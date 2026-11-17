@@ -2,6 +2,8 @@
 #include <unistd.h>
 #include <sys/xattr.h>
 #include <windows.h>
+#include <aclapi.h>
+#include <gesher/xattr.h>
 #include <winternl.h>
 
 #include <algorithm>
@@ -17,6 +19,7 @@
 #include "internal.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_liveness.h"
+#include "xattr_security_policy.h"
 
 namespace {
 
@@ -181,12 +184,16 @@ struct Request {
 };
 
 DWORD RequiredAccess(const Request& request) {
-  return FILE_READ_EA | FILE_READ_ATTRIBUTES | (request.Mutates() ? FILE_WRITE_EA : 0);
+  // Android checks current inode read/write permission, not the mode of the
+  // descriptor used to reach it. EA rights alone are separate Windows rights.
+  return FILE_READ_EA | FILE_READ_ATTRIBUTES |
+         (request.operation == Operation::kGet ? FILE_READ_DATA : 0) |
+         (request.Mutates() ? FILE_WRITE_EA | FILE_WRITE_DATA : 0);
 }
 
 // A native empty name opens the held file itself, including directories.
 // ReOpenFile can reject directory objects even with backup flags.
-int ReopenWithAccess(HANDLE file, DWORD access, HANDLE* result) {
+int ReopenWithAccess(HANDLE file, DWORD access, HANDLE* result, bool* delete_pending = nullptr) {
   if (!Native().open) return EOPNOTSUPP;
   wchar_t empty = L'\0';
   UNICODE_STRING name{0, sizeof(empty), &empty};
@@ -197,7 +204,117 @@ int ReopenWithAccess(HANDLE file, DWORD access, HANDLE* result) {
   IO_STATUS_BLOCK io{};
   const LONG status = Native().open(result, access | SYNCHRONIZE, &attributes, &io, kSharing,
                                     FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT);
+  if (delete_pending) *delete_pending = static_cast<ULONG>(status) == 0xc0000056;
   return status == 0 ? 0 : NativeError(status);
+}
+
+// Only the ordinary allow/deny DACL and mandatory label can be evaluated by
+// this fallback. CAP, resource attributes, callback/conditional and other ACE
+// policies need the filesystem's authorization machinery, which cannot reopen
+// a classic delete-pending file. Refuse them instead of silently omitting them.
+int CheckFallbackPolicy(PSECURITY_DESCRIPTOR descriptor) {
+  if (!descriptor || !IsValidSecurityDescriptor(descriptor)) return EIO;
+  for (bool system_acl : {false, true}) {
+    PACL acl = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    const BOOL ok = system_acl ? GetSecurityDescriptorSacl(descriptor, &present, &acl, &defaulted)
+                              : GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted);
+    if (!ok) return EIO;
+    if (!present || !acl) continue;
+    if (!IsValidAcl(acl)) return EIO;
+    const auto support = gesher::xattr::CheckFallbackAcl(
+        {reinterpret_cast<const unsigned char*>(acl), acl->AclSize},
+        system_acl ? gesher::xattr::AclKind::kSacl : gesher::xattr::AclKind::kDacl);
+    if (support == gesher::xattr::PolicySupport::kUnsupported) return EOPNOTSUPP;
+    if (support == gesher::xattr::PolicySupport::kMalformed) return EIO;
+  }
+  return 0;
+}
+
+// Reopening a delete-pending object can fail even though its admitted handle
+// remains valid. When it already has the native EA rights, check the object's
+// current DACL against the effective token and keep using that pinned handle.
+// Never use the old grant as evidence of current inode authorization.
+int CurrentAccess(HANDLE file, DWORD desired) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  // ATTRIBUTE and SCOPE are separate READ_CONTROL queries: querying LABEL
+  // alone does not reveal resource claims or an applicable Central Access Policy.
+  constexpr SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+      DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION |
+      ATTRIBUTE_SECURITY_INFORMATION | SCOPE_SECURITY_INFORMATION |
+      PROCESS_TRUST_LABEL_SECURITY_INFORMATION | ACCESS_FILTER_SECURITY_INFORMATION;
+  // Ask Windows for the query rights of this complete metadata selection. Do
+  // not enable audit privileges or omit a policy class when it is inaccessible.
+  DWORD query_access = 0;
+  QuerySecurityAccessMask(information, &query_access);
+  if (query_access != READ_CONTROL) return EOPNOTSUPP;
+  const DWORD query_error = GetSecurityInfo(file, SE_FILE_OBJECT, information,
+      nullptr, nullptr, nullptr, nullptr, &descriptor);
+  if (query_error != ERROR_SUCCESS) return gesher::ErrnoFromWin32(query_error);
+  const auto free_descriptor = [](void* value) { LocalFree(value); };
+  std::unique_ptr<void, decltype(free_descriptor)> security(descriptor, free_descriptor);
+  const int policy_error = CheckFallbackPolicy(descriptor);
+  if (policy_error) return policy_error;
+  Handle token;
+  // OpenAsSelf controls admission to the thread token; the token being checked
+  // is still the impersonating thread's, never the process token on failure.
+  if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token.value)) {
+    if (GetLastError() != ERROR_NO_TOKEN) return WinError();
+    Handle process_token;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &process_token.value) ||
+        !DuplicateToken(process_token.value, SecurityImpersonation, &token.value)) return WinError();
+  }
+  // AccessCheck evaluates the DACL. A held handle must not bypass mandatory
+  // integrity policy when a lower-integrity thread impersonates its opener.
+  TOKEN_MANDATORY_POLICY policy{};
+  DWORD bytes = 0;
+  if (!GetTokenInformation(token.value, TokenMandatoryPolicy, &policy, sizeof(policy), &bytes))
+    return WinError();
+  if (policy.Policy & TOKEN_MANDATORY_POLICY_NO_WRITE_UP) {
+    alignas(TOKEN_MANDATORY_LABEL) unsigned char label_buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    if (!GetTokenInformation(token.value, TokenIntegrityLevel, label_buffer, sizeof(label_buffer), &bytes))
+      return WinError();
+    const PSID token_sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(label_buffer)->Label.Sid;
+    if (!IsValidSid(token_sid) || *GetSidSubAuthorityCount(token_sid) != 1) return EIO;
+    const DWORD token_level = *GetSidSubAuthority(token_sid, 0);
+    DWORD object_level = SECURITY_MANDATORY_MEDIUM_RID;
+    DWORD mask = SYSTEM_MANDATORY_LABEL_NO_WRITE_UP;
+    PACL sacl = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    if (!GetSecurityDescriptorSacl(descriptor, &present, &sacl, &defaulted)) return WinError();
+    if (present && sacl) {
+      for (DWORD i = 0; i < sacl->AceCount; ++i) {
+        void* entry = nullptr;
+        if (!GetAce(sacl, i, &entry)) return WinError();
+        const auto* ace = static_cast<SYSTEM_MANDATORY_LABEL_ACE*>(entry);
+        if (ace->Header.AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+        if (!(ace->Header.AceFlags & INHERIT_ONLY_ACE)) {
+          PSID sid = const_cast<DWORD*>(&ace->SidStart);
+          if (!IsValidSid(sid) || *GetSidSubAuthorityCount(sid) != 1) return EIO;
+          object_level = *GetSidSubAuthority(sid, 0);
+          mask = ace->Mask;
+        }
+        break;
+      }
+    }
+    if (token_level < object_level) {
+      // These are the file-specific rights in the generic read/write/execute
+      // mappings; their common READ_CONTROL/SYNCHRONIZE bits are not writes.
+      const DWORD denied = ((mask & SYSTEM_MANDATORY_LABEL_NO_READ_UP) ?
+          FILE_READ_DATA | FILE_READ_EA | FILE_READ_ATTRIBUTES : 0) |
+          ((mask & SYSTEM_MANDATORY_LABEL_NO_WRITE_UP) ?
+          FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | DELETE | WRITE_DAC | WRITE_OWNER : 0) |
+          ((mask & SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP) ? FILE_EXECUTE : 0);
+      if (desired & denied) return EACCES;
+    }
+  }
+  GENERIC_MAPPING mapping{FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
+  PRIVILEGE_SET privileges{};
+  DWORD privilege_size = sizeof(privileges), granted = 0;
+  BOOL allowed = FALSE;
+  if (!AccessCheck(descriptor, token.value, desired, &mapping, &privileges,
+                   &privilege_size, &granted, &allowed)) return WinError();
+  return allowed ? 0 : EACCES;
 }
 
 struct Target {
@@ -240,15 +357,17 @@ int OpenPath(const char* path, bool follow, const Request& request, Target* targ
   // Open the link itself when requested. Inspect the resulting object before
   // asking for write rights, so lsetxattr cannot ever tag the link target.
   DWORD flags = kOpenFlags | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT);
-  DWORD access = follow ? RequiredAccess(request) : FILE_READ_ATTRIBUTES | FILE_READ_EA;
+  // The initial open only pins/classifies the object. The native reopen below
+  // checks data and EA rights without backup-intent privilege overrides.
+  DWORD access = FILE_READ_ATTRIBUTES | FILE_READ_EA;
   target->original.value = CreateFileW(windows.c_str(), access, kSharing, nullptr, OPEN_EXISTING, flags, nullptr);
   if (!target->original) return WinError();
   error = CheckTarget(target, request);
-  if (error || !target->eligible || follow || !request.Mutates()) return error;
+  if (error || !target->eligible) return error;
   return ReopenWithAccess(target->original.value, RequiredAccess(request), &target->reopened.value);
 }
 
-int OpenFd(int fd, const Request& request, Target* target) {
+int OpenFd(int fd, const Request& request, bool allow_path, Target* target) {
   if (fd < 0) return EBADF;
   {
     // Pin the opened object before any participating close/dup2 can reuse fd.
@@ -263,17 +382,32 @@ int OpenFd(int fd, const Request& request, Target* target) {
   int error = gesher::record_locks::HandleAccess(target->original.value, &granted);
   if (error) return error;
   // Our O_PATH descriptors lack all of the data and EA rights of an open fd.
-  if (!(granted & (FILE_READ_EA | FILE_WRITE_EA | FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA)))
-    return EBADF;
+  const bool path_only = !(granted &
+      (FILE_READ_EA | FILE_WRITE_EA | FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA));
+  if (path_only) {
+    if (!allow_path) return EBADF;
+    // Bionic's fget/fset/flist fallback follows /proc/self/fd, which pins the
+    // referred object, including an O_PATH|O_NOFOLLOW symlink itself. Open the
+    // held object for classification without ever resolving its current name.
+    error = ReopenWithAccess(target->original.value, FILE_READ_ATTRIBUTES | FILE_READ_EA,
+                             &target->reopened.value);
+    if (error) return error;
+  }
   error = CheckTarget(target, request);
   if (error || !target->eligible) return error;
-  const DWORD access = RequiredAccess(request);
-  if ((granted & access) != access) {
-    // Linux evaluates inode permissions independently of fd access mode. Reopen
-    // the same object through a new ACL check, never through its current path.
-    return ReopenWithAccess(target->original.value, access, &target->reopened.value);
-  }
-  return 0;
+  const DWORD native_access = FILE_READ_EA | FILE_READ_ATTRIBUTES | READ_CONTROL |
+                              (request.Mutates() ? FILE_WRITE_EA : 0);
+  // Prefer the filesystem's current-token access check, including its native
+  // security policies. A descriptor's access mode does not limit this request.
+  Handle authorized;
+  bool delete_pending = false;
+  error = ReopenWithAccess(target->original.value, RequiredAccess(request), &authorized.value, &delete_pending);
+  if (!error) std::swap(target->reopened.value, authorized.value);
+  // A classic delete-pending file cannot be reopened. Only use the held object
+  // when it already has the actual EA rights, and recheck its current security.
+  if (delete_pending && !path_only && (granted & native_access) == native_access)
+    return CurrentAccess(target->original.value, RequiredAccess(request));
+  return error;
 }
 
 int ReadStore(HANDLE file, unsigned char* buffer, std::string_view* store) {
@@ -456,9 +590,9 @@ ssize_t PathRequest(const char* path, bool follow, const Request& request) {
   return error ? (errno = error, -1) : Perform(target, request);
 }
 
-ssize_t FdRequest(int fd, const Request& request) {
+ssize_t FdRequest(int fd, const Request& request, bool allow_path = false) {
   Target target;
-  const int error = OpenFd(fd, request, &target);
+  const int error = OpenFd(fd, request, allow_path, &target);
   return error ? (errno = error, -1) : Perform(target, request);
 }
 
@@ -504,3 +638,20 @@ int fremovexattr(int fd, const char* name) {
 }
 
 }  // extern "C"
+
+namespace gesher {
+
+// The public Bionic provider has an O_PATH fallback for these three calls.
+// Keep the POSIX entry points above as the legacy raw-kernel contracts; both
+// syscall-number tables route to them through Bionic's __f*xattr shims.
+ssize_t BionicFgetxattr(int fd, const char* name, void* value, size_t size) {
+  return FdRequest(fd, {Operation::kGet, name, value, nullptr, size}, true);
+}
+int BionicFsetxattr(int fd, const char* name, const void* value, size_t size, int flags) {
+  return static_cast<int>(FdRequest(fd, {Operation::kSet, name, nullptr, value, size, flags}, true));
+}
+ssize_t BionicFlistxattr(int fd, char* list, size_t size) {
+  return FdRequest(fd, {Operation::kList, nullptr, list, nullptr, size}, true);
+}
+
+}  // namespace gesher

@@ -143,6 +143,10 @@ add_executable(filesystem_metadata_host_test tests/native/filesystem_metadata_ho
 target_compile_options(filesystem_metadata_host_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(filesystem_metadata_host_test PRIVATE gesher_posix)
 
+add_executable(xattr_fd_host_test tests/native/xattr_fd_host_test.cc)
+target_compile_options(xattr_fd_host_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(xattr_fd_host_test PRIVATE gesher_posix advapi32)
+
 add_executable(sqlite_path_test tests/native/sqlite_path_test.cc)
 target_compile_options(sqlite_path_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(sqlite_path_test PRIVATE sqlite)

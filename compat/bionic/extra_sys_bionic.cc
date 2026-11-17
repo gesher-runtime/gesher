@@ -11,6 +11,7 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/clocks.h>
+#include <gesher/xattr.h>
 
 #include <windows.h>
 // bcrypt.h needs windows.h first.
@@ -794,8 +795,17 @@ ssize_t BIONIC_SYSV Getxattr(const char* path, const char* name, void* value, si
 ssize_t BIONIC_SYSV Lgetxattr(const char* path, const char* name, void* value, size_t size) {
   return ::lgetxattr(path, name, value, size);
 }
-ssize_t BIONIC_SYSV Fgetxattr(int fd, const char* name, void* value, size_t size) {
+ssize_t BIONIC_SYSV RawFgetxattr(int fd, const char* name, void* value, size_t size) {
   return ::fgetxattr(fd, name, value, size);
+}
+int BIONIC_SYSV RawFsetxattr(int fd, const char* name, const void* value, size_t size, int flags) {
+  return ::fsetxattr(fd, name, value, size, flags);
+}
+ssize_t BIONIC_SYSV RawFlistxattr(int fd, char* list, size_t size) {
+  return ::flistxattr(fd, list, size);
+}
+ssize_t BIONIC_SYSV Fgetxattr(int fd, const char* name, void* value, size_t size) {
+  return ::gesher::BionicFgetxattr(fd, name, value, size);
 }
 int BIONIC_SYSV Setxattr(const char* path, const char* name, const void* value, size_t size,
                        int flags) {
@@ -806,7 +816,7 @@ int BIONIC_SYSV Lsetxattr(const char* path, const char* name, const void* value,
   return ::lsetxattr(path, name, value, size, flags);
 }
 int BIONIC_SYSV Fsetxattr(int fd, const char* name, const void* value, size_t size, int flags) {
-  return ::fsetxattr(fd, name, value, size, flags);
+  return ::gesher::BionicFsetxattr(fd, name, value, size, flags);
 }
 ssize_t BIONIC_SYSV Listxattr(const char* path, char* list, size_t size) {
   return ::listxattr(path, list, size);
@@ -815,7 +825,7 @@ ssize_t BIONIC_SYSV Llistxattr(const char* path, char* list, size_t size) {
   return ::llistxattr(path, list, size);
 }
 ssize_t BIONIC_SYSV Flistxattr(int fd, char* list, size_t size) {
-  return ::flistxattr(fd, list, size);
+  return ::gesher::BionicFlistxattr(fd, list, size);
 }
 int BIONIC_SYSV Removexattr(const char* path, const char* name) {
   return ::removexattr(path, name);
@@ -1127,12 +1137,15 @@ void RegisterExtraSys(SymbolTable& t) {
   E("getxattr", Getxattr);
   E("lgetxattr", Lgetxattr);
   E("fgetxattr", Fgetxattr);
+  E("__fgetxattr", RawFgetxattr);
   E("setxattr", Setxattr);
   E("lsetxattr", Lsetxattr);
   E("fsetxattr", Fsetxattr);
+  E("__fsetxattr", RawFsetxattr);
   E("listxattr", Listxattr);
   E("llistxattr", Llistxattr);
   E("flistxattr", Flistxattr);
+  E("__flistxattr", RawFlistxattr);
   E("removexattr", Removexattr);
   E("lremovexattr", Lremovexattr);
   E("fremovexattr", Fremovexattr);
