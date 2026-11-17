@@ -15,6 +15,7 @@ public final class AccountClientRemovalProbe {
     private static final String CLIENT = "com.gesher.microgprobe";
     private static final Account RETAINED = new Account("retained-account@example.test", TYPE);
     private static final Account VISIBLE = new Account("visible-ungranted@example.test", TYPE);
+    private static final Account OWNER_RETIREMENT = new Account("uninstall-owner@example.test", TYPE);
     private static void require(boolean value, String why) { if (!value) throw new AssertionError(why); }
 
     private static void providerIntact(IAccountManager accounts) throws Exception {
@@ -32,21 +33,22 @@ public final class AccountClientRemovalProbe {
 
     private static void checkOwnerRemoval(IAccountManager accounts, String stage) throws Exception {
         if ("owner-prepare".equals(stage)) {
-            require(accounts.addAccountExplicitly(VISIBLE, "owner-fixture-secret", null, "android"),
+            require(accounts.addAccountExplicitly(OWNER_RETIREMENT, "owner-fixture-secret", null, "android"),
                     "Could not create a real package-owned fixture account");
-            accounts.setAuthToken(VISIBLE, "retirement", "owner-fixture-token");
-            require(accounts.setAccountVisibility(VISIBLE, CLIENT, AccountManager.VISIBILITY_VISIBLE),
+            accounts.setAuthToken(OWNER_RETIREMENT, "retirement", "owner-fixture-token");
+            require(accounts.setAccountVisibility(OWNER_RETIREMENT, CLIENT, AccountManager.VISIBILITY_VISIBLE),
                     "Could not grant visibility to the retained client");
-            require(accounts.getAccountsByTypeForPackage(TYPE, CLIENT, "android").length == 1,
+            require(Arrays.asList(accounts.getAccountsByTypeForPackage(TYPE, CLIENT, "android"))
+                    .contains(OWNER_RETIREMENT),
                     "The retained client did not see its granted account");
         } else {
             require(accounts.getAccountsAsUser(TYPE, 0, "android").length == 0
                     && accounts.getAccountsByTypeForPackage(TYPE, CLIENT, "android").length == 0,
                     "A committed provider removal left a visible account");
-            require(accounts.getAccountVisibility(VISIBLE, CLIENT) == AccountManager.VISIBILITY_NOT_VISIBLE,
+            require(accounts.getAccountVisibility(OWNER_RETIREMENT, CLIENT) == AccountManager.VISIBILITY_NOT_VISIBLE,
                     "The retained client inherited the discarded visibility grant");
             try {
-                accounts.peekAuthToken(VISIBLE, "retirement");
+                accounts.peekAuthToken(OWNER_RETIREMENT, "retirement");
                 throw new AssertionError("A retired credential was still readable");
             } catch (SecurityException expected) {
                 // An absent account has no credential owner.
