@@ -621,14 +621,38 @@ public final class JobSchedulerConstraintContractTest {
                         && (Long) get(periodic, "earliest") == original + 600_000,
                 "Periodic retry shifted the original cadence");
 
-        // Completing halfway through a later missed period retains the original cadence.
-        long missed = SystemClock.elapsedRealtime() - 2_250_000;
-        set(periodic, "originalLatest", missed);
-        TestRunHandle late = h.start(145, new TestService());
-        late.params.getCallback().jobFinished(145, false);
-        check((Long) get(periodic, "latest") == missed + 2_700_000,
-                "Missed periodic windows were rescheduled relative to completion instead of cadence");
+        // Exercise the same production window calculation with explicit elapsed
+        // times. Subtracting 37.5 minutes from a fresh host's uptime creates an
+        // invalid negative boundary, so it cannot represent missed valid windows.
+        // The full callback, retry and counter-reset path remains exercised above.
+        checkPeriodicWindow(h, periodic, 1_000_000, 3_250_000, 3_400_000, 3_700_000,
+                "Missed periodic windows retain cadence");
+        checkPeriodicWindow(h, periodic, 0, 60_000, 600_000, 900_000,
+                "Zero is a valid early-boot periodic boundary");
+        checkPeriodicWindow(h, periodic, 1_000_000, 1_590_000, 2_500_000, 2_800_000,
+                "Custom flex skips a window too close to completion");
+        checkPeriodicWindow(h, periodic, -1, 60_000, 660_000, 960_000,
+                "Negative periodic boundary recovers from completion");
+        checkPeriodicWindow(h, periodic, Long.MAX_VALUE, 60_000, 660_000, 960_000,
+                "Missing periodic boundary recovers from completion");
         h.cancel(145);
+    }
+
+    private static void checkPeriodicWindow(Harness h, Object job, long original, long now,
+            long expectedEarliest, long expectedLatest, String scenario) throws Exception {
+        synchronized (h.scheduler) {
+            set(job, "originalLatest", original);
+            invoke(h.scheduler, "reschedulePeriodic", new Class<?>[]{h.jobType, long.class}, job, now);
+            long earliest = (Long) get(job, "earliest");
+            long latest = (Long) get(job, "latest");
+            String context = scenario + " (original=" + original + ", now=" + now + ")";
+            check(earliest == expectedEarliest,
+                    context + ": earliest " + earliest + ", expected " + expectedEarliest);
+            check(latest == expectedLatest,
+                    context + ": latest " + latest + ", expected " + expectedLatest);
+            check((Long) get(job, "originalLatest") == expectedLatest,
+                    context + ": next periodic boundary was not advanced");
+        }
     }
 
     private static void testEffectiveChargingPriority(Harness h) throws Exception {

@@ -144,6 +144,20 @@ charged as application failures, charging exemption based on raw priority, and a
 missing start acknowledgement retaining pending work. The repaired suite asserts
 the pinned Android outcomes instead of treating those old outcomes as expected.
 
+The missed-window calculation uses explicit elapsed-time inputs passed to the
+production `reschedulePeriodic` helper, while the surrounding retry and successful
+completion tests still exercise the actual callbacks and counter reset. It checks
+both window bounds and the next original boundary for missed windows, a valid zero
+boundary, custom-flex spacing, and invalid negative/missing boundary recovery.
+This avoids requiring the machine to have been running for 37.5 minutes. The old
+fixture subtracted that duration from host uptime; on a fresh runner it supplied a
+negative original boundary that AOSP correctly replaces with completion time.
+[CI run 44158610661, framework job 134341791550](https://github.com/gesher-runtime/gesher/actions/runs/44158610661/job/134341791550)
+failed at that assertion on `7f1f089677cacf15f58f2b0d3bac2278dfb7dc77`. An isolated
+host-clock reproduction starting at 60 seconds reproduced the same failure and
+600,000–900,000 ms recovery window; starting at 30,000,000 ms passed the unchanged
+fixture. These clock values are test inputs, not claims about Windows uptime.
+
 The existing scheduler host runner compiles this suite and the work/alarm regression
 suite against current production classes. Its host JNI adapter supplies only the
 declared identity, allocation, clock and Parcel-write boundaries. Package/process
