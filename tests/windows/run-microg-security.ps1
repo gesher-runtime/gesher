@@ -586,6 +586,33 @@ try {
     $null = Activity 'dpapi-roundtrip-after-server-restart' $owner '.AccountActivity' @('--ez', 'verify-retained-account', 'true') @(
         'account: protected storage survived restart true', 'account: retained account removed true'
     ) 'account: retained account removed'
+    # Actual Installer and protected storage: leave a live account, uninstall its
+    # authenticator, then prove that an identical APK cannot reacquire the account.
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'prepare-authenticator-owner-removal' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'owner-prepare')
+    RequireOutput 'real authenticator owns a live account' $text @('AccountClientRemovalProbe PASS_owner-prepare')
+    $env:GESHER_BINDER_UID = $null
+    $null = Launcher 'uninstall-active-authenticator' @('uninstall', $owner)
+    UseDevice
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'check-committed-authenticator-removal' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'owner-after')
+    RequireOutput 'uninstall purges provider accounts and client access' $text @('AccountClientRemovalProbe PASS_owner-after')
+    $env:GESHER_BINDER_UID = $null
+    $null = RememberDevice
+    $null = Launcher 'shutdown-after-authenticator-removal' @('shutdown')
+    $script:deviceLogs = Join-Path $run 'device-third-boot'
+    SetProfile $script:deviceRoot $script:deviceLogs
+    $null = Launcher 'restart-after-authenticator-removal' @('start')
+    $null = RememberDevice
+    $null = Launcher 'reinstall-identical-authenticator' @('install', (AndroidPath $DevsvcApk))
+    UseDevice
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'check-reinstalled-authenticator-retirement' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'owner-reinstall')
+    RequireOutput 'same-signer reinstall after restart leaves accounts retired' $text @('AccountClientRemovalProbe PASS_owner-reinstall')
+    $env:GESHER_BINDER_UID = $null
     Passed 'offline microG security integration complete'
 } catch {
     $script:failed = $true

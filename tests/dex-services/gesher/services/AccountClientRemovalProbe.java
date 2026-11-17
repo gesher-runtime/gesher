@@ -30,13 +30,44 @@ public final class AccountClientRemovalProbe {
                 "Client removal or restart changed an unrelated provider credential");
     }
 
+    private static void checkOwnerRemoval(IAccountManager accounts, String stage) throws Exception {
+        if ("owner-prepare".equals(stage)) {
+            require(accounts.addAccountExplicitly(VISIBLE, "owner-fixture-secret", null, "android"),
+                    "Could not create a real package-owned fixture account");
+            accounts.setAuthToken(VISIBLE, "retirement", "owner-fixture-token");
+            require(accounts.setAccountVisibility(VISIBLE, CLIENT, AccountManager.VISIBILITY_VISIBLE),
+                    "Could not grant visibility to the retained client");
+            require(accounts.getAccountsByTypeForPackage(TYPE, CLIENT, "android").length == 1,
+                    "The retained client did not see its granted account");
+        } else {
+            require(accounts.getAccountsAsUser(TYPE, 0, "android").length == 0
+                    && accounts.getAccountsByTypeForPackage(TYPE, CLIENT, "android").length == 0,
+                    "A committed provider removal left a visible account");
+            require(accounts.getAccountVisibility(VISIBLE, CLIENT) == AccountManager.VISIBILITY_NOT_VISIBLE,
+                    "The retained client inherited the discarded visibility grant");
+            try {
+                accounts.peekAuthToken(VISIBLE, "retirement");
+                throw new AssertionError("A retired credential was still readable");
+            } catch (SecurityException expected) {
+                // An absent account has no credential owner.
+            }
+        }
+        System.out.println("AccountClientRemovalProbe PASS_" + stage);
+    }
+
     public static void main(String[] args) throws Exception {
-        require(args.length >= 1 && (args[0].equals("prepare") || args[0].equals("after") || args[0].equals("restart")),
-                "Pass prepare, after or restart for the synthetic client-removal probe");
+        require(args.length >= 1, "Pass a fixture stage for the account removal probe");
         System.loadLibrary("android_runtime");
         IPackageManager pm = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
         IAccountManager accounts = IAccountManager.Stub.asInterface(ServiceManager.getService("account"));
         require(pm != null && accounts != null, "A genuine running SystemServer is required");
+        if (args[0].equals("owner-prepare") || args[0].equals("owner-after")
+                || args[0].equals("owner-reinstall")) {
+            checkOwnerRemoval(accounts, args[0]);
+            return;
+        }
+        require(args[0].equals("prepare") || args[0].equals("after") || args[0].equals("restart"),
+                "Unknown account removal probe stage");
         ApplicationInfo installed = pm.getApplicationInfo(CLIENT, 0, 0);
         require(installed != null, "Synthetic client was not installed");
         int uid = installed.uid;

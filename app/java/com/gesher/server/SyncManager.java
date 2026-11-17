@@ -38,14 +38,19 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -281,6 +286,7 @@ final class SyncManager {
         if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         synchronized (this) {
+            requireAccountAccess(account);
             mSettings.setProperty("auto." + id(account, authority), Boolean.toString(sync));
             save();
         }
@@ -310,6 +316,7 @@ final class SyncManager {
         if (account != null) requireAccountAccess(account);
         if (account == null || authority == null) return;
         synchronized (this) {
+            requireAccountAccess(account);
             mSettings.setProperty("syncable." + id(account, authority),
                     Integer.toString(Math.max(-1, Math.min(1, syncable))));
             save();
@@ -503,19 +510,93 @@ final class SyncManager {
         mTimer.execute(this::run);
     }
 
+    /** Retire a committed account removal before its owner can be reinstalled. */
+    void accountsRemoved(Set<Account> removed, Set<Account> retained) {
+        Set<String> removedIds = new HashSet<>();
+        for (Account account : removed) removedIds.add(settingAccountId(account));
+        // Old settings join the type and name with '/'. Preserve keys also
+        // attributable to a retained account if old delimiter aliases collide.
+        for (Account account : retained) removedIds.remove(settingAccountId(account));
+        List<Active> cancel = new ArrayList<>();
+        IOException persistenceFailure = null;
+        int events = 0;
+        synchronized (this) {
+            if (mPending.removeIf(p -> removed.contains(p.account))) {
+                events |= ContentResolver.SYNC_OBSERVER_TYPE_PENDING;
+            }
+            mBackoff.keySet().removeIf(e -> removed.contains(e.account));
+            mDelayUntil.keySet().removeIf(e -> removed.contains(e.account));
+            for (Active active : mActive.values()) {
+                if (removed.contains(active.account) && !active.cancelled) {
+                    active.cancelled = true;
+                    cancel.add(active);
+                }
+            }
+
+            Properties replacement = new Properties();
+            for (String key : mSettings.stringPropertyNames()) {
+                if (removedIds.contains(settingAccountFromKey(key))) {
+                    ScheduledFuture<?> periodic = mPeriodic.remove(key);
+                    if (periodic != null) periodic.cancel(false);
+                } else {
+                    replacement.setProperty(key, mSettings.getProperty(key));
+                }
+            }
+            if (replacement.size() != mSettings.size()) {
+                try {
+                    writeSettings(replacement);
+                    mSettings.clear(); mSettings.putAll(replacement);
+                    events |= ContentResolver.SYNC_OBSERVER_TYPE_SETTINGS;
+                } catch (IOException e) {
+                    persistenceFailure = e;
+                }
+            }
+        }
+        if (events != 0 || !cancel.isEmpty()) {
+            int notify = events;
+            mTimer.execute(() -> {
+                for (Active active : cancel) cancelActive(active, "account removed");
+                if (notify != 0) changed(notify);
+                run();
+            });
+        }
+        if (persistenceFailure != null) {
+            throw new IllegalStateException("Cannot retire persisted account sync settings", persistenceFailure);
+        }
+    }
+
+    private static String settingAccountId(Account account) {
+        return account.type + "/" + account.name;
+    }
+
+    /** Return the account portion of a per-authority setting, or null for global settings. */
+    private static String settingAccountFromKey(String key) {
+        int start;
+        int end = key.length();
+        if (key.startsWith("auto.")) start = "auto.".length();
+        else if (key.startsWith("syncable.")) start = "syncable.".length();
+        else if (key.startsWith("periodic.")) {
+            start = "periodic.".length();
+            end = key.lastIndexOf('|');
+            if (end < start) return null;
+        } else return null;
+        int authority = key.lastIndexOf('/', end - 1);
+        return authority > start ? key.substring(start, authority) : null;
+    }
+
     private static boolean matches(Account actual, String provider, Account account, String authority) {
         return (account == null || account.equals(actual)) && (authority == null || authority.equals(provider));
     }
 
     private static String id(Account account, String authority) {
         // Persisted settings/periodic-key migration is separate from transient admission.
-        return account.type + "/" + account.name + "/" + authority;
+        return settingAccountId(account) + "/" + authority;
     }
 
     private void enqueue(Adapter adapter, Account account, Bundle extras) {
-        if (!mAccountAccess.test(account, adapter.service.getPackageName())) return;
         Pending pending = new Pending(adapter, account, extras, 0, false);
         synchronized (this) {
+            if (!mAccountAccess.test(account, adapter.service.getPackageName())) return;
             Pending existing = null;
             for (Pending p : mPending) {
                 if (!p.independent && p.key.equals(pending.key)) { existing = p; break; }
@@ -732,6 +813,7 @@ final class SyncManager {
         long period = Math.max(seconds, 15 * 60);
         String name = "periodic." + id(account, authority) + "|" + extrasKey(extras);
         synchronized (this) {
+            requireAccountAccess(account);
             String value = period + "|" + encode(extras);
             if (value.equals(mSettings.getProperty(name))) return;
             mSettings.setProperty(name, value);
@@ -746,6 +828,7 @@ final class SyncManager {
         if (account == null || authority == null) return;
         String name = "periodic." + id(account, authority) + "|" + extrasKey(extras);
         synchronized (this) {
+            requireAccountAccess(account);
             if (mSettings.remove(name) == null) return;
             save();
             ScheduledFuture<?> f = mPeriodic.remove(name);
@@ -881,11 +964,25 @@ final class SyncManager {
     }
 
     private synchronized void save() {
-        mFile.getParentFile().mkdirs();
-        try (OutputStream out = new FileOutputStream(mFile)) {
-            mSettings.store(out, "Gesher's sync settings");
+        try {
+            writeSettings(mSettings);
         } catch (IOException e) {
             SystemServer.log(TAG + mFile + ": " + e);
+        }
+    }
+
+    private void writeSettings(Properties settings) throws IOException {
+        Path target = mFile.toPath();
+        Files.createDirectories(target.getParent());
+        Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(temporary.toFile())) {
+            settings.store(out, "Gesher's sync settings");
+            out.getFD().sync();
+        }
+        try {
+            Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException unavailable) {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 }

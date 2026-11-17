@@ -31,6 +31,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -61,7 +62,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         mEnabledStateRestarter = restarter;
     }
     private final List<Consumer<String>> mPackageRemoval = new ArrayList<>();
-    private final List<Consumer<String>> mPackageRemovalChecks = new ArrayList<>();
+    private volatile Consumer<Set<String>> mAccountRemovalReconciler = installed -> { };
     private volatile Map<String, ApkPackage> mRemoving = new LinkedHashMap<>();
 
     boolean isRemovalPending(String name) { return mRemoving.containsKey(name); }
@@ -83,12 +84,13 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** Server-local capability cleanup; never callable through the package Binder. */
     synchronized void onPackageRemoval(Consumer<String> cleanup) { mPackageRemoval.add(cleanup); }
 
-    synchronized void onPackageRemovalCheck(Consumer<String> check) { mPackageRemovalChecks.add(check); }
+    /** Reconcile the account store against the Installer's authoritative registry. */
+    void setAccountRemovalReconciler(Consumer<Set<String>> reconcile) {
+        mAccountRemovalReconciler = reconcile;
+    }
 
-    void checkPackageRemoval(String name) {
-        List<Consumer<String>> checks;
-        synchronized (this) { checks = new ArrayList<>(mPackageRemovalChecks); }
-        for (Consumer<String> check : checks) check.accept(name);
+    void reconcileAccountRemovals(Set<String> installed) {
+        mAccountRemovalReconciler.accept(installed);
     }
 
     void revokePackageCapabilities(String name) {

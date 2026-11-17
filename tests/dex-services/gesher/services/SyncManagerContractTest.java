@@ -37,16 +37,20 @@ import android.service.notification.StatusBarNotification;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedServiceImpl;
 import com.android.internal.pm.pkg.component.ParsedIntentInfoImpl;
+import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -595,11 +599,72 @@ public final class SyncManagerContractTest {
         }
     }
 
+    private static void accountRetirement(boolean wire) throws Exception {
+        Path root = Files.createTempDirectory("gesher-sync-retirement");
+        Path blocker = Files.createFile(root.resolve("system"));
+        Path store = blocker.resolve("sync.properties");
+        try (Harness h = new Harness(false, wire)) {
+            set(h.sync, "mFile", store.toFile());
+            h.enqueue(ONE, extras("running"));
+            h.enqueue(TWO, extras("keep"));
+            h.timer.drain();
+            h.enqueue(ONE, extras("remove-pending"));
+            h.timer.drain();
+            check(h.active() == 1 && h.pending() == 2, "Retirement fixture must have running and queued work");
+
+            String removed = TYPE + "/one/" + AUTHORITY;
+            String retained = TYPE + "/two/" + AUTHORITY;
+            String prefixed = TYPE + "/one/other/" + AUTHORITY;
+            String periodic = "periodic." + removed + "|0";
+            h.setting("auto." + removed, "false");
+            h.setting("syncable." + removed, "1");
+            h.setting(periodic, "900|");
+            h.setting("auto." + retained, "true");
+            h.setting("auto." + prefixed, "true");
+            h.setting("master", "true");
+            invoke(h.sync, "schedulePeriodic", new Class<?>[]{String.class, boolean.class}, periodic, false);
+            check(((Map<?, ?>) get(h.sync, "mPeriodic")).containsKey(periodic), "Periodic fixture was not scheduled");
+
+            try {
+                invoke(h.sync, "accountsRemoved", new Class<?>[]{Set.class, Set.class}, Set.of(ONE), Set.of(TWO));
+                throw new AssertionError("Sync retirement succeeded despite a blocked store");
+            } catch (IllegalStateException expected) {
+                check(expected.getCause() instanceof java.io.IOException, "Retirement returned an unrelated failure");
+            }
+            check(((Properties) get(h.sync, "mSettings")).containsKey(periodic),
+                    "A failed sync write discarded retryable state");
+            h.timer.drain();
+            check(h.cancelled == 1 && h.starts.size() == 2 && h.starts.get(1).account.equals(TWO)
+                    && h.pending() == 0 && h.active() == 1, "Retirement failed to cancel only the deleted account's work");
+            h.finish(0, result("soft"));
+            check(h.pending() == 0 && h.starts.size() == 2, "A retired adapter's late callback scheduled a retry");
+
+            Files.delete(blocker);
+            invoke(h.sync, "accountsRemoved", new Class<?>[]{Set.class, Set.class}, Set.of(ONE), Set.of(TWO));
+            Properties persisted = new Properties();
+            try (InputStream in = Files.newInputStream(store)) { persisted.load(in); }
+            check(!persisted.containsKey("auto." + removed) && !persisted.containsKey("syncable." + removed)
+                    && !persisted.containsKey(periodic), "Retired sync settings reached disk");
+            check("true".equals(persisted.getProperty("auto." + retained))
+                    && "true".equals(persisted.getProperty("auto." + prefixed))
+                    && "true".equals(persisted.getProperty("master")), "Cleanup changed another account or global settings");
+            check(!((Map<?, ?>) get(h.sync, "mPeriodic")).containsKey(periodic), "Retired periodic sync stayed scheduled");
+        } finally {
+            if (Files.isDirectory(blocker)) {
+                Files.deleteIfExists(store.resolveSibling("sync.properties.tmp"));
+                Files.deleteIfExists(store);
+            }
+            Files.deleteIfExists(blocker);
+            Files.deleteIfExists(root);
+        }
+    }
+
     public static void contracts(String group, boolean wire) throws Exception {
         if (group.equals("all") || group.equals("admission")) admission(wire);
         if (group.equals("all") || group.equals("clock")) clock(wire);
         if (group.equals("all") || group.equals("results")) results(wire);
         if (group.equals("all") || group.equals("cancellation")) cancellation(wire);
+        if (group.equals("all")) accountRetirement(wire);
         if (wire && group.equals("all")) threaded();
     }
     public static void main(String[] args) throws Exception {

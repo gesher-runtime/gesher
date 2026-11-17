@@ -147,13 +147,20 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
     // Guarded by this.
     private final Map<Account, Entry> mAccounts = new LinkedHashMap<>();
+    // Protected-store write-ahead records. Only the package registry can decide
+    // if removing the owner committed or rolled back.
+    private final Set<String> mPendingOwnerRemovals = new HashSet<>();
+    private java.util.function.BiConsumer<Set<Account>, Set<Account>> mRetireSync =
+            (removed, retained) -> { };
     private State mBeforeMutation;
 
     private static final class State {
         final Map<Account, Entry> accounts = new LinkedHashMap<>();
         final String legacy;
-        State(Map<Account, Entry> source, String legacy) {
+        final Set<String> pendingOwnerRemovals;
+        State(Map<Account, Entry> source, String legacy, Set<String> pendingOwnerRemovals) {
             this.legacy = legacy;
+            this.pendingOwnerRemovals = new HashSet<>(pendingOwnerRemovals);
             for (Map.Entry<Account, Entry> item : source.entrySet()) {
                 Entry old = item.getValue(), copy = new Entry();
                 copy.owner = old.owner; copy.ownerIdentity = old.ownerIdentity;
@@ -169,7 +176,9 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private void beginMutation() {
-        if (mBeforeMutation == null) mBeforeMutation = new State(mAccounts, mUnclaimedLegacy);
+        if (mBeforeMutation == null) {
+            mBeforeMutation = new State(mAccounts, mUnclaimedLegacy, mPendingOwnerRemovals);
+        }
     }
     // Calls to authenticators wait on their binding and answer: off the binder threads.
     private final java.util.concurrent.ScheduledExecutorService mSessionTimeout =
@@ -198,8 +207,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (persistent) load();
         else mStoreWriter = values -> { /* Stand-in accounts live only in this process. */ };
         if (am != null) am.setAccountManager(this);
-        pm.onPackageRemovalCheck(this::checkPackageRemoval);
         pm.onPackageRemoval(this::packageRemoved);
+        pm.setAccountRemovalReconciler(this::reconcilePackageRemovals);
     }
 
     private synchronized long packageEpoch(String name) { return mRemovalEpochs.getOrDefault(name, 0L); }
@@ -209,31 +218,30 @@ public final class AccountManagerService extends IAccountManager.Default {
         return new Caller(name, code, system, uid, pid, packageEpoch(name));
     }
 
-    /** Retire client capabilities before an uninstall can publish removal or permit reinstall. */
-    private synchronized void checkPackageRemoval(String name) {
-        if (mAccounts.values().stream().anyMatch(e -> name.equals(e.owner))) {
-            throw new UnsupportedOperationException("Remove this authenticator's accounts before uninstalling it");
-        }
+    void setSyncRetirement(java.util.function.BiConsumer<Set<Account>, Set<Account>> retire) {
+        mRetireSync = retire;
     }
 
+    /** Before package publication, seal the intent to remove owned accounts and revoke client grants. */
     void packageRemoved(String name) {
         if (name == null || name.isEmpty()) throw new IllegalArgumentException("Missing removed package");
         List<Answer> cancel = new ArrayList<>();
         synchronized (this) {
-            checkPackageRemoval(name);
             String prefix = name + "\u0000";
+            boolean ownsAccounts = mAccounts.values().stream().anyMatch(e -> name.equals(e.owner));
             boolean changed = mAccounts.values().stream().anyMatch(e ->
                     e.visibility.keySet().stream().anyMatch(k -> k.startsWith(prefix))
                     || e.tokenGrants.values().stream().anyMatch(g -> g.stream().anyMatch(k -> k.startsWith(prefix)))
                     || e.customTokens.keySet().stream().anyMatch(k -> k.startsWith(prefix)));
-            if (changed) {
+            if (ownsAccounts || changed) {
                 beginMutation();
+                if (ownsAccounts) mPendingOwnerRemovals.add(name);
                 for (Entry e : mAccounts.values()) {
                     e.visibility.keySet().removeIf(k -> k.startsWith(prefix));
                     for (Set<String> grants : e.tokenGrants.values()) grants.removeIf(k -> k.startsWith(prefix));
                     e.customTokens.keySet().removeIf(k -> k.startsWith(prefix));
                 }
-                save(); // Failed persistence restores all grants and stops removal.
+                save(); // A failed write restores grants and stops the package transaction.
             }
             mRemovalEpochs.put(name, packageEpoch(name) + 1);
             mSessions.packageRemoved(name);
@@ -243,8 +251,52 @@ public final class AccountManagerService extends IAccountManager.Default {
             }
         }
         for (Answer answer : cancel) answer.cancelForRemoval();
-        // Provider-owned records/credentials are never deleted by client cleanup.
-        AccountManager.invalidateLocalAccountsDataCaches();
+        invalidateAccountListCache();
+        invalidateAccountUserDataCache();
+    }
+
+    /**
+     * The Installer calls this under its publication lock, with the durable registry's
+     * names. A scan failure or temporarily disabled authenticator is not a removal.
+     * Synchronize our own state separately: sync admission calls back into accounts.
+     */
+    void reconcilePackageRemovals(Set<String> installed) {
+        Map<Account, Entry> removed = new LinkedHashMap<>();
+        Set<Account> retained = new HashSet<>();
+        synchronized (this) {
+            if (mPendingOwnerRemovals.isEmpty()) return;
+            for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+                String owner = item.getValue().owner;
+                if (mPendingOwnerRemovals.contains(owner) && !installed.contains(owner)) {
+                    removed.put(item.getKey(), item.getValue());
+                } else {
+                    retained.add(item.getKey());
+                }
+            }
+        }
+        // A failed cleanup leaves the marker sealed and the accounts inaccessible.
+        // Retry before a package can be published again, even with the same signer.
+        try {
+            if (!removed.isEmpty()) mRetireSync.accept(removed.keySet(), retained);
+            synchronized (this) {
+                beginMutation();
+                for (Account account : removed.keySet()) mAccounts.remove(account);
+                mPendingOwnerRemovals.clear();
+                save();
+            }
+        } finally {
+            invalidateAccountListCache();
+            invalidateAccountUserDataCache();
+        }
+        for (Map.Entry<Account, Entry> item : removed.entrySet()) {
+            mCalls.execute(() -> changed(item.getKey(), true, item.getValue(), false));
+        }
+    }
+
+    /** Called with this locked. Pending accounts remain sealed for a possible registry rollback. */
+    private boolean retiring(Entry entry) {
+        return entry != null && mPendingOwnerRemovals.contains(entry.owner)
+                && (mPm.isRemovalPending(entry.owner) || mPm.get(entry.owner) == null);
     }
 
     /** Called only after ATM authenticated the source activity, PID and application thread. */
@@ -289,7 +341,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         private boolean permittedType(String type) { return allowedTypes == null || allowedTypes.contains(type); }
         private boolean eligible(Account account, Entry entry) {
             if (entry == null || entry.owner == null || entry.ownerIdentity == null
-                    || !entry.ownerIdentity.equals(packageIdentity(entry.owner))
+                    || retiring(entry) || !entry.ownerIdentity.equals(packageIdentity(entry.owner))
                     || !permittedType(account.type)
                     || allowedAccounts != null && !allowedAccounts.contains(account)) return false;
             Authenticator owner = authenticator(account.type);
@@ -411,8 +463,8 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private boolean owns(Caller c, Entry e) {
-        return c.system || e != null && c.name != null && c.code != null && c.name.equals(e.owner)
-                && c.code.equals(e.ownerIdentity);
+        return !retiring(e) && (c.system || e != null && c.name != null && c.code != null
+                && c.name.equals(e.owner) && c.code.equals(e.ownerIdentity));
     }
 
     private void requireOwner(Caller c, Entry e) {
@@ -425,7 +477,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private int visibility(Caller c, Entry e) {
-        if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
+        if (e == null || retiring(e)) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (owns(c, e)) return AccountManager.VISIBILITY_VISIBLE;
         // Legacy keys describe policy categories, not grants to every client. Until
         // Android's permission/target-SDK eligibility policy is implemented here,
@@ -521,7 +573,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         Map<String, Integer> result = new LinkedHashMap<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             Account a = item.getKey(); Entry e = item.getValue();
-            if (accountType != null && !accountType.equals(a.type)) continue;
+            if (retiring(e) || accountType != null && !accountType.equals(a.type)) continue;
             if (!c.system && !owns(c, e)
                     && (!packageName.equals(c.name) || !visible(c, a, e))) continue;
             if (!dummy(a)) result.put(a.name, visibility(target, e));
@@ -532,7 +584,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public synchronized int getAccountVisibility(Account account, String packageName) {
         Caller c = caller(null); Entry e = mAccounts.get(account);
-        if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
+        if (e == null || retiring(e)) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (!owns(c, e) && !packageName.equals(c.name)) throw new SecurityException("Account client mismatch");
         if (isLegacyKey(packageName)) return legacyVisibility(e, packageName);
         return visibility(targetCaller(packageName), e);
@@ -665,17 +717,23 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     synchronized boolean canAccessAccount(Account account, String packageName) {
         Entry e = mAccounts.get(account);
-        return e != null && visible(targetCaller(packageName), account, e);
+        return e != null && packageName != null && !mPm.isRemovalPending(packageName)
+                && visible(targetCaller(packageName), account, e);
     }
 
     synchronized Account[] syncableAccounts() {
-        List<Account> list = new ArrayList<>(mAccounts.keySet());
-        if (synthetic(DEFAULT_ACCOUNT, mAccounts.get(DEFAULT_ACCOUNT))) list.remove(DEFAULT_ACCOUNT);
+        List<Account> list = new ArrayList<>();
+        for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+            if (!synthetic(item.getKey(), item.getValue()) && !retiring(item.getValue())) {
+                list.add(item.getKey());
+            }
+        }
         return list.toArray(new Account[0]);
     }
 
     private synchronized boolean exists(Account account) {
-        return account != null && mAccounts.containsKey(account);
+        Entry entry = account != null ? mAccounts.get(account) : null;
+        return entry != null && !retiring(entry);
     }
 
     @Override
@@ -986,6 +1044,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             if (!item.getKey().type.equals(accountType)) continue;
             Entry e = item.getValue();
+            if (retiring(e)) continue;
             for (String type : new ArrayList<>(e.tokens.keySet())) {
                 Set<String> grants = e.tokenGrants.get(type);
                 if (authToken.equals(e.tokens.get(type)) && (owns(c, e) || grants != null && grants.contains(c.key()))) {
@@ -1004,7 +1063,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (!c.system) throw new SecurityException("Only system may change token grants");
         if (tokenType == null) throw new IllegalArgumentException("token type");
         Entry e = mAccounts.get(account);
-        if (e == null) return;
+        if (e == null || retiring(e)) return;
         String[] packages = mPm.getPackagesForUid(uid);
         List<String> keys = new ArrayList<>();
         if (packages != null) for (String name : packages) keys.add(targetKey(name));
@@ -1127,7 +1186,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (a == null) return false;
         synchronized (this) {
             Entry e = mAccounts.get(account);
-            if (!a.service.getPackageName().equals(e.owner) || !e.ownerIdentity.equals(packageIdentity(e.owner))) return false;
+            if (e == null || retiring(e) || !a.service.getPackageName().equals(e.owner)
+                    || !e.ownerIdentity.equals(packageIdentity(e.owner))) return false;
         }
         Answer answer = call(a, (auth, r) -> auth.hasFeatures(r, account, features));
         return answer.result != null ? answer.result.getBoolean(AccountManager.KEY_BOOLEAN_RESULT, false) : null;
@@ -1656,6 +1716,10 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private void changed(Account account, boolean removed, Entry e) {
+        changed(account, removed, e, true);
+    }
+
+    private void changed(Account account, boolean removed, Entry e, boolean includeOwner) {
         if (e == null) return;
         // Once account caches have a nonce, later add/remove/rename operations
         // must invalidate them too; otherwise enabling the cache would make a
@@ -1663,8 +1727,11 @@ public final class AccountManagerService extends IAccountManager.Default {
         invalidateAccountListCache();
         invalidateAccountUserDataCache();
         if (mAm == null) return;
-        Set<String> recipients = new HashSet<>(); recipients.add(e.owner);
+        Set<String> recipients = new HashSet<>();
         synchronized (this) {
+            if (includeOwner && e.ownerIdentity != null && e.ownerIdentity.equals(packageIdentity(e.owner))) {
+                recipients.add(e.owner);
+            }
             for (Map.Entry<String, Integer> grant : e.visibility.entrySet()) {
                 if (grant.getValue() != AccountManager.VISIBILITY_VISIBLE
                         && grant.getValue() != AccountManager.VISIBILITY_USER_MANAGED_VISIBLE) continue;
@@ -1716,48 +1783,58 @@ public final class AccountManagerService extends IAccountManager.Default {
                 }
                 return;
             }
-            mUnclaimedLegacy = p.getProperty("unclaimedLegacy");
-            for (int i = 0; i < count(p, "count"); i++) {
-                String prefix = i + ".";
-                String name = p.getProperty(prefix + "name"), type = p.getProperty(prefix + "type");
-                Entry e = new Entry();
-                e.owner = p.getProperty(prefix + "owner");
-                e.ownerIdentity = p.getProperty(prefix + "ownerIdentity");
-                if (name == null || type == null || e.owner == null || e.ownerIdentity == null) {
-                    throw new IllegalStateException("Invalid protected account ownership");
-                }
-                e.password = p.getProperty(prefix + "password");
-                e.authenticatedAt = Long.parseLong(p.getProperty(prefix + "authenticatedAt", "0"));
-                for (int j = 0; j < count(p, prefix + "data.count"); j++) {
-                    e.data.put(p.getProperty(prefix + "data." + j + ".key"),
-                            p.getProperty(prefix + "data." + j + ".value"));
-                }
-                for (int j = 0; j < count(p, prefix + "token.count"); j++) {
-                    String tokenPrefix = prefix + "token." + j + ".";
-                    String tokenType = p.getProperty(tokenPrefix + "type");
-                    e.tokens.put(tokenType, p.getProperty(tokenPrefix + "value"));
-                    Set<String> grants = new HashSet<>();
-                    for (int k = 0; k < count(p, tokenPrefix + "grant.count"); k++) {
-                        grants.add(p.getProperty(tokenPrefix + "grant." + k));
-                    }
-                    e.tokenGrants.put(tokenType, grants);
-                }
-                for (int j = 0; j < count(p, prefix + "grantType.count"); j++) {
-                    String grantPrefix = prefix + "grantType." + j + ".";
-                    Set<String> grants = new HashSet<>();
-                    for (int k = 0; k < count(p, grantPrefix + "client.count"); k++) {
-                        grants.add(p.getProperty(grantPrefix + "client." + k));
-                    }
-                    e.tokenGrants.put(p.getProperty(grantPrefix + "type"), grants);
-                }
-                for (int j = 0; j < count(p, prefix + "visibility.count"); j++) {
-                    e.visibility.put(p.getProperty(prefix + "visibility." + j + ".client"),
-                            Integer.parseInt(p.getProperty(prefix + "visibility." + j + ".value")));
-                }
-                mAccounts.put(new Account(name, type), e);
-            }
+            loadProtectedState(p);
         } catch (IOException | RuntimeException e) {
             throw new IllegalStateException("Cannot open protected account storage", e);
+        }
+    }
+
+    /** Load the protected data only after the store has authenticated it. */
+    private void loadProtectedState(Properties p) {
+        mUnclaimedLegacy = p.getProperty("unclaimedLegacy");
+        for (int i = 0; i < count(p, "pendingRemoval.count"); i++) {
+            String name = p.getProperty("pendingRemoval." + i);
+            if (name == null || name.isEmpty()) throw new IllegalStateException("Invalid account removal record");
+            mPendingOwnerRemovals.add(name);
+        }
+        for (int i = 0; i < count(p, "count"); i++) {
+            String prefix = i + ".";
+            String name = p.getProperty(prefix + "name"), type = p.getProperty(prefix + "type");
+            Entry e = new Entry();
+            e.owner = p.getProperty(prefix + "owner");
+            e.ownerIdentity = p.getProperty(prefix + "ownerIdentity");
+            if (name == null || type == null || e.owner == null || e.ownerIdentity == null) {
+                throw new IllegalStateException("Invalid protected account ownership");
+            }
+            e.password = p.getProperty(prefix + "password");
+            e.authenticatedAt = Long.parseLong(p.getProperty(prefix + "authenticatedAt", "0"));
+            for (int j = 0; j < count(p, prefix + "data.count"); j++) {
+                e.data.put(p.getProperty(prefix + "data." + j + ".key"),
+                        p.getProperty(prefix + "data." + j + ".value"));
+            }
+            for (int j = 0; j < count(p, prefix + "token.count"); j++) {
+                String tokenPrefix = prefix + "token." + j + ".";
+                String tokenType = p.getProperty(tokenPrefix + "type");
+                e.tokens.put(tokenType, p.getProperty(tokenPrefix + "value"));
+                Set<String> grants = new HashSet<>();
+                for (int k = 0; k < count(p, tokenPrefix + "grant.count"); k++) {
+                    grants.add(p.getProperty(tokenPrefix + "grant." + k));
+                }
+                e.tokenGrants.put(tokenType, grants);
+            }
+            for (int j = 0; j < count(p, prefix + "grantType.count"); j++) {
+                String grantPrefix = prefix + "grantType." + j + ".";
+                Set<String> grants = new HashSet<>();
+                for (int k = 0; k < count(p, grantPrefix + "client.count"); k++) {
+                    grants.add(p.getProperty(grantPrefix + "client." + k));
+                }
+                e.tokenGrants.put(p.getProperty(grantPrefix + "type"), grants);
+            }
+            for (int j = 0; j < count(p, prefix + "visibility.count"); j++) {
+                e.visibility.put(p.getProperty(prefix + "visibility." + j + ".client"),
+                        Integer.parseInt(p.getProperty(prefix + "visibility." + j + ".value")));
+            }
+            mAccounts.put(new Account(name, type), e);
         }
     }
 
@@ -1768,6 +1845,9 @@ public final class AccountManagerService extends IAccountManager.Default {
             Properties p = new Properties();
             if (mUnclaimedLegacy != null) p.setProperty("unclaimedLegacy", mUnclaimedLegacy);
             int i = 0;
+            for (String pending : mPendingOwnerRemovals) p.setProperty("pendingRemoval." + i++, pending);
+            p.setProperty("pendingRemoval.count", Integer.toString(i));
+            i = 0;
             for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
                 if (synthetic(item.getKey(), item.getValue())) continue;
                 String prefix = i + "."; Entry e = item.getValue();
@@ -1814,6 +1894,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             State before = mBeforeMutation;
             mAccounts.clear(); mAccounts.putAll(before.accounts);
             mUnclaimedLegacy = before.legacy;
+            mPendingOwnerRemovals.clear(); mPendingOwnerRemovals.addAll(before.pendingOwnerRemovals);
             mBeforeMutation = null;
             throw new IllegalStateException("Cannot save protected account storage", e);
         }
