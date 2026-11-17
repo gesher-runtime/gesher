@@ -145,11 +145,11 @@ void ImageReader_classInit(JNIEnv* env, jclass clazz) {
   gIr.surfaceCtor = GetMethodIDOrDie(env, gIr.surfaceClass, "<init>", "()V");
 }
 
-void EnqueueImage(JNIEnv* env, const std::shared_ptr<Reader>& r, Image* image) {
+bool EnqueueImage(JNIEnv* env, const std::shared_ptr<Reader>& r, Image* image) {
   jobject weak;
   {
     std::lock_guard<std::mutex> lock(r->mutex);
-    if (r->closed) { delete image; return; }
+    if (r->closed) { delete image; return false; }
     while (static_cast<int>(r->pending.size()) >= r->maxImages) {
       delete r->pending.front();
       r->pending.pop_front();
@@ -159,6 +159,7 @@ void EnqueueImage(JNIEnv* env, const std::shared_ptr<Reader>& r, Image* image) {
   }
   env->CallStaticVoidMethod(gIr.readerClass, gIr.postEvent, weak);
   env->DeleteLocalRef(weak);
+  return true;
 }
 
 void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
@@ -432,8 +433,7 @@ bool QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv
     i->planes.push_back({ySize, cSize, cw, 1});
     i->planes.push_back({ySize + cSize, cSize, cw, 1});
   }
-  EnqueueImage(env, r, i);
-  return true;
+  return EnqueueImage(env, r, i);
 }
 
 // CameraFrames.nativeDeliver: 0 delivered, 1 the target cannot take it (no native

@@ -50,7 +50,7 @@ def generate(component: str, ref: str | None) -> str:
             "@TIMESTAMP_MEMBER@": members[0].strip(),
             "@TIMESTAMP_DISPATCH@": section(source, "    case NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP: {",
                                             "    case NATIVE_WINDOW_GET_REFRESH_CYCLE_DURATION:"),
-            "@PUBLISH@": section(source, "void QueueSurface::Publish() {",
+            "@PUBLISH@": section(source, "int QueueSurface::unlockAndPost() {",
                                   "int QueueSurface::dequeueBuffer(")}
         source += header
     for marker, body in replacements.items():

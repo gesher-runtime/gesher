@@ -41,15 +41,23 @@ struct GlobalRef {
 struct VideoFrame { int id = 7; };
 std::function<void(ANativeWindow*)> on_render;
 int rendered = 0, delivered = 0;
-bool RenderFrame(ANativeWindow* window, const VideoFrame& frame) {
+bool render_ok = true, delivery_ok = true;
+int64_t render_timestamp_ns = -1, reader_timestamp_ns = -1;
+bool RenderFrame(ANativeWindow* window, const VideoFrame& frame, int64_t timestamp_ns) {
   Check(!window->retired && frame.id == 7, "render receives live window and frame");
+  render_timestamp_ns = timestamp_ns;
   ++rendered;
   if (on_render) on_render(window);
   Check(!window->retired, "window remains live until rendering ends");
-  return false;  // Failure also releases the render's reference.
+  return render_ok;
 }
 std::function<void()> on_deliver;
-void DeliverToReader(jobject, const VideoFrame&, int64_t) { ++delivered; if (on_deliver) on_deliver(); }
+bool DeliverToReader(jobject, const VideoFrame&, int64_t timestamp_ns) {
+  ++delivered;
+  reader_timestamp_ns = timestamp_ns;
+  if (on_deliver) on_deliver();
+  return delivery_ok;
+}
 constexpr int kSlots = 2;
 struct Slot { bool client = false; std::shared_ptr<VideoFrame> frame; int64_t time_us = 0; };
 class Codec {
@@ -91,27 +99,35 @@ int main() {
       Check(!old_window.retired && old_window.references == 1 && new_window.references == 1,
             "surface replacement leaves render's old window alive");
     };
-    Check(codec.ReleaseOutput(0, true, 0, &error), "rendered release succeeds");
+    Check(codec.ReleaseOutput(0, true, false, 0, &error), "rendered release succeeds");
+    Check(render_timestamp_ns == 42000, "boolean release sends the buffer PTS in nanoseconds");
     Check(old_window.retired && old_window.references == 0 && old_window.acquisitions == 2
               && old_window.releases == 2, "render reference releases exactly once after swap");
     Check(codec.events == 1 && codec.last_time == 42 && rendered == 1, "frame event preserved");
     const int acquired = new_window.acquisitions, released = new_window.releases;
-    Check(!codec.ReleaseOutput(0, true, 0, &error), "same output slot cannot be released twice");
-    Check(!codec.ReleaseOutput(-1, true, 0, &error), "invalid output index rejected");
+    Check(!codec.ReleaseOutput(0, true, false, 0, &error), "same output slot cannot be released twice");
+    Check(!codec.ReleaseOutput(-1, true, false, 0, &error), "invalid output index rejected");
     Check(new_window.acquisitions == acquired && new_window.releases == released,
           "invalid output never borrows a window");
     codec.Prepare();
-    Check(codec.ReleaseOutput(0, false, 0, &error), "discarded output succeeds");
+    Check(codec.ReleaseOutput(0, false, false, 0, &error), "discarded output succeeds");
     Check(new_window.acquisitions == acquired && new_window.releases == released && rendered == 1,
           "discard neither renders nor takes references");
     codec.Prepare(false);
-    Check(codec.ReleaseOutput(0, true, 0, &error) && new_window.references == 1,
+    Check(codec.ReleaseOutput(0, true, true, 0, &error) && new_window.references == 1,
           "empty output balances its optional render reference");
     on_render = {};
     codec.Prepare();
+    render_ok = false;
+    Check(codec.ReleaseOutput(0, true, true, 0, &error) && new_window.references == 1 &&
+              render_timestamp_ns == 0 && codec.events == 1,
+          "explicit zero reaches renderer and failed render posts no event");
+    codec.Prepare();
+    render_ok = true;
     codec.frame_rendered_ = false;
-    Check(codec.ReleaseOutput(0, true, 0, &error) && new_window.references == 1 && codec.events == 1,
-          "failed renderer still releases and disabled callback remains disabled");
+    Check(codec.ReleaseOutput(0, true, true, 123456789, &error) && new_window.references == 1 &&
+              render_timestamp_ns == 123456789 && codec.events == 1,
+          "successful render with callback disabled emits no event");
   }
   Check(new_window.retired && new_window.references == 0
             && new_window.acquisitions == new_window.releases, "remaining codec owner retires normally");
@@ -125,10 +141,17 @@ int main() {
       Check(!weak.expired(), "reader owner is retained across a surface swap");
     };
     codec.Prepare();
-    Check(codec.ReleaseOutput(0, true, 0, &error) && delivered == 1,
+    Check(codec.ReleaseOutput(0, true, true, -123456789, &error) && delivered == 1 &&
+              reader_timestamp_ns == -123456789 && codec.last_time == 42,
           "reader surface delivery preserved");
     Check(weak.expired() && codec.events == 1, "reader temporary retires after delivery");
     on_deliver = {};
+    codec.SetSurface(nullptr, &reader);
+    codec.Prepare();
+    codec.outputs_[0].time_us = INT64_MAX;
+    delivery_ok = false;
+    Check(codec.ReleaseOutput(0, true, false, 0, &error) && reader_timestamp_ns == -1000 &&
+              codec.events == 1, "full-width PTS scales without overflow and failed reader posts no event");
   }
   std::printf("codec window ownership contracts: %d checks, %d failures\n", checks, failures);
   return failures != 0;

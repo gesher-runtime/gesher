@@ -51,21 +51,10 @@
 // The ANativeWindow functions dalvikvm defines (docs/graphics.md) and
 // libandroid_runtime's host ANativeWindow_fromSurface.
 struct ANativeWindow;
-struct ARect {
-  int32_t left, top, right, bottom;
-};
-struct ANativeWindow_Buffer {
-  int32_t width, height, stride, format;
-  void* bits;
-  uint32_t reserved[6];
-};
 extern "C" {
 ANativeWindow* ANativeWindow_fromSurface(JNIEnv* env, jobject surface);
 void ANativeWindow_acquire(ANativeWindow* window);
 void ANativeWindow_release(ANativeWindow* window);
-int32_t ANativeWindow_setBuffersGeometry(ANativeWindow* window, int32_t w, int32_t h, int32_t format);
-int32_t ANativeWindow_lock(ANativeWindow* window, ANativeWindow_Buffer* buffer, ARect* bounds);
-int32_t ANativeWindow_unlockAndPost(ANativeWindow* window);
 }
 
 namespace gesher::media {
@@ -311,18 +300,18 @@ bool IsReaderSurface(JNIEnv* env, jobject surface) {
 }
 
 // A decoded frame into an ImageReader (YUV_420_888 / PRIVATE readers take NV12).
-void DeliverToReader(jobject surface, const VideoFrame& f, int64_t time_us) {
+bool DeliverToReader(jobject surface, const VideoFrame& f, int64_t timestamp_ns) {
   JNIEnv* env = AttachedEnv("gesher-codec");
-  if (env == nullptr) return;
+  if (env == nullptr) return false;
   jclass cls = CameraFramesClass(env);
-  if (cls == nullptr) return;
+  if (cls == nullptr) return false;
   jmethodID m = env->GetStaticMethodID(cls, "deliver", "(Landroid/view/Surface;[BIIJ[B)I");
   if (m == nullptr) {
     env->ExceptionClear();
-    return;
+    return false;
   }
   const int w = f.visible_width() & ~1, h = f.visible_height() & ~1;
-  if (w <= 0 || h <= 0) return;
+  if (w <= 0 || h <= 0) return false;
   std::vector<uint8_t> nv12(static_cast<size_t>(w) * h * 3 / 2);
   for (int y = 0; y < h; y++) {
     memcpy(nv12.data() + static_cast<size_t>(y) * w,
@@ -336,12 +325,23 @@ void DeliverToReader(jobject surface, const VideoFrame& f, int64_t time_us) {
       uv[static_cast<size_t>(y) * w + 2 * x + 1] = f.v()[row + x];
     }
   }
-  env->PushLocalFrame(8);
+  if (env->PushLocalFrame(8) < 0) {
+    CheckException(env, "CameraFrames local frame");
+    return false;
+  }
   jbyteArray a = env->NewByteArray(static_cast<jsize>(nv12.size()));
-  env->SetByteArrayRegion(a, 0, static_cast<jsize>(nv12.size()), reinterpret_cast<const jbyte*>(nv12.data()));
-  env->CallStaticIntMethod(cls, m, surface, a, w, h, static_cast<jlong>(time_us * 1000), nullptr);
-  CheckException(env, "CameraFrames.deliver");
+  jint result = -1;
+  if (a != nullptr) {
+    env->SetByteArrayRegion(a, 0, static_cast<jsize>(nv12.size()),
+                            reinterpret_cast<const jbyte*>(nv12.data()));
+    if (!env->ExceptionCheck()) {
+      result = env->CallStaticIntMethod(cls, m, surface, a, w, h,
+                                        static_cast<jlong>(timestamp_ns), nullptr);
+    }
+  }
+  const bool delivered = !CheckException(env, "CameraFrames.deliver") && result == 0;
   env->PopLocalFrame(nullptr);
+  return delivered;
 }
 
 // --- A codec -----------------------------------------------------------------------------
@@ -651,7 +651,8 @@ class Codec {
     return i;
   }
 
-  bool ReleaseOutput(int index, bool render, int64_t /*time_ns*/, std::string* error) {
+  bool ReleaseOutput(int index, bool render, bool has_timestamp, int64_t time_ns,
+                     std::string* error) {
     std::shared_ptr<VideoFrame> frame;
     std::unique_ptr<ANativeWindow, decltype(&ANativeWindow_release)> window(
         nullptr, ANativeWindow_release);
@@ -676,13 +677,15 @@ class Codec {
       if (render) reader = reader_;
       cv_.notify_all();
     }
-    if (window != nullptr && frame != nullptr) {
-      RenderFrame(window.get(), *frame);
-      if (frame_rendered_) PostFrameRendered(time_us);
-    } else if (reader != nullptr && frame != nullptr) {
-      DeliverToReader(reader->get(), *frame, time_us);
-      if (frame_rendered_) PostFrameRendered(time_us);
-    }
+    if (frame == nullptr || (window == nullptr && reader == nullptr)) return true;
+    // The boolean overload uses the presentation time. Explicit zero belongs
+    // to the long overload and must survive delivery as zero.
+    const int64_t timestamp_ns =
+        has_timestamp ? time_ns : static_cast<int64_t>(static_cast<uint64_t>(time_us) * 1000);
+    const bool delivered = window != nullptr
+        ? RenderFrame(window.get(), *frame, timestamp_ns)
+        : reader != nullptr && DeliverToReader(reader->get(), *frame, timestamp_ns);
+    if (delivered && frame_rendered_) PostFrameRendered(time_us);
     return true;
   }
 
@@ -1601,11 +1604,11 @@ jint JNICALL MC_dequeueOutputBuffer(JNIEnv* env, jobject thiz, jobject info, jlo
 }
 
 void JNICALL MC_releaseOutputBuffer(JNIEnv* env, jobject thiz, jint index, jboolean render,
-                                    jboolean, jlong time_ns) {
+                                    jboolean has_timestamp, jlong time_ns) {
   auto c = GetCodec(env, thiz);
   if (c == nullptr) return;
   std::string error;
-  if (!c->ReleaseOutput(index, render, time_ns, &error)) {
+  if (!c->ReleaseOutput(index, render, has_timestamp, time_ns, &error)) {
     jniThrow(env, "java/lang/IllegalStateException", error.c_str());
   }
 }

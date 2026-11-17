@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -113,6 +114,7 @@ void RgbaToI420(const uint32_t* src, int src_w, int src_h, VideoFrame* f);
 }  // namespace gesher::media
 struct ANativeWindow;
 namespace gesher::media {
-bool RenderFrame(ANativeWindow* window, const VideoFrame& f);
+bool RenderFrame(ANativeWindow* window, const VideoFrame& f,
+                 std::optional<int64_t> timestamp_ns = std::nullopt);
 
 }  // namespace gesher::media

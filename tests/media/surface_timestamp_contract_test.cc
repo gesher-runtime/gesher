@@ -11,11 +11,15 @@ bool Check(bool ok, const char* reason) {
   if (!ok) { ++failures; std::fprintf(stderr, "FAIL surface timestamp: %s\n", reason); }
   return ok;
 }
-void Post(gesher::media::QueueSurface* surface) {
+void Post(gesher::media::QueueSurface* surface,
+          std::optional<int64_t> timestamp_ns = std::nullopt) {
   ANativeWindow_Buffer buffer = {};
   if (!Check(surface->lock(&buffer, nullptr) == 0, "lock a real producer buffer")) return;
   static_cast<uint32_t*>(buffer.bits)[0] = 0xff123456;
-  Check(surface->unlockAndPost() == 0, "publish a real producer buffer");
+  const int result = timestamp_ns.has_value()
+      ? surface->UnlockAndPostWithTimestamp(*timestamp_ns)
+      : surface->unlockAndPost();
+  Check(result == 0, "publish a real producer buffer");
 }
 }
 
@@ -40,6 +44,10 @@ int main() {
   Post(surface.get());
   auto explicit_frame = surface->Latest();
   Check(explicit_frame->timestamp_ns == 123456789, "positive timestamp forwarded");
+  Post(surface.get(), 0);
+  Check(surface->Latest()->timestamp_ns == 0, "one frame overrides producer timestamp with zero");
+  Post(surface.get(), -1234);
+  Check(surface->Latest()->timestamp_ns == -1234, "one frame preserves a signed explicit timestamp");
   ANativeWindowBuffer* buffer = nullptr;
   int fence = -1;
   Check(window->dequeueBuffer(window, &buffer, &fence) == 0 && buffer != nullptr, "dequeue native buffer");
@@ -54,7 +62,7 @@ int main() {
   frame = surface->Latest();
   Check(frame->timestamp_ns >= start && frame->timestamp_ns <= end,
         "auto sentinel is replaced, never emitted literally");
-  Check(callbacks == 6 && surface->frames() == 6, "one callback and frame per publication");
+  Check(callbacks == 8 && surface->frames() == 8, "one callback and frame per publication");
   surface->Abandon();
   ANativeWindow_Buffer abandoned = {};
   Check(surface->lock(&abandoned, nullptr) != 0, "abandoned surface still rejects production");
