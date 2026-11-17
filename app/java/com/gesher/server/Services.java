@@ -167,7 +167,7 @@ public final class Services {
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
-                new DeviceServices.SearchService()).asBinder());
+                new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new ClipboardService()).asBinder());
         // Device state from Windows (devsvc track, ADR 0038): jobs, the battery.

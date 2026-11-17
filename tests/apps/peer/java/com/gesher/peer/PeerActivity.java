@@ -6,6 +6,7 @@ package com.gesher.peer;
 
 import android.app.Activity;
 import android.app.Application;
+import android.app.SearchManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.os.Bundle;
@@ -28,6 +29,12 @@ public class PeerActivity extends Activity {
         report("PeerActivity onCreate in process " + Application.getProcessName() + " (pid "
                 + Process.myPid() + "), action " + getIntent().getAction() + ", started by "
                 + (caller != null ? caller.flattenToShortString() : "no activity"));
+        SearchManager search = getSystemService(SearchManager.class);
+        if (search.getSearchableInfo(new ComponentName("com.gesher.components",
+                "com.gesher.components.SecondActivity")) != null) {
+            throw new AssertionError("App-local search metadata crossed the package boundary");
+        }
+        report("foreign searchable metadata not returned");
     }
 
     @Override

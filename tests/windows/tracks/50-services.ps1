@@ -403,7 +403,8 @@ $ok = (CheckSequences 'services: content providers: the app''s own (installed at
     "${c}insert banana: content://com.gesher.components.items/items/2",
     "${c}query content://com.gesher.components.items/items: 2 rows: apple, banana",
     "${c}Settings.System font_scale=1.0, Settings.Secure android_id=6765736865720000, Settings.Global auto_time=1",
-    "${c}Settings.System gesher_test after putInt: 7", "${c}all steps ran", "${c}MainActivity onDestroy",
+    "${c}Settings.System gesher_test after putInt: 7", "${c}searchable metadata and provider suggestions verified",
+    "${c}all steps ran", "${c}MainActivity onDestroy",
     'gesher-app: the system server ended the process (scheduleExit)', 'gesher-app: done')
 ) $appCode) -and $ok
 if (-not $ok) { Write-Host $appOut }
@@ -681,7 +682,8 @@ $ok = CheckOrdered 'services: gesher-app launch components.apk --keep-task: inst
   'gesher-app: app process for com.gesher.components: pid ',
   "${c}MainActivity onResume #1", "${c}MainActivity onActivityResult: request 1, result RESULT_OK, answer 42",
   "${c}LocalService onDestroy", "${c}ManifestReceiver onReceive com.gesher.components.HELLO",
-  "${c}query content://com.gesher.components.items/items: 2 rows: apple, banana", "${c}all steps ran",
+  "${c}query content://com.gesher.components.items/items: 2 rows: apple, banana",
+  "${c}searchable metadata and provider suggestions verified", "${c}all steps ran",
   'gesher-app: the process of com.gesher.components ended (exit code 0)', 'gesher-app: done') $code
 if (-not $ok) { Write-Host $out }
 if ($ok -and $serverPid -gt 0 -and $pidLifecycle -eq $serverPid -and (ServerPid $out) -eq $serverPid) {
@@ -722,6 +724,7 @@ $ok = (CheckOrdered 'services: cross-package: components'' ContentResolver reach
 $ok = (CheckSequences 'services: processes on demand: peer started for its activity, ended with it, started again for its provider, ended with its last client' ($peerOut + "`n" + $serverOut) @(
   @('gesher-app: app process for com.gesher.peer: pid ',
     'peer: PeerActivity onCreate in process com.gesher.peer (pid ', 'started by com.gesher.components/.CrossActivity',
+    'peer: foreign searchable metadata not returned',
     'peer: PeerActivity onDestroy', 'gesher-app: the system server ended the process (scheduleExit)',
     'gesher-app: app process for com.gesher.peer: pid ', 'peer: NotesProvider onCreate in process com.gesher.peer',
     'peer: NotesProvider insert hello from components', 'peer: NotesProvider call describe',
