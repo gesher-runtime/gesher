@@ -775,6 +775,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            app/java/com/gesher/app
+            app/java/com/gesher/server
+            tests/app-crash
+            tools
             tools/package
             tools/ci
             tools/surface
