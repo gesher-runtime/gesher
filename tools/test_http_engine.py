@@ -70,7 +70,7 @@ def main():
                             '-cp', str(work), '-d', str(work), str(wrapper), str(policy), str(annotation), str(logger),
                             *map(str, framing), str(ROOT / 'tests/net/Http2DeviceSmoke.java')],
                            check=True, timeout=60)
-            for mode in args.http2_mode or ['', 'unary', 'gzip', 'gzip-headers', 'early-read', 'readonly-write']:
+            for mode in args.http2_mode or ['', 'unary', 'gzip', 'gzip-headers', 'early-read', 'readonly-write', 'disabled']:
                 subprocess.run([str(args.java_home / 'bin/java'), '-cp', str(work), 'Http2DeviceSmoke',
                                 *([mode] if mode else [])], check=True, timeout=35)
 

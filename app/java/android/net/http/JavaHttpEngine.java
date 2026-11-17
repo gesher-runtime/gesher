@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** URLConnection supplies proxy selection, Android network security config and TLS. */
 final class JavaHttpEngine extends HttpEngine {
     final String agent;
+    final boolean http2Enabled;
     final ExecutorService io = Executors.newCachedThreadPool(r -> {
         Thread thread = new Thread(r, "Gesher-HttpEngine"); thread.setDaemon(true); return thread;
     });
@@ -19,17 +20,42 @@ final class JavaHttpEngine extends HttpEngine {
     private boolean closed;
     private Network network;
 
-    JavaHttpEngine(String agent) { this.agent=agent; }
+    JavaHttpEngine(String agent, boolean http2Enabled) {
+        this.agent = agent;
+        this.http2Enabled = http2Enabled;
+    }
     synchronized void checkOpen() {
         if (closed) throw new IllegalStateException("HttpEngine is shut down");
     }
     @Override public synchronized void bindToNetwork(Network value) { checkOpen(); network=value; }
     @Override public synchronized URLConnection openConnection(URL url) throws IOException {
         checkOpen(); checkUrl(url);
-        URLConnection connection=network==null ? url.openConnection() : network.openConnection(url);
+        URLConnection connection = openTransport(url, network);
+        if (isAndroidHttpConnection(connection)) configureProtocols(connection);
         connection.setRequestProperty("User-Agent", agent);
         return connection;
     }
+    private static URLConnection openTransport(URL url, Network network) throws IOException {
+        return network == null ? url.openConnection() : network.openConnection(url);
+    }
+
+    private static boolean isAndroidHttpConnection(URLConnection connection) {
+        String name = connection.getClass().getName();
+        return name.equals("com.android.okhttp.internal.huc.HttpURLConnectionImpl")
+                || name.equals("com.android.okhttp.internal.huc.HttpsURLConnectionImpl");
+    }
+
+    private void configureProtocols(URLConnection connection) {
+        // Android's repackaged OkHttp consumes this property locally. Its
+        // pool includes the protocol list in the address key, separating
+        // HTTP/2-enabled connections from HTTP/1.1-only connections.
+        connection.setRequestProperty("X-Android-Protocols", http2Enabled ? "h2,http/1.1" : "http/1.1");
+    }
+
+    private static boolean isProtocolControl(String name) {
+        return name.equals("X-Android-Protocols") || name.equals("X-Android-Transports");
+    }
+
     @Override public URLStreamHandlerFactory createUrlStreamHandlerFactory() {
         // Use a URL constructed before installing the returned handler, so that
         // opening it cannot recursively re-enter this factory.
@@ -101,11 +127,15 @@ final class JavaHttpEngine extends HttpEngine {
         final List<String> chain;
         final int code;
         final String message;
+        final String protocol;
         final Headers headers;
         volatile long received;
         Response(List<String> chain, HttpURLConnection connection) throws IOException {
             this.chain=Collections.unmodifiableList(new ArrayList<>(chain));
             code=connection.getResponseCode(); message=Objects.toString(connection.getResponseMessage(), "");
+            protocol = isAndroidHttpConnection(connection)
+                    ? Objects.toString(connection.getHeaderField("X-Android-Selected-Protocol"), "http/1.1")
+                    : "http/1.1";
             List<Map.Entry<String,String>> values=new ArrayList<>();
             for (int i=1;;i++) {
                 String name=connection.getHeaderFieldKey(i), value=connection.getHeaderField(i);
@@ -117,7 +147,7 @@ final class JavaHttpEngine extends HttpEngine {
         @Override public HeaderBlock getHeaders() { return headers; }
         @Override public int getHttpStatusCode() { return code; }
         @Override public String getHttpStatusText() { return message; }
-        @Override public String getNegotiatedProtocol() { return "http/1.1"; }
+        @Override public String getNegotiatedProtocol() { return protocol; }
         @Override public long getReceivedByteCount() { return received; }
         @Override public String getUrl() { return chain.get(chain.size()-1); }
         @Override public List<String> getUrlChain() { return chain; }
@@ -250,7 +280,7 @@ final class JavaHttpEngine extends HttpEngine {
         }
         private void connect() throws Exception {
             URL target=current;
-            HttpURLConnection opened=(HttpURLConnection)(network==null ? target.openConnection() : network.openConnection(target));
+            HttpURLConnection opened = (HttpURLConnection) openTransport(target, network);
             synchronized (this) {
                 if (isDone()) { opened.disconnect(); return; }
                 connection=opened;
@@ -260,7 +290,12 @@ final class JavaHttpEngine extends HttpEngine {
             opened.setConnectTimeout(30000); opened.setReadTimeout(30000);
             opened.setRequestMethod(method);
             opened.setRequestProperty("User-Agent", engine.agent);
-            for (Map.Entry<String,String> h: effectiveHeaders) opened.addRequestProperty(h.getKey(),h.getValue());
+            boolean androidConnection = isAndroidHttpConnection(opened);
+            for (Map.Entry<String, String> header : effectiveHeaders) {
+                if (androidConnection && isProtocolControl(header.getKey())) continue;
+                opened.addRequestProperty(header.getKey(), header.getValue());
+            }
+            if (androidConnection) engine.configureProtocols(opened);
             if (sendUpload) upload(opened);
             chain.add(target.toExternalForm());
             Response info=new Response(chain,opened);

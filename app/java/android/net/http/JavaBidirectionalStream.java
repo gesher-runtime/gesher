@@ -2,6 +2,7 @@
 package android.net.http;
 
 import android.net.Network;
+import java.net.ProtocolException;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -75,6 +76,9 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         if (started) throw new IllegalStateException("Stream has already started");
         engine.register(this); started=true;
         io(() -> {
+            // The current duplex transport requires HTTP/2. Fail through the
+            // ordinary asynchronous callback path before opening a connection.
+            if (!engine.http2Enabled) throw new ProtocolException("HTTP/2 is disabled for this engine");
             Http2Transport opened=new Http2Transport();
             synchronized (this) { if (done) { opened.close(); return; } transport=opened; }
             opened.connect(url,network);
@@ -248,7 +252,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         @Override public HeaderBlock getHeaders() { return headers; }
         @Override public int getHttpStatusCode() { return code; }
         @Override public String getHttpStatusText() { return ""; }
-        @Override public String getNegotiatedProtocol() { return "h2"; }
+        @Override public String getNegotiatedProtocol() { return code == 0 ? "" : "h2"; }
         @Override public long getReceivedByteCount() { return received; }
         @Override public String getUrl() { return url; }
         @Override public List<String> getUrlChain() { return Collections.singletonList(url); }
