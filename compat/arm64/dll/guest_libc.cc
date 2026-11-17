@@ -397,6 +397,10 @@ struct SyscallMap {
   char ret;
 };
 const SyscallMap kSyscalls[] = {
+    {5, "setxattr", 'i'}, {6, "lsetxattr", 'i'}, {7, "fsetxattr", 'i'},
+    {8, "getxattr", 'l'}, {9, "lgetxattr", 'l'}, {10, "fgetxattr", 'l'},
+    {11, "listxattr", 'l'}, {12, "llistxattr", 'l'}, {13, "flistxattr", 'l'},
+    {14, "removexattr", 'i'}, {15, "lremovexattr", 'i'}, {16, "fremovexattr", 'i'},
     {17, "getcwd", 'p'},      {23, "dup", 'i'},          {24, "dup3", 'i'},
     {26, "inotify_init1", 'i'}, {27, "inotify_add_watch", 'i'}, {28, "inotify_rm_watch", 'i'},
     {32, "flock", 'i'},
