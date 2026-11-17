@@ -99,9 +99,11 @@ public final class UiModeFixture {
         volatile int theme = 1, display = WindowsHost.DISPLAY_STATE_ON;
         volatile boolean power, closed;
         volatile UiModeManagerService.Twilight twilight;
+        final AtomicInteger events = new AtomicInteger();
         Runnable changed;
         @Override public long now() { return time; }
         @Override public ZoneId zone() { return zone; }
+        @Override public int takeEvents() { return events.getAndSet(0); }
         @Override public UiModeManagerService.Environment read(boolean needsTwilight) {
             return new UiModeManagerService.Environment(theme, display, power, needsTwilight ? twilight : null);
         }
@@ -341,6 +343,145 @@ public final class UiModeFixture {
             check(saved(file).getProperty("overrideOn").equals("false")
                             && saved(file).getProperty("overrideOff").equals("false"),
                     "Storage recovery did not save the pending derived override reset");
+        }
+    }
+
+    private static void attentionWait(boolean binder, PackageManagerService pm,
+            ActivityTaskManagerService atm, int mode) throws Exception {
+        Source source = new Source();
+        source.twilight = new UiModeManagerService.Twilight(false, source.time + 60_000);
+        AtomicInteger dispatches = new AtomicInteger();
+        try (UiModeManagerService service = new UiModeManagerService(pm, atm, source, null, null,
+                ignored -> dispatches.incrementAndGet())) {
+            IUiModeManager api = api(service, binder);
+            api.setNightMode(MODE_NIGHT_NO); api.setNightMode(mode); awaitWorker(service);
+            int calls = dispatches.get();
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
+            check(api.getAttentionModeThemeOverlay() == MODE_ATTENTION_THEME_OVERLAY_NIGHT
+                            && UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO && dispatches.get() == calls,
+                    "Attention bypassed an automatic selection's pending inactive-device wait");
+            source.display = WindowsHost.DISPLAY_STATE_DIMMED; service.refreshEnvironment();
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO, "Dimmed display released an attention wait");
+            source.display = WindowsHost.DISPLAY_STATE_UNKNOWN; service.refreshEnvironment();
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO, "Unknown display released an attention wait");
+            source.display = WindowsHost.DISPLAY_STATE_ON;
+            source.power = true; service.refreshEnvironment();
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES, "Battery saver did not bypass pending publication");
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_DAY);
+            source.power = false; service.refreshEnvironment();
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
+                    "Battery-saver publication incorrectly cleared the existing wait");
+            source.display = WindowsHost.DISPLAY_STATE_OFF; service.refreshEnvironment();
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO, "Display-off did not release pending attention");
+            source.display = WindowsHost.DISPLAY_STATE_ON; service.refreshEnvironment();
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
+                    "Interactive attention was deferred with no pending wait");
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_OFF);
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
+                    "Interactive attention clearing was deferred after the wait ended");
+
+            api.setNightMode(MODE_NIGHT_NO); api.setNightMode(mode); awaitWorker(service);
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
+            check(api.setNightModeActivated(false), "Explicit activation failed to clear the pending wait");
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
+                    "Explicit activation retained an obsolete attention wait");
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_OFF);
+            source.at("2026-11-17T23:00:00Z");
+            source.twilight = new UiModeManagerService.Twilight(true, source.time + 60_000);
+            service.refreshEnvironment();
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
+                    "An observed automatic transition did not rearm the inactive-device wait");
+            source.display = WindowsHost.DISPLAY_STATE_OFF; service.refreshEnvironment();
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
+                    "Display-off did not publish the automatic transition's pending overlay");
+            source.display = WindowsHost.DISPLAY_STATE_ON; service.refreshEnvironment();
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_DAY);
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
+                    "An unchanged display-on observation recreated a released wait");
+            if (mode == MODE_NIGHT_CUSTOM) {
+                source.events.set(WindowsHost.EVENT_TIME_CHANGED); service.refreshEnvironment();
+                api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
+                check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
+                        "A real clock-change event did not retain custom-mode deferral");
+                source.display = WindowsHost.DISPLAY_STATE_OFF; service.refreshEnvironment();
+                check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
+                        "Clock-change wait did not release at display-off");
+                source.display = WindowsHost.DISPLAY_STATE_ON; service.refreshEnvironment();
+            }
+            api.setNightMode(MODE_NIGHT_NO); api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_OFF);
+            api.setNightMode(mode); awaitWorker(service);
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
+            api.setNightMode(MODE_NIGHT_YES);
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
+                    "Explicit YES policy did not release the previous automatic wait");
+            api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_DAY);
+            check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
+                    "Explicit mode selection left a stale attention wait");
+        }
+    }
+
+    private static void observe(Source source, boolean night, int day) {
+        source.at("2026-11-" + day + (night ? "T23:00:00Z" : "T12:00:00Z"));
+        source.twilight = new UiModeManagerService.Twilight(night, source.time + 86_400_000);
+    }
+    private static void deferredOverride(boolean binder, PackageManagerService pm,
+            ActivityTaskManagerService atm, File directory, int mode, boolean active, String update) throws Exception {
+        String description = "mode=" + mode + ", manual=" + active + ", update=" + update;
+        File file = new File(directory, "deferred-" + mode + "-" + active + "-" + update + ".properties");
+        Source source = new Source(); source.display = WindowsHost.DISPLAY_STATE_OFF;
+        observe(source, !active, 17);
+        int manual = active ? UI_MODE_NIGHT_YES : UI_MODE_NIGHT_NO;
+        int expected = update.equals("none") || update.equals("steady-power") ? manual
+                : active ? UI_MODE_NIGHT_NO : UI_MODE_NIGHT_YES;
+        try (UiModeManagerService service = new UiModeManagerService(pm, atm, source, file, null, ignored -> {})) {
+            IUiModeManager api = api(service, binder);
+            api.setNightMode(mode); awaitWorker(service);
+            check(api.setNightModeActivated(active) && UiModeManagerService.getUiModeNight() == manual,
+                    "Manual override setup failed: " + description);
+            byte[] selected = Files.readAllBytes(file.toPath());
+            if (update.equals("steady-power")) {
+                source.power = true; service.refreshEnvironment();
+            }
+            source.display = WindowsHost.DISPLAY_STATE_ON;
+            observe(source, active, 18); service.refreshEnvironment();
+            check(java.util.Arrays.equals(selected, Files.readAllBytes(file.toPath())),
+                    "Deferred catch-up retired the saved override: " + description);
+            check((boolean) get(get(service, "mState"), "computed") == active,
+                    "Deferred catch-up rewrote computed policy: " + description);
+            if (update.equals("attention")) {
+                int overlay = active ? MODE_ATTENTION_THEME_OVERLAY_DAY : MODE_ATTENTION_THEME_OVERLAY_NIGHT;
+                api.setAttentionModeThemeOverlay(overlay);
+                check(api.getAttentionModeThemeOverlay() == overlay
+                                && UiModeManagerService.getUiModeNight() == manual,
+                        "Attention did not preserve the pending resource wait: " + description);
+                check((boolean) get(get(service, "mState"), "computed") != active,
+                        "Attention failed to recompute policy while a wait was pending: " + description);
+                api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_OFF);
+            } else if (update.equals("power-change")) {
+                source.power = true; service.refreshEnvironment();
+                source.power = false; service.refreshEnvironment();
+            }
+            observe(source, !active, 19); service.refreshEnvironment();
+            if (update.equals("none") || update.equals("steady-power")) {
+                check(java.util.Arrays.equals(selected, Files.readAllBytes(file.toPath()))
+                                && (boolean) get(get(service, "mState"), "computed") == active,
+                        "Deferred return observation changed the override or computed cache: " + description);
+            }
+            if (update.equals("steady-power")) {
+                source.power = false; service.refreshEnvironment();
+                check(UiModeManagerService.getUiModeNight() == manual,
+                        "Automatic callbacks recomputed merely because power saver was already active: " + description);
+            }
+            source.display = WindowsHost.DISPLAY_STATE_OFF; service.refreshEnvironment();
+            check(UiModeManagerService.getUiModeNight() == expected,
+                    "Inactivity evaluated the wrong retained override: " + description);
+        }
+        if (mode == MODE_NIGHT_AUTO) {
+            check(saved(file).getProperty("computed").equals(Boolean.toString(expected == UI_MODE_NIGHT_YES)),
+                    "Shutdown saved an incorrectly recomputed deferred AUTO cache: " + description);
         }
     }
 
@@ -594,6 +735,15 @@ public final class UiModeFixture {
             derivedOverrideStorage(binder, h.pm, h.atm, directory, MODE_NIGHT_AUTO, false);
             derivedOverrideStorage(binder, h.pm, h.atm, directory, MODE_NIGHT_CUSTOM, false);
             derivedOverrideStorage(binder, h.pm, h.atm, directory, MODE_NIGHT_AUTO, true);
+            attentionWait(binder, h.pm, h.atm, MODE_NIGHT_AUTO);
+            attentionWait(binder, h.pm, h.atm, MODE_NIGHT_CUSTOM);
+            for (int mode : new int[]{MODE_NIGHT_AUTO, MODE_NIGHT_CUSTOM}) {
+                for (boolean active : new boolean[]{false, true}) {
+                    for (String update : List.of("none", "attention", "power-change", "steady-power")) {
+                        deferredOverride(binder, h.pm, h.atm, directory, mode, active, update);
+                    }
+                }
+            }
 
             Source replacementNight = new Source(); replacementNight.display = WindowsHost.DISPLAY_STATE_OFF;
             replacementNight.twilight = new UiModeManagerService.Twilight(false, replacementNight.time + 60_000);

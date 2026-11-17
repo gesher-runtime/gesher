@@ -34,12 +34,31 @@ The modes retain their Android meanings:
 Automatic twilight/schedule changes wait for the observed Windows session display
 to turn off. `GUID_SESSION_DISPLAY_STATUS` comes from the existing hidden event
 window; dimmed remains interactive and an unavailable observation remains unknown.
-Explicit activation, bedtime changes and real battery-saver changes apply without
-that wait. Windows time, settings, resume, power and display events refresh policy;
+Explicit activation and bedtime changes release that wait. Active battery saver
+publishes its night override without clearing an existing wait. Windows time,
+settings, resume, power and display events refresh policy;
 one cancellable timer tracks the next boundary, with a bounded hourly refresh for
 changes in real location. Events are coalesced and unchanged snapshots do not
 rewrite the settings file. Native registry and event observation use no per-call
 processes and leak no registry/notification handles.
+
+The pending inactivity wait is distinct from the current display state. Selecting
+an automatic policy, changing its schedule, or observing an automatic transition
+while interactive can arm the wait even if resources have not changed yet.
+Attention updates its selected overlay immediately and preserves an existing
+wait; resources are dispatched when observed display-off releases it. Once the
+wait has ended, attention changes apply while interactive. An unchanged display-on
+refresh does not recreate the wait, while actual custom time-change events retain
+AOSP's deferral behavior. Dimmed and unknown display states never release a wait.
+
+Deferred automatic callbacks sample current twilight/local time and reschedule
+alarms without recomputing configuration policy, changing the computed cache, or
+retiring a manual override. Inactivity release then evaluates the current input
+against that retained override. Attention updates and actual power-save changes
+are separate configuration-update entrypoints: they recompute policy while keeping
+any pending resource wait, with active power saver bypassing the publication gate.
+An unchanged power-save observation is not an extra configuration update. Custom
+alarm scheduling uses a pure time predicate rather than the computed policy.
 
 `setApplicationNightMode()` changes only the package belonging to the authenticated
 calling PID and matching UID. A shared UID does not merge package preferences.

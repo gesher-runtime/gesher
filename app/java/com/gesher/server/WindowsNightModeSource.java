@@ -19,14 +19,17 @@ package com.gesher.server;
 import android.location.Location;
 import java.time.ZoneId;
 import java.util.Calendar;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Real Windows inputs for UiModeManager; no coordinates or theme are invented on failure. */
 final class WindowsNightModeSource implements UiModeManagerService.Source, WindowsHost.Listener {
     private volatile Runnable mChanged;
     private volatile ZoneId mZone = ZoneId.systemDefault();
+    private final AtomicInteger mEvents = new AtomicInteger();
 
     @Override public long now() { return System.currentTimeMillis(); }
     @Override public ZoneId zone() { return mZone; }
+    @Override public int takeEvents() { return mEvents.getAndSet(0); }
     @Override public UiModeManagerService.Environment read(boolean twilight) {
         // AlarmManager's worker may not yet have invalidated the default-zone
         // cache for this same Windows notification. Observe the host zone here.
@@ -53,12 +56,14 @@ final class WindowsNightModeSource implements UiModeManagerService.Source, Windo
     }
     @Override public void close() {
         mChanged = null;
+        mEvents.set(0);
         WindowsHost.removeListener(this);
     }
     @Override public void onWindowsEvents(int events) {
         if ((events & (WindowsHost.EVENT_SETTING_CHANGED | WindowsHost.EVENT_TIME_CHANGED
                 | WindowsHost.EVENT_RESUMED | WindowsHost.EVENT_POWER_STATUS
                 | WindowsHost.EVENT_DISPLAY_STATE)) != 0) {
+            mEvents.getAndUpdate(pending -> pending | events);
             Runnable changed = mChanged;
             if (changed != null) changed.run();
         }
