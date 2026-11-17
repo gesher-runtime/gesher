@@ -916,10 +916,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         return result;
     }
 
-    /** Internal component metadata access, using the same installed visibility snapshot. */
-    boolean isPackageVisibleTo(int callingUid, String packageName) {
-        return android.os.UserHandle.getUserId(callingUid) == 0
-                && packageVisibility().canSee(callingUid, packageName);
+    /** Resolves the authorized APK from the same snapshot used to check its visibility. */
+    ApkPackage getVisibleSearchPackage(int callingUid, String callerPackage, String packageName) {
+        if (callingUid < 0 || android.os.UserHandle.getUserId(callingUid) != 0) return null;
+        PackageVisibility visibility = packageVisibility();
+        if (!visibility.contains(callerPackage)) return null;
+        // Legacy Binder assigns 10000 to unrelated processes. The authenticated
+        // package still distinguishes their manifest queries and compatibility rules.
+        boolean visible = GmsSignatureSpoofing.isEnabled() || "android".equals(callerPackage)
+                ? visibility.uid(callerPackage) == callingUid && visibility.canSee(callingUid, packageName)
+                : visibility.canSeeFromPackage(callerPackage, packageName);
+        return visible ? visibility.apk(packageName) : null;
     }
 
     private PackageVisibility packageVisibility() {

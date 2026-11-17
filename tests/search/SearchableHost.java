@@ -33,7 +33,7 @@ import sun.misc.Unsafe;
 /** Production lookup, public client and visibility; explicit native identity/XML boundaries. */
 public final class SearchableHost {
     private static final String A = "fixture.search.client", B = "fixture.search.target";
-    private static final int UID_A = 12001, UID_B = 12002, PID = 981017;
+    private static final int UID_A = 10000, UID_B = 10001, PID = 981017;
     private static final String META = "android.app.searchable", DEFAULT = "android.app.default_searchable";
     private static Unsafe unsafe;
     private static int checks;
@@ -162,11 +162,35 @@ public final class SearchableHost {
             catch (SecurityException expected) { checks++; }
         });
         Fixture otherUser = new Fixture(visibleClient(), target(), UID_B);
-        as(112001, PID, () -> {
+        as(110000, PID, () -> {
             try { check(otherUser.lookup("Search") == null, "Lookup crossed into a different user"); }
             catch (SecurityException expected) { checks++; }
         });
     }
+
+    private static void legacyVisibility() throws Exception {
+        PackageImpl client = manifest(A);
+        client.addActivity(activity(A, "Search", true));
+        Fixture hidden = new Fixture(client, target(), UID_A);
+        as(UID_A, PID, () -> {
+            SearchableInfo own = hidden.client.getSearchableInfo(new ComponentName(A, A + ".Search"));
+            check(own != null, "Legacy caller could not resolve its own declaration");
+            check(hidden.lookup("Search") == null, "Legacy compatibility UID exposed a hidden package");
+        });
+        check(hidden.reads == 1, "Legacy lookup read an invisible APK");
+
+        Fixture visible = new Fixture(visibleClient(), target(), UID_A);
+        as(UID_A, PID, () -> {
+            check(visible.lookup("Search") != null, "Legacy visibility ignored the caller's queries");
+            check(visible.lookup("Launch") != null, "Legacy visibility blocked a visible redirect");
+        });
+
+        PackageImpl old = manifest(A);
+        old.setTargetSdkVersion(29);
+        Fixture preR = new Fixture(old, target(), UID_A);
+        as(UID_A, PID, () -> check(preR.lookup("Search") != null, "Pre-R legacy caller lost visibility"));
+    }
+
     private static void routing() throws Exception {
         Fixture f = new Fixture(visibleClient(), target(), UID_B);
         as(UID_A, PID, () -> {
@@ -236,7 +260,11 @@ public final class SearchableHost {
     public static void main(String[] args) throws Exception {
         System.load(args[0]);
         unsafe = (Unsafe)field(Unsafe.class, "theUnsafe").get(null);
-        visibility(); routing(); resourceAndLifecycle();
+        if (args.length == 2 && "legacy".equals(args[1])) {
+            legacyVisibility();
+        } else {
+            visibility(); routing(); resourceAndLifecycle();
+        }
         System.out.println("Searchable host all passed: " + checks + " checks");
         System.out.println("Production SearchManagerService, PMS visibility and public SearchManager; constructed manifests, controlled Binder JNI and metadata-reader boundary. Real XML, ContentResolver and Binder transport remain the components/peer Windows APK gates.");
     }

@@ -26,6 +26,9 @@ foreign searchable declaration. The lookup now uses the same `PackageVisibility`
 snapshot as the package service. The caller is authenticated before APK access;
 visibility, package identity and enabled state are rechecked after resource
 loading, so replacing or removing the APK does not publish stale metadata.
+The legacy runtime assigns a compatibility UID to unrelated apps. Search uses
+the authenticated package in that mode, so the caller's manifest determines
+visibility even when several packages report the same numeric UID.
 
 ## Validation boundaries
 
@@ -35,8 +38,10 @@ Its host fixture constructs parsed manifests and supplies explicit native Binder
 identity and XML-reader boundaries. It checks visibility, authentication,
 one-hop defaults, direct metadata precedence, unavailable declarations, package
 replacement/removal, enabled-state changes, resource exceptions and identity
-restoration. The negative-control option restores the original blanket foreign
-package denial and must fail the explicit `<queries>` case.
+restoration. A separate legacy process verifies that one compatibility UID
+keeps unrelated packages hidden while own and declared packages resolve. The
+negative-control option restores the original blanket foreign package denial
+and must fail the explicit `<queries>` case.
 
 The components and peer APK tests exercise the separate real XML/resource,
 cross-process Binder and `ContentResolver` paths on Windows. The peer declares

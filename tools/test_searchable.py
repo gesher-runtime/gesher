@@ -38,14 +38,18 @@ def main() -> None:
             service = work / "SearchManagerService.java"
             service.write_text(contents)
         sources = [service, ROOT / "app/java/com/gesher/server/PackageManagerService.java",
+                   ROOT / "app/java/com/gesher/server/PackageVisibility.java",
                    ROOT / "tests/search/SearchableHost.java"]
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), *map(str, sources)], check=True)
         environment = os.environ.copy()
         environment["ANDROID_DATA"] = str(work / "data")
+        java = [str(args.java_home / "bin/java"), "-cp", str(classes) + os.pathsep + classpath,
+                "gesher.search.SearchableHost", str(library)]
         environment["GESHER_MICROG_SPOOF"] = "1"
-        subprocess.run([str(args.java_home / "bin/java"), "-cp", str(classes) + os.pathsep + classpath,
-                        "gesher.search.SearchableHost", str(library)], env=environment, check=True, timeout=90)
+        subprocess.run(java, env=environment, check=True, timeout=90)
+        environment["GESHER_MICROG_SPOOF"] = "0"
+        subprocess.run([*java, "legacy"], env=environment, check=True, timeout=90)
 
 
 if __name__ == "__main__":

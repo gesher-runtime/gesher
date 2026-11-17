@@ -12,6 +12,7 @@ import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.Process;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -49,11 +50,10 @@ final class SearchManagerService extends ISearchManager.Default {
         // filters by package visibility, not package-name equality: explicit
         // <queries>, QUERY_ALL_PACKAGES, legacy targets and shared UIDs count.
         boolean system = mCallers.isSystem();
-        if (!system) mCallers.callerPackage();
-        int callingUid = system ? android.os.Process.SYSTEM_UID : mCallers.callerUid();
-        if (!mPackages.isPackageVisibleTo(callingUid, name)) return null;
-        ApkPackage pkg = mPackages.get(name);
-        if (pkg == null || mPackages.isRemovalPending(name)) return null;
+        String callerPackage = system ? "android" : mCallers.callerPackage();
+        int callingUid = system ? Process.SYSTEM_UID : mCallers.callerUid();
+        ApkPackage pkg = mPackages.getVisibleSearchPackage(callingUid, callerPackage, name);
+        if (pkg == null) return null;
 
         ActivityInfo source = pkg.activityInfo(activity.getClassName(), METADATA);
         if (source == null) return null;
@@ -66,11 +66,11 @@ final class SearchManagerService extends ISearchManager.Default {
         }
         // APK content is read outside package-manager locks. Recheck both activities
         // against one enabled-state snapshot before publishing the lookup result.
-        if (result == null || !activitiesStillEnabled(pkg, activity, result.getSearchActivity())) {
+        if (result == null || mPackages.getVisibleSearchPackage(callingUid, callerPackage, name) != pkg
+                || !activitiesStillEnabled(pkg, activity, result.getSearchActivity())) {
             return null;
         }
-        return mPackages.get(name) == pkg && !mPackages.isRemovalPending(name)
-                && mPackages.isPackageVisibleTo(callingUid, name) ? result : null;
+        return result;
     }
 
     private static boolean activitiesStillEnabled(ApkPackage pkg, ComponentName source, ComponentName target) {
