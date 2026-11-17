@@ -18,6 +18,12 @@ def controls():
     assert not allowed('gesher_arm64.dll', ['WS2_32.dll'])
     assert not allowed('gesher_arm64.dll', ['WINHTTP.dll'])
     assert not allowed('net_tcp_priority_probe.exe', ['WINHTTP.dll'])
+    # The POSIX clock/resume backend uses these exact Windows system imports.
+    # They do not authorize a power/clock dependency in the standalone translator.
+    for role in POLICY:
+        clocks = ['api-ms-win-core-realtime-l1-1-1.dll', 'powrprof.dll']
+        assert allowed(role, clocks) == (role != 'gesher_arm64.dll')
+        assert not allowed(role, ['api-ms-win-power-private-l1-1-0.dll'])
     assert not allowed('foreign-role', ['kernel32.dll'])
     print('PASS TCP priority import policy: unknown/private/path/empty/wrong-role negative controls')
 

@@ -126,6 +126,9 @@ public final class PendingIntentContractTest {
 
     private static Object code(String name, int uid, int signer) throws Exception {
         PackageImpl parsed = (PackageImpl)PackageImpl.forTesting(name, "/fixture/" + name + "/base.apk");
+        var keepAlive = new com.android.internal.pm.pkg.component.ParsedActivityImpl();
+        keepAlive.setPackageName(name); keepAlive.setName(name + ".FixtureKeepAlive"); keepAlive.setEnabled(true);
+        parsed.addActivity(keepAlive);
         parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.hideAsFinal();
         Object code = UNSAFE.allocateInstance(type("ApkPackage"));
         set(code, "packageName", name); set(code, "mUid", uid); set(code, "parsed", parsed);
@@ -164,7 +167,8 @@ public final class PendingIntentContractTest {
             set(am, "mServices", make(type("ActiveServices"), new Class<?>[]{atmType, pmType,
                     type("NotificationManagerService")}, atm, pm, null));
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
-            for (String map : new String[]{"mPublished", "mPublishedBy", "mClients", "mConnections"}) set(providers, map, new LinkedHashMap<>());
+            for (String map : new String[]{"mPublished", "mPublishedBy", "mPublishedCode", "mClients", "mConnections", "mInstalling"}) set(providers, map, new LinkedHashMap<>());
+            set(providers, "mRequests", new java.util.HashSet<>());
             set(am, "mProviders", providers);
             broadcasts = make(type("BroadcastController"), new Class<?>[]{atmType, pmType, long.class}, atm, pm, timeout);
             set(am, "mBroadcasts", broadcasts);
@@ -181,7 +185,14 @@ public final class PendingIntentContractTest {
             set(process, "uid", uid); set(process, "packageName", name); set(process, "processName", name); set(process, "ready", true);
             ((List<Object>)get(atm, "mProcesses")).add(process);
             // A constructed activity record keeps this synthetic process alive; no activity lifecycle is claimed.
-            ((List<Object>)get(process, "activities")).add(UNSAFE.allocateInstance(type("ActivityTaskManagerService$ActivityRecord")));
+            android.content.pm.ActivityInfo info = (android.content.pm.ActivityInfo)invoke(pm, "getActivityInfo",
+                    new Class<?>[]{android.content.ComponentName.class, long.class, int.class},
+                    new android.content.ComponentName(name, name + ".FixtureKeepAlive"), 0L, 0);
+            Class<?> recordType = type("ActivityTaskManagerService$ActivityRecord");
+            Object record = make(recordType, new Class<?>[]{atm.getClass(), android.content.pm.ActivityInfo.class,
+                    Intent.class, int.class, int.class, String.class, recordType, String.class, int.class},
+                    atm, info, new Intent(), 1, pid, name, null, null, -1);
+            ((List<Object>)get(process, "activities")).add(record);
             return process;
         }
         IIntentSender create(int request, Intent intent, String resolvedType, int flags) throws Exception {
@@ -263,16 +274,24 @@ public final class PendingIntentContractTest {
     }
 
     private record Delivered(Intent intent, String type) { }
-    private static Delivered fill(Harness h, IIntentSender sender, Intent input, String type) throws Exception {
+    private record ActivityDispatch(Intent[] intents, String[] types, Bundle options, String creator) { }
+    private static ActivityDispatch dispatch(Harness h, IIntentSender sender, Intent input,
+            String type, Bundle options) throws Exception {
         Class<?> launchType = Class.forName("com.gesher.server.PendingIntents$ActivityLaunch");
-        AtomicReference<Delivered> delivered = new AtomicReference<>();
+        AtomicReference<ActivityDispatch> delivered = new AtomicReference<>();
         Object launch = Proxy.newProxyInstance(launchType.getClassLoader(), new Class<?>[]{launchType}, (self, method, args) -> {
-            delivered.set(new Delivered((Intent)args[1], (String)args[2])); return 0;
+            delivered.set(new ActivityDispatch((Intent[])args[1], (String[])args[2],
+                    (Bundle)args[5], (String)args[0])); return 0;
         });
         int result = (Integer)invoke(h.pending, "sendActivity", new Class<?>[]{IIntentSender.class, Intent.class,
-                String.class, Bundle.class, launchType}, sender, input, type, null, launch);
+                String.class, Bundle.class, launchType}, sender, input, type, options, launch);
         check(result == 0 && delivered.get() != null, "Activity dispatch seam was not reached");
         return delivered.get();
+    }
+    private static Delivered fill(Harness h, IIntentSender sender, Intent input, String type) throws Exception {
+        ActivityDispatch dispatch = dispatch(h, sender, input, type, null);
+        int last = dispatch.intents().length - 1;
+        return new Delivered(dispatch.intents()[last], dispatch.types()[last]);
     }
     private static void fillIn() throws Exception {
         try (Harness h = new Harness()) {
@@ -338,6 +357,49 @@ public final class PendingIntentContractTest {
             prefix.setAction("mutated"); replacement.putExtra("new", "mutated"); stored.putExtra("new", "readback-mutation");
             check("new-stack".equals(((Intent[])get(token, "intents"))[0].getAction())
                     && "value".equals(h.am.getIntentForIntentSender(token).getStringExtra("new")), "Creator/readback copies share stored mutable state");
+            ActivityDispatch delivered = dispatch(h, token, null, null, null);
+            check(delivered.intents().length == 2 && "new-stack".equals(delivered.intents()[0].getAction())
+                    && "prefix/type".equals(delivered.types()[0]) && delivered.intents()[1].getFlags() == initial.getFlags(),
+                    "UPDATE_CURRENT lost its prefix/types on actual activity dispatch");
+        }
+        try (Harness h = new Harness()) {
+            Bundle creation = new Bundle(); creation.putString("creation", "kept"); creation.putInt("override", 1);
+            Intent prefix = new Intent("stack-root").putExtra("prefix", "retained");
+            IIntentSender token = h.am.getIntentSenderWithFeature(ActivityManager.INTENT_SENDER_ACTIVITY,
+                    CREATOR, null, null, null, 51, new Intent[]{prefix, new Intent(ACTION)},
+                    new String[]{"prefix/type", null}, MUTABLE, creation, 0);
+            creation.putString("creation", "mutated"); prefix.putExtra("prefix", "mutated");
+            Bundle sending = new Bundle(); sending.putInt("override", 2);
+            Intent fill = new Intent().setData(Uri.parse("content://fixture/final")).putExtra("sender", "last-only");
+            ActivityDispatch first = dispatch(h, token, fill, "final/type", sending);
+            check(first.intents().length == 2 && CREATOR.equals(first.creator())
+                    && "retained".equals(first.intents()[0].getStringExtra("prefix"))
+                    && !first.intents()[0].hasExtra("sender") && "prefix/type".equals(first.types()[0])
+                    && "last-only".equals(first.intents()[1].getStringExtra("sender"))
+                    && "final/type".equals(first.types()[1]), "Stack send changed a parent or dropped final fill-in");
+            check("kept".equals(first.options().getString("creation")) && first.options().getInt("override") == 2,
+                    "Activity send lost/aliased creator options or sender precedence");
+            first.intents()[0].setAction("consumer-mutated"); first.types()[0] = "consumer/mutated";
+            first.options().putString("creation", "consumer-mutated");
+            ActivityDispatch second = dispatch(h, token, null, null, null);
+            check("stack-root".equals(second.intents()[0].getAction())
+                    && "prefix/type".equals(second.types()[0]) && !second.intents()[1].hasExtra("sender")
+                    && "kept".equals(second.options().getString("creation"))
+                    && second.options().getInt("override") == 1, "One send mutated the next stack/options");
+            set(h.pending, "mBeforeSendDispatch", (Runnable)() -> {
+                try {
+                    h.create(ActivityManager.INTENT_SENDER_ACTIVITY, 51,
+                            new Intent[]{new Intent("updated-root"), new Intent(ACTION)},
+                            new String[]{"updated/type", null}, MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                } catch (Exception failure) { throw new AssertionError(failure); }
+            });
+            ActivityDispatch accepted = dispatch(h, token, null, null, null);
+            set(h.pending, "mBeforeSendDispatch", null);
+            ActivityDispatch updated = dispatch(h, token, null, null, null);
+            check("stack-root".equals(accepted.intents()[0].getAction())
+                    && "updated-root".equals(updated.intents()[0].getAction())
+                    && "updated/type".equals(updated.types()[0]),
+                    "UPDATE_CURRENT tore an already accepted stack send");
         }
     }
 

@@ -103,6 +103,14 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
 
+$activityRestoreOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ActivityRestoreContractTest') 90
+$activityRestoreCode = $LASTEXITCODE
+Check 'services: activity state restoration, process death survival and LaunchActivityItem delivery' {
+  $global:LASTEXITCODE = $activityRestoreCode
+  $activityRestoreOut
+} @('ActivityRestoreContractTest all passed:')
+
 $mediaRequestsOut = FixesRun ($dvmFixes + 'gesher.services.MediaStoreRequestContractTest') 90
 $mediaRequestsCode = $LASTEXITCODE
 Check 'framework: MediaStore request forwarding, provider errors and SDK callback descriptors' {
@@ -284,6 +292,15 @@ Check 'services: audio focus ownership, loss escalation, token death and public 
   $audioFocusOut
 } @('AudioFocusLifecycleTest all passed:')
 
+# UiMode uses generated IUiModeManager Binder parcels and the real ATM transaction path.
+$uiModeOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'UiModeContractTest') 90
+$uiModeCode = $LASTEXITCODE
+Check 'services: Android night mode scope, schedule, permissions, persistence and relaunch' {
+  $global:LASTEXITCODE = $uiModeCode
+  $uiModeOut
+} @('UiModeContractTest all passed:', 'checks; binder=true')
+
 # The wrapper creates the writable framework cache region. The fixture uses
 # generated AM Binder parcels and production URI/provider authorization state.
 $uriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
@@ -293,6 +310,14 @@ Check 'services: URI delegation, provider patterns, exact identities and scoped 
   $global:LASTEXITCODE = $uriGrantsCode
   $uriGrantsOut
 } @('UriGrantContractTest all passed: 138 checks; binder=true')
+
+$intentUriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'IntentUriGrantContractTest') 90
+$intentUriGrantsCode = $LASTEXITCODE
+Check 'services: Intent URI grants, IBinder owner lifecycle and non-system ignore' {
+  $global:LASTEXITCODE = $intentUriGrantsCode
+  $intentUriGrantsOut
+} @('IntentUriGrantContractTest passed: 28 checks')
 
 # Caller identity and URI snapshots must survive actual ActivityThread delivery,
 # relaunch and results, including a PendingIntent holder cleared by its own send.
@@ -410,6 +435,7 @@ foreach ($fixture in @(
   @('NdefDataContractTest', 'NDEF bytes, helpers, malformed input and native Parcel round trips'),
   @('PowerWakeLockCallbackTest', 'wake lock listener callbacks, real held state and token lifetime'),
   @('PackageManifestFlagsTest', 'complete parsed manifest flags preserve installed application state'),
+  @('AppStorageContextTest', 'distinct CE/DE contexts, files, preferences, databases and data migration'),
   @('PackageServiceQueriesTest', 'package UID/group queries and Android 16 dex-module completion'),
   @('BluetoothValueContractTest', 'BLE settings, filters, advertisements and parcels without an adapter'),
   @('MediaStoreContractTest', 'media collections, resolver forwarding and unavailable-provider handling'),

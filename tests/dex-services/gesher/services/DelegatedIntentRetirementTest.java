@@ -301,12 +301,12 @@ public final class DelegatedIntentRetirementTest {
             field(h.processType, "ready").setBoolean(app, true);
             field(h.processType, "windowMode").set(app, "hidden");
             ((List<Object>) field(h.atmType, "mProcesses").get(h.atm)).add(app);
-            // The source record is a planted fixture; only the delegated destination
-            // is resolved from a manifest. No application code is executed.
-            ActivityInfo sourceInfo = new ActivityInfo(destination);
-            sourceInfo.packageName = h.target.packageName;
-            sourceInfo.name = h.target.packageName + ".FixtureSource";
-            sourceInfo.applicationInfo = h.target.applicationInfo(0);
+            // A recording ActivityRecord still needs a genuinely declared, enabled
+            // component: production resume validates that Android contract.
+            ActivityInfo sourceInfo = h.pm.getActivityInfo(new ComponentName(h.target.packageName,
+                    h.target.packageName + ".FixtureSource"), 0, 0);
+            require(sourceInfo != null && sourceInfo.enabled && !sourceInfo.exported,
+                    "Use the target fixture APK's actual private result recipient");
             Class<?> activityType = Class.forName(h.atmType.getName() + "$ActivityRecord");
             Object source = make(activityType, new Class<?>[]{h.atmType, ActivityInfo.class, Intent.class,
                     int.class, int.class, String.class, activityType, String.class, int.class},

@@ -81,14 +81,16 @@ PathKind VirtualKind(std::string_view path, std::wstring* name) {
     *name = Widen(joined.c_str());
     return PathKind::kVirtual;
   }
-  // /sys/devices/system/cpu/{possible,present}: the CPU lists cpuinfo
+  // /sys/devices/system/cpu/{possible,present,online}: the CPU lists cpuinfo
   // (XNNPACK, onnxruntime) reads first, served like /proc's files.
   if (root == "sys") {
     if (NextPart(&path) == "devices" && NextPart(&path) == "system" &&
         NextPart(&path) == "cpu") {
       const auto leaf = NextPart(&path);
-      if ((leaf == "possible" || leaf == "present") && NextPart(&path).empty()) {
-        *name = leaf == "possible" ? L"sys/devices/system/cpu/possible" : L"sys/devices/system/cpu/present";
+      if ((leaf == "possible" || leaf == "present" || leaf == "online") && NextPart(&path).empty()) {
+        *name = leaf == "possible" ? L"sys/devices/system/cpu/possible" :
+                leaf == "present"  ? L"sys/devices/system/cpu/present" :
+                                     L"sys/devices/system/cpu/online";
         return PathKind::kVirtual;
       }
     }

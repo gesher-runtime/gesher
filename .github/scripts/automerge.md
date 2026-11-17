@@ -15,46 +15,59 @@ The PR author can opt in by removing and reapplying an earlier label, with a
 strictly older application by the same stable account ID in the event history.
 An author's first application instead requires the separate exact-head QA
 review described below. Other collaborators can approve with their first
-application. Every route requires write or admin access, initialization and a
-recorded label approval. Missing author identity blocks approval. This is
-asynchronous label removal and approval enforcement, not a restriction on
-GitHub's label-assignment UI.
+application. Every route requires write or admin access and a recorded bot
+approval. Missing author identity blocks approval. This is asynchronous label
+removal and approval enforcement, not a restriction on GitHub's label UI.
 
-The controller first records an unedited bot opening receipt, bound to the
-repository, PR number, creation time and an approval boundary. A new unlabelled
-PR is initialized by its opened event. Scheduled sweeps also initialize open
-PRs without the automerge label, covering older PRs and missed opening events before review.
-If a label event arrives before initialization, initialization covers it and
-removes it. Apply the label once more after initialization. This one-time
-reapproval prevents webhook ordering from turning an initial label into an
-approval. The effective boundary includes the immutable bot receipt's creation
-time and the current PR update observed during initialization, so a label
-already added while initialization was pending cannot approve it. Same-second
-receipt and label timestamps require a later application. Concurrent receipts
-use their latest boundary; a late opening event cannot relax it. The boundary
-is checked again before merge.
+The controller posts no issue comments: opening, initialization, waiting for CI,
+label removal and failures stay silent on the PR. Diagnostic reasons remain in
+Actions logs. The native bot approval review is the opt-in signal; GitHub's merge
+activity is the completion signal. Native review and dismissal events may still
+produce GitHub notifications according to subscribers' settings.
 
-GitHub CLI may add labels through a separate request after creating a PR.
-GitHub does not expose whether that later request came from the creation
-command or a new manual action, even when initialization has finished. An
-author's first label without the separate QA review is therefore rejected.
-Removing and reapplying it remains a valid opt-in after initialization.
+New PRs need no initialization write. The approval boundary is their creation
+time. Existing unedited bot opening receipts remain conservative boundaries:
+the latest recorded boundary or receipt creation time still applies. Edited,
+malformed or conflicting legacy opening records fail closed. This migration
+preserves earlier boundaries without creating more comments. An author's first
+label still needs the exact-head QA review below or a deliberate reapplication;
+a separate label request made by `gh pr create --label` alone is insufficient.
 
-The label workflow records a small, unedited github-actions bot comment containing the repository, PR, head SHA, target branch, label event ID and actor ID. A later workflow completion or scheduled sweep can use only that recorded approval. It cannot infer approval from a label that predates installation, a missed label delivery, an edited comment or ambiguous history. Remove and reapply the label if no approval was recorded. The delivered update timestamp must be zero or one second after the label timestamp, with exactly one label event in that interval and the same sender. Ambiguous same- or adjacent-second relabels require a fresh application.
+On a uniquely bound, authorized label delivery, the controller submits an
+`APPROVE` review as github-actions[bot], with `commit_id` set to the exact PR head
+and a hidden receipt containing repository, PR, head, base, label event and actor.
+This records the collaborator's automerge opt-in; it is not a code-review or
+project-scope verdict. CI, permissions and repository merge requirements remain
+separate gates. The bot review's REST and GraphQL identity, body, state, commit,
+submission time and absence of edits are verified again before merging. A
+dismissed review cannot be recreated by replaying the same label delivery.
+Old approval comments no longer authorize merging; reapply the label to record
+a native review. Missing, edited or dismissed approval requires a fresh label.
+The delivered update timestamp must be zero or one second after the label time,
+with exactly one label event in that interval and the same sender.
 
-Pushing a different head, force-pushing, reopening or retargeting requires a new approval. Delayed synchronize jobs re-read the current label event so they do not remove a newer approval.
+The repository must enable **Allow GitHub Actions to create and approve pull
+requests** in Actions workflow permissions. If approval is denied (including a
+PR authored by the bot itself), the controller fails closed without a comment
+fallback. Squash merging must also be enabled.
+
+Pushing a different head, force-pushing, reopening or retargeting requires a
+new approval. On synchronize, stale controller reviews are dismissed, including
+when the label is already absent; human reviews are untouched. This does not
+require enabling stale-review dismissal for the entire branch. The merge gate
+also checks the exact head even if a synchronize event was missed. Delayed
+synchronize jobs re-read the PR and label so they preserve a fresh approval.
 
 ## Author's first-label QA review
 
-After the opening receipt is recorded, the author may submit a pull-request
+After the approval boundary, the author may submit a pull-request
 review with the `COMMENT` event and then apply the label. GitHub does not allow
 authors to approve their own PR; an `APPROVE` review is not this proof. The
 submitted review must have REST state `COMMENTED`, a positive review ID, the
 same stable account ID as the label actor, and the exact current head SHA in
 `commit_id`. Its submission must be strictly after the effective opening
 boundary and strictly before the label. Same-second timestamps fail either
-comparison. A review cannot initialize a legacy PR or replace a missing bot
-label-approval receipt.
+comparison. A QA review cannot replace the bot approval review.
 
 Include the concrete QA findings and exactly one standalone marker line. This
 example uses placeholder identities; replace all four values with the actual
@@ -76,7 +89,7 @@ requiring `lastEditedAt` to be explicitly null. REST `submitted_at` alone
 cannot establish that the marker existed before labeling because editing a
 review does not change that submission timestamp. Any edit, missing metadata
 or failed API request blocks this proof; removing and reapplying the label
-remains available without a review query.
+remains available without an author-QA proof query.
 
 The proof is checked when recording approval and again during merge
 evaluation, including after asynchronous CI checks. That final proof read
@@ -100,7 +113,7 @@ All other workflows, check runs and commit-status contexts must finish without f
 
 ## Execution and limits
 
-The privileged job checks out only the default branch's scripts. It never downloads or executes PR code or artifacts. Permissions, approval, head, base, target, draft state and label identity are re-read before merging. GitHub's merge API pins the head and still applies repository merge rules; the controller does not bypass required reviews or branch protection. The API does not offer an atomic expected-base parameter, so repository protections or a merge queue remain the server-side control for concurrent base updates.
+The privileged job checks out only the default branch's scripts. It never downloads or executes PR code or artifacts. Permissions, approval, head, base, target, draft state and label identity are re-read before merging. The controller uses `merge_method: squash` to create one commit on the target. GitHub's merge API pins the head and still applies repository merge rules; the controller does not bypass required reviews or branch protection. The API does not offer an atomic expected-base parameter, so repository protections or a merge queue remain the server-side control for concurrent base updates.
 
 Workflow completion normally wakes the controller. A five-minute scheduled sweep also observes external checks and manually dispatched workflows that finish last; GitHub may delay scheduled jobs. Each API listing is bounded to 1000 items, and malformed, missing or excessive history blocks the PR for manual handling.
 
@@ -116,4 +129,4 @@ Run the deterministic REST and GraphQL fixture regression suite with:
 
     node --test .github/scripts/automerge.test.js
 
-The suite stubs every write; it does not merge a PR, add a label or post a comment during tests.
+The suite stubs every write; it does not merge a PR, change a label, submit or dismiss a review, or post a comment during tests.

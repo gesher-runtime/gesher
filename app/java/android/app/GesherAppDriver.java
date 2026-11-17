@@ -440,6 +440,7 @@ public final class GesherAppDriver {
 
     private static boolean sRelaunchPending;
     private static int sRelaunchChanges;
+    private static Configuration sDeferredConfigurationBefore;
 
     /**
      * ActivityThread.handleActivityConfigurationChanged, scaled down: the Activity's
@@ -449,6 +450,43 @@ public final class GesherAppDriver {
      * Looper, as the server's ActivityRelaunchItem comes); then its window updates
      * (ViewRootImpl.updateConfiguration).
      */
+    /** Apply a process configuration on the main thread, including the manual driver's activity. */
+    public static void applyConfiguration(Configuration configuration) {
+        ActivityThread thread = ActivityThread.currentActivityThread();
+        if (thread == null) return;
+        Activity activity = sActivity;
+        Configuration before = activity == null ? null
+                : new Configuration(activity.getResources().getConfiguration());
+        thread.handleConfigurationChanged(configuration, android.content.Context.DEVICE_ID_DEFAULT);
+        if (activity != null && before != null && sInfo != null
+                && !activity.mFinished && !activity.isDestroyed()) {
+            if (activity.mStopped) {
+                if (sDeferredConfigurationBefore == null) sDeferredConfigurationBefore = before;
+                return;
+            }
+            dispatchConfiguration(activity, sInfo, before,
+                    new Configuration(activity.getResources().getConfiguration()), Display.DEFAULT_DISPLAY);
+        }
+    }
+
+    /** Deliver deferred resource changes before a minimized standalone activity resumes. */
+    public static void prepareActivityForResume() {
+        Configuration before = sDeferredConfigurationBefore;
+        sDeferredConfigurationBefore = null;
+        Activity activity = sActivity;
+        if (before == null || activity == null || sInfo == null || activity.mFinished
+                || activity.isDestroyed()) return;
+        Configuration now = new Configuration(activity.getResources().getConfiguration());
+        int diff = before.diff(now) & ~(ActivityInfo.CONFIG_WINDOW_CONFIGURATION
+                | ActivityInfo.CONFIG_ASSETS_PATHS);
+        if ((diff & ~sInfo.getRealConfigChanged()) != 0) {
+            try { relaunch(activity, sOverride, diff); }
+            catch (Exception failure) { throw new RuntimeException("relaunching " + sInfo.name, failure); }
+        } else {
+            dispatchConfiguration(activity, sInfo, before, now, Display.DEFAULT_DISPLAY);
+        }
+    }
+
     private static void configurationChanged(Activity activity, Binder token, ActivityInfo info,
             Configuration overrideConfig, int displayId) {
         if (activity == null) return;
@@ -457,6 +495,11 @@ public final class GesherAppDriver {
                 Display.DEFAULT_DISPLAY);
         sOverride = overrideConfig;
         Configuration now = new Configuration(activity.getResources().getConfiguration());
+        dispatchConfiguration(activity, info, old, now, displayId);
+    }
+
+    private static void dispatchConfiguration(Activity activity, ActivityInfo info,
+            Configuration old, Configuration now, int displayId) {
         int diff = old.diff(now) & ~(ActivityInfo.CONFIG_WINDOW_CONFIGURATION
                 | ActivityInfo.CONFIG_ASSETS_PATHS);
         if (diff != 0) {
@@ -479,6 +522,12 @@ public final class GesherAppDriver {
                         sRelaunchChanges = 0;
                         Activity current = sActivity;
                         if (current == null || current.mFinished || current.isDestroyed()) {
+                            return;
+                        }
+                        if (current.mStopped) {
+                            if (sDeferredConfigurationBefore == null) {
+                                sDeferredConfigurationBefore = new Configuration(old);
+                            }
                             return;
                         }
                         try {

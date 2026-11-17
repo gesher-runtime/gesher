@@ -219,6 +219,7 @@ public final class Main {
             if (dataDir != null) {
                 pkg.setDataDir(new File(dataDir).getAbsolutePath());
             }
+            pkg.prepareDataDirectories();
             appInfo = pkg.applicationInfo(PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES);
             launch = pkg.launcherActivity(activity);
@@ -237,7 +238,6 @@ public final class Main {
             // The app's windows are Win32 windows drawn in this process (WindowSession).
             WindowMode.install(showWindow);
         }
-        new File(appInfo.dataDir).mkdirs();
         // The APK's lib/x86_64 (or, for an arm64-only APK, lib/arm64-v8a: run by the
         // arm64 translator) into nativeLibraryDir, for System.loadLibrary (NativeLibs).
         int libs = NativeLibs.extract(apk, appInfo.nativeLibraryDir);

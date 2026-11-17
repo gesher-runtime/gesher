@@ -22,6 +22,7 @@ import android.os.IInterface;
 import android.os.Parcel;
 import android.os.RemoteException;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
+import com.android.internal.pm.pkg.component.ParsedActivityImpl;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -82,7 +83,17 @@ public final class ActivityFinishFixture {
     }
     private static ApkPackage code() throws Exception {
         PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(OWNER, "/fixture/finish/base.apk");
-        parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.hideAsFinal();
+        parsed.setEnabled(true); parsed.setTargetSdkVersion(36);
+        // These records represent admitted activities; their synthetic package must
+        // declare them when asynchronous admission rechecks installed enabled state.
+        for (String name : List.of("Above", "Bottom", "Caller", "Child", "Last", "Match1", "Match2",
+                "Middle", "NotChild", "Other", "OtherCode", "OtherParent", "OtherTask", "OtherWho",
+                "Parent", "Pending", "Receiver", "Resuming", "Root", "RootWithResult", "Sibling", "Top")) {
+            ParsedActivityImpl activity = new ParsedActivityImpl();
+            activity.setPackageName(OWNER); activity.setName(OWNER + "." + name); activity.setEnabled(true);
+            parsed.addActivity(activity);
+        }
+        parsed.hideAsFinal();
         ApkPackage code = (ApkPackage) UNSAFE.allocateInstance(ApkPackage.class);
         set(code, "packageName", OWNER); set(code, "parsed", parsed); set(code, "mUid", UID);
         set(code, "apkPath", "/fixture/finish/base.apk"); set(code, "mDataDir", "/fixture/finish/data");

@@ -133,14 +133,27 @@ target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
 add_executable(posix_probe probes/posix/posix_probe.cc)
 target_compile_options(posix_probe PRIVATE -Wall -Wextra -Werror)
 
+# Virtual procfs and sysfs contracts (Roadmap N04, Issue #56).
+add_executable(procfs_sysfs_contract_test tests/native/procfs_sysfs_contract_test.cc)
+target_compile_options(procfs_sysfs_contract_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(procfs_sysfs_contract_test PRIVATE gesher_posix)
+
 # The same metadata contract runs through host POSIX and both guest ABI shims.
 add_executable(filesystem_metadata_host_test tests/native/filesystem_metadata_host_test.cc)
 target_compile_options(filesystem_metadata_host_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(filesystem_metadata_host_test PRIVATE gesher_posix)
 
+add_executable(sqlite_path_test tests/native/sqlite_path_test.cc)
+target_compile_options(sqlite_path_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(sqlite_path_test PRIVATE sqlite)
+
 add_executable(timerfd_windows_test tests/native/timerfd_windows_test.cc)
 target_compile_options(timerfd_windows_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(timerfd_windows_test PRIVATE gesher_posix)
+
+add_executable(boottime_resume_windows_test tests/native/boottime_resume_windows_test.cc)
+target_compile_options(boottime_resume_windows_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(boottime_resume_windows_test PRIVATE gesher_bionic gesher_elf gesher_posix)
 
 # libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
 # also run in CI on Windows.
@@ -205,6 +218,10 @@ target_link_libraries(exec4_environment_test PRIVATE gesher_bionic gesher_elf)
 add_executable(native3_unicode_test tests/native/native3_unicode_test.cc)
 target_compile_options(native3_unicode_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(native3_unicode_test PRIVATE gesher_bionic gesher_elf icuuc)
+
+add_executable(clock_domains_windows_test tests/native/clock_domains_windows_test.cc)
+target_compile_options(clock_domains_windows_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(clock_domains_windows_test PRIVATE gesher_posix)
 
 add_executable(native3_cpu_clock_test tests/native/native3_cpu_clock_test.cc)
 target_compile_options(native3_cpu_clock_test PRIVATE -Wall -Wextra -Werror)

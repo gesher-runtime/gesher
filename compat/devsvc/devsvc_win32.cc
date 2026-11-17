@@ -64,6 +64,12 @@ unsigned g_pending = 0;                // guarded by g_lock
 std::deque<Activation> g_activations;  // guarded by g_lock
 HWND g_window = nullptr;
 INIT_ONCE g_events_once = INIT_ONCE_STATIC_INIT;
+// GUID_SESSION_DISPLAY_STATUS: this process runs in the Android apps' Windows
+// session. A still image / idle keyboard with the display on is not device idle.
+constexpr GUID kSessionDisplayStatus = {
+    0x2b84c20e, 0xad23, 0x4ddf, {0x93, 0xdb, 0x05, 0xff, 0xbd, 0x7e, 0xfc, 0xa5}};
+int g_session_display_state = -1;      // guarded by g_lock; unknown remains distinct
+
 
 void Post(unsigned events) {
   AcquireSRWLockExclusive(&g_lock);
@@ -85,6 +91,20 @@ LRESULT CALLBACK EventProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_POWERBROADCAST:
       switch (wp) {
+        case PBT_POWERSETTINGCHANGE: {
+          const auto* setting = reinterpret_cast<const POWERBROADCAST_SETTING*>(lp);
+          if (setting != nullptr && setting->DataLength == sizeof(DWORD)
+              && IsEqualGUID(setting->PowerSetting, kSessionDisplayStatus)) {
+            DWORD state = 0;
+            std::memcpy(&state, setting->Data, sizeof(state));
+            AcquireSRWLockExclusive(&g_lock);
+            int observed = state <= 2 ? static_cast<int>(state) : -1;
+            g_session_display_state = observed; // Dimmed (2) remains interactive.
+            ReleaseSRWLockExclusive(&g_lock);
+            Post(kDisplayState);
+          }
+          break;
+        }
         case PBT_APMRESUMEAUTOMATIC:
         case PBT_APMRESUMESUSPEND:
           Post(kResumed);
@@ -116,7 +136,12 @@ DWORD WINAPI EventThread(void* ready) {
   HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName,
                               L"Gesher device services", WS_POPUP, 0, 0, 0, 0, nullptr,
                               nullptr, wc.hInstance, nullptr);
-  if (hwnd != nullptr) AddClipboardFormatListener(hwnd);
+  HPOWERNOTIFY display_notification = nullptr;
+  if (hwnd != nullptr) {
+    AddClipboardFormatListener(hwnd);
+    display_notification = RegisterPowerSettingNotification(
+        hwnd, &kSessionDisplayStatus, DEVICE_NOTIFY_WINDOW_HANDLE);
+  }
   g_window = hwnd;
   SetEvent(static_cast<HANDLE>(ready));
   if (hwnd == nullptr) return 1;
@@ -125,6 +150,7 @@ DWORD WINAPI EventThread(void* ready) {
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
+  if (display_notification != nullptr) UnregisterPowerSettingNotification(display_notification);
   return 0;
 }
 
@@ -468,6 +494,23 @@ uint32_t IdleMillis() {
   info.cbSize = sizeof(info);
   if (!GetLastInputInfo(&info)) return 0;
   return GetTickCount() - info.dwTime;
+}
+
+int SessionDisplayState() {
+  AcquireSRWLockShared(&g_lock);
+  int state = g_session_display_state;
+  ReleaseSRWLockShared(&g_lock);
+  return state;
+}
+
+int AppsUseLightTheme() {
+  DWORD value = 0;
+  DWORD size = sizeof(value);
+  LSTATUS status = RegGetValueW(HKEY_CURRENT_USER,
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size);
+  return status == ERROR_SUCCESS && size == sizeof(value) && value <= 1
+      ? static_cast<int>(value) : -1;
 }
 
 int NetworkState() {

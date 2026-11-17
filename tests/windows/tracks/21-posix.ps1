@@ -107,6 +107,9 @@ if ($PosixGtestsOnly) { return }
 # It works in a directory of its own under the current one (the workspace's
 # drive), and on TEMP's drive as /mnt/<drive> when that is another one.
 Check 'posix probe: paths, /proc, /etc/timezone, inotify, processes' { & "$Dir/posix_probe.exe" } @('all passed')
+if (Test-Path "$Dir/procfs_sysfs_contract_test.exe") {
+  Check 'procfs & sysfs virtual filesystem contracts' { & "$Dir/procfs_sysfs_contract_test.exe" } @('procfs & sysfs contracts: all passed')
+}
 
 # A class path on another drive: /mnt/<drive>/... (ADR 0045). The tests run on
 # the workspace's drive; TEMP is on another one on GitHub's runners.

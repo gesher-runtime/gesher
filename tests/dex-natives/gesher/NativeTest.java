@@ -72,6 +72,10 @@ public final class NativeTest {
 
     // SystemClock: @CriticalNative over libutils' clocks.
     long up0 = SystemClock.uptimeMillis();
+    long uptimeBefore = SystemClock.uptimeNanos();
+    long javaNano = System.nanoTime();
+    long uptimeAfter = SystemClock.uptimeNanos();
+    check(javaNano >= uptimeBefore && javaNano <= uptimeAfter, "nanoTime shares uptime domain");
     check(up0 > 0, "uptimeMillis > 0");
     check(SystemClock.uptimeNanos() >= up0 * 1000000L, "uptimeNanos consistent");
     check(SystemClock.elapsedRealtime() >= up0, "elapsedRealtime >= uptimeMillis");

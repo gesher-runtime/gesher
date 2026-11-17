@@ -82,14 +82,14 @@ public final class Services {
         return create(packages, true);
     }
 
-    /** Stand-in services share no persistent account state with the real device. */
+    /** Stand-in services share no persistent account or enabled-state policy with the real device. */
     public static Map<String, IBinder> createInProcess(Collection<ApkPackage> packages) {
         return create(packages, false);
     }
 
     private static Map<String, IBinder> create(Collection<ApkPackage> packages, boolean persistentAccounts) {
         Map<String, IBinder> services = new LinkedHashMap<>();
-        PackageManagerService pm = new PackageManagerService(packages);
+        PackageManagerService pm = new PackageManagerService(packages, persistentAccounts);
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
@@ -143,7 +143,7 @@ public final class Services {
                 new TextServicesManagerService()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
-        UiModeManagerService uiMode = new UiModeManagerService(atm, am);
+        UiModeManagerService uiMode = new UiModeManagerService(pm, atm, persistentAccounts);
         services.put(Context.UI_MODE_SERVICE,
                 StandIn.of(IUiModeManager.class, uiMode).asBinder());
         // mount: the private data volume and its emulated shared view at
@@ -690,23 +690,6 @@ public final class Services {
         @Override
         public void mkdirs(String callingPkg, String path) {
             new java.io.File(path).mkdirs();
-        }
-    }
-
-    /**
-     * uimode: UiModeManagerService contract implementation and backwards-compatible alias.
-     */
-    public static final class UiModeService extends UiModeManagerService {
-        public UiModeService() {
-            super(null, null);
-        }
-
-        public UiModeService(ActivityTaskManagerService atm) {
-            super(atm, null);
-        }
-
-        public UiModeService(ActivityTaskManagerService atm, ActivityManagerService am) {
-            super(atm, am);
         }
     }
 

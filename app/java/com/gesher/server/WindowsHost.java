@@ -28,6 +28,7 @@ public final class WindowsHost {
     public static final int EVENT_SUSPENDING = 1 << 4;
     public static final int EVENT_SETTING_CHANGED = 1 << 5;
     public static final int EVENT_TOAST_ACTIVATED = 1 << 6;
+    public static final int EVENT_DISPLAY_STATE = 1 << 7;
 
     /** AlarmWait's answers. */
     static final int ALARM_TIME = 0;
@@ -345,56 +346,29 @@ public final class WindowsHost {
         }
     }
 
-    private static volatile java.util.function.IntSupplier sAppsUseLightThemeHook;
-
-    /** Hook for tests or host embedders to simulate Windows theme. */
-    public static void setAppsUseLightThemeHook(java.util.function.IntSupplier hook) {
-        sAppsUseLightThemeHook = hook;
-    }
-
-    /**
-     * Reads Windows AppsUseLightTheme registry setting:
-     * HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme
-     * Returns 0 for dark theme, 1 for light theme, or -1 if unknown.
-     */
+    /** AppsUseLightTheme: 0 dark, 1 light, -1 missing/unreadable; never launches a process. */
     public static int appsUseLightTheme() {
-        if (sAppsUseLightThemeHook != null) {
-            try {
-                return sAppsUseLightThemeHook.getAsInt();
-            } catch (Throwable ignored) {
-            }
-        }
-        return readAppsUseLightTheme();
+        if (!available()) return -1;
+        try { return nativeAppsUseLightTheme(); }
+        catch (UnsatisfiedLinkError unavailable) { return -1; }
     }
 
-    private static int readAppsUseLightTheme() {
-        try {
-            Process p = new ProcessBuilder("reg", "query",
-                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                    "/v", "AppsUseLightTheme").redirectErrorStream(true).start();
-            try (java.io.BufferedReader r = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getInputStream()))) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    if (line.contains("AppsUseLightTheme")) {
-                        String[] parts = line.trim().split("\\s+");
-                        if (parts.length >= 3) {
-                            String val = parts[parts.length - 1];
-                            if (val.startsWith("0x") || val.startsWith("0X")) {
-                                return Integer.parseInt(val.substring(2), 16);
-                            } else {
-                                return Integer.parseInt(val);
-                            }
-                        }
-                    }
-                }
-            }
-            p.waitFor();
-        } catch (Throwable ignored) {
-        }
-        return 1;
+    public static final int DISPLAY_STATE_UNKNOWN = -1;
+    public static final int DISPLAY_STATE_OFF = 0;
+    public static final int DISPLAY_STATE_ON = 1;
+    public static final int DISPLAY_STATE_DIMMED = 2;
+
+    /** Last observed GUID_SESSION_DISPLAY_STATUS, or UNKNOWN if unavailable. */
+    public static int sessionDisplayState() {
+        if (!available()) return DISPLAY_STATE_UNKNOWN;
+        try { return nativeSessionDisplayState(); }
+        catch (UnsatisfiedLinkError unavailable) { return DISPLAY_STATE_UNKNOWN; }
     }
 
+    public static void removeListener(Listener listener) { sListeners.remove(listener); }
+
+    private static native int nativeAppsUseLightTheme();
+    private static native int nativeSessionDisplayState();
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();

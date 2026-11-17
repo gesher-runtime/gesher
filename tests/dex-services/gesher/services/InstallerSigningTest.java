@@ -70,6 +70,9 @@ public final class InstallerSigningTest {
         File base = new File(oldCode, "base.apk"); Files.copy(oldApk.toPath(), base.toPath());
         Object previous = parse(base);
         Class<?> apkClass = previous.getClass();
+        // Mirror system-server startup before this fixture directly registers
+        // an existing app and exercises an incoming update.
+        apkClass.getMethod("prepareDataDirectories").invoke(previous);
         String pkg = (String) apkClass.getField("packageName").get(previous);
         Class<?> pmClass = Class.forName("com.gesher.server.PackageManagerService");
         Class<?> atmClass = Class.forName("com.gesher.server.ActivityTaskManagerService");

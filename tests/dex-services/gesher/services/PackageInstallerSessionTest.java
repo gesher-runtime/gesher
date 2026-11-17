@@ -321,6 +321,9 @@ public final class PackageInstallerSessionTest {
         Class<?> consentClass = Class.forName(serviceClass.getName() + "$Consent");
         Class<?> transportClass = Class.forName("com.gesher.server.InstallFileBridge$Transport");
         Object parsed = apkClass.getMethod("parse", String.class).invoke(null, apk.getPath());
+        // This directly registered package represents a running installer/client;
+        // system-server startup prepares its storage before publishing it.
+        apkClass.getMethod("prepareDataDirectories").invoke(parsed);
         String pkg = (String) apkClass.getField("packageName").get(parsed);
         Object pm = pmClass.getConstructor(Collection.class).newInstance(Collections.singletonList(parsed));
         Object atm = construct(atmClass, new Class<?>[]{pmClass}, pm);

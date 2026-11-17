@@ -3,6 +3,7 @@
 #include "recorder.h"
 
 #include <time.h>
+#include <gesher/clocks.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -32,7 +33,7 @@ Recorder::~Recorder() { Reset(); }
 
 int64_t Recorder::NowUs() const {
   timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  gesher::AndroidClockGettime(CLOCK_MONOTONIC, &ts);
   return static_cast<int64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
 

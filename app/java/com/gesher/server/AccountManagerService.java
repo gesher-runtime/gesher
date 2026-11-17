@@ -1372,7 +1372,8 @@ public final class AccountManagerService extends IAccountManager.Default {
             // authenticator must additionally require the platform bind permission.
             if (service == null || service.metaData == null || !service.enabled) continue;
             ApkPackage owner = mPm.get(service.packageName);
-            if (owner == null || mPm.isRemovalPending(service.packageName) || !owner.parsed.isEnabled()) continue;
+            if (owner == null || mPm.isRemovalPending(service.packageName)
+                    || !service.applicationInfo.enabled) continue;
             if (service.exported && !"android.permission.BIND_ACCOUNT_AUTHENTICATOR"
                     .equals(service.permission)) continue;
             int xml = service.metaData.getInt(AccountManager.AUTHENTICATOR_META_DATA_NAME);

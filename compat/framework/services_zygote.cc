@@ -187,6 +187,31 @@ int ExitCode(int pid) {
   return static_cast<int>(code);
 }
 
+int64_t ChildStartTime(int pid) {
+  std::lock_guard<std::mutex> guard(g_lock);
+  auto it = g_children.find(pid);
+  if (it == g_children.end()) return 0;
+  FILETIME created, exited, kernel, user;
+  if (!GetProcessTimes(it->second, &created, &exited, &kernel, &user)) return 0;
+  return (static_cast<int64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+}
+
+bool KillChild(int pid, int64_t start_time) {
+  if (pid <= 0 || start_time <= 0) return false;
+  // ExitCode cannot close this handle and Spawn cannot replace this map entry
+  // between checking its identity and termination. The handle, not the PID,
+  // names the original Windows process throughout the operation.
+  std::lock_guard<std::mutex> guard(g_lock);
+  auto it = g_children.find(pid);
+  if (it == g_children.end()) return false;
+  HANDLE child = it->second;
+  FILETIME created, exited, kernel, user;
+  if (!GetProcessTimes(child, &created, &exited, &kernel, &user)) return false;
+  int64_t actual = (static_cast<int64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  if (actual != start_time || WaitForSingleObject(child, 0) != WAIT_TIMEOUT) return false;
+  return TerminateProcess(child, 137) != FALSE;
+}
+
 bool Kill(int pid) {
   HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
   if (h == nullptr) return false;

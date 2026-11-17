@@ -74,6 +74,8 @@ final class PendingIntents {
         final int uid;
         final String creatorIdentity;
         final boolean shareIdentity;
+        final Bundle activityOptions;
+        final boolean activityOptionsFromSystem;
         Intent[] intents;
         String[] resolvedTypes;
         volatile boolean canceled;
@@ -87,6 +89,13 @@ final class PendingIntents {
 
         Record(int type, String packageName, int requestCode, Intent[] intents,
                 String[] resolvedTypes, int flags, int uid, String creatorIdentity, boolean shareIdentity) {
+            this(type, packageName, requestCode, intents, resolvedTypes, flags, uid, creatorIdentity,
+                    shareIdentity, null, false);
+        }
+
+        Record(int type, String packageName, int requestCode, Intent[] intents,
+                String[] resolvedTypes, int flags, int uid, String creatorIdentity, boolean shareIdentity,
+                Bundle options, boolean optionsFromSystem) {
             this.type = type;
             this.packageName = packageName;
             this.requestCode = requestCode;
@@ -96,6 +105,8 @@ final class PendingIntents {
             this.uid = uid;
             this.creatorIdentity = creatorIdentity;
             this.shareIdentity = shareIdentity;
+            this.activityOptions = options == null ? null : new Bundle(options);
+            this.activityOptionsFromSystem = optionsFromSystem;
         }
 
         boolean sameKey(int type, String packageName, int uid, String identity,
@@ -158,6 +169,7 @@ final class PendingIntents {
         flags &= ~(PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_CANCEL_CURRENT
                 | PendingIntent.FLAG_UPDATE_CURRENT);
         boolean shareIdentity = sharesIdentity(options);
+        boolean optionsFromSystem = mCallers.isSystem();
         Runnable beforeLock = mBeforeRecordLock;
         if (beforeLock != null) beforeLock.run();
         RemoteCallbackList<IResultReceiver> callbacks = null;
@@ -196,7 +208,7 @@ final class PendingIntents {
             } else {
                 result = new Record(type, packageName, requestCode, copies,
                         resolvedTypes == null ? null : resolvedTypes.clone(), flags, uid, identity,
-                        shareIdentity);
+                        shareIdentity, options, optionsFromSystem);
                 mRecords.add(result);
             }
         }
@@ -294,8 +306,8 @@ final class PendingIntents {
     }
 
     interface ActivityLaunch {
-        int start(String creator, Intent intent, String resolvedType, BooleanSupplier lifetime,
-                boolean shareIdentity);
+        int start(String creator, Intent[] intents, String[] resolvedTypes, BooleanSupplier lifetime,
+                boolean shareIdentity, Bundle options);
     }
 
     int sendActivity(IIntentSender target, Intent fillIn, String resolvedType, Bundle options,
@@ -309,6 +321,9 @@ final class PendingIntents {
             IIntentReceiver finishedReceiver, String requiredPermission,
             ActivityLaunch activityLaunch, Bundle options) {
         final Intent intent;
+        final Intent[] activityIntents;
+        final String[] activityTypes;
+        final Bundle launchOptions;
         final String creatorType;
         final ApkPackage creator;
         final boolean shareIdentity;
@@ -323,6 +338,9 @@ final class PendingIntents {
                 callbacks = cancelLocked(r);
                 creator = null;
                 intent = null;
+                activityIntents = null;
+                activityTypes = null;
+                launchOptions = null;
                 creatorType = null;
                 shareIdentity = false;
             } else {
@@ -335,6 +353,22 @@ final class PendingIntents {
                 shareIdentity = r.shareIdentity || sharesIdentity(options);
                 intent = new Intent(r.last());
                 creatorType = r.lastResolvedType();
+                if (r.type == ActivityManager.INTENT_SENDER_ACTIVITY) {
+                    // Capture the complete stack under the same lock as UPDATE_CURRENT
+                    // and one-shot consumption. Each send owns its mutable copies.
+                    activityIntents = new Intent[r.intents.length];
+                    for (int i = 0; i < r.intents.length - 1; i++) {
+                        activityIntents[i] = new Intent(r.intents[i]);
+                    }
+                    activityIntents[activityIntents.length - 1] = intent;
+                    activityTypes = r.resolvedTypes == null ? new String[r.intents.length] : r.resolvedTypes.clone();
+                    launchOptions = r.activityOptions == null ? new Bundle() : new Bundle(r.activityOptions);
+                    if (options != null) launchOptions.putAll(options);
+                } else {
+                    activityIntents = null;
+                    activityTypes = null;
+                    launchOptions = null;
+                }
                 // Sending is capability based: a legitimate recipient can consume a
                 // one-shot record, but cannot separately cancel or update its creator's PI.
                 if ((r.flags & PendingIntent.FLAG_ONE_SHOT) != 0) {
@@ -349,6 +383,7 @@ final class PendingIntents {
             int changes = intent.fillIn(fillIn, r.flags);
             if ((changes & Intent.FILL_IN_DATA) != 0) type = resolvedType;
         }
+        if (activityTypes != null) activityTypes[activityTypes.length - 1] = type;
         // Signing identity permits a future send after a safe update. This invocation
         // carries only the exact creator generation validated above, including while
         // queued in another service after transport identity has been cleared.
@@ -357,6 +392,18 @@ final class PendingIntents {
         Runnable beforeDispatch = mBeforeSendDispatch;
         if (beforeDispatch != null) beforeDispatch.run();
         if (!lifetime.getAsBoolean()) return ActivityManager.START_CANCELED;
+        // Keep both option suppliers' authority across clearCallingIdentity. A
+        // holder's options never inherit privileges from a system-created token.
+        RuntimeException optionFailure = null;
+        if (r.type == ActivityManager.INTENT_SENDER_ACTIVITY) {
+            try {
+                ActivityTaskManagerService.checkLaunchTaskOptions(r.activityOptions, mPm,
+                        r.packageName, r.activityOptionsFromSystem);
+                boolean system = mCallers.isSystem();
+                ActivityTaskManagerService.checkLaunchTaskOptions(options, mPm,
+                        system ? null : mCallers.callerPackage(), system);
+            } catch (RuntimeException failure) { optionFailure = failure; }
+        }
         SystemServer.log("send " + r);
         long ident = Binder.clearCallingIdentity();
         try {
@@ -368,9 +415,20 @@ final class PendingIntents {
                     return mAm.sendBroadcastFor(r.packageName, intent, type, requiredPermission,
                             lifetime, code, finishedReceiver);
                 case ActivityManager.INTENT_SENDER_ACTIVITY:
-                    result = activityLaunch != null
-                            ? activityLaunch.start(r.packageName, intent, type, lifetime, shareIdentity)
-                            : mAm.startActivityFor(r.packageName, intent, type, lifetime, shareIdentity);
+                    // PendingIntentRecord.sendInner isolates activity-start runtime
+                    // failures from the token holder. Permission checks still run
+                    // under creator authority and must publish no rejected target.
+                    result = ActivityManager.START_SUCCESS;
+                    try {
+                        if (optionFailure != null) throw optionFailure;
+                        result = activityLaunch != null
+                                ? activityLaunch.start(r.packageName, activityIntents, activityTypes,
+                                        lifetime, shareIdentity, launchOptions)
+                                : mAm.startActivitiesFor(r.packageName, activityIntents, activityTypes,
+                                        lifetime, shareIdentity, launchOptions);
+                    } catch (RuntimeException failure) {
+                        SystemServer.log("Unable to send startActivity intent: " + failure);
+                    }
                     break;
                 case ActivityManager.INTENT_SENDER_SERVICE:
                 case ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE:

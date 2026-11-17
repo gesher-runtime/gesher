@@ -1,6 +1,7 @@
 // Gesher media: the player under android.media.MediaPlayer (player.h).
 
 #include "player.h"
+#include <gesher/clocks.h>
 
 #include <algorithm>
 #include <chrono>
@@ -106,7 +107,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
     playing_ = true;
     StartTrackIfReadyLocked();
     if (!clock_running_) {
-      clock_anchor_ = std::chrono::steady_clock::now();
+      clock_anchor_ = gesher::MonotonicNanos();
       clock_running_ = true;
     }
     cv_.notify_all();
@@ -283,14 +284,12 @@ class Playback : public std::enable_shared_from_this<Playback> {
   }
 
   // --- Video: decoded on a thread of its own, each frame shown at its time on
-  // the media clock (the audio's position; the wall clock without audio).
+  // the media clock (the audio's position; awake time without audio).
 
   int64_t WallClockLocked() {
     int64_t us = clock_base_us_;
     if (clock_running_) {
-      us += static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                     std::chrono::steady_clock::now() - clock_anchor_).count() *
-                                 speed_);
+      us += static_cast<int64_t>((gesher::MonotonicNanos() - clock_anchor_) / 1000 * speed_);
     }
     return us;
   }
@@ -464,7 +463,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
         notify_seek = seek_notify_;
         if (seek_us >= 0) {
           clock_base_us_ = seek_us;
-          clock_anchor_ = std::chrono::steady_clock::now();
+          clock_anchor_ = gesher::MonotonicNanos();
           VideoSeekLocked(seek_us, seek_mode == 3);
           if (seek_us_ == seek_us) seek_us_ = -1;
           if (seek_us_ < 0) seek_notify_ = false;
@@ -480,7 +479,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
         loop = loop_;
         if (loop) {
           clock_base_us_ = 0;
-          clock_anchor_ = std::chrono::steady_clock::now();
+          clock_anchor_ = gesher::MonotonicNanos();
           VideoSeekLocked(0, false);
         } else {
           completed_ = true;
@@ -773,7 +772,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
   uint64_t video_shown_ = 0, video_dropped_ = 0;
   // The wall clock of a video without audio.
   int64_t clock_base_us_ = 0;
-  std::chrono::steady_clock::time_point clock_anchor_;
+  int64_t clock_anchor_ = 0;
   bool clock_running_ = false;
   uint32_t rate_ = 0;
   size_t frame_size_ = 1;

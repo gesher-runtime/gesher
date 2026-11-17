@@ -8,8 +8,11 @@
 # (sqlite-default, which is sqlite-autoconf-3500400 in android-16.0.0_r4, with
 # SQLITE_ENABLE_ICU and libsqlite3_android's functions and collators), built as
 # Soong builds it for Windows hosts: SQLite's own Win32 VFS (os_win.c), so
-# databases are files opened with CreateFileW, and Linux paths are paths on
-# the current drive, as everywhere in Gesher (ADR 0010). No gesher-base here.
+# databases are files opened with CreateFileW. Its xFullPathname first uses
+# gesher-base's DiskPath (ADR 0045) so /mnt/<drive>, /mnt/unc and encoded Linux
+# names reach the same files as Java/POSIX operations. The pager then owns the
+# canonical filename and its URI/journal metadata; xOpen and file IO remain
+# SQLite's Win32 implementations (docs/sqlite-paths.md).
 #
 # frameworks/base's android_database_*.cpp and android_animation_*.cpp go into
 # libandroid_runtime (framework_runtime), their JNI tables made System V by
@@ -21,6 +24,7 @@ set(_sqlite_dist "${_sqlite}/dist/sqlite-autoconf-3500400")
 
 add_library(sqlite STATIC
   ${_sqlite_dist}/sqlite3.c
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/sqlite_path.cc
   # libsqlite3_android
   ${_sqlite}/android/PhoneNumberUtils.cpp
   ${_sqlite}/android/OldPhoneNumberUtils.cpp

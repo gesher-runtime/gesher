@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <objbase.h>
 #include <time.h>
+#include <gesher/clocks.h>
 
 #include <algorithm>
 #include <cmath>
@@ -43,7 +44,7 @@ constexpr const char* kGroupName[kNumGroups] = {"Media", "Ringtone", "Alarm", "N
 
 int64_t MonotonicNs() {
   timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+  gesher::AndroidClockGettime(CLOCK_MONOTONIC, &ts);
   return static_cast<int64_t>(ts.tv_sec) * 1000000000 + ts.tv_nsec;
 }
 
