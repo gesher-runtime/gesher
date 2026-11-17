@@ -10,7 +10,7 @@ $workflow = "$repoName/.github/workflows/arm64-windows-self-hosted.yml@refs/head
 
 $allowedWorkflows = @(
     $workflow,
-    "$repoName/.github/workflows/framework.yml@936cd045698e8b883705b6630598dbe488c9e365"
+    "$repoName/.github/workflows/framework.yml@93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7"
 )
 
 function Invoke-GhApi {

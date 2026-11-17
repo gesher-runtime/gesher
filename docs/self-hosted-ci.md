@@ -9,8 +9,8 @@ one physical runner, so it executes one job at a time; other PRs can queue.
 ## Trust and rollout
 
 The CI caller pins `framework.yml` to
-`936cd045698e8b883705b6630598dbe488c9e365`. That policy pins the runner-route
-and local-cache actions to `843be4f5dbbdad63c92822fe25000d5df65163bf`.
+`93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7`. That policy pins the runner-route
+and local-cache actions to `b9510513a538d80669895521d1061b54fbe11aff`.
 Changes to PR workflow files cannot change the policy authorized by the runner
 group. Publishing a replacement requires reviewing/pinning a new immutable
 policy and explicitly updating the group allowlist.
@@ -34,7 +34,7 @@ The organization group `gesher-build-trial` permits only this repository and:
 
 ```
 gesher-runtime/gesher/.github/workflows/arm64-windows-self-hosted.yml@refs/heads/main
-gesher-runtime/gesher/.github/workflows/framework.yml@936cd045698e8b883705b6630598dbe488c9e365
+gesher-runtime/gesher/.github/workflows/framework.yml@93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7
 ```
 
 The first entry remains for explicit ARM64 diagnostics. Turn off its automatic
@@ -56,8 +56,9 @@ They use uncompressed local archives, not Actions cache uploads/downloads.
 The code retains real directories at `workspace/third_party/aosp`, so the AOSP
 cleanup/sparse-set guards retain their original boundary checks.
 
-- The original input hashes, cache keys, ordered fallback prefixes and exact-hit
-  outputs are retained. An inexact fallback is not reported as an exact hit.
+- Snapshots are isolated by PR ref, preserving the original branch boundary.
+  A different PR cannot restore the same key. The original input hashes, cache
+  keys, ordered fallback prefixes and exact-hit outputs are retained. An inexact fallback is not reported as an exact hit.
 - AOSP fetching still validates the pinned source/patch recipe. Host tools are
   freshly invoked for the current run and attempt and publish a fresh archive.
 - Coremod, framework resources, build tools, public SDK and JVM tools use the
@@ -66,7 +67,7 @@ cleanup/sparse-set guards retain their original boundary checks.
 - Compiler output stays in ordinary local ccache, bounded to 8 GiB for these
   jobs. Ninja uses at most eight processes; the framework retains its 10 GiB
   default javac heap. Snapshot storage is bounded to 10 GiB, with oldest entries
-  evicted under a process lock. Oversized snapshots are skipped.
+  evicted across PR namespaces under a process lock. Oversized snapshots are skipped.
 - Snapshots are immutable and published atomically with a SHA-256 manifest.
   Restoring validates archive identity, digest, paths and links before replacing
   cache destinations. Interrupted staging directories are removed under the

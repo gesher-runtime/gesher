@@ -82,10 +82,11 @@ jobs:
           }
           for tool in git curl python3 cmake ninja ccache javac; do command -v "$tool"; done
       - name: Initialize persistent local inputs
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@843be4f5dbbdad63c92822fe25000d5df65163bf
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         id: local
         with:
           phase: initialize
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
       - name: Fetch llvm-mingw only when absent locally
         if: steps.local.outputs.toolchain-hit != 'true'
         run: |
@@ -93,32 +94,36 @@ jobs:
           curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
             | tar -xJ -C ~/toolchain
       - name: Restore local AOSP inputs
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@843be4f5dbbdad63c92822fe25000d5df65163bf
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
           phase: restore
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
           restore-keys: aosp-
       - name: Fetch pinned AOSP sources
         run: bash tools/fetch-aosp.sh
       - name: Save local AOSP inputs immediately
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@843be4f5dbbdad63c92822fe25000d5df65163bf
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
           phase: save
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
       - name: Restore local Android build tools
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@843be4f5dbbdad63c92822fe25000d5df65163bf
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
           phase: restore
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
           path: out-arm64/build-tools-36.1
           key: android-build-tools-linux-36.1-${{ hashFiles('cmake/aosp/binder.cmake') }}
       - name: Build and verify ARM64 Windows targets
         run: bash tools/ci/build-arm64-windows.sh
       - name: Save local Android build tools
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@843be4f5dbbdad63c92822fe25000d5df65163bf
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
           phase: save
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
           path: out-arm64/build-tools-36.1
           key: android-build-tools-linux-36.1-${{ hashFiles('cmake/aosp/binder.cmake') }}
       - uses: actions/upload-artifact@v4

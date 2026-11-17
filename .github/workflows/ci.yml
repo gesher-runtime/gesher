@@ -666,7 +666,7 @@ jobs:
   framework:
     needs: [artifact-preflight]
     # This immutable policy, not PR-controlled workflow YAML, may use the runner.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@936cd045698e8b883705b6630598dbe488c9e365
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7
     with:
       local-runner: true
 
