@@ -85,9 +85,15 @@ final class BroadcastController {
         final IntentFilter filter;
         final String permission;
         final boolean exported;
-        ReceiverFilter(IntentFilter filter, String permission, int flags) {
+        ReceiverFilter(IntentFilter filter, String permission, int flags, int targetSdk) {
             this.filter = new IntentFilter(filter);
             this.permission = permission;
+            if ((flags & Context.RECEIVER_EXPORTED) != 0 && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
+                throw new SecurityException("Cannot specify both RECEIVER_EXPORTED and RECEIVER_NOT_EXPORTED");
+            }
+            if (targetSdk >= 34 && (flags & (Context.RECEIVER_EXPORTED | Context.RECEIVER_NOT_EXPORTED)) == 0) {
+                throw new SecurityException("One of RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED must be specified for targetSdk 34+");
+            }
             exported = (flags & Context.RECEIVER_NOT_EXPORTED) == 0;
         }
     }
