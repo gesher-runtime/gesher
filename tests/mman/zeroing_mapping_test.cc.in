@@ -10,6 +10,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -119,7 +120,12 @@ struct Region {
   std::vector<bool> live{true};
   std::vector<Origin> origins{Origin::kPrivateAnonymous};
 };
-struct State { std::mutex lock; std::map<uintptr_t, Region> regions; size_t page_size = kPage; };
+struct State {
+  std::mutex lock;
+  std::map<uintptr_t, Region> regions;
+  std::set<uintptr_t> locked_pages;
+  size_t page_size = kPage;
+};
 State& state() { static State s; return s; }
 void InvalidateSharedAliases(State&, uintptr_t, size_t) {}
 DWORD CopyOnWrite(DWORD protection) { return protection; }

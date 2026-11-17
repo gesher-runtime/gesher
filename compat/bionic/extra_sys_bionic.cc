@@ -25,6 +25,7 @@
 #include <sys/file.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
 
@@ -569,10 +570,16 @@ int BIONIC_SYSV Msync(void* addr, size_t len, int flags) {
 }
 int BIONIC_SYSV Mlock(const void* addr, size_t len) { return mlock(addr, len); }
 int BIONIC_SYSV Munlock(const void* addr, size_t len) { return munlock(addr, len); }
+int UnsupportedLockMode() {
+  struct rlimit limit;
+  getrlimit(RLIMIT_MEMLOCK, &limit);
+  return errno = (limit.rlim_cur == 0 ? kEPERM : kEOPNOTSUPP), -1;
+}
 int BIONIC_SYSV Mlock2(const void* addr, size_t len, int flags) {
   constexpr int kMlockOnFault = 1;
   if (flags == 0) return mlock(addr, len);
-  return errno = (flags == kMlockOnFault ? kEOPNOTSUPP : kEINVAL), -1;
+  if (flags != kMlockOnFault) return errno = kEINVAL, -1;
+  return UnsupportedLockMode();
 }
 int BIONIC_SYSV Mlockall(int flags) {
   constexpr int kMclOnFault = 4;
@@ -580,9 +587,9 @@ int BIONIC_SYSV Mlockall(int flags) {
   if ((flags & kScope) == 0 || (flags & ~(kScope | kMclOnFault)) != 0) {
     return errno = kEINVAL, -1;
   }
-  return errno = kEOPNOTSUPP, -1;
+  return UnsupportedLockMode();
 }
-int BIONIC_SYSV Munlockall() { return errno = kEOPNOTSUPP, -1; }
+int BIONIC_SYSV Munlockall() { return munlockall(); }
 int BIONIC_SYSV Zero2(const void*, size_t) { return 0; }
 int BIONIC_SYSV Zero1(int) { return 0; }
 int BIONIC_SYSV Mincore(void*, size_t len, unsigned char* vec) {
