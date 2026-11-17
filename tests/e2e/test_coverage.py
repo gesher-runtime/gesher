@@ -40,6 +40,16 @@ def fixture():
     return manifest, observed
 
 
+def sdk_identity(app):
+    return {"schema_version": 1, "source": "android_sdk_build_tools", "apk_sha256": HASH,
+            "package": app["package"], "version_code": app["versionCode"],
+            "min_sdk": 23, "target_sdk": 36, "packaged_native_abis": ["arm64-v8a", "x86_64"],
+            "signer_certificate_sha256": ["b" * 64, "c" * 64],
+            "signature_verification": "apksigner_default_supported_platforms",
+            "tools": {"aapt2_sha256": "d" * 64, "apksigner_jar_sha256": "e" * 64,
+                      "java_executable_sha256": "f" * 64, "build_tools_directory_name": "36.1"}}
+
+
 class CoverageContractTest(unittest.TestCase):
     def setUp(self):
         self.manifest, self.observed = fixture()
@@ -222,6 +232,98 @@ class CoverageContractTest(unittest.TestCase):
         self.assertEqual(report["summary"]["manifest_apps"], len(manifest["apps"]))
         self.assertEqual(report["summary"]["full_functional_compatibility"]["passed"], 0)
         self.assertFalse(report["gate_passed"])
+
+
+    def add_sdk_identities(self):
+        for app, observed in zip(self.manifest["apps"], self.observed["apks"]):
+            observed["sdk_identity"] = sdk_identity(app)
+            observed["target_sdk"] = 36
+        self.observed["runner"]["require_apk_identity"] = True
+
+    def test_measured_profile_preserves_unknown_runtime_selection_and_functional_coverage(self):
+        self.add_sdk_identities()
+        result = self.report()
+        self.assertTrue(result["gate_passed"])
+        self.assertEqual(result["summary"]["apk_identity_by_status"], {"verified": 2})
+        profile = result["compatibility_matrix"][0]
+        self.assertEqual(profile["signer_certificate_sha256"], ["b" * 64, "c" * 64])
+        self.assertEqual(profile["packaged_native_abis"], ["arm64-v8a", "x86_64"])
+        self.assertEqual(profile["target_sdk"], 36)
+        for field in ("selected_abi", "aosp_tag", "modules", "providers", "hardware_profile", "android_reference"):
+            self.assertIsNone(profile[field])
+        self.assertEqual(result["summary"]["full_functional_compatibility"]["passed"], 0)
+
+    def test_required_identity_is_not_waived_by_known_failure(self):
+        self.observed["runner"]["require_apk_identity"] = True
+        self.manifest["apps"][0]["knownFailure"] = "expected app failure"
+        self.observed["checks"][0].update(status="blocked", problems=["no SDK tools"])
+        result = self.report()
+        self.assertFalse(result["gate_passed"])
+        self.assertTrue(any("required SDK APK identity is missing" in error for error in result["validation_errors"]))
+
+    def test_gate_requires_identity_independently_of_runner_claim(self):
+        result = coverage.summarize(self.manifest, self.observed, HASH, require_apk_identity=True)
+        self.assertFalse(result["gate_passed"])
+        self.assertTrue(any("runner did not require it" in error for error in result["validation_errors"]))
+
+    def test_sdk_identity_mismatch_invalidates_smoke_pass(self):
+        self.add_sdk_identities()
+        for field, wrong in [("package", "other.package"), ("version_code", 7),
+                             ("apk_sha256", "d" * 64), ("target_sdk", 35),
+                             ("signer_certificate_sha256", []), ("tools", {}),
+                             ("packaged_native_abis", {"x86_64": True}),
+                             ("version_code", True), ("schema_version", True)]:
+            with self.subTest(field=field, wrong=wrong):
+                observed = copy.deepcopy(self.observed)
+                observed["apks"][0]["sdk_identity"][field] = wrong
+                result = coverage.summarize(self.manifest, observed, HASH)
+                self.assertFalse(result["gate_passed"])
+                self.assertEqual(result["apps"][0]["smoke_outcome"], "invalid")
+                self.assertEqual(result["apps"][0]["apk_identity_status"], "invalid")
+                self.assertIsNone(result["compatibility_matrix"][0]["signer_certificate_sha256"])
+
+    def test_optional_unavailable_identity_stays_unknown(self):
+        self.observed["apks"][0]["identity_error"] = "SDK tools unavailable"
+        result = self.report()
+        self.assertTrue(result["gate_passed"])
+        self.assertEqual(result["summary"]["apk_identity_by_status"], {"not_collected": 1, "unavailable": 1})
+        self.assertEqual(len(result["compatibility_matrix"]), 2)
+        self.assertIsNone(result["compatibility_matrix"][0]["signer_certificate_sha256"])
+
+    def test_bad_identity_is_rejected_when_optional(self):
+        self.observed["apks"][0]["sdk_identity"] = ["not an identity"]
+        result = self.report()
+        self.assertFalse(result["gate_passed"])
+        self.assertEqual(result["apps"][0]["smoke_outcome"], "invalid")
+
+    def test_excluded_version_retains_profile_without_requiring_download(self):
+        self.add_sdk_identities()
+        self.observed["runner"]["only"] = ["fixture.a"]
+        self.observed["apks"] = self.observed["apks"][:1]
+        for check in self.observed["checks"]:
+            if check["package"] == "fixture.b":
+                check.update(status="skipped", reason="excluded_by_only", started_at=None, finished_at=None)
+        result = self.report()
+        self.assertTrue(result["gate_passed"])
+        self.assertEqual(result["summary"]["manifest_apps"], 2)
+        self.assertEqual(result["compatibility_matrix"][1]["sdk_identity_status"], "not_collected")
+        self.assertEqual(result["compatibility_matrix"][1]["smoke_outcome"], "skipped")
+
+    def test_declared_abi_list_is_not_selected_abi(self):
+        self.add_sdk_identities()
+        self.observed["runtime"]["declared_properties"] = {
+            "ro.build.version.sdk": "36", "ro.build.version.sdk_full": "3600000",
+            "ro.product.cpu.abilist": "x86_64,arm64-v8a"}
+        profile = self.report()["compatibility_matrix"][0]
+        self.assertEqual(profile["declared_sdk_int"], "36")
+        self.assertEqual(profile["declared_sdk_int_full"], "3600000")
+        self.assertIsNone(profile["selected_abi"])
+
+    def test_malformed_runtime_profile_is_invalid_evidence(self):
+        for runtime in ([], {"declared_properties": "pretend"}):
+            with self.subTest(runtime=runtime):
+                self.observed["runtime"] = runtime
+                self.assertFalse(self.report()["gate_passed"])
 
 
 if __name__ == "__main__":

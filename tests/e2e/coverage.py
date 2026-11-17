@@ -26,8 +26,56 @@ def hash_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def identity_errors(identity: object, app: dict, observed: dict) -> list[str]:
+    """Validate measured SDK identity separately from launch/runtime observations."""
+    errors = []
+    if not isinstance(identity, dict):
+        return ["SDK APK identity must be an object"]
+    if type(identity.get("schema_version")) is not int or identity.get("schema_version") != 1 or identity.get("source") != "android_sdk_build_tools":
+        errors.append("unsupported SDK APK identity schema/source")
+    if identity.get("package") != app["package"] or identity.get("version_code") != app.get("versionCode"):
+        errors.append("SDK package/versionCode differs from the manifest")
+    pin = app.get("sha256")
+    measured = identity.get("apk_sha256")
+    if not isinstance(measured, str) or not SHA256.fullmatch(measured) or not isinstance(pin, str) or measured.lower() != pin.lower() or measured != observed.get("sha256"):
+        errors.append("SDK APK identity does not match pinned and observed bytes")
+    if type(identity.get("version_code")) is not int or identity.get("version_code", -1) < 0:
+        errors.append("SDK versionCode must be an integer")
+    for key in ("min_sdk", "target_sdk"):
+        value = identity.get(key)
+        if value is not None and not (type(value) is int and value > 0) and not (
+                isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]*", value)):
+            errors.append(f"invalid SDK identity {key}")
+    parsed_target = observed.get("target_sdk")
+    sdk_target = identity.get("target_sdk")
+    if parsed_target is not None and type(parsed_target) is not int:
+        errors.append("runtime package parser targetSdk must be an integer")
+    if type(parsed_target) is int and type(sdk_target) is int and parsed_target != sdk_target:
+        errors.append("SDK and runtime package parser targetSdk disagree")
+    abis = identity.get("packaged_native_abis")
+    if not isinstance(abis, list) or any(not isinstance(abi, str) or not re.fullmatch(
+            r"[A-Za-z0-9_-]+", abi) for abi in abis):
+        errors.append("packaged native ABIs must be a list of ABI names")
+    elif len(abis) != len(set(abis)):
+        errors.append("duplicate packaged native ABI")
+    signers = identity.get("signer_certificate_sha256")
+    if not isinstance(signers, list) or not signers or any(
+            not isinstance(signer, str) or not SHA256.fullmatch(signer) for signer in signers):
+        errors.append("SDK identity lacks verified signer certificate hashes")
+    if identity.get("signature_verification") != "apksigner_default_supported_platforms":
+        errors.append("SDK signature verification scope is missing")
+    tools = identity.get("tools")
+    if not isinstance(tools, dict) or any(not isinstance(tools.get(key), str) or not SHA256.fullmatch(tools[key])
+            for key in ("aapt2_sha256", "apksigner_jar_sha256", "java_executable_sha256")):
+        errors.append("SDK identity lacks collector tool hashes")
+    if observed.get("identity_error"):
+        errors.append("SDK identity has a collector error")
+    return errors
+
+
 def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
-              expected_run: dict | None = None, expected_invocation: str | None = None) -> dict:
+              expected_run: dict | None = None, expected_invocation: str | None = None,
+              require_apk_identity: bool = False) -> dict:
     errors: list[str] = []
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be an object")
@@ -76,6 +124,12 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
     if len(set(only)) != len(only) or set(only) - packages.keys():
         errors.append("runner.only contains duplicate or unknown packages")
     selected = {package for package in packages if not only or package in only}
+    required_identity = runner.get("require_apk_identity", False)
+    if type(required_identity) is not bool:
+        errors.append("runner.require_apk_identity must be a boolean")
+    if require_apk_identity and required_identity is not True:
+        errors.append("this gate requires SDK APK identity, but the runner did not require it")
+    required_identity = require_apk_identity or required_identity is True
 
     expected = {(package, scenario) for package, app in packages.items()
                 for scenario in (["launch", "surface-trace"] if app.get("surfaceTrace") else ["launch"])}
@@ -121,6 +175,22 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
             continue
         apks[package] = apk
 
+    identities = {}
+    identity_states = {}
+    for package, app in packages.items():
+        observed = apks.get(package, {})
+        identity = observed.get("sdk_identity")
+        if identity is None:
+            identity_states[package] = "unavailable" if observed.get("identity_error") else "not_collected"
+            if required_identity and package in selected:
+                errors.append(f"required SDK APK identity is missing: {package}")
+        else:
+            problems = identity_errors(identity, app, observed)
+            errors.extend(f"{package}: {problem}" for problem in problems)
+            identity_states[package] = "invalid" if problems else "verified"
+            if not problems:
+                identities[package] = identity
+
     def check(package: str | None, scenario: str) -> dict:
         record = records.get((package, scenario), {})
         status = record.get("status", "not_run")
@@ -162,6 +232,10 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
             if not isinstance(observed, str) or not SHA256.fullmatch(observed) or not isinstance(pin, str) or observed.lower() != pin.lower():
                 errors.append(f"passing check lacks a matching pinned APK hash: {actual_package}/{scenario}")
                 invalid = True
+            if identity_states.get(actual_package) == "invalid" or (
+                    required_identity and identity_states.get(actual_package) != "verified"):
+                errors.append(f"passing check lacks valid required APK identity: {actual_package}/{scenario}")
+                invalid = True
         known = packages.get(actual_package, {}).get("knownFailure") or None
         # Match the runner's existing waiver: only the default app check. A
         # diagnostic failure remains unexpected, even for a known-failing app.
@@ -198,6 +272,7 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
             "package": package, "selected": package in selected,
             "expected_apk": {key: app.get(key) for key in ("versionName", "versionCode", "sha256")},
             "observed_apk": apks.get(package),
+            "apk_identity_status": identity_states[package],
             "smoke_outcome": outcome,
             "functional_compatibility": "not_tested",
             "scenarios": scenarios,
@@ -209,6 +284,38 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
     unexpected = sum(item["status"] in {"failed", "blocked"} and not item["ci_waived"] for item in checks)
     completed = source.get("completed") is True
     counts = Counter(row["smoke_outcome"] for row in rows)
+    runtime = source.get("runtime", {})
+    if not isinstance(runtime, dict):
+        errors.append("runtime must be an object")
+        runtime = {}
+    properties = runtime.get("declared_properties", {})
+    if not isinstance(properties, dict):
+        errors.append("runtime.declared_properties must be an object")
+        properties = {}
+    # One profile row per manifest entry, including excluded/unrun versions.
+    # SDK package inspection is independent of runtime capability claims. None
+    # of these dimensions, by itself, promotes smoke checks to functional proof.
+    matrix = []
+    for row in rows:
+        package = row["package"]
+        identity = identities.get(package, {})
+        observed = apks.get(package, {})
+        matrix.append({
+            "package": package, "version_code": packages[package].get("versionCode"),
+            "apk_sha256": packages[package].get("sha256"),
+            "sdk_identity_status": identity_states[package],
+            "min_sdk": identity.get("min_sdk"), "target_sdk": identity.get("target_sdk"),
+            "runtime_parsed_target_sdk": observed.get("target_sdk"),
+            "signer_certificate_sha256": identity.get("signer_certificate_sha256"),
+            "packaged_native_abis": identity.get("packaged_native_abis"),
+            "selected_abi": observed.get("selected_abi"),
+            "declared_sdk_int": properties.get("ro.build.version.sdk"),
+            "declared_sdk_int_full": properties.get("ro.build.version.sdk_full"),
+            "aosp_tag": runtime.get("aosp_tag"), "modules": runtime.get("modules"),
+            "providers": runtime.get("providers"), "hardware_profile": runtime.get("hardware_profile"),
+            "android_reference": runtime.get("android_reference"),
+            "smoke_outcome": row["smoke_outcome"], "functional_compatibility": "not_tested",
+        })
     return {
         "schema_version": 1,
         "invocation_id": source.get("invocation_id"),
@@ -216,10 +323,12 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
         "manifest_sha256": manifest_sha256,
         "run_completed": completed,
         "runner": runner,
-        "runtime": source.get("runtime", {}),
+        "runtime": runtime,
+        "compatibility_matrix": matrix,
         "summary": {
             "manifest_apps": len(rows), "selected_apps": len(selected),
             "apps_by_smoke_outcome": dict(sorted(counts.items())),
+            "apk_identity_by_status": dict(sorted(Counter(identity_states.values()).items())),
             "full_functional_compatibility": {"passed": 0, "denominator": len(rows), "not_tested": len(rows)},
             "planned_scenarios": len(checks),
             "scenarios_by_status": dict(sorted(Counter(item["status"] for item in checks).items())),
@@ -252,8 +361,22 @@ def render(report: dict) -> str:
     lines += ["", f"CI-waived failures/blocks: {summary['ci_waived_failures_or_blocks']}; "
               f"unexpected failures/blocks: {summary['unexpected_failures_or_blocks']}; "
               f"incomplete selected scenarios: {summary['incomplete_selected_scenarios']}.",
-              "Unknown runtime/source, signer, selected ABI, providers and Android-reference fields "
+              "Unknown runtime/source, selected ABI, providers and Android-reference fields "
               "remain unknown; declared build properties are not measured hardware capabilities."]
+    lines += ["", "### APK identity and profile matrix", "",
+              "Packaged native ABIs describe APK contents, not the ABI selected or executed by Gesher. "
+              "Certificate hashes identify the verified signer set; they are not an endorsement of the signer.",
+              "", "| Package / version code | SDK identity | minSdk / targetSdk | Packaged native ABIs | Verified signers |",
+              "| --- | --- | --- | --- | --- |"]
+    for profile in report["compatibility_matrix"]:
+        abis = profile["packaged_native_abis"]
+        abi_label = "unknown" if abis is None else (", ".join(abis) or "none packaged")
+        certificates = profile["signer_certificate_sha256"]
+        signers = "unknown" if certificates is None else str(len(certificates))
+        sdk = " / ".join(str(profile[key]) if profile[key] is not None else "unknown"
+                         for key in ("min_sdk", "target_sdk"))
+        lines.append(f"| {cell(profile['package'])} / {profile['version_code']} | "
+                     f"{profile['sdk_identity_status']} | {cell(sdk)} | {cell(abi_label)} | {signers} |")
     if report["validation_errors"]:
         lines += ["", "Evidence validation errors:"] + [
             "- " + cell(error) for error in report["validation_errors"]]
@@ -266,6 +389,7 @@ def main() -> int:
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--expected-invocation-id", default=os.environ.get("GESHER_E2E_INVOCATION_ID"))
+    parser.add_argument("--require-apk-identity", action="store_true")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
     observation_error = None
@@ -278,7 +402,7 @@ def main() -> int:
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
         "test_checkout_sha": os.environ.get("GITHUB_SHA"),
-    }, args.expected_invocation_id)
+    }, args.expected_invocation_id, args.require_apk_identity)
     if observation_error:
         report["validation_errors"].append(observation_error)
     args.out_dir.mkdir(parents=True, exist_ok=True)

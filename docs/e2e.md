@@ -106,14 +106,56 @@ Identity fields distinguish measured bytes from declared or unknown values:
   `target_sdk` is taken from the actual successful package-parser log when
   available. Neither metadata source is inferred from an app's display name.
 - The test checkout SHA is separate from the runtime source revision. The
-  latter, AOSP tag, selected app ABI, signer, modules, providers, hardware profile
-  and Android reference stay null until a future collector can verify them.
+  latter, AOSP tag, selected app ABI, modules, providers, hardware profile and
+  Android reference stay null until a future collector can verify them.
+
+### Measured APK identity and profile rows
+
+`apk_identity.py` inspects a private copy of each exact pinned APK with
+[AAPT2 `dump badging` and `dump xmltree`](https://developer.android.com/tools/aapt2#dump) and
+[`apksigner verify --print-certs`](https://developer.android.com/tools/apksigner).
+It does not execute APK code. The collector rejects an incorrect hash, package
+or version code, a failed signature check, ambiguous metadata and a timeout.
+The report records the SDK parser's minSdk/targetSdk, long version code, complete
+signer certificate SHA-256 set and packaged native ABI inventory. It hashes the
+actual AAPT2 executable, apksigner JAR and Java launcher used for collection.
+Certificate subject names and local tool paths are not included in the ledger.
+
+Each manifest version has a `compatibility_matrix` row, even when excluded or
+not run. This connects the APK identity to the measured/declared runtime fields,
+the smoke result and the still-untested functional result. Metadata rejected by
+validation is not copied into the matrix as verified data. A disagreement
+between SDK targetSdk and the runtime's package-parser targetSdk fails the
+evidence gate. Packaged ABIs do **not** identify the ABI selected or executed by
+Gesher, and verified signatures do not establish trust in their signer.
+
+CI installs Android SDK build-tools 36.1.0 and requires measured identity for
+every selected APK. The reporter independently requires that mode, so removing
+the runner flag cannot weaken the gate. A known application failure cannot
+waive missing or invalid identity evidence. Local smoke runs can leave the
+collector optional: a missing SDK or failed collection remains explicitly
+`unavailable`, with no verified metadata. Use `-RequireApkIdentity` to apply the
+same gate locally and `-BuildTools <directory>` to select installed tools.
+Without an explicit directory the collector searches `ANDROID_HOME` and
+`ANDROID_SDK_ROOT` for the newest installed stable build-tools; it never
+downloads tools itself. The legacy singular `signer_sha256` field remains null;
+the measured set is `sdk_identity.signer_certificate_sha256`.
+
+The `e2e-evidence` workflow also builds and signs a tiny project-owned,
+non-executable fixture APK on Linux and Windows. It verifies the actual SDK
+collector against valid bytes, mismatched manifest identity and modifications
+after signing. These tests establish metadata handling, not app compatibility.
+Signer rotation history, split-APK sets and measured runtime/provider/hardware
+selection remain follow-up work in issue #56 A01/T01/T13/T14.
 
 To regenerate a report locally after a Windows run:
 
 ```text
 python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results
 ```
+
+Append `--require-apk-identity` when validating a run made with
+`-RequireApkIdentity`, including all current CI runs.
 
 The command exits nonzero on invalid evidence, incomplete selected scenarios,
 an incomplete run, or an unwaived failure/block. It does not turn known failures
