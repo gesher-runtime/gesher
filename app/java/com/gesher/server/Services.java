@@ -110,9 +110,11 @@ public final class Services {
         services.put(Context.RESTRICTIONS_SERVICE,
                 StandIn.of(android.content.IRestrictionsManager.class,
                         new ApplicationRestrictionsService()).asBinder());
+        java.io.File sharedBlobs = persistentAccounts
+                ? new java.io.File(android.os.Environment.getDataDirectory(), "system/gesher-blobs")
+                : null;
         services.put(Context.BLOB_STORE_SERVICE,
-                StandIn.of(android.app.blob.IBlobStoreManager.class,
-                        new BlobStoreService()).asBinder());
+                new BlobStoreService(pm, am.callers(), sharedBlobs).asBinder());
         services.put(Context.ROLLBACK_SERVICE,
                 StandIn.of(android.content.rollback.IRollbackManager.class,
                         new RollbackManagerService(pm, atm)).asBinder());
