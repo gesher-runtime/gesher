@@ -30,20 +30,32 @@ struct Handle {
 };
 struct Pair { Handle reader, writer; };
 
-bool MakePair(Pair* pair, bool overlapped) {
+bool MakePair(Pair* pair, bool overlapped, bool nowait = false,
+              bool change_mode = false, bool server_writer = false) {
   static unsigned sequence = 0;
   wchar_t name[128];
   std::swprintf(name, std::size(name), L"\\\\.\\pipe\\gesher-native-pipe-probe-%lu-%u",
                 GetCurrentProcessId(), ++sequence);
-  DWORD mode = PIPE_TYPE_MESSAGE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
+  DWORD mode = PIPE_TYPE_MESSAGE | PIPE_READMODE_BYTE | PIPE_REJECT_REMOTE_CLIENTS |
+               (nowait ? PIPE_NOWAIT : PIPE_WAIT);
   DWORD options = FILE_FLAG_FIRST_PIPE_INSTANCE | (overlapped ? FILE_FLAG_OVERLAPPED : 0);
-  pair->reader.value = CreateNamedPipeW(name, PIPE_ACCESS_INBOUND | options, mode,
-                                        1, 0, 65536, 0, nullptr);
-  if (pair->reader.value == INVALID_HANDLE_VALUE) return false;
-  pair->writer.value = CreateFileW(name, GENERIC_WRITE | FILE_READ_ATTRIBUTES,
-                                   0, nullptr, OPEN_EXISTING,
-                                   overlapped ? FILE_FLAG_OVERLAPPED : 0, nullptr);
-  if (pair->writer.value == INVALID_HANDLE_VALUE) return false;
+  HANDLE* server = server_writer ? &pair->writer.value : &pair->reader.value;
+  HANDLE* client = server_writer ? &pair->reader.value : &pair->writer.value;
+  // CreateNamedPipe accepts only its documented mode flags, not arbitrary
+  // FILE_* access bits. Duplex grants the server mode-changing rights for the
+  // separate exploratory mode-change test; fixed-NOWAIT cases stay one-way.
+  const DWORD access = change_mode ? PIPE_ACCESS_DUPLEX :
+                       server_writer ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND;
+  *server = CreateNamedPipeW(name, access | options, mode,
+                              1, server_writer ? 65536 : 0, server_writer ? 0 : 65536, 0, nullptr);
+  if (*server == INVALID_HANDLE_VALUE) return false;
+  // A client reader needs FILE_WRITE_ATTRIBUTES for its one initial mode
+  // transition. This does not grant FILE_WRITE_DATA or change its direction.
+  const DWORD client_access = server_writer ? GENERIC_READ | FILE_WRITE_ATTRIBUTES
+                                             : GENERIC_WRITE | FILE_READ_ATTRIBUTES;
+  *client = CreateFileW(name, client_access, 0, nullptr, OPEN_EXISTING,
+                         overlapped ? FILE_FLAG_OVERLAPPED : 0, nullptr);
+  if (*client == INVALID_HANDLE_VALUE) return false;
   // Opening the client before ConnectNamedPipe is a documented successful
   // connection: the subsequent connect reports ERROR_PIPE_CONNECTED.
   Handle event;
@@ -53,8 +65,13 @@ bool MakePair(Pair* pair, bool overlapped) {
     if (!event.value) return false;
     operation.hEvent = event.value;
   }
-  BOOL connected = ConnectNamedPipe(pair->reader.value, overlapped ? &operation : nullptr);
-  return connected || GetLastError() == ERROR_PIPE_CONNECTED;
+  BOOL connected = ConnectNamedPipe(*server, overlapped ? &operation : nullptr);
+  if (!connected && GetLastError() != ERROR_PIPE_CONNECTED) return false;
+  if (nowait) {
+    DWORD client_mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+    return SetNamedPipeHandleState(*client, &client_mode, nullptr, nullptr) != FALSE;
+  }
+  return true;
 }
 
 bool Transfer(HANDLE file, void* bytes, DWORD count, bool write, bool overlapped,
@@ -86,7 +103,9 @@ bool Transfer(HANDLE file, void* bytes, DWORD count, bool write, bool overlapped
 void Modes(bool overlapped) {
   std::printf("BACKEND mode=%s\n", overlapped ? "overlapped" : "synchronous");
   Pair pipe;
-  if (!MakePair(&pipe, overlapped)) { Check(false, "create native message pipe"); return; }
+  if (!MakePair(&pipe, overlapped, false, true)) {
+    Check(false, "create duplex server for the mode-change observation"); return;
+  }
   std::array<char, 4096> bytes{};
   DWORD wrote = 0;
   Check(Transfer(pipe.writer.value, bytes.data(), bytes.size(), true, overlapped, &wrote) && wrote == bytes.size(),
@@ -119,15 +138,27 @@ void Modes(bool overlapped) {
   }
 }
 
-void Atomicity(bool overlapped) {
-  std::printf("ATOMICITY mode=%s\n", overlapped ? "overlapped" : "synchronous");
+void Atomicity(bool overlapped, bool server_writer) {
+  std::printf("ATOMICITY mode=%s server=%s\n", overlapped ? "overlapped" : "synchronous",
+              server_writer ? "writer" : "reader");
   Pair pipe;
-  if (!MakePair(&pipe, overlapped)) { Check(false, "create independent atomicity pipe"); return; }
-  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-  if (!SetNamedPipeHandleState(pipe.reader.value, &mode, nullptr, nullptr) ||
-      !SetNamedPipeHandleState(pipe.writer.value, &mode, nullptr, nullptr)) {
-    Check(false, "enable nonblocking mode on empty atomicity pipe"); return;
+  if (!MakePair(&pipe, overlapped, true, false, server_writer)) {
+    Check(false, "create fixed-NOWAIT atomicity pipe"); return;
   }
+  DWORD reader_mode = 0, writer_mode = 0;
+  const bool query_reader = GetNamedPipeHandleStateW(pipe.reader.value, &reader_mode, nullptr, nullptr, nullptr, nullptr, 0) != FALSE;
+  const bool query_writer = GetNamedPipeHandleStateW(pipe.writer.value, &writer_mode, nullptr, nullptr, nullptr, nullptr, 0) != FALSE;
+  std::printf("FIXED_NOWAIT reader_query=%u reader_mode=%lu writer_query=%u writer_mode=%lu\n",
+              query_reader, reader_mode, query_writer, writer_mode);
+  Check(query_reader && query_writer && (reader_mode & PIPE_NOWAIT) && (writer_mode & PIPE_NOWAIT),
+        "both native endpoints permanently use NOWAIT");
+  char empty_byte = 0;
+  DWORD empty_count = MAXDWORD;
+  const BOOL empty_ok = Transfer(pipe.reader.value, &empty_byte, 1, false, overlapped, &empty_count);
+  const DWORD empty_error = empty_ok ? ERROR_SUCCESS : GetLastError();
+  std::printf("FIXED_NOWAIT_EMPTY_READ ok=%u bytes=%lu error=%lu\n", empty_ok, empty_count, empty_error);
+  Check(!empty_ok && empty_error == ERROR_NO_DATA && empty_count == 0,
+        "empty connected NOWAIT read is immediate with no data");
   std::array<char, 4096> bytes{};
   DWORD wrote = 0;
   DWORD buffered = 0;
@@ -181,9 +212,10 @@ void DescribePipe(const char* observation, HANDLE pipe) {
               observation, queried, static_cast<unsigned long>(native), info.type, info.configuration,
               info.read_available, info.inbound_quota, info.outbound_quota, info.write_available, info.state, info.end);
 }
-void QueuedAndClosedPeerInformation() {
+void QueuedAndClosedPeerInformation(bool nowait, bool server_writer) {
+  std::printf("STATE_BACKEND fixed_nowait=%u server=%s\n", nowait, server_writer ? "writer" : "reader");
   Pair pipe;
-  if (!MakePair(&pipe, false)) { Check(false, "create queued-state pipe"); return; }
+  if (!MakePair(&pipe, false, nowait, false, server_writer)) { Check(false, "create queued-state pipe"); return; }
   DWORD transferred = 0;
   Check(WriteFile(pipe.writer.value, "abcdef", 6, &transferred, nullptr) && transferred == 6,
         "queue six real bytes for endpoint observations");
@@ -197,9 +229,22 @@ void QueuedAndClosedPeerInformation() {
   CloseHandle(pipe.reader.value);
   pipe.reader.value = INVALID_HANDLE_VALUE;
   DescribePipe("closed-reader-writer", pipe.writer.value);
+  if (nowait) {
+    LocalInformation information{};
+    const bool query = QueryLocal(pipe.writer.value, &information);
+    const ULONG quota = information.end == 0 ? information.inbound_quota : information.outbound_quota;
+    Check(query && quota >= information.write_available && quota - information.write_available == 4,
+          "Linux FIONREAD retains four queued bytes after the last reader closes");
+    transferred = MAXDWORD;
+    const BOOL wrote = WriteFile(pipe.writer.value, "x", 1, &transferred, nullptr);
+    const DWORD error = wrote ? ERROR_SUCCESS : GetLastError();
+    std::printf("FIXED_NOWAIT_BROKEN_WRITE ok=%u bytes=%lu error=%lu\n", wrote, transferred, error);
+    Check(!wrote && (error == ERROR_NO_DATA || error == ERROR_BROKEN_PIPE),
+          "NOWAIT writer observes genuine last-reader closure");
+  }
 
   Pair closing;
-  if (!MakePair(&closing, false)) { Check(false, "create writer-close pipe"); return; }
+  if (!MakePair(&closing, false, nowait, false, server_writer)) { Check(false, "create writer-close pipe"); return; }
   Check(WriteFile(closing.writer.value, "abcdef", 6, &transferred, nullptr) && transferred == 6,
         "queue bytes before writer closes");
   CloseHandle(closing.writer.value);
@@ -359,9 +404,13 @@ int main(int argc, char** argv) {
   std::printf("DIAGNOSTIC_ONLY production_backend_validated=0\n");
   Modes(false);
   Modes(true);
-  Atomicity(false);
-  Atomicity(true);
-  QueuedAndClosedPeerInformation();
+  Atomicity(false, false);
+  Atomicity(true, false);
+  Atomicity(false, true);
+  Atomicity(true, true);
+  QueuedAndClosedPeerInformation(false, false);
+  QueuedAndClosedPeerInformation(true, false);
+  QueuedAndClosedPeerInformation(true, true);
   PendingReaderQuota();
   NativeChild(false, true);
   NativeChild(false, false);
