@@ -91,6 +91,7 @@ public final class Main {
             System.out.flush();
             System.err.println(TAG + ": failed: " + t);
             t.printStackTrace();
+            AppCrash.report(t);
             code = 1;
         }
         System.out.flush();
