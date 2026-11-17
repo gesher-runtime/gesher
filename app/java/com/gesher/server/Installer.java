@@ -33,10 +33,10 @@ import java.util.Map;
  * extracted next to it ({@code lib/x86_64}, the package's nativeLibraryDir), its data
  * directory is {@code $ANDROID_DATA/data/<package>}, and {@code
  * $ANDROID_DATA/system/packages.list} lists them (package, code path, first install and
- * last update times, tab-separated), which the system server reads at start, as
- * PackageManagerService reads packages.xml. An update (a different APK for an installed
- * package) gets a new {@code <n>}, after the package's processes are stopped; the same APK
- * again changes nothing. Uninstalling removes the code, the data and the entry.
+ * last update times, optional install attribution, tab-separated). The system server reads
+ * this at startup, as Android reads packages.xml. Updating installed APK bytes gets a new
+ * {@code <n>} after the package's processes are stopped. Opening an unchanged host APK
+ * preserves the existing record. Uninstalling removes the code, data and entry.
  */
 final class Installer {
     private static final String REGISTRY = "system/packages.list";
@@ -53,13 +53,20 @@ final class Installer {
         final String codePath;
         final long firstInstallTime;
         final long lastUpdateTime;
+        final PackageInstallSource installSource;
 
         Entry(String packageName, String codePath, long firstInstallTime,
-                long lastUpdateTime) {
+                long lastUpdateTime, PackageInstallSource installSource) {
             this.packageName = packageName;
             this.codePath = codePath;
             this.firstInstallTime = firstInstallTime;
             this.lastUpdateTime = lastUpdateTime;
+            this.installSource = installSource;
+        }
+
+        Entry withInstallSource(PackageInstallSource source) {
+            if (source == null || installSource.equals(source)) return this;
+            return new Entry(packageName, codePath, firstInstallTime, lastUpdateTime, source);
         }
     }
 
@@ -98,16 +105,27 @@ final class Installer {
         File f = registry();
         if (!f.isFile()) return entries;
         for (String line : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
-            String[] fields = line.split("\t");
+            String[] fields = line.split("\t", -1);
             if (fields.length < 4 || line.startsWith("#")) continue;
             try {
                 entries.put(fields[0], new Entry(fields[0], fields[1],
-                        Long.parseLong(fields[2]), Long.parseLong(fields[3])));
+                        Long.parseLong(fields[2]), Long.parseLong(fields[3]),
+                        readInstallSource(fields)));
             } catch (NumberFormatException e) {
                 SystemServer.log("packages.list: ignoring the line " + line);
             }
         }
         return entries;
+    }
+
+    private static PackageInstallSource readInstallSource(String[] fields) {
+        if (fields.length < 5) return PackageInstallSource.UNKNOWN;
+        try {
+            return PackageInstallSource.decode(fields[4]);
+        } catch (IllegalArgumentException | java.security.cert.CertificateException invalid) {
+            SystemServer.log("packages.list: invalid install attribution for " + fields[0]);
+            return PackageInstallSource.UNKNOWN;
+        }
     }
 
     private void writeRegistry() throws IOException {
@@ -117,10 +135,11 @@ final class Installer {
         try (FileOutputStream out = new FileOutputStream(tmp);
                 Writer w = new OutputStreamWriter(out,
                 StandardCharsets.UTF_8)) {
-            w.write("# package\tcode path\tfirst install\tlast update (Gesher, ADR 0026)\n");
+            w.write("# package\tcode path\tfirst install\tlast update\tinstall attribution (Gesher, ADR 0026)\n");
             for (Entry e : mEntries.values()) {
+                String source = e.installSource.encode();
                 w.write(e.packageName + "\t" + e.codePath + "\t" + e.firstInstallTime + "\t"
-                        + e.lastUpdateTime + "\n");
+                        + e.lastUpdateTime + (source.isEmpty() ? "" : "\t" + source) + "\n");
             }
             w.flush(); out.getFD().sync();
         }
@@ -269,6 +288,7 @@ final class Installer {
                 + NativeLibs.instructionSetDir(abi != null ? abi : NativeLibs.ABI));
         p.setPrimaryCpuAbi(abi);
         p.setInstallTimes(e.firstInstallTime, e.lastUpdateTime);
+        p.setInstallSource(e.installSource);
         return p;
     }
 
@@ -278,11 +298,12 @@ final class Installer {
      * version code.
      */
     synchronized String[] install(String apk) throws Exception {
-        return install(apk, null);
+        return install(apk, null, null);
     }
 
     /** Server-owned immutable session metadata, copied before package publication. */
-    synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata) throws Exception {
+    synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
+            PackageInstallSource installSource) throws Exception {
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
         recoverRemovals();
@@ -292,7 +313,7 @@ final class Installer {
         Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
-            return unchanged(apk, recorded.packageName, parsed, recorded);
+            return unchanged(apk, recorded.packageName, parsed, recorded, null);
         }
         File tempDir = null;
         try {
@@ -367,7 +388,8 @@ final class Installer {
                     && (sessionMetadata == null || sessionMetadata.matches(new File(old.codePath)))
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
-                return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old);
+                return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
+                        installSource);
             }
             int n = 1;
             if (old != null) {
@@ -453,7 +475,7 @@ final class Installer {
             Dexopt.onInstall(pkg, code.getPath(), staged.sharedLibraries);
             long now = System.currentTimeMillis();
             Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
-                    now);
+                    now, installSource == null ? PackageInstallSource.UNKNOWN : installSource);
             ApkPackage installed = open(entry);
             if (previous != null && previous.isSystemAddon()) {
                 if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
@@ -484,6 +506,12 @@ final class Installer {
     /** Owner creation can fail; finish it before committing the installed registry. */
     private void publishInstalled(Entry entry, ApkPackage installed) throws IOException {
         mPm.prepareAdd(installed);
+        commitEntry(entry);
+        // prepareAdd attached this record to the store; publication performs no owner I/O.
+        mPm.add(installed);
+    }
+
+    private void commitEntry(Entry entry) throws IOException {
         Entry previous = mEntries.put(entry.packageName, entry);
         try {
             writeRegistry();
@@ -492,13 +520,12 @@ final class Installer {
             else mEntries.put(entry.packageName, previous);
             throw failure;
         }
-        // prepareAdd attached this record to the store; publication performs no owner I/O.
-        mPm.add(installed);
     }
 
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
-    private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old)
-            throws Exception {
+    private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
+            PackageInstallSource installSource) throws Exception {
+        Entry entry = old.withInstallSource(installSource);
         SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
                 + old.codePath + ")");
         // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
@@ -509,7 +536,7 @@ final class Installer {
                 SystemServer.log("install " + pkg + ": shared-library context/content changed");
             }
             Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-            ApkPackage installed = open(old);
+            ApkPackage installed = open(entry);
             ApkPackage previous = mPm.get(pkg);
             if (previous != null && previous.isSystemAddon()) {
                 if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
@@ -518,7 +545,13 @@ final class Installer {
                 installed.setSystemAddon(true);
             }
             installed.prepareInstalledDataDirectories();
-            mPm.add(installed);
+            if (entry != old) publishInstalled(entry, installed);
+            else mPm.add(installed);
+        } else if (entry != old) {
+            // An explicit session reinstall can change attribution even when code bytes
+            // are unchanged. A direct host launch of the same file keeps the old record.
+            commitEntry(entry);
+            mPm.get(pkg).setInstallSource(entry.installSource);
         }
         return new String[] {pkg, "unchanged", old.codePath,
                 String.valueOf(parsed.versionCode())};

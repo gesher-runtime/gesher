@@ -5,6 +5,8 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.IPackageManager;
+import android.content.pm.InstallSourceInfo;
+import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.net.Uri;
@@ -282,8 +284,47 @@ public final class PackageVisibilityContractTest {
         check(f.hasAction(ACTION) && !f.hasAction("*") && f.countDataTypes() == 1,
                 "Visibility matching mutated installed filters");
     }
+    private static void installSourceVisibility() throws Exception {
+        ApkPackage target = record(parsed(A)), installer = record(parsed(B));
+        PackageImpl observer = parsed(C);
+        observer.addQueriesPackage(A);
+        ApkPackage observerRecord = record(observer);
+        PackageManagerService pm = service(target, installer, observerRecord);
+        String generation = "951630b6-0775-4a4c-9366-7d4a7cc2c433";
+        // Bind the controlled test record to a specific installation, as Session does.
+        set(installer, "mEnabledOwner", generation);
+        Class<?> type = Class.forName("com.gesher.server.PackageInstallSource");
+        var decode = type.getDeclaredMethod("decode", String.class);
+        decode.setAccessible(true);
+        Object attribution = decode.invoke(null, B + "," + generation + ",2");
+        set(target, "mInstallSource", attribution);
+        PackageManager publicClient = client(pm);
+        as(target.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(B.equals(source.getInstallingPackageName()) && B.equals(source.getInitiatingPackageName())
+                    && source.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE,
+                    "Own authenticated installer was filtered");
+            check(B.equals(publicClient.getInstallerPackageName(A)) && publicClient.canPackageQuery(A, B),
+                    "Legacy getter or installer visibility edge disagreed with install source");
+        });
+        if (target.uid() != observerRecord.uid()) {
+            as(observerRecord.uid(), () -> check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                    "Observer learned about an otherwise hidden installer"));
+            as(installer.uid(), () -> expect(PackageManager.NameNotFoundException.class,
+                    () -> publicClient.getInstallSourceInfo(A), "Installer visibility was made bidirectional"));
+        }
+        set(pm, "mPackages", Map.of(A, target, C, observerRecord));
+        check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                "Removed installer remained installer of record");
+        ApkPackage replacement = record(parsed(B));
+        set(replacement, "mEnabledOwner", "5cebb932-01c0-4015-b0fa-b8218e4df7cd");
+        set(pm, "mPackages", Map.of(A, target, B, replacement, C, observerRecord));
+        check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                "A same-name reinstall inherited attribution from an earlier generation");
+    }
+
     public static int run(boolean onArt) throws Exception {
-        art = onArt; checks = 0; shapesAndCallers();
+        art = onArt; checks = 0; shapesAndCallers(); installSourceVisibility();
         if (GmsSignatureSpoofing.isEnabled()) { declarations(); components(); }
         return checks;
     }

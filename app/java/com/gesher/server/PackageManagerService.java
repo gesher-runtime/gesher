@@ -13,6 +13,7 @@ import android.os.RemoteException;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
+import android.content.pm.InstallSourceInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
@@ -563,7 +564,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public int getComponentEnabledSetting(ComponentName componentName, int userId) {
         // ComputerEngine checks cross-user access before looking up a component's
         // user; a privileged lookup of a nonexistent user reports DISABLED.
-        enforceEnabledCrossUser(userId);
+        enforceCrossUser(userId);
         if (componentName == null) return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
         if (userId != 0) return PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
         String pkg = componentName.getPackageName();
@@ -602,7 +603,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (userId != 0) return;
         if (settings == null) throw new IllegalArgumentException("settings is null");
         if (settings.isEmpty()) throw new IllegalArgumentException("settings is empty");
-        enforceEnabledCrossUser(userId);
+        enforceCrossUser(userId);
         // Capture caller-owned input, then validate the entire batch before any state,
         // persistence, cache, process or broadcast change.
         List<PackageManager.ComponentEnabledSetting> captured = new ArrayList<>(settings);
@@ -719,7 +720,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (services != null && services.pm == this) services.atm.restartForEnabledState(pkg);
     }
 
-    private void enforceEnabledCrossUser(int userId) {
+    private void enforceCrossUser(int userId) {
         if (userId < 0) throw new IllegalArgumentException("Invalid userId " + userId);
         int callingUid = Binder.getCallingUid();
         if (android.os.UserHandle.getUserId(callingUid) != userId
@@ -729,7 +730,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                         Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED
                 && mPermissions.checkProcessPermission("android.permission.INTERACT_ACROSS_USERS",
                         Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED) {
-            throw new SecurityException("Enabled-state access requires cross-user permission");
+            throw new SecurityException("Package access requires cross-user permission");
         }
     }
 
@@ -782,7 +783,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public int getApplicationEnabledSetting(String packageName, int userId) {
         // Unlike the component getter, AOSP checks user existence before permissions.
         if (userId != 0) return PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
-        enforceEnabledCrossUser(userId);
+        enforceCrossUser(userId);
         ApkPackage installed = get(packageName);
         if (installed != null) return installed.applicationEnabledState();
         if (synthetic(packageName)
@@ -879,6 +880,19 @@ public final class PackageManagerService extends IPackageManager.Default {
         return info == null ? -1 : info.uid;
     }
 
+    private synchronized PackageVisibility packageVisibility() {
+        Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
+        for (String removing : mRemoving.keySet()) packages.remove(removing);
+        boolean browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
+                && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
+        boolean gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
+        boolean vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
+                && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
+        return new PackageVisibility(packages, browser, gms, vending, this::isProtectedBroadcast);
+    }
+
     @Override
     public boolean[] canPackageQuery(String sourcePackageName, String[] targetPackageNames,
             int userId) {
@@ -896,21 +910,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                         Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException("canPackageQuery requires cross-user permission");
         }
-        Map<String, ApkPackage> packages;
-        boolean browser, gms, vending;
-        synchronized (this) {
-            packages = new LinkedHashMap<>(mPackages);
-            for (String removing : mRemoving.keySet()) packages.remove(removing);
-            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
-                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
-            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
-            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
-                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
-        }
-        PackageVisibility visibility = new PackageVisibility(packages, browser, gms, vending,
-                this::isProtectedBroadcast);
+        PackageVisibility visibility = packageVisibility();
         boolean missing = !visibility.contains(sourcePackageName)
                 || !visibility.canSee(callingUid, sourcePackageName);
         for (String target : targetPackageNames) {
@@ -1023,24 +1023,51 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getInstallerPackageName(String packageName) {
-        return null;
+        InstallSourceInfo info = getInstallSourceInfo(packageName,
+                android.os.UserHandle.getUserId(Binder.getCallingUid()));
+        if (info == null) throw new IllegalArgumentException("Unknown package: " + packageName);
+        return info.getInstallingPackageName();
     }
 
-    /**
-     * Where an installed package came from: nowhere known (sideloaded through Gesher's
-     * installer), but it is installed. IPackageManager.Default returns null, which
-     * ApplicationPackageManager turns into NameNotFoundException for every package, so
-     * code that asks about its own package (Flutter's package_info_plus, store checks)
-     * failed.
-     */
     @Override
-    public android.content.pm.InstallSourceInfo getInstallSourceInfo(String packageName,
-            int userId) {
-        if (get(packageName) == null && !synthetic(packageName)
-                && !BrowserPackageSupport.isBrowserPackage(packageName)) {
-            return null;
+    public InstallSourceInfo getInstallSourceInfo(String packageName, int userId) {
+        Objects.requireNonNull(packageName);
+        enforceCrossUser(userId);
+        if (userId != 0) return null;
+        int uid = Binder.getCallingUid();
+        PackageInstallSource source;
+        ApkPackage target;
+        boolean installed;
+        String installer = null;
+        synchronized (this) {
+            target = get(packageName);
+            if (isRemovalPending(packageName) || (target == null && !"android".equals(packageName)
+                    && !synthetic(packageName) && !BrowserPackageSupport.isBrowserPackage(packageName))) {
+                return null;
+            }
+            // Core callers can see all packages. An installed app can see itself
+            // and its active installer by definition, so only third-party
+            // lookups need to construct the static visibility graph.
+            boolean filter = uid < 0 || (android.os.UserHandle.getAppId(uid)
+                    >= android.os.Process.FIRST_APPLICATION_UID && (target == null || target.uid() != uid));
+            PackageVisibility visibility = filter ? packageVisibility() : null;
+            if (filter && !visibility.canSee(uid, packageName)) return null;
+            source = target == null ? PackageInstallSource.UNKNOWN : target.installSource();
+            installed = source.isInstaller(get(source.installer()));
+            if (installed && !isRemovalPending(source.installer())
+                    && (!filter || visibility.canSee(uid, source.installer()))) {
+                installer = source.installer();
+            }
         }
-        return new android.content.pm.InstallSourceInfo(null, null, null, null);
+        String initiator = installer;
+        // Android lets the installed app itself inspect its original initiator
+        // after removal. Authenticate by process as legacy profiles share an app UID.
+        if (!installed && source.installer() != null && target != null && target.uid() == uid
+                && mInstallerService.isCallingPackage(packageName)) {
+            initiator = source.installer();
+        }
+        return new InstallSourceInfo(initiator, initiator == null ? null : source.signingInfo(),
+                null, installer, null, source.category());
     }
 
     private final PackageInstallerService mInstallerService = new PackageInstallerService(this);

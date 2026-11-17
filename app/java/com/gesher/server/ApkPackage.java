@@ -81,6 +81,7 @@ public final class ApkPackage {
     private final List<String> mLauncherActivities = new ArrayList<>();
     private long mInstallTime = System.currentTimeMillis();
     private long mUpdateTime = mInstallTime;
+    private volatile PackageInstallSource mInstallSource = PackageInstallSource.UNKNOWN;
     private String mDataDir;
     private AppDataStorage mDataStorage;
     private String mNativeLibraryDir;  // null: <data dir>/lib
@@ -447,6 +448,15 @@ public final class ApkPackage {
         mUpdateTime = lastUpdateTime;
     }
 
+    void setInstallSource(PackageInstallSource source) {
+        mInstallSource = source;
+    }
+
+    PackageInstallSource installSource() {
+        PackageInstallSource source = mInstallSource;
+        return source != null ? source : PackageInstallSource.UNKNOWN;
+    }
+
     public long firstInstallTime() {
         return mInstallTime;
     }
@@ -488,6 +498,37 @@ public final class ApkPackage {
             }
         }
         return mVerifiedSignatures == null ? null : mVerifiedSignatures.clone();
+    }
+
+    /** Historical installer attribution uses only fully verified signer data. */
+    synchronized SigningDetails verifiedSigningDetails() {
+        Signature[] current = verifiedSignatures();
+        if (current == null) return null;
+        try {
+            Signature[] past = null;
+            if (mVerifiedLineage != null && current.length == 1) {
+                List<X509Certificate> certificates = mVerifiedLineage.getCertificatesInLineage();
+                if (certificates.size() > 1 && current[0].equals(new Signature(
+                        certificates.get(certificates.size() - 1).getEncoded()))) {
+                    past = new Signature[certificates.size()];
+                    for (int i = 0; i < past.length; i++) {
+                        X509Certificate certificate = certificates.get(i);
+                        past[i] = new Signature(certificate.getEncoded());
+                        var capabilities = mVerifiedLineage.getSignerCapabilities(certificate);
+                        int flags = 0;
+                        if (capabilities.hasInstalledData()) flags |= SigningDetails.CertCapabilities.INSTALLED_DATA;
+                        if (capabilities.hasSharedUid()) flags |= SigningDetails.CertCapabilities.SHARED_USER_ID;
+                        if (capabilities.hasPermission()) flags |= SigningDetails.CertCapabilities.PERMISSION;
+                        if (capabilities.hasRollback()) flags |= SigningDetails.CertCapabilities.ROLLBACK;
+                        if (capabilities.hasAuth()) flags |= SigningDetails.CertCapabilities.AUTH;
+                        past[i].setFlags(flags);
+                    }
+                }
+            }
+            return new SigningDetails(current, mVerifiedSignatureSchemeVersion, past);
+        } catch (java.security.cert.CertificateException | IllegalArgumentException unavailable) {
+            return null;
+        }
     }
 
     public static Signature[] verifySignatures(String path) {
