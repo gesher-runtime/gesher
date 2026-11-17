@@ -6,6 +6,30 @@ current-run host-tool receipts, compiler flags, Android contract checks and
 Windows consumers are preserved. No application behavior is changed. There is
 one physical runner, so it executes one job at a time; other PRs can queue.
 
+The root native Gesher `build` job still runs on GitHub. This rollout first
+validates these two framework producer jobs before moving more required work.
+
+## Capacity and simultaneous PRs
+
+Keep a single runner registration on this computer. GitHub assigns it one job
+at a time, so several eligible PRs wait rather than start concurrent builds on
+the machine. Scheduling is not guaranteed to follow PR creation order. A newer
+commit cancels the older CI run for the same PR; different PRs do not cancel
+one another.
+
+Local native compilation uses at most eight Ninja processes. This is a build
+parallelism limit, not a whole-machine CPU or RAM quota. The framework's javac
+heap remains 10 GiB; native tools and the operating system use additional RAM.
+The existing 8 GiB ccache and 10 GiB snapshot budgets also do not cap checkout,
+toolchain or temporary-build disk usage. Check free space and actual load
+before expanding the workload. Do not register a second runner to clear a
+queue without revisiting these limits.
+
+If the computer sleeps, disconnects or shuts down, assigned jobs cannot finish
+and queued local jobs wait; there is no automatic hosted fallback after routing.
+Use the rollback flag below and cancel/rerun affected CI if a long outage is
+expected. Windows-only execution tests continue on GitHub-hosted Windows.
+
 ## Trust and rollout
 
 The CI caller pins `framework.yml` to
@@ -89,11 +113,13 @@ Run on the runner computer in PowerShell if updating an older installation:
 
 ```powershell
 wsl -d Ubuntu-24.04 -u root -- apt-get update
-wsl -d Ubuntu-24.04 -u root -- apt-get install -y --no-install-recommends clang bison flex libc++-18-dev libc++abi-18-dev unzip zip zstd openjdk-21-jdk-headless
+wsl -d Ubuntu-24.04 -u root -- apt-get install -y --no-install-recommends gh clang bison flex libc++-18-dev libc++abi-18-dev unzip zip zstd openjdk-21-jdk-headless
 ```
 
 The existing `Gesher WSL Runner` scheduled task and its registration stay in
 place. New installations receive these dependencies from `setup-wsl-runner.ps1`.
+`gh` must be installed, but must not be logged into a personal account: artifact
+reads use only the current job's read-only `GH_TOKEN`.
 `prepare-wsl-runner.ps1` verifies the exact group policy, refuses unknown
 workflow grants, and can add the newly approved pinned workflow to the old
 single-workflow group. It does not weaken repository or workflow restrictions.
