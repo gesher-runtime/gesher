@@ -346,10 +346,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** The activity told it is the top resumed one (onTopResumedActivityChanged), or null. */
     private ActivityRecord mTopResumed;
 
-    /** Current top application for scheduler policy; does not infer foreground from mere liveness. */
-    synchronized int topResumedUid() {
-        return mTopResumed != null && mTopResumed.app != null ? mTopResumed.app.uid : -1;
+    private volatile Runnable mTopResumedPackageListener;
+    private String mLastTopResumedPackage; // Guarded by this.
+
+    /** Current top application for scheduler policy, including with legacy shared UIDs. */
+    synchronized String topResumedPackage() {
+        return mTopResumed != null && mTopResumed.app != null ? mTopResumed.app.packageName : null;
     }
+
+    void setTopResumedPackageListener(Runnable listener) {
+        mTopResumedPackageListener = listener;
+    }
+
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
@@ -3183,6 +3191,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ActivityRecord gain = null;
         int displayRotation;
         long displaySequence;
+        boolean topPackageChanged;
         synchronized (this) {
             ActivityRecord want = topResumedCandidateLocked();
             displayRotation = want == null ? Surface.ROTATION_0
@@ -3196,11 +3205,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 mTopResumed.topSent = false;
             }
             mTopResumed = want;
+            String topPackage = topResumedPackage();
+            topPackageChanged = !java.util.Objects.equals(mLastTopResumedPackage, topPackage);
+            mLastTopResumedPackage = topPackage;
             if (want != null && !want.topSent && want.state == State.RESUMED) {
                 want.topSent = true;
                 gain = want;
             }
         }
+        Runnable listener = mTopResumedPackageListener;
+        if (topPackageChanged && listener != null) listener.run();
         com.gesher.app.window.ApplicationDisplay.update(displayRotation, displaySequence);
         if (lose != null) {
             ClientTransaction t = new ClientTransaction(lose.app.thread);
