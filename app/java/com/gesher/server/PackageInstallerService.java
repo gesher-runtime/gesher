@@ -10,6 +10,7 @@ import android.content.pm.IPackageInstaller;
 import android.content.pm.IPackageInstallerCallback;
 import android.content.pm.IPackageInstallerSession;
 import android.content.pm.PackageInstaller;
+import android.content.pm.PackageManager;
 import android.content.pm.PackageParser.PackageParserException;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.Signature;
@@ -142,6 +143,12 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 || p.volumeUuid != null || p.getEnableRollback()
                 || (p.installFlags & 0x00020000) != 0) { // AOSP INSTALL_APEX, hidden in framework export.
             throw new UnsupportedOperationException("Only ordinary APK installs are supported");
+        }
+        if (p.mode == PackageInstaller.SessionParams.MODE_INHERIT_EXISTING
+                && (p.installFlags & PackageManager.INSTALL_DONT_KILL_APP) != 0) {
+            // Publication currently restarts an installed package. Do not accept
+            // an additive install's explicit promise to keep its processes alive.
+            throw new UnsupportedOperationException("Inherited installs without an app restart are unsupported");
         }
         if (p.sizeBytes < -1 || p.sizeBytes > MAX_SESSION_BYTES) {
             throw new IllegalArgumentException("Invalid installation size");
