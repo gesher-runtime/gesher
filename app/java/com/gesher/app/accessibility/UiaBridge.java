@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutorService;
@@ -182,6 +183,59 @@ public final class UiaBridge {
     // Every access is guarded by this map, including reference-queue cleanup.
     private static final Map<Long, CachedRoot> sRoots = new LinkedHashMap<>(16, .75f, true);
 
+    // Event IDs must survive payload-cache eviction. A window's IWindow token
+    // identifies its ViewRootImpl, independently of a recycled HWND. Keep only
+    // scalar identity while that token is owned elsewhere; neither keys nor
+    // values here keep the token, View, ViewRootImpl or Activity alive.
+    private static final ReferenceQueue<IBinder> sCollectedTokens = new ReferenceQueue<>();
+    private static final class WindowKey extends WeakReference<IBinder> {
+        final int hash;
+        WindowKey(IBinder token) {
+            super(token, sCollectedTokens);
+            hash = System.identityHashCode(token);
+        }
+        @Override public int hashCode() { return hash; }
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            IBinder token = get();
+            return token != null && other instanceof WindowKey
+                    && token == ((WindowKey) other).get();
+        }
+    }
+    private static final class RootIdentity {
+        final long hwnd, generation, nodeId;
+        RootIdentity(long hwnd, long generation, long nodeId) {
+            this.hwnd = hwnd; this.generation = generation; this.nodeId = nodeId;
+        }
+    }
+    private static final Map<WindowKey, RootIdentity> sRootIdentities = new HashMap<>();
+
+    private static void pruneIdentities() {
+        WindowKey collected;
+        while ((collected = (WindowKey) sCollectedTokens.poll()) != null) {
+            sRootIdentities.remove(collected);
+        }
+    }
+
+    private static void rememberIdentity(IBinder token, long hwnd, Root root) {
+        if (token == null) return;
+        synchronized (sRootIdentities) {
+            pruneIdentities();
+            WindowKey key = new WindowKey(token);
+            RootIdentity previous = sRootIdentities.get(key);
+            if (previous != null && previous.generation > root.generation) return;
+            sRootIdentities.put(key, new RootIdentity(hwnd, root.generation, root.rootNodeId));
+        }
+    }
+
+    private static long eventId(IBinder token, long hwnd, long id) {
+        synchronized (sRootIdentities) {
+            pruneIdentities();
+            RootIdentity identity = sRootIdentities.get(new WindowKey(token));
+            return identity != null && identity.hwnd == hwnd && identity.nodeId == id ? ROOT : id;
+        }
+    }
+
     private static void pruneRoots() {
         CachedRoot collected;
         while ((collected = (CachedRoot) sCollectedViews.poll()) != null) {
@@ -312,6 +366,12 @@ public final class UiaBridge {
             r = new Root(vr, v, id, info.getSourceNodeId(), q.generation);
             cacheRoot(hwnd, r);
             if (!q.active()) { forgetRoot(hwnd, r); return null; }
+            // Resolve the token outside either cache monitor. WindowSession
+            // validates its currently registered native window before admission.
+            IBinder token = v.getWindowToken();
+            if (token != null && hwndOf(token) == hwnd && q.active()) {
+                rememberIdentity(token, hwnd, r);
+            }
             return r;
         }
         return null;
@@ -551,7 +611,10 @@ public final class UiaBridge {
         if (hwnd == 0) return;
         Root r = cachedRoot(hwnd);
         long id = e.getSourceNodeId();
-        if (r != null) id = publicId(r, id);
+        if (r != null && r.view.getWindowToken() == windowToken) {
+            rememberIdentity(windowToken, hwnd, r);
+        }
+        id = eventId(windowToken, hwnd, id);
         StringBuilder text = new StringBuilder();
         for (CharSequence t : e.getText()) {
             if (text.length() > 0) text.append(' ');

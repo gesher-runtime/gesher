@@ -44,11 +44,17 @@ def main():
         classes.mkdir()
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), str(source),
-                        str(ROOT / 'tests/uia-cache/UiaCacheHost.java')], check=True, timeout=60)
+                        str(ROOT / 'tests/uia-cache/UiaCacheHost.java'),
+                        str(ROOT / 'tests/uia-cache/UiaEventIdentityHost.java'),
+                        str(ROOT / 'tests/uia-cache/WindowSession.java')], check=True, timeout=60)
         subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData',
                         '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
                         '-cp', str(classes) + os.pathsep + classpath,
                         'UiaCacheHost', str(lib)], check=True, timeout=30)
+        subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData',
+                        '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
+                        '-cp', str(classes) + os.pathsep + classpath,
+                        'UiaEventIdentityHost', str(lib)], check=True, timeout=30)
 
 
 if __name__ == '__main__':
