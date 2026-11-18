@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 static int checks, failures, lock_depth, descriptor_depth, admission_error, finish_error, crt_calls;
 static bool close_error_after;
@@ -50,6 +51,15 @@ static FILE* _wfreopen(const wchar_t* path,const wchar_t* mode,FILE* stream){
   check("real reopen stays under both guards",lock_depth==2 && descriptor_depth==1);++crt_calls;
   std::wstring wp(path),wm(mode);std::string p(wp.begin(),wp.end()),m(wm.begin(),wm.end());
   for(char& c:m)if(c=='N')c='e';
+  // A failed glibc freopen closes the descriptor but can leave the FILE
+  // allocation live. Model the UCRT read-only missing-path failure with the
+  // real filesystem error and release the original stream with fclose.
+  struct stat metadata{};
+  if (m == "rb" && stat(p.c_str(), &metadata) < 0 && errno == ENOENT) {
+    check("failed CRT reopen closes the original stream", std::fclose(stream) == 0);
+    errno = ENOENT;
+    return nullptr;
+  }
   return std::freopen(p.c_str(),m.c_str(),stream);
 }
 namespace host {
@@ -118,8 +128,11 @@ int main(){
   f=prepared();
   check("path rejection closes original stream",shim::Freopen("missing:","rb",f)==nullptr && errno==ENOENT);
   check("path-rejection retirement is recorded",!recorded(f));
-  f=prepared();
-  check("CRT reopen failure is returned",shim::Freopen("absent/destination","rb",f)==nullptr);
+  f=prepared();fd=fileno(f);calls=crt_calls;
+  check("CRT reopen returns the missing-target error",
+        shim::Freopen("absent/destination","rb",f)==nullptr && errno==ENOENT);
+  check("missing-target failure reaches the CRT once",crt_calls==calls+1);
+  check("CRT reopen failure closes the original descriptor",fcntl(fd,F_GETFD)<0 && errno==EBADF);
   check("CRT reopen failure retires closed FILE state",!recorded(f));
 
   f=prepared();finish_error=EROFS;
