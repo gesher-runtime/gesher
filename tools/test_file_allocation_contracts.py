@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
     source = args.source.read_text(encoding="utf-8")
-    first, last = "int posix_fallocate(", "// --- uio "
+    first, last = "int posix_fadvise(", "// --- uio "
     if source.count(first) != 1 or source.count(last) != 1:
         raise ValueError("file-allocation source boundaries changed")
     section = source[source.index(first):source.index(last, source.index(first))]
@@ -46,7 +46,7 @@ def main():
         if args.sanitize:
             env["UBSAN_OPTIONS"] = "halt_on_error=1:" + env.get("UBSAN_OPTIONS", "")
         failures = []
-        for case in ("contents", "errors", "overflow", "faults"):
+        for case in ("advice", "contents", "errors", "overflow", "faults"):
             result = subprocess.run([str(executable), case], cwd=folder, env=env,
                                     capture_output=True, text=True, timeout=30)
             print(result.stdout, end="", flush=True)

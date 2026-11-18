@@ -118,6 +118,74 @@ struct Dataset {
   std::vector<Packet> packets;
 };
 
+Format MetadataFormat() {
+  Format format(AMediaFormat_new());
+  if (format) AMediaFormat_setString(format.get(), "mime", "application/gyro");
+  return format;
+}
+
+bool AddMetadata(Dataset* data) {
+  auto format = MetadataFormat();
+  if (!format) return false;
+  const size_t track = data->tracks.size();
+  data->tracks.push_back(std::move(format));
+  data->packets.push_back({track, 215000, 0, {0x01, 0x00, 0xfe}});
+  data->packets.push_back({track, 248333, 0, {0x02, 0x17}});
+  data->packets.push_back({track, 312175, 0, {0x03, 0x42, 0xff, 0x00}});
+  return true;
+}
+
+// These are tiny real container writes; the separate reader executable checks
+// their sample tables, MIME and timestamps against Android's writer contract.
+void MetadataBoundaries(const Api& api, const std::string& root, Report* report) {
+  bool ok = true;
+  const uint8_t payload[] = {0x12, 0x34, 0x56};
+  for (OutputFormat output : {AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4, AMEDIAMUXER_OUTPUT_FORMAT_THREE_GPP}) {
+    const char* suffix = output == AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4 ? ".mp4" : ".3gp";
+    for (const char* kind : {"eos", "long", "negative", "offset", "long-offset", "long-trim"}) {
+      const std::string path = root + "/metadata-" + kind + suffix;
+      const int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
+      if (fd < 0) { ok = false; continue; }
+      Muxer muxer(api.create(fd, output), MuxerDelete{&api});
+      close(fd);
+      auto format = MetadataFormat();
+      if (!muxer || !format) { ok = false; continue; }
+      const bool long_offset = std::strcmp(kind, "long-offset") == 0;
+      const bool offset = long_offset || std::strcmp(kind, "offset") == 0;
+      const ssize_t track = api.add(muxer.get(), format.get());
+      const ssize_t second = offset ? api.add(muxer.get(), format.get()) : -1;
+      if (track != 0 || (offset && second != 1) || api.start(muxer.get()) != AMEDIA_OK) {
+        ok = false;
+        continue;
+      }
+      std::vector<int64_t> times = {0, 33333, 97175};
+      if (std::strcmp(kind, "long") == 0) times = {0, 30000000000LL};
+      if (std::strcmp(kind, "negative") == 0) times = {-33000, 0, 33333};
+      if (std::strcmp(kind, "long-trim") == 0) times = {-30000000000LL, 0, 33333};
+      if (offset) times = {0, 1000000};
+      for (int64_t time : times) {
+        AMediaCodecBufferInfo info = {0, sizeof(payload), time, 0};
+        ok = (api.write(muxer.get(), 0, payload, &info) == AMEDIA_OK) && ok;
+      }
+      if (offset) {
+        const int64_t delay = long_offset ? 430000000000LL : 0;
+        for (int64_t time : {215567, 248900, 312742}) {
+          AMediaCodecBufferInfo info = {0, sizeof(payload), delay + time, 0};
+          ok = (api.write(muxer.get(), 1, payload, &info) == AMEDIA_OK) && ok;
+        }
+      }
+      if (std::strcmp(kind, "eos") == 0) {
+        AMediaCodecBufferInfo info = {0, 0, 200000, AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM};
+        ok = (api.write(muxer.get(), 0, payload, &info) == AMEDIA_OK) && ok;
+        info = {0, sizeof(payload), 210000, 0};
+        ok = (api.write(muxer.get(), 0, payload, &info) == AMEDIA_ERROR_INVALID_OPERATION) && ok;
+      }
+      ok = (api.stop(muxer.get()) == AMEDIA_OK) && ok;
+    }
+  }
+  report->Check(ok, "metadata-eos-long-negative-offset-boundaries");
+}
+
 bool Load(const std::string& path, Dataset* out) {
   Reader input(path);
   const auto magic = input.Bytes(8);
@@ -263,6 +331,10 @@ void Write(const Api& api, const Dataset& data, const std::string& path, OutputF
   ok = ok && api.location(muxer.get(), 45.125f, -75.25f) ==
       (mp4 ? AMEDIA_OK : AMEDIA_ERROR_INVALID_OPERATION);
   if (mp4) ok = ok && api.location(muxer.get(), 91, 0) == AMEDIA_ERROR_UNKNOWN;
+  if (!mp4) {
+    auto metadata = MetadataFormat();
+    ok = ok && metadata && api.add(muxer.get(), metadata.get()) == AMEDIA_ERROR_UNKNOWN;
+  }
   Format retained;
   for (size_t i = 0; i < data.tracks.size(); ++i) {
     Format original(AMediaFormat_new());
@@ -393,6 +465,7 @@ std::string Run() {
   if (api.valid() && fixtures != nullptr && output != nullptr) {
     Descriptors(api, output, &report);
     EmptyLifecycle(api, output, &report);
+    MetadataBoundaries(api, output, &report);
     struct Case { const char* input; const char* suffix; OutputFormat format; };
     const Case cases[] = {{"h264-aac", "mp4", AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4},
       {"h264-aac", "3gp", AMEDIAMUXER_OUTPUT_FORMAT_THREE_GPP},
@@ -402,8 +475,11 @@ std::string Run() {
     for (const auto& test : cases) {
       Dataset data;
       const bool loaded = Load(std::string(fixtures) + "/" + test.input + ".bin", &data);
-      report.Check(loaded, std::string("independent-encoded-fixture ") + test.input);
-      if (!loaded) continue;
+      const bool mp4 = test.format == AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4 ||
+          test.format == AMEDIAMUXER_OUTPUT_FORMAT_THREE_GPP;
+      const bool ready = loaded && (!mp4 || AddMetadata(&data));
+      report.Check(ready, std::string("independent-encoded-fixture ") + test.input);
+      if (!ready) continue;
       // Race the first Ogg writers, before any ordinary Ogg output warms CRC.
       if (test.format == AMEDIAMUXER_OUTPUT_FORMAT_OGG) OggBoundaries(api, data, output, &report);
       for (bool blocked : {false, true}) {

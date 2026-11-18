@@ -387,6 +387,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private boolean mTaskCallbackPending; // Guarded by this.
     /** The activity told it is the top resumed one (onTopResumedActivityChanged), or null. */
     private ActivityRecord mTopResumed;
+
+    /** Current top application for scheduler policy; does not infer foreground from mere liveness. */
+    synchronized int topResumedUid() {
+        return mTopResumed != null && mTopResumed.app != null ? mTopResumed.app.uid : -1;
+    }
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
@@ -2070,12 +2075,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                         // A finishing trampoline may already have queued a
                                         // result. Remove only its result, not another child's
                                         // result that happens to use the same request code.
-                                        resultSource.pendingResults.removeIf(result ->
-                                                result instanceof PendingActivityResult pending
-                                                        && pending.source == source
-                                                        && result.mRequestCode == source.requestCode
-                                                        && java.util.Objects.equals(result.mResultWho,
-                                                                source.resultWho));
+                                        resultSource.pendingResults.removeIf(result -> {
+                                            if (!(result instanceof PendingActivityResult pending)
+                                                    || pending.source != source
+                                                    || result.mRequestCode != source.requestCode
+                                                    || !java.util.Objects.equals(result.mResultWho,
+                                                            source.resultWho)) return false;
+                                            resultSource.callerState.remove(result.mCallerToken);
+                                            return true;
+                                        });
                                     }
                                     // A forwarded result belongs to the original activity
                                     // record, whose saved state can outlive its process.

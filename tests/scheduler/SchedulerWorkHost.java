@@ -2,7 +2,14 @@
 public final class SchedulerWorkHost {
     public static void main(String[] args) throws Exception {
         System.load(args[0]);
-        gesher.services.SchedulerWorkContractTest.contracts(args[1], false);
+        if (!args[1].equals("constraints")) {
+            gesher.services.SchedulerWorkContractTest.contracts(args[1], false);
+        }
+        if (args[1].equals("all") || args[1].equals("constraints")) {
+            gesher.services.JobSchedulerConstraintContractTest.contracts();
+            System.out.println("JobSchedulerConstraintContractTest all passed: "
+                    + gesher.services.JobSchedulerConstraintContractTest.checks + " checks");
+        }
         System.out.println("Scheduler work host all passed: " + gesher.services.SchedulerWorkContractTest.checks + " checks");
         System.out.println("Real framework/public Java APIs and production services; constructed package/process metadata, manual run dispatch, native identity/allocation boundaries and write-size-only Parcel. No host ART, Binder transport, Windows timer or notification publication claim.");
     }
