@@ -14,6 +14,22 @@ Check 'framework: Wi-Fi configuration, enterprise certificates and native Parcel
   $deepWifiConfigurationOut
 } @('WifiConfigurationContractTest all passed:', 'parcel=true')
 
+$deepWifiInfoOut = FixesRun ($dvmFixes + 'gesher.services.WifiInfoContractTest') 90
+$deepWifiInfoCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiInfoParcel.ps1"
+$deepWifiInfoWireOK = $false
+$deepWifiInfoWireFailure = ''
+try {
+  Assert-WifiInfoParcelEvidence -Output $deepWifiInfoOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-info-android-reference-2026-11-17.json')
+  $deepWifiInfoWireOK = $true
+} catch { $deepWifiInfoWireFailure = $_.Exception.Message }
+Check 'framework: WifiInfo Builder, MLO, redaction and native Parcelable contracts' {
+  $global:LASTEXITCODE = $deepWifiInfoCode
+  $deepWifiInfoOut
+  if ($deepWifiInfoWireOK) { 'WifiInfo native Parcel bytes match Android reference: 9 cases' }
+  else { $global:LASTEXITCODE = 1; "WifiInfo native Parcel evidence failed: $deepWifiInfoWireFailure" }
+} @('WifiInfoContractTest all passed:', 'parcel=true', 'WifiInfo native Parcel bytes match Android reference: 9 cases')
+
 $deepNetworkOut = FixesRun ($dvmFixes + 'gesher.services.NetworkSnapshotContractTest') 90
 $deepNetworkCode = $LASTEXITCODE
 Check 'framework: network route, address, snapshot and proxy contracts with native Parcel' {

@@ -1783,8 +1783,31 @@ public class WifiConfiguration implements Parcelable {
     @MeteredOverride
     public int meteredOverride = METERED_OVERRIDE_NONE;
 
-    // The hidden isMetered(config, WifiInfo) blend helper depends on a mutable
-    // connection snapshot. It is outside this SDK 36 configuration-value port.
+    /**
+     * Blend together all the various opinions to decide if the given network
+     * should be considered metered or not.
+     *
+     * @hide
+     */
+    @SystemApi
+    public static boolean isMetered(@Nullable WifiConfiguration config, @Nullable WifiInfo info) {
+        boolean metered = false;
+        if (info != null && info.getMeteredHint()) {
+            metered = true;
+        }
+        if (config != null && config.meteredHint) {
+            metered = true;
+        }
+        if (config != null
+                && config.meteredOverride == WifiConfiguration.METERED_OVERRIDE_METERED) {
+            metered = true;
+        }
+        if (config != null
+                && config.meteredOverride == WifiConfiguration.METERED_OVERRIDE_NOT_METERED) {
+            metered = false;
+        }
+        return metered;
+    }
 
     /** Check whether wep keys exist. */
     private boolean hasWepKeys() {

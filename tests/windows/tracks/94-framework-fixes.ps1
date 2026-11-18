@@ -87,6 +87,14 @@ Check 'services: concurrent clipboard callbacks and native Windows clipboard upd
   $clipboardCallbacksOut
 } @('ClipboardCallbackTest all passed:')
 
+$receiverExportOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ReceiverExportContractTest') 90
+$receiverExportCode = $LASTEXITCODE
+Check 'services: dynamic receiver exports, protected broadcasts and sticky-query exemptions' {
+  $global:LASTEXITCODE = $receiverExportCode
+  $receiverExportOut
+} @('ReceiverExportContractTest passed:', 'binder=true')
+
 $contentObserverOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'ContentObserverLifecycleTest') 90
 $contentObserverCode = $LASTEXITCODE
@@ -102,6 +110,14 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $global:LASTEXITCODE = $schedulerWorkCode
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
+
+$schedulerConstraintsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'JobSchedulerConstraintContractTest') 90
+$schedulerConstraintsCode = $LASTEXITCODE
+Check 'services: observed job constraints, deadlines, callback ordering and bounded retirement' {
+  $global:LASTEXITCODE = $schedulerConstraintsCode
+  $schedulerConstraintsOut
+} @('JobSchedulerConstraintContractTest all passed:')
 
 $activityRestoreOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'ActivityRestoreContractTest') 90
