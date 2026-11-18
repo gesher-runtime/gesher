@@ -200,3 +200,45 @@ EACCES, followed by two dependent cleanup failures, both as shell and in an owne
 debuggable app profile. This new fixture avoids that unrelated precondition; it
 does not turn those earlier runs into full passes or assert an Android hardlink
 contract from those failures. No SELinux settings were changed.
+
+## Source-review repair: argument order and storage exhaustion
+
+The error-order baseline is the Android common kernel commit linked above,
+`964a54e5e1a0d70cd80bd5a0885a1938463625b1`. It first admits the path or raw fd,
+then prepares set flags, the complete attribute name and the bounded input value,
+then checks current inode authorization and resolves the namespace handler. Its
+user-namespace inode-type restriction also precedes the handler's empty-suffix
+check. This is a versioned contract: newer kernel refactorings can copy set/remove
+arguments before path lookup. Results from an arbitrary Linux host are not a
+substitute for the declared Android baseline. The recorded Android device above
+used kernel 6.6.66.
+
+The backend now separates object admission, argument preparation and current
+authorization. Path admission pins the actual object with zero desired access;
+the subsequent metadata and access opens still use that held object. Thus a
+current EA/data denial does not replace an earlier argument-copy error, while an
+invalid raw fd still returns `EBADF`. The additional metadata open on path calls
+has a cost; no new throughput claim is made. File-identity locking and the
+delete-pending authorization boundary remain in effect.
+
+Android's input limit is 65,536 bytes. An input above that returns `E2BIG` before
+inode authorization. A valid-sized value that cannot fit the Windows native EA
+store returns `ENOSPC` from the existing atomic commit path instead. Create and
+replace conditions are evaluated before storage exhaustion, and failed writes
+preserve existing attribute bytes. The backend does not claim that every valid
+Android-sized attribute fits every Windows filesystem.
+
+The registered Windows fixture adds competing-error cases under real data/EA
+DACL denial, invalid raw-fd and missing-path admission, value-copy faults,
+create/replace precedence and full-size storage failures. The shared native/guest
+fixture adds symlink type versus suffix, value-copy and flag precedence checks.
+These are real public-provider calls; no test-only production branch changes the
+result. A future exact-source Windows/Android run must execute the new cases.
+
+The later pre-repair [Windows run 44183195886](https://github.com/gesher-runtime/gesher/actions/runs/44183195886)
+passed 249 combined checks on Server2022 and Server2025, including the then-current
+75-check shared suite. That validates its own source and corrects the pending-run
+status in the historical section above; it does not validate this argument-order
+repair. On those hosts native empty-name reopening succeeded, so the run proves
+direct held-policy evaluator checks but not execution of the public
+`STATUS_DELETE_PENDING` exception path.

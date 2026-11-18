@@ -46,6 +46,81 @@ static bool ApplyDacl(HANDLE file, const wchar_t* sddl) {
   return ok;
 }
 
+// Error precedence follows the PR's pinned Android common kernel 964a54e5:
+// admit path/fd, copy flags/name/value, authorize the inode, resolve user.*.
+// The Windows EA budget is a storage limit, not Android's 65536-byte input cap.
+static void ArgumentAndCapacityContracts(const char* path, int fd) {
+  const char* bad = reinterpret_cast<const char*>(static_cast<uintptr_t>(1));
+  char output[32];
+  std::vector<char> large(65537, 'x');
+  const std::string missing = std::string(path) + ".missing";
+  XHOST_ERROR(setxattr(missing.c_str(), bad, bad, large.size(), 4), ENOENT,
+              "declared kernel admits the path before preparing set arguments");
+  XHOST_ERROR(fsetxattr(-1, bad, bad, large.size(), 4), EBADF,
+              "invalid raw fd precedes set argument preparation");
+  XHOST_ERROR(fsetxattr(fd, bad, bad, large.size(), 4), EINVAL,
+              "unknown set flags precede name and value copying");
+  XHOST_ERROR(fsetxattr(fd, "", bad, large.size(), 0), ERANGE,
+              "empty name precedes oversized value");
+  XHOST_ERROR(fsetxattr(fd, "unsupported.value", bad, large.size(), 0), E2BIG,
+              "Android input cap precedes namespace resolution");
+  XHOST_ERROR(fsetxattr(fd, "unsupported.value", bad, 1, 0), EFAULT,
+              "value copying precedes namespace resolution");
+  XHOST_ERROR(fsetxattr(fd, "user.", bad, 1, 0), EFAULT,
+              "value copying precedes empty user suffix rejection");
+  XHOST_ERROR(fsetxattr(fd, "user.capacity", bad, 65536, 0), EFAULT,
+              "valid-sized input is copied before storage capacity is checked");
+  XHOST_ERROR(fsetxattr(fd, "user.base", large.data(), large.size(), XATTR_CREATE), E2BIG,
+              "Android oversized input precedes create collision");
+  XHOST_ERROR(fsetxattr(fd, "user.base", large.data(), 65536, XATTR_CREATE), EEXIST,
+              "create collision precedes backing-store capacity");
+  XHOST_ERROR(fsetxattr(fd, "user.capacity", large.data(), 65536, XATTR_REPLACE), ENODATA,
+              "replace-missing precedes backing-store capacity");
+  XHOST_ERROR(fsetxattr(fd, "user.capacity", large.data(), 65536, 0), ENOSPC,
+              "Android-valid value exceeding native EA budget returns ENOSPC");
+  XHOST_ERROR(fsetxattr(fd, "user.base", large.data(), 65536, XATTR_REPLACE), ENOSPC,
+              "oversized replacement returns storage exhaustion without publishing");
+  XHOST_ERROR(fgetxattr(fd, "user.capacity", output, sizeof(output)), ENODATA,
+              "failed capacity checks create no attribute");
+  XCheck(fgetxattr(fd, "user.base", output, sizeof(output)) == 4 && !memcmp(output, "base", 4),
+         "failed large replacements preserve existing bytes");
+}
+
+static void DeniedArgumentContracts(const char* path, int fd) {
+  const char* bad = reinterpret_cast<const char*>(static_cast<uintptr_t>(1));
+  char output[32];
+  XHOST_ERROR(getxattr(path, bad, output, sizeof(output)), EFAULT,
+              "path get copies name before current data authorization");
+  XHOST_ERROR(lgetxattr(path, "", output, sizeof(output)), ERANGE,
+              "nofollow get rejects empty name before current data authorization");
+  XHOST_ERROR(fgetxattr(fd, bad, output, sizeof(output)), EFAULT,
+              "admitted fd get copies name before current data authorization");
+  XHOST_ERROR(fgetxattr(fd, "", output, sizeof(output)), ERANGE,
+              "admitted fd get rejects empty name before authorization");
+  XHOST_ERROR(fgetxattr(fd, "user.", output, sizeof(output)), EACCES,
+              "current inode authorization precedes user suffix resolution");
+  XHOST_ERROR(setxattr(path, bad, bad, 65537, 4), EINVAL,
+              "path set rejects flags before current data authorization");
+  XHOST_ERROR(lsetxattr(path, "user.base", bad, 1, 0), EFAULT,
+              "nofollow set copies input before current data authorization");
+  XHOST_ERROR(fsetxattr(fd, bad, bad, 65537, 4), EINVAL,
+              "admitted fd set rejects flags before current data authorization");
+  XHOST_ERROR(fsetxattr(fd, "", bad, 65537, 0), ERANGE,
+              "admitted fd set rejects empty name before authorization");
+  XHOST_ERROR(fsetxattr(fd, "user.base", bad, 65537, 0), E2BIG,
+              "admitted fd set checks Android input cap before authorization");
+  XHOST_ERROR(fsetxattr(fd, "user.base", bad, 1, 0), EFAULT,
+              "admitted fd set copies value before authorization");
+  XHOST_ERROR(fsetxattr(fd, "user.", "x", 1, 0), EACCES,
+              "set authorization precedes user suffix resolution");
+  XHOST_ERROR(removexattr(path, bad), EFAULT,
+              "path remove copies name before current data authorization");
+  XHOST_ERROR(fremovexattr(fd, ""), ERANGE,
+              "admitted fd remove rejects empty name before authorization");
+  XHOST_ERROR(fremovexattr(fd, "user."), EACCES,
+              "remove authorization precedes user suffix resolution");
+}
+
 static void CurrentTokenContracts(HANDLE file, int fd) {
   HANDLE process_token = nullptr, impersonation = nullptr, restricted = nullptr;
   bool token_ok = WinCheck(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &process_token),
@@ -415,6 +490,7 @@ static void DaclAndLifetimeContracts() {
   XCheck(status == ERROR_SUCCESS, "retain original DACL for cleanup");
   if (status != ERROR_SUCCESS) { close(fd); DeleteFileA(path); return; }
   XCheck(fsetxattr(fd, "user.base", "base", 4, 0) == 0, "initialize actual persistent EA");
+  ArgumentAndCapacityContracts(path, fd);
 
   // Deny only file data. Native EA bits remain granted, which distinguishes
   // Android inode authorization from merely having a Windows EA handle.
@@ -429,10 +505,15 @@ static void DaclAndLifetimeContracts() {
   XHOST_ERROR(fremovexattr(fd, "user.base"), EACCES, "old fd cannot remove after data-write revocation");
   XCheck(listxattr(path, output, sizeof(output)) > 0 && flistxattr(fd, output, sizeof(output)) > 0,
          "list requires EA rights without inventing a data-read requirement");
+  DeniedArgumentContracts(path, fd);
 
   XCheck(ApplyDacl(file, L"D:P(D;;0x00000008;;;WD)(A;;FA;;;WD)"), "revoke EA read while allowing data");
   XHOST_ERROR(fgetxattr(fd, "user.base", output, sizeof(output)), EACCES, "old fd rechecks current EA-read permission");
   XHOST_ERROR(flistxattr(fd, output, sizeof(output)), EACCES, "old fd list rechecks current EA-read permission");
+  XHOST_ERROR(getxattr(path, "", output, sizeof(output)), ERANGE,
+              "path name preparation precedes current EA-read denial");
+  XHOST_ERROR(fgetxattr(fd, "", output, sizeof(output)), ERANGE,
+              "admitted fd name preparation precedes current EA-read denial");
   XCheck(ApplyDacl(file, L"D:P(D;;0x00000010;;;WD)(A;;FA;;;WD)"), "revoke EA write while allowing data");
   XCheck(fgetxattr(fd, "user.base", output, sizeof(output)) == 4, "EA-write denial does not forbid reading");
   XHOST_ERROR(fsetxattr(fd, "user.base", "deny", 4, 0), EACCES, "old fd rechecks current EA-write permission");

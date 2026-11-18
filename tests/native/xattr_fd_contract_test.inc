@@ -146,6 +146,14 @@ static int xattr_fd_contracts(void) {
     char out[256];
     XERROR(XGET(linkfd, "user.base", out, sizeof(out)), ENODATA, "O_PATH symlink fallback never reads the target");
     XERROR(XSET(linkfd, "user.base", "other", 5, 0), EPERM, "O_PATH symlink fallback never writes the target");
+    XERROR(XGET(linkfd, "user.", out, sizeof(out)), ENODATA,
+           "symlink inode type precedes empty user suffix resolution");
+    XERROR(XSET(linkfd, "user.", "x", 1, 0), EPERM,
+           "symlink mutation restriction precedes empty user suffix resolution");
+    XERROR(XSET(linkfd, "user.base", (const void*)(uintptr_t)1, 1, 0), EFAULT,
+           "set value is copied before symlink inode type rejection");
+    XERROR(XSET(linkfd, "user.base", "x", 1, 4), EINVAL,
+           "unknown set flags precede symlink inode type rejection");
     XCheck(XLIST(linkfd, out, sizeof(out)) >= 0, "O_PATH symlink list is permitted");
     XERROR(fremovexattr(linkfd, "user.base"), EBADF, "public O_PATH symlink remove stays raw");
   }

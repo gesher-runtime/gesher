@@ -184,6 +184,33 @@ struct Request {
   bool Mutates() const { return operation == Operation::kSet || operation == Operation::kRemove; }
 };
 
+struct PreparedRequest {
+  char name[kMaxName + 1]{};
+  std::unique_ptr<char[]> input;
+};
+
+// The selected Android kernel admits the path/FD first, then prepares these
+// user arguments before inode authorization and namespace handler resolution.
+// Keep full-name copying separate from CheckName's later namespace/suffix check.
+int PrepareRequest(const Request& request, PreparedRequest* prepared) {
+  if (request.operation == Operation::kSet &&
+      (request.flags & ~(XATTR_CREATE | XATTR_REPLACE))) return EINVAL;
+  if (request.operation != Operation::kList) {
+    const int error = ReadString(request.name, prepared->name, sizeof(prepared->name), ERANGE);
+    if (error) return error;
+    if (prepared->name[0] == '\0') return ERANGE;
+  }
+  if (request.operation == Operation::kSet) {
+    if (request.length > kMaxValue) return E2BIG;
+    if (request.length != 0) {
+      prepared->input.reset(new (std::nothrow) char[request.length]);
+      if (!prepared->input) return ENOMEM;
+      if (!ReadUser(request.input, prepared->input.get(), request.length)) return EFAULT;
+    }
+  }
+  return 0;
+}
+
 DWORD RequiredAccess(const Request& request) {
   // Android checks current inode read/write permission, not the mode of the
   // descriptor used to reach it. EA rights alone are separate Windows rights.
@@ -341,6 +368,8 @@ struct Target {
   Handle original;
   Handle reopened;
   bool eligible = true;
+  bool path_only = false;
+  uint32_t granted = 0;
 
   HANDLE File() const { return reopened ? reopened.value : original.value; }
 };
@@ -368,26 +397,23 @@ int CheckTarget(Target* target, const Request& request) {
   return 0;
 }
 
-int OpenPath(const char* path, bool follow, const Request& request, Target* target) {
+int PinPath(const char* path, bool follow, Target* target) {
   char stable_path[4096];
   int error = ReadString(path, stable_path, sizeof(stable_path), ENAMETOOLONG);
   if (error) return error;
   std::wstring windows;
   if (!gesher::DiskPath(stable_path, &windows, EOPNOTSUPP)) return errno;
-  // Open the link itself when requested. Inspect the resulting object before
-  // asking for write rights, so lsetxattr cannot ever tag the link target.
+  // Open the link itself when requested. Zero desired access pins the actual
+  // object without letting an EA/data permission denial preempt argument
+  // preparation. Classification and current authorization follow below.
   DWORD flags = kOpenFlags | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT);
-  // The initial open only pins/classifies the object. The native reopen below
-  // checks data and EA rights without backup-intent privilege overrides.
-  DWORD access = FILE_READ_ATTRIBUTES | FILE_READ_EA;
-  target->original.value = CreateFileW(windows.c_str(), access, kSharing, nullptr, OPEN_EXISTING, flags, nullptr);
+  target->original.value = CreateFileW(windows.c_str(), 0, kSharing, nullptr, OPEN_EXISTING, flags, nullptr);
   if (!target->original) return WinError();
-  error = CheckTarget(target, request);
-  if (error || !target->eligible) return error;
-  return gesher::xattr::ReopenFileAccess(target->original.value, RequiredAccess(request), &target->reopened.value);
+  target->path_only = true;
+  return 0;
 }
 
-int OpenFd(int fd, const Request& request, bool allow_path, Target* target) {
+int PinFd(int fd, bool allow_path, Target* target) {
   if (fd < 0) return EBADF;
   {
     // Pin the opened object before any participating close/dup2 can reuse fd.
@@ -398,14 +424,17 @@ int OpenFd(int fd, const Request& request, bool allow_path, Target* target) {
     if (!DuplicateHandle(process, file, process, &target->original.value, 0, FALSE, DUPLICATE_SAME_ACCESS))
       return WinError();
   }
-  uint32_t granted = 0;
-  int error = gesher::record_locks::HandleAccess(target->original.value, &granted);
+  int error = gesher::record_locks::HandleAccess(target->original.value, &target->granted);
   if (error) return error;
   // Our O_PATH descriptors lack all of the data and EA rights of an open fd.
-  const bool path_only = !(granted &
+  target->path_only = !(target->granted &
       (FILE_READ_EA | FILE_WRITE_EA | FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA));
-  if (path_only) {
-    if (!allow_path) return EBADF;
+  return target->path_only && !allow_path ? EBADF : 0;
+}
+
+int AuthorizeTarget(Target* target, const Request& request) {
+  int error = 0;
+  if (target->path_only) {
     // Bionic's fget/fset/flist fallback follows /proc/self/fd, which pins the
     // referred object, including an O_PATH|O_NOFOLLOW symlink itself. Open the
     // held object for classification without ever resolving its current name.
@@ -425,7 +454,8 @@ int OpenFd(int fd, const Request& request, bool allow_path, Target* target) {
   if (!error) std::swap(target->reopened.value, authorized.value);
   // Only a native STATUS_DELETE_PENDING permits using the held object. It must
   // already have the actual EA rights, and its current security is rechecked.
-  if (static_cast<ULONG>(native_status) == 0xc0000056 && !path_only && (granted & native_access) == native_access)
+  if (static_cast<ULONG>(native_status) == 0xc0000056 && !target->path_only &&
+      (target->granted & native_access) == native_access)
     return gesher::xattr::CheckHeldFileAccess(target->original.value, RequiredAccess(request));
   return error;
 }
@@ -543,30 +573,16 @@ ssize_t CopyResult(const Request& request, std::string_view value) {
   return static_cast<ssize_t>(value.size());
 }
 
-ssize_t Perform(const Target& target, const Request& request) {
-  char stable_name[kMaxName + 1];
-  std::string_view name;
-  if (request.operation != Operation::kList) {
-    const int read_error = ReadString(request.name, stable_name, sizeof(stable_name), ERANGE);
-    if (read_error) return errno = read_error, -1;
-    name = stable_name;
-    const int name_error = CheckName(name);
-    if (name_error) return errno = name_error, -1;
-  }
+ssize_t Perform(const Target& target, const Request& request, const PreparedRequest& prepared) {
+  const std::string_view name = prepared.name;
   if (!target.eligible) {
     if (request.operation == Operation::kList) return 0;
-    return errno = request.Mutates() ? EPERM : ENODATA, -1;
+    // The user.* inode-type restriction precedes handler suffix validation.
+    if (name.starts_with(kPrefix)) return errno = request.Mutates() ? EPERM : ENODATA, -1;
   }
-  std::unique_ptr<char[]> input;
-  if (request.operation == Operation::kSet) {
-    if (request.flags & ~(XATTR_CREATE | XATTR_REPLACE)) return errno = EINVAL, -1;
-    if (request.length > kMaxValue || request.length > kMaxStore - sizeof(kSignature) - 3 - name.size())
-      return errno = E2BIG, -1;
-    if (request.length != 0) {
-      input.reset(new (std::nothrow) char[request.length]);
-      if (!input) return errno = ENOMEM, -1;
-      if (!ReadUser(request.input, input.get(), request.length)) return errno = EFAULT, -1;
-    }
+  if (request.operation != Operation::kList) {
+    const int name_error = CheckName(name);
+    if (name_error) return errno = name_error, -1;
   }
   std::unique_ptr<unsigned char[]> buffer(new (std::nothrow) unsigned char[kValueOffset + kMaxStore]);
   if (!buffer) return errno = ENOMEM, -1;
@@ -598,7 +614,7 @@ ssize_t Perform(const Target& target, const Request& request) {
   } else {
     if (existing != attributes.end() && (request.flags & XATTR_CREATE)) return errno = EEXIST, -1;
     if (existing == attributes.end() && (request.flags & XATTR_REPLACE)) return errno = ENODATA, -1;
-    attributes.insert_or_assign(name, std::string_view(input ? input.get() : "", request.length));
+    attributes.insert_or_assign(name, std::string_view(prepared.input ? prepared.input.get() : "", request.length));
   }
   error = Commit(target.File(), attributes);
   return error ? (errno = error, -1) : 0;
@@ -606,14 +622,20 @@ ssize_t Perform(const Target& target, const Request& request) {
 
 ssize_t PathRequest(const char* path, bool follow, const Request& request) {
   Target target;
-  const int error = OpenPath(path, follow, request, &target);
-  return error ? (errno = error, -1) : Perform(target, request);
+  PreparedRequest prepared;
+  int error = PinPath(path, follow, &target);
+  if (!error) error = PrepareRequest(request, &prepared);
+  if (!error) error = AuthorizeTarget(&target, request);
+  return error ? (errno = error, -1) : Perform(target, request, prepared);
 }
 
 ssize_t FdRequest(int fd, const Request& request, bool allow_path = false) {
   Target target;
-  const int error = OpenFd(fd, request, allow_path, &target);
-  return error ? (errno = error, -1) : Perform(target, request);
+  PreparedRequest prepared;
+  int error = PinFd(fd, allow_path, &target);
+  if (!error) error = PrepareRequest(request, &prepared);
+  if (!error) error = AuthorizeTarget(&target, request);
+  return error ? (errno = error, -1) : Perform(target, request, prepared);
 }
 
 }  // namespace
