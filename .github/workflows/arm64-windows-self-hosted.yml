@@ -1,0 +1,135 @@
+name: arm64-windows-self-hosted-trial
+
+# Always uses policy from main, never a PR's workflow YAML. The hosted baseline
+# remains a required-check candidate while this optional pilot is measured.
+on:
+  workflow_run:
+    workflows: [arm64-windows]
+    types: [in_progress]
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: 'An arm64-windows PR run ID to retry or compare'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: arm64-self-hosted-trial-${{ github.event.workflow_run.id || inputs.run-id }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    if: github.event_name == 'workflow_dispatch' || vars.GESHER_SELF_HOSTED_TRIAL == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      allowed: ${{ steps.source.outputs.allowed }}
+      source: ${{ steps.source.outputs.source }}
+      pr: ${{ steps.source.outputs.pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run resolves github.sha to main. A dispatch on another
+          # ref is rejected by the policy script before it can schedule work.
+          ref: main
+          persist-credentials: false
+      - name: Authorize a current internal PR merge
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
+        run: python3 tools/ci/self_hosted_trial.py
+
+  build:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    runs-on:
+      group: gesher-build-trial
+      labels: [self-hosted, linux, x64]
+    timeout-minutes: 60
+    env:
+      LLVM_MINGW_TAG: '20261006'
+      LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+      BUILD_JOBS: '8'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.source }}
+          persist-credentials: false
+      - name: Record exact source and runner capacity
+        env:
+          SOURCE: ${{ needs.authorize.outputs.source }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          echo "SOURCE_IDENTITY source=$SOURCE"
+          nproc
+          free -h
+          df -h .
+          test "$(df -Pk . | awk 'NR==2 {print $4}')" -ge 62914560 || {
+            echo 'At least 60 GiB free is required for the trial' >&2
+            exit 1
+          }
+          for tool in git curl python3 cmake ninja ccache javac; do command -v "$tool"; done
+      - name: Initialize persistent local inputs
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        id: local
+        with:
+          phase: initialize
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+      - name: Fetch llvm-mingw only when absent locally
+        if: steps.local.outputs.toolchain-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+      - name: Restore local AOSP inputs
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: restore
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+      - name: Fetch pinned AOSP sources
+        run: bash tools/fetch-aosp.sh
+      - name: Save local AOSP inputs immediately
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: save
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+      - name: Restore local Android build tools
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: restore
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+          path: out-arm64/build-tools-36.1
+          key: android-build-tools-linux-36.1-${{ hashFiles('cmake/aosp/binder.cmake') }}
+      - name: Build and verify ARM64 Windows targets
+        run: bash tools/ci/build-arm64-windows.sh
+      - name: Save local Android build tools
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: save
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+          path: out-arm64/build-tools-36.1
+          key: android-build-tools-linux-36.1-${{ hashFiles('cmake/aosp/binder.cmake') }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trial-arm64-windows-pr-${{ needs.authorize.outputs.pr }}-${{ needs.authorize.outputs.source }}
+          path: |
+            out-arm64/*.exe
+            out-arm64/*.a
+          if-no-files-found: error

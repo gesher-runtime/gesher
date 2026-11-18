@@ -103,6 +103,21 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
 
+$exactAlarmOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExactAlarmContractTest') 90
+$exactAlarmCode = $LASTEXITCODE
+Check 'services: exact alarm scheduling contracts, permissions and revocation' {
+  $global:LASTEXITCODE = $exactAlarmCode
+  $exactAlarmOut
+} @('ExactAlarmContractTest all passed: 414 checks verified')
+$schedulerConstraintsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'JobSchedulerConstraintContractTest') 90
+$schedulerConstraintsCode = $LASTEXITCODE
+Check 'services: observed job constraints, deadlines, callback ordering and bounded retirement' {
+  $global:LASTEXITCODE = $schedulerConstraintsCode
+  $schedulerConstraintsOut
+} @('JobSchedulerConstraintContractTest all passed:')
+
 $activityRestoreOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'ActivityRestoreContractTest') 90
 $activityRestoreCode = $LASTEXITCODE
@@ -300,7 +315,36 @@ $uriGrantsCode = $LASTEXITCODE
 Check 'services: URI delegation, provider patterns, exact identities and scoped revocation' {
   $global:LASTEXITCODE = $uriGrantsCode
   $uriGrantsOut
-} @('UriGrantContractTest all passed: 138 checks; binder=true')
+} @('UriGrantContractTest all passed: 154 checks; binder=true')
+
+# Direct-service fixture: actual metadata publication, persisted record reload,
+# owner retirement, shared UID, file IO concurrency, admin types and quota.
+# Actual APK removal/reinstall is covered by PackageUninstallTest separately;
+# this fixture does not claim to exercise Binder transport or process teardown.
+$persistableUriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'PersistableUriGrantContractTest') 90
+$persistableUriGrantsCode = $LASTEXITCODE
+Check 'services: persisted URI records, release, reload and quota' {
+  $global:LASTEXITCODE = $persistableUriGrantsCode
+  $persistableUriGrantsOut
+} @('PersistableUriGrantContractTest all passed: 99 checks')
+
+$appOpsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'AppOpsContractTest') 90
+$appOpsCode = $LASTEXITCODE
+Check 'services: AppOps defaults, authority, attributed delivery, foreground lifecycle and signed persistence' {
+  $global:LASTEXITCODE = $appOpsCode
+  $appOpsOut
+} @('AppOpsContractTest all passed: 482 checks; binder=true')
+
+$uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'PackageUidIsolationContractTest' +
+  (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/v2only.apk'))) 90
+$uidIsolationCode = $LASTEXITCODE
+Check 'services: per-package identity, distinct UID allocation, sharedUserId and isolation' {
+  $global:LASTEXITCODE = $uidIsolationCode
+  $uidIsolationOut
+} @('PackageUidIsolationContractTest passed:')
 
 $intentUriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'IntentUriGrantContractTest') 90
@@ -325,22 +369,51 @@ Check 'services: MediaStore picker/collection contracts and missing-provider han
   $mediaStoreOut
 } @('MediaStoreContractTest all passed: 28')
 
-# The document picker (ACTION_OPEN_DOCUMENT / _TREE, ActivityTaskManagerService)
-# shows the Windows dialog on a thread of its own: startActivity returns while it
-# is up, not when the user closes it (the app's UI froze meanwhile); the picked
-# Windows path is mapped to Gesher's (Zygote.fromWindowsPath: the own drive's
-# without a drive, another's under /mnt/<drive>). The test exits with the dialog
-# still open.
+# Production DocumentsProvider transport and real filesystem operations. The
+# explicit package fixture capability is confined to these fresh ART processes.
+$safSpoofPresent = Test-Path Env:GESHER_MICROG_SPOOF
+$safSpoofValue = [Environment]::GetEnvironmentVariable('GESHER_MICROG_SPOOF', 'Process')
+$safRestart = Join-Path $root ('saf-restart-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $safRestart -Force | Out-Null
+try {
+  $env:GESHER_MICROG_SPOOF = '1'
+  $safOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+    'SafDocumentsContractTest') 90
+  $safCode = $LASTEXITCODE
+  Check 'services: AOSP documents transport, selection, actual descriptors and lifecycle' {
+    $global:LASTEXITCODE = $safCode
+    $safOut
+  } @('SafDocumentsContractTest passed:', 'nativeFiles=true')
+  $detachedUiOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+    'DetachedNativeUiContractTest') 45
+  $detachedUiCode = $LASTEXITCODE
+  Check 'services: detached document and chooser retain focused-task coverage' {
+    $global:LASTEXITCODE = $detachedUiCode
+    $detachedUiOut
+  } @('DetachedNativeUiContractTest passed:')
+  foreach ($safPhase in @('write', 'read', 'released')) {
+    $safRestartOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+      'SafDocumentsContractTest' + $safPhase + (NoDrive $safRestart)) 45
+    $safRestartCode = $LASTEXITCODE
+    Check "services: SAF durable read/write release across fresh process $safPhase" {
+      $global:LASTEXITCODE = $safRestartCode
+      $safRestartOut
+    } @("SafDocumentsContractTest restart $safPhase passed")
+  }
+} finally {
+  if ($safSpoofPresent) { Set-Item Env:GESHER_MICROG_SPOOF $safSpoofValue }
+  else { Remove-Item Env:GESHER_MICROG_SPOOF -ErrorAction SilentlyContinue }
+  Remove-Item $safRestart -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Real COM dialogs close through their own message-loop lifetime timer; an
+# unavailable desktop or failed dialog is a failure, never a passing selection.
 $pickerOut = FixesRun ($dvmFixes + 'gesher.services.DocumentPickerTest') 90
 $pickerCode = $LASTEXITCODE
-Check 'services: the document picker does not block startActivity; picked Windows paths map to Gesher''s' {
+Check 'services: real Windows open/save/tree dialogs cancel and retire their resources' {
   $global:LASTEXITCODE = $pickerCode
   $pickerOut
-} @('DocumentPickerTest: fromWindowsPath maps the own drive to /, another to /mnt/<drive>',
-  'DocumentPickerTest: startActivity returns at once while the picker is up; Windows paths mapped passed')
-foreach ($m in [regex]::Matches($pickerOut, 'DocumentPickerTest: (android\.intent\.action\.\S+) (dialog [^\r\n]*)')) {
-  Write-Host "INFO  services: document picker: $($m.Groups[1].Value): $($m.Groups[2].Value)"
-}
+} @('DocumentPickerTest passed: real open/save/tree cancellation and Windows path mapping')
 
 # android.graphics.ColorMatrix on the boot class path (framework.jar lacks it), and
 # FileChannel locks over FileDispatcherImpl.lock0/release0 (fcntl record locks).

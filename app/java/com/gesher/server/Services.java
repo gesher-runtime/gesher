@@ -91,6 +91,7 @@ public final class Services {
         Map<String, IBinder> services = new LinkedHashMap<>();
         PackageManagerService pm = new PackageManagerService(packages, persistentAccounts);
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        pm.attachInstallSourceCallers(atm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         sLast = new Created(pm, atm, am);
@@ -162,7 +163,9 @@ public final class Services {
                 new AlarmManagerService(am, pm)).asBinder());
         services.put(Context.APP_OPS_SERVICE, StandIn.of(
                 com.android.internal.app.IAppOpsService.class,
-                new DeviceServices.AppOpsService()).asBinder());
+                pm.appOps()).asBinder());
+        services.put("permission_checker", StandIn.of(android.permission.IPermissionChecker.class,
+                new AppOpsPermissionChecker(pm)).asBinder());
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
@@ -170,9 +173,12 @@ public final class Services {
                 new DeviceServices.SearchService()).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new ClipboardService()).asBinder());
+        // Construct the network provider before jobs subscribe to its changes.
+        ConnectivityService connectivity = new ConnectivityService(pm, atm);
+        services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
         // Device state from Windows (devsvc track, ADR 0038): jobs, the battery.
         services.put(Context.JOB_SCHEDULER_SERVICE, StandIn.of(android.app.job.IJobScheduler.class,
-                new JobSchedulerService(am, atm, pm)).asBinder());
+                new JobSchedulerService(am, atm, pm, connectivity)).asBinder());
         services.put("batteryproperties", StandIn.of(android.os.IBatteryPropertiesRegistrar.class,
                 new BatteryService(am).properties()).asBinder());
         // No StandIn proxy: IBatteryStats names android.bluetooth and android.telephony
@@ -223,7 +229,6 @@ public final class Services {
                         user(userId); return Configuration.GRAMMATICAL_GENDER_NOT_SPECIFIED;
                     }
                 }).asBinder());
-        services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
         // their authenticators.
         AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
@@ -724,30 +729,6 @@ public final class Services {
         @Override
         public int getForceInvertState(int userId) {
             return UiModeManager.FORCE_INVERT_TYPE_OFF;
-        }
-    }
-
-    /** Permission checks follow the same package policy as PackageManager and AM. */
-    public static final class PermissionChecker extends android.permission.IPermissionChecker.Default {
-        private PermissionPolicy policy() {
-            Created created = sLast;
-            return created == null ? null : created.pm.permissions();
-        }
-        @Override public int checkPermission(String permission,
-                android.content.AttributionSourceState source, String message,
-                boolean forDataDelivery, boolean startDataDelivery, boolean fromDatasource,
-                int attributedOp) {
-            PermissionPolicy policy = policy();
-            return policy == null ? android.content.PermissionChecker.PERMISSION_HARD_DENIED
-                    : policy.checkAttribution(permission, source, fromDatasource);
-        }
-        @Override public void finishDataDelivery(int op,
-                android.content.AttributionSourceState source, boolean fromDatasource) { }
-        @Override public int checkOp(int op, android.content.AttributionSourceState source,
-                String message, boolean forDataDelivery, boolean startDataDelivery) {
-            PermissionPolicy policy = policy();
-            return policy == null ? android.content.PermissionChecker.PERMISSION_HARD_DENIED
-                    : policy.checkAttribution(android.app.AppOpsManager.opToPermission(op), source, false);
         }
     }
 

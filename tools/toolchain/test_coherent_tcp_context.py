@@ -69,6 +69,27 @@ def main():
    try:c.context(contributor,job,bad,parents)
    except AssertionError:count+=1
    else:raise AssertionError('different fork merge parents accepted')
- print('COHERENT_TCP_CONTEXT_PURE_PASS roles=4 arbitrary_actor_pairs=2 events=3 negatives='+str(count)+' actual_authority=false')
+ # Native queue execution keeps the combined checkout as its API source.
+ queue_ref='refs/heads/gh-readonly-queue/main/pr-115-queue-test'
+ queue=dict(base,GITHUB_EVENT_NAME='merge_group',GITHUB_REF=queue_ref,
+  GITHUB_WORKFLOW_REF=c.REPOSITORY+'/'+c.PATH+'@'+queue_ref)
+ group=dict(action='checks_requested',merge_group=dict(head_sha=source,
+  head_ref=queue_ref,base_sha='3'*40,base_ref='refs/heads/main'))
+ for job in ('compile','linux-reference','windows','supplier-correlation'):
+  e=dict(queue,GITHUB_JOB=job)
+  if job!='linux-reference':e['TCP_SUPPLIER_ROLE']='selected-minimum'
+  assert c.context(e,job,group)['GITHUB_SHA']==source
+  for field,value in [('head_sha','f'*40),('head_ref','refs/heads/main'),
+                      ('base_ref','refs/heads/other'),('base_sha','invalid')]:
+   bad=copy.deepcopy(group);bad['merge_group'][field]=value
+   try:c.context(e,job,bad)
+   except AssertionError:count+=1
+   else:raise AssertionError('wrong queue source accepted '+job+'/'+field)
+  for key in e:
+   bad=dict(e);bad[key]='' if key in ('GITHUB_ACTOR','GITHUB_TRIGGERING_ACTOR') else 'invalid'
+   try:c.context(bad,job,group)
+   except (AssertionError,KeyError):count+=1
+   else:raise AssertionError('wrong queue role identity accepted '+job+'/'+key)
+ print('COHERENT_TCP_CONTEXT_PURE_PASS roles=4 arbitrary_actor_pairs=2 events=4 negatives='+str(count)+' actual_authority=false')
 
 if __name__=='__main__':main()

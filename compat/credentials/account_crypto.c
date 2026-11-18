@@ -110,6 +110,42 @@ Java_com_gesher_server_AccountSecretStore_nativeUnprotect(JNIEnv* env, jclass cl
 }
 
 #include "permission_dialog.inc"
+#include "exact_alarm_dialog.inc"
+
+JNIEXPORT jint GESHER_NATIVE
+Java_com_gesher_server_ExactAlarmAccessRequests_nativeEdit(JNIEnv* env, jclass cls,
+        jobjectArray packages, jbooleanArray allowed) {
+  (void)cls;
+  if (!RequireServer(env) || packages == NULL || allowed == NULL) return -1;
+  jsize count = (*env)->GetArrayLength(env, packages);
+  if (count != (*env)->GetArrayLength(env, allowed) || count > 10000) return -1;
+  WCHAR** names = (WCHAR**)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+      ((SIZE_T)count + 1) * sizeof(WCHAR*));
+  jboolean* values = (jboolean*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)count + 1);
+  int result = -1;
+  if (names == NULL || values == NULL) goto done;
+  (*env)->GetBooleanArrayRegion(env, allowed, 0, count, values);
+  if ((*env)->ExceptionCheck(env)) goto done;
+  for (jsize i = 0; i < count; ++i) {
+    jstring name = (jstring)(*env)->GetObjectArrayElement(env, packages, i);
+    if (name == NULL) goto done;
+    jsize length = (*env)->GetStringLength(env, name);
+    if (length <= 0 || length > 255) { (*env)->DeleteLocalRef(env, name); goto done; }
+    names[i] = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)length + 1) * sizeof(WCHAR));
+    if (names[i] == NULL) { (*env)->DeleteLocalRef(env, name); goto done; }
+    (*env)->GetStringRegion(env, name, 0, length, (jchar*)names[i]);
+    (*env)->DeleteLocalRef(env, name);
+    if ((*env)->ExceptionCheck(env)) goto done;
+  }
+  result = ExactAlarmDialog(GesherUiCurrentLanguage(), (const WCHAR* const*)names, values, count);
+done:
+  if (names != NULL) {
+    for (jsize i = 0; i < count; ++i) if (names[i] != NULL) HeapFree(GetProcessHeap(), 0, names[i]);
+    HeapFree(GetProcessHeap(), 0, names);
+  }
+  if (values != NULL) HeapFree(GetProcessHeap(), 0, values);
+  return result;
+}
 
 JNIEXPORT jboolean GESHER_NATIVE
 Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,

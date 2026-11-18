@@ -28,6 +28,11 @@ public final class WindowsHost {
     public static final int EVENT_SUSPENDING = 1 << 4;
     public static final int EVENT_SETTING_CHANGED = 1 << 5;
     public static final int EVENT_TOAST_ACTIVATED = 1 << 6;
+    public static final int EVENT_DISPLAY_STATE = 1 << 7;
+    public static final int DISPLAY_STATE_UNKNOWN = -1;
+    public static final int DISPLAY_STATE_OFF = 0;
+    public static final int DISPLAY_STATE_ON = 1;
+    public static final int DISPLAY_STATE_DIMMED = 2;
 
     /** AlarmWait's answers. */
     static final int ALARM_TIME = 0;
@@ -214,6 +219,20 @@ public final class WindowsHost {
         return available() ? nativeIdleMillis() : 0;
     }
 
+    /** Last observed Windows session display state; UNKNOWN until actually reported. */
+    public static int sessionDisplayState() {
+        if (!available()) return DISPLAY_STATE_UNKNOWN;
+        try { return nativeSessionDisplayState(); }
+        catch (UnsatisfiedLinkError unavailable) { return DISPLAY_STATE_UNKNOWN; }
+    }
+
+    /** Observed continuous display-off time without input; 0 if active or unknown. */
+    public static long jobIdleMillis() {
+        if (!available()) return 0;
+        try { return nativeJobIdleMillis(); }
+        catch (UnsatisfiedLinkError unavailable) { return 0; }
+    }
+
     /** Bits: 1 connected, 2 internet, 4 metered; -1 if unknown. */
     public static int networkState() {
         return available() ? nativeNetworkState() : -1;
@@ -345,6 +364,34 @@ public final class WindowsHost {
         }
     }
 
+    /** Cancellable open/save/tree dialogs. A failed backend is an error, not a URI. */
+    static String[] pickDocuments(int mode, String title, String suggestedName,
+            String initialDirectory, String filter, String extension, boolean multiple,
+            boolean localOnly, int ownerPid, java.util.function.BooleanSupplier active) throws java.io.IOException {
+        if (!available()) throw new java.io.IOException("Windows document picker unavailable");
+        try {
+            return nativePickDocuments(mode, title, suggestedName, initialDirectory, filter,
+                    extension, multiple, localOnly, ownerPid, active);
+        } catch (UnsatisfiedLinkError unavailable) {
+            throw new java.io.IOException("Windows document picker unavailable", unavailable);
+        }
+    }
+
+    private static native String[] nativePickDocuments(int mode, String title, String suggestedName,
+            String initialDirectory, String filter, String extension, boolean multiple,
+            boolean localOnly, int ownerPid, java.util.function.BooleanSupplier active) throws java.io.IOException;
+
+    /** Query the resolved Windows handle and volume, never infer locality from a path prefix. */
+    static boolean isLocalDocument(String windowsPath) throws java.io.IOException {
+        if (!available()) throw new java.io.IOException("Windows document locality check unavailable");
+        try { return nativeIsLocalDocument(windowsPath); }
+        catch (UnsatisfiedLinkError unavailable) {
+            throw new java.io.IOException("Windows document locality check unavailable", unavailable);
+        }
+    }
+
+    private static native boolean nativeIsLocalDocument(String windowsPath);
+
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();
@@ -362,6 +409,8 @@ public final class WindowsHost {
     private static native boolean nativeKeepAwake(String reason, boolean system,
             boolean display);
     private static native long nativeIdleMillis();
+    private static native long nativeJobIdleMillis();
+    private static native int nativeSessionDisplayState();
     private static native int nativeNetworkState();
     private static native String nativeTimeZoneKeyName();
     private static native int nativeShowToast(String appId, String tag, String group,

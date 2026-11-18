@@ -13,8 +13,10 @@ public final class ChooserClient {
     System.load(args[0]);
     denied(() -> AccountChooser.nativeChoose("com.gesher.synthetic",
         new String[]{"Synthetic"}, true, () -> false));
+    denied(() -> IntentChooser.nativeAvailable());
+    denied(() -> IntentChooser.nativeChoose("com.gesher.synthetic", "Synthetic", new String[]{"Choice"}, new boolean[]{true}, () -> false));
     denied(() -> AccountSecretStore.nativeProtect(new byte[]{1}));
     denied(() -> AccountSecretStore.nativeUnprotect(new byte[]{1}));
-    System.out.println("AccountChooserNative client role all passed: 3");
+    System.out.println("AccountChooserNative client role all passed: 5");
   }
 }

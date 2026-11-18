@@ -66,7 +66,6 @@ final class SettingsIntents {
             "android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
             "android.settings.action.MANAGE_OVERLAY_PERMISSION",
             "android.settings.action.MANAGE_WRITE_SETTINGS",
-            "android.settings.REQUEST_SCHEDULE_EXACT_ALARM",
             "android.settings.APP_LOCALE_SETTINGS",
             "android.settings.APP_OPEN_BY_DEFAULT_SETTINGS",
             "android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT",

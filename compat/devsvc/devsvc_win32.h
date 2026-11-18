@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace gesher {
 namespace devsvc {
@@ -20,6 +21,7 @@ enum Event : unsigned {
   kPowerStatus = 1u << 3,     // WM_POWERBROADCAST PBT_APMPOWERSTATUSCHANGE (AC, battery)
   kSuspending = 1u << 4,      // WM_POWERBROADCAST PBT_APMSUSPEND
   kSettingChanged = 1u << 5,  // WM_SETTINGCHANGE (time zone, regional settings...)
+  kDisplayState = 1u << 7,   // GUID_SESSION_DISPLAY_STATUS (on/off/dimmed)
   kToastActivated = 1u << 6,  // a toast this process showed was clicked (see PopActivation)
 };
 
@@ -71,6 +73,10 @@ bool PowerStatus(int out[4]);
 bool KeepAwake(const std::u16string& reason, bool system, bool display);
 // Milliseconds since the user's last input (GetLastInputInfo).
 uint32_t IdleMillis();
+// Continuous observed session display-off time without input; zero if active/unknown.
+uint64_t JobIdleMillis();
+// GUID_SESSION_DISPLAY_STATUS: -1 unknown, 0 off, 1 on, 2 dimmed.
+int SessionDisplayState();
 // The network list manager's view: bit 0 connected, bit 1 internet, bit 2 the
 // internet connection is metered (not unrestricted). -1 if it cannot tell.
 int NetworkState();
@@ -123,6 +129,21 @@ std::u16string PickFolder(const std::u16string& title);
 
 // IFileOpenDialog: native Windows file picker dialog.
 std::u16string PickFile(const std::u16string& title);
+
+// Android SAF: mode 0=open, 1=create (IFileSaveDialog), 2=tree. The Java
+// provider atomically creates a unique file after a save location is chosen;
+// this dialog never overwrites. active is polled on the dialog's STA thread.
+struct DocumentSelection {
+  long error = 0;  // HRESULT; cancellation is an empty successful selection.
+  std::vector<std::u16string> paths;
+};
+DocumentSelection PickDocuments(int mode, const std::u16string& title,
+    const std::u16string& suggested_name, const std::u16string& initial_directory,
+    const std::u16string& filter, const std::u16string& extension, bool multiple,
+    bool local_only, uint32_t owner_pid, bool (*active)(void*), void* context);
+// False includes an unavailable/unverifiable target. Follows reparse points and
+// requires a resolved local volume and locally available data.
+bool IsLocalDocument(const std::u16string& path);
 
 }  // namespace devsvc
 }  // namespace gesher
