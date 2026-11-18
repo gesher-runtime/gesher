@@ -4,7 +4,7 @@
   "generator_files_sha256": {
     "java_api_inventory.py": "0d66695c9b4689858abba61d0a127e9cefbe68ab2d426a03ecabd001fd62ca83",
     "java_member_inventory.py": "290d6fe66049e90d6f29495b038b4f9365c0be89105d94a76c27fa9ca76a5475",
-    "sdk_platform_diff.py": "0f96b71fd7fca7edbfcf5f3b9c488f4e01c04cdb09a2e29d6d7da8e93372f594"
+    "sdk_platform_diff.py": "df91c8d5a1abd8de789f63c8a150c5401be281cfb49619de1e2535c12ad78856"
   },
   "interpretation": [
     "Encoded classes include all classfile visibilities. Public/protected declarations are counted once on their encoded declaring class; inherited members are not expanded for every subclass.",
