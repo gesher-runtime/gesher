@@ -48,8 +48,19 @@ $parentProgram = '$child = Start-Process -PassThru -FilePath ''' + $pwsh.Replace
     '''); Write-Output (''CONTROL descendant='' + $child.Id); Start-Sleep -Seconds 30'
 $control = Run-Owned 'controller-timeout' 5000 $pwsh @('-NoProfile', '-Command', $parentProgram) 124 'CONTROL descendant=[0-9]+'
 if ($control -notmatch 'terminated=1 active_before_cleanup=[2-9]') { throw 'Actual descendant cleanup was not observed' }
-[void](Run-Owned 'revocable-file' 45000 (Join-Path $Dir 'revocable_file_test.exe') @() 0 'revocable Windows contracts: [1-9][0-9]* checks, 0 failures')
-[void](Run-Owned 'binder-revocable' 120000 (Join-Path $Dir 'binder_probe.exe') @() 0 'binder probe: all passed')
+# Native component fixtures use ordinary relative POSIX paths. Give their
+# complete, job-owned process trees one isolated writable directory; bare
+# Windows runners do not necessarily have the product's drive-root /tmp.
+$fixtureDir = Join-Path ([IO.Path]::GetTempPath()) ('gesher-revocable-' + [Guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($fixtureDir)
+Push-Location -LiteralPath $fixtureDir
+try {
+    [void](Run-Owned 'revocable-file' 45000 (Join-Path $Dir 'revocable_file_test.exe') @() 0 'revocable Windows contracts: [1-9][0-9]* checks, 0 failures')
+    [void](Run-Owned 'binder-revocable' 120000 (Join-Path $Dir 'binder_probe.exe') @() 0 'binder probe: all passed')
+} finally {
+    Pop-Location
+    Remove-Item -LiteralPath $fixtureDir -Recurse -Force
+}
 $sgScript = (Resolve-Path -LiteralPath 'tests/binder/run-host.ps1').Path
 [void](Run-Owned 'binder-transport' 480000 $pwsh @('-NoProfile', '-File', $sgScript, '-Dir', $Dir) 0 'SG parent: [1-9][0-9]* checks, 0 failed')
 Write-Host "REVOCABLE_COMPONENT_SUCCESS source=$head windows=$([Environment]::OSVersion.VersionString)"

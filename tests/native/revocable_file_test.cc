@@ -43,7 +43,9 @@ void RejectedIo(int fd) {
   Check(futimes(fd, nullptr) == -1 && errno == EPERM, "revoked timestamp change");
 }
 void Lifecycle(bool wait_for_operation) {
-  char path[] = "/tmp/gesher-revocable-XXXXXX";
+  // The component runner owns an isolated writable working directory. Do not
+  // assume the host has a drive-root /tmp directory installed by product setup.
+  char path[] = "gesher-revocable-XXXXXX";
   int fd = mkstemp(path);
   Check(fd >= 0, "create real backing file");
   int trusted = open(path, O_RDWR | O_CLOEXEC);

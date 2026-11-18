@@ -386,7 +386,7 @@ int Client() {
 
   // Transfer the real OFD metadata through the broker. The receiver keeps
   // distinct dup/proc-fd aliases after releasing the Binder transaction buffer.
-  char temporary[] = "/tmp/gesher-revocable-binder-XXXXXX";
+  char temporary[] = "gesher-revocable-binder-XXXXXX";
   int writable = mkstemp(temporary);
   REQUIRE(writable >= 0);
   unlink(temporary);
