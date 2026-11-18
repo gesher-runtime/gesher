@@ -1035,18 +1035,19 @@ final class JobSchedulerService extends IJobScheduler.Default
         List<Run> ready = new ArrayList<>();
         boolean checkTimeouts;
         synchronized (this) {
-            boolean retry = sampledObservation != mConstraintObservation;
+            boolean staleObservation = sampledObservation != mConstraintObservation;
+            boolean retry = staleObservation;
             // Polling can observe storage changes without a host event. If another
             // thread accepted a newer snapshot while this read was in flight, this
             // entire older snapshot is stale even when host revisions are identical.
-            long observation = retry ? mConstraintObservation : ++mConstraintObservation;
+            long observation = staleObservation ? mConstraintObservation : ++mConstraintObservation;
             long now = SystemClock.elapsedRealtime();
             long next = hostPollAt(now, inputs, state);
             List<Job> eligible = new ArrayList<>();
             long timestamp = System.currentTimeMillis();
             for (Job job : mJobs) {
                 long revision = hostRevisionLocked(job.hostInputs);
-                if (retry || (job.hostInputs & ~inputs) != 0 || revision > sampledAfter) {
+                if (staleObservation || (job.hostInputs & ~inputs) != 0 || revision > sampledAfter) {
                     // The next pass refreshes this job. Changes to one host
                     // input cannot starve jobs using other inputs.
                     retry = true;
