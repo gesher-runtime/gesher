@@ -264,7 +264,10 @@ final class JobSchedulerService extends IJobScheduler.Default
                         // proposals, including those with the same host-event revision.
                         mConstraintObservation++;
                         topStarted |= job.packageName.equals(constraints.topPackage);
-                        violation = runningConstraintViolation(job, constraints, SystemClock.elapsedRealtime());
+                        long now = SystemClock.elapsedRealtime();
+                        recordPendingReasons(job, pendingConstraints(job, now, constraints),
+                                System.currentTimeMillis());
+                        violation = runningConstraintViolation(job, constraints, now);
                         if (violation != JobParameters.STOP_REASON_UNDEFINED) {
                             claimStopLocked(this, violation,
                                     JobParameters.INTERNAL_STOP_REASON_CONSTRAINTS_NOT_SATISFIED,
@@ -332,7 +335,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 }
                 if (!ongoing) finish(this, false, "onStartJob returned false");
                 else if (stopping) dispatchStop(this);
-                else updateNetwork(this, network, networkGeneration);
+                else dispatchNetwork(this);
             }
         }
 
@@ -1577,14 +1580,27 @@ final class JobSchedulerService extends IJobScheduler.Default
         return run.job.run == run && mJobs.contains(run.job);
     }
 
-    /** Caller holds the run's dispatch gate, including for acknowledgement of start. */
+    /** Accept a fresh proposal while holding the run's dispatch gate. */
     private void updateNetwork(Run run, android.net.Network network, long generation, long observation) {
         synchronized (this) {
             if (!canApplyConstraintUpdateLocked(run, generation, observation)) return;
             run.network = network;
             run.networkGeneration = generation;
-            if (run.state != EXECUTING || Objects.equals(run.params.getNetwork(), network)) return;
-            run.params.setNetwork(network);
+        }
+        dispatchNetwork(run);
+    }
+
+    /** Deliver accepted state after start acknowledgement; caller holds run.dispatch. */
+    private void dispatchNetwork(Run run) {
+        synchronized (this) {
+            // An accepted handover can wait for onStartJob while later polling
+            // observations leave its network unchanged. Those observations must
+            // not discard the deferred callback as if it were a stale proposal.
+            if (run.done || run.stopping || run.state != EXECUTING
+                    || run.networkGeneration != hostRevisionLocked(run.job.hostInputs)
+                    || !isScheduledRunLocked(run) || !current(run.job)
+                    || Objects.equals(run.params.getNetwork(), run.network)) return;
+            run.params.setNetwork(run.network);
         }
         try {
             run.service.onNetworkChanged(run.params);

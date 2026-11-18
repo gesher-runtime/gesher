@@ -970,8 +970,9 @@ public final class JobSchedulerConstraintContractTest {
                 "Network callback death fabricated an application completion failure");
         long generation = (Long) get(h.scheduler, "mHostGeneration");
         synchronized (get(run.run, "dispatch")) {
-            invoke(h.scheduler, "updateNetwork", new Class<?>[]{h.runType, Network.class, long.class},
-                    run.run, new Network(145), generation);
+            long observation = (Long) get(h.scheduler, "mConstraintObservation");
+            invoke(h.scheduler, "updateNetwork", new Class<?>[]{h.runType, Network.class, long.class, long.class},
+                    run.run, new Network(145), generation, observation);
         }
         check(service.networkChanges == 2, "Finished run received a late network callback");
         h.cancel(127);
@@ -1034,6 +1035,11 @@ public final class JobSchedulerConstraintContractTest {
         TestRunHandle pending = h.start(131, starting);
         h.setNetworkSnapshot(snapshot(48, "wifi", false, false));
         check(starting.networkChanges == 0, "Network callback arrived before start acknowledgement");
+        long acceptedObservation = (Long) get(h.scheduler, "mConstraintObservation");
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        check((Long) get(h.scheduler, "mConstraintObservation") > acceptedObservation
+                        && starting.networkChanges == 0,
+                "Unchanged polling did not leave the accepted handover waiting for start acknowledgement");
         pending.params.getCallback().acknowledgeStartMessage(131, true);
         check(starting.networkChanges == 1 && new Network(148).equals(pending.params.getNetwork()),
                 "Deferred network handover was not delivered after start acknowledgement");
@@ -1367,6 +1373,57 @@ public final class JobSchedulerConstraintContractTest {
         check(thread.getState() == Thread.State.BLOCKED, message);
     }
 
+    private static void testPolledStorageBeforeNewerAdmission(Harness h) throws Exception {
+        int id = 180;
+        long gib = 1024L * 1024 * 1024;
+        h.setStorageSpace(20 * gib, gib);
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresStorageNotLow(true).build());
+        Object run = h.begin(id);
+        TestService service = new TestService();
+        service.acknowledgeImmediately = false;
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread poller = new Thread(() -> {
+            try {
+                invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+            } catch (Throwable unexpected) {
+                failure.set(unexpected);
+            }
+        }, "job-stale-storage-poll-test");
+        poller.setDaemon(true);
+        long generation = (Long) get(h.scheduler, "mHostGeneration");
+        synchronized (get(run, "dispatch")) {
+            // Exercise a real scheduler proposal waiting behind admission, with
+            // neither disk-space observation accompanied by a host notification.
+            set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, 0});
+            poller.start();
+            awaitBlocked(poller, "Storage poll did not reach the run dispatch gate");
+            set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, gib});
+            invoke(run, "started", new Class<?>[]{IBinder.class}, service.asBinder());
+        }
+        poller.join(5_000);
+        check(!poller.isAlive() && failure.get() == null, "Storage poll failed: " + failure.get());
+        check((Long) get(h.scheduler, "mHostGeneration") == generation,
+                "Fixture unexpectedly notified a host storage change");
+        check(service.starts == 1 && service.stops == 0 && h.runningCount() == 1,
+                "An older same-revision storage poll stopped a newly admitted run");
+        List<PendingJobReasonsInfo> recovered = h.history(id);
+        check(Arrays.equals(recovered.get(recovered.size() - 1).getPendingJobReasons(),
+                        new int[]{JobScheduler.PENDING_JOB_REASON_UNDEFINED}),
+                "Accepted start-time recovery left the old low-storage history current");
+
+        set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, 0});
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        check(service.stops == 1
+                        && service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW,
+                "A genuinely newer storage loss was suppressed");
+        List<PendingJobReasonsInfo> stopping = h.history(id);
+        check(Arrays.equals(stopping.get(stopping.size() - 1).getPendingJobReasons(),
+                        new int[]{JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW}),
+                "Active constraint history waited for the stop acknowledgement");
+        service.lastStopParams.getCallback().acknowledgeStopMessage(id, false);
+        check(h.runningCount() == 0, "Storage stop acknowledgement did not retire the run");
+    }
+
     private static void testCancelDuringStartObservation(Harness h) throws Exception {
         int id = 178;
         h.setPowerStatus(new int[]{1, 8, 70});
@@ -1532,6 +1589,9 @@ public final class JobSchedulerConstraintContractTest {
             testCancelDuringStartObservation(h);
             testPendingReasonRefreshesObservation(h);
             testNetworkPermission(h);
+        }
+        try (Harness h = new Harness()) {
+            testPolledStorageBeforeNewerAdmission(h);
         }
         try (Harness h = new Harness()) {
             testWindowsPowerEventWakesWorker(h);
