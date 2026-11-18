@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "data_source.h"
@@ -30,8 +31,10 @@ class Format {
   Format& operator=(const Format&) = delete;
 
   AMediaFormat* get() const { return f_; }
+  AMediaFormat* Release() { return std::exchange(f_, nullptr); }
   bool GetInt32(const char* key, int32_t* out) const;
   bool GetInt64(const char* key, int64_t* out) const;
+  bool GetRect(const char* key, int32_t* left, int32_t* top, int32_t* right, int32_t* bottom) const;
   bool GetFloat(const char* key, float* out) const;
   bool GetString(const char* key, std::string* out) const;
   bool GetBuffer(const char* key, std::vector<uint8_t>* out) const;
@@ -64,11 +67,18 @@ enum class SeekMode : uint32_t {
 class TrackReader {
  public:
   virtual ~TrackReader() = default;
+  // CMediaTrack's NDK status from starting this reader. Callers that expose
+  // selection must report a failed start before retaining the reader.
+  virtual int StartStatus() const { return 0; }
   // The next sample. Returns 0, 1 at the end, negative on error; with
   // position >= 0, the first sample at or around that time in microseconds,
   // or at a preceding sync sample for a presentation-order kFrameIndex seek.
   virtual int Read(Sample* out, int64_t position = -1,
                    SeekMode mode = SeekMode::kPreviousSync) = 0;
+
+  // The NDK also exposes per-sample metadata. Playback readers need no copy.
+  virtual void EnableSampleMetadata() {}
+  virtual const Format* SampleMetadata() const { return nullptr; }
 };
 
 class Extractor {

@@ -29,6 +29,14 @@
       var port = e.ports[0];
       port.onmessage = function (m) { port.postMessage('echo ' + m.data); };
       report('port received ' + e.data + ' (origin "' + e.origin + '")');
+      // Exercise a real page-created transfer, including data queued before it
+      // is handed to Java. The retained endpoint must still receive Java's reply.
+      var child = new MessageChannel();
+      child.port1.onmessage = function (m) {
+        if (m.data === 'probe from Java') child.port1.postMessage('reply from page');
+      };
+      child.port1.postMessage('queued in page');
+      port.postMessage('page endpoint', [child.port2]);
     }
   });
   ['pickApp', 'pickWin'].forEach(function (id) {

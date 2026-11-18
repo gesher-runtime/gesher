@@ -6,8 +6,8 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
-#include <map>
 #include <memory>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,14 +15,26 @@
 #include "compat/media/video/video_decoder.h"
 
 #define HAS_INDEXED_SELECTOR @HAS_INDEXED_SELECTOR@
-#define HAS_DISPLAY_GEOMETRY @HAS_DISPLAY_GEOMETRY@
+#define HAS_DISPLAY_METADATA @HAS_DISPLAY_METADATA@
 
 struct AMediaFormat {
   bool has_time = true, has_target = false, has_sync = true, has_valid_samples = false;
   int64_t time = 0, target = -1;
   int32_t sync = 0, valid_samples = -1;
-  std::map<std::string, int32_t> attributes;
+  std::map<std::string, int32_t> integers;
+  bool has_crop = false;
+  int32_t left = 0, top = 0, right = 0, bottom = 0;
 };
+AMediaFormat* AMediaFormat_new() { return new AMediaFormat; }
+void AMediaFormat_delete(AMediaFormat* format) { delete format; }
+void AMediaFormat_clear(AMediaFormat* format) { *format = {}; }
+void AMediaFormat_copy(AMediaFormat* to, const AMediaFormat* from) { *to = *from; }
+bool AMediaFormat_getRect(AMediaFormat* format, const char* key, int32_t* left,
+                         int32_t* top, int32_t* right, int32_t* bottom) {
+  if (std::strcmp(key, "crop") != 0 || !format->has_crop) return false;
+  *left = format->left; *top = format->top; *right = format->right; *bottom = format->bottom;
+  return true;
+}
 bool AMediaFormat_getInt64(AMediaFormat* format, const char* key, int64_t* out) {
   if (std::strcmp(key, "timeUs") == 0 && format->has_time) { *out = format->time; return true; }
   if (std::strcmp(key, "target-time") == 0 && format->has_target) {
@@ -37,16 +49,14 @@ bool AMediaFormat_getInt32(AMediaFormat* format, const char* key, int32_t* out) 
   if (std::strcmp(key, "valid-samples") == 0 && format->has_valid_samples) {
     *out = format->valid_samples; return true;
   }
-  auto attribute = format->attributes.find(key);
-  if (attribute != format->attributes.end()) {
-    *out = attribute->second;
-    return true;
-  }
+  auto found = format->integers.find(key);
+  if (found != format->integers.end()) { *out = found->second; return true; }
   return false;
 }
 using media_status_t = int;
 constexpr int AMEDIA_OK = 0;
 constexpr int AMEDIA_ERROR_END_OF_STREAM = -10004;
+constexpr int AMEDIA_ERROR_UNKNOWN = -10000;
 struct CMediaBuffer {
   void* handle;
   void* (*data)(void*);
@@ -71,10 +81,7 @@ struct MediaBufferGroup { void* wrap() { return this; } };
 }  // namespace android
 
 namespace gesher::media {
-Format::~Format() { delete f_; }
-bool Format::GetInt32(const char* key, int32_t* out) const {
-  return AMediaFormat_getInt32(f_, key, out);
-}
+@FORMAT_ADAPTER@
 @TRACK_READER@
 @RETRIEVER_SELECTION@
 @PRESENTATION_ORIENTATION@
@@ -312,29 +319,6 @@ void Orientation() {
   Check(rotated(270) == std::vector<int>({2, 5, 1, 4, 0, 3}), "wide bitmap rotates counterclockwise");
 }
 
-#if HAS_DISPLAY_GEOMETRY
-void DisplayDimensions() {
-  Format track(new AMediaFormat);
-  auto dimensions = [&](int rotation, int dst_w = -1, int dst_h = -1) {
-    return RetrieverBitmapDimensions(320, 240, track, rotation, dst_w, dst_h);
-  };
-  Check(dimensions(0) == std::pair<int, int>(320, 240), "absent metadata keeps visible size");
-  track.get()->attributes = {{"display-width", 352}, {"display-height", 264}};
-  Check(dimensions(0) == std::pair<int, int>(352, 264), "display geometry applies to indexed bitmaps");
-  track.get()->attributes["sar-width"] = 3;
-  track.get()->attributes["sar-height"] = 2;
-  Check(dimensions(0) == std::pair<int, int>(480, 240), "pixel aspect ratio takes precedence");
-  Check(dimensions(90) == std::pair<int, int>(240, 480), "rotate corrected display geometry");
-  Check(dimensions(270, 160, 160) == std::pair<int, int>(80, 160),
-        "scaled frames fit within the requested bounds using the display ratio");
-  track.get()->attributes["sar-height"] = 0;
-  Check(dimensions(0) == std::pair<int, int>(352, 264), "invalid SAR falls back to display dimensions");
-  track.get()->attributes["sar-width"] = std::numeric_limits<int32_t>::max();
-  track.get()->attributes["sar-height"] = 1;
-  Check(dimensions(0) == std::pair<int, int>(), "unrepresentable display geometry fails");
-}
-#endif
-
 void IndexedFrames() {
   for (int batch : {1, 7, 0}) {
     Track track(Tail(1466666));
@@ -419,6 +403,46 @@ void Errors() {
           "no decoded output remains a real no-frame result");
   }
 }
+
+#if HAS_DISPLAY_METADATA
+void DisplayMetadata() {
+  VideoFrame frame;
+  frame.width = 32; frame.height = 16; frame.crop_right = 31; frame.crop_bottom = 15;
+  Format format;
+  auto* values = format.get();
+  auto expect = [&](int width, int height, const char* why) {
+    int32_t actual_width = -1, actual_height = -1;
+    Check(RetrieverDisplaySize(frame, format, &actual_width, &actual_height)
+          && actual_width == width && actual_height == height, why);
+  };
+  expect(32, 16, "missing presentation metadata preserves the decoder's visible size");
+  values->integers = {{"sar-width", 2}, {"sar-height", 1}};
+  expect(64, 16, "Android SAR applies to decoded visible width");
+  values->integers["display-width"] = 24; values->integers["display-height"] = 24;
+  expect(64, 16, "SAR has precedence over explicit display dimensions");
+  values->integers["sar-height"] = 0;
+  expect(24, 24, "zero SAR denominator falls back to valid display dimensions");
+  values->integers.erase("sar-width");
+  expect(24, 24, "incomplete SAR falls back to explicit display dimensions");
+  values->integers["display-height"] = 0;
+  expect(32, 16, "nonpositive explicit dimension falls back to decoder size");
+  values->integers = {{"sar-width", 2}, {"sar-height", 1}};
+  values->has_crop = true; values->left = 2; values->top = 1; values->right = 20; values->bottom = 10;
+  expect(19, 10, "valid track crop overrides SAR and uses inclusive right/bottom");
+  values->right = 32;
+  expect(64, 16, "out-of-frame track crop is ignored");
+  values->right = 1;
+  expect(64, 16, "inverted track crop is ignored");
+  values->has_crop = false;
+  frame.crop_left = 2; frame.crop_right = 15; frame.crop_top = 1; frame.crop_bottom = 12;
+  expect(28, 12, "SAR is based on decoder crop rather than coded dimensions");
+  values->integers["sar-width"] = std::numeric_limits<int32_t>::max();
+  int32_t width, height;
+  Check(!RetrieverDisplaySize(frame, format, &width, &height), "overflowing SAR product has no native frame");
+  values->integers["sar-width"] = -1;
+  Check(!RetrieverDisplaySize(frame, format, &width, &height), "negative SAR numerator has no native frame");
+}
+#endif
 }  // namespace
 
 int main() {
@@ -428,11 +452,11 @@ int main() {
 #if HAS_INDEXED_SELECTOR
   IndexedFrames();
   Orientation();
-#if HAS_DISPLAY_GEOMETRY
-  DisplayDimensions();
-#endif
 #endif
   Errors();
+#if HAS_DISPLAY_METADATA
+  DisplayMetadata();
+#endif
   std::cout << "Retriever frame contracts: " << checks - failures << '/' << checks
             << " passed, " << failures << " failed\n";
   return failures == 0 ? 0 : 1;
