@@ -18,8 +18,8 @@
 // any other request with ESRCH (no such tracee).
 //
 // regcomp/regexec/regerror/regfree: bionic's (BSD) regex ABI over
-// posix_regex::Program (POSIX BRE/ERE with leftmost-longest whole-match selection,
-// NetBSD/Android REG_NEWLINE anchor/bracket rules, and bounded NFA matching).
+// a pinned Bionic/NetBSD engine, with per-call work/allocation accounting.
+// Guest byte signedness and locale selection are independent of Windows CRT state.
 
 #include "shim_internal.h"
 
@@ -190,104 +190,62 @@ struct BionicRegex {
   void* re_g;
 };
 static_assert(sizeof(BionicRegex) == 32);
-struct BionicRegmatch {
-  int64_t rm_so;
-  int64_t rm_eo;
-};
+using BionicRegmatch = posix_regex::netbsd::regmatch_t;
 
 constexpr int32_t kRegMagic = 0xf265;
-
-using posix_regex::Compiler;
 using posix_regex::kRegBadpat;
 using posix_regex::kRegEspace;
-using posix_regex::kRegExtended;
-using posix_regex::kRegIcase;
 using posix_regex::kRegInvarg;
-using posix_regex::kRegNewline;
-using posix_regex::kRegNomatch;
-using posix_regex::kRegNosub;
-using posix_regex::kRegNotbol;
-using posix_regex::kRegNoteol;
 using posix_regex::kRegOk;
 using posix_regex::kRegPend;
 using posix_regex::kRegStartend;
-using posix_regex::Matcher;
 using posix_regex::Program;
 
-int BIONIC_SYSV Regcomp(BionicRegex* preg, const char* pattern, int cflags) {
+size_t RegexMbCurMax() {
+  using Function = size_t (BIONIC_SYSV*)();
+  auto function = reinterpret_cast<Function>(LookupBionicSymbol("__ctype_get_mb_cur_max"));
+  // All ordinary callers use the registered Bionic locale implementation.
+  // An isolated adapter embedding without locale exports has the C locale.
+  return function != nullptr ? function() : 1;
+}
+
+int RegcompForAbi(BionicRegex* preg, const char* pattern, int cflags, bool unsigned_char) {
   if (preg == nullptr || pattern == nullptr) return kRegInvarg;
-  constexpr int supported = kRegExtended | kRegIcase | kRegNosub | kRegNewline | kRegPend;
-  if ((cflags & ~supported) != 0 ||
-      ((cflags & kRegPend) != 0 &&
-       (preg->re_endp == nullptr || reinterpret_cast<uintptr_t>(preg->re_endp) <
-                                        reinterpret_cast<uintptr_t>(pattern)))) {
-    return kRegInvarg;
-  }
-  const bool extended = (cflags & kRegExtended) != 0;
-  const bool icase = (cflags & kRegIcase) != 0;
-  const bool nosub = (cflags & kRegNosub) != 0;
-  const bool newline = (cflags & kRegNewline) != 0;
+  if ((cflags & kRegPend) != 0 &&
+      (preg->re_endp == nullptr || reinterpret_cast<uintptr_t>(preg->re_endp) <
+                                      reinterpret_cast<uintptr_t>(pattern))) return kRegInvarg;
   try {
-    std::string raw = (cflags & kRegPend) != 0 && preg->re_endp != nullptr
-                          ? std::string(pattern, preg->re_endp)
-                          : std::string(pattern);
-    auto compiled = std::make_unique<Program>();
-    Compiler compiler(raw, extended, icase, nosub, newline);
-    int err = compiler.Compile(*compiled);
-    if (err != kRegOk) {
-      return err;
-    }
+    auto compiled = std::make_unique<Program>(unsigned_char);
+    int result = posix_regex::Compile(*compiled, pattern, preg->re_endp, cflags, RegexMbCurMax());
+    if (result != kRegOk) return result;
     preg->re_magic = kRegMagic;
-    preg->re_nsub = compiled->nsub;
+    preg->re_nsub = compiled->regex.re_nsub;
     preg->re_g = compiled.release();
-    return 0;
-  } catch (...) {
-    return kRegEspace;
-  }
+    return kRegOk;
+  } catch (...) { return kRegEspace; }
+}
+int BIONIC_SYSV Regcomp(BionicRegex* preg, const char* pattern, int cflags) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  return RegcompForAbi(preg, pattern, cflags, true);
+#else
+  return RegcompForAbi(preg, pattern, cflags, false);
+#endif
+}
+// Translated ARM64 shares the matcher but has Android's unsigned-char ABI.
+int BIONIC_SYSV RegcompArm64(BionicRegex* preg, const char* pattern, int cflags) {
+  return RegcompForAbi(preg, pattern, cflags, true);
 }
 
 int BIONIC_SYSV Regexec(const BionicRegex* preg, const char* string, size_t nmatch,
                         BionicRegmatch* pmatch, int eflags) {
   if (preg == nullptr || preg->re_magic != kRegMagic || preg->re_g == nullptr) return kRegBadpat;
   if (string == nullptr) return kRegInvarg;
-  const auto* compiled = static_cast<const Program*>(preg->re_g);
-  const char* begin = string;
-  const char* end;
-  if ((eflags & kRegStartend) != 0) {
-    // REG_STARTEND accepts a bounded byte sequence, including embedded NULs;
-    // it must not first scan for a terminator outside that sequence.
-    if (pmatch == nullptr || pmatch[0].rm_so < 0 || pmatch[0].rm_eo < pmatch[0].rm_so) {
-      return kRegInvarg;
-    }
-    begin = string + pmatch[0].rm_so;
-    end = string + pmatch[0].rm_eo;
-  } else {
-    end = string + std::strlen(string);
-  }
+  if ((eflags & kRegStartend) != 0 &&
+      (pmatch == nullptr || pmatch[0].rm_so < 0 || pmatch[0].rm_eo < pmatch[0].rm_so)) return kRegInvarg;
   try {
-    Matcher matcher(*compiled, string, begin, end, eflags, nmatch);
-    std::vector<int32_t> caps;
-    int32_t match_start = 0;
-    int32_t match_end = 0;
-    int rc = matcher.Execute(caps, match_start, match_end);
-    if (rc != kRegOk) return rc;
-    if (!compiled->nosub && pmatch != nullptr && nmatch > 0) {
-      const int64_t base_offset = static_cast<int64_t>(begin - string);
-      pmatch[0].rm_so = base_offset + match_start;
-      pmatch[0].rm_eo = base_offset + match_end;
-      for (size_t i = 1; i < nmatch; ++i) {
-        if (i <= compiled->nsub && 2 * i + 1 < caps.size() && caps[2 * i] >= 0) {
-          pmatch[i].rm_so = base_offset + caps[2 * i];
-          pmatch[i].rm_eo = base_offset + caps[2 * i + 1];
-        } else {
-          pmatch[i].rm_so = pmatch[i].rm_eo = -1;
-        }
-      }
-    }
-    return 0;
-  } catch (...) {
-    return kRegEspace;
-  }
+    return posix_regex::Execute(*static_cast<const Program*>(preg->re_g), string,
+                               nmatch, pmatch, eflags, RegexMbCurMax());
+  } catch (...) { return kRegEspace; }
 }
 
 size_t BIONIC_SYSV Regerror(int errcode, const BionicRegex*, char* errbuf, size_t errbuf_size) {
@@ -396,6 +354,7 @@ int64_t RawSyscallX64(int64_t nr, const int64_t a[6]) {
 void RegisterSyscall(SymbolTable& t) {
   t["ptrace"] = reinterpret_cast<void*>(&Ptrace);
   t["regcomp"] = reinterpret_cast<void*>(&Regcomp);
+  t["__gesher_arm64_regcomp"] = reinterpret_cast<void*>(&RegcompArm64);
   t["regexec"] = reinterpret_cast<void*>(&Regexec);
   t["regerror"] = reinterpret_cast<void*>(&Regerror);
   t["regfree"] = reinterpret_cast<void*>(&Regfree);

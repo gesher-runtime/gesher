@@ -29,6 +29,6 @@ target_link_libraries(gesher_bionic PUBLIC gesher_elf gesher_exec_spawn log sync
 # libz.so for app libraries: zlib_bionic.cc over external/zlib (third_party.cmake).
 target_link_libraries(gesher_bionic PRIVATE z gesher_bionic_unicode)
 target_compile_options(gesher_bionic PRIVATE -Wall -Wextra -Werror)
-# regcomp/regexec over std::regex, which reports a bad pattern by throwing.
+# The bounded regex arena unwinds work/allocation limits into REG_ESPACE.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/syscall_bionic.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")

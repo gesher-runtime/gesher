@@ -17,11 +17,17 @@ def main():
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
-    print("Production source SHA256 " + hashlib.sha256(args.source.read_bytes()).hexdigest(), flush=True)
+    source_dir = args.source.resolve().parent
+    sources = [args.source, source_dir / "posix_regex.h"]
+    sources += sorted((source_dir / "regex").glob("*.h"))
+    sources += sorted((source_dir / "regex").glob("*.inc"))
+    if (source_dir / "posix_regex_cnames.h").exists():
+        sources.append(source_dir / "posix_regex_cnames.h")
+    for source in sources:
+        print(f"Production source {source.name} SHA256 " + hashlib.sha256(source.read_bytes()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="gesher-raw-syscall-") as folder:
         executable = Path(folder) / "raw-syscall-contracts"
-        # -O0 also avoids GCC's optimized std::regex internal-state warning;
-        # this fixture checks ABI behavior rather than regex throughput.
+        # These fixtures check production ABI/ownership behavior, not a product throughput claim.
         command = shlex.split(args.cxx) + ["-std=c++20", "-O0", "-g", "-Wall", "-Wextra", "-Werror",
             "-I", str(ROOT / "compat/bionic"), "-I", str(ROOT / "compat/bionic/include"),
             "-I", str(ROOT / "compat/arm64/include"), "-I", str(ROOT / "compat/elf/include"),
@@ -29,7 +35,18 @@ def main():
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, timeout=120)
-        return subprocess.run([str(executable)], cwd=folder, timeout=30).returncode
+        result = subprocess.run([str(executable)], cwd=folder, timeout=30).returncode
+        if result:
+            return result
+        budget = Path(folder) / "regex-budget-contracts"
+        budget_command = shlex.split(args.cxx) + ["-std=c++20", "-O0", "-g", "-Wall", "-Wextra", "-Werror",
+            "-pthread", "-I", str(ROOT / "compat/bionic"),
+            str(ROOT / "tests/native/regex_budget_host_test.cc"),
+            "-Wl,--wrap=malloc", "-Wl,--wrap=free", "-o", str(budget)]
+        if args.sanitize:
+            budget_command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+        subprocess.run(budget_command, check=True, timeout=120)
+        return subprocess.run([str(budget)], cwd=folder, timeout=30).returncode
 
 
 if __name__ == "__main__":

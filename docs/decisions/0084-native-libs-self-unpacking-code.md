@@ -140,17 +140,21 @@ Android section header table past EOF, which Android's linker rejects).
   are not emulated (-ENOSYS).
 - `ptrace` (a process nobody traces) and `regcomp`/`regexec` (via
   `compat/bionic/posix_regex.h`) are now in the shim; Ijiami imports them.
-  Regex compilation and matching use a POSIX BRE/ERE compiler and NFA with
-  leftmost-longest whole-match selection, `REG_ICASE`, `REG_NOSUB`, `REG_NEWLINE`
-  (excluding `\n` from `.` and negated `[^...]` classes while preserving `\n`
-  in positive classes like `[[:space:]]` and `[[:cntrl:]]`, supporting
-  line-internal `^`/`$` anchors around `\n` and preceding `\n` on
-  `REG_STARTEND`), `REG_PEND`, BSD/Bionic punctuation-escape normalization
-  (such as `\/`), and bounded linear-time NFA matching for
-  backreference-free patterns. Unsupported compilation flags return
-  `REG_INVARG` instead of silently using different matching rules.
-  Repeated-subexpression capture selection still differs from AOSP and blocks
-  approval of this engine; see the [independent QA record](../research/bionic-regex-qa-2026-11-17.md).
+  Compilation and matching now adapt the pinned Android16 r4 Bionic/NetBSD
+  strip engine, preserving its observable BRE/ERE, line-anchor, word-boundary,
+  capture-dissection and backreference behavior. The earlier custom compiler
+  differed on sliced word boundaries and bounded/captured-expression
+  backreferences. Guest character promotion and Bionic per-thread locale
+  selection are explicit; Windows CRT locale does not select semantics.
+  Compile and execution allocations have separate 64 MiB arena limits,
+  including temporary/retained capacity and reallocations. All engine loops
+  and bulk work consume per-call limits; exhaustion returns `REG_ESPACE`
+  without partial captures. This is not a linear-complexity claim for
+  backreferences or a Windows runtime qualification. See the
+  [current implementation and evidence](../research/bionic-regex-repair-2026-11-18.md)
+  and [pinned-source adaptation notes](../../compat/bionic/regex/README.md).
+  The [earlier independent QA record](../research/bionic-regex-qa-2026-11-17.md)
+  remains historical evidence for its original head.
 - Copies of shared mappings publish their changes at msync, munmap,
   mprotect and replacement, not continuously to another copy of the file.
 - Soundcore 3.9.7 now gets past its native libraries: both unpack, its

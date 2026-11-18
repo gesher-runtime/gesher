@@ -15,6 +15,8 @@ void Check(const char* name, bool ok) {
   failures += !ok;
 }
 int event_flags = -1, chmod_flags = -1, mask_calls;
+size_t locale_mb_cur_max = 1;
+size_t BIONIC_SYSV LocaleMbCurMax() { return locale_mb_cur_max; }
 int64_t BIONIC_SYSV Eventfd(int64_t initial, int64_t flags, int64_t, int64_t, int64_t, int64_t) {
   event_flags = static_cast<int>(flags);
   return flags < 0 ? (errno = EINVAL, -1) : initial + 100;
@@ -50,6 +52,7 @@ int ProtectLoadedMemory(void*, size_t, int, bool) { errno = ENOSYS; return -1; }
 
 namespace gesher::bionic {
 void* LookupBionicSymbol(const char* name) {
+  if (!std::strcmp(name, "__ctype_get_mb_cur_max")) return reinterpret_cast<void*>(&LocaleMbCurMax);
   if (!std::strcmp(name, "eventfd")) return reinterpret_cast<void*>(&Eventfd);
   if (!std::strcmp(name, "fchmodat")) return reinterpret_cast<void*>(&Fchmodat);
   if (!std::strcmp(name, "close")) return reinterpret_cast<void*>(&Close);
@@ -306,6 +309,53 @@ int main() {
       free_regex(&re_alpha);
     }
   }
+  // Independent PR60 review controls against pinned Android16 r4 and actual
+  // NDK Bionic on both guest ABIs. Keep the submitted assertions above intact.
+  for (const char* pattern : {"\\<a", "[[:<:]]a"}) {
+    Check("word beginning compiles", compile(&re, pattern, 1) == 0);
+    match = {1, 2};
+    Check("slice creates beginning unless NOTBOL", execute(&re, "aa", 1, &match, 4) == 0 && match.begin == 1 && match.end == 2);
+    match = {1, 2};
+    Check("NOTBOL preserves preceding word byte", execute(&re, "aa", 1, &match, 4 | 1) == 1);
+    match = {1, 2};
+    Check("NOTBOL permits preceding nonword byte", execute(&re, " a", 1, &match, 4 | 1) == 0);
+    free_regex(&re);
+  }
+  for (int flags : {0, 1}) {
+    for (const char* pattern : {"\\<*", "\\>*", "[[:<:]]*", "[[:>:]]*"}) {
+      Check("word boundaries have Bionic repetition eligibility",
+            compile(&re, pattern, flags) == 0 && execute(&re, "a", 1, &match, 0) == 0 && match.begin == 0 && match.end == 0);
+      free_regex(&re);
+    }
+  }
+  for (const char* pattern : {"\\(^a\\)\\1", "\\(\\<a\\)\\1", "\\([[:<:]]a\\)\\1"}) {
+    Check("backreference strip prefilter preserves captured anchors",
+          compile(&re, pattern, 0) == 0 && execute(&re, "aa", 0, nullptr, 0) == 1);
+    free_regex(&re);
+  }
+  Check("bounded backreference preserves Bionic strip traversal",
+        compile(&re, "\\(a\\)\\1\\{0,2\\}", 0) == 0 && execute(&re, "aaa", 2, sub, 0) == 0 && sub[0].end == 2 && sub[1].begin == 0 && sub[1].end == 1);
+  free_regex(&re);
+  for (const char* input : {"a", "aaa"}) {
+    Check("backreference after bounded capture preserves Bionic selection",
+          compile(&re, "\\(a\\)\\{0,2\\}\\1", 0) == 0 && execute(&re, input, 2, sub, 0) == 0 && sub[0].begin == 0 && sub[0].end == 1 && sub[1].begin == 0 && sub[1].end == 1);
+    free_regex(&re);
+  }
+  auto compile_arm64 = reinterpret_cast<int (BIONIC_SYSV*)(Regex*, const char*, int)>(symbols.at("__gesher_arm64_regcomp"));
+  for (size_t mb : {1U, 4U}) {
+    locale_mb_cur_max = mb;
+    for (const char* input : {"\xff", "\xc3\xa9", "abc\xffz"}) {
+      Check("translated ARM64 retains unsigned byte compilation",
+            compile_arm64(&re, input, 1) == 0 && execute(&re, input, 1, &match, 0) == 0 && match.end == static_cast<int64_t>(std::strlen(input)));
+      free_regex(&re);
+#if !defined(__aarch64__) && !defined(_M_ARM64)
+      Check("x86_64 retains Bionic signed byte compilation",
+            compile(&re, input, 1) == 0 && execute(&re, input, 1, &match, 0) == 1);
+      free_regex(&re);
+#endif
+    }
+  }
+  locale_mb_cur_max = 1;
   Check("REG_PEND needs an end pointer", compile(&re, "x", 32) == 16);
   std::printf("raw syscall contracts: %d failures\n", failures);
   return failures != 0;

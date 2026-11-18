@@ -1,5 +1,10 @@
 # Bionic regex compatibility QA — 2026-11-17
 
+> Historical review of the head identified below. The later repair replaces
+> the custom compiler with a bounded adaptation of the pinned Bionic engine;
+> see [2026-11-18 repair evidence](bionic-regex-repair-2026-11-18.md). Historical
+> failures and conclusions below have not been rewritten as passing results.
+
 ## Decision and reviewed state
 
 PR #60 is **not ready to merge**. The goal is within Gesher's runtime scope:

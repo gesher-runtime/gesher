@@ -1,10 +1,4 @@
-// Character names from Android android-16.0.0_r4 bionic, retained under
-// the upstream BSD license below. Names are part of regcomp's C-locale contract.
-// https://android.googlesource.com/platform/bionic/+/android-16.0.0_r4/libc/upstream-netbsd/lib/libc/regex/cname.h
-#pragma once
-#include <cstddef>
-
-namespace gesher::bionic::posix_regex::detail {
+// Gesher adaptation of pinned Android16 r4. See README.md for changes and hashes.
 /*	$NetBSD: cname.h,v 1.8 2021/02/23 22:14:59 christos Exp $	*/
 
 /*-
@@ -147,5 +141,3 @@ static struct cname {
 	{"DEL",	'\177'},
 	{NULL,	0}
 };
-
-}  // namespace gesher::bionic::posix_regex::detail

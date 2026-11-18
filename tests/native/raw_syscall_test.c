@@ -347,6 +347,35 @@ int gesher_selftest(void) {
               regexec(&re, "a[b/c]", 0, NULL, 0) == 0 &&
               regexec(&re, "ab", 0, NULL, 0) == REG_NOMATCH);
     regfree(&re);
+    // Pinned Bionic strip behavior found by the independent PR60 review.
+    const char* word_starts[] = {"\\<a", "[[:<:]]a"};
+    for (size_t i = 0; i < sizeof(word_starts) / sizeof(word_starts[0]); ++i) {
+        check("slice word boundary compile", regcomp(&re, word_starts[i], REG_EXTENDED) == 0);
+        m[0] = (regmatch_t){1, 2};
+        check("slice begins a word unless NOTBOL", regexec(&re, "aa", 1, m, REG_STARTEND) == 0 &&
+              m[0].rm_so == 1 && m[0].rm_eo == 2);
+        m[0] = (regmatch_t){1, 2};
+        check("NOTBOL keeps original preceding byte", regexec(&re, "aa", 1, m, REG_STARTEND | REG_NOTBOL) == REG_NOMATCH);
+        regfree(&re);
+    }
+    const char* word_repeats[] = {"\\<*", "\\>*"};
+    for (int flags = 0; flags <= REG_EXTENDED; ++flags) {
+        for (size_t i = 0; i < sizeof(word_repeats) / sizeof(word_repeats[0]); ++i) {
+            check("escaped boundary repetition", regcomp(&re, word_repeats[i], flags) == 0 &&
+                  regexec(&re, "a", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 0);
+            regfree(&re);
+        }
+    }
+    check("backreference prefilter keeps captured anchor", regcomp(&re, "\\(^a\\)\\1", 0) == 0 &&
+          regexec(&re, "aa", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
+    check("bounded backreference strip selection", regcomp(&re, "\\(a\\)\\1\\{0,2\\}", 0) == 0 &&
+          regexec(&re, "aaa", 2, m, 0) == 0 && m[0].rm_eo == 2 && m[1].rm_eo == 1);
+    regfree(&re);
+    check("backreference after bounded capture", regcomp(&re, "\\(a\\)\\{0,2\\}\\1", 0) == 0 &&
+          regexec(&re, "a", 2, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 1 && m[1].rm_eo == 1);
+    regfree(&re);
+
     check("regerror", regerror(REG_NOMATCH, &re, message, sizeof(message)) > 1 &&
                           message[0] != '\0');
 

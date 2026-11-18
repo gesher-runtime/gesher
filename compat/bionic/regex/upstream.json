@@ -1,0 +1,55 @@
+{
+  "repository": "https://android.googlesource.com/platform/bionic",
+  "revision": "f22516cbc67e81c13cf943ce02f01b8929a98726",
+  "tag": "android-16.0.0_r4",
+  "path": "libc/upstream-netbsd/lib/libc/regex",
+  "files": {
+    "regcomp.c": {
+      "upstream_sha256": "8308c820bff17d4b1e33e2a28b6c1303aede890e6b82b63f8a584e9f10f3dc82",
+      "adapted_file": "regcomp.inc",
+      "source_path": "libc/upstream-netbsd/lib/libc/regex/regcomp.c",
+      "original_loop_count": 33
+    },
+    "regexec.c": {
+      "upstream_sha256": "8160d06bb401d8bcfa510954d06c5cd9c13bc765dafd13590c66e401922473e6",
+      "adapted_file": "regexec.inc",
+      "source_path": "libc/upstream-netbsd/lib/libc/regex/regexec.c",
+      "original_loop_count": 0
+    },
+    "regfree.c": {
+      "upstream_sha256": "251771e0b34a2ee0260ee1314b0bd5f5a4595d35c3c1e2b254668a548e0ba697",
+      "adapted_file": "regfree.inc",
+      "source_path": "libc/upstream-netbsd/lib/libc/regex/regfree.c",
+      "original_loop_count": 1
+    },
+    "engine.c": {
+      "upstream_sha256": "c541eb37440b60fa7ffd74ca7bfd7deb5b482d945a9dd31893296e6da1e41ae1",
+      "adapted_file": "engine.inc",
+      "source_path": "libc/upstream-netbsd/lib/libc/regex/engine.c",
+      "original_loop_count": 28
+    },
+    "regex2.h": {
+      "upstream_sha256": "ba977b0ef5a3365be74423bfe49fca3223e3b33745aaeba7c09cf10dd292caeb",
+      "adapted_file": "regex2.h",
+      "source_path": "libc/upstream-netbsd/lib/libc/regex/regex2.h",
+      "original_loop_count": 3
+    },
+    "utils.h": {
+      "upstream_sha256": "7729fcdd7c269cd66ccf707802df9c8e32db21e8a4b17e528432edbb36468312",
+      "adapted_file": "utils.h",
+      "source_path": "libc/upstream-netbsd/lib/libc/regex/utils.h",
+      "original_loop_count": 0
+    },
+    "cname.h": {
+      "upstream_sha256": "51a618a5e68bb1c5fb0c736ccf5733423f9b04ed25026150119a881efd1fd58a",
+      "adapted_file": "cname.h",
+      "source_path": "libc/upstream-netbsd/lib/libc/regex/cname.h",
+      "original_loop_count": 0
+    },
+    "regex.h": {
+      "source_path": "libc/include/regex.h",
+      "upstream_sha256": "995a0436934bf14eb7c989d1ed8a0b6a736468e00b68246ef99d2c8c32322f57",
+      "adapted_file": "regex_abi.h"
+    }
+  }
+}

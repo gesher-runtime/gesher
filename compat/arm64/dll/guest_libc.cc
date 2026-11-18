@@ -17,6 +17,7 @@
 //  - four O_* open flags (O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE);
 //  - localeconv's CHAR_MAX sentinels (unsigned char on Android arm64);
 //  - DNS bitstring rendering's plain-char promotion (unsigned on arm64);
+//  - regex compilation's plain-char promotion (unsigned on arm64);
 //  - dlsym: returns these definitions for those names;
 //  - the shim's va_list functions (vsnprintf...): registered so the guest's
 //    AAPCS64 va_list is converted to System V when the guest calls them.
@@ -705,6 +706,8 @@ void InitGuestLibc() {
   if (g_pthread_create) Override("pthread_create", reinterpret_cast<void*>(&GuestPthreadCreate));
   if (void* getattr = Host("__gesher_arm64_pthread_getattr_np"))
     Override("pthread_getattr_np", getattr);
+
+  if (void* regcomp = Host("__gesher_arm64_regcomp")) Override("regcomp", regcomp);
 
   g_localeconv = Host("localeconv");
   if (g_localeconv) Override("localeconv", reinterpret_cast<void*>(&GuestLocaleconv));
