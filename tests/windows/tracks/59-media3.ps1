@@ -13,8 +13,9 @@ New-Item -ItemType Directory -Force $m3Tmp | Out-Null
 $captureProbe = Join-Path $Dir 'media_probe-media-capture-test.exe'
 $captureRuntime = Join-Path $Dir 'dalvikvm-media-capture-test.exe'
 Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
+CheckTimed 'media3: actual WASAPI packet and disconnect status contracts' "$Dir/capture_wasapi_contract_test.exe" @() @('WASAPI capture contracts:') 20
 foreach ($case in @('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'last-owner', 'stale-peer', 'fixture-env',
-                    'opensl-missing', 'opensl-descriptors', 'opensl-start', 'opensl-disconnect', 'recorder-start', 'recorder-disconnect', 'jni-read')) {
+                    'opensl-missing', 'opensl-permission', 'opensl-descriptors', 'opensl-start', 'opensl-disconnect', 'recorder-start', 'recorder-disconnect', 'jni-read')) {
   CheckTimed "media3: unavailable/disconnected capture contract ($case)" "$Dir/capture_failure_contract_test.exe" @($case) @("capture failure ${case}:") 20
 }
 foreach ($case in @('fixture-env', 'fixture-bad-file')) {
