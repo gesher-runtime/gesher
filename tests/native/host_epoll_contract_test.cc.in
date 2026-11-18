@@ -13,6 +13,7 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 #include <vector>
+#include "poll_scratch.h"
 using HANDLE = void*;
 using ULONGLONG = unsigned long long;
 static void SetEvent(HANDLE) {}
