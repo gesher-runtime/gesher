@@ -21,12 +21,14 @@ foreach ($name in 'Set-Busy','Complete-DashboardAction','Install-PanelApk','New-
     . ([scriptblock]::Create($functionSource))
 }
 # The native functions are nested inside the production owner. Extract them
-# unchanged for ABI inspection and a direct, warmed native failure census.
+# unchanged for ABI inspection. The failure census below observes their real
+# native acquisitions and releases without counting unrelated CLR/WPF handles.
 foreach ($name in 'Initialize-PanelActionNative', 'Invoke-PanelActionNative') {
     $definition = @($ast.FindAll({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $true))
     if ($definition.Count -ne 1) { throw "Expected one production native function: $name" }
+    if ($name -eq 'Invoke-PanelActionNative') { $nativeActionSource = $definition[0].Extent.Text }
     . ([scriptblock]::Create($definition[0].Extent.Text))
 }
 $script:Checks = 0
@@ -279,55 +281,75 @@ $ok = [Gesher.PanelActionNative]::GetExitCodeProcess([IntPtr]::Zero, [ref]$code)
         -not $script:ActionState.Worker -and (Read-ActionCalls).Count -eq 0) 'Native process-start failure retained ownership or ran a helper'
     Assert-Action (@(Get-ChildItem -LiteralPath $here -Directory -Filter 'gesher-panel-action-*').Count -eq 0) 'Failed process start retained its owned staging files'
 
-    $process = [Diagnostics.Process]::GetCurrentProcess()
-    try {
-        # Isolate native cleanup from reflection, PowerShell binding and process
-        # census initialization. Require real Win32 errors rather than swallowing
-        # missing-method/type errors that could make this check ineffective.
-        function Invoke-FailedNativeStart {
-            try { [void](Invoke-PanelActionNative (Join-Path $here 'missing.exe') 'unused.ps1' $here) }
-            catch {
-                $failure = $_.Exception.GetBaseException()
-                if ($failure -is [ComponentModel.Win32Exception] -and $failure.NativeErrorCode -eq 2) { $script:NativeFailureCount++; return }
-                throw
-            }
-            throw 'Missing native executable unexpectedly started'
+    # Observe only the NUL handles owned by the production failure path. The
+    # previous process-wide HandleCount equality also counted asynchronous CLR,
+    # runspace and WPF activity (CI observed +5 handles on Windows Server 2025).
+    # Keep every native call and the production try/finally intact; add acquisition
+    # observations and forward the two releases to the real CloseHandle API.
+    $censusSource = $nativeActionSource.Replace('function Invoke-PanelActionNative(', 'function Invoke-CensusNativeStart(')
+    foreach ($variable in 'inputHandle', 'outputHandle') {
+        $guard = 'if(-not (Valid $' + $variable + ')) { Throw-NativeFailure }'
+        $release = '[Gesher.PanelActionNative]::CloseHandle($' + $variable + ')'
+        Assert-Action ($censusSource.Contains($guard) -and $censusSource.Contains($release)) "Native census lost its production boundary: $variable"
+        $censusSource = $censusSource.Replace($guard, $guard + '; Register-CensusHandle $' + $variable)
+        $censusSource = $censusSource.Replace($release, '(Close-CensusHandle $' + $variable + ')')
+    }
+    function Register-CensusHandle([IntPtr] $handle) {
+        Assert-Action ($script:CensusHandles.Add($handle)) 'Native acquisition reused an unreleased owned handle'
+        $script:CensusOpened++
+    }
+    function Close-CensusHandle([IntPtr] $handle) {
+        $closed = [Gesher.PanelActionNative]::CloseHandle($handle)
+        if ($closed) {
+            Assert-Action ($script:CensusHandles.Remove($handle)) 'Native release did not match an owned handle'
+            $script:CensusClosed++
         }
-        $script:NativeFailureCount = 0
-        for ($attempt = 0; $attempt -lt 32; $attempt++) { Invoke-FailedNativeStart }
-        $null = $process.Handle
-        [GC]::Collect(); [GC]::WaitForPendingFinalizers(); [GC]::Collect()
-        $process.Refresh(); $handlesBefore = $process.HandleCount
-        $script:NativeFailureCount = 0
-        for ($attempt = 0; $attempt -lt 32; $attempt++) { Invoke-FailedNativeStart }
-        [GC]::Collect(); [GC]::WaitForPendingFinalizers(); [GC]::Collect()
-        $process.Refresh()
-        Write-Host "Panel failed-start handles: before=$handlesBefore after=$($process.HandleCount) attempts=32"
-        Assert-Action ($script:NativeFailureCount -eq 32) 'Native census did not exercise 32 real ERROR_FILE_NOT_FOUND failures'
-        Assert-Action ($process.HandleCount -eq $handlesBefore) 'Native failed-start attempts changed the warmed native handle balance'
-
-        # Demonstrate that the exact census rejects an owned handle leak, then
-        # restore ownership before continuing the remaining action contracts.
-        $security = [Gesher.PanelActionSecurity]::new()
-        $security.Length = [Runtime.InteropServices.Marshal]::SizeOf([type][Gesher.PanelActionSecurity])
-        function Open-NulForCensus { [Gesher.PanelActionNative]::CreateFileW('NUL',1073741824,3,[ref]$security,3,0,[IntPtr]::Zero) }
-        $warmHandle = Open-NulForCensus
-        [void][Gesher.PanelActionNative]::CloseHandle($warmHandle)
-        [GC]::Collect(); [GC]::WaitForPendingFinalizers(); [GC]::Collect()
-        $process.Refresh(); $negativeBaseline = $process.HandleCount
-        $leaked = Open-NulForCensus
+        return $closed
+    }
+    function Measure-NativeFailures([string] $source, [int] $attempts) {
+        . ([scriptblock]::Create($source))
+        $script:CensusHandles = [Collections.Generic.HashSet[IntPtr]]::new()
+        $script:CensusOpened = 0; $script:CensusClosed = 0
+        $failures = 0
         try {
-            Assert-Action ($leaked -ne [IntPtr]::Zero -and $leaked -ne [IntPtr]::new(-1)) 'Could not create the handle-census negative control'
-            $process.Refresh()
-            Write-Host "Panel handle negative control: before=$negativeBaseline retained=$($process.HandleCount)"
-            Assert-Action ($process.HandleCount -eq $negativeBaseline + 1) 'Handle census failed to detect one deliberately retained NUL handle'
-        } finally { $closed = [Gesher.PanelActionNative]::CloseHandle($leaked) }
-        Assert-Action $closed 'Could not release the handle-census negative control'
-        [GC]::Collect(); [GC]::WaitForPendingFinalizers(); [GC]::Collect()
-        $process.Refresh()
-        Write-Host "Panel handle negative cleanup: after=$($process.HandleCount)"
-        Assert-Action ($process.HandleCount -eq $negativeBaseline) 'Handle negative-control cleanup did not restore ownership balance'
-    } finally { $process.Dispose() }
+            for ($attempt = 0; $attempt -lt $attempts; $attempt++) {
+                try { [void](Invoke-CensusNativeStart (Join-Path $here 'missing.exe') 'unused.ps1' $here) }
+                catch {
+                    $failure = $_.Exception.GetBaseException()
+                    if ($failure -isnot [ComponentModel.Win32Exception] -or $failure.NativeErrorCode -ne 2) { throw }
+                    $failures++
+                }
+            }
+            [PSCustomObject]@{
+                Failures = $failures; Opened = $script:CensusOpened
+                Closed = $script:CensusClosed; Retained = $script:CensusHandles.Count
+            }
+        } finally {
+            # Negative controls deliberately omit a production release. Clean up
+            # the real retained handles even if an assertion or native call fails.
+            foreach ($handle in $script:CensusHandles) {
+                $closed = [Gesher.PanelActionNative]::CloseHandle($handle)
+                Assert-Action $closed 'Could not clean up a retained census handle'
+            }
+        }
+    }
+    function Test-NativeHandleBalance($census, [int] $attempts) {
+        $census.Failures -eq $attempts -and $census.Opened -eq 2 * $attempts -and
+            $census.Closed -eq $census.Opened -and $census.Retained -eq 0
+    }
+    $census = Measure-NativeFailures $censusSource 32
+    Write-Host "Panel failed-start owned handles: opened=$($census.Opened) closed=$($census.Closed) retained=$($census.Retained) attempts=32"
+    Assert-Action (Test-NativeHandleBalance $census 32) 'Native failed-start attempts did not release every owned NUL handle after ERROR_FILE_NOT_FOUND'
+
+    # Prove that the same measurement rejects omission of either production
+    # release, including a single leaked handle, rather than widening a tolerance.
+    foreach ($variable in 'inputHandle', 'outputHandle') {
+        $mutant = $censusSource.Replace('(Close-CensusHandle $' + $variable + ')', '$true')
+        $negative = Measure-NativeFailures $mutant 1
+        Write-Host "Panel handle negative control: omitted=$variable opened=$($negative.Opened) closed=$($negative.Closed) retained=$($negative.Retained)"
+        Assert-Action ($negative.Failures -eq 1 -and $negative.Opened -eq 2 -and $negative.Closed -eq 1 -and
+            $negative.Retained -eq 1 -and -not (Test-NativeHandleBalance $negative 1)) 'Native census did not reject one omitted production CloseHandle'
+    }
 
     foreach ($enable in $true, $false) {
         Reset-Action

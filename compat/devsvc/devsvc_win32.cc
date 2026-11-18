@@ -69,7 +69,7 @@ INIT_ONCE g_events_once = INIT_ONCE_STATIC_INIT;
 constexpr GUID kSessionDisplayStatus = {
     0x2b84c20e, 0xad23, 0x4ddf, {0x93, 0xdb, 0x05, 0xff, 0xbd, 0x7e, 0xfc, 0xa5}};
 int g_session_display_state = -1;      // guarded by g_lock; unknown remains distinct
-
+uint64_t g_display_off_since = 0;      // GetTickCount64 (elapsed, including suspend)
 
 void Post(unsigned events) {
   AcquireSRWLockExclusive(&g_lock);
@@ -99,6 +99,7 @@ LRESULT CALLBACK EventProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             std::memcpy(&state, setting->Data, sizeof(state));
             AcquireSRWLockExclusive(&g_lock);
             int observed = state <= 2 ? static_cast<int>(state) : -1;
+            if (observed == 0 && g_session_display_state != 0) g_display_off_since = GetTickCount64();
             g_session_display_state = observed; // Dimmed (2) remains interactive.
             ReleaseSRWLockExclusive(&g_lock);
             Post(kDisplayState);
@@ -511,6 +512,17 @@ int AppsUseLightTheme() {
       L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size);
   return status == ERROR_SUCCESS && size == sizeof(value) && value <= 1
       ? static_cast<int>(value) : -1;
+}
+
+uint64_t JobIdleMillis() {
+  AcquireSRWLockShared(&g_lock);
+  bool off = g_session_display_state == 0;
+  uint64_t since = g_display_off_since;
+  ReleaseSRWLockShared(&g_lock);
+  if (!off) return 0;
+  uint64_t display_idle = GetTickCount64() - since;
+  uint64_t input_idle = IdleMillis();
+  return display_idle < input_idle ? display_idle : input_idle;
 }
 
 int NetworkState() {

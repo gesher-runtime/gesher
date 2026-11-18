@@ -32,6 +32,11 @@ on:
         description: javac's heap (-J-Xmx)
         default: 10g
   workflow_call:
+    inputs:
+      local-runner:
+        description: Use the restricted runner for eligible owner PRs
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,16 +49,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runner-route:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      runner: ${{ steps.route.outputs.runner }}
+    steps:
+      - uses: gesher-runtime/gesher/.github/actions/runner-route@b9510513a538d80669895521d1061b54fbe11aff
+        id: route
+        with:
+          requested: ${{ inputs.local-runner }}
+          enabled: ${{ vars.GESHER_SELF_HOSTED_PRS }}
   # aidl, hidl-gen, protoc and its Java plugins, stats-log-api-gen,
   # expresscatalog-codegen, sysprop_java: tools/host, built natively for the
   # Linux build host from the pinned AOSP sources.
   host-tools:
-    runs-on: ubuntu-24.04
+    needs: runner-route
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runner) }}
     timeout-minutes: 75
     outputs:
       key: ${{ steps.key.outputs.key }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize local build inputs
+        if: runner.environment == 'self-hosted'
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: initialize
 
       # Keyed on what the tools are built from: tools/host, the blueprint
       # reader its bp_srcs.py uses, and the aosp.lock lines and patches of
@@ -83,8 +108,9 @@ jobs:
 
       - name: Cache AOSP sources
         if: steps.reuse.outputs.build == 'true'
-        uses: actions/cache@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
           restore-keys: aosp-
@@ -93,15 +119,27 @@ jobs:
         if: steps.reuse.outputs.build == 'true'
         run: tools/fetch-aosp.sh
 
-      - name: Install build tools
+      - name: Save fetched AOSP inputs
         if: steps.reuse.outputs.build == 'true'
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: save
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+      - name: Verify local host tool dependencies
+        if: runner.environment == 'self-hosted'
+        run: |
+          for tool in clang clang++ bison flex ccache; do command -v "$tool"; done
+      - name: Install build tools
+        if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
         run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
 
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
-        if: steps.reuse.outputs.build == 'true'
-        uses: actions/cache/restore@v4
+        if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
           path: ~/.cache/ccache
           key: ccache-host-tools-${{ github.run_id }}
           restore-keys: ccache-host-tools-
@@ -109,7 +147,7 @@ jobs:
       - name: Build
         if: steps.reuse.outputs.build == 'true'
         run: |
-          ccache --set-config=max_size=1G
+          ccache --set-config=max_size="${CCACHE_LIMIT:-1G}"
           # clang and libc++, as Soong builds them: AOSP host sources use
           # clang-only builtins (__builtin_available) gcc rejects, and rely on
           # libc++'s transitive includes (libpropertyinfoserializer's
@@ -121,7 +159,7 @@ jobs:
             -DCMAKE_C_FLAGS_RELEASE="-O1 -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG" \
             -DCMAKE_CXX_FLAGS="-stdlib=libc++" -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++" \
             -DCMAKE_PROJECT_gesher_host_tools_INCLUDE="$PWD/tools/host-tools-ci.cmake"
-          ninja -C out/host -k 0
+          ninja -C out/host -k 0 ${BUILD_JOBS:+-j$BUILD_JOBS}
           ccache --show-stats | head -5
           mkdir -p dist-host/protobuf
           cp out/host/aidl out/host/hidl-gen out/host/stats-log-api-gen \
@@ -131,9 +169,10 @@ jobs:
           ls -la dist-host dist-host/protobuf
 
       - name: Save compiler output
-        if: always() && steps.reuse.outputs.build == 'true'
-        uses: actions/cache/save@v4
+        if: always() && steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: save
           path: ~/.cache/ccache
           key: ccache-host-tools-${{ github.run_id }}
 
@@ -152,11 +191,19 @@ jobs:
           retention-days: 90
 
   framework:
-    needs: host-tools
-    runs-on: ubuntu-24.04
+    needs: [host-tools, runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runner) }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize local build inputs
+        if: runner.environment == 'self-hosted'
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: initialize
 
       - name: Verify XSD compiler dependency acquisition
         run: python3 -m unittest discover -s tools/tests -p test_framework_xsdc.py -v
@@ -177,7 +224,9 @@ jobs:
       # The tools are linked against libc++, as Soong links them.
       - name: Install the host tools' runtime
         run: |
-          sudo apt-get install -y --no-install-recommends libc++1-18 libc++abi1-18
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then
+            sudo apt-get install -y --no-install-recommends libc++1-18 libc++abi1-18
+          fi
           missing=$(for t in $(find dist-host -type f); do ldd "$t" | sed -n "s|^|$t: |; /not found/p"; done)
           if [[ -n $missing ]]; then echo "$missing"; echo "::error::host tools miss shared libraries"; exit 1; fi
           dist-host/protobuf/protoc --version
@@ -190,8 +239,9 @@ jobs:
 
       - name: Restore AOSP sources
         id: aosp
-        uses: actions/cache/restore@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
           path: third_party/aosp
           key: ${{ env.AOSP_KEY }}-
           restore-keys: |
@@ -208,6 +258,7 @@ jobs:
           tools/sparse-bp.sh
 
       - uses: actions/setup-java@v4
+        if: runner.environment != 'self-hosted'
         with:
           distribution: temurin
           java-version: 21
@@ -217,15 +268,17 @@ jobs:
       # after it is built.
       - name: Restore the framework's JVM tools (kotlinc, JavaPoet, Guava)
         id: jvm
-        uses: actions/cache/restore@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
           path: out/framework/jvm-tools
           key: framework-jvm-tools-kotlin-2.1.21
 
       - name: Restore the coremod
         id: coremod
-        uses: actions/cache/restore@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
           path: out/coremod
           key: coremod-${{ hashFiles('tools/build-boot-jars.sh', 'tools/make-coremod.sh', 'tools/gen/**', 'config/aconfig/**', 'java/compile-stubs/**', 'aosp.lock', 'patches/libcore/**', 'patches/external/icu/**') }}
 
@@ -237,15 +290,17 @@ jobs:
 
       - name: Save the coremod
         if: steps.coremod.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: save
           path: out/coremod
           key: ${{ steps.coremod.outputs.cache-primary-key }}
 
       - name: Restore framework-res
         id: res
-        uses: actions/cache/restore@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
           path: out/framework-res
           key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock') }}
 
@@ -254,8 +309,9 @@ jobs:
       # with retries, as dl.google.com fails now and then.
       - name: Restore build-tools
         id: bt
-        uses: actions/cache/restore@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
           path: work/build-tools-36.1
           key: build-tools-36.1-linux
 
@@ -274,8 +330,9 @@ jobs:
 
       - name: Save build-tools
         if: steps.bt.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: save
           path: work/build-tools-36.1
           key: build-tools-36.1-linux
 
@@ -285,8 +342,9 @@ jobs:
 
       - name: Save framework-res
         if: steps.res.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: save
           path: out/framework-res
           key: ${{ steps.res.outputs.cache-primary-key }}
 
@@ -465,8 +523,9 @@ jobs:
 
       - name: Cache public SDK 36 API reference
         id: sdk-contract-reference
-        uses: actions/cache@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
           path: work/sdk-36/android.jar
           key: sdk-public-api-36-r02-d9eb9da824d9
 
@@ -480,6 +539,14 @@ jobs:
             "$RUNNER_TEMP/platform-36_r02.zip" | sha256sum --check
           mkdir -p work/sdk-36
           unzip -p "$RUNNER_TEMP/platform-36_r02.zip" android-36/android.jar > work/sdk-36/android.jar
+
+      - name: Save public SDK 36 API reference
+        if: steps.sdk-contract-reference.outputs.cache-hit != 'true'
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: save
+          path: work/sdk-36/android.jar
+          key: sdk-public-api-36-r02-d9eb9da824d9
 
       - name: Durable Settings provider contracts
         run: |
@@ -567,6 +634,7 @@ jobs:
           python3 tools/test_webmessage_ports.py --java-home "$JAVA_HOME" \
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod
+          python3 tools/test_webmessage_page_script.py
           "$JAVA_HOME/bin/javac" -cp work/sdk-36/android.jar \
             -d "$RUNNER_TEMP/codec-lifecycle-sdk" \
             tests/dex-services/gesher/services/CodecLifecycleContractTest.java
@@ -650,8 +718,9 @@ jobs:
 
       - name: Save the framework's JVM tools
         if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''
-        uses: actions/cache/save@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: save
           path: out/framework/jvm-tools
           key: ${{ steps.jvm.outputs.cache-primary-key }}
 
@@ -664,8 +733,9 @@ jobs:
 
       - name: Save AOSP sources
         if: always() && !cancelled() && steps.after.outputs.sparse != '' && (steps.aosp.outputs.cache-matched-key != format('{0}-{1}', env.AOSP_KEY, steps.after.outputs.sparse))
-        uses: actions/cache/save@v4
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: save
           path: third_party/aosp
           key: ${{ env.AOSP_KEY }}-${{ steps.after.outputs.sparse }}
 

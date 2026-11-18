@@ -241,6 +241,9 @@ function FeaturesCheck {
   $expect = @(
     'Features page: port received hello page (origin "")',
     'Features port message: echo ping',
+    'Features page port queued data preserved',
+    'Features page port reply and close passed',
+    'Features page-origin port round trip passed',
     'Features find: match 0 of 4',
     'Features find: match 1 of 4',
     'Features capturePicture: 400x400, at 200,300 #00ff00',
