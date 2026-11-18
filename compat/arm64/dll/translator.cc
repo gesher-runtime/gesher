@@ -151,6 +151,7 @@ constexpr uint32_t kBrk = 0xD4200000;
 struct Trampoline {
   void* host_fn;
   int va_list_index;
+  int pointer_variadic_fixed = -1;
 };
 Trampoline g_tramps[kMaxTramps];
 std::atomic<size_t> g_tramp_count{0};
@@ -160,11 +161,15 @@ std::unordered_map<void*, void*> g_tramp_by_fn;
 // --- va_list host functions --------------------------------------------------
 std::mutex g_va_mutex;
 std::unordered_map<const void*, int> g_va_functions;
+std::unordered_map<const void*, Trampoline> g_pointer_variadic_functions;
 
-int VaListIndexOf(const void* fn) {
+Trampoline HostSignature(void* fn, int va_list_index = -2) {
   std::lock_guard<std::mutex> lock(g_va_mutex);
+  auto direct = g_pointer_variadic_functions.find(fn);
+  if (direct != g_pointer_variadic_functions.end()) return direct->second;
+  if (va_list_index != -2) return {fn, va_list_index};
   auto it = g_va_functions.find(fn);
-  return it == g_va_functions.end() ? -1 : it->second;
+  return {fn, it == g_va_functions.end() ? -1 : it->second};
 }
 
 // --- guest TLS (variant I: TPIDR_EL0 -> TCB, then the static TLS modules) ----
@@ -406,6 +411,17 @@ void ConvertVaList(const Aapcs64VaList* a, VaListStorage* s) {
   s->tag.fp_offset = gesher::abi::kArm64VaTag | static_cast<uint32_t>((8 - n_fp) * 16);
   s->tag.reg_save_area = &s->registers;
   s->tag.overflow_arg_area = a->stack;
+}
+
+// All scanf destinations are pointers, so only the GP bank is consumed.
+// Keep the original guest stack as the overflow source and let NextGp read
+// one argument at a time, including calls with no assignments at all.
+void PointerVaList(const uint64_t (&gp)[8], void* stack, int fixed, VaListStorage* s) {
+  s->registers = {reinterpret_cast<const uint8_t*>(gp + 8), nullptr};
+  s->tag.gp_offset = gesher::abi::kArm64VaTag | static_cast<uint32_t>(fixed * 8);
+  s->tag.fp_offset = gesher::abi::kArm64VaTag | gesher::abi::kArm64VaFpBytes;
+  s->tag.reg_save_area = &s->registers;
+  s->tag.overflow_arg_area = stack;
 }
 
 // Pages already found to hold host code: a guest that calls a host pointer
@@ -713,7 +729,7 @@ class Env final : public A64::UserCallbacks {
       GuestCrash(kSigSys, 1, "SYS_SECCOMP", jit->GetPC() - 4, "SVC with an unknown number");
     }
     const Trampoline& t = g_tramps[swi - 1];
-    QueueHostCall(jit, t.host_fn, t.va_list_index);
+    QueueHostCall(jit, t);
   }
 
   void ExceptionRaised(uint64_t pc, A64::Exception ex) override {
@@ -726,7 +742,7 @@ class Env final : public A64::UserCallbacks {
         // pointer (dlsym, eglGetProcAddress, a table): call it as System V
         // and return to the guest's X30, as a bound trampoline would.
         if (HostExecutable(pc)) {
-          QueueHostCall(jit, reinterpret_cast<void*>(pc), VaListIndexOf(reinterpret_cast<void*>(pc)));
+          QueueHostCall(jit, HostSignature(reinterpret_cast<void*>(pc)));
           jit->SetPC(jit->GetRegister(30));
           return;
         }
@@ -904,10 +920,12 @@ class Env final : public A64::UserCallbacks {
     void* fn = nullptr;
     int va_index = -1;
     bool syscall = false;
+    int pointer_variadic_fixed = -1;
   };
 
-  void QueueHostCall(A64::Jit* jit, void* fn, int va_index) {
-    pending_call_ = {fn, va_index, false};
+  void QueueHostCall(A64::Jit* jit, const Trampoline& signature) {
+    pending_call_ = {signature.host_fn, signature.va_list_index, false,
+                     signature.pointer_variadic_fixed};
     jit->HaltExecution(Dynarmic::HaltReason::UserDefined2);
   }
 
@@ -935,7 +953,7 @@ class Env final : public A64::UserCallbacks {
         int64_t result = GuestRawSyscall(jit->GetRegister(8), args);
         jit->SetRegister(0, static_cast<uint64_t>(result));
       } else if (pending.fn != nullptr) {
-        CallHost(jit, pending.fn, pending.va_index);
+        CallHost(jit, pending.fn, pending.va_index, pending.pointer_variadic_fixed);
       } else {
         return;
       }
@@ -945,24 +963,32 @@ class Env final : public A64::UserCallbacks {
   static constexpr size_t kStackSize = 8 << 20;
   static constexpr size_t kGuardSize = 0x10000;
 
-  void CallHost(A64::Jit* jit, void* fn, int va_index) {
+  void CallHost(A64::Jit* jit, void* fn, int va_index, int pointer_variadic_fixed) {
     HostFenvScope host_fenv;
     // AAPCS64 -> System V. X0..X5 are the first six System V integer
     // arguments; X6, X7 are System V arguments 7 and 8, which go on the stack;
-    // any further arguments (a variadic call with more than eight) are on the
-    // guest stack at SP and follow on the host stack. Copying a fixed window
-    // of guest stack words covers them without knowing the real count (the
-    // callee reads only what its signature or format string names).
+    // further arguments are on the guest stack at SP. Preserve the generic
+    // stack window for other signatures. Registered pointer-only variadic
+    // calls instead pass the original banks and stack to their va_list form.
     uint64_t gpr[6], xmm[8];
     for (int i = 0; i < 6; ++i) gpr[i] = jit->GetRegister(i);
     for (int i = 0; i < 8; ++i) xmm[i] = jit->GetVector(i)[0];
     uint64_t stack[2 + 14];
-    stack[0] = jit->GetRegister(6);
-    stack[1] = jit->GetRegister(7);
+    uint64_t nstack = 0;
     uint64_t gsp = jit->GetSP();
-    std::memcpy(&stack[2], reinterpret_cast<void*>(gsp), 14 * 8);
     VaListStorage va;
-    if (va_index >= 0 && va_index < 8) {
+    uint64_t pointer_gp[8];
+    if (pointer_variadic_fixed >= 0) {
+      for (int i = 0; i < 8; ++i) pointer_gp[i] = jit->GetRegister(i);
+      PointerVaList(pointer_gp, reinterpret_cast<void*>(gsp), pointer_variadic_fixed, &va);
+      gpr[pointer_variadic_fixed] = reinterpret_cast<uint64_t>(&va.tag);
+    } else {
+      stack[0] = jit->GetRegister(6);
+      stack[1] = jit->GetRegister(7);
+      std::memcpy(&stack[2], reinterpret_cast<void*>(gsp), 14 * 8);
+      nstack = 16;
+    }
+    if (pointer_variadic_fixed < 0 && va_index >= 0 && va_index < 8) {
       uint64_t& slot = va_index < 6 ? gpr[va_index] : stack[va_index - 6];
       if (slot != 0) {
         char trace[2] = {};
@@ -988,7 +1014,7 @@ class Env final : public A64::UserCallbacks {
         slot = reinterpret_cast<uint64_t>(&va.tag);
       }
     }
-    HostCall call{fn, gpr, xmm, stack, 16, 0, 0};
+    HostCall call{fn, gpr, xmm, stack, nstack, 0, 0};
     // A host->guest call made by this host function runs below the guest's
     // live frames.
     uint64_t saved_stack_cur = stack_cur_;
@@ -1751,9 +1777,26 @@ void AddVaListFunction(const void* fn, int index) {
   }
 }
 
+void AddPointerVariadicFunction(const void* fn, void* va_fn, int fixed_arguments) {
+  // The va_list must fit after the fixed arguments in the host GP registers.
+  if (fn == nullptr || va_fn == nullptr || fixed_arguments < 0 || fixed_arguments >= 6) return;
+  Trampoline signature{va_fn, -1, fixed_arguments};
+  {
+    std::lock_guard<std::mutex> lock(g_va_mutex);
+    g_pointer_variadic_functions[fn] = signature;
+  }
+  std::lock_guard<std::mutex> lock(g_tramp_mutex);
+  auto it = g_tramp_by_fn.find(const_cast<void*>(fn));
+  if (it != g_tramp_by_fn.end()) {
+    uint32_t svc;
+    std::memcpy(&svc, it->second, 4);
+    g_tramps[((svc >> 5) & 0xFFFF) - 1] = signature;
+  }
+}
+
 void* BindHost(void* fn, int va_list_index) {
   if (fn == nullptr) return nullptr;
-  if (va_list_index == -2) va_list_index = VaListIndexOf(fn);
+  Trampoline signature = HostSignature(fn, va_list_index);
   std::lock_guard<std::mutex> lock(g_tramp_mutex);
   auto it = g_tramp_by_fn.find(fn);
   if (it != g_tramp_by_fn.end()) return it->second;
@@ -1761,7 +1804,7 @@ void* BindHost(void* fn, int va_list_index) {
   if (index >= kMaxTramps) return nullptr;
   uint32_t* p = AllocGuestCode(kTrampWords);
   if (p == nullptr) return nullptr;
-  g_tramps[index] = {fn, va_list_index};
+  g_tramps[index] = signature;
   p[0] = Svc(static_cast<uint32_t>(index + 1));
   p[1] = kRet;
   for (size_t i = 2; i < kTrampWords; ++i) p[i] = kBrk;

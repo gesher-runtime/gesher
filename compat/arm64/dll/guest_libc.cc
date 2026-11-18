@@ -699,6 +699,10 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
 void InitGuestLibc() {
   for (const VaFn& v : kVaFunctions) AddVaListFunction(Host(v.name), v.index);
 
+  AddPointerVariadicFunction(Host("sscanf"), Host("vsscanf"), 2);
+  AddPointerVariadicFunction(Host("fscanf"), Host("vfscanf"), 2);
+  AddPointerVariadicFunction(Host("scanf"), Host("vscanf"), 1);
+
   for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
     std::string entry = std::string("__gesher_arm64_") + name;
     void* bridge = Host(entry.c_str());
