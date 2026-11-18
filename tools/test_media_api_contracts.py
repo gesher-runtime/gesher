@@ -55,7 +55,8 @@ def main() -> int:
     yuv_rows_start = ("size_t JpegRowBytes(" if "size_t JpegRowBytes(" in yuv
                       else "void Nv21Rows(")
     sources = {
-        "aaudio": ((section(audio, "bool SetInputDisconnectedLocked(", "aaudio_result_t CheckInputDisconnectLocked(")
+        "aaudio": ("#define HAS_INPUT_DISCONNECT " + str(int("bool SetInputDisconnectedLocked(" in audio)) + "\n")
+                   + ((section(audio, "bool SetInputDisconnectedLocked(", "aaudio_result_t CheckInputDisconnectLocked(")
                     + section(audio, "int32_t SYSV GetState(", "// A timeout is a duration"))
                    if "bool SetInputDisconnectedLocked(" in audio else "")
                    + section(audio, audio_start, "aaudio_result_t SYSV SetBufferSizeInFrames("),
