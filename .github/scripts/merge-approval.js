@@ -242,14 +242,15 @@ async function removeLabel(github, owner, repo, pr, event, why, core) {
   const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
   const now = await labelEvent(github, owner, repo, pr.number);
   if (current.state !== 'open' || current.number !== pr.number ||
-      !hasLabel(current) || now?.id !== event.id) return;
+      !sameTarget(pr, current) || !hasLabel(current) || now?.id !== event.id) return false;
   try {
     await github.rest.issues.removeLabel({owner, repo, issue_number: pr.number, name: LABEL});
   } catch (err) {
-    if (err.status === 404) return;
+    if (err.status === 404) return false;
     throw err;
   }
   core.info('#' + pr.number + ': label removed (' + why + ')');
+  return true;
 }
 
 module.exports = {list, hasLabel, labelEvent, openingBoundary, authorQa,
