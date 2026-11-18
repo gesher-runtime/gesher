@@ -1584,12 +1584,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                         // A finishing trampoline may already have queued a
                                         // result. Remove only its result, not another child's
                                         // result that happens to use the same request code.
-                                        resultSource.pendingResults.removeIf(result ->
-                                                result instanceof PendingActivityResult pending
-                                                        && pending.source == source
-                                                        && result.mRequestCode == source.requestCode
-                                                        && java.util.Objects.equals(result.mResultWho,
-                                                                source.resultWho));
+                                        resultSource.pendingResults.removeIf(result -> {
+                                            if (!(result instanceof PendingActivityResult pending)
+                                                    || pending.source != source
+                                                    || result.mRequestCode != source.requestCode
+                                                    || !java.util.Objects.equals(result.mResultWho,
+                                                            source.resultWho)) return false;
+                                            resultSource.callerState.remove(result.mCallerToken);
+                                            return true;
+                                        });
                                     }
                                     // A forwarded result belongs to the original activity
                                     // record, whose saved state can outlive its process.
