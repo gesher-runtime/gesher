@@ -602,6 +602,21 @@ public final class WifiConfigurationContractTest {
             check(parcel.readInt() == 71 && parcel.readInt() == WifiConfiguration.Status.DISABLED,
                     "Pinned Parcel starts with networkId and status");
         } finally { parcel.recycle(); }
+        // The pinned Android writer requires these containers, even though their
+        // individual entries may be null. Verify each invalid state independently.
+        WifiConfiguration missingWep = new WifiConfiguration();
+        missingWep.wepKeys = null;
+        WifiConfiguration missingProtocols = new WifiConfiguration();
+        missingProtocols.allowedProtocols = null;
+        Parcel invalid = Parcel.obtain();
+        try {
+            expect(NullPointerException.class, () -> missingWep.writeToParcel(invalid, 0),
+                    "Native Parcel rejects a null WEP container");
+            invalid.setDataSize(0);
+            invalid.setDataPosition(0);
+            expect(NullPointerException.class, () -> missingProtocols.writeToParcel(invalid, 0),
+                    "Native Parcel rejects a null protocol container");
+        } finally { invalid.recycle(); }
     }
     private static void assertEnterpriseParcel(WifiEnterpriseConfig expected, WifiEnterpriseConfig actual) throws Exception {
         check(expected.getEapMethod() == actual.getEapMethod() && expected.getPhase2Method() == actual.getPhase2Method()

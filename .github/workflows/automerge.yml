@@ -1,6 +1,6 @@
 name: automerge
 
-# Records exact-head label/QA approval and enables native merge-queue waiting.
+# Records exact-head label approval, rechecks QA after CI and arms auto-merge.
 # Only default-branch scripts execute with this workflow's write permissions.
 
 on:
@@ -8,23 +8,34 @@ on:
     types: [opened, labeled, unlabeled, synchronize, reopened, ready_for_review, converted_to_draft, edited]
   pull_request_review:
     types: [submitted, edited, dismissed]
-  merge_group:
-    types: [checks_requested]
-    branches: [main]
+  workflow_run:
+    workflows: [ci, arm64-windows]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: 'Recheck one existing approval; leave empty for all open PRs'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write       # enable native waiting; never call the merge API
   pull-requests: write  # read PRs, submit/dismiss bot approval reviews
   issues: write         # remove labels; read events and legacy opening receipts
   statuses: write
+  actions: read
+  checks: read
 
 concurrency:
-  group: merge-approval-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
+  group: merge-approval-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   automerge:
+    # Fork review events have read-only tokens. Their QA proof is rechecked by
+    # the privileged workflow_run event before the required gate turns green.
+    if: github.event_name != 'pull_request_review' || github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -36,5 +47,5 @@ jobs:
       - uses: actions/github-script@v7
         with:
           script: |
-            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/native-merge-queue.js`);
+            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/label-automerge.js`);
             await run({github, context, core});

@@ -121,6 +121,25 @@ class XsdcDependencyTest(unittest.TestCase):
         self.assertEqual(self.server.requests, ['/primary', '/primary', '/alternate'])
         self.assert_cache(PAYLOAD)
 
+    def test_central_rate_limits_use_an_independent_verified_mirror(self):
+        self.builder.XSDC_COMMONS_CLI_URLS += (self.builder.XSDC_COMMONS_CLI_URLS[0].replace('/primary', '/mirror'),)
+        for path in ('/primary', '/alternate'):
+            self.reply(path, (429, b'rate limited', None))
+        self.reply('/mirror', (200, PAYLOAD, None))
+        self.builder.xsdc()
+        self.assertEqual(self.server.requests,
+                         ['/primary', '/primary', '/alternate', '/alternate', '/mirror'])
+        self.assert_cache(PAYLOAD)
+
+    def test_rate_limited_sources_cannot_install_wrong_mirror_bytes(self):
+        self.builder.XSDC_COMMONS_CLI_URLS += (self.builder.XSDC_COMMONS_CLI_URLS[0].replace('/primary', '/mirror'),)
+        for path in ('/primary', '/alternate'):
+            self.reply(path, (429, b'rate limited', None))
+        self.reply('/mirror', (200, b'unverified mirror content', None))
+        with self.assertRaisesRegex(RuntimeError, 'SHA-256 mismatch'):
+            self.builder.xsdc()
+        self.assert_cache(None)
+
     def test_all_404_responses_fail_after_bounded_attempts(self):
         with self.assertRaisesRegex(RuntimeError, 'cannot acquire verified Commons CLI 1.2'):
             self.builder.xsdc()

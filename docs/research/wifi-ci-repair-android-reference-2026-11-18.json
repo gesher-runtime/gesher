@@ -1,0 +1,94 @@
+{
+  "recorded_on": "2026-11-18",
+  "scope": "Wi-Fi configuration fixture integration repair",
+  "device": {
+    "api": 36,
+    "release": "16",
+    "abi": "x86_64",
+    "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+    "security_patch": "2025-07-05"
+  },
+  "configuration": {
+    "source_build_parent": "f1a7e6d8392378073a2095149866a22b44920a25",
+    "source_sha256": {
+      "app/java/android/net/wifi/WifiConfiguration.java": "cb22a3d89630fb8e181a78a3c7a849e74b456854b0d006eab0a5049b7ef30bdf",
+      "app/java/android/net/wifi/WifiEnterpriseConfig.java": "7c7f53a802c07704d42700aa2db3a185c4753368c4fbeb3800d0b3dd9539deb0",
+      "app/java/android/net/wifi/SecurityParams.java": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060",
+      "app/java/android/net/wifi/ParcelUtil.java": "a35e0d2b112833ae5e8eb74b266f845bb40f6249d473f841e11e29f2d0f454c8",
+      "app/java/android/net/wifi/OuiKeyedData.java": "670ea134264cbc80ae7eca2f7beed833475c9aa6f03443cc2ee9582c76b0734a",
+      "app/java/android/net/wifi/util/PersistableBundleUtils.java": "82a38ffde5621d1a0c7c6b8c71ce535502f8c71a68397eb8586742f171094730",
+      "tests/dex-services/gesher/services/WifiConfigurationContractTest.java": "8b0a195d93b6542b458f4de4e6d585195ebe25c5252f618032d6c8a7cca76f46",
+      "tests/dex-services/gesher/services/WifiConfigurationCertificates.java": "e160dda94dbe27a36274db43149f9e96175faddcf542ffdb38a1fecf2ae96c13",
+      "tests/wifi-configuration/WifiConfigurationOracle.java": "e37b5b9fb2a28c8919edeba2c6810660e52fb8212b4d01c33f7e00214495ef06"
+    },
+    "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "d8_sha256": "e0c2803fbf9a1258051c3202daad46a2e00f33a0eb91258ac9fd373df0a832ce",
+    "artifacts": {
+      "reference.jar": {
+        "sha256": "e125f455af1bc043967c7ed4a8f6d065b26fc31f80f8fe2151fdc945a7ff82c2",
+        "bytes": 19396
+      },
+      "reference-classes.jar": {
+        "sha256": "e1080c784aebcf1a033645fbd9ce78cca0ae969e59973a83a2439b833875e1f1",
+        "bytes": 19529
+      },
+      "launcher-classes.jar": {
+        "sha256": "32dde06e9aeeee44d24ed92585df1689f00258123eb64a80a7820adf8e423d63",
+        "bytes": 3122
+      },
+      "launcher.jar": {
+        "sha256": "1f38ec9b09ee8813e56617ae6081ba7305d0dbdda0a73564594b20ccaddec519",
+        "bytes": 2744
+      },
+      "candidate-classes.jar": {
+        "sha256": "10dadbc55a34b706733e9c168de86a14457a743166f8471c880d22fc68edda85",
+        "bytes": 95002
+      },
+      "candidate.jar": {
+        "sha256": "5cb47f047309c0666d3673221426c3b80491366961848f4ae309889a5557779a",
+        "bytes": 56828
+      }
+    },
+    "reference": {
+      "receipt_sha256": "d92fd3c2725613801309b1de9e3fe7ea6a87a4cc77c427ec5a81498e40fbd985",
+      "argv": [
+        "shell",
+        "env",
+        "CLASSPATH=/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/launcher.jar",
+        "app_process",
+        "/system/bin",
+        "gesher.services.WifiConfigurationOracle",
+        "reference",
+        "/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/reference.jar"
+      ],
+      "exit_code": 0,
+      "seconds": 11.904,
+      "output_sha256": "bbf76e880deea4630a6b291dc36cc29e501ed77a4ad8a0a61bf48a2d9bd54393",
+      "output": "Wi-Fi oracle mode=reference; SDK=36; fingerprint=Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys\nprovider android.net.wifi.WifiConfiguration=java.lang.BootClassLoader@143f535\nprovider android.net.wifi.WifiEnterpriseConfig=java.lang.BootClassLoader@143f535\nprovider android.net.wifi.SecurityParams=java.lang.BootClassLoader@143f535\nprovider android.net.wifi.ParcelUtil=java.lang.BootClassLoader@143f535\nprovider android.net.wifi.OuiKeyedData=java.lang.BootClassLoader@143f535\nprovider android.net.wifi.util.PersistableBundleUtils=java.lang.BootClassLoader@143f535\nWifiConfigurationContractTest all passed: 512 checks; parcel=true\nWi-Fi oracle reference complete with real Android native Parcel\n"
+    },
+    "candidate": {
+      "receipt_sha256": "4eb831ca03000e8714ca961404a6faafee4325d4b323f1a8bd579ecb5adf4c1e",
+      "argv": [
+        "shell",
+        "env",
+        "CLASSPATH=/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/launcher.jar",
+        "app_process",
+        "/system/bin",
+        "gesher.services.WifiConfigurationOracle",
+        "candidate",
+        "/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/candidate.jar"
+      ],
+      "exit_code": 0,
+      "seconds": 12.322,
+      "output_sha256": "91d27085389ac3fb7a41c24fb85419941dd38585eb90f39963852a12e72e6457",
+      "output": "Wi-Fi oracle mode=candidate; SDK=36; fingerprint=Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys\nprovider android.net.wifi.WifiConfiguration=gesher.services.WifiConfigurationOracle$CandidateLoader[DexPathList[[zip file \"/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.WifiEnterpriseConfig=gesher.services.WifiConfigurationOracle$CandidateLoader[DexPathList[[zip file \"/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.SecurityParams=gesher.services.WifiConfigurationOracle$CandidateLoader[DexPathList[[zip file \"/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.ParcelUtil=gesher.services.WifiConfigurationOracle$CandidateLoader[DexPathList[[zip file \"/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.OuiKeyedData=gesher.services.WifiConfigurationOracle$CandidateLoader[DexPathList[[zip file \"/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.util.PersistableBundleUtils=gesher.services.WifiConfigurationOracle$CandidateLoader[DexPathList[[zip file \"/data/local/tmp/gesher-ci-wifi-config-5cb47f047309/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nWifiConfigurationContractTest all passed: 512 checks; parcel=true\nWi-Fi oracle candidate complete with real Android native Parcel\n"
+    },
+    "checks_per_provider": 512,
+    "reference_payload_shared_between_candidates": true
+  },
+  "limitations": [
+    "This is actual Android native Parcel evidence, not Windows runtime evidence.",
+    "The configuration corpus tests field behavior and stream consumption; it does not compare complete configuration wire bytes.",
+    "Source hashes bind the executed payload to the repair source; the payload was prepared from the integration commit plus the recorded fixture edit."
+  ]
+}

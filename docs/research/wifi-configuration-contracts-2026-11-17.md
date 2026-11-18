@@ -174,6 +174,29 @@ The local class/DEX checks establish this candidate's definitions; they do not
 substitute for checking a complete ordered Windows boot artifact. The native
 fixture must execute successfully through the distribution's actual boot path.
 
+## Integration fixture repair (2026-11-18)
+
+The Windows services run on PR #129's original head failed in the older
+`WifiUnsupportedTest` fixture after that fixture set both `wepKeys` and
+`allowedProtocols` to null. The pinned
+[AOSP Android 16 writer](https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/WifiConfiguration.java)
+iterates the WEP array and calls `cardinality()` on security bitsets directly.
+The containers are required; nullable WEP elements remain valid. The fixture
+now independently expects `NullPointerException` for each invalid container,
+restoring a valid WEP array before testing the bitset. Production serialization
+is unchanged. Its existing completion count remains 42.
+
+The SDK-compiled configuration corpus now independently exercises both invalid
+containers against each provider with real native Parcel. Actual Android's
+reference and both isolated PR #127 and PR #129 candidate families each pass
+**512 checks**, including the two new rejection cases. The updated
+[execution record](wifi-ci-repair-android-reference-2026-11-18.json) includes the
+device profile, complete outputs, source and payload hashes. Each PR records
+its own production candidate because PR #129 includes the metered helper.
+These runs establish the fixture's Android behavior; they do not establish a
+Windows runtime pass or complete configuration wire-byte equivalence. Both
+Windows services jobs remain required on the final published source.
+
 ## Remaining A02 scope
 
 This closes the selected 162 value-family descriptor gaps, not issue #56 A02 as
