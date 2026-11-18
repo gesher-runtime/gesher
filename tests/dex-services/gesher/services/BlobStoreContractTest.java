@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Collections;
@@ -143,7 +145,16 @@ public final class BlobStoreContractTest {
         try (BlobStoreManager.Session resumed = manager.openSession(id)) {
             check(resumed.getSize() == prefix && resumed.isPublicAccessAllowed(),
                     "reopen preserves both bytes and access modes");
-            write(resumed.openWrite(prefix, bytes.length), Arrays.copyOfRange(bytes, prefix, bytes.length));
+            expect(IOException.class, () -> resumed.openWrite(0, Long.MAX_VALUE),
+                    "impossible allocation fails without changing the session");
+            check(resumed.getSize() == prefix, "rejected allocation preserves the staged prefix");
+            ParcelFileDescriptor allocated = resumed.openWrite(prefix, bytes.length);
+            check(allocated.getStatSize() == bytes.length && resumed.getSize() == bytes.length,
+                    "positive length extends the backing file before any guest write");
+            check(android.system.Os.lseek(allocated.getFileDescriptor(), 0,
+                            android.system.OsConstants.SEEK_CUR) == prefix,
+                    "allocation preserves the initial write offset");
+            write(allocated, Arrays.copyOfRange(bytes, prefix, bytes.length));
             check(Arrays.equals(bytes, read(resumed.openRead())), "offset write preserves the prefix");
             try (var stale = new ParcelFileDescriptor.AutoCloseOutputStream(resumed.openWrite(0, -1))) {
                 check(commit(resumed) == BlobStoreManager.COMMIT_RESULT_SUCCESS, "verified commit succeeds");
@@ -153,6 +164,29 @@ public final class BlobStoreContractTest {
         }
         expect(SecurityException.class, () -> manager.openSession(id), "committed session cannot reopen");
         check(manager.getLeaseInfo(handle) == null, "available blob without caller lease returns null");
+
+        long failedPublication = manager.createSession(handle);
+        try (BlobStoreManager.Session session = manager.openSession(failedPublication)) {
+            write(session.openWrite(0, -1), bytes);
+            Path root = android.os.Environment.getDataDirectory().toPath().resolve("system/gesher-blobs");
+            Path index = root.resolve("index"), backup = root.resolve("fixture-index-backup");
+            Files.move(index, backup);
+            try {
+                Files.createDirectory(index);
+                try {
+                    check(commit(session) == BlobStoreManager.COMMIT_RESULT_ERROR,
+                            "publication fails when the index cannot be atomically replaced");
+                    expect(SecurityException.class, () -> manager.openSession(failedPublication),
+                            "storage failure leaves a finalized session consumed");
+                    check(Arrays.equals(bytes, read(manager.openBlob(handle))),
+                            "failed recommit preserves earlier published bytes");
+                } finally {
+                    Files.delete(index);
+                }
+            } finally {
+                Files.move(backup, index);
+            }
+        }
 
         BlobHandle mismatch = handle(bytes, tag + "-mismatch", expiry);
         long mismatchId = manager.createSession(mismatch);
@@ -171,8 +205,13 @@ public final class BlobStoreContractTest {
         manager.acquireLease(handle, "expires immediately", System.currentTimeMillis() - 1000);
         check(!manager.getLeasedBlobs().contains(handle), "expired lease is omitted");
         manager.acquireLease(handle, android.R.string.ok);
-        check(manager.getLeaseInfo(handle).getDescriptionResId() == android.R.string.ok,
+        var resourceLease = manager.getLeaseInfo(handle);
+        check(resourceLease.getDescriptionResId() == android.R.string.ok,
                 "resource-based description retains its resource identity");
+        check(context.getString(android.R.string.ok).contentEquals(resourceLease.getDescription()),
+                "resource-based description retains the resolved fallback text");
+        check(resourceLease.getExpiryTimeMillis() == 0,
+                "direct lease metadata keeps an indefinite lease expiry at zero");
         manager.acquireLease(handle, "persistent consumer");
         check(manager.getLeasedBlobs().contains(handle), "lease listing includes the blob");
         check("persistent consumer".contentEquals(manager.getLeaseInfo(handle).getDescription()),
@@ -185,6 +224,8 @@ public final class BlobStoreContractTest {
                 .findFirst().orElseThrow();
         check(info.getSizeBytes() == bytes.length && info.getLeases().size() == 1,
                 "administrative metadata includes size and active lease");
+        check(info.getLeases().get(0).getExpiryTimeMillis() == expiry,
+                "administrative lease reporting uses the effective blob expiry");
         check(service.queryBlobsForUser(10).isEmpty(), "unknown user does not expose managed blobs");
         CompletableFuture<Boolean> idle = new CompletableFuture<>();
         service.waitForIdle(new RemoteCallback(bundle -> idle.complete(bundle != null && bundle.isEmpty())));
@@ -199,6 +240,8 @@ public final class BlobStoreContractTest {
         IBinder registryAfterRestart = Services.create(Collections.emptyList()).get(Context.BLOB_STORE_SERVICE);
         IBlobStoreManager restored = IBlobStoreManager.Stub.asInterface(registryAfterRestart);
         check(restored.getLeasedBlobs("android").contains(handle), "new service reloads durable lease");
+        expect(SecurityException.class, () -> restored.openSession(failedPublication, "android"),
+                "restart cannot reopen a finalized stage after publication failure");
         check(Arrays.equals(bytes, read(restored.openBlob(handle, "android"))), "new service reloads committed bytes");
         IBlobStoreSession sessionAfterRestart = restored.openSession(pendingId, "android");
         check(sessionAfterRestart.getSize() == prefix, "new service reloads partial session");

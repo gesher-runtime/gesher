@@ -13,7 +13,6 @@ import android.app.blob.IBlobStoreSession;
 import android.app.blob.LeaseInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.Signature;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.content.res.ResourceId;
@@ -26,6 +25,8 @@ import android.os.Process;
 import android.os.RemoteCallback;
 import android.os.RemoteException;
 import android.os.UserHandle;
+import android.system.ErrnoException;
+import android.system.Os;
 import android.util.DisplayMetrics;
 
 import java.io.BufferedInputStream;
@@ -36,16 +37,20 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -61,6 +66,7 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
     private static final int MAX_GRANTS = 300;
     private static final int MAX_INDEX_ENTRIES = 100_000;
     private static final int INDEX_VERSION = 1;
+    private static final String CONSUMED_SUFFIX = ".consumed";
     private static final Access PRIVATE = new Access(false, false, List.of());
 
     private final PackageManagerService mPm;
@@ -73,6 +79,8 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
     });
     private final SecureRandom mRandom = new SecureRandom();
     private final Map<Long, Session> mOpen = new LinkedHashMap<>();
+    // Committed sessions whose index retirement still needs to be persisted.
+    private final Set<Long> mConsumed = new HashSet<>();
     private Index mIndex;
 
     BlobStoreService(PackageManagerService pm, CallerIdentity callers, File root) {
@@ -167,6 +175,9 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
                 throw new IOException("BlobStore is not a directory");
             }
             mIndex = readIndex();
+            for (Stage stage : mIndex.sessions.values()) {
+                if (consumedMarker(stage).exists()) mConsumed.add(stage.id);
+            }
             mWorker.scheduleWithFixedDelay(this::maintain, 0, 1, TimeUnit.HOURS);
             return mIndex;
         } catch (IOException error) {
@@ -206,7 +217,8 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         BlobHandle key = checkedHandle(handle);
         Owner owner = requireOwner(packageName);
         Index state = index();
-        long active = state.sessions.values().stream().filter(stage -> stage.owner.equals(owner)).count();
+        long active = state.sessions.values().stream()
+                .filter(stage -> stage.owner.equals(owner) && !mConsumed.contains(stage.id)).count();
         if (active >= MAX_SESSIONS) throw limit("Too many active blob sessions");
         File file = null;
         try {
@@ -229,7 +241,8 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         if (id <= 0) throw new IllegalArgumentException("Session ID must be positive");
         Stage stage = index().sessions.get(id);
         Session open = mOpen.get(id);
-        if (stage == null || !stage.owner.equals(owner) || (open != null && open.committing)
+        if (stage == null || !stage.owner.equals(owner) || mConsumed.contains(id)
+                || (open != null && open.committing)
                 || !validFile(stage.fileName)) {
             throw new SecurityException("No accessible blob session");
         }
@@ -274,20 +287,10 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             if (recipient == null) continue;
             if (allowed.sameSignature && recipient.signaturesMatch(mPm.get(owner.name))) return true;
             for (Grant grant : allowed.grants) {
-                if (grant.name.equals(caller.name) && hasCertificate(recipient, grant.sha256)) {
+                if (grant.name.equals(caller.name) && recipient.hasVerifiedSigningCertificate(grant.sha256)) {
                     return true;
                 }
             }
-        }
-        return false;
-    }
-
-    private static boolean hasCertificate(ApkPackage pkg, byte[] certificate) {
-        Signature[] signers = pkg.verifiedSignatures();
-        if (signers == null) return false;
-        MessageDigest digest = BlobStoreFiles.sha256();
-        for (Signature signature : signers) {
-            if (MessageDigest.isEqual(certificate, digest.digest(signature.toByteArray()))) return true;
         }
         return false;
     }
@@ -310,6 +313,22 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             return ParcelFileDescriptor.open(dataFile(name), ParcelFileDescriptor.MODE_READ_ONLY);
         } catch (IOException error) {
             throw failure(error);
+        }
+    }
+
+    private void allocateWriteLength(ParcelFileDescriptor descriptor, long length) throws IOException {
+        var fd = descriptor.getFileDescriptor();
+        try {
+            long blocks = Math.max(0, Os.fstat(fd).st_blocks);
+            long allocated = Math.min(blocks, Long.MAX_VALUE / 512) * 512;
+            if (length > allocated
+                    && length - allocated > Services.StorageService.allocatableBytes(mRoot, 0)) {
+                throw new IOException("Insufficient allocatable space for blob write");
+            }
+            // length describes the whole file, independently of the requested seek offset.
+            Os.posix_fallocate(fd, 0, length);
+        } catch (ErrnoException error) {
+            throw error.rethrowAsIOException();
         }
     }
 
@@ -345,22 +364,19 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             }
             synchronized (BlobStoreService.this) {
                 File file = dataFile(opened().fileName);
-                long size = file.length();
-                if (length > size && length - size > mRoot.getUsableSpace()) {
-                    throw failure(new IOException("Insufficient free space for blob write"));
-                }
                 ParcelFileDescriptor descriptor = null;
                 try {
-                    descriptor = ParcelFileDescriptor.open(file,
-                            ParcelFileDescriptor.MODE_READ_WRITE);
+                    descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_WRITE);
                     descriptor.seekTo(offset);
+                    if (length > 0) allocateWriteLength(descriptor, length);
                     issuedWriter = true;
                     return descriptor;
-                } catch (IOException error) {
+                } catch (IOException | RuntimeException error) {
                     if (descriptor != null) {
                         try { descriptor.close(); } catch (IOException close) { error.addSuppressed(close); }
                     }
-                    throw failure(error);
+                    if (error instanceof IOException io) throw failure(io);
+                    throw (RuntimeException) error;
                 }
             }
         }
@@ -488,17 +504,25 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
                         // An uninstall may still roll back. Keep the saved stage
                         // available for the recovered owner to reopen.
                         mOpen.remove(stage.id);
-                    } else if (candidate != null && publish(stage, candidate)) {
-                        result = BlobStoreManager.COMMIT_RESULT_SUCCESS;
-                        candidate = null;
                     } else {
-                        abandon(stage);
+                        // Persist consumption first. A failed blob publication must not
+                        // roll back session retirement or an earlier valid contribution.
+                        retireCommit(stage);
+                        if (candidate != null && publish(stage, candidate)) {
+                            result = BlobStoreManager.COMMIT_RESULT_SUCCESS;
+                            candidate = null;
+                        }
                     }
                 }
             }
         } catch (RuntimeException error) {
-            // The previously published index remains authoritative after I/O failure.
-            synchronized (this) { mOpen.remove(stage.id); }
+            synchronized (this) {
+                if (mIndex.sessions.get(stage.id) == stage && !mConsumed.contains(stage.id)) {
+                    try { retireCommit(stage); }
+                    catch (RuntimeException retirement) { error.addSuppressed(retirement); }
+                }
+            }
+            SystemServer.log("BlobStore commit unavailable: " + error.getClass().getSimpleName());
         } finally {
             BlobStoreFiles.discard(candidate);
         }
@@ -508,19 +532,47 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         }
     }
 
+    private File consumedMarker(Stage stage) {
+        return dataFile(stage.fileName + CONSUMED_SUFFIX);
+    }
+
+    private void retireCommit(Stage stage) {
+        mOpen.remove(stage.id);
+        mConsumed.add(stage.id);
+        try {
+            Index next = new Index(mIndex);
+            next.sessions.remove(stage.id);
+            update(next);
+            mConsumed.remove(stage.id);
+        } catch (RuntimeException error) {
+            // A failed atomic replacement can leave the old index readable, and
+            // an outstanding Windows descriptor can prevent deleting its data file.
+            // Record retirement separately so neither can resurrect the session.
+            try (FileChannel marker = FileChannel.open(consumedMarker(stage).toPath(),
+                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+                marker.force(true);
+            } catch (java.nio.file.FileAlreadyExistsException alreadyConsumed) {
+                // An earlier retirement attempt has already recorded the marker.
+            } catch (IOException markerError) {
+                error.addSuppressed(markerError);
+            }
+            throw error;
+        } finally {
+            BlobStoreFiles.discard(dataFile(stage.fileName));
+        }
+    }
+
     private boolean publish(Stage stage, File candidate) {
         long now = System.currentTimeMillis();
         if (!currentlyInstalled(stage.owner) || stage.handle.isExpired()) return false;
         Blob existing = mIndex.blobs.get(stage.handle);
         if (existing != null && !validFile(existing.fileName)) existing = null;
         Contribution previous = existing == null ? null : existing.contributions.get(stage.owner.name);
-        if (previous == null || !previous.owner.equals(stage.owner)) {
-            long committed = mIndex.blobs.values().stream().filter(blob -> {
-                Contribution contribution = blob.contributions.get(stage.owner.name);
-                return contribution != null && contribution.owner.equals(stage.owner);
-            }).count();
-            if (committed >= MAX_COMMITTED) return false;
-        }
+        long committed = mIndex.blobs.values().stream().filter(blob -> {
+            Contribution contribution = blob.contributions.get(stage.owner.name);
+            return contribution != null && contribution.owner.equals(stage.owner);
+        }).count();
+        if (committed >= MAX_COMMITTED) return false;
         Map<String, Contribution> contributions = existing == null
                 ? new LinkedHashMap<>() : new LinkedHashMap<>(existing.contributions);
         long committedAt = previous != null && previous.owner.equals(stage.owner)
@@ -532,18 +584,15 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
                 : new Blob(existing.id, existing.handle, existing.fileName, existing.size,
                         existing.unleasedSince, contributions, existing.leases);
         Index next = new Index(mIndex);
-        next.sessions.remove(stage.id);
         next.blobs.put(stage.handle, blob);
         update(next);
-        mOpen.remove(stage.id);
-        BlobStoreFiles.discard(dataFile(stage.fileName));
         if (existing != null) BlobStoreFiles.discard(candidate);
         return true;
     }
 
     private boolean liveLease(Blob blob, Owner owner, long now) {
         Lease lease = blob.leases.get(owner.name);
-        return lease != null && lease.owner.equals(owner) && lease.active(now) && !blob.handle.isExpired();
+        return lease != null && lease.owner.equals(owner) && lease.active(now);
     }
 
     private long quota(Owner owner, long now) {
@@ -576,7 +625,9 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         Owner owner = requireOwner(packageName);
         long now = System.currentTimeMillis();
         Blob blob = accessible(handle, owner, now);
-        return liveLease(blob, owner, now) ? leaseInfo(blob, blob.leases.get(owner.name)) : null;
+        if (!liveLease(blob, owner, now)) return null;
+        Lease lease = blob.leases.get(owner.name);
+        return leaseInfo(lease, lease.expiry);
     }
 
     @Override public synchronized void acquireLease(BlobHandle handle, int descriptionResId,
@@ -590,24 +641,22 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         }
         long now = System.currentTimeMillis();
         Blob blob = accessible(key, owner, now);
-        if (!liveLease(blob, owner, now)) {
-            long live = mIndex.blobs.values().stream().filter(item -> liveLease(item, owner, now)).count();
-            if (live >= MAX_LEASED || blob.size > quota(owner, now)) throw limit("Blob lease quota exceeded");
-        }
+        long live = mIndex.blobs.values().stream().filter(item -> liveLease(item, owner, now)).count();
+        if (live >= MAX_LEASED || blob.size > quota(owner, now)) throw limit("Blob lease quota exceeded");
         String text = description == null ? null
                 : description.subSequence(0, Math.min(description.length(), 300)).toString();
-        String resourceName = resource ? leaseResource(owner.name, resources -> {
-            resources.getText(descriptionResId);
-            return resources.getResourceName(descriptionResId);
-        }) : null;
+        Lease lease = resource ? leaseResource(owner.name, resources -> new Lease(owner, expiry,
+                resources.getResourceName(descriptionResId),
+                text == null ? resources.getString(descriptionResId) : text))
+                : new Lease(owner, expiry, null, text);
         Map<String, Lease> leases = new LinkedHashMap<>(blob.leases);
-        leases.put(owner.name, new Lease(owner, expiry, resourceName, text));
+        leases.put(owner.name, lease);
         Index next = new Index(mIndex);
         next.blobs.put(blob.handle, withLeases(blob, leases, now));
         update(next);
     }
 
-    private LeaseInfo leaseInfo(Blob blob, Lease lease) {
+    private LeaseInfo leaseInfo(Lease lease, long expiry) {
         int resourceId = 0;
         if (lease.resourceName != null) {
             try {
@@ -617,7 +666,6 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
                 // An app update can remove the resource. The lease still exists.
             }
         }
-        long expiry = lease.expiry == 0 ? blob.handle.getExpiryTimeMillis() : lease.expiry;
         return new LeaseInfo(lease.owner.name, expiry, resourceId, lease.description);
     }
 
@@ -700,7 +748,10 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             if (blob.handle.isExpired() || !validFile(blob.fileName)) continue;
             List<LeaseInfo> leases = new ArrayList<>();
             for (Lease lease : blob.leases.values()) {
-                if (lease.active(now) && currentlyInstalled(lease.owner)) leases.add(leaseInfo(blob, lease));
+                if (lease.active(now) && currentlyInstalled(lease.owner)) {
+                    long expiry = lease.expiry == 0 ? blob.handle.getExpiryTimeMillis() : lease.expiry;
+                    leases.add(leaseInfo(lease, expiry));
+                }
             }
             if (leases.isEmpty() && blob.contributions.values().stream()
                     .noneMatch(contribution -> currentlyInstalled(contribution.owner))) continue;
@@ -738,7 +789,7 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         for (Stage stage : mIndex.sessions.values()) {
             // No committing operation shares the worker with maintenance.
             // Removal-pending packages still exist until Installer commits removal.
-            if (!validFile(stage.fileName) || !currentlyInstalled(stage.owner)
+            if (mConsumed.contains(stage.id) || !validFile(stage.fileName) || !currentlyInstalled(stage.owner)
                     || now - dataFile(stage.fileName).lastModified() >= SESSION_LIFETIME
                     || stage.handle.isExpired()) {
                 next.sessions.remove(stage.id);
@@ -768,15 +819,23 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         }
         if (!next.sessions.equals(mIndex.sessions) || !next.blobs.equals(mIndex.blobs)) {
             update(next);
-            for (Stage stage : expiredStages) mOpen.remove(stage.id);
+            for (Stage stage : expiredStages) {
+                mOpen.remove(stage.id);
+                mConsumed.remove(stage.id);
+            }
         }
         var retained = new java.util.HashSet<String>();
-        for (Stage stage : mIndex.sessions.values()) retained.add(stage.fileName);
+        for (Stage stage : mIndex.sessions.values()) {
+            retained.add(stage.fileName);
+            if (mConsumed.contains(stage.id)) retained.add(consumedMarker(stage).getName());
+        }
         for (Blob blob : mIndex.blobs.values()) retained.add(blob.fileName);
         try (var files = Files.newDirectoryStream(mRoot.toPath())) {
             for (var file : files) {
                 String name = file.getFileName().toString();
-                if ((isDataName(name) || (name.startsWith("index-") && name.endsWith(".tmp")))
+                boolean marker = name.endsWith(CONSUMED_SUFFIX)
+                        && isDataName(name.substring(0, name.length() - CONSUMED_SUFFIX.length()));
+                if ((isDataName(name) || marker || (name.startsWith("index-") && name.endsWith(".tmp")))
                         && !retained.contains(name)) BlobStoreFiles.discard(file.toFile());
             }
         }
