@@ -569,6 +569,13 @@ public final class ActivityFinishFixture {
         });
         List<ResultInfo> pending = (List<ResultInfo>) get(parent, "pendingResults");
         check(pending.size() == 2, "Fixture did not queue both ordinary child results");
+        ResultInfo childResult = pending.get(0);
+        ResultInfo siblingResult = pending.get(1);
+        Object callerState = get(parent, "callerState");
+        var callerSnapshot = callerState.getClass().getDeclaredMethod("get", IBinder.class);
+        callerSnapshot.setAccessible(true);
+        check(callerSnapshot.invoke(callerState, childResult.mCallerToken) != null,
+                "Fixture did not retain the queued caller snapshot");
         Field opener = field(h.atmType, "sOpenExternalUrl");
         Object previous = opener.get(null);
         try {
@@ -581,6 +588,10 @@ public final class ActivityFinishFixture {
             check(pending.get(0).mResultCode == Activity.RESULT_OK
                             && pending.get(1).mResultCode == Activity.RESULT_CANCELED,
                     "Pending result replacement changed the sibling's result or order");
+            check(callerSnapshot.invoke(callerState, childResult.mCallerToken) == null,
+                    "Forwarding retained the discarded result's caller snapshot");
+            check(callerSnapshot.invoke(callerState, siblingResult.mCallerToken) != null,
+                    "Forwarding removed the sibling result's caller snapshot");
         } finally { opener.set(null, previous); }
         System.out.println("External URL forwarding: original route, conflicts, ownership and pending results passed");
     }

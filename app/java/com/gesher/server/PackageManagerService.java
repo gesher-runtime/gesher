@@ -955,6 +955,28 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no radio to report.
         }
+        try {
+            addCameraFeatures(FEATURES, WindowsCamera.devices());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no cameras to report.
+        }
+    }
+
+    /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */
+    static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            List<WindowsCamera.Device> cameras) {
+        if (cameras == null || cameras.isEmpty()) return;
+        addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
+        for (WindowsCamera.Device camera : cameras) {
+            if (camera.isRearFacing()) addFeature(features, PackageManager.FEATURE_CAMERA);
+        }
+    }
+
+    private static void addFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, String name) {
+        android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
+        f.name = name;
+        features.put(name, f);
     }
 
     /** The Bluetooth features of {@code adapter} (none without a radio). */

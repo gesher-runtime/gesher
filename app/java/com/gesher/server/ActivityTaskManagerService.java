@@ -1903,9 +1903,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (recipient != null) {
             // A finishing trampoline may already have queued its result. Preserve
             // results from other children, even with identical who/request codes.
-            recipient.pendingResults.removeIf(result -> result instanceof PendingActivityResult pending
-                    && pending.source == source && result.mRequestCode == source.requestCode
-                    && java.util.Objects.equals(result.mResultWho, source.resultWho));
+            ActivityRecord target = recipient;
+            target.pendingResults.removeIf(result -> {
+                if (!(result instanceof PendingActivityResult pending)
+                        || pending.source != source || result.mRequestCode != source.requestCode
+                        || !java.util.Objects.equals(result.mResultWho, source.resultWho)) return false;
+                target.callerState.remove(result.mCallerToken);
+                return true;
+            });
         }
         return route;
     }

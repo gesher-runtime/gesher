@@ -57,6 +57,7 @@ public final class UiMessages {
             case "account_name": value = lang.equals("he") ? "\n\u05d7\u05e9\u05d1\u05d5\u05df: " : "\nAccount: "; break;
             case "account_token": value = lang.equals("he") ? "\n\u05e1\u05d5\u05d2 \u05d0\u05e1\u05d9\u05de\u05d5\u05df: " : "\nToken type: "; break;
             case "camera_name": value = lang.equals("he") ? "\u05de\u05e6\u05dc\u05de\u05ea \u05d2\u05e9\u05e8" : "Gesher Camera"; break;
+            case "camera_selection_restart": value = lang.equals("he") ? "\u05db\u05d3\u05d9 \u05dc\u05d4\u05d7\u05d9\u05dc \u05d0\u05ea \u05d1\u05d7\u05d9\u05e8\u05ea \u05d4\u05de\u05e6\u05dc\u05de\u05d4, \u05e1\u05d2\u05d5\u05e8 \u05d0\u05ea \u05d9\u05d9\u05e9\u05d5\u05de\u05d9 Android \u05d5\u05d4\u05e4\u05e2\u05dc gesher-app shutdown." : "Close your Android apps and run gesher-app shutdown for the camera change to take effect."; break;
             case "camera_take": value = lang.equals("he") ? "\u05e6\u05d9\u05dc\u05d5\u05dd \u05ea\u05de\u05d5\u05e0\u05d4" : "Take photo"; break;
             case "camera_cancel": value = lang.equals("he") ? "\u05d1\u05d9\u05d8\u05d5\u05dc" : "Cancel"; break;
             case "no_device": value = lang.equals("he") ? "\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 \u05d0\u05d9\u05e0\u05d4 \u05e4\u05d5\u05e2\u05dc\u05ea" : "no Gesher device is running"; break;
