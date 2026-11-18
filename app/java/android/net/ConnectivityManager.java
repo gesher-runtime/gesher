@@ -657,7 +657,13 @@ public class ConnectivityManager {
                 sCallbacks.put(cb, r);
                 cb.mWasRegistered = true;
                 first = sCurrent != null ? sCurrent : NO_NETWORK;
-                if (timeoutMs > 0) {
+                // Publish known availability before its deadline, as Android
+                // processes registration before the timeout. A descheduled
+                // registering thread must not put the initial snapshot behind
+                // an already-due timeout in the Handler's timestamp queue.
+                r.post(first);
+                if (timeoutMs > 0 && r.active && !r.everAvailable
+                        && sCallbacks.get(cb) == r) {
                     r.timeout = () -> {
                         Listener retiredListener;
                         synchronized (sLock) {
@@ -670,9 +676,6 @@ public class ConnectivityManager {
                     };
                     if (!r.handler.postDelayed(r.timeout, timeoutMs)) r.timeout = null;
                 }
-                // The PendingIntent owner is already visible before delivery can
-                // cancel/release it, and concurrent replacements cannot orphan it.
-                r.post(first);
             }
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();

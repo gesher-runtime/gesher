@@ -134,6 +134,54 @@ public final class ConnectivityCallbackContractTest {
         }
         int deadlines() { synchronized (tasks) { prune(); return (int)tasks.stream().filter(t -> t.delayed).count(); } }
     }
+    /** Real Handler timestamp ordering, with one controlled registration-thread
+     * deschedule after enqueue. This queue has no native poller; removal and
+     * ordering use the unchanged framework MessageQueue implementation. */
+    private static final class OrderedHandler extends Handler {
+        MessageQueue queue;
+        boolean paused;
+        private OrderedHandler() { super(); }
+        static OrderedHandler create() throws Exception {
+            OrderedHandler handler = (OrderedHandler)UNSAFE.allocateInstance(OrderedHandler.class);
+            handler.queue = (MessageQueue)UNSAFE.allocateInstance(MessageQueue.class);
+            ControlledHandler.declared(MessageQueue.class, "sUseConcurrentInitialized").setBoolean(null, true);
+            ControlledHandler.declared(MessageQueue.class, "sUseConcurrent").setBoolean(null, false);
+            ControlledHandler.declared(MessageQueue.class, "mMessageCount").set(handler.queue,
+                    new java.util.concurrent.atomic.AtomicLong());
+            ControlledHandler.declared(Handler.class, "mQueue").set(handler, handler.queue);
+            return handler;
+        }
+        private static void until(long when) {
+            while (SystemClock.uptimeMillis() < when) {
+                try { Thread.sleep(1); }
+                catch (InterruptedException e) {
+                    Thread.currentThread().interrupt(); throw new AssertionError(e);
+                }
+            }
+        }
+        @Override public boolean sendMessageAtTime(Message message, long when) {
+            boolean accepted = super.sendMessageAtTime(message, when);
+            if (!paused) {
+                paused = true;
+                until(when + 20);
+            }
+            return accepted;
+        }
+        void drain() throws Exception {
+            for (int count = 0; count < 8; count++) {
+                Message message;
+                synchronized (queue) {
+                    message = (Message)ControlledHandler.declared(MessageQueue.class, "mMessages").get(queue);
+                }
+                if (message == null) return;
+                until(message.getWhen());
+                Runnable callback = message.getCallback();
+                removeCallbacks(callback);
+                callback.run();
+            }
+            throw new AssertionError("Unexpected request queue growth");
+        }
+    }
     private static class Callback extends ConnectivityManager.NetworkCallback {
         int available, lost, unavailable;
         Runnable unavailableAction;
@@ -487,6 +535,15 @@ public final class ConnectivityCallbackContractTest {
         }
     }
     private static void timeouts(boolean parcel) throws Exception {
+        try (Harness h = new Harness(parcel)) {
+            h.service.snapshot = ONLINE;
+            OrderedHandler handler = OrderedHandler.create();
+            Callback callback = new Callback();
+            h.manager.requestNetwork(request(), callback, handler, 10);
+            handler.drain();
+            check(callback.available == 1 && callback.unavailable == 0 && h.count() == 1,
+                    "already available network precedes its deadline after registration descheduling");
+        }
         try (Harness h = new Harness(parcel)) {
             Callback callback = new Callback();
             h.manager.requestNetwork(request(), callback, h.handler, Integer.MAX_VALUE);
