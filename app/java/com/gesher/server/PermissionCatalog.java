@@ -110,6 +110,12 @@ final class PermissionCatalog {
         return name != null && (!mFrameworkRead || mProtectedBroadcasts.contains(name));
     }
 
+    /** Positive catalog evidence, for exemptions that must not be granted on load failure. */
+    boolean isKnownProtectedBroadcast(String name) {
+        load();
+        return mFrameworkRead && name != null && mProtectedBroadcasts.contains(name);
+    }
+
     Map<String, PermissionInfo> permissions() {
         load();
         Map<String, PermissionInfo> result = new LinkedHashMap<>(mFramework);
