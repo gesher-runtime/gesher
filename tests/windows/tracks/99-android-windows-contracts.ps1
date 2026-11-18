@@ -12,7 +12,7 @@ Check 'services: native permission dialog explicit consent and Hebrew/English co
   $permissionDialogOut
 } @('permission_dialog_test:', ' checks, 0 failures')
 
-foreach ($serviceFixture in @('RunningTaskSnapshotTest', 'TaskStackContractTest', 'TextServicesContractTest', 'MediaRouterContractTest')) {
+foreach ($serviceFixture in @('RunningTaskSnapshotTest', 'TaskStackContractTest', 'TextServicesContractTest', 'MediaRouterContractTest', 'HandwritingUnavailableContractTest')) {
   $serviceContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + $serviceFixture) 90
   $serviceContractCode = $LASTEXITCODE
   Check "services: $serviceFixture public manager and generated Binder contracts" {
