@@ -242,6 +242,20 @@ test('a rejected workflow-capable credential cannot release the QA gate', async 
   assert.equal(w.nativeAutoMethod, null);
 });
 
+test('maintainer-enabled squash waiting survives without another privileged mutation', async () => {
+  const w = world({nativeAutoMethod: 'SQUASH'});
+  w.mergeGithub = {graphql: async () => { assert.fail('existing squash waiting needs no mutation'); }};
+  w.runs[0].status = 'in_progress'; w.runs[0].conclusion = null;
+  await w.ciDone();
+  assert.equal(w.did('status').at(-1)[1].state, 'pending');
+  Object.assign(w.runs[0], {status: 'completed', conclusion: 'success'});
+  await w.ciDone();
+  assert.equal(w.did('status').at(-1)[1].state, 'success');
+  assert.equal(w.nativeAutoMethod, 'SQUASH');
+  assert.equal(w.did('nativeWait').length, 0);
+  assert.equal(w.did('nativeCancel').length, 0);
+});
+
 test('a workflow-capable credential cannot authorize an unapproved head', async () => {
   const w = world(); w.pr.head.sha = OTHER;
   w.mergeGithub = {graphql: async () => { assert.fail('unapproved head must not enable waiting'); }};
