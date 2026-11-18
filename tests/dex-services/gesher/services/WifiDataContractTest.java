@@ -138,6 +138,7 @@ public final class WifiDataContractTest {
         ssids();
         supplicant();
         if (nativeParcel) parcels();
+        WifiScanResultContractTest.run(nativeParcel);
         System.out.println("WifiDataContractTest all passed: " + checks + " checks; parcel=" + nativeParcel);
     }
 }

@@ -170,9 +170,12 @@ public final class Services {
                 new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new ClipboardService()).asBinder());
+        // Construct the network provider before jobs subscribe to its changes.
+        ConnectivityService connectivity = new ConnectivityService(pm, atm);
+        services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
         // Device state from Windows (devsvc track, ADR 0038): jobs, the battery.
         services.put(Context.JOB_SCHEDULER_SERVICE, StandIn.of(android.app.job.IJobScheduler.class,
-                new JobSchedulerService(am, atm, pm)).asBinder());
+                new JobSchedulerService(am, atm, pm, connectivity)).asBinder());
         services.put("batteryproperties", StandIn.of(android.os.IBatteryPropertiesRegistrar.class,
                 new BatteryService(am).properties()).asBinder());
         // No StandIn proxy: IBatteryStats names android.bluetooth and android.telephony
@@ -223,7 +226,6 @@ public final class Services {
                         user(userId); return Configuration.GRAMMATICAL_GENDER_NOT_SPECIFIED;
                     }
                 }).asBinder());
-        services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
         // their authenticators.
         AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
