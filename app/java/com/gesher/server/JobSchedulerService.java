@@ -248,15 +248,21 @@ final class JobSchedulerService extends IJobScheduler.Default
                 int violation;
                 while (true) {
                     long generation;
+                    long observation;
                     synchronized (JobSchedulerService.this) {
                         if (done || stopping || state != BINDING || service != null
                                 || !isScheduledRunLocked(this)) return;
                         generation = hostRevisionLocked(job.hostInputs);
+                        observation = mConstraintObservation;
                     }
                     ConstraintState constraints = readConstraints(job.hostInputs);
                     synchronized (JobSchedulerService.this) {
                         if (!isScheduledRunLocked(this)) return;
-                        if (generation != hostRevisionLocked(job.hostInputs)) continue;
+                        if (generation != hostRevisionLocked(job.hostInputs)
+                                || observation != mConstraintObservation) continue;
+                        // This accepted start-time snapshot supersedes older polling
+                        // proposals, including those with the same host-event revision.
+                        mConstraintObservation++;
                         topStarted |= job.packageName.equals(constraints.topPackage);
                         violation = runningConstraintViolation(job, constraints, SystemClock.elapsedRealtime());
                         if (violation != JobParameters.STOP_REASON_UNDEFINED) {
@@ -495,6 +501,9 @@ final class JobSchedulerService extends IJobScheduler.Default
     private Runnable mBeforePersist; // Server-local race fixture; never a Binder option.
     private int mRunning;
     private long mHostGeneration; // Guarded by this, shared order for all host signals.
+    // Advances for every accepted full constraint observation, including polling reads
+    // that have no corresponding host notification/revision.
+    private long mConstraintObservation;
     private final long[] mHostRevisions = new long[5]; // Guarded by this, indexed by OBSERVE_* bit.
     private boolean mCheckExecutionAfterResume; // Guarded by this.
     private Thread mThread;
@@ -1008,6 +1017,7 @@ final class JobSchedulerService extends IJobScheduler.Default
     /** One observation and one admission/transition pass, shared with the server-local fixture. */
     private void schedulePass(boolean waitForWork) throws InterruptedException {
         long sampledAfter;
+        long sampledObservation;
         int inputs;
         synchronized (this) {
             if (waitForWork && mJobs.isEmpty()) {
@@ -1017,6 +1027,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             }
             inputs = hostInputsLocked();
             sampledAfter = mHostGeneration;
+            sampledObservation = mConstraintObservation;
         }
         // Native calls (and the task-manager lock) stay outside the scheduler monitor.
         ConstraintState state = readConstraints(inputs);
@@ -1024,14 +1035,18 @@ final class JobSchedulerService extends IJobScheduler.Default
         List<Run> ready = new ArrayList<>();
         boolean checkTimeouts;
         synchronized (this) {
-            boolean retry = false;
+            boolean retry = sampledObservation != mConstraintObservation;
+            // Polling can observe storage changes without a host event. If another
+            // thread accepted a newer snapshot while this read was in flight, this
+            // entire older snapshot is stale even when host revisions are identical.
+            long observation = retry ? mConstraintObservation : ++mConstraintObservation;
             long now = SystemClock.elapsedRealtime();
             long next = hostPollAt(now, inputs, state);
             List<Job> eligible = new ArrayList<>();
             long timestamp = System.currentTimeMillis();
             for (Job job : mJobs) {
                 long revision = hostRevisionLocked(job.hostInputs);
-                if ((job.hostInputs & ~inputs) != 0 || revision > sampledAfter) {
+                if (retry || (job.hostInputs & ~inputs) != 0 || revision > sampledAfter) {
                     // The next pass refreshes this job. Changes to one host
                     // input cannot starve jobs using other inputs.
                     retry = true;
@@ -1039,6 +1054,9 @@ final class JobSchedulerService extends IJobScheduler.Default
                 }
                 Run run = job.run;
                 if (run != null) {
+                    // Android records constraint transitions for active jobs too,
+                    // before stop dispatch/acknowledgement can complete.
+                    recordPendingReasons(job, pendingConstraints(job, now, state), timestamp);
                     if (!run.stopping && !run.done) {
                         int lost = runningConstraintViolation(job, state, now);
                         android.net.Network network = lost == JobParameters.STOP_REASON_UNDEFINED
@@ -1046,7 +1064,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                         if (lost != JobParameters.STOP_REASON_UNDEFINED
                                 || needsNetwork(job.info) && (run.networkGeneration != revision
                                         || !Objects.equals(run.network, network))) {
-                            updates.add(new RunConstraintUpdate(run, revision, lost, network));
+                            updates.add(new RunConstraintUpdate(run, revision, observation, lost, network));
                         }
                     }
                     if (job.latest > now) next = Math.min(next, job.latest);
@@ -1534,12 +1552,12 @@ final class JobSchedulerService extends IJobScheduler.Default
         Run run = update.run;
         synchronized (run.dispatch) {
             if (update.stopReason == JobParameters.STOP_REASON_UNDEFINED) {
-                updateNetwork(run, update.network, update.generation);
+                updateNetwork(run, update.network, update.generation, update.observation);
             } else {
                 String why = constraintWhy(update.stopReason);
                 int state;
                 synchronized (this) {
-                    if (!canApplyConstraintUpdateLocked(run, update.generation)) return;
+                    if (!canApplyConstraintUpdateLocked(run, update.generation, update.observation)) return;
                     state = claimStopLocked(run, update.stopReason,
                             JobParameters.INTERNAL_STOP_REASON_CONSTRAINTS_NOT_SATISFIED, why);
                 }
@@ -1548,8 +1566,9 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
     }
 
-    private boolean canApplyConstraintUpdateLocked(Run run, long generation) {
-        return generation == hostRevisionLocked(run.job.hostInputs) && !run.done && !run.stopping
+    private boolean canApplyConstraintUpdateLocked(Run run, long generation, long observation) {
+        return observation == mConstraintObservation
+                && generation == hostRevisionLocked(run.job.hostInputs) && !run.done && !run.stopping
                 && isScheduledRunLocked(run) && current(run.job);
     }
 
@@ -1558,9 +1577,9 @@ final class JobSchedulerService extends IJobScheduler.Default
     }
 
     /** Caller holds the run's dispatch gate, including for acknowledgement of start. */
-    private void updateNetwork(Run run, android.net.Network network, long generation) {
+    private void updateNetwork(Run run, android.net.Network network, long generation, long observation) {
         synchronized (this) {
-            if (!canApplyConstraintUpdateLocked(run, generation)) return;
+            if (!canApplyConstraintUpdateLocked(run, generation, observation)) return;
             run.network = network;
             run.networkGeneration = generation;
             if (run.state != EXECUTING || Objects.equals(run.params.getNetwork(), network)) return;
@@ -1573,7 +1592,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
     }
 
-    private record RunConstraintUpdate(Run run, long generation, int stopReason,
+    private record RunConstraintUpdate(Run run, long generation, long observation, int stopReason,
             android.net.Network network) {}
 
     /** The run is over: unbind, then reschedule (periodic, backoff) or drop the job. */
