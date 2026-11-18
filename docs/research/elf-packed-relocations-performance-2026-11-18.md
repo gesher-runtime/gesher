@@ -48,6 +48,21 @@ group-flag combinations is retained. Addend accumulation uses unsigned 64-bit
 arithmetic before converting its resulting bits back to the signed ELF field,
 avoiding signed-overflow undefined behavior on corrupted inputs.
 
+## Readable snapshot bounds
+
+Before inspecting the APS2 signature or copying its declared section, the loader
+checks the reservation bounds and actual readable segment coverage. A reserved
+address gap in the file-view path does not count as readable memory. Adjacent
+readable segments are accepted regardless of program-header order; unchecked
+address or size arithmetic cannot authorize the snapshot. Bad signatures retain
+the original header-only rejection behavior.
+
+The follow-up host validation passed 60,444 ASan/UBSan checks, including 64 new
+range-admission checks using ordinary owned arrays and declared mapping bounds.
+It also retains the exact-baseline comparison and every existing allocation
+budget. These checks exercise the production range validator at the declared
+mapping boundary; they do not establish Windows virtual-memory execution.
+
 ## Measured allocation work
 
 `tools/test_elf_packed_relocations.py` compiles the **unchanged production parser

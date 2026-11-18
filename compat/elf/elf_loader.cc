@@ -1132,6 +1132,39 @@ bool ApplyRelr(Library* lib, std::string* error) {
 // Validation checks every group and encoded field without materializing its
 // relocations. The application pass may only consume that same owned, validated
 // snapshot; it reconstructs values once and calls the visitor in wire order.
+bool ReadablePackedRange(const Library* lib, const uint8_t* data, size_t size) {
+  const uintptr_t base = reinterpret_cast<uintptr_t>(lib->base);
+  uintptr_t cursor = reinterpret_cast<uintptr_t>(data);
+  if (lib->base == nullptr || lib->map_size > UINTPTR_MAX - base ||
+      cursor < base || cursor - base > lib->map_size ||
+      size > lib->map_size - (cursor - base) || size > UINTPTR_MAX - cursor) return false;
+  const uintptr_t end = cursor + size;
+  while (cursor < end) {
+    uintptr_t covered = cursor;
+    // The copied-image path has one readable/writable reservation; the
+    // file-view path records only the segments that were actually mapped.
+    for (const auto& range : lib->writable) {
+      if (range.first <= cursor && cursor < range.second) covered = std::max(covered, range.second);
+    }
+    for (uint16_t i = 0; i < lib->file_phnum; ++i) {
+      const Elf64_Phdr& ph = lib->file_phdr[i];
+      // Work relative to the reservation, including nonzero ELF virtual bases
+      // whose load bias is represented by unsigned address subtraction.
+      const uintptr_t first_vaddr = base - reinterpret_cast<uintptr_t>(lib->load_bias);
+      if (ph.p_type != PT_LOAD || !(ph.p_flags & PF_R) || ph.p_vaddr < first_vaddr) continue;
+      const uint64_t offset = ph.p_vaddr - first_vaddr;
+      if (offset > lib->map_size || ph.p_memsz > lib->map_size - offset) continue;
+      const uintptr_t start = base + offset;
+      const uintptr_t limit = start + ph.p_memsz;
+      if (start <= cursor && cursor < limit) covered = std::max(covered, limit);
+    }
+    // A reservation alone does not make gaps between file views readable.
+    if (covered == cursor) return false;
+    cursor = std::min(covered, end);
+  }
+  return true;
+}
+
 template <bool ValidateOnly, typename Visit>
 bool DecodeAndroidRela(const uint8_t* p, size_t size, Visit&& visit, std::string* error) {
   if (size < 4 || std::memcmp(p, "APS2", 4) != 0) {
@@ -1230,8 +1263,20 @@ bool Relocate(Library* lib, std::string* error) {
   if (lib->android_rela != nullptr) {
     // Preserve the old header-only rejection: an invalid signature must not
     // make us copy or inspect the rest of the claimed section.
-    if (lib->android_rela_size < 4 || std::memcmp(lib->android_rela, "APS2", 4) != 0) {
+    if (lib->android_rela_size < 4) {
       Fail(error, "DT_ANDROID_RELA is not APS2-packed");
+      return false;
+    }
+    if (!ReadablePackedRange(lib, lib->android_rela, 4)) {
+      Fail(error, "DT_ANDROID_RELA header is outside readable load segments");
+      return false;
+    }
+    if (std::memcmp(lib->android_rela, "APS2", 4) != 0) {
+      Fail(error, "DT_ANDROID_RELA is not APS2-packed");
+      return false;
+    }
+    if (!ReadablePackedRange(lib, lib->android_rela, lib->android_rela_size)) {
+      Fail(error, "DT_ANDROID_RELA is outside readable load segments");
       return false;
     }
     packed.assign(lib->android_rela, lib->android_rela + lib->android_rela_size);

@@ -43,6 +43,8 @@ def main() -> int:
     fixture = fixture.replace("@CANDIDATE@", candidate).replace("@REFERENCE@", reference)
     fixture = fixture.replace("@CORRUPTION@", "Corruption(candidate::Relocate);" if
                               "template <bool ValidateOnly" in candidate else "(void)Corruption;")
+    fixture = fixture.replace("@RANGE_CHECKS@", "MappedRanges(candidate::Relocate);" if
+                              "bool ReadablePackedRange" in candidate else "(void)MappedRanges;")
     print("packed relocation source SHA256 " + hashlib.sha256(candidate.encode()).hexdigest(), flush=True)
     if reference:
         print("reference source SHA256 " + hashlib.sha256(reference.encode()).hexdigest(), flush=True)
