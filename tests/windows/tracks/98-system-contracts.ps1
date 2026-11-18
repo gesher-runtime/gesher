@@ -72,6 +72,19 @@ try {
       $global:LASTEXITCODE = $settingsBootstrapCode
       $settingsBootstrapOut
     } @('SettingsBootstrapContractTest all passed:', 'bootstrap without Binder, worker transport')
+    $dictionaryBootstrapOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'UserDictionaryBootstrapTest') 90
+    $dictionaryBootstrapCode = $LASTEXITCODE
+    Check 'services: UserDictionary builtin metadata, SQLite and actual observer delivery' {
+      $global:LASTEXITCODE = $dictionaryBootstrapCode
+      $dictionaryBootstrapOut
+    } @('UserDictionaryBootstrapTest all passed:', 'actual provider transport, SQLite and ContentService', 'features=initialized')
+    $dictionaryRetainedFeaturesOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+      'UserDictionaryBootstrapTest' + 'preinitialized-features') 90
+    $dictionaryRetainedFeaturesCode = $LASTEXITCODE
+    Check 'services: UserDictionary retains existing real package-manager feature cache' {
+      $global:LASTEXITCODE = $dictionaryRetainedFeaturesCode
+      $dictionaryRetainedFeaturesOut
+    } @('UserDictionaryBootstrapTest all passed:', 'actual provider transport, SQLite and ContentService', 'features=retained')
   } finally {
     if ($null -eq $settingsBootstrapBinder) { Remove-Item -LiteralPath Env:GESHER_BINDER -ErrorAction SilentlyContinue }
     else { [Environment]::SetEnvironmentVariable('GESHER_BINDER', $settingsBootstrapBinder, 'Process') }
@@ -82,6 +95,12 @@ try {
     $global:LASTEXITCODE = $settingsContractCode
     $settingsContractOut
   } @('Settings provider contracts passed:')
+  $dictionaryContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'UserDictionaryContractTest') 90
+  $dictionaryContractCode = $LASTEXITCODE
+  Check 'services: UserDictionary SQLite CRUD, batch, public helper and durable upgrade contracts' {
+    $global:LASTEXITCODE = $dictionaryContractCode
+    $dictionaryContractOut
+  } @('UserDictionaryContractTest all passed:', 'real SQLite; com.gesher.server.UserDictionaryProvider')
 
   # Use devsvc's private URI-grant provider without optional GmsCore metadata.
   $providerContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +

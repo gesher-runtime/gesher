@@ -2,10 +2,13 @@
 package android.app;
 
 import android.content.Context;
+import android.content.pm.IPackageManager;
+import android.content.pm.SystemFeaturesCache;
 import android.os.Binder;
 import android.os.Looper;
+import android.os.RemoteException;
 
-/** Framework context for the built-in settings provider's normal Binder transport. */
+/** Framework context for built-in providers' normal Binder transports. */
 public final class GesherSettingsContext {
     private static ActivityThread sMainThread;
     private static volatile Context sContext;
@@ -34,7 +37,22 @@ public final class GesherSettingsContext {
                 // synchronously: system_server's main thread serves Binder, not a Looper.
                 long identity = Binder.clearCallingIdentity();
                 try {
+                    // Built-in providers can need framework managers before any
+                    // application is bound. SystemServiceRegistry consults this
+                    // cache during manager construction; obtain the same actual
+                    // package-manager features that bindApplication supplies.
+                    // An already bound application's cache keeps its identity.
+                    if (!SystemFeaturesCache.hasInstance()) {
+                        IPackageManager packages = ActivityThread.getPackageManager();
+                        if (packages == null) {
+                            throw new IllegalStateException("Package manager is not available");
+                        }
+                        SystemFeaturesCache.setInstance(new SystemFeaturesCache(
+                                packages.getSystemAvailableFeatures().getList()));
+                    }
                     sContext = ContextImpl.createSystemContext(sMainThread);
+                } catch (RemoteException failure) {
+                    throw failure.rethrowFromSystemServer();
                 } finally {
                     Binder.restoreCallingIdentity(identity);
                 }

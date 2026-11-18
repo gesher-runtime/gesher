@@ -161,11 +161,24 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         if (callers == null) return PackageManager.PERMISSION_DENIED;
         // A package's effective UID comes from its authenticated registered PID.
         String pkg = callers.packageForPid(pid);
+        if (pid == Process.myPid()) {
+            // Standalone Main binds ActivityThread without an ATM attachment.
+            // Its app must not inherit the services that share this process.
+            String bound = android.app.ActivityThread.currentPackageName();
+            if (bound != null) {
+                if (uid != Process.myUid() || pkg != null && !pkg.equals(bound)) {
+                    return PackageManager.PERMISSION_DENIED;
+                }
+                pkg = bound;
+            }
+        }
         if (pkg != null) {
             ApkPackage installed = mPm.get(pkg);
-            return installed != null && installed.uid() == uid && granted(permission, pkg)
+            return installed != null && !mPm.isRemovalPending(pkg)
+                    && installed.uid() == uid && granted(permission, pkg)
                     ? PackageManager.PERMISSION_GRANTED : PackageManager.PERMISSION_DENIED;
         }
+        // Only a genuine service-local context with no bound APK reaches here.
         if (pid == Process.myPid() && (uid == Process.SYSTEM_UID || uid == Process.myUid())) {
             return PackageManager.PERMISSION_GRANTED;
         }

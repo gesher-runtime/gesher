@@ -158,7 +158,9 @@ final class Installer {
         }
         for (Entry e : entries.values()) {
             try {
-                result.add(open(e));
+                ApkPackage installedPackage = open(e);
+                UserDictionaryProvider.checkPackageAdmission(installedPackage);
+                result.add(installedPackage);
             } catch (Exception ex) {
                 SystemServer.log("installed package " + e.packageName + " at " + e.codePath
                         + " could not be loaded: " + ex);
@@ -292,6 +294,7 @@ final class Installer {
         Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
+            UserDictionaryProvider.checkPackageAdmission(parsed);
             return unchanged(apk, recorded.packageName, parsed, recorded);
         }
         File tempDir = null;
@@ -316,6 +319,7 @@ final class Installer {
                 source = mainApk;
             }
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
+            UserDictionaryProvider.checkPackageAdmission(parsed);
             String pkg = parsed.packageName;
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
@@ -411,6 +415,7 @@ final class Installer {
             ApkPackage staged;
             try {
                 staged = ApkPackage.parseCodeDirectory(code.getPath());
+                UserDictionaryProvider.checkPackageAdmission(staged);
             } catch (Exception invalidCluster) {
                 // Malformed/mismatched splits must not stop or replace the working app.
                 deleteTree(code);

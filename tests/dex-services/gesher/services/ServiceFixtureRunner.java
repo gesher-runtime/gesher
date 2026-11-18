@@ -15,6 +15,7 @@ public final class ServiceFixtureRunner {
         // under this test loader. The account-cache fixture owns its own real region.
         boolean ownsBootstrap = args[0].equals("SdkSandboxUnsupportedTest")
                 || args[0].equals("SettingsBootstrapContractTest")
+                || args[0].equals("UserDictionaryBootstrapTest")
                 || args[0].equals("NetworkStatsUnavailableTest")
                 || args[0].equals("GrammaticalInflectionUnavailableTest")
                 || args[0].equals("WifiUnsupportedTest")
@@ -25,6 +26,13 @@ public final class ServiceFixtureRunner {
             Class<?> shared = Class.forName("com.android.internal.os.ApplicationSharedMemory");
             Object region = shared.getMethod("create").invoke(null);
             shared.getMethod("setInstance", shared).invoke(null, region);
+            if (args[0].equals("UserDictionaryContractTest")) {
+                // app_process already installs system assets on the Android oracle.
+                // This raw ART entry point needs the real Windows runtime resource
+                // APK before SQLite reads its framework database configuration.
+                android.content.res.AssetManager.createSystemAssetsInZygoteLocked(false,
+                        System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
+            }
         }
         try {
             Class.forName("gesher.services." + args[0]).getMethod("main", String[].class)

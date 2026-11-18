@@ -575,12 +575,15 @@ $ok = CheckOrdered 'services: gesher-app install and list: base.apk in data/app/
   '/app/com.gesher.lifecycle-1',
   'gesher-app: installed com.gesher.peer (version 1) in ',
   'gesher-app: com.gesher.lifecycle is installed and unchanged',
-  # 2 installed + the synthetic com.google.android.gms and com.android.vending (GmsPackageSupport).
-  'gesher-app: 4 installed packages',
+  # 2 installed + the builtin dictionary + the 2 GmsPackageSupport packages.
+  'gesher-app: 5 installed packages',
+  'package:com.android.providers.userdictionary version null (0) ',
+  '/framework/gesher-app.jar, 0 activities, 0 services, 1 providers',
   'package:com.gesher.lifecycle version 1.0 (1) ',
   '/app/com.gesher.lifecycle-1/base.apk, 1 activities, 0 services, 0 providers',
   'package:com.gesher.peer version 1.0 (1) ',
-  '/app/com.gesher.peer-1/base.apk, 3 activities, 0 services, 2 providers') $code
+  '/app/com.gesher.peer-1/base.apk, 3 activities, 0 services, 2 providers',
+  'package:com.google.android.gms ', 'package:com.android.vending ') $code
 if ($ok -and -not ((Test-Path (Join-Path $root 'data/app/com.gesher.peer-1/base.apk')) -and $registry -match "com\.gesher\.lifecycle`t" -and $registry -match "com\.gesher\.peer`t")) {
   Write-Host "FAIL  services: installed files (data/app, packages.list): $registry"
   $failed++
@@ -746,8 +749,11 @@ $code = $LASTEXITCODE
 $out += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
 $code = [Math]::Max($code, $LASTEXITCODE)
 $ok = CheckOrdered 'services: gesher-app uninstall: the package''s code, data and entry removed' $out @(
-  'gesher-app: uninstalled com.gesher.peer', 'gesher-app: 4 installed packages',
-  'package:com.gesher.lifecycle ', 'package:com.gesher.components ') $code
+  'gesher-app: uninstalled com.gesher.peer', 'gesher-app: 5 installed packages',
+  'package:com.android.providers.userdictionary version null (0) ',
+  '/framework/gesher-app.jar, 0 activities, 0 services, 1 providers',
+  'package:com.gesher.lifecycle ', 'package:com.gesher.components ',
+  'package:com.google.android.gms ', 'package:com.android.vending ') $code
 if ($ok -and ($out.Contains('package:com.gesher.peer') -or (Test-Path (Join-Path $root 'data/app/com.gesher.peer-1')) -or
     (Get-Content (Join-Path $root 'data/system/packages.list') -Raw) -match 'com\.gesher\.peer')) {
   Write-Host 'FAIL  services: uninstall left com.gesher.peer behind'
