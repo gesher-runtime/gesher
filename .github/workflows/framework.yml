@@ -522,6 +522,12 @@ jobs:
           python3 tools/test_media_routing_contracts.py \
             --framework-classes out/framework/classes --core-classes out/coremod
 
+      - name: Account authentication session lifetimes and deadlines
+        run: |
+          python3 tools/test_account_session_lifetime.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Sync admission, results and adapter lifecycle contracts
         run: |
           python3 tools/test_sync_manager.py --java-home "$JAVA_HOME" \
@@ -559,6 +565,7 @@ jobs:
           python3 tools/test_webmessage_ports.py --java-home "$JAVA_HOME" \
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod
+          python3 tools/test_webmessage_page_script.py
           "$JAVA_HOME/bin/javac" -cp work/sdk-36/android.jar \
             -d "$RUNNER_TEMP/codec-lifecycle-sdk" \
             tests/dex-services/gesher/services/CodecLifecycleContractTest.java

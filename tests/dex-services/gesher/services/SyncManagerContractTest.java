@@ -115,12 +115,22 @@ public final class SyncManagerContractTest {
         boolean stopped;
         final PriorityQueue<Task<?>> queue = new PriorityQueue<>();
         final class Task<V> extends FutureTask<V> implements ScheduledFuture<V> {
-            final long due, order;
+            volatile long due;
+            final long order, period;
             final AtomicReference<Throwable> thrown;
-            Task(Callable<V> work, long delay) { this(work, delay, new AtomicReference<>()); }
-            Task(Callable<V> work, long delay, AtomicReference<Throwable> failure) {
+            Task(Callable<V> work, long delay) { this(work, delay, 0); }
+            Task(Callable<V> work, long delay, long period) { this(work, delay, period, new AtomicReference<>()); }
+            Task(Callable<V> work, long delay, long period, AtomicReference<Throwable> failure) {
                 super(() -> { try { return work.call(); } catch (Throwable error) { failure.set(error); throw error; } });
-                thrown = failure; due = now + Math.max(0, delay); order = sequence++;
+                thrown = failure; due = now + Math.max(0, delay); order = sequence++; this.period = period;
+            }
+            @Override public void run() {
+                if (period == 0) { super.run(); return; }
+                if (runAndReset()) {
+                    synchronized (Manual.this) {
+                        if (!isCancelled() && !stopped) { due += period; queue.add(this); }
+                    }
+                }
             }
             @Override public long getDelay(TimeUnit unit) { return unit.convert(due - now, TimeUnit.MILLISECONDS); }
             @Override public int compareTo(Delayed other) {
@@ -134,7 +144,12 @@ public final class SyncManagerContractTest {
             return schedule(() -> { work.run(); return null; }, delay, unit);
         }
         @Override public void execute(Runnable work) { schedule(work, 0, TimeUnit.MILLISECONDS); }
-        @Override public ScheduledFuture<?> scheduleAtFixedRate(Runnable work, long initial, long period, TimeUnit unit) { throw new AssertionError("Fixture does not install periodic syncs"); }
+        @Override public synchronized ScheduledFuture<?> scheduleAtFixedRate(Runnable work, long initial, long period, TimeUnit unit) {
+            long millis = unit.toMillis(period);
+            if (period <= 0 || millis <= 0) throw new IllegalArgumentException("Positive millisecond period required");
+            Task<Void> task = new Task<>(() -> { work.run(); return null; }, unit.toMillis(initial), millis);
+            queue.add(task); return task;
+        }
         @Override public ScheduledFuture<?> scheduleWithFixedDelay(Runnable work, long initial, long delay, TimeUnit unit) { throw new AssertionError("Unexpected fixed delay"); }
         void drain() throws Exception {
             int runs = 0;
@@ -150,7 +165,7 @@ public final class SyncManagerContractTest {
                 task.run();
                 if (task.thrown.get() != null) rethrow(task.thrown.get());
                 // A wakeup can retire its own ScheduledFuture while its Runnable runs.
-                if (task.isCancelled()) continue;
+                if (task.isCancelled() || task.period != 0) continue;
                 try { task.get(); } catch (ExecutionException failure) { rethrow(failure.getCause()); }
             }
         }
@@ -169,7 +184,7 @@ public final class SyncManagerContractTest {
         final IActivityManager am;
         final Class<?> adapterType = type("SyncManager$Adapter");
         final List<Start> starts = new ArrayList<>();
-        int cancelled, unbound;
+        int cancelled, unbound, stoppedServices;
         IBinder suppliedAdapter;
         volatile CountDownLatch blockCreate, createEntered, blockStart, startEntered;
         Runnable duringCreate;
@@ -206,7 +221,7 @@ public final class SyncManagerContractTest {
                 catch (Exception failure) { throw new AssertionError(failure); }
             }
             @Override public void scheduleUnbindService(IBinder token, IBinder bindToken, Intent intent) { unbound++; }
-            @Override public void scheduleStopService(IBinder token) { }
+            @Override public void scheduleStopService(IBinder token) { stoppedServices++; }
         };
         @SuppressWarnings("unchecked") Harness(boolean parallel, boolean wire) throws Exception {
             this.wire = wire;
@@ -231,6 +246,11 @@ public final class SyncManagerContractTest {
             am = (IActivityManager) UNSAFE.allocateInstance(amType);
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Service teardown clears start-grant owners through AMS. Keep the
+            // actual UriGrants registry while isolating unrelated settings startup.
+            Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mUriGrants", make(type("UriGrants"), new Class<?>[]{pmType, atmType}, pm, atm));
+            set(am, "mProviders", providers);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions); invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
             Object catalog = get(permissions, "mCatalog"); set(catalog, "mLoaded", true); set(catalog, "mFrameworkRead", true);
@@ -624,6 +644,7 @@ public final class SyncManagerContractTest {
             h.setting("master", "true");
             invoke(h.sync, "schedulePeriodic", new Class<?>[]{String.class, boolean.class}, periodic, false);
             check(((Map<?, ?>) get(h.sync, "mPeriodic")).containsKey(periodic), "Periodic fixture was not scheduled");
+            ScheduledFuture<?> periodicFuture = (ScheduledFuture<?>) ((Map<?, ?>) get(h.sync, "mPeriodic")).get(periodic);
 
             try {
                 invoke(h.sync, "accountsRemoved", new Class<?>[]{Set.class, Set.class}, Set.of(ONE), Set.of(TWO));
@@ -633,6 +654,7 @@ public final class SyncManagerContractTest {
             }
             check(((Properties) get(h.sync, "mSettings")).containsKey(periodic),
                     "A failed sync write discarded retryable state");
+            check(periodicFuture.isCancelled(), "A failed retirement write left the removed account's timer running");
             h.timer.drain();
             check(h.cancelled == 1 && h.starts.size() == 2 && h.starts.get(1).account.equals(TWO)
                     && h.pending() == 0 && h.active() == 1, "Retirement failed to cancel only the deleted account's work");
@@ -649,6 +671,7 @@ public final class SyncManagerContractTest {
                     && "true".equals(persisted.getProperty("auto." + prefixed))
                     && "true".equals(persisted.getProperty("master")), "Cleanup changed another account or global settings");
             check(!((Map<?, ?>) get(h.sync, "mPeriodic")).containsKey(periodic), "Retired periodic sync stayed scheduled");
+            check(periodicFuture.isCancelled(), "Retirement revived the removed account's timer");
         } finally {
             if (Files.isDirectory(blocker)) {
                 Files.deleteIfExists(store.resolveSibling("sync.properties.tmp"));
@@ -659,7 +682,47 @@ public final class SyncManagerContractTest {
         }
     }
 
+    private static void timerRetention(boolean wire) throws Exception {
+        Method factory = type("SyncManager").getDeclaredMethod("timer");
+        factory.setAccessible(true);
+        ScheduledExecutorService timer = (ScheduledExecutorService) factory.invoke(null);
+        try {
+            // Hold the worker so no canceled task can disappear by reaching its deadline.
+            CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+            timer.execute(() -> {
+                entered.countDown();
+                try { release.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            });
+            try {
+                await(entered, "timer worker");
+                for (int i = 0; i < 10000; ++i) {
+                    timer.schedule(() -> {}, 365, TimeUnit.DAYS).cancel(false);
+                }
+                check(timer instanceof java.util.concurrent.ScheduledThreadPoolExecutor
+                                && ((java.util.concurrent.ScheduledThreadPoolExecutor) timer).getQueue().isEmpty(),
+                        "Canceled long-delay sync timers accumulated in the production queue");
+            } finally { release.countDown(); }
+        } finally { timer.shutdownNow(); }
+        for (boolean cancel : new boolean[]{false, true}) {
+            try (Harness h = new Harness(false, wire)) {
+                h.enqueue(ONE, extras("watchdog-retention")); h.timer.drain();
+                Object active = h.firstActive();
+                ScheduledFuture<?> watchdog = (ScheduledFuture<?>) get(active, "watchdog");
+                check(watchdog != null && !watchdog.isDone(), "Running sync has no watchdog");
+                if (cancel) { h.cancel(ONE, AUTHORITY); h.timer.drain(); }
+                else h.finish(0, new SyncResult());
+                check(watchdog.isCancelled() && get(active, "watchdog") == null,
+                        "Finished sync retained its watchdog and active object graph");
+                check(h.stoppedServices == 1, "Terminal sync did not finish the adapter service lifecycle");
+                int queued = h.timer.queue.size();
+                invoke(h.sync, "watch", new Class<?>[]{active.getClass()}, active);
+                check(h.timer.queue.size() == queued, "Stale watchdog rearmed a finished sync");
+            }
+        }
+    }
+
     public static void contracts(String group, boolean wire) throws Exception {
+        if (group.equals("all") || group.equals("retention")) timerRetention(wire);
         if (group.equals("all") || group.equals("admission")) admission(wire);
         if (group.equals("all") || group.equals("clock")) clock(wire);
         if (group.equals("all") || group.equals("results")) results(wire);

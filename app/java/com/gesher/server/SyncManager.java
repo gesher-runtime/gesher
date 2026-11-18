@@ -52,7 +52,7 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -118,6 +118,7 @@ final class SyncManager {
         IServiceConnection connection;
         boolean done, cancelled;  // guarded by SyncManager.this
         boolean bound; // lifecycle executor only; successful bind owns exactly one unbind
+        ScheduledFuture<?> watchdog; // guarded by SyncManager.this
 
         Active(WorkKey key, Adapter adapter, Account account, Bundle extras) {
             this.key = key;
@@ -155,9 +156,11 @@ final class SyncManager {
     private final ScheduledExecutorService mTimer;
     private final DeviceWork.Source mWorkSource = this::nextDueElapsed;
     private static ScheduledExecutorService timer() {
-        return Executors.newSingleThreadScheduledExecutor(r -> {
+        ScheduledThreadPoolExecutor timer = new ScheduledThreadPoolExecutor(1, r -> {
             Thread t = new Thread(r, "sync"); t.setDaemon(true); return t;
         });
+        timer.setRemoveOnCancelPolicy(true);
+        return timer;
     }
 
     /** Transient identity must not alias account names/types containing delimiters. */
@@ -729,8 +732,9 @@ final class SyncManager {
         finished(active, result, why);
     }
 
-    private void watch(Active active) {
-        mTimer.schedule(() -> {
+    private synchronized void watch(Active active) {
+        if (active.done || active.cancelled) return;
+        active.watchdog = mTimer.schedule(() -> {
             if (stopped(active)) return;
             if (mElapsed.getAsLong() - active.heartbeat >= SYNC_TIMEOUT_MS) cancelActive(active, "timed out");
             else watch(active);
@@ -759,6 +763,10 @@ final class SyncManager {
         synchronized (this) {
             if (active.done) return;
             active.done = true;
+            if (active.watchdog != null) {
+                active.watchdog.cancel(false);
+                active.watchdog = null;
+            }
             if (mActive.get(active.key) == active) mActive.remove(active.key);
             if (!active.cancelled && result != null) {
                 Endpoint endpoint = active.key.endpoint;
