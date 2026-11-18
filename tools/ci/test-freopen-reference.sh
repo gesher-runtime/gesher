@@ -30,6 +30,7 @@ if ! dpkg --compare-versions "${reference_libc#glibc }" ge 2.41; then
 fi
 
 # The runner creates and removes its harness files under this container's /tmp.
-# Run the existing ASan/UBSan suite with LSan enabled and no suppressions.
+# Run both stdio ASan/UBSan suites with LSan enabled and no suppressions.
+python3 /work/tools/test_stream_device_lifetime.py --sanitize
 python3 /work/tools/test_freopen_mode_contracts.py --sanitize
 FREOPEN_REFERENCE
