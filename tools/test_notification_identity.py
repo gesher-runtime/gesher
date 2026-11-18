@@ -17,6 +17,7 @@ def main():
     for name in ('java-home', 'framework-classes', 'core-classes', 'app-classes'):
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--source-ref')
+    p.add_argument('--tag-only', action='store_true', help='Run the public-internal tag API probe, also against unchanged source')
     p.add_argument('--cc', default='cc')
     a = p.parse_args()
     cp = os.pathsep.join(str(x.resolve()) for x in (a.app_classes, a.framework_classes, a.core_classes))
@@ -32,7 +33,7 @@ def main():
             str(ROOT / 'tests/notification-identity/framework_host.c'), '-o', str(library),
             *(['-lwinpthread', '-static'] if windows else [])], check=True)
         sources = []
-        for name in ('NotificationIdentity', 'NotificationManagerService', 'NotificationStore', 'NotificationIcons'):
+        for name in ('NotificationIdentity', 'NotificationManagerService', 'NotificationStore', 'NotificationIcons', 'WindowsHost'):
             path = 'app/java/com/gesher/server/' + name + '.java'
             source = ROOT / path
             if a.source_ref and name != 'NotificationIdentity':
@@ -40,7 +41,14 @@ def main():
                 source.write_bytes(subprocess.check_output(['git', 'show', a.source_ref + ':' + path], cwd=ROOT))
             sources.append(str(source))
         # Production compilation uses actual application/framework interfaces.
+        if a.tag_only:
+            subprocess.run([javac, '-encoding', 'UTF-8', '-cp', cp, '-d', str(classes), *sources,
+                str(ROOT / 'tests/notification-identity/ToastTagProbe.java')], check=True)
+            subprocess.run([java, '-cp', str(classes) + os.pathsep + cp,
+                'com.gesher.server.ToastTagProbe'], check=True, timeout=30)
+            return
         subprocess.run([javac, '-encoding', 'UTF-8', '-cp', cp, '-d', str(classes), *sources,
+            str(ROOT / 'tests/dex-services/com/gesher/server/ToastIdentityDevice.java'),
             str(ROOT / 'tests/dex-services/gesher/services/NotificationChannelGroupsTest.java')], check=True)
         subprocess.run([javac, '-encoding', 'UTF-8', '-cp', str(classes) + os.pathsep + cp,
             '-d', str(classes), *map(str, (ROOT / 'tests/notification-identity').glob('*.java'))], check=True)

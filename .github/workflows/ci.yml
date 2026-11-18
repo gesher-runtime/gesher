@@ -427,6 +427,9 @@ jobs:
 
       - name: Cross-compile current-source Windows performance contracts
         run: |
+          python3 tools/test_toast_history_identity.py --compile-only \
+            --cc "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang" \
+            --output out/toast_history_identity_test.exe
           python3 tools/test_procfs_thread_lookup.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/procfs_thread_lookup_test.exe
@@ -1694,6 +1697,8 @@ jobs:
           & ./dist/layered_bitmap_cache_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/native_poll_allocations_test.exe gate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/toast_history_identity_test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Windows SQLite guest paths, URI metadata and journal IO

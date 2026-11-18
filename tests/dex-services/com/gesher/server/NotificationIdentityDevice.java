@@ -65,5 +65,6 @@ public final class NotificationIdentityDevice {
             restored(B, "BB");
         }
         System.out.println("NotificationIdentityDevice " + args[0] + " passed: " + checks + " checks");
+        ToastIdentityDevice.contracts(args[0]);
     }
 }

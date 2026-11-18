@@ -19,6 +19,7 @@ def main():
     for name in ('java-home', 'framework-classes', 'core-classes', 'app-classes', 'runtime', 'd8-jar', 'output'):
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--source-ref', help='Compile unchanged production source as a negative control')
+    p.add_argument('--tag-only', action='store_true', help='Run the source-compatible tag identity probe')
     a = p.parse_args()
     runtime, work = a.runtime.resolve(), a.output.resolve()
     work.mkdir(parents=True, exist_ok=False)
@@ -27,14 +28,18 @@ def main():
     java = str(a.java_home / 'bin/java')
     cp = os.pathsep.join(str(x.resolve()) for x in (a.app_classes, a.framework_classes, a.core_classes))
     sources = []
-    for name in ('NotificationIdentity', 'NotificationStore', 'NotificationIcons'):
+    for name in ('NotificationIdentity', 'NotificationStore', 'NotificationIcons', 'NotificationManagerService', 'WindowsHost'):
         path = 'app/java/com/gesher/server/' + name + '.java'
         source = ROOT / path
         if a.source_ref and name != 'NotificationIdentity':
             source = work / (name + '.java')
             source.write_bytes(subprocess.check_output(['git', 'show', a.source_ref + ':' + path], cwd=ROOT))
         sources.append(source)
-    sources.append(ROOT / 'tests/dex-services/com/gesher/server/NotificationIdentityDevice.java')
+    if a.tag_only:
+        sources.append(ROOT / 'tests/notification-identity/ToastTagProbe.java')
+    else:
+        sources.append(ROOT / 'tests/dex-services/com/gesher/server/NotificationIdentityDevice.java')
+        sources.append(ROOT / 'tests/dex-services/com/gesher/server/ToastIdentityDevice.java')
     subprocess.run([str(a.java_home / 'bin/javac'), '-source', '17', '-target', '17',
         '-XDstringConcat=inline', '-encoding', 'UTF-8', '-cp', cp, '-d', str(classes), *map(str, sources)], check=True)
     archive = work / 'overlay-classes.jar'
@@ -64,18 +69,23 @@ def main():
         GESHER_MICROG_SPOOF='0')
     boot = [runtime / (name + '.jar') for name in ('core-oj', 'core-libart', 'core-icu4j', 'framework')]
     boot.extend((overlay, runtime / 'gesher-app.jar'))
-    for phase in ('write', 'read'):
+    for phase in (('probe',) if a.tag_only else ('write', 'read')):
+        target = ['com.gesher.server.ToastTagProbe'] if a.tag_only else ['com.gesher.server.NotificationIdentityDevice', phase]
         command = [str(runtime / 'dalvikvm.exe'), '-Xbootclasspath:' + ':'.join(map(guest, boot)),
-            '-Ximage:none', '-Xint', '-Xusejit:false', 'com.gesher.server.NotificationIdentityDevice', phase]
+            '-Ximage:none', '-Xint', '-Xusejit:false', *target]
         result = subprocess.run(command, cwd=runtime, env=env, capture_output=True, timeout=60)
         (work / (phase + '.log')).write_bytes(result.stdout + result.stderr)
         output = (result.stdout + result.stderr).decode('utf-8', errors='replace')
         if result.returncode != 0:
             raise RuntimeError(f'ART {phase} exited {result.returncode}:\n{output[-7000:]}')
-        expected = 'NotificationIdentityDevice ' + phase + ' passed:'
+        expected = 'ToastTagProbe passed' if a.tag_only else 'NotificationIdentityDevice ' + phase + ' passed:'
         lines = [line.strip() for line in output.splitlines() if expected in line]
         if len(lines) != 1: raise RuntimeError('Missing unique success marker: ' + output[-3000:])
         print(lines[0])
+        if a.tag_only: continue
+        toast = [line.strip() for line in output.splitlines() if 'ToastIdentityDevice ' + phase + ' passed:' in line]
+        if len(toast) != 1: raise RuntimeError('Missing toast migration success marker: ' + output[-3000:])
+        print(toast[0])
 
 
 if __name__ == '__main__':

@@ -65,5 +65,6 @@ public final class NotificationIdentityHost {
             restored(B, "BB", 7);
         }
         System.out.println("Notification identity host " + args[0] + " passed: " + checks + " checks");
+        ToastIdentityDevice.contracts(args[0]);
     }
 }

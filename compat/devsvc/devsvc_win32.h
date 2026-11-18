@@ -94,6 +94,8 @@ long ShowToast(const std::u16string& app_id, const std::u16string& tag,
 // Removes the toast from the screen and from the notification center.
 long RemoveToast(const std::u16string& app_id, const std::u16string& tag,
                  const std::u16string& group);
+long RemoveToastIfLaunch(const std::u16string& app_id, const std::u16string& tag,
+                         const std::u16string& group, const std::u16string& launch);
 // Removes every toast of `app_id`.
 long ClearToasts(const std::u16string& app_id);
 // HKCU\Software\Classes\AppUserModelId\<app_id>: DisplayName and IconUri, which

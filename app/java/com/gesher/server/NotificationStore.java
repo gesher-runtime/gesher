@@ -28,7 +28,7 @@ import java.io.OutputStream;
  * for it) and sends it.
  */
 final class NotificationStore {
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
 
     /** A notification as stored: its identity and its PendingIntents' records. */
     static final class Stored {
@@ -39,6 +39,8 @@ final class NotificationStore {
         int id;
         int flags;
         String channelId;
+        String windowsTag;
+        String legacyWindowsTag;
         Intended content;
         Intended[] actions = new Intended[0];
     }
@@ -87,7 +89,7 @@ final class NotificationStore {
     }
 
     /** Keeps the notification's PendingIntents (for clicks after the device stopped). */
-    static void save(ActivityManagerService am, String key, String pkg, String tag, int id,
+    static synchronized void save(ActivityManagerService am, String key, String pkg, String tag, int id,
             Notification n) {
         Stored s = new Stored();
         s.key = key;
@@ -98,12 +100,25 @@ final class NotificationStore {
         s.id = id;
         s.flags = n.flags;
         s.channelId = n.getChannelId() != null ? n.getChannelId() : "miscellaneous";
+        s.windowsTag = NotificationManagerService.toastTag(tag, id);
+        Stored previous = load(pkg, key);
+        if (previous != null) {
+            if (previous.legacyWindowsTag != null && NotificationManagerService.legacyToastTagMatches(previous.legacyWindowsTag, tag, id))
+                s.legacyWindowsTag = previous.legacyWindowsTag;
+            else if (NotificationManagerService.legacyToastTagMatches(previous.windowsTag, tag, id))
+                s.legacyWindowsTag = previous.windowsTag;
+        }
         s.content = intended(am, n.contentIntent);
         int actions = n.actions != null ? n.actions.length : 0;
         s.actions = new Intended[actions];
         for (int i = 0; i < actions; i++) {
             s.actions[i] = n.actions[i] != null ? intended(am, n.actions[i].actionIntent) : null;
         }
+        writeStored(s);
+    }
+
+    private static void writeStored(Stored s) {
+        String pkg = s.packageName, key = s.key;
         Parcel p = Parcel.obtain();
         try {
             p.writeInt(VERSION);
@@ -114,6 +129,8 @@ final class NotificationStore {
             p.writeInt(s.id);
             p.writeInt(s.flags);
             p.writeString(s.channelId);
+            p.writeString(s.windowsTag);
+            p.writeString(s.legacyWindowsTag);
             write(p, s.content);
             p.writeInt(s.actions.length);
             for (Intended i : s.actions) write(p, i);
@@ -167,7 +184,7 @@ final class NotificationStore {
     }
 
     /** The stored notification with {@code key} of {@code pkg}, or null. */
-    static Stored load(String pkg, String key) {
+    static synchronized Stored load(String pkg, String key) {
         File current = file(pkg, key);
         // Existing Windows toasts keep their activation key after an upgrade.
         // The reader verifies the full key before accepting a legacy hash file.
@@ -182,7 +199,7 @@ final class NotificationStore {
             p.unmarshall(data, 0, data.length);
             p.setDataPosition(0);
             int version = p.readInt();
-            if (version != VERSION && version != 2 && !(version == 1 && !GmsSignatureSpoofing.isEnabled())) return null;
+            if (version != VERSION && version != 3 && version != 2 && !(version == 1 && !GmsSignatureSpoofing.isEnabled())) return null;
             Stored s = new Stored();
             s.key = p.readString();
             if (s.key == null || key != null && !key.equals(s.key)) return null;
@@ -196,6 +213,10 @@ final class NotificationStore {
             s.id = p.readInt();
             s.flags = p.readInt();
             if (version >= 3) s.channelId = p.readString();
+            s.windowsTag = version >= 4 ? p.readString() : NotificationManagerService.legacyToastTag(s.tag, s.id);
+            s.legacyWindowsTag = version >= 4 ? p.readString() : null;
+            if (version >= 4 && (!NotificationManagerService.toastTag(s.tag, s.id).equals(s.windowsTag)
+                    || s.legacyWindowsTag != null && !NotificationManagerService.legacyToastTagMatches(s.legacyWindowsTag, s.tag, s.id))) return null;
             s.content = read(p, version);
             int actions = p.readInt();
             if (actions < 0 || actions > 128) return null;
@@ -210,9 +231,17 @@ final class NotificationStore {
         }
     }
 
-    static void delete(String pkg, String key) {
+    static synchronized void delete(String pkg, String key) {
         file(pkg, key).delete();
         deleteLegacy(pkg, key);
+    }
+
+    static synchronized void legacyRemoved(String pkg, String key, String legacyTag) {
+        Stored s = load(pkg, key);
+        if (s != null && legacyTag.equals(s.legacyWindowsTag)) {
+            s.legacyWindowsTag = null;
+            writeStored(s);
+        }
     }
 
     private static void deleteLegacy(String pkg, String key) {
@@ -221,7 +250,7 @@ final class NotificationStore {
     }
 
     /** Retained Windows toasts can outlive the system server's in-memory records. */
-    static java.util.List<Stored> deleteChannels(String pkg, java.util.Set<String> channelIds) {
+    static synchronized java.util.List<Stored> deleteChannels(String pkg, java.util.Set<String> channelIds) {
         java.util.List<Stored> removed = new java.util.ArrayList<>();
         File[] files = dir(pkg).listFiles((directory, name) -> name.endsWith(".n"));
         if (files == null) return removed;
@@ -239,7 +268,7 @@ final class NotificationStore {
     }
 
     /** Every stored notification of the package goes (an uninstall). */
-    static void deleteAll(String pkg) {
+    static synchronized void deleteAll(String pkg) {
         File d = dir(pkg);
         File[] files = d.listFiles();
         if (files != null) {

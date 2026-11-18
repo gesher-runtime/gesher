@@ -28,8 +28,9 @@ being tested.
 
 Run with the usual `--java-home`, `--framework-classes`, `--core-classes` and
 `--app-classes` inputs. On Windows also supply `--cc <llvm-mingw C compiler>`.
-`--source-ref 473beec7` runs unchanged main as a negative control and fails because
-the two distinct keys resolve to the same production storage path.
+The original filename-control result against `473beec7` was produced with the
+runner at `ae069416`. The current runner also includes Windows-tag migration;
+see [TOAST_MIGRATION.md](TOAST_MIGRATION.md) for its source-compatible control.
 
 The added `notificationKeyCollisions` case in the existing Windows
 `NotificationChannelGroupsTest` uses real Android Parcel/AIDL and persisted files,
@@ -59,4 +60,6 @@ framework-res.apk and ICU data), `--d8-jar`, and a fresh `--output` directory.
 The 2026-11-18 local Windows run passed 8 write and 13 read checks, including an
 actual PNG write for a 204-character package name accepted by Android's package
 validator (the AOSP-derived validator's filename limit is 223 characters). The same
-command with `--source-ref 473beec7` failed at `Colliding keys share storage path`.
+command at `ae069416` with `--source-ref 473beec7` failed at
+`Colliding keys share storage path`. The current runner additionally exercises
+Windows-tag metadata migration as documented in [TOAST_MIGRATION.md](TOAST_MIGRATION.md).

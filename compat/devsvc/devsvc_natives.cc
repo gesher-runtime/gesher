@@ -232,6 +232,12 @@ jint WindowsHost_clearToasts(JNIEnv* env, jclass, jstring appId) {
   return static_cast<jint>(dev::ClearToasts(Str(env, appId)));
 }
 
+jint WindowsHost_removeToastIfLaunch(JNIEnv* env, jclass, jstring appId, jstring tag,
+                                     jstring group, jstring launch) {
+  return static_cast<jint>(dev::RemoveToastIfLaunch(Str(env, appId), Str(env, tag),
+                                                   Str(env, group), Str(env, launch)));
+}
+
 jint WindowsHost_registerAppId(JNIEnv* env, jclass, jstring appId, jstring displayName,
                                jstring icon) {
   return static_cast<jint>(
@@ -314,6 +320,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
      GESHER_JNI(WindowsHost_showToast)},
     {"nativeRemoveToast", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING ")I",
      GESHER_JNI(WindowsHost_removeToast)},
+    {"nativeRemoveToastIfLaunch", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING ")I",
+     GESHER_JNI(WindowsHost_removeToastIfLaunch)},
     {"nativeClearToasts", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_clearToasts)},
     {"nativeShowNotificationBridge",
      "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "I)I",
