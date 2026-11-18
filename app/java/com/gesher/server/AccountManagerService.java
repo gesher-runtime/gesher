@@ -70,8 +70,8 @@ public final class AccountManagerService extends IAccountManager.Default {
     private static final String GOOGLE_TYPE = "com.google";
     private static final Account DEFAULT_ACCOUNT = new Account("user@gesher.local", GOOGLE_TYPE);
     private static final String ANDROID_NS = "http://schemas.android.com/apk/res/android";
-    /** How long an authenticator has to bind and answer. */
-    private static final long AUTHENTICATOR_TIMEOUT_SECONDS = 60;
+    /** AOSP Session budget, including binding and any login Activity continuation. */
+    private static final long AUTHENTICATOR_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(15);
 
     /** An account's password and user data. */
     private static final class Entry {
@@ -172,6 +172,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (mBeforeMutation == null) mBeforeMutation = new State(mAccounts, mUnclaimedLegacy);
     }
     // Calls to authenticators wait on their binding and answer: off the binder threads.
+    /** Server-local clock seam; normal sessions always use Android's awake-time clock. */
+    private java.util.function.LongSupplier mSessionUptimeMillis = SystemClock::uptimeMillis;
     private final java.util.concurrent.ScheduledExecutorService mSessionTimeout =
             sessionTimer();
     private static java.util.concurrent.ScheduledThreadPoolExecutor sessionTimer() {
@@ -350,35 +352,35 @@ public final class AccountManagerService extends IAccountManager.Default {
             Authenticator owner = authenticator(type);
             if (owner == null) return false;
             String ownerCode = packageIdentity(owner.service.getPackageName());
-            Answer answer = call(owner, (auth, response) -> auth.addAccount(response, type,
-                    authTokenType, requiredFeatures, new Bundle(addOptions)), client);
             CountDownLatch done = new CountDownLatch(1);
             java.util.concurrent.atomic.AtomicBoolean success = new java.util.concurrent.atomic.AtomicBoolean();
             java.util.concurrent.atomic.AtomicBoolean launched = new java.util.concurrent.atomic.AtomicBoolean();
-            answer.deliverSession(new IAccountManagerResponse.Stub() {
+            java.util.concurrent.atomic.AtomicBoolean finished = new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.function.Consumer<Boolean> finish = value -> {
+                if (finished.compareAndSet(false, true)) { success.set(value); done.countDown(); }
+            };
+            IAccountManagerResponse response = new IAccountManagerResponse.Stub() {
                 @Override public void onResult(Bundle result) {
-                    if (!active.getAsBoolean()) { done.countDown(); return; }
+                    if (!active.getAsBoolean()) { finish.accept(false); return; }
                     Intent intent = result.getParcelable(AccountManager.KEY_INTENT, Intent.class);
-                    if (intent == null) { success.set(true); done.countDown(); }
+                    if (intent == null) finish.accept(true);
                     else if (!launched.compareAndSet(false, true)
-                            || !launcher.launch(intent, () -> { success.set(true); done.countDown(); })) done.countDown();
+                            || !launcher.launch(intent, () -> finish.accept(true))) finish.accept(false);
                 }
-                @Override public void onError(int code, String message) { done.countDown(); }
-            }, value -> {
-                Authenticator current = authenticator(type);
-                if (!active.getAsBoolean() || !callerUnchanged(client) || current == null
-                        || !current.service.equals(owner.service) || ownerCode == null
-                        || !ownerCode.equals(packageIdentity(owner.service.getPackageName()))) return null;
-                // Unlike addAccount, adding through the chooser grants no visibility.
-                return validatedResult(owner, value, null);
-            });
+                @Override public void onError(int code, String message) { finish.accept(false); }
+            };
+            Answer answer = call(owner, (auth, r) -> auth.addAccount(r, type,
+                    authTokenType, requiredFeatures, new Bundle(addOptions)), client, response, active);
             try {
-                long end = SystemClock.elapsedRealtime() + TimeUnit.MINUTES.toMillis(10);
-                while (!done.await(250, TimeUnit.MILLISECONDS)) {
-                    if (!active.getAsBoolean() || SystemClock.elapsedRealtime() >= end) return false;
-                }
-                return success.get() && active.getAsBoolean();
-            } catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
+                return answer.deliverToChooser(response, value -> {
+                    Authenticator current = authenticator(type);
+                    if (!active.getAsBoolean() || !callerUnchanged(client) || current == null
+                            || !current.service.equals(owner.service) || ownerCode == null
+                            || !ownerCode.equals(packageIdentity(owner.service.getPackageName()))) return null;
+                    // Unlike addAccount, adding through the chooser grants no visibility.
+                    return validatedResult(owner, value, null);
+                }, done, success::get, active);
+            } finally { finish.accept(false); }
         }
     }
 
@@ -904,7 +906,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                     error(response, AccountManager.ERROR_CODE_CANCELED, "Account credential access revoked"); return;
                 }
             }
-            Answer answer = call(a, (auth, r) -> auth.getAuthToken(r, account, authTokenType, o), c);
+            Answer answer = call(a, (auth, r) -> auth.getAuthToken(r, account, authTokenType, o), c, response);
             answer.deliverSession(response, b -> {
                 Bundle result = validatedResult(a, b, account, true);
                 if (result == null) return null;
@@ -1055,7 +1057,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         mCalls.execute(() -> {
             Authenticator a = authenticator(accountType);
             if (a == null) { error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "Authenticator unavailable"); return; }
-            Answer answer = call(a, (auth, r) -> auth.addAccount(r, accountType, authTokenType, requiredFeatures, o), c);
+            Answer answer = call(a, (auth, r) -> auth.addAccount(r, accountType, authTokenType, requiredFeatures, o), c, response);
             answer.deliverSession(response, b -> {
                 Bundle result = validatedResult(a, b, null);
                 if (result == null) return null;
@@ -1136,7 +1138,8 @@ public final class AccountManagerService extends IAccountManager.Default {
             if (!a.service.getPackageName().equals(e.owner) || !e.ownerIdentity.equals(packageIdentity(e.owner))) return false;
         }
         Answer answer = call(a, (auth, r) -> auth.hasFeatures(r, account, features));
-        return answer.result != null ? answer.result.getBoolean(AccountManager.KEY_BOOLEAN_RESULT, false) : null;
+        Bundle result = answer.takeResult();
+        return result != null ? result.getBoolean(AccountManager.KEY_BOOLEAN_RESULT, false) : null;
     }
 
     @Override
@@ -1167,7 +1170,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                     error(response, AccountManager.ERROR_CODE_BAD_AUTHENTICATION, "Authenticator unavailable"); return;
                 }
             }
-            call(a, operation, c).deliverSession(response, b -> validatedResult(a, b, account));
+            call(a, operation, c, response).deliverSession(response, b -> validatedResult(a, b, account));
         });
     }
 
@@ -1178,7 +1181,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (a == null) { error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "Authenticator unavailable"); return; }
         if (!c.system && (!a.service.getPackageName().equals(c.name)
                 || !packageIdentity(c.name).equals(c.code))) throw new SecurityException("Authenticator owner required");
-        mCalls.execute(() -> call(a, (auth, r) -> auth.editProperties(r, accountType), c)
+        mCalls.execute(() -> call(a, (auth, r) -> auth.editProperties(r, accountType), c, response)
                 .deliverSession(response, b -> validatedResult(a, b, null)));
     }
 
@@ -1187,11 +1190,13 @@ public final class AccountManagerService extends IAccountManager.Default {
         caller(null); Authenticator a = authenticator(type);
         if (a == null) { error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "Authenticator unavailable"); return; }
         mCalls.execute(() -> {
-            Answer answer = call(a, (auth, r) -> auth.getAuthTokenLabel(r, tokenType));
-            if (answer.result == null) { answer.deliver(response); return; }
-            Bundle result = new Bundle();
-            result.putString(AccountManager.KEY_AUTH_TOKEN_LABEL, answer.result.getString(AccountManager.KEY_AUTH_TOKEN_LABEL));
-            reply(response, result);
+            call(a, (auth, r) -> auth.getAuthTokenLabel(r, tokenType), null, response)
+                    .deliverSession(response, value -> {
+                        Bundle result = new Bundle();
+                        result.putString(AccountManager.KEY_AUTH_TOKEN_LABEL,
+                                value.getString(AccountManager.KEY_AUTH_TOKEN_LABEL));
+                        return result;
+                    });
         });
     }
 
@@ -1241,7 +1246,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                     error(response, AccountManager.ERROR_CODE_BAD_AUTHENTICATION, "Account owner changed"); return;
                 }
             }
-            call(a, operation, c).deliverSession(response, b -> {
+            call(a, operation, c, response).deliverSession(response, b -> {
                 if (!code.equals(packageIdentity(a.service.getPackageName()))) return null;
                 Bundle internal = b.getBundle(AccountManager.KEY_ACCOUNT_SESSION_BUNDLE);
                 Bundle checked = validatedResult(a, b, account);
@@ -1298,7 +1303,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                     || !pending.ownerCode.equals(packageIdentity(pending.owner))) {
                 error(response, AccountManager.ERROR_CODE_BAD_AUTHENTICATION, "Account session owner changed"); return;
             }
-            call(a, (auth, r) -> auth.finishSession(r, pending.type, internal), c).deliverSession(response, b -> {
+            call(a, (auth, r) -> auth.finishSession(r, pending.type, internal), c, response).deliverSession(response, b -> {
                 Bundle result = validatedResult(a, b, pending.account);
                 if (result == null || !pending.ownerCode.equals(packageIdentity(pending.owner))) return null;
                 String name = result.getString(AccountManager.KEY_ACCOUNT_NAME);
@@ -1460,52 +1465,124 @@ public final class AccountManagerService extends IAccountManager.Default {
     private interface ResultCheck { Bundle check(Bundle bundle); }
 
     /** Initial service answer plus the later callback from an authenticator login Activity. */
-    private final class Answer extends IAccountAuthenticatorResponse.Stub {
+    private final class Answer extends IAccountAuthenticatorResponse.Stub implements IBinder.DeathRecipient {
         final CountDownLatch done = new CountDownLatch(1);
         final Authenticator owner;
         final Caller client;
-        volatile Bundle result;
-        volatile int code = AccountManager.ERROR_CODE_REMOTE_EXCEPTION;
-        volatile String message = "Authenticator did not answer";
+        final long deadline;
+        private Bundle result;
+        private int code = AccountManager.ERROR_CODE_REMOTE_EXCEPTION;
+        private String message = "Authenticator did not answer";
         private final List<Bundle> pending = new ArrayList<>();
+        // Serialize validation and outbound callbacks, without holding the state monitor
+        // across app code. In particular, a timeout cannot overtake an accepted login Intent.
+        private final Object deliveryLock = new Object();
         private java.util.function.Consumer<Bundle> listener;
         private java.util.function.BiConsumer<Integer, String> errorListener;
-        private boolean complete, failed;
+        private boolean complete, failed, deliveryStarted;
+        private IBinder responseBinder;
         private java.util.concurrent.ScheduledFuture<?> timeout;
 
         /** Called with this Answer's monitor held on every terminal session path. */
         private void completeLocked() {
             complete = true;
             if (timeout != null) { timeout.cancel(false); timeout = null; }
+            if (responseBinder != null) {
+                responseBinder.unlinkToDeath(this, 0);
+                responseBinder = null;
+            }
             listener = null;
             errorListener = null;
             result = null;
             pending.clear();
+            done.countDown();
         }
 
-        Answer(Authenticator owner) { this(owner, null); }
-        Answer(Authenticator owner, Caller client) {
+        Answer(Authenticator owner) { this(owner, null, null); }
+        Answer(Authenticator owner, Caller client) { this(owner, client, null); }
+        Answer(Authenticator owner, Caller client, IAccountManagerResponse response) {
             this.owner = owner; this.client = client;
+            deadline = mSessionUptimeMillis.getAsLong() + AUTHENTICATOR_TIMEOUT_MILLIS;
             synchronized (AccountManagerService.this) { mAnswers.add(this); }
+            synchronized (deliveryLock) {
+                synchronized (this) {
+                    if (!complete) {
+                        scheduleTimeoutLocked();
+                        watchResponseLocked(response);
+                        if (!complete && response != null) errorListener = (c, m) -> error(response, c, m);
+                    }
+                }
+            }
+        }
+
+        private void watchResponseLocked(IAccountManagerResponse response) {
+            if (responseBinder != null || response == null) return;
+            IBinder binder = response.asBinder();
+            if (binder == null) return;
+            try {
+                responseBinder = binder;
+                binder.linkToDeath(this, 0);
+            } catch (RemoteException e) {
+                responseBinder = null; // linkToDeath did not register a recipient.
+                deliveryStarted = true;
+                completeLocked();
+            }
+        }
+
+        private void scheduleTimeoutLocked() {
+            if (timeout != null) timeout.cancel(false);
+            timeout = mSessionTimeout.schedule(this::onTimedOut,
+                    Math.max(0, deadline - mSessionUptimeMillis.getAsLong()), TimeUnit.MILLISECONDS);
+        }
+
+        private void onTimedOut() {
+            synchronized (deliveryLock) {
+                synchronized (this) {
+                    if (complete) return;
+                    // The scheduler's delay clock need not exclude host sleep. Keep the
+                    // Android Handler uptime deadline even if a host wakeup arrives early.
+                    if (mSessionUptimeMillis.getAsLong() < deadline) {
+                        scheduleTimeoutLocked();
+                        return;
+                    }
+                }
+                finishError(AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "timeout", false);
+            }
         }
 
         private boolean current() {
             return authenticatorUnchanged(owner) && (client == null || callerUnchanged(client));
         }
 
-        void cancelForRemoval() {
-            java.util.function.BiConsumer<Integer, String> listener;
-            synchronized (this) {
-                if (complete) return;
-                failed = true;
-                code = AccountManager.ERROR_CODE_CANCELED; message = "Account package access removed";
-                listener = errorListener;
-                completeLocked();
-                done.countDown();
+        private void finishError(int errorCode, String errorMessage, boolean asynchronous) {
+            synchronized (deliveryLock) {
+                java.util.function.BiConsumer<Integer, String> deliver;
+                synchronized (this) {
+                    if (complete) return;
+                    code = errorCode; message = errorMessage; failed = true;
+                    deliver = errorListener;
+                    if (deliver != null) deliveryStarted = true;
+                    completeLocked();
+                }
+                if (deliver != null) {
+                    if (asynchronous) mCalls.execute(() -> deliver.accept(errorCode, errorMessage));
+                    else deliver.accept(errorCode, errorMessage);
+                }
             }
-            if (listener != null) mCalls.execute(() -> listener.accept(
-                    AccountManager.ERROR_CODE_CANCELED, "Account package access removed"));
         }
+
+        void cancelForRemoval() {
+            finishError(AccountManager.ERROR_CODE_CANCELED, "Account package access removed", true);
+        }
+
+        /** Caller death or an abandoned chooser has no remaining response to deliver. */
+        void close() {
+            synchronized (deliveryLock) {
+                synchronized (this) { deliveryStarted = true; completeLocked(); }
+            }
+        }
+
+        @Override public void binderDied() { close(); }
 
         private void authenticateCallback() {
             if (!mCallers.isSystem()) mCallers.requirePackage(owner.service.getPackageName());
@@ -1538,78 +1615,122 @@ public final class AccountManagerService extends IAccountManager.Default {
         public void onError(int errorCode, String errorMessage) {
             authenticateCallback();
             if (!current()) { cancelForRemoval(); return; }
-            java.util.function.BiConsumer<Integer, String> deliver;
-            synchronized (this) {
-                if (complete) return;
-                code = errorCode; message = errorMessage; failed = true; deliver = errorListener;
-                if (deliver != null) completeLocked();
-                done.countDown();
+            finishError(errorCode, errorMessage, false);
+        }
+
+        void fail(String why) {
+            finishError(AccountManager.ERROR_CODE_REMOTE_EXCEPTION, why, false);
+        }
+
+        void awaitInitial(java.util.function.BooleanSupplier active) throws InterruptedException {
+            if (active == null) done.await();
+            else {
+                while (active.getAsBoolean()) {
+                    if (done.await(250, TimeUnit.MILLISECONDS)) return;
+                }
+                close();
             }
-            if (deliver != null) deliver.accept(errorCode, errorMessage);
         }
 
-        synchronized void fail(String why) {
-            if (complete) return;
-            message = why; failed = true; done.countDown();
+        synchronized boolean isComplete() { return complete; }
+
+        /** Noninteractive internal consumers also retire the construction-time timer. */
+        Bundle takeResult() {
+            if (!current()) cancelForRemoval();
+            synchronized (deliveryLock) {
+                synchronized (this) {
+                    if (deliveryStarted) return null;
+                    deliveryStarted = true;
+                    Bundle value = complete || failed ? null : result;
+                    completeLocked();
+                    return value;
+                }
+            }
         }
 
-        void deliver(IAccountManagerResponse response) {
-            if (!current()) { cancelForRemoval(); error(response, code, message); return; }
-            if (result != null) reply(response, result);
-            else error(response, code, message);
+        private void deliverChecked(IAccountManagerResponse response, ResultCheck check, Bundle value) {
+            synchronized (deliveryLock) {
+                synchronized (this) { if (complete) return; }
+                if (!current()) { cancelForRemoval(); return; }
+                Bundle checked;
+                try { checked = check.check(value); }
+                catch (RuntimeException e) { checked = null; }
+                synchronized (this) {
+                    if (complete) return;
+                    if (checked == null || response == null
+                            || !checked.containsKey(AccountManager.KEY_INTENT)) completeLocked();
+                }
+                if (checked == null) error(response, AccountManager.ERROR_CODE_INVALID_RESPONSE, "Invalid authenticator response");
+                else if (response != null) {
+                    try { response.onResult(checked); }
+                    catch (RemoteException e) { close(); }
+                }
+            }
         }
 
         void deliverSession(IAccountManagerResponse response, ResultCheck check) {
-            if (!current()) { cancelForRemoval(); error(response, code, message); return; }
-            List<Bundle> initial;
-            java.util.function.Consumer<Bundle> continuation;
-            synchronized (this) {
-                if (complete) return;
-                if (result == null || failed) { completeLocked(); error(response, code, message); return; }
-                listener = value -> {
-                    synchronized (this) { if (complete) return; }
-                    Bundle checked;
-                    try { checked = current() ? check.check(value) : null; }
-                    catch (RuntimeException e) { checked = null; }
-                    synchronized (this) {
+            if (!current()) cancelForRemoval();
+            synchronized (deliveryLock) {
+                List<Bundle> initial = new ArrayList<>();
+                java.util.function.Consumer<Bundle> continuation = null;
+                int errorCode = 0;
+                String errorMessage = null;
+                synchronized (this) {
+                    if (deliveryStarted) return;
+                    deliveryStarted = true;
+                    if (complete) {
+                        // A timeout/error can precede registration. Cleanup must not
+                        // consume that sole error, nor may a second registration replay it.
+                        if (!failed) return;
+                        errorCode = code; errorMessage = message;
+                    } else {
+                        watchResponseLocked(response);
                         if (complete) return;
-                        if (checked == null || !checked.containsKey(AccountManager.KEY_INTENT)) completeLocked();
+                        listener = value -> deliverChecked(response, check, value);
+                        errorListener = (c, m) -> error(response, c, m);
+                        if (result != null) initial.add(result);
+                        initial.addAll(pending); pending.clear(); result = null;
+                        continuation = listener;
                     }
-                    if (checked == null) error(response, AccountManager.ERROR_CODE_INVALID_RESPONSE, "Invalid authenticator response");
-                    else reply(response, checked);
-                };
-                errorListener = (c, m) -> error(response, c, m);
-                initial = new ArrayList<>(); initial.add(result); initial.addAll(pending); pending.clear();
-                result = null;
-                continuation = listener;
+                }
+                if (continuation == null) error(response, errorCode, errorMessage);
+                else for (Bundle value : initial) continuation.accept(value);
             }
-            for (Bundle value : initial) continuation.accept(value);
-            synchronized (this) {
-                if (complete) return;
-                timeout = mSessionTimeout.schedule(() -> {
-                    synchronized (this) {
-                        if (complete) return;
-                        completeLocked();
-                    }
-                    error(response, AccountManager.ERROR_CODE_CANCELED, "Authentication session expired");
-                }, 10, TimeUnit.MINUTES);
-            }
+        }
+
+        boolean deliverToChooser(IAccountManagerResponse response, ResultCheck check,
+                CountDownLatch finished, java.util.function.BooleanSupplier success,
+                java.util.function.BooleanSupplier active) {
+            try {
+                deliverSession(response, check);
+                // This Answer's timer owns the budget, including the initial binding.
+                while (!finished.await(250, TimeUnit.MILLISECONDS)) {
+                    if (!active.getAsBoolean()) return false;
+                }
+                return success.getAsBoolean() && active.getAsBoolean();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            } finally { close(); }
         }
     }
 
     /** Binds {@code a}'s service, makes the call and waits for its answer (on mCalls). */
     private Answer call(Authenticator a, Call call) {
-        return call(a, call, null);
+        return call(a, call, null, null);
     }
 
-    private Answer call(Authenticator a, Call call, Caller client) {
-        Answer answer = new Answer(a, client);
-        if (!answer.current()) { answer.cancelForRemoval(); return answer; }
-        IServiceConnection connection = new IServiceConnection.Stub() {
+    private Answer call(Authenticator a, Call call, Caller client, IAccountManagerResponse response) {
+        return call(a, call, client, response, null);
+    }
+
+    private IServiceConnection connection(Answer answer, Call call) {
+        return new IServiceConnection.Stub() {
             @Override
             public void connected(ComponentName name, IBinder binder,
                     android.app.IBinderSession session, boolean dead) {
-                if (binder == null) return;
+                if (answer.isComplete()) return;
+                if (binder == null || dead) { answer.fail("Authenticator disconnected"); return; }
                 if (!answer.current()) { answer.cancelForRemoval(); return; }
                 try {
                     call.run(IAccountAuthenticator.Stub.asInterface(binder), answer);
@@ -1618,6 +1739,15 @@ public final class AccountManagerService extends IAccountManager.Default {
                 }
             }
         };
+    }
+
+    private Answer call(Authenticator a, Call call, Caller client, IAccountManagerResponse response,
+            java.util.function.BooleanSupplier active) {
+        Answer answer = new Answer(a, client, response);
+        if (answer.isComplete()) return answer;
+        if (!answer.current()) { answer.cancelForRemoval(); return answer; }
+        if (active != null && !active.getAsBoolean()) { answer.close(); return answer; }
+        IServiceConnection connection = connection(answer, call);
         int bound;
         long token = Binder.clearCallingIdentity();
         try {
@@ -1636,12 +1766,10 @@ public final class AccountManagerService extends IAccountManager.Default {
             return answer;
         }
         try {
-            if (!answer.done.await(AUTHENTICATOR_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                answer.fail("the authenticator " + a.service.flattenToShortString()
-                        + " did not answer in " + AUTHENTICATOR_TIMEOUT_SECONDS + " s");
-            }
+            answer.awaitInitial(active);
         } catch (InterruptedException e) {
             answer.fail("interrupted");
+            Thread.currentThread().interrupt();
         } finally {
             try {
                 mAm.unbindService(connection);

@@ -522,7 +522,7 @@ jobs:
           python3 tools/test_media_routing_contracts.py \
             --framework-classes out/framework/classes --core-classes out/coremod
 
-      - name: Account authentication session terminal lifetimes
+      - name: Account authentication session lifetimes and deadlines
         run: |
           python3 tools/test_account_session_lifetime.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \

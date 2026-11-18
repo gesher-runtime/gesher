@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the whole production account service and test Answer terminal lifetimes.
+"""Compile the whole production account service and test Answer lifetimes/deadlines.
 
 The fixture supplies synthetic authenticator metadata and existing host JNI
 identity/allocation boundaries; no production Java method is replaced.
@@ -40,16 +40,18 @@ def main():
                                               check=True,capture_output=True).stdout)
         subprocess.run([str(args.java_home/'bin/javac'),'-J-XX:-UsePerfData','-encoding','UTF-8',
                         '-cp',cp,'-d',str(classes),str(source),
-                        str(ROOT/'tests/account-session/AccountSessionLifetimeHost.java')],check=True)
+                        str(ROOT/'tests/account-session/AccountSessionLifetimeHost.java'),
+                        str(ROOT/'tests/account-session/AccountSessionTimeoutHost.java')],check=True)
         cleaner=work/'cleaner/sun/misc'; cleaner.mkdir(parents=True)
         for entry in (args.core_classes/'sun/misc').glob('Cleaner*.class'):
             shutil.copy2(entry,cleaner/entry.name)
         env=os.environ.copy(); env['ANDROID_DATA']=str(work/'data'); env['GESHER_MICROG_SPOOF']='0'
-        subprocess.run([str(args.java_home/'bin/java'),'-XX:-UsePerfData',
-                        '--add-opens','java.base/java.util.concurrent=ALL-UNNAMED',
-                        '--patch-module','jdk.unsupported='+str(work/'cleaner'),
-                        '-cp',str(classes)+os.pathsep+cp,'AccountSessionLifetimeHost',str(native)],
-                       check=True,env=env,timeout=45)
+        for fixture in ('AccountSessionLifetimeHost', 'AccountSessionTimeoutHost'):
+            subprocess.run([str(args.java_home/'bin/java'),'-XX:-UsePerfData',
+                            '--add-opens','java.base/java.util.concurrent=ALL-UNNAMED',
+                            '--patch-module','jdk.unsupported='+str(work/'cleaner'),
+                            '-cp',str(classes)+os.pathsep+cp,fixture,str(native)],
+                           check=True,env=env,timeout=45)
 
 if __name__=='__main__':
     main()
