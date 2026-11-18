@@ -272,6 +272,59 @@ int main() {
         compile(&re, "(a*){1,2}", 1) == 0 && execute(&re, "a", 2, sub, 0) == 0 &&
             sub[0].begin == 0 && sub[0].end == 1 && sub[1].begin == 1 && sub[1].end == 1);
   free_regex(&re);
+  for (const char* input : {"a", "aa"}) {
+    const auto length = static_cast<int64_t>(std::strlen(input));
+    Check("AOSP bounded BRE choice preserves branch-local backreference capture",
+          compile(&re, "\\(a*\\)\\{1,2\\}\\1", 0) == 0 &&
+              execute(&re, input, 2, sub, 0) == 0 &&
+              sub[0].begin == 0 && sub[0].end == length &&
+              sub[1].begin == 0 && sub[1].end == length);
+    free_regex(&re);
+  }
+  for (int flags : {0, 4}) {
+    Check("Bounded BRE cannot skip a required backreference, including REG_NOSUB",
+          compile(&re, "\\(a\\)\\{1,2\\}\\1", flags) == 0 &&
+              execute(&re, "a", 2, sub, 0) == 1);
+    free_regex(&re);
+    Check("Bounded BRE cannot skip a required suffix, including REG_NOSUB",
+          compile(&re, "\\(a\\)\\{1,2\\}\\1b", flags) == 0 &&
+              execute(&re, "aa", 2, sub, 0) == 1);
+    free_regex(&re);
+    Check("Nullable bounded BRE still requires the whole expression",
+          compile(&re, "\\(a*\\)\\{1,2\\}\\1b", flags) == 0 &&
+              execute(&re, "aa", 2, sub, 0) == 1);
+    free_regex(&re);
+  }
+  Check("BRE whole-pattern filter retains nested referenced group language",
+        compile(&re, "\\(a\\)\\(\\1b\\)\\2", 0) == 0 &&
+            execute(&re, "aabab", 3, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 5 &&
+            sub[1].begin == 0 && sub[1].end == 1 &&
+            sub[2].begin == 1 && sub[2].end == 3);
+  free_regex(&re);
+  for (const char* pattern : {"\\<a\\>", "[[:<:]]a[[:>:]]"}) {
+    match = {1, 2};
+    Check("REG_STARTEND starts a word region despite a preceding word byte",
+          compile(&re, pattern, 1) == 0 && execute(&re, "ba", 1, &match, 4) == 0 &&
+              match.begin == 1 && match.end == 2);
+    match = {1, 2};
+    Check("REG_STARTEND REG_NOTBOL retains the preceding word byte",
+          execute(&re, "ba", 1, &match, 4 | 1) == 1);
+    match = {1, 2};
+    Check("REG_STARTEND REG_NOTBOL permits a preceding nonword byte",
+          execute(&re, " a", 1, &match, 4 | 1) == 0 &&
+              match.begin == 1 && match.end == 2);
+    free_regex(&re);
+  }
+  sub[0] = {1, 3};
+  Check("BRE backreference respects the REG_STARTEND word-region beginning",
+        compile(&re, "\\<\\(a\\)\\1", 0) == 0 && execute(&re, "baa", 2, sub, 4) == 0 &&
+            sub[0].begin == 1 && sub[0].end == 3 &&
+            sub[1].begin == 1 && sub[1].end == 2);
+  sub[0] = {1, 3};
+  Check("BRE REG_NOTBOL keeps REG_STARTEND inside the preceding word",
+        execute(&re, "baa", 2, sub, 4 | 1) == 1);
+  free_regex(&re);
   Check("AOSP word boundary honors REG_NOTBOL and REG_NOTEOL at edges",
         compile(&re, "\\<foo\\>", 1) == 0 &&
             execute(&re, "foo", 0, nullptr, 1) != 0 &&

@@ -1,6 +1,45 @@
 # Bionic regex compatibility QA — 2026-11-17
 
-## Decision and reviewed state
+## Repair candidate — 2026-11-18
+
+The historical review below is retained as the record of the earlier head.
+The current PR head `8f46c2f6f8ccee8b9e20cc6a0d8ecff3fbd8f607` replaces
+capture-history preference with Android-style capture dissection and an
+iterative backreference executor. Independent review of that head found two
+additional observable differences: word-begin assertions at a `REG_STARTEND`
+region after a word byte, and captured ranges in bounded BRE alternatives.
+
+The follow-up repair preserves the region beginning unless `REG_NOTBOL`
+requires preceding-character context, and distinguishes a bounded alternative
+from a star's optional continuation in the backreference executor. The latter
+uses branch-local stop points following the pinned reference's `OCH_` handling;
+the complete expression is first filtered through an NFA that includes a
+copy of each referenced group's language and every required suffix. Without
+that prerequisite, branch-local dissection can accept a missing backreference
+or suffix. This is not an exception for a particular pattern. For example,
+`\(a*\)\{1,2\}\1` on `aa` must report group 1 as `[0, 2)`, whereas
+`\(a*\)*\1` still reports its trailing empty capture `[2, 2)`.
+
+Capture dissection now uses explicit tasks instead of native recursion through
+generated concatenation nodes. The working budget includes those tasks,
+input-sized prefix storage and backreference repetition-position storage.
+The full-expression filter shares the backreference work limit, and its
+candidate-end storage is deducted from the later backtracking budget.
+Resource failure continues to return `REG_ESPACE`.
+
+The repair candidate passed 89 production-ABI host checks, also under
+AddressSanitizer/UndefinedBehaviorSanitizer with leak detection disabled for
+the managed host. A fixed matrix of 39,216 ordinary pattern/input/flag
+combinations agreed with an unmodified matching implementation built from
+Android 16 r4 source commit `f22516cbc67e81c13cf943ce02f01b8929a98726`.
+A further 6,552 short bounded-backreference/suffix/nested-reference cases,
+including `REG_NOSUB` and different result counts, also agreed.
+Host and guest regressions cover both boundary spellings, `REG_NOTBOL`, the
+BRE path, and bounded captures. This is host execution of the production
+adapter against pinned source, not a claim of Windows or Android-device
+execution. Independent candidate re-review and current-head CI remain required.
+
+## Historical decision and reviewed state
 
 PR #60 is **not ready to merge**. The goal is within Gesher's runtime scope:
 correct `REG_NEWLINE` matching is useful Android compatibility work, without

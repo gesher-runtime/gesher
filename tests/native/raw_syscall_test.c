@@ -337,6 +337,65 @@ int gesher_selftest(void) {
           regcomp(&re, "(a(b)|a)+", REG_EXTENDED) == 0 && regexec(&re, "aba", 3, m, 0) == 0 &&
               m[1].rm_so == 2 && m[1].rm_eo == 3 && m[2].rm_so == -1 && m[2].rm_eo == -1);
     regfree(&re);
+    const char* bounded_inputs[] = {"a", "aa"};
+    for (size_t i = 0; i < sizeof(bounded_inputs) / sizeof(bounded_inputs[0]); ++i) {
+        regoff_t length = (regoff_t)strlen(bounded_inputs[i]);
+        check("AOSP bounded BRE choice preserves branch-local backreference capture",
+              regcomp(&re, "\\(a*\\)\\{1,2\\}\\1", 0) == 0 &&
+                  regexec(&re, bounded_inputs[i], 2, m, 0) == 0 &&
+                  m[0].rm_so == 0 && m[0].rm_eo == length &&
+                  m[1].rm_so == 0 && m[1].rm_eo == length);
+        regfree(&re);
+    }
+    const char* word_patterns[] = {"\\<a\\>", "[[:<:]]a[[:>:]]"};
+    const int backref_flags[] = {0, REG_NOSUB};
+    for (size_t i = 0; i < sizeof(backref_flags) / sizeof(backref_flags[0]); ++i) {
+        check("Bounded BRE cannot skip a required backreference, including REG_NOSUB",
+              regcomp(&re, "\\(a\\)\\{1,2\\}\\1", backref_flags[i]) == 0 &&
+                  regexec(&re, "a", 2, m, 0) == REG_NOMATCH);
+        regfree(&re);
+        check("Bounded BRE cannot skip a required suffix, including REG_NOSUB",
+              regcomp(&re, "\\(a\\)\\{1,2\\}\\1b", backref_flags[i]) == 0 &&
+                  regexec(&re, "aa", 2, m, 0) == REG_NOMATCH);
+        regfree(&re);
+        check("Nullable bounded BRE still requires the whole expression",
+              regcomp(&re, "\\(a*\\)\\{1,2\\}\\1b", backref_flags[i]) == 0 &&
+                  regexec(&re, "aa", 2, m, 0) == REG_NOMATCH);
+        regfree(&re);
+    }
+    check("BRE whole-pattern filter retains nested referenced group language",
+          regcomp(&re, "\\(a\\)\\(\\1b\\)\\2", 0) == 0 &&
+              regexec(&re, "aabab", 3, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 5 &&
+              m[1].rm_so == 0 && m[1].rm_eo == 1 && m[2].rm_so == 1 && m[2].rm_eo == 3);
+    regfree(&re);
+    for (size_t i = 0; i < sizeof(word_patterns) / sizeof(word_patterns[0]); ++i) {
+        m[0].rm_so = 1;
+        m[0].rm_eo = 2;
+        check("REG_STARTEND starts a word region despite a preceding word byte",
+              regcomp(&re, word_patterns[i], REG_EXTENDED) == 0 &&
+                  regexec(&re, "ba", 1, m, REG_STARTEND) == 0 &&
+                  m[0].rm_so == 1 && m[0].rm_eo == 2);
+        m[0].rm_so = 1;
+        m[0].rm_eo = 2;
+        check("REG_STARTEND REG_NOTBOL retains the preceding word byte",
+              regexec(&re, "ba", 1, m, REG_STARTEND | REG_NOTBOL) == REG_NOMATCH);
+        m[0].rm_so = 1;
+        m[0].rm_eo = 2;
+        check("REG_STARTEND REG_NOTBOL permits a preceding nonword byte",
+              regexec(&re, " a", 1, m, REG_STARTEND | REG_NOTBOL) == 0 &&
+                  m[0].rm_so == 1 && m[0].rm_eo == 2);
+        regfree(&re);
+    }
+    m[0].rm_so = 1;
+    m[0].rm_eo = 3;
+    check("BRE backreference respects the REG_STARTEND word-region beginning",
+          regcomp(&re, "\\<\\(a\\)\\1", 0) == 0 && regexec(&re, "baa", 2, m, REG_STARTEND) == 0 &&
+              m[0].rm_so == 1 && m[0].rm_eo == 3 && m[1].rm_so == 1 && m[1].rm_eo == 2);
+    m[0].rm_so = 1;
+    m[0].rm_eo = 3;
+    check("BRE REG_NOTBOL keeps REG_STARTEND inside the preceding word",
+          regexec(&re, "baa", 2, m, REG_STARTEND | REG_NOTBOL) == REG_NOMATCH);
+    regfree(&re);
     check("REG_NEWLINE extended accepts escaped ordinary slash and escaped bracket",
           regcomp(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
               regexec(&re, "|11/11111^", 0, NULL, 0) == 0 &&

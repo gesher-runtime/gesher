@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -79,6 +80,7 @@ enum class Op : uint8_t {
   kPlusBeg,
   kPlusEnd,
   kSplit,
+  kAltSplit,
   kJump,
   kMatch,
 };
@@ -261,7 +263,7 @@ class Compiler {
     }
     int32_t tail_pc = branches.back().entry_pc;
     for (size_t i = branches.size() - 1; i > 0; --i) {
-      int32_t sp = Emit(Op::kSplit, 0, 0, branches[i - 1].entry_pc, tail_pc);
+      int32_t sp = Emit(Op::kAltSplit, 0, exit_pc, branches[i - 1].entry_pc, tail_pc);
       if (sp < 0) return kRegEspace;
       tail_pc = sp;
     }
@@ -301,6 +303,55 @@ class Compiler {
     int32_t ast_id = AddAst(AstKind::kLeaf, pc, pc, exit_pc);
     if (ast_id < 0) return kRegEspace;
     out = Frag{ast_id, pc, exit_pc, repeatable, false};
+    return kRegOk;
+  }
+
+  // Android's OBACK_ encloses a copy of the referenced group's language. Its
+  // whole-pattern NFA follows that copy before backref() checks exact bytes.
+  // Keep the relaxed language on out2; the byte-equality executor uses out1.
+  int CopyBackrefLanguage(size_t gid, int32_t continuation, int32_t& entry) {
+    const auto [body_entry, body_exit] = group_bodies_[gid];
+    const size_t original_size = prog_.insns.size();
+    std::vector<int32_t> copies(original_size, -1);
+    std::vector<int32_t> pending;
+    auto copy_pc = [&](int32_t pc) -> int32_t {
+      if (pc < 0) return -1;
+      if (copies[pc] >= 0) return copies[pc];
+      int32_t copy = Emit(Op::kJump);
+      if (copy >= 0) {
+        copies[pc] = copy;
+        pending.push_back(pc);
+      }
+      return copy;
+    };
+    entry = copy_pc(body_entry);
+    if (entry < 0) return kRegEspace;
+    while (!pending.empty()) {
+      int32_t pc = pending.back();
+      pending.pop_back();
+      const int32_t copy = copies[pc];
+      if (pc == body_exit) {
+        prog_.insns[copy] = Insn{Op::kJump, 0, 0, continuation, -1};
+        continue;
+      }
+      Insn insn = prog_.insns[pc];
+      if (insn.op == Op::kBackref) {
+        insn.op = Op::kJump;
+        insn.out1 = insn.out2;
+        insn.out2 = -1;
+      } else if (insn.op == Op::kAltSplit || insn.op == Op::kPlusEnd) {
+        insn.op = Op::kSplit;
+      } else if (insn.op == Op::kSave || insn.op == Op::kPlusBeg) {
+        insn.op = Op::kJump;
+      }
+      for (int32_t* target : {&insn.out1, &insn.out2}) {
+        if (*target >= 0) {
+          *target = copy_pc(*target);
+          if (*target < 0) return kRegEspace;
+        }
+      }
+      prog_.insns[copy] = insn;
+    }
     return kRegOk;
   }
 
@@ -352,12 +403,14 @@ class Compiler {
                      size_t max_nsub, Frag& out) {
     size_t saved_pos = pos_;
     const auto saved_closed = closed_groups_;
+    const auto saved_bodies = group_bodies_;
     pos_ = start_pos;
     prog_.nsub = base_nsub;
     int err = ParseAtom(out, at_piece_start, /*stop_on_rparen=*/true);
     if (err == kRegOk && pos_ != end_pos) err = kRegBadpat;
     pos_ = saved_pos;
     closed_groups_ = saved_closed;
+    group_bodies_ = saved_bodies;
     prog_.nsub = std::max(prog_.nsub, max_nsub);
     return err;
   }
@@ -622,7 +675,12 @@ class Compiler {
           if (!closed_groups_[idx]) return kRegEsubreg;
           pos_ += 2;
           prog_.has_backref = true;
-          return MakeLeafFrag(Op::kBackref, 0, static_cast<int32_t>(idx), /*repeatable=*/true, out);
+          int err = MakeLeafFrag(Op::kBackref, 0, static_cast<int32_t>(idx), /*repeatable=*/true, out);
+          if (err != kRegOk) return err;
+          int32_t language_entry = -1;
+          err = CopyBackrefLanguage(idx, out.exit_pc, language_entry);
+          if (err == kRegOk) prog_.insns[out.entry_pc].out2 = language_entry;
+          return err;
         }
       }
     }
@@ -693,7 +751,10 @@ class Compiler {
       ++pos_;
     }
 
-    if (gid < closed_groups_.size()) closed_groups_[gid] = true;
+    if (gid < closed_groups_.size()) {
+      closed_groups_[gid] = true;
+      group_bodies_[gid] = {inner.entry_pc, inner.exit_pc};
+    }
     int32_t exit_pc = Emit(Op::kJump);
     int32_t open_pc = Emit(Op::kSave, 0, static_cast<int32_t>(2 * gid), inner.entry_pc, -1);
     int32_t close_pc = Emit(Op::kSave, 0, static_cast<int32_t>(2 * gid + 1), exit_pc, -1);
@@ -826,6 +887,7 @@ class Compiler {
   bool extended_;
   size_t pos_ = 0;
   std::array<bool, 10> closed_groups_{};
+  std::array<std::pair<int32_t, int32_t>, 10> group_bodies_{};
   size_t parse_depth_ = 0;
   Program prog_;
 };
@@ -873,8 +935,8 @@ class Matcher {
     if (pos >= len_) return false;
     if (!IsWordByte(static_cast<unsigned char>(begin_[pos]))) return false;
     if (pos == 0) {
-      if (begin_ > base_) return !IsWordByte(static_cast<unsigned char>(begin_[-1]));
-      return (eflags_ & kRegNotbol) == 0;
+      if ((eflags_ & kRegNotbol) == 0) return true;
+      return begin_ > base_ && !IsWordByte(static_cast<unsigned char>(begin_[-1]));
     }
     return !IsWordByte(static_cast<unsigned char>(begin_[pos - 1]));
   }
@@ -908,10 +970,13 @@ class Matcher {
     std::vector<int32_t> stack;
     std::vector<Thread> curr;
     std::vector<Thread> next;
-    std::vector<uint8_t> prefix_ok;
+    std::unique_ptr<uint8_t[]> prefix_ok;
+    size_t prefix_capacity = 0;
+    size_t prefix_budget;
     size_t work_steps = 0;
 
-    explicit DissectScratch(size_t ninsns) : slot_of(ninsns, -1), eps_vis(ninsns, 0) {}
+    DissectScratch(size_t ninsns, size_t available_prefix_bytes)
+        : slot_of(ninsns, -1), eps_vis(ninsns, 0), prefix_budget(available_prefix_bytes) {}
 
     uint32_t NextEpoch() {
       ++eps_epoch;
@@ -947,6 +1012,7 @@ class Matcher {
           sc.stack.push_back(insn.out1);
           break;
         case Op::kSplit:
+        case Op::kAltSplit:
         case Op::kPlusEnd:
           sc.stack.push_back(insn.out2);
           sc.stack.push_back(insn.out1);
@@ -1035,7 +1101,18 @@ class Matcher {
     }
 
     const size_t span = stop - sp;
-    sc.prefix_ok.assign(span + 1, 0);
+    if (span >= sc.prefix_budget) {
+      timed_out = true;
+      return kNoMatch;
+    }
+    if (span + 1 > sc.prefix_capacity) {
+      sc.prefix_ok.reset();
+      sc.prefix_capacity = 0;
+      sc.prefix_ok = std::make_unique<uint8_t[]>(span + 1);
+      sc.prefix_capacity = span + 1;
+    } else {
+      std::fill_n(sc.prefix_ok.get(), span + 1, uint8_t{0});
+    }
     sc.curr.clear();
     sc.next.clear();
     if (!AddSubStep(sc, sc.curr, pnode.entry_pc, 0, pnode.exit_pc, sp, /*keep_max_tag=*/false,
@@ -1101,24 +1178,39 @@ class Matcher {
     return (best_split >= 0) ? static_cast<size_t>(best_split) : kNoMatch;
   }
 
-  // Reproduces AOSP NetBSD engine.c dissect() capture selection on AST over `[sp, stop]`.
-  int Dissect(DissectScratch& sc, int32_t node_id, size_t sp, size_t stop,
+  struct DissectTask {
+    int32_t node_id;
+    size_t start;
+    size_t end;
+  };
+
+  // Preserve left-to-right captures without recursion over generated concat
+  // nodes, whose depth can exceed the parsed group nesting depth.
+  int Dissect(DissectScratch& sc, int32_t root, size_t start, size_t end,
               std::vector<int32_t>& caps) const {
-    const AstNode& node = prog_.nodes[node_id];
-    switch (node.kind) {
+    std::vector<DissectTask> tasks;
+    tasks.reserve(prog_.nodes.size());
+    tasks.push_back({root, start, end});
+    while (!tasks.empty()) {
+      const auto [node_id, sp, stop] = tasks.back();
+      tasks.pop_back();
+      const AstNode& node = prog_.nodes[node_id];
+      switch (node.kind) {
       case AstKind::kEmpty:
       case AstKind::kLeaf:
-        return kRegOk;
+        break;
       case AstKind::kGroup: {
         const size_t gid = static_cast<size_t>(node.arg);
         if (2 * gid + 1 < caps.size()) {
           caps[2 * gid] = static_cast<int32_t>(sp);
           caps[2 * gid + 1] = static_cast<int32_t>(stop);
         }
-        return Dissect(sc, node.children[0], sp, stop, caps);
+        tasks.push_back({node.children[0], sp, stop});
+        break;
       }
       case AstKind::kConcat: {
         size_t cur = sp;
+        const size_t first_task = tasks.size();
         for (size_t i = 0; i < node.children.size(); ++i) {
           size_t part_end = stop;
           if (i + 1 < node.children.size()) {
@@ -1127,13 +1219,13 @@ class Matcher {
             part_end = FindMaxConcatSplit(sc, node.children[i], next_node.entry_pc, node.exit_pc,
                                           cur, stop, timed_out);
             if (timed_out) return kRegEspace;
-            if (part_end == kNoMatch) return kRegOk;
+            if (part_end == kNoMatch) break;
           }
-          int rc = Dissect(sc, node.children[i], cur, part_end, caps);
-          if (rc != kRegOk) return rc;
+          tasks.push_back({node.children[i], cur, part_end});
           cur = part_end;
         }
-        return kRegOk;
+        std::reverse(tasks.begin() + first_task, tasks.end());
+        break;
       }
       case AstKind::kAlt: {
         for (int32_t branch_id : node.children) {
@@ -1141,20 +1233,22 @@ class Matcher {
           bool timed_out = false;
           if (WalkSubMatch(sc, b.entry_pc, b.exit_pc, sp, stop, /*require_full=*/true, timed_out) !=
               kNoMatch) {
-            return Dissect(sc, branch_id, sp, stop, caps);
+            tasks.push_back({branch_id, sp, stop});
+            break;
           }
           if (timed_out) return kRegEspace;
         }
-        return kRegOk;
+        break;
       }
       case AstKind::kQuest: {
         const AstNode& child = prog_.nodes[node.children[0]];
         bool timed_out = false;
         if (WalkSubMatch(sc, child.entry_pc, child.exit_pc, sp, stop, /*require_full=*/true,
                          timed_out) != kNoMatch) {
-          return Dissect(sc, node.children[0], sp, stop, caps);
+          tasks.push_back({node.children[0], sp, stop});
         }
-        return timed_out ? kRegEspace : kRegOk;
+        if (timed_out) return kRegEspace;
+        break;
       }
       case AstKind::kPlus: {
         const AstNode& child = prog_.nodes[node.children[0]];
@@ -1174,7 +1268,9 @@ class Matcher {
           sep = ssp;
           ssp = oldssp;
         }
-        return Dissect(sc, node.children[0], ssp, sep, caps);
+        tasks.push_back({node.children[0], ssp, sep});
+        break;
+      }
       }
     }
     return kRegOk;
@@ -1227,6 +1323,7 @@ class Matcher {
             stack.push_back(insn.out1);
             break;
           case Op::kSplit:
+          case Op::kAltSplit:
           case Op::kPlusEnd:
             stack.push_back(insn.out2);
             stack.push_back(insn.out1);
@@ -1290,12 +1387,15 @@ class Matcher {
     out_start = best_start;
     out_end = best_end;
     if (track_caps_) {
-      const size_t cap_bytes = num_slots_ * sizeof(int32_t) + ninsns * 16;
+      // Both NFA phases coexist here. Include vector capacity headroom,
+      // capture offsets and iterative dissection tasks before input scratch.
+      const size_t cap_bytes = num_slots_ * sizeof(int32_t) +
+          ninsns * (2 * bytes_per_state) + prog_.nodes.size() * sizeof(DissectTask);
       if (cap_bytes > kMaxWorkBytes) return kRegEspace;
       std::vector<int32_t> caps(num_slots_, -1);
       caps[0] = best_start;
       caps[1] = best_end;
-      DissectScratch sc(ninsns);
+      DissectScratch sc(ninsns, kMaxWorkBytes - cap_bytes);
       int rc = Dissect(sc, prog_.root_ast, static_cast<size_t>(best_start),
                        static_cast<size_t>(best_end), caps);
       if (rc != kRegOk) return rc;
@@ -1304,32 +1404,45 @@ class Matcher {
     return kRegOk;
   }
 
-  // Computes candidate end offsets reachable from `start` ignoring backreference
-  // content constraints, so failed long spans are not explored repeatedly.
-  bool CollectCandidateEnds(size_t start, std::vector<size_t>& ends_desc) const {
+  // Filter the complete expression using each backreference's copied group
+  // language. Branch-local capture dissection is valid only for these spans.
+  int CollectCandidateEnds(size_t start, std::vector<size_t>& ends_desc,
+                           size_t& steps) const {
     const size_t ninsns = prog_.insns.size();
-    std::vector<int32_t> min_pos(ninsns, -1);
-    min_pos[prog_.entry] = static_cast<int32_t>(start);
-    // Conservative reachability: any kBackref can consume any length [0 .. len_ - pos]
-    // if reached. Compute exact minimum positions first, or scan all candidate ends if
-    // any kBackref exists along the path. Because patterns with backrefs typically match
-    // short strings, scanning end = len_ down to start directly after verifying whether
-    // match is reachable in a relaxed NFA avoids missing any match.
-    (void)min_pos;
+    // Include capacity headroom for the closure stack and both state lists.
+    const size_t scratch_bytes = ninsns * 64 + 256;
+    if (scratch_bytes >= kMaxWorkBytes) return kRegEspace;
+    const size_t max_ends = (kMaxWorkBytes - scratch_bytes) / sizeof(size_t);
+    if (ends_desc.capacity() > max_ends) return kRegEspace;
     ends_desc.clear();
+    auto append_end = [&](size_t pos) {
+      if (ends_desc.size() == ends_desc.capacity()) {
+        const size_t capacity = std::min(max_ends, std::max(size_t{16}, ends_desc.size() * 2));
+        if (capacity <= ends_desc.size()) return false;
+        ends_desc.reserve(capacity);
+        if (ends_desc.capacity() > max_ends) return false;
+      }
+      ends_desc.push_back(pos);
+      return true;
+    };
     std::vector<uint8_t> reachable(ninsns, 0);
     std::vector<uint32_t> vis(ninsns, 0);
-    std::vector<int32_t> st;
+    std::vector<int32_t> st, curr, next;
+    st.reserve(2 * ninsns);
+    curr.reserve(ninsns);
+    next.reserve(ninsns);
     uint32_t epoch = 0;
-    std::vector<int32_t> curr;
-    std::vector<int32_t> next;
-    bool hit_backref = false;
 
-    auto close = [&](std::vector<int32_t>& dst, int32_t seed_pc, size_t pos, bool& match_here) {
+    auto close = [&](std::vector<int32_t>& dst, int32_t seed_pc, size_t pos,
+                     bool& match_here) {
       st.clear();
       st.push_back(seed_pc);
-      ++epoch;
+      if (++epoch == 0) {
+        std::fill(vis.begin(), vis.end(), 0);
+        ++epoch;
+      }
       while (!st.empty()) {
+        if (++steps > kMaxBackrefSteps) return false;
         int32_t pc = st.back();
         st.pop_back();
         if (pc < 0 || vis[pc] == epoch) continue;
@@ -1342,6 +1455,7 @@ class Matcher {
             st.push_back(insn.out1);
             break;
           case Op::kSplit:
+          case Op::kAltSplit:
           case Op::kPlusEnd:
             st.push_back(insn.out2);
             st.push_back(insn.out1);
@@ -1362,11 +1476,7 @@ class Matcher {
             match_here = true;
             break;
           case Op::kBackref:
-            hit_backref = true;
-            if (!reachable[pc]) {
-              reachable[pc] = 1;
-              dst.push_back(pc);
-            }
+            st.push_back(insn.out2);
             break;
           case Op::kByte:
           case Op::kAny:
@@ -1378,40 +1488,37 @@ class Matcher {
             break;
         }
       }
+      return true;
     };
 
     bool match_at_start = false;
-    close(curr, prog_.entry, start, match_at_start);
-    if (hit_backref) return false;  // Caller scans `[start, len_]` downward.
-    if (match_at_start) ends_desc.push_back(start);
+    if (!close(curr, prog_.entry, start, match_at_start)) return kRegEspace;
+    if (match_at_start && !append_end(start)) return kRegEspace;
     for (size_t pos = start; pos < len_; ++pos) {
       if (curr.empty()) break;
       const unsigned char ch = static_cast<unsigned char>(begin_[pos]);
       for (int32_t pc : curr) reachable[pc] = 0;
       bool matched = false;
       for (int32_t pc : curr) {
+        if (++steps > kMaxBackrefSteps) return kRegEspace;
         const Insn& insn = prog_.insns[pc];
-        if (MatchConsumeOp(insn, ch)) {
-          close(next, insn.out1, pos + 1, matched);
+        if (MatchConsumeOp(insn, ch) && !close(next, insn.out1, pos + 1, matched)) {
+          return kRegEspace;
         }
       }
-      if (hit_backref) {
-        for (int32_t pc : next) reachable[pc] = 0;
-        return false;
-      }
-      if (matched) ends_desc.push_back(pos + 1);
+      if (matched && !append_end(pos + 1)) return kRegEspace;
       curr.swap(next);
       next.clear();
     }
-    for (int32_t pc : curr) reachable[pc] = 0;
     std::reverse(ends_desc.begin(), ends_desc.end());
-    return true;
+    return kRegOk;
   }
 
   int ExecuteBackref(std::vector<int32_t>& out_caps, int32_t& out_start, int32_t& out_end) {
     const size_t slots_size = 2 * (prog_.nsub + 1);
     struct Frame {
       int32_t pc;
+      int32_t stop_pc;
       size_t pos;
       size_t empty_rec;
       std::vector<int32_t> caps;
@@ -1424,6 +1531,7 @@ class Matcher {
         auto mix = [&](size_t value) {
           h ^= value + size_t{0x9e3779b9} + (h << 6) + (h >> 2);
         };
+        mix(static_cast<uint32_t>(f.stop_pc));
         mix(f.pos);
         mix(f.empty_rec);
         for (int32_t cap : f.caps) mix(static_cast<uint32_t>(cap));
@@ -1431,31 +1539,46 @@ class Matcher {
         return h;
       }
     };
-    const size_t state_bytes = 2 * (sizeof(Frame) + slots_size * sizeof(int32_t)) + 64;
-    const size_t state_limit = kMaxWorkBytes / state_bytes;
-    if (state_limit < 2) return kRegEspace;
-
-    std::vector<Frame> pending;
-    std::unordered_set<Frame, FrameHash> seen_failed;
+    const size_t state_bytes = 2 * (sizeof(Frame) + slots_size * sizeof(int32_t) +
+        kMaxParseDepth * sizeof(size_t)) + 64;
     std::vector<size_t> candidate_ends;
     size_t steps = 0;
 
     for (size_t start = 0; start <= len_; ++start) {
       if (prog_.insns[prog_.entry].op == Op::kBol && !IsBol(start)) continue;
 
-      const bool have_filtered = CollectCandidateEnds(start, candidate_ends);
-      const size_t end_count = have_filtered ? candidate_ends.size() : (len_ - start + 1);
-      for (size_t ei = 0; ei < end_count; ++ei) {
-        const size_t target_end = have_filtered ? candidate_ends[ei] : (len_ - ei);
+      int filter_result = CollectCandidateEnds(start, candidate_ends, steps);
+      if (filter_result != kRegOk) return filter_result;
+      const size_t end_bytes = candidate_ends.capacity() * sizeof(size_t);
+      const size_t state_limit = (kMaxWorkBytes - end_bytes) / state_bytes;
+      if (state_limit < 2) return kRegEspace;
+      // Release backtracking storage before constructing the next NFA filter.
+      std::vector<Frame> pending;
+      std::unordered_set<Frame, FrameHash> seen_failed;
+      for (size_t target_end : candidate_ends) {
         pending.clear();
         seen_failed.clear();
-        pending.push_back(Frame{prog_.entry, start, 0, std::vector<int32_t>(slots_size, -1), {}});
+        pending.push_back(Frame{prog_.entry, -1, start, 0, std::vector<int32_t>(slots_size, -1), {}});
 
         while (!pending.empty()) {
           Frame current = std::move(pending.back());
           pending.pop_back();
           while (current.pc >= 0) {
             if (++steps > kMaxBackrefSteps) return kRegEspace;
+            if (current.pc == current.stop_pc) {
+              // NetBSD OCH_ tests a branch against the complete target span,
+              // then returns that branch result. OQUEST_ instead includes the
+              // rest of the expression in its continuation (e.g. a star).
+              if (current.pos != target_end) break;
+              out_start = static_cast<int32_t>(start);
+              out_end = static_cast<int32_t>(target_end);
+              if (track_caps_) {
+                current.caps[0] = out_start;
+                current.caps[1] = out_end;
+                out_caps = std::move(current.caps);
+              }
+              return kRegOk;
+            }
             const Insn& insn = prog_.insns[current.pc];
             switch (insn.op) {
               case Op::kMatch:
@@ -1496,7 +1619,7 @@ class Matcher {
                   current.pc = insn.out2;
                 } else {
                   // NetBSD backref() tries another pass first, falling back to loop exit.
-                  Frame exit_frame{insn.out2, current.pos, current.empty_rec, current.caps,
+                  Frame exit_frame{insn.out2, current.stop_pc, current.pos, current.empty_rec, current.caps,
                                    current.lastpos};
                   exit_frame.lastpos.pop_back();
                   pending.push_back(std::move(exit_frame));
@@ -1504,6 +1627,9 @@ class Matcher {
                   current.pc = insn.out1;
                 }
                 break;
+              case Op::kAltSplit:
+                current.stop_pc = insn.arg;
+                [[fallthrough]];
               case Op::kSplit:
                 if (seen_failed.find(current) != seen_failed.end()) {
                   current.pc = -1;
@@ -1511,7 +1637,7 @@ class Matcher {
                 }
                 if (pending.size() + seen_failed.size() + 2 > state_limit) return kRegEspace;
                 seen_failed.insert(current);
-                pending.push_back(Frame{insn.out2, current.pos, current.empty_rec, current.caps,
+                pending.push_back(Frame{insn.out2, current.stop_pc, current.pos, current.empty_rec, current.caps,
                                         current.lastpos});
                 current.pc = insn.out1;
                 break;
