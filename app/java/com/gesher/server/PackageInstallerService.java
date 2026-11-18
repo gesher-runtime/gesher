@@ -107,7 +107,17 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     private String caller() {
         if (mTestCaller != null) return mTestCaller.get();
         if (mCallers == null) throw new UnsupportedOperationException("No persistent package installer");
-        return mCallers.callerPackage();
+        String name = mCallers.callerPackage();
+        if (!"android".equals(name)) {
+            // A surviving old process must not acquire a replacement installation's
+            // session authority or signer snapshot by resolving only its package name.
+            ApkPackage code = mAtm.authenticatedPackageCodeForPid(
+                    mCallers.callerPid(), mCallers.callerUid());
+            if (code == null || !name.equals(code.packageName)) {
+                throw new SecurityException("Installer process belongs to retired package code");
+            }
+        }
+        return name;
     }
     boolean isCallingPackage(String packageName) {
         CallerIdentity callers = mCallers;

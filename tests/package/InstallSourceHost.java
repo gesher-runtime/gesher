@@ -138,6 +138,58 @@ public final class InstallSourceHost {
         var read = Installer.class.getDeclaredMethod("readRegistry"); read.setAccessible(true);
         return ((Map<?, ?>)read.invoke(null)).get(name);
     }
+    private static void sessionIdentity(PackageManagerService pm, ActivityTaskManagerService atm,
+            Installer storage) throws Exception {
+        pm.attachInstaller(atm, storage);
+        var sessions = pm.getPackageInstaller();
+        String name = "fixture.source.session";
+        ApkPackage original = pkg(name, "v2only.apk", null, 36);
+        pm.add(original); attach(atm, original);
+        String originalOwner = original.enabledStateOwner();
+        var params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_STORE);
+        int[] id = new int[1];
+        as(original, () -> id[0] = sessions.createSession(params, name, null, 0));
+        as(original, () -> check(sessions.openSession(id[0]) != null,
+                "Current authenticated installer owns its session"));
+        @SuppressWarnings("unchecked") List<ActivityTaskManagerService.ProcessRecord> attached =
+                (List<ActivityTaskManagerService.ProcessRecord>)get(atm, "mProcesses");
+        ActivityTaskManagerService.ProcessRecord process = attached.stream()
+                .filter(candidate -> candidate.pid == pids.get(original)).findFirst().orElseThrow();
+        process.exiting = true;
+        as(original, () -> {
+            check(sessions.openSession(id[0]) != null, "Live exiting installer retains its session");
+            int fresh = sessions.createSession(params, name, null, 0);
+            check(fresh != id[0], "Live exiting installer may initiate a session before actual death");
+            sessions.abandonSession(fresh);
+        });
+        process.dead = true;
+        as(original, () -> expect(SecurityException.class,
+                () -> sessions.createSession(params, name, null, 0), "Dead installer cannot create sessions"));
+        as(original, () -> expect(SecurityException.class,
+                () -> sessions.openSession(id[0]), "Dead installer cannot reopen sessions"));
+        process.dead = false;
+        as(original, () -> sessions.abandonSession(id[0]));
+
+        // The old process can survive the bounded force-stop wait. A same-name reinstall
+        // gets a new owner and may have a different signer, without lending either to it.
+        pm.remove(name);
+        ApkPackage replacement = pkg(name, "rotated.apk", null, 36);
+        pm.add(replacement); attach(atm, replacement);
+        check(!originalOwner.equals(replacement.enabledStateOwner())
+                && !Arrays.equals(original.verifiedSignatures(), replacement.verifiedSignatures()),
+                "Replacement control has a new installation owner and current signer");
+        as(replacement, () -> id[0] = sessions.createSession(params, name, null, 0));
+        as(original, () -> expect(SecurityException.class,
+                () -> sessions.createSession(params, name, null, 0),
+                "Superseded attached code cannot create a session as its replacement"));
+        as(original, () -> expect(SecurityException.class,
+                () -> sessions.openSession(id[0]), "Superseded attached code cannot open its replacement's session"));
+        as(replacement, () -> {
+            check(sessions.openSession(id[0]) != null, "Replacement installer retains its own session authority");
+            sessions.abandonSession(id[0]);
+        });
+    }
     private static void run() throws Exception {
         String targetName = "fixture.source.target", oldName = "fixture.source.original";
         String nextName = "fixture.source.next", rotatedName = "fixture.source.rotated";
@@ -352,6 +404,7 @@ public final class InstallSourceHost {
         check(PackageInstallSource.decode("") == PackageInstallSource.UNKNOWN, "Old missing source is unknown");
         check(PackageInstallSource.decode(nextName + "," + next.enabledStateOwner() + ",2").initiator().equals(nextName),
                 "Original three-field identity maps to both roles");
+        sessionIdentity(pm, atm, storage);
     }
     public static void main(String[] args) throws Exception {
         System.load(args[0]); fixtures = Path.of(args[1]); data = Path.of(System.getenv("ANDROID_DATA"));

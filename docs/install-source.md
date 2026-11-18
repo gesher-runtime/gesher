@@ -17,6 +17,10 @@ silently. The decision uses the authenticated application's target SDK; this run
 does not yet admit Android shared-user groups. A numeric UID collision does not combine
 identities.
 
+Session APIs also authenticate the process's attached package code. A live process
+with a pending exit keeps its own session authority until death, but cannot create
+or open sessions using a later installation's identity or signing snapshot.
+
 The target can see both its current installer and its still-installed initiating
 package. Other callers filter those names independently. After the initiating package
 is removed, only the authenticated target application can retrieve its historical
