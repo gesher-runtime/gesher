@@ -5,6 +5,10 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <condition_variable>
+#include <chrono>
+#include <filesystem>
+#include <unistd.h>
 #include <cwchar>
 #include <list>
 #include <limits>
@@ -24,6 +28,17 @@ constexpr int64_t kFixtureChunk = 256 * 1024;
 constexpr int64_t kFixtureLength = 24 * kFixtureChunk + 13;
 std::atomic<int> checks{0}, failures{0}, handles{0}, requests{0};
 std::atomic<int64_t> last_range_end{-1};
+std::atomic<int64_t> transport_bytes{0}, spool_bytes{0};
+std::atomic<int> file_handles{0};
+std::atomic<DWORD> max_http_read{0};
+std::atomic<bool> fail_create{false}, fail_write{false}, fail_read{false}, fail_seek{false};
+std::atomic<bool> zero_write{false}, zero_read{false}, short_file_io{false};
+std::atomic<int64_t> fail_write_after{-1};
+std::mutex blocked_mu;
+std::condition_variable blocked_cv;
+bool read_blocked = false, release_read = false;
+thread_local DWORD last_error = 1234;
+constexpr int64_t kLargeLength = 128 * 1024 * 1024 + 13;
 bool Check(bool ok, const char* reason) {
   ++checks;
   if (!ok) { ++failures; std::fprintf(stderr, "FAIL HTTP source: %s\n", reason); }
@@ -38,11 +53,77 @@ struct HttpContractHandle {
   std::wstring range;
   std::vector<uint8_t> bytes;
   size_t cursor = 0;
+  int64_t generated_length = -1;
+  int64_t declared_length = -1;
+  int64_t fail_at = -1;
+  bool unknown_length = false;
+  DWORD read_limit = std::numeric_limits<DWORD>::max();
+  size_t Length() const { return generated_length >= 0 ? static_cast<size_t>(generated_length) : bytes.size(); }
   HttpContractHandle() { ++handles; }
   ~HttpContractHandle() { --handles; }
 };
 
-DWORD GetLastError() { return 1234; }
+DWORD GetLastError() { return last_error; }
+struct HttpFileHandle { FILE* file; std::string path; };
+DWORD GetTempPathW(DWORD size, wchar_t* out) {
+  const std::string path = std::filesystem::temp_directory_path().string() + "/";
+  if (size <= path.size()) return static_cast<DWORD>(path.size() + 1);
+  for (size_t i = 0; i <= path.size(); ++i) out[i] = static_cast<unsigned char>(path[i]);
+  return static_cast<DWORD>(path.size());
+}
+DWORD GetCurrentProcessId() { return static_cast<DWORD>(getpid()); }
+uint64_t GetTickCount64() { return 123456789; }
+HANDLE CreateFileW(const wchar_t* name, DWORD access, DWORD sharing, void* inherit,
+                   DWORD disposition, DWORD flags, HANDLE) {
+  Check(access == (GENERIC_READ | GENERIC_WRITE) && sharing == 0 && inherit == nullptr,
+        "spool is private and non-inheritable");
+  Check(disposition == CREATE_NEW && flags == (FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE),
+        "spool atomically creates an owned disk file with deletion on close");
+  if (fail_create) return INVALID_HANDLE_VALUE;
+  std::string path;
+  while (*name != 0) path += static_cast<char>(*name++);
+  FILE* f = std::fopen(path.c_str(), "w+bx");
+  if (f == nullptr) { last_error = errno == EEXIST ? ERROR_FILE_EXISTS : 1234; return INVALID_HANDLE_VALUE; }
+  ++file_handles;
+  return new HttpFileHandle{f, path};
+}
+BOOL CloseHandle(HANDLE file) {
+  Check(file != nullptr && file != INVALID_HANDLE_VALUE, "close valid spool handle");
+  const std::string path = file->path;
+  std::fclose(file->file);
+  const int removed = std::remove(path.c_str());
+  Check(removed == 0 && !std::filesystem::exists(path), "spool removed on close");
+  delete file;
+  --file_handles;
+  return true;
+}
+BOOL SetFilePointerEx(HANDLE file, LARGE_INTEGER at, LARGE_INTEGER*, DWORD origin) {
+  Check(origin == FILE_BEGIN && at.QuadPart >= 0, "spool uses nonnegative absolute offsets");
+  if (fail_seek) return false;
+  return fseeko(file->file, static_cast<off_t>(at.QuadPart), SEEK_SET) == 0;
+}
+BOOL WriteFile(HANDLE file, const void* data, DWORD size, DWORD* written, void*) {
+  *written = 0;
+  if (fail_write) return false;
+  if (zero_write) return true;
+  if (short_file_io) size = std::min<DWORD>(size, 997);
+  if (fail_write_after >= 0) {
+    if (fail_write_after == 0) return false;
+    size = static_cast<DWORD>(std::min<int64_t>(size, fail_write_after));
+    fail_write_after -= size;
+  }
+  *written = static_cast<DWORD>(std::fwrite(data, 1, size, file->file));
+  spool_bytes += *written;
+  return std::ferror(file->file) == 0;
+}
+BOOL ReadFile(HANDLE file, void* data, DWORD size, DWORD* read, void*) {
+  *read = 0;
+  if (fail_read) return false;
+  if (zero_read) return true;
+  if (short_file_io) size = std::min<DWORD>(size, 991);
+  *read = static_cast<DWORD>(std::fread(data, 1, size, file->file));
+  return std::ferror(file->file) == 0;
+}
 int MultiByteToWideChar(unsigned, DWORD, const char* input, int, wchar_t* out, int capacity) {
   const int count = static_cast<int>(std::strlen(input)) + 1;
   if (out == nullptr) return count;
@@ -82,6 +163,12 @@ HINTERNET WinHttpOpenRequest(HINTERNET, const wchar_t*, const wchar_t* path, con
 }
 BOOL WinHttpSendRequest(HINTERNET req, const wchar_t* raw, DWORD, void*, DWORD, DWORD, uintptr_t) {
   ++requests;
+  if (req->path == L"/stream-headers-blocked") {
+    std::unique_lock<std::mutex> lock(blocked_mu);
+    read_blocked = true;
+    blocked_cv.notify_all();
+    blocked_cv.wait(lock, [] { return release_read; });
+  }
   std::wstring headers = raw == nullptr ? L"" : raw;
   int64_t base = 0;
   const auto range = headers.find(L"Range: bytes=");
@@ -90,6 +177,25 @@ BOOL WinHttpSendRequest(HINTERNET req, const wchar_t* raw, DWORD, void*, DWORD, 
     base = std::wcstoll(headers.c_str() + range + 13, &end, 10);
     Check(end != nullptr && *end == L'-', "range syntax");
     last_range_end = std::wcstoll(end + 1, nullptr, 10);
+  }
+  if (req->path.starts_with(L"/stream")) {
+    req->status = 200;
+    req->generated_length = req->path == L"/stream-empty" ? 0 : 2 * kFixtureChunk + 13;
+    if (req->path == L"/stream-large") req->generated_length = kLargeLength;
+    req->unknown_length = req->path == L"/stream-unknown";
+    if (req->path == L"/stream-short") { req->read_limit = 73; req->generated_length = 12345; }
+    if (req->path == L"/stream-truncated") {
+      req->generated_length = 1000;
+      req->declared_length = 2000;
+    }
+    if (req->path == L"/stream-bad-length") req->declared_length = 10;
+    if (req->path == L"/stream-error") req->fail_at = 64 * 1024;
+    return true;
+  }
+  if (req->path == L"/oversized-range") {
+    req->status = 206;
+    req->generated_length = kFixtureChunk + 1;
+    return true;
   }
   if (req->path == L"/error") { req->status = 500; return true; }
   if (req->path == L"/whole" || (req->path == L"/ignore" && base > 0)) {
@@ -117,7 +223,8 @@ BOOL WinHttpQueryHeaders(HINTERNET req, DWORD query, const wchar_t*, void* outpu
   }
   std::wstring text;
   if (query == WINHTTP_QUERY_CONTENT_RANGE && !req->range.empty()) text = req->range;
-  else if (query == WINHTTP_QUERY_CONTENT_LENGTH) text = std::to_wstring(req->bytes.size());
+  else if (query == WINHTTP_QUERY_CONTENT_LENGTH && !req->unknown_length)
+    text = std::to_wstring(req->declared_length >= 0 ? req->declared_length : static_cast<int64_t>(req->Length()));
   else return false;
   const size_t length = (text.size() + 1) * sizeof(wchar_t);
   if (*bytes < length) return false;
@@ -126,13 +233,25 @@ BOOL WinHttpQueryHeaders(HINTERNET req, DWORD query, const wchar_t*, void* outpu
   return true;
 }
 BOOL WinHttpQueryDataAvailable(HINTERNET req, DWORD* count) {
-  *count = static_cast<DWORD>(req->bytes.size() - req->cursor);
+  *count = static_cast<DWORD>(req->Length() - req->cursor);
   return true;
 }
 BOOL WinHttpReadData(HINTERNET req, void* out, DWORD count, DWORD* got) {
-  *got = static_cast<DWORD>(std::min(static_cast<size_t>(count), req->bytes.size() - req->cursor));
-  std::memcpy(out, req->bytes.data() + req->cursor, *got);
+  if (req->path == L"/stream-blocked" && req->cursor == 0) {
+    std::unique_lock<std::mutex> lock(blocked_mu);
+    read_blocked = true;
+    blocked_cv.notify_all();
+    blocked_cv.wait(lock, [] { return release_read; });
+  }
+  if (req->fail_at >= 0 && static_cast<int64_t>(req->cursor) >= req->fail_at) return false;
+  max_http_read.store(std::max(max_http_read.load(), count));
+  *got = static_cast<DWORD>(std::min({static_cast<size_t>(count), req->Length() - req->cursor,
+                                     static_cast<size_t>(req->read_limit)}));
+  if (req->generated_length >= 0) {
+    for (DWORD i = 0; i < *got; ++i) static_cast<uint8_t*>(out)[i] = ByteAt(req->cursor + i);
+  } else if (*got != 0) std::memcpy(out, req->bytes.data() + req->cursor, *got);
   req->cursor += *got;
+  transport_bytes += *got;
   return true;
 }
 
@@ -170,7 +289,193 @@ void EvictionLifetime(HttpSource& source, Retained retained) {
 }
 }
 
-int main() {
+namespace {
+template<class Source>
+size_t PayloadCapacity(const Source& source) {
+  size_t total = 0;
+  for (const auto& item : source.chunks_) total += item.second->capacity();
+  if constexpr (requires { source.whole_buffer_; }) total += source.whole_buffer_.capacity();
+  return total;
+}
+void CheckBytes(gesher::media::DataSource& source, int64_t offset, size_t count, const char* reason) {
+  std::vector<uint8_t> bytes(count + 32, 0xed);
+  bool exact = source.ReadAt(offset, bytes.data() + 16, count) == static_cast<ssize_t>(count);
+  for (size_t i = 0; i < count; ++i) exact &= bytes[i + 16] == ByteAt(offset + i);
+  for (size_t i = 0; i < 16; ++i) exact &= bytes[i] == 0xed && bytes[count + 16 + i] == 0xed;
+  Check(exact, reason);
+}
+void Measurements(bool gate) {
+  transport_bytes = 0; spool_bytes = 0; max_http_read = 0;
+  const int calls = requests;
+  auto source = Open("stream-large");
+  const auto begin = std::chrono::steady_clock::now();
+  CheckBytes(*source, 17, 32, "large whole resource returns exact initial bytes and guards");
+  const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - begin).count();
+  const int64_t first_transfer = transport_bytes;
+  const int64_t first_spooled = spool_bytes;
+  const size_t first_payload = PayloadCapacity(static_cast<HttpSource&>(*source));
+  if (gate) {
+    Check(first_transfer <= 64 * 1024, "first read does not consume the complete 128 MiB body");
+    Check(first_payload <= 64 * 1024, "whole body payload capacity is at most 64 KiB");
+    Check(max_http_read <= 64 * 1024, "every whole-body transport read is bounded");
+  }
+  CheckBytes(*source, kLargeLength - 13, 13, "forward seek spools exact final bytes");
+  const size_t full_payload = PayloadCapacity(static_cast<HttpSource&>(*source));
+  const int64_t after_tail = transport_bytes;
+  CheckBytes(*source, 123, 101, "backward seek reads exact persisted bytes");
+  Check(transport_bytes == after_tail && requests == calls + 1, "backward seek never refetches a whole resource");
+  Check(source->Size() == kLargeLength, "full resource retains exact length");
+  if (gate) {
+    Check(full_payload <= 64 * 1024, "full transfer does not grow the retained payload buffer");
+    Check(handles == 2, "completed known-length request closes before source destruction");
+  }
+  std::printf("HTTP whole-body measurement: resource=%lld first_transfer=%lld first_spool=%lld "
+              "first_payload_capacity=%zu full_payload_capacity=%zu first_read_us=%lld total_transfer=%lld\n",
+              static_cast<long long>(kLargeLength), static_cast<long long>(first_transfer),
+              static_cast<long long>(first_spooled), first_payload, full_payload,
+              static_cast<long long>(micros), static_cast<long long>(after_tail));
+}
+void StreamingContracts() {
+  {
+    auto source = Open("stream-large");
+    const int calls = requests;
+    Check(source->ReadAt(0, nullptr, 0) == 0 && requests == calls,
+          "zero-sized read performs no request or spool allocation");
+    const int64_t before = transport_bytes;
+    Check(source->Size() == kLargeLength && transport_bytes == before,
+          "known length query does not drain the response");
+    source->Cancel();
+    Check(source->ReadAt(0, nullptr, 0) == -EINTR && source->Size() == -1,
+          "cancelled source rejects reads and size query");
+    Check(file_handles == 0 && handles == 2, "idle cancellation retires request without creating spool");
+  }
+  {
+    auto source = Open("stream-unknown");
+    const int64_t before = transport_bytes;
+    CheckBytes(*source, 23, 103, "unknown-length 200 permits an early read");
+    Check(transport_bytes - before <= 64 * 1024, "unknown length early read also stops promptly");
+    Check(source->Size() == 2 * kFixtureChunk + 13, "unknown length query discovers exact EOF through spool");
+    Check(handles == 2, "unknown-length EOF closes request");
+    CheckBytes(*source, kFixtureChunk - 7, 41, "seek after unknown-length drain preserves bytes");
+    uint8_t bytes[32] = {};
+    Check(source->ReadAt(2 * kFixtureChunk + 10, bytes, sizeof(bytes)) == 3,
+          "partial final unknown-length read");
+    Check(source->ReadAt(INT64_MAX, bytes, 1) == 0, "highest offset is EOF after size discovery");
+  }
+  {
+    auto source = Open("stream-empty");
+    uint8_t byte = 99;
+    Check(source->Size() == 0 && source->ReadAt(0, &byte, 1) == 0 && byte == 99,
+          "empty body has zero size and leaves output unchanged");
+    Check(handles == 2 && file_handles == 0, "empty body retains no request or spool");
+  }
+  {
+    short_file_io = true;
+    auto source = Open("stream-short");
+    CheckBytes(*source, 17, 8000, "short network and disk reads/writes preserve every byte");
+    short_file_io = false;
+    CheckBytes(*source, 0, 12345, "short reads retain seekable whole source");
+  }
+  {
+    auto source = Open("stream-truncated");
+    uint8_t bytes[3000];
+    std::memset(bytes, 0xed, sizeof(bytes));
+    Check(source->ReadAt(0, bytes, 2000) == 1000, "premature EOF returns only received prefix");
+    bool exact = true;
+    for (size_t i = 0; i < 1000; ++i) exact &= bytes[i] == ByteAt(i);
+    for (size_t i = 1000; i < sizeof(bytes); ++i) exact &= bytes[i] == 0xed;
+    Check(exact, "truncated response never fabricates bytes past received prefix");
+    Check(source->ReadAt(1000, bytes, 1) == -EIO, "premature EOF is sticky error rather than ordinary EOF");
+    CheckBytes(*source, 11, 17, "verified prefix survives a later transport error");
+  }
+  {
+    auto source = Open("stream-bad-length");
+    uint8_t byte = 99;
+    Check(source->ReadAt(0, &byte, 1) == -EIO && byte == 99,
+          "transport body exceeding declared length is rejected");
+  }
+  {
+    auto source = Open("stream-error");
+    CheckBytes(*source, 0, 32, "initial prefix arrives before later network error");
+    uint8_t byte = 99;
+    Check(source->ReadAt(64 * 1024, &byte, 1) == -EIO && byte == 99,
+          "later read failure is reported without fabricated data");
+  }
+  {
+    auto source = Open("oversized-range");
+    uint8_t byte = 99;
+    Check(source->ReadAt(0, &byte, 1) == -EIO && byte == 99,
+          "oversized 206 cannot allocate an unbounded range buffer");
+  }
+  for (int fault = 0; fault < 6; ++fault) {
+    {
+      auto source = Open("stream-large");
+      fail_create = fault == 0; fail_write = fault == 1; fail_seek = fault == 2;
+      zero_write = fault == 3; fail_write_after = fault == 4 ? 113 : -1;
+      fail_read = fault == 5;
+      uint8_t byte = 99;
+      Check(source->ReadAt(0, &byte, 1) == -EIO && byte == 99, "spool failure reports error without success bytes");
+      fail_create = fail_write = fail_seek = zero_write = fail_read = false;
+      fail_write_after = -1;
+      if (fault < 5) Check(source->ReadAt(0, &byte, 1) == -EIO,
+                           "failed spool append does not publish partial disk bytes");
+    }
+    Check(file_handles == 0 && handles == 0, "faulted source retires file and network handles");
+  }
+  {
+    auto source = Open("stream-large");
+    CheckBytes(*source, 0, 31, "spool prepares bytes before read fault");
+    zero_read = true;
+    uint8_t byte = 99;
+    Check(source->ReadAt(0, &byte, 1) == -EIO && byte == 99,
+          "unexpected disk EOF is error, not a shortened HTTP resource");
+    zero_read = false;
+  }
+  for (const char* endpoint : {"stream-blocked", "stream-headers-blocked"}) {
+    auto source = Open(endpoint);
+    { std::lock_guard<std::mutex> lock(blocked_mu); read_blocked = false; release_read = false; }
+    ssize_t result = 0;
+    std::thread reader([&] { uint8_t byte; result = source->ReadAt(0, &byte, 1); });
+    {
+      std::unique_lock<std::mutex> lock(blocked_mu);
+      Check(blocked_cv.wait_for(lock, std::chrono::seconds(2), [] { return read_blocked; }),
+            "controlled synchronous request reaches blocked boundary");
+    }
+    source->Cancel();
+    Check(handles == 3, "cancel does not close a handle while synchronous WinHTTP uses it");
+    { std::lock_guard<std::mutex> lock(blocked_mu); release_read = true; }
+    blocked_cv.notify_all();
+    reader.join();
+    Check(result == -EINTR && handles == 2 && file_handles == 0,
+          "returning synchronous operation observes cancel and retires request");
+  }
+  {
+    auto source = Open("stream-large");
+    CheckBytes(*source, 17, 61, "idle spool has an initial prefix");
+    source->Cancel();
+    Check(file_handles == 0 && handles == 2, "cancel promptly removes idle spool and request");
+  }
+  {
+    auto source = Open("stream-concurrent");
+    std::vector<std::thread> readers;
+    for (int t = 0; t < 6; ++t) readers.emplace_back([&, t] {
+      for (int j = 0; j < 15; ++j) {
+        const int64_t offset = (t * 9901 + j * 32771) % (2 * kFixtureChunk - 100);
+        CheckBytes(*source, offset, 79, "concurrent whole-file readers retain exact random-access bytes");
+      }
+    });
+    for (auto& reader : readers) reader.join();
+  }
+  Check(file_handles == 0 && handles == 0, "all streaming paths retire their resources");
+}
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc == 2 && std::strcmp(argv[1], "measure") == 0) {
+    Measurements(false);
+    return failures != 0;
+  }
   {
     auto source = Open("range");
     Check(source->Size() == kFixtureLength, "206 resource length");
@@ -240,6 +545,9 @@ int main() {
     for (auto& reader : readers) reader.join();
   }
   Check(handles == 0, "all request, connection and session handles close");
+  StreamingContracts();
+  Measurements(true);
+  Check(handles == 0 && file_handles == 0, "measured source leaves no owned resources");
   std::printf("HTTP source host contracts: %d checks, %d failures, %d requests\n",
               checks.load(), failures.load(), requests.load());
   return failures != 0;
