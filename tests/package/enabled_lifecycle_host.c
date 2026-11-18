@@ -1,6 +1,11 @@
 /* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
-/* Recording native process boundary only: never invoke OS process control. */
+/* Host clock and recorded process boundaries: never invoke OS process control. */
 #include "../pending-intent/framework_host.c"
+
+JNIEXPORT jlong JNICALL Java_android_os_SystemClock_elapsedRealtime(JNIEnv* env, jclass type) {
+    return Java_android_os_SystemClock_uptimeMillis(env, type);
+}
+
 static jclass fixture(JNIEnv* env) {
     jclass thread = (*env)->FindClass(env, "java/lang/Thread");
     jobject current = (*env)->CallStaticObjectMethod(env, thread,

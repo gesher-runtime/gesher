@@ -45,13 +45,16 @@ collisions, manual runs, another repository or another check suite cannot supply
 that evidence. It then rechecks current label, permission, receipt and QA proof
 before turning the required gate green. GitHub applies all branch protections.
 
-When either registered PR workflow finishes with a failure, timeout or action
-required, the controller removes `automerge`, cancels native auto-merge and posts
+When either registered PR workflow finishes with a failure, timeout or startup
+failure, the controller removes `automerge`, cancels native auto-merge and posts
 one short bot comment linking to the failed run. It reads the current run attempt
 before acting, so a delayed failure event cannot revoke a newer pending or
 successful rerun. Newer heads and label applications are preserved. Pending or
 cancelled runs cannot release the QA gate. After fixing or rerunning failed CI,
 review the result and reapply the label; success alone does not restore approval.
+`action_required` (including fork CI awaiting maintainer approval) preserves the
+label and keeps the QA gate pending. Approve and run both required PR workflows;
+their completion events recheck the existing exact-head approval automatically.
 
 `ci-required` covers every root production CI job, including Windows shards,
 packaging and e2e; failed, cancelled or skipped root jobs fail it. `arm64-required`
@@ -85,6 +88,38 @@ Enable Allow auto-merge and Allow GitHub Actions to create and approve pull
 requests. Use workflow_dispatch to recheck existing receipts; the optional
 pull_request_number input targets one PR. It never manufactures approval from a
 label snapshot. Old PR heads without aggregate checks need updated CI.
+
+### Pull requests that modify workflows
+
+GitHub's built-in `GITHUB_TOKEN` cannot enable auto-merge for a PR changing
+`.github/workflows/*`: it lacks the Workflows permission, which cannot be added
+to the workflow's `permissions` block.
+
+Prefer a dedicated GitHub App installed only on `gesher-runtime/gesher`, with
+Contents, Pull requests and Workflows write permissions (Metadata read is
+implicit). No webhook subscription or branch-protection bypass is required.
+Set the repository Actions variable `GESHER_BOT_APP_ID` to its App ID and the
+Actions secret `GESHER_BOT_PRIVATE_KEY` to its generated PEM private key. The
+pinned official `actions/create-github-app-token` action creates a short-lived
+token scoped to this repository and those three permissions, and revokes it at
+job completion. Set the App ID only after installing the App and saving its key;
+incomplete App configuration fails visibly instead of falling back silently.
+
+As an alternative, set the Actions secret `AUTOMERGE_WORKFLOWS_TOKEN` to a
+fine-grained PAT restricted to this repository with Contents, Pull requests and
+Workflows read/write permissions. Use an account with repository write access;
+configure expiration and rotate before expiry. The App token takes precedence.
+Do not paste credentials into source, issues or logs. Ordinary build/test workers
+keep their existing tokens; never expose this App key/token to PR code.
+
+The controller uses this credential only to enable/disable native auto-merge.
+Reviews, authorization reads, CI evidence and `qa/label-approval` still use
+`GITHUB_TOKEN`, preserving the ruleset's GitHub Actions app identity and the
+bot receipt format. It does not bypass protections or approve workflow runs.
+Without either credential, ordinary PRs retain the built-in token behavior; workflow
+PRs require this setup or native auto-merge enabled by an authorized maintainer.
+After setup/deployment, dispatch `automerge` for the existing PR number to recheck
+its current approval without rerunning CI or reapplying an intact label.
 
 ```text
 node --test .github/scripts/label-automerge.test.js
