@@ -655,9 +655,9 @@ public final class ActivityFinishFixture {
                         set(parent, "app", h.process);
                         ((List<Object>) get(h.process, "activities")).add(parent);
                     }
-                    var resume = h.atmType.getDeclaredMethod("resume", h.recordType);
-                    resume.setAccessible(true);
-                    h.asApp(() -> resume.invoke(h.atm, parent));
+                    // The parent becomes foreground after its already-forwarded child exits.
+                    h.asApp(() -> h.controller.finishActivity(token(child),
+                            Activity.RESULT_CANCELED, null, 0));
                     check(pending.isEmpty() && h.thread.results(parent).size() == 1
                                     && h.thread.results(parent).get(0) == result,
                             "Restored parent did not consume the retained cancellation exactly once");
