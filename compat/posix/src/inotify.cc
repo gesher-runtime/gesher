@@ -95,6 +95,7 @@ struct Watch {
   std::wstring file;  // a watched file's name; empty for a directory
   unsigned long long volume = 0, index = 0;
   HANDLE handle = INVALID_HANDLE_VALUE;
+  HANDLE identity = INVALID_HANDLE_VALUE;  // the watched inode, not its current name
   HANDLE event = nullptr;  // file-watch reads can also be consumed by a writer
   HANDLE port = nullptr;
   PTP_WAIT wait = nullptr;
@@ -123,6 +124,7 @@ struct Watch {
     }
     if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
     if (event != nullptr) CloseHandle(event);
+    if (identity != INVALID_HANDLE_VALUE) CloseHandle(identity);
   }
 };
 
@@ -264,6 +266,16 @@ bool MatchesNamedEntry(const Watch& w, const std::wstring& name) {
 
 }  // namespace
 
+// Case-only renames can report a transient removal before their rename pair.
+// The retained file handle distinguishes a live inode from an actual unlink;
+// looking up the old pathname races subsequent renames and replacements.
+bool FileStillLinked(const Watch& w) {
+  FILE_STANDARD_INFO info;
+  return w.identity != INVALID_HANDLE_VALUE &&
+         GetFileInformationByHandleEx(w.identity, FileStandardInfo, &info, sizeof(info)) &&
+         !info.DeletePending && info.NumberOfLinks != 0;
+}
+
 // One completed read's records.
 void Inotify::Changes(Watch& w, DWORD bytes) {
   const unsigned char* p = reinterpret_cast<const unsigned char*>(w.buffer.data());
@@ -343,6 +355,7 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
             if (!attrib_only) w.writing.insert(L"");
             break;
           case FILE_ACTION_REMOVED:
+            if (FileStillLinked(w)) break;
             EmitFor(w, IN_DELETE_SELF, 0, L"");
             End(w);
             break;
@@ -649,10 +662,12 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   if (!gesher::DiskPath(path, &windows, EACCES)) return -1;
   DWORD open_flags = FILE_FLAG_BACKUP_SEMANTICS |
                      ((mask & IN_DONT_FOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0);
+  auto w = std::make_unique<Watch>();
   HANDLE target = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                               OPEN_EXISTING, open_flags, nullptr);
   if (target == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  w->identity = target;
   BY_HANDLE_FILE_INFORMATION info;
   wchar_t final_path[32768];
   DWORD n = 0;
@@ -661,7 +676,6 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
                                            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS)) != 0 &&
             n < 32768;
   DWORD error = GetLastError();
-  CloseHandle(target);
   if (!ok) {
     SetLastError(error);
     return gesher::FailWithLastError();
@@ -679,7 +693,6 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
       return wd;
     }
   }
-  auto w = std::make_unique<Watch>();
   w->wd = in->next_wd++;
   w->mask = events;
   w->volume = info.dwVolumeSerialNumber;

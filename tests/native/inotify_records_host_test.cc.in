@@ -49,7 +49,7 @@ struct Watch {
   unsigned long long volume = 1, index = 42;
   std::vector<DWORD> buffer = std::vector<DWORD>(kBufferSize / 4);
   bool extended = true, removed = false, ignored_sent = false,
-       awaiting_rename = false;
+       awaiting_rename = false, still_linked = false;
   std::set<std::wstring> writing;
   std::map<std::wstring, std::pair<long long, long long>> contents;
 };
@@ -58,6 +58,7 @@ bool MatchesNamedEntry(const Watch &w, const std::wstring &name) {
   auto it = current_entries.find(name);
   return it != current_entries.end() && it->second == w.index;
 }
+bool FileStillLinked(const Watch &w) { return w.still_linked; }
 struct Event {
   int wd;
   uint32_t mask, cookie;
@@ -159,6 +160,22 @@ bool Overflow(const Inotify &in) {
   return false;
 }
 int main() {
+  {
+    Watch w;
+    w.still_linked = true;
+    Inotify in;
+    in.Changes(w, Records(w, {{2, L"a"}}));
+    in.Changes(w, Records(w, {{4, L"a"}, {5, L"A"}, {3, L"A", 42, 1}}));
+    Check("transient removal of live inode preserves rename and write",
+          Masks(in, {IN_MOVE_SELF, IN_MODIFY}) && !w.removed && w.file == L"A", in);
+  }
+  {
+    Watch w;
+    Inotify in;
+    in.Changes(w, Records(w, {{2, L"a"}}));
+    Check("actual unlink still retires watch",
+          Masks(in, {IN_DELETE_SELF, IN_IGNORED}) && w.removed, in);
+  }
   {
     Watch w;
     Inotify in;
