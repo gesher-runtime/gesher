@@ -57,6 +57,8 @@ public class FeaturesActivity extends Activity {
     private WebView mNav;
     private WebView mPopup;
     private WebMessagePort[] mChannel;
+    private WebMessagePort mPagePort;
+    private boolean mPortEcho, mPortQueued, mPortReply, mPortsFinished;
     private int mChoosers;
     private boolean mStarted;
     private String mServerHttp;
@@ -249,12 +251,47 @@ public class FeaturesActivity extends Activity {
             @Override
             public void onMessage(WebMessagePort port, WebMessage message) {
                 say("port message: " + message.getData());
-                mHandler.post(FeaturesActivity.this::find);
+                if ("page endpoint".equals(message.getData())) {
+                    if (message.getPorts() == null || message.getPorts().length != 1) {
+                        throw new AssertionError("Page-created MessagePort was not transferred");
+                    }
+                    mPagePort = message.getPorts()[0];
+                    mPagePort.setWebMessageCallback(new WebMessagePort.WebMessageCallback() {
+                        @Override public void onMessage(WebMessagePort received, WebMessage reply) {
+                            if ("queued in page".equals(reply.getData()) && !mPortQueued) {
+                                mPortQueued = true;
+                                say("page port queued data preserved");
+                            } else if ("reply from page".equals(reply.getData()) && mPortQueued) {
+                                mPortReply = true;
+                                received.close();
+                                mPagePort = null;
+                                say("page port reply and close passed");
+                            } else {
+                                throw new AssertionError("Unexpected page-port message: " + reply.getData());
+                            }
+                            finishPorts();
+                        }
+                    });
+                    mPagePort.postMessage(new WebMessage("probe from Java"));
+                } else if ("echo ping".equals(message.getData())) {
+                    mPortEcho = true;
+                    finishPorts();
+                } else {
+                    throw new AssertionError("Unexpected carrier message: " + message.getData());
+                }
             }
         });
         mMain.postWebMessage(new WebMessage("hello page", new WebMessagePort[] {mChannel[1]}),
                 Uri.parse("*"));
         mChannel[0].postMessage(new WebMessage("ping"));
+    }
+
+    private void finishPorts() {
+        if (!mPortEcho || !mPortReply || mPortsFinished) return;
+        mPortsFinished = true;
+        mChannel[0].close();
+        say("page-origin port round trip passed");
+        mHandler.post(this::find);
     }
 
     private int mFindStep;
@@ -405,6 +442,8 @@ public class FeaturesActivity extends Activity {
     @Override
     protected void onDestroy() {
         say("onDestroy");
+        if (mPagePort != null) mPagePort.close();
+        if (mChannel != null) mChannel[0].close();
         super.onDestroy();
     }
 }

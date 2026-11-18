@@ -8,8 +8,15 @@ before implementing or reviewing a change.
 ## Project scope: preserve application behavior
 
 Gesher provides the runtime, Android APIs and surrounding system services that
-an application expects. Windows integration must preserve the meaning of those
-interfaces and the application's intended workflow.
+an application expects, implemented on Windows. Windows adaptation is a core
+purpose of the project: use Windows APIs, real hardware, desktop presentation
+and system mechanisms where appropriate. Internal architecture and implementation
+may differ substantially from AOSP; source-level similarity is not a goal.
+
+Judge compatibility at the application-visible boundary. Preserve the operation
+the application requested, the meaning and origin of its inputs and results,
+and the relevant Android contracts. A Windows implementation of the requested
+operation is welcome. Replacing that operation with a different one is not.
 Lifecycle, permission checks, errors and capability reporting are part of this
 contract. If a capability is unavailable, use the Android-defined unsupported or
 unavailable behavior rather than inventing a successful result.
@@ -25,6 +32,7 @@ Examples:
 | Change | Policy |
 | --- | --- |
 | Connect Android's camera APIs to a Windows camera, preserving capture semantics and reporting actual capabilities. | Within scope. |
+| Let the user select a real Windows camera and describe its physical mounting. | Within scope when the configuration truthfully describes the device; selection alone does not establish additional capabilities or change sensor geometry. |
 | Implement an Android file-selection intent with a Windows file picker when the application requests file selection. | Within scope, preserving the intent's selection, permission and result contracts. |
 | Replace a camera capture with a file picker or feed a saved image as live camera input so an application accepts it as a fresh capture, including for cheque deposits. | Outside scope. Preserve the requested capture workflow and use an actual camera backend. |
 | Report successful autofocus, sensor readings or other capabilities that the backend does not implement, to satisfy an application's checks. | Outside scope. Implement the capability faithfully or use the Android-defined unavailable/unsupported behavior. |
@@ -32,13 +40,19 @@ Examples:
 
 Desktop presentation and input may differ where Windows requires it; the
 Android-visible contract and the application's choices must still be preserved.
+An implementation difference, desktop-specific setting or use of a Windows API
+is not by itself a scope violation. For example, selecting which real camera
+performs a capture preserves the requested operation; selecting an existing
+image and returning it as a fresh capture replaces that operation.
 Mock devices and synthetic inputs may be used in explicit, isolated tests. They
 must not silently become production defaults or be presented as real hardware
 behavior. Synthetic inputs must not replace real inputs in ordinary application
 use.
 
-Discuss unclear Windows adaptations or non-runtime project-scope questions in an
-issue or PR, and link the relevant discussion. Maintainer approval, user opt-in
+Discuss materially unclear application-visible contracts or non-runtime
+project-scope questions in an issue or PR, and link the relevant discussion.
+Ordinary Windows implementation choices do not require a separate scope
+approval. Maintainer approval, user opt-in
 and successful demonstrations do not waive the Android-contract requirements
 above. Routine compatibility work needs no separate scope approval. A violation
 of these requirements blocks a recommendation to merge until removed or
@@ -74,8 +88,14 @@ Human reviewers and AI assistants used for review must:
 2. Decide whether the implementation preserves the Android contract and the
    application's workflow. Look for substituted inputs, fabricated success or
    capabilities, package-specific workarounds and test/production differences.
-3. Report a policy violation as a **merge blocker**, with the
-   relevant code location, the rule violated and the observable consequence.
+   Evaluate what the application observes, not whether the internals duplicate
+   AOSP or whether the implementation uses a Windows-specific mechanism.
+3. Report a policy violation as a **merge blocker**, with the relevant code
+   location, requested operation, actual behavior, applicable contract and
+   observable consequence. A request to remove or redesign useful work must be
+   grounded in such a mismatch or a concrete correctness, security, performance
+   or resource problem. Preserve useful changes that have no substantiated
+   defect; do not reject them merely for adapting Android to Windows.
    Do not recommend approval merely because the implementation works or CI is
    green. Ask for removal or redesign of the violating behavior; maintainer
    approval does not waive the Android-contract requirements.

@@ -27,6 +27,8 @@ struct StreamLock {
 };
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+// Device identity is exercised separately by test_stream_device_lifetime.py.
+void ForgetStreamDevice(int, bool) {}
 PathKind MapPath(const char* path, std::wstring* out) {
   *out = std::wstring(path, path + std::strlen(path));
   return PathKind::kFile;

@@ -3,21 +3,19 @@ import java.lang.reflect.*;
 import java.util.*;
 
 public final class BluetoothScanHost {
-    private static int failures;
+    private static int failures, checks;
     private static final BluetoothLeScanner scanner = new BluetoothLeScanner(new Context());
     private static final class Callback extends ScanCallback {
-        int reports, first, lost, batches, batched;
-        public void onScanResult(int type, ScanResult result) {
-            reports++;
-            if (type == ScanSettings.CALLBACK_TYPE_FIRST_MATCH) first++;
-            if (type == ScanSettings.CALLBACK_TYPE_MATCH_LOST) lost++;
-        }
+        int reports, batches, batched, errors, lastError;
+        public void onScanResult(int type, ScanResult result) { reports++; }
         public void onBatchScanResults(List<ScanResult> results) {
             batches++;
             batched += results.size();
         }
+        public void onScanFailed(int error) { errors++; lastError = error; }
     }
     private static void check(boolean condition, String description) {
+        checks++;
         System.out.println((condition ? "PASS " : "FAIL ") + description);
         if (!condition) failures++;
     }
@@ -26,8 +24,8 @@ public final class BluetoothScanHost {
         result.setAccessible(true);
         return result;
     }
-    private static Object client(Callback callback) throws Exception {
-        return ((Map<?, ?>) field(BluetoothLeScanner.class, "sClients").get(null)).get(callback);
+    private static Object client(Object key) throws Exception {
+        return ((Map<?, ?>) field(BluetoothLeScanner.class, "sClients").get(null)).get(key);
     }
     private static int retained(Callback callback, String name) throws Exception {
         Object value = client(callback);
@@ -57,61 +55,212 @@ public final class BluetoothScanHost {
         scanner.cleanup();
         Handler.drain();
         SystemClock.now = 100;
+        BluetoothHost.scanAllowed = true;
+        BluetoothHost.radioOn = true;
+        BluetoothHost.permissionChecks = 0;
+    }
+    private static boolean callbackStart(ScanSettings settings, Callback callback) {
+        try {
+            scanner.startScan(null, settings, callback);
+            return true;
+        } catch (SecurityException denied) {
+            return false;
+        }
+    }
+    private static int intentStart(ScanSettings settings, PendingIntent intent) {
+        try {
+            return scanner.startScan(null, settings, intent);
+        } catch (SecurityException denied) {
+            return Integer.MIN_VALUE;
+        }
+    }
+    private static void permissionPrecedence() throws Exception {
+        ScanSettings unsupported = new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0);
+        ScanSettings supported = new ScanSettings(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        BluetoothHost.scanAllowed = false;
+        Callback rejected = new Callback();
+        check(callbackStart(unsupported, rejected) && rejected.errors == 0,
+                "unsupported callback settings are checked before scan permission");
+        Handler.drain();
+        check(rejected.errors == 1 && rejected.lastError == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED
+                && client(rejected) == null, "permission-denied unsupported callback is rejected once without registration");
+        PendingIntent intent = new PendingIntent();
+        check(intentStart(unsupported, intent) == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED
+                && intent.attempts == 0 && client(intent) == null,
+                "unsupported PendingIntent settings fail without checking permission or sending");
+        check(BluetoothHost.permissionChecks == 0, "unsupported settings never enter scan permission enforcement");
+
+        BluetoothHost.radioOn = false;
+        Callback off = new Callback();
+        check(callbackStart(unsupported, off) && off.errors == 0,
+                "radio-off callback failure is posted before settings and permission checks");
+        Handler.drain();
+        check(off.errors == 1 && off.lastError == ScanCallback.SCAN_FAILED_INTERNAL_ERROR
+                && client(off) == null, "radio-off callback receives INTERNAL_ERROR once without registration");
+        check(intentStart(unsupported, intent) == ScanCallback.SCAN_FAILED_INTERNAL_ERROR
+                && intent.attempts == 0 && client(intent) == null && BluetoothHost.permissionChecks == 0,
+                "radio-off PendingIntent returns INTERNAL_ERROR before settings and permission checks");
+
+        BluetoothHost.radioOn = true;
+        Callback denied = new Callback();
+        check(!callbackStart(supported, denied) && client(denied) == null,
+                "admitted callback still throws SecurityException before registration without permission");
+        check(intentStart(supported, intent) == Integer.MIN_VALUE && client(intent) == null,
+                "admitted PendingIntent still throws SecurityException before registration without permission");
+        Handler.drain();
+        check(denied.errors == 0 && intent.attempts == 0 && BluetoothHost.permissionChecks == 2,
+                "permission denial does not also post an error or send an intent");
+
+        BluetoothHost.scanAllowed = true;
+        Callback duplicate = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        Object original = client(duplicate);
+        BluetoothHost.scanAllowed = false;
+        int before = BluetoothHost.permissionChecks;
+        check(callbackStart(unsupported, duplicate) && client(duplicate) == original,
+                "duplicate callback preserves its registration after scan permission is revoked");
+        Handler.drain();
+        check(duplicate.errors == 1 && duplicate.lastError == ScanCallback.SCAN_FAILED_ALREADY_STARTED
+                && BluetoothHost.permissionChecks == before,
+                "duplicate callback fails before new settings and scan permission checks");
+        reset();
+    }
+    private static void unsupported(ScanSettings settings, String name) throws Exception {
+        Callback callback = new Callback();
+        scanner.startScan(List.of(new ScanFilter()), settings, callback);
+        check(callback.errors == 0, name + ": callback error is asynchronous");
+        check(client(callback) == null, name + ": rejected callback is not registered");
+        deliver("unsupported-callback");
+        Handler.drain();
+        check(callback.errors == 1 && callback.lastError == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                name + ": callback receives FEATURE_UNSUPPORTED once");
+        scanner.flushPendingScanResults(callback);
+        SystemClock.now += 600_001;
+        housekeeping();
+        check(callback.reports == 0 && callback.batches == 0 && callback.errors == 1,
+                name + ": no reports, delayed work or repeated failure after rejection");
+        scanner.stopScan(callback);
+
+        PendingIntent intent = new PendingIntent();
+        check(scanner.startScan(List.of(new ScanFilter()), settings, intent)
+                == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                name + ": PendingIntent receives synchronous FEATURE_UNSUPPORTED");
+        check(client(intent) == null, name + ": rejected PendingIntent is not registered");
+        deliver("unsupported-intent");
+        housekeeping();
+        check(intent.attempts == 0, name + ": synchronous rejection does not send the intent");
+        scanner.stopScan(intent);
+        reset();
     }
     public static void main(String[] args) throws Exception {
-        // Test through the public start/stop API without starting a real radio.
+        Callback cold = new Callback();
+        scanner.startScan(null, new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0), cold);
+        check(client(cold) == null && field(BluetoothLeScanner.class, "sThread").get(null) == null,
+                "rejected first request does not create a client or native watcher thread");
+        Handler.drain();
+        check(cold.errors == 1 && cold.lastError == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                "first rejected request still dispatches its failure");
+        reset();
+        // The complete production scanner runs through its public API. A sentinel
+        // replaces only the native watcher thread; no host radio is fabricated.
         field(BluetoothLeScanner.class, "sThread").set(null, Thread.currentThread());
+        permissionPrecedence();
         Callback all = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
         for (int i = 0; i < 4096; i++) deliver("device-" + i);
         Handler.drain();
-        check(all.reports == 4096, "ordinary scanning delivers every report");
+        check(all.reports == 4096 && all.errors == 0, "ordinary scanning delivers every report");
         check(retained(all, "lastSeen") == 0 && retained(all, "found") == 0,
                 "ordinary scanning does not retain a history of random addresses");
+        scanner.flushPendingScanResults(all);
+        housekeeping();
+        check(all.batches == 0, "flushing an immediate scan does not invent a batch");
         reset();
 
-        Callback first = start(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0);
-        deliver("returning-device");
-        deliver("returning-device");
+        unsupported(new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0), "FIRST_MATCH");
+        unsupported(new ScanSettings(ScanSettings.CALLBACK_TYPE_MATCH_LOST, 0), "MATCH_LOST");
+        unsupported(new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH
+                | ScanSettings.CALLBACK_TYPE_MATCH_LOST, 0), "FIRST_MATCH | MATCH_LOST");
+        unsupported(new ScanSettings(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 1), "report delay 1 ms");
+        unsupported(new ScanSettings(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, Long.MAX_VALUE), "long report delay");
+        unsupported(new ScanSettings(ScanSettings.CALLBACK_TYPE_ALL_MATCHES_AUTO_BATCH, 600_000), "auto batch");
+
+        Callback retry = new Callback();
+        scanner.startScan(null, new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0), retry);
+        scanner.startScan(retry);
+        check(client(retry) != null, "valid retry is accepted before the earlier error callback runs");
+        deliver("valid-retry");
         Handler.drain();
-        check(first.first == 1, "first-match suppresses duplicates while the device is present");
-        SystemClock.now += 10_001;
-        housekeeping();
-        check(retained(first, "lastSeen") == 0 && retained(first, "found") == 0,
-                "first-match alone releases departed-device tracking");
-        deliver("returning-device");
-        Handler.drain();
-        check(first.first == 2 && first.lost == 0,
-                "first-match reports a returning device without unsolicited lost callbacks");
+        check(retry.errors == 1 && retry.lastError == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED
+                && retry.reports == 1, "valid retry preserves the earlier error and receives immediate results");
         reset();
 
-        Callback tracked = start(ScanSettings.CALLBACK_TYPE_FIRST_MATCH
-                | ScanSettings.CALLBACK_TYPE_MATCH_LOST, 0);
-        deliver("tracked-device");
+        Callback duplicate = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        Object original = client(duplicate);
+        scanner.startScan(null, new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0), duplicate);
+        check(duplicate.errors == 0 && client(duplicate) == original,
+                "duplicate callback validation preserves the active registration");
+        deliver("still-active");
         Handler.drain();
-        SystemClock.now += 10_001;
-        housekeeping();
-        housekeeping();
-        check(tracked.first == 1 && tracked.lost == 1,
-                "combined found/lost reports each transition once");
+        check(duplicate.errors == 1 && duplicate.lastError == ScanCallback.SCAN_FAILED_ALREADY_STARTED
+                && duplicate.reports == 1, "ALREADY_STARTED takes precedence over unsupported new settings");
         reset();
 
-        Callback delayed = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, Long.MAX_VALUE);
-        for (int i = 0; i < 1537; i++) deliver("batch-device-" + i);
+        Callback internalReturn = new Callback();
+        Method start = BluetoothLeScanner.class.getDeclaredMethod("start", List.class,
+                ScanSettings.class, ScanCallback.class, PendingIntent.class);
+        start.setAccessible(true);
+        int code = (Integer) start.invoke(scanner, null,
+                new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0), internalReturn, null);
+        check(code == ScanCallback.NO_ERROR && internalReturn.errors == 0,
+                "callback path posts its failure and internally returns NO_ERROR as AOSP does");
         Handler.drain();
-        check(delayed.batched == 1536 && delayed.batches == 3 && retained(delayed, "batch") == 1,
-                "full batches flush early without dropping reports or retaining an unlimited queue");
-        scanner.flushPendingScanResults(delayed);
+        check(internalReturn.errors == 1 && internalReturn.lastError == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED,
+                "internal callback return does not consume or duplicate asynchronous failure");
+        reset();
+
+        PendingIntent intent = new PendingIntent();
+        check(scanner.startScan(null, new ScanSettings(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 1), intent)
+                == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED && client(intent) == null,
+                "PendingIntent rejection leaves its token available for a supported retry");
+        check(scanner.startScan(null, null, intent) == ScanCallback.NO_ERROR && client(intent) != null,
+                "null PendingIntent settings select the supported immediate default");
+        Object activeIntent = client(intent);
+        check(scanner.startScan(null, new ScanSettings(ScanSettings.CALLBACK_TYPE_FIRST_MATCH, 0), intent)
+                == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED && client(intent) == activeIntent,
+                "unsupported replacement preserves an already active PendingIntent registration");
+        deliver("pending-result");
+        check(intent.attempts == 0, "successful PendingIntent reports are scheduled on the callback queue");
         Handler.drain();
-        check(delayed.batched == 1537 && retained(delayed, "batch") == 0,
-                "explicit flush delivers the remaining partial batch exactly once");
+        check(intent.sends == 1
+                && Integer.valueOf(ScanSettings.CALLBACK_TYPE_ALL_MATCHES).equals(
+                        intent.last.extras.get(BluetoothLeScanner.EXTRA_CALLBACK_TYPE))
+                && !intent.last.extras.containsKey(BluetoothLeScanner.EXTRA_ERROR_CODE)
+                && ((List<?>) intent.last.extras.get(BluetoothLeScanner.EXTRA_LIST_SCAN_RESULT)).size() == 1,
+                "default PendingIntent scan delivers the result list and ALL_MATCHES type");
+        deliver("queued-before-intent-stop");
+        scanner.stopScan(intent);
+        Handler.drain();
+        check(intent.sends == 1 && client(intent) == null, "PendingIntent stop suppresses queued delivery and unregisters");
+
+        PendingIntent cancelled = new PendingIntent();
+        cancelled.cancelled = true;
+        scanner.startScan(null, null, cancelled);
+        deliver("cancelled-intent");
+        Handler.drain();
+        check(cancelled.attempts == 1 && cancelled.sends == 0 && client(cancelled) == null,
+                "cancelled PendingIntent releases the accepted registration");
         reset();
 
         Callback stopped = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
         deliver("queued-before-stop");
         scanner.stopScan(stopped);
         Handler.drain();
-        check(stopped.reports == 0, "stop suppresses already queued callbacks");
-        System.out.println("BluetoothScanHost: " + failures + " failures");
+        check(stopped.reports == 0 && client(stopped) == null, "stop suppresses already queued callbacks");
+        Callback cleaned = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        deliver("queued-before-cleanup");
+        scanner.cleanup();
+        Handler.drain();
+        check(cleaned.reports == 0 && client(cleaned) == null, "cleanup removes accepted scans and queued results");
+        System.out.println("BluetoothScanHost: " + checks + " checks, " + failures + " failures");
         if (failures != 0) throw new AssertionError("scan contracts failed");
     }
 }
@@ -119,12 +268,21 @@ public final class BluetoothScanHost {
 // Only Android value types, scheduling and native boundaries are substituted.
 class Context {}
 class Intent {
-    void putExtra(String key, int value) {}
-    void putParcelableArrayListExtra(String key, ArrayList<ScanResult> value) {}
+    final Map<String, Object> extras = new HashMap<>();
+    void putExtra(String key, int value) { extras.put(key, value); }
+    void putParcelableArrayListExtra(String key, ArrayList<ScanResult> value) { extras.put(key, value); }
 }
 class PendingIntent {
+    int attempts, sends;
+    boolean cancelled;
+    Intent last;
     static class CanceledException extends Exception {}
-    void send(Context context, int code, Intent intent) throws CanceledException {}
+    void send(Context context, int code, Intent intent) throws CanceledException {
+        attempts++;
+        if (cancelled) throw new CanceledException();
+        sends++;
+        last = intent;
+    }
 }
 class Looper { static Looper getMainLooper() { return new Looper(); } }
 class Handler {
@@ -156,9 +314,14 @@ class BluetoothDevice {
     static BluetoothDevice createFromHost(String address, int type) { return new BluetoothDevice(address, type); }
 }
 class BluetoothHost {
-    static void enforceScan(Context context) {}
+    static boolean scanAllowed = true, radioOn = true;
+    static int permissionChecks;
+    static void enforceScan(Context context) {
+        permissionChecks++;
+        if (!scanAllowed) throw new SecurityException("BLUETOOTH_SCAN");
+    }
     static boolean mayReceiveScanResults(Context context) { return true; }
-    static boolean on() { return true; }
+    static boolean on() { return radioOn; }
     static Context context(Context context) { return context; }
     static BluetoothDevice device(String address, int type, Context context) { return new BluetoothDevice(address, type); }
     static void sawLe(String address, String name) {}
@@ -176,7 +339,8 @@ class ScanRecord {
 }
 class ScanFilter { boolean matches(ScanResult result) { return true; } }
 class ScanCallback {
-    static final int NO_ERROR = 0, SCAN_FAILED_ALREADY_STARTED = 1, SCAN_FAILED_INTERNAL_ERROR = 3;
+    static final int NO_ERROR = 0, SCAN_FAILED_ALREADY_STARTED = 1,
+            SCAN_FAILED_INTERNAL_ERROR = 3, SCAN_FAILED_FEATURE_UNSUPPORTED = 4;
     public void onScanResult(int type, ScanResult result) {}
     public void onBatchScanResults(List<ScanResult> results) {}
     public void onScanFailed(int error) {}

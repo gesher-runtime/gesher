@@ -1,0 +1,60 @@
+name: Build input cache
+description: Local disk snapshots on the self-hosted runner; ordinary Actions cache on hosted runners
+inputs:
+  phase:
+    description: initialize, restore or save
+    required: true
+  path:
+    description: Literal workspace paths, one per line
+    default: ''
+  key:
+    description: Same immutable input key used by Actions cache
+    default: ''
+  restore-keys:
+    description: Ordered fallback prefixes
+    default: ''
+  namespace:
+    description: Original cache ref boundary; diagnostics explicitly name their authorized PR ref
+    default: ${{ github.ref }}
+outputs:
+  cache-hit:
+    description: True only for an exact key hit
+    value: ${{ steps.local.outputs.cache-hit || steps.remote_restore.outputs.cache-hit }}
+  cache-primary-key:
+    description: Requested key
+    value: ${{ steps.local.outputs.cache-primary-key || steps.remote_restore.outputs.cache-primary-key }}
+  cache-matched-key:
+    description: Actual restored key
+    value: ${{ steps.local.outputs.cache-matched-key || steps.remote_restore.outputs.cache-matched-key }}
+  toolchain-hit:
+    description: Existing versioned llvm-mingw installation is executable
+    value: ${{ steps.local.outputs.toolchain-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Local disk cache
+      if: runner.environment == 'self-hosted'
+      id: local
+      shell: bash
+      env:
+        CACHE_ACTION: ${{ github.action_path }}
+        CACHE_PHASE: ${{ inputs.phase }}
+        CACHE_PATHS: ${{ inputs.path }}
+        CACHE_KEY: ${{ inputs.key }}
+        CACHE_RESTORE_KEYS: ${{ inputs.restore-keys }}
+        CACHE_NAMESPACE: ${{ inputs.namespace }}
+      run: python3 "$CACHE_ACTION/cache.py"
+    - name: Hosted restore
+      if: runner.environment != 'self-hosted' && inputs.phase == 'restore'
+      id: remote_restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}
+    - name: Hosted save
+      if: runner.environment != 'self-hosted' && inputs.phase == 'save'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}

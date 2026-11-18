@@ -12,6 +12,9 @@ especially "Project scope: preserve application behavior".
   behavior impact, explain why this is not applicable.
 - Does it change application-visible inputs, workflows, permissions, capability
   reporting or success results? Explain how it preserves application behavior.
+- Which Windows mechanisms or real devices implement the requested operation?
+  Different internal mechanisms and desktop presentation are expected; explain
+  any meaningful application-visible difference, not source-level AOSP parity.
 - Does it introduce synthetic inputs, device simulation or package-specific
   behavior? Explain the production/test boundary, or state that it does not.
 - If project scope is unclear, describe the question and link any relevant
@@ -35,6 +38,10 @@ which checks exercise production code and which use mocks or host-only fixtures.
 Read CONTRIBUTING.md and inspect the actual current-head diff. Check project
 scope before correctness. A checked box or green CI is not proof of compliance.
 Report workflow substitutions, bypasses or fabricated capabilities as
-merge blockers. Withhold an approval recommendation when scope evidence or a
+merge blockers, identifying the requested operation, actual behavior, applicable
+contract and observable consequence. Preserve useful Windows adaptations; a
+different internal implementation is not itself a defect. Requests for removal
+or redesign need a concrete contract, correctness, security, performance or
+resource finding. Withhold an approval recommendation when scope evidence or a
 required Android-contract reference is missing. State the reviewed commit, scope
 conclusion, supporting evidence, blockers and validation limits in your review.

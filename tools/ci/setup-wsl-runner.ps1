@@ -1,13 +1,19 @@
-# Run on the runner computer. No gh executable or account login is needed.
+# Run on the runner computer. gh is installed for job-scoped artifact reads;
+# no GitHub account login is needed.
 [CmdletBinding()]
 param(
-    [string]$PackagePath = (Join-Path $PSScriptRoot 'runner-package.json'),
+    [string]$PackagePath = '',
     [string]$Distribution = 'Ubuntu-24.04',
     [ValidatePattern('^[A-Za-z0-9_-]+$')]
     [string]$RunnerName = 'gesher-wsl-trial'
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($PackagePath)) {
+    # Resolve this in the script body: PowerShell 5.1 may not initialize
+    # PSScriptRoot while parameter default expressions are evaluated.
+    $PackagePath = Join-Path $PSScriptRoot 'runner-package.json'
+}
 Get-Command wsl.exe -ErrorAction Stop | Out-Null
 $package = Get-Content -LiteralPath $PackagePath -Raw | ConvertFrom-Json
 if ($package.schema_version -ne 1 -or
@@ -37,7 +43,7 @@ if ($LASTEXITCODE -ne 1) { throw 'Could not check existing runner configuration.
 Write-Host 'Installing build dependencies in WSL (this may take several minutes)...'
 & wsl.exe -d $Distribution -u root -- apt-get update
 if ($LASTEXITCODE -ne 0) { throw 'apt-get update failed.' }
-& wsl.exe -d $Distribution -u root -- env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git curl ca-certificates tar xz-utils python3 cmake ninja-build ccache libicu74 libssl3t64 libkrb5-3 zlib1g
+& wsl.exe -d $Distribution -u root -- env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git gh curl ca-certificates tar xz-utils python3 cmake ninja-build ccache clang bison flex libc++-18-dev libc++abi-18-dev unzip zip zstd openjdk-21-jdk-headless libicu74 libssl3t64 libkrb5-3 zlib1g
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
 
 $download = @'
