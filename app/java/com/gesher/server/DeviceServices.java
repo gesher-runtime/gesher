@@ -9,7 +9,6 @@ import android.app.ISearchManager;
 import android.app.SyncNotedAppOp;
 import android.app.admin.IDevicePolicyManager;
 import android.app.trust.ITrustManager;
-import android.app.usage.IUsageStatsManager;
 import android.content.ComponentName;
 import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
@@ -102,85 +101,6 @@ final class DeviceServices {
     }
 
     /**
-     * {@code appops}: every operation is allowed (Gesher grants an app what it asks for,
-     * as the activity manager's permission checks do); noted and started operations
-     * answer MODE_ALLOWED. Environment.isExternalStorageManager asks it, among others.
-     */
-    static final class AppOpsService extends IAppOpsService.Default {
-        @Override
-        public int checkOperation(int code, int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationRaw(int code, int uid, String packageName,
-                String attributionTag) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationRawForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkAudioOperation(int code, int usage, int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkPackage(int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int permissionToOpCode(String permission) {
-            return AppOpsManager.OP_NONE;
-        }
-
-        @Override
-        public SyncNotedAppOp noteOperation(int code, int uid, String packageName,
-                String attributionTag, boolean shouldCollectAsyncNotedOp, String message,
-                boolean shouldCollectMessage) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp noteOperationForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId, boolean shouldCollectAsyncNotedOp,
-                String message, boolean shouldCollectMessage) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp startOperation(IBinder clientId, int code, int uid,
-                String packageName, String attributionTag, boolean startIfModeDefault,
-                boolean shouldCollectAsyncNotedOp, String message, boolean shouldCollectMessage,
-                int attributionFlags, int attributionChainId) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp startOperationForDevice(IBinder clientId, int code, int uid,
-                String packageName, String attributionTag, int virtualDeviceId,
-                boolean startIfModeDefault, boolean shouldCollectAsyncNotedOp, String message,
-                boolean shouldCollectMessage, int attributionFlags, int attributionChainId) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-    }
-
-    /**
      * {@code appwidget}: a launcher that hosts no widgets yet. Apps ask which of their
      * widgets exist (none) to update them; pinning is not supported.
      */
@@ -244,10 +164,6 @@ final class DeviceServices {
     /**
      * {@code usagestats}: no collected usage history or Android app standby.
      */
-    static final class UsageStatsService extends DesktopUsageStatsService {
-        UsageStatsService(PackageManagerService packages) { super(packages); }
-    }
-
     /**
      * {@code device_policy}: no Android administrators; Android encryption is unsupported.
      */

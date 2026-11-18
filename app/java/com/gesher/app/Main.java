@@ -219,11 +219,13 @@ public final class Main {
             if (dataDir != null) {
                 pkg.setDataDir(new File(dataDir).getAbsolutePath());
             }
+            // Admission assigns the stable UID; snapshot application/component
+            // metadata only after the in-process package manager has accepted it.
+            Services.installInProcess(Services.createInProcess(List.of(pkg)));
             pkg.prepareDataDirectories();
             appInfo = pkg.applicationInfo(PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES);
             launch = pkg.launcherActivity(activity);
-            Services.installInProcess(Services.createInProcess(List.of(pkg)));
             com.gesher.server.ConnectivityService.applyInternetPermission(pkg);  // docs/network.md
             log("stand-in services in this process: "
                     + String.join(", ", ServiceManager.listServices()));

@@ -53,7 +53,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void activityPaused(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityPaused(r);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityPaused(r);
     }
 
     @Override
@@ -66,7 +66,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void activityDestroyed(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityDestroyed(r);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityDestroyed(r);
     }
 
     /** After an ActivityRelaunchItem (locale track): the new instance reports its states. */
@@ -214,13 +214,15 @@ public final class ActivityClientController extends IActivityClientController.De
     public ComponentName getCallingActivity(IBinder token) {
         // Who will get this activity's result (startActivityForResult), if anyone.
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        return r != null && r.resultTo != null ? r.resultTo.component() : null;
+        ActivityTaskManagerService.ActivityRecord result = r == null ? null : r.resultTo;
+        return result != null ? result.component() : null;
     }
 
     @Override
     public String getCallingPackage(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        return r != null && r.resultTo != null ? r.resultTo.info.packageName : null;
+        ActivityTaskManagerService.ActivityRecord result = r == null ? null : r.resultTo;
+        return result != null ? result.info.packageName : null;
     }
 
     @Override

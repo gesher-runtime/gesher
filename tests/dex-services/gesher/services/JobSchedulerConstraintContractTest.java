@@ -970,8 +970,8 @@ public final class JobSchedulerConstraintContractTest {
                 "Network callback death fabricated an application completion failure");
         long generation = (Long) get(h.scheduler, "mHostGeneration");
         synchronized (get(run.run, "dispatch")) {
-            invoke(h.scheduler, "updateNetwork", new Class<?>[]{h.runType, Network.class, long.class},
-                    run.run, new Network(145), generation);
+            invoke(h.scheduler, "updateNetwork", new Class<?>[]{h.runType, Network.class, long.class, long.class},
+                    run.run, new Network(145), generation, get(run.job, "constraintObservation"));
         }
         check(service.networkChanges == 2, "Finished run received a late network callback");
         h.cancel(127);
@@ -1033,6 +1033,10 @@ public final class JobSchedulerConstraintContractTest {
         starting.acknowledgeStartImmediately = false;
         TestRunHandle pending = h.start(131, starting);
         h.setNetworkSnapshot(snapshot(48, "wifi", false, false));
+        // An unchanged poll must not invalidate the accepted assignment that is
+        // waiting for start acknowledgement, or manufacture an early callback.
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
         check(starting.networkChanges == 0, "Network callback arrived before start acknowledgement");
         pending.params.getCallback().acknowledgeStartMessage(131, true);
         check(starting.networkChanges == 1 && new Network(148).equals(pending.params.getNetwork()),
@@ -1331,11 +1335,12 @@ public final class JobSchedulerConstraintContractTest {
         TestService service = new TestService();
         TestRunHandle handle = h.start(id, service);
         Class<?> updateType = type("JobSchedulerService$RunConstraintUpdate");
-        Class<?>[] signature = {h.runType, long.class, int.class, Network.class};
+        Class<?>[] signature = {h.runType, long.class, long.class, int.class, Network.class};
         long generation = (Long) get(h.scheduler, "mHostGeneration");
-        Object obsoleteStop = make(updateType, signature, handle.run, generation,
+        long observation = (Long) get(handle.job, "constraintObservation");
+        Object obsoleteStop = make(updateType, signature, handle.run, generation, observation,
                 JobParameters.STOP_REASON_CONSTRAINT_CONNECTIVITY, null);
-        Object obsoleteNetwork = make(updateType, signature, handle.run, generation,
+        Object obsoleteNetwork = make(updateType, signature, handle.run, generation, observation,
                 JobParameters.STOP_REASON_UNDEFINED, new Network(999));
         h.setNetworkSnapshot(snapshot(59, "wifi", false, false));
         check(handle.params.getNetwork() != null && handle.params.getNetwork().getNetId() == 159,
@@ -1346,6 +1351,163 @@ public final class JobSchedulerConstraintContractTest {
                         && handle.params.getNetwork().getNetId() == 159,
                 "A superseded host snapshot stopped or rebound an active job");
         handle.params.getCallback().jobFinished(id, false);
+    }
+
+    private static void testUnnotifiedStorageObservation(Harness h, boolean duringStart) throws Exception {
+        int id = duringStart ? 180 : 181;
+        long gib = 1024L * 1024 * 1024;
+        h.setStorageSpace(20 * gib, gib);
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresStorageNotLow(true).build());
+        TestService service = new TestService();
+        service.rescheduleOnStop = true;
+        Object run = duringStart ? h.begin(id) : h.start(id, service).run;
+        long generation = (Long) get(h.scheduler, "mHostGeneration");
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread observer = new Thread(() -> {
+            try { invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false); }
+            catch (Throwable unexpected) { failure.set(unexpected); }
+        }, "job-unnotified-storage-test");
+        observer.setDaemon(true);
+        synchronized (get(run, "dispatch")) {
+            // These are native observation inputs only: no constraintsChanged,
+            // test setter, or manufactured RunConstraintUpdate is involved.
+            set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, 0});
+            observer.start();
+            awaitBlocked(observer, "Actual low-storage pass did not wait at run dispatch");
+            set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, gib});
+            if (duringStart) invoke(run, "started", new Class<?>[]{IBinder.class}, service.asBinder());
+            else invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        }
+        observer.join(5_000);
+        check(!observer.isAlive() && failure.get() == null, "Queued storage observation failed: " + failure.get());
+        check(generation == (Long) get(h.scheduler, "mHostGeneration"),
+                "The unnotified-storage race accidentally depended on a host event");
+        check(service.starts == 1 && service.stops == 0 && h.runningCount() == 1 && h.getPendingJob(id) != null,
+                "An older disk-pressure sample stopped a run after a newer accepted observation");
+        // A genuinely later low-storage observation must still stop and retain
+        // the constraint on retry; fencing cannot simply suppress storage stops.
+        set(h.scheduler, "mStorageSpaceOverride", new long[]{20 * gib, 0});
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        check(service.stops == 1 && service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW
+                        && h.runningCount() == 0 && h.getPendingJob(id) != null,
+                "Observation fencing suppressed a genuine later storage stop/retry");
+        check(h.reason(id) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW,
+                "A genuine storage retry lost its requested constraint");
+        h.cancel(id);
+    }
+
+    private static void testUnnotifiedNetworkObservationBeforeStart(Harness h) throws Exception {
+        int id = 182;
+        h.setNetworkSnapshot(snapshot(61, "wifi", false, false));
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build());
+        Object run = h.begin(id);
+        TestService service = new TestService();
+        long generation = (Long) get(h.scheduler, "mHostGeneration");
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread observer = new Thread(() -> {
+            try { invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false); }
+            catch (Throwable unexpected) { failure.set(unexpected); }
+        }, "job-unnotified-network-test");
+        observer.setDaemon(true);
+        synchronized (get(run, "dispatch")) {
+            set(h.scheduler, "mNetworkSnapshotOverride", snapshot(62, "wifi", false, false));
+            observer.start();
+            awaitBlocked(observer, "Actual network pass did not wait at run dispatch");
+            set(h.scheduler, "mNetworkSnapshotOverride", snapshot(63, "wifi", false, false));
+            invoke(run, "started", new Class<?>[]{IBinder.class}, service.asBinder());
+        }
+        observer.join(5_000);
+        check(!observer.isAlive() && failure.get() == null, "Queued network observation failed: " + failure.get());
+        check(generation == (Long) get(h.scheduler, "mHostGeneration"), "Unnotified network test sent an event");
+        check(service.starts == 1 && service.stops == 0 && service.networkChanges == 0
+                        && new Network(163).equals(service.lastStartParams.getNetwork()),
+                "A queued older network overwrote the actual admission observation");
+        set(h.scheduler, "mNetworkSnapshotOverride", snapshot(64, "wifi", false, false));
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        check(service.networkChanges == 1 && new Network(164).equals(service.lastStartParams.getNetwork()),
+                "Observation fencing suppressed a genuine later network handover");
+        service.lastStartParams.getCallback().jobFinished(id, false);
+    }
+
+    private static void testActivePendingHistory(Harness h) throws Exception {
+        int id = 183;
+        h.setPowerStatus(new int[]{1, 8, 70});
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true).build());
+        h.setPowerStatus(new int[]{1, 8, 70});
+        AtomicReference<List<PendingJobReasonsInfo>> atDispatch = new AtomicReference<>();
+        TestService service = new TestService() {
+            @Override public void stopJob(JobParameters params) {
+                try { atDispatch.set(h.history(id)); }
+                catch (Exception failure) { throw new AssertionError(failure); }
+                super.stopJob(params);
+            }
+        };
+        service.acknowledgeImmediately = false;
+        TestRunHandle run = h.start(id, service);
+        check(h.history(id).size() == 1 && Arrays.equals(h.history(id).get(0).getPendingJobReasons(),
+                new int[]{JobScheduler.PENDING_JOB_REASON_APP}), "Resolved ready-service history diverged from JobStatus");
+        long before = System.currentTimeMillis();
+        h.setPowerStatus(new int[]{0, 0, 70});
+        List<PendingJobReasonsInfo> history = h.history(id);
+        int[] charging = {JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CHARGING};
+        check(service.stops == 1 && atDispatch.get() != null && atDispatch.get().size() == 2
+                        && Arrays.equals(atDispatch.get().get(1).getPendingJobReasons(), charging),
+                "Active constraint loss was not recorded before stopJob dispatch");
+        check(history.size() == 2 && Arrays.equals(history.get(1).getPendingJobReasons(), charging)
+                        && history.get(1).getTimestampMillis() >= before,
+                "History lost the charging transition while stop acknowledgement waits");
+        check(h.reason(id) == JobScheduler.PENDING_JOB_REASON_EXECUTING,
+                "A diagnostic constraint history incorrectly changed the live pending-reason API");
+        for (int i = 0; i < 14; i++) h.setPowerStatus(i % 2 == 0 ? new int[]{1, 8, 70} : new int[]{0, 0, 70});
+        history = h.history(id);
+        check(history.size() == 10 && Arrays.equals(history.get(9).getPendingJobReasons(), charging)
+                        && service.stops == 1, "Stopping history was omitted, unbounded, or duplicated stop dispatch");
+        long previous = before;
+        for (PendingJobReasonsInfo entry : history) {
+            check(entry.getTimestampMillis() >= previous && entry.getTimestampMillis() <= System.currentTimeMillis(),
+                    "Stopping history lost wall-clock observation order");
+            previous = entry.getTimestampMillis();
+        }
+        history.get(9).getPendingJobReasons()[0] = -999;
+        check(Arrays.equals(h.history(id).get(9).getPendingJobReasons(), charging), "Stopping history exposed mutable server data");
+        run.params.getCallback().acknowledgeStopMessage(id, false);
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true).build());
+        h.setPowerStatus(new int[]{0, 0, 70});
+        check(h.history(id).size() == 1, "A reused ID inherited the completed run's history");
+        h.cancel(id);
+    }
+
+    private static void testActiveContentTriggerHistory(Harness h) throws Exception {
+        int id = 184;
+        android.net.Uri uri = android.net.Uri.parse("content://fixture.jobs/item");
+        h.setPowerStatus(new int[]{1, 8, 70});
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true)
+                .addTriggerContentUri(new JobInfo.TriggerContentUri(uri, 0))
+                .setTriggerContentUpdateDelay(1_000).setTriggerContentMaxDelay(1_000).build());
+        invoke(h.scheduler, "contentChanged", new Class<?>[]{android.net.Uri[].class, int.class},
+                new android.net.Uri[]{uri}, 0);
+        // Make the real observed trigger old enough without waiting on wall time.
+        synchronized (h.scheduler) {
+            Object job = h.findJob(id);
+            set(job, "firstChange", SystemClock.elapsedRealtime() - 2_000);
+            set(job, "lastChange", SystemClock.elapsedRealtime() - 2_000);
+        }
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        TestService service = new TestService();
+        service.acknowledgeImmediately = false;
+        TestRunHandle run = h.start(id, service);
+        invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
+        List<PendingJobReasonsInfo> history = h.history(id);
+        check(Arrays.equals(run.params.getTriggeredContentAuthorities(), new String[]{uri.getAuthority()})
+                        && Arrays.equals(history.get(history.size() - 1).getPendingJobReasons(),
+                                new int[]{JobScheduler.PENDING_JOB_REASON_APP}),
+                "Moving delivered content into JobParameters falsely unsatisfied the active trigger");
+        h.setPowerStatus(new int[]{0, 0, 70});
+        history = h.history(id);
+        check(Arrays.equals(history.get(history.size() - 1).getPendingJobReasons(),
+                        new int[]{JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CHARGING}),
+                "Active history invented a new content constraint when charging alone was lost");
+        run.params.getCallback().acknowledgeStopMessage(id, false);
     }
 
     private static void awaitBlocked(Thread thread, String message) throws InterruptedException {
@@ -1518,6 +1680,11 @@ public final class JobSchedulerConstraintContractTest {
             testPendingReasonsAndHistory(h);
             testAdmissionOrderAndCapacity(h);
             testSupersededConstraintObservation(h);
+            testUnnotifiedStorageObservation(h, true);
+            testUnnotifiedStorageObservation(h, false);
+            testUnnotifiedNetworkObservationBeforeStart(h);
+            testActivePendingHistory(h);
+            testActiveContentTriggerHistory(h);
             testCancelDuringStartObservation(h);
             testPendingReasonRefreshesObservation(h);
             testNetworkPermission(h);

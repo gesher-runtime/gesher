@@ -8,6 +8,7 @@
     }
   },
   "messages": {
+    "intent_chooser_title": {"en": "Gesher — choose an app", "he": "גשר — בחירת יישום"},
     "chooser_title": {"en": "Gesher accounts", "he": "גשר — בחירת חשבון"},
     "chooser_prompt": {"en": "Choose an account for this application:", "he": "בחר חשבון עבור יישום זה:"},
     "chooser_select": {"en": "Select", "he": "בחירה"},
@@ -50,6 +51,12 @@
     "permission_requested": {"en": "This app is requesting the following permissions:", "he": "היישום מבקש את ההרשאות הבאות:"},
     "permission_allow": {"en": "Allow", "he": "לאפשר"},
     "permission_deny": {"en": "Don't allow", "he": "לא לאפשר"},
+    "exact_alarm_title": {"en": "Alarms and reminders", "he": "התראות ותזכורות"},
+    "exact_alarm_allow": {"en": "Allow alarms and reminders", "he": "לאפשר התראות ותזכורות"},
+    "exact_alarm_detail": {"en": "Allow this app to schedule alarms and reminders at precise times. Turning this off stops the app and cancels its exact alarms.", "he": "הרשאה לתזמן התראות ותזכורות בזמנים מדויקים. ביטול ההרשאה מפסיק את היישום ומבטל את ההתראות המדויקות שלו."},
+    "exact_alarm_empty": {"en": "No installed apps need this special access.", "he": "אין יישומים מותקנים הזקוקים לגישה מיוחדת זו."},
+    "exact_alarm_close": {"en": "Close", "he": "סגירה"},
+    "exact_alarm_apply": {"en": "Apply", "he": "החלה"},
     "permission_prefix": {
       "en": "Allow the Android application ",
       "he": "לאפשר ליישום Android ‏"
