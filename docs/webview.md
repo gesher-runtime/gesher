@@ -166,7 +166,7 @@ Pages see the https origin: same-origin requests between assets work without
 | Geolocation | navigator.geolocation in main frames from LocationManager (`GeolocationShim`, ADR 0058): the WebChromeClient decides per origin, positions are Windows' location service's or the app's test providers |
 | Permissions | `PermissionRequested` with a deferral: iframes' geolocation to `onGeolocationPermissionsShowPrompt` (retained answers in `GeolocationPermissions`), camera, microphone, MIDI SysEx to `onPermissionRequest` (its default denies), autoplay by `mediaPlaybackRequiresUserGesture`, the rest denied |
 | File chooser | DevTools `Page.setInterceptFileChooserDialog`: `<input type=file>` calls `onShowFileChooser` (`FileChooserParams` from the input); the Uris go in with `DOM.setFileInputFiles` (content: copied to the cache). Not handled by the app: a Windows file dialog (`IFileOpenDialog`, owned by the app's window, filters from `accept`) |
-| `createWebMessageChannel`, `postWebMessage` | `GesherWebMessagePort`: a port sent to the page is a `MessageChannel` of a document script (`PageScripts.PORTS`) relaying over `PostWebMessageAsJson` and `chrome.webview.postMessage`; strings and typed ArrayBuffer payloads through the support-library boundary; ports end with the page (ArrayBuffer CI pending) |
+| `createWebMessageChannel`, `postWebMessage` | `GesherWebMessagePort`: native `MessageChannel` endpoints relay over `PostWebMessageAsJson` and `chrome.webview.postMessage`, including page-originated endpoint transfers; strings and typed ArrayBuffer payloads through the support-library boundary. See [message ports](#message-ports) for ownership and validation limits. |
 | `copyBackForwardList`, `goBackOrForward(n)`, `clearHistory` | DevTools `Page.getNavigationHistory` (read after each history change), `Page.navigateToHistoryEntry`, `Page.resetNavigationHistory` |
 | `findAllAsync`, `findNext`, `clearMatches`, `findAll` | `ICoreWebView2Find` when the runtime has it (its 1-based index is Android's 0-based ordinal), else a script (`PageScripts.find`, CSS Custom Highlights); `findAll` (synchronous) uses the script |
 | `saveWebArchive` | DevTools `Page.captureSnapshot` (MHTML) |
@@ -186,6 +186,48 @@ and can be retried on the next settings/theme update. This does not implement
 Android's separate Force Dark rendering pipeline. The source-owned boundary and
 actual renderer regression is recorded in
 [the Otzaria WebView validation](research/otzaria-webview-validation-2026-11-06.json).
+
+### Message ports
+
+`PageScripts.PORTS` retains endpoints received in a native `MessageEvent.ports`
+array and sends their transport identifiers to the Java provider. The provider
+creates ordinary `WebMessagePort` receivers, so an application can reply, install
+a callback, or transfer an unused received endpoint again. Nested transfers keep
+their order and payload type. A received endpoint queues messages until a callback
+is installed, following the
+[Android WebMessagePort contract](https://developer.android.com/reference/android/webkit/WebMessagePort).
+The existing Java-to-page and local transfer paths use the same ownership graph.
+
+The page publishes the parent message before starting newly received native
+ports. This preserves data already queued on a transferred endpoint: the
+[HTML transfer steps](https://html.spec.whatwg.org/multipage/web-messaging.html#message-ports)
+move that queue to the receiver, and WebView2 guarantees
+[same-page message ordering](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2#add_webmessagereceived).
+The provider validates the complete transfer list before admitting any endpoint.
+App close, undelivered-message disposal, navigation and provider destruction
+retire transport registrations. Fresh identifiers per document keep late cleanup
+from targeting a subsequent document's ports.
+
+The host checks run the actual Java endpoint/payload classes and extracted
+provider methods with declared Handler and WebView2 adapters:
+
+```sh
+python3 tools/test_webmessage_ports.py --java-home "$JAVA_HOME" \
+  --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+  --core-classes out/coremod
+python3 tools/test_webmessage_page_script.py
+```
+
+The second command executes the exact injected script with Node's native
+`MessageChannel`, structured cloning and ArrayBuffer support; only the window and
+WebView2 messaging surface are adapters. Both harnesses accept `--source-ref`
+for old-source negative controls. The Windows feature fixture in
+`tests/windows/webview/Features.ps1` additionally requires a real page-created
+endpoint, queued data, a Java-to-page reply and app-side close before continuing.
+Adding that gate does not establish its execution: actual Windows/ART results,
+browser lifetime/GC behavior and a matching Android WebView oracle remain
+required for full roadmap W02 acceptance. ArrayBuffer end-to-end acceptance also
+remains pending.
 
 ### JavaScript interfaces
 
