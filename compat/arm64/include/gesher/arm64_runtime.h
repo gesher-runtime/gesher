@@ -20,10 +20,19 @@ bool Available();
 // Registers a mapped guest executable segment [start, start+size).
 void AddCode(const void* start, size_t size, const char* name);
 
+// Aborts an unpublished image after IFUNC calls return, before unmapping.
+// Retires code classification, translated caches and host-entry bindings.
+// This is not dlclose for a successfully loaded library.
+void RemoveCode(const void* mapping_base, size_t mapping_size);
+
 // Binds host function `host_fn` (System V) to a guest trampoline: the address
 // returned is guest code the guest can call, which marshals into `host_fn`.
 // Used for a guest import that resolves to a host (shim) symbol.
 void* BindHostFunction(void* host_fn);
+
+// For a library-owned unresolved-symbol stub being freed on load abort only.
+// Globally valid shim bindings remain cached for the process lifetime.
+void UnbindHostFunction(void* host_fn);
 
 // A System V x86-64 entry point for guest function `fn` (host -> guest): a stub
 // host code calls as an ordinary System V function. For init/fini arrays, IFUNC
@@ -37,8 +46,17 @@ uint64_t Call(const void* fn, const uint64_t* args, size_t nargs);
 // Guest TLS (variant I). Registers a PT_TLS module of `total_size`/`align` and
 // returns its offset from the thread pointer, or -1 if the static area is full.
 int64_t TlsRegister(size_t total_size, size_t align);
-// Publishes a module's initialisation image into every thread's block.
+// Makes a relocated pending image available only to its loader thread, so a
+// dependent IFUNC can use it before the complete graph is published.
+bool TlsPrepare(int64_t offset, const void* image, size_t image_size, size_t total_size);
+// Publishes the image to other threads, preserving the prepared owner's writes.
 void TlsPublish(int64_t offset, const void* image, size_t image_size, size_t total_size);
+// Discards only an unpublished reservation owned by this loader thread. Clear
+// the caller's reservation flag on success: its offset can be reused later.
+bool TlsRollback(int64_t offset, size_t total_size);
+// The calling thread's copy of a TLS symbol. Only published modules or this
+// loader thread's prepared image are visible; unknown/out-of-range is nullptr.
+void* TlsAddress(int64_t module_offset, size_t symbol_offset);
 
 // Marks host function `fn` as taking a va_list at argument `index`, so the
 // guest's AAPCS64 va_list is converted when it calls it (the shim's vsnprintf,
@@ -55,6 +73,9 @@ void* GuestSymbol(const char* name);
 
 // The guest TLSDESC resolver for static TLS (descriptor word 1 = TP offset).
 void* TlsDescStatic();
+// Resolver for an unresolved weak TLS symbol: returns addend minus guest TP,
+// so the caller's TLSDESC sequence computes a null address plus the addend.
+void* TlsDescUnresolvedWeak();
 
 // The AT_HWCAP the guest sees: FP, ASIMD, AES, PMULL, SHA1, SHA2, CRC32.
 constexpr uint64_t kGuestHwcap = 0xFB;

@@ -98,6 +98,10 @@ list(TRANSFORM LIBART_RUNTIME_ASM_SRCS PREPEND "${_rt}/")
 add_library(art_runtime STATIC ${LIBART_RUNTIME_SRCS} ${runtime_ops}
   ${LIBART_RUNTIME_ASM_SRCS} "${_nterp}")
 target_compile_definitions(art_runtime PRIVATE BUILDING_LIBART)
+# Only the real VM application-target initializer forwards its SDK to the
+# native loader. This does not enable unrelated Android-target ART branches.
+set_property(SOURCE ${_rt}/native/dalvik_system_VMRuntime.cc APPEND PROPERTY
+  COMPILE_DEFINITIONS GESHER_NATIVE_LOADER)
 target_compile_options(art_runtime PRIVATE -fno-delete-null-pointer-checks)
 target_link_libraries(art_runtime PUBLIC art_runtime_headers)
 add_dependencies(art_runtime art_asm_support_headers)
@@ -130,9 +134,13 @@ target_link_libraries(art_sigchain PUBLIC art_defaults base log gesher_posix)
 add_library(art_nativebridge STATIC ${_art}/libnativebridge/native_bridge.cc)
 target_include_directories(art_nativebridge PUBLIC ${_art}/libnativebridge/include)
 target_link_libraries(art_nativebridge PUBLIC art_runtime_headers)
-add_library(art_nativeloader STATIC ${_art}/libnativeloader/native_loader.cpp)
+add_library(art_nativeloader STATIC ${_art}/libnativeloader/native_loader.cpp
+  ${CMAKE_SOURCE_DIR}/compat/art/native_loader.cc
+  ${CMAKE_SOURCE_DIR}/compat/art/native_library_catalog.cc)
+target_compile_definitions(art_nativeloader PRIVATE GESHER_NATIVE_LOADER)
 target_include_directories(art_nativeloader PUBLIC ${_art}/libnativeloader/include)
-target_link_libraries(art_nativeloader PUBLIC art_nativebridge art_runtime_headers)
+target_link_libraries(art_nativeloader PUBLIC art_nativebridge art_runtime_headers
+  PRIVATE gesher_bionic gesher_elf)
 
 # libodrstatslog (host: no stats are uploaded).
 add_library(art_odrstatslog STATIC ${_art}/odrefresh/odr_statslog_host.cc)

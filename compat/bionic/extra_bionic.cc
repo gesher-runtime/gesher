@@ -11,7 +11,7 @@
 // This file: libm (and the x86-64 floating-point environment), stdlib
 // (div, rand48, getopt, mkstemp, pwd/grp), strings and locale-suffixed forms,
 // wide characters and wide stdio, unlocked stdio, strptime, system
-// properties, and the registry of platform libraries for dlopen.
+// properties, and the process linker path/target-SDK entry points.
 // extra_sys_bionic.cc: semaphores, scheduling, pthread additions, resource
 // usage and time, Linux system calls, flock. zlib_bionic.cc: libz.so.
 
@@ -20,6 +20,7 @@
 #include "search_bionic.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/elf_loader.h>
 #include <gesher/system_properties.h>
 
 #include <windows.h>
@@ -1509,135 +1510,35 @@ int BIONIC_SYSV GetDeviceApiLevel() {
   std::string value;
   return GetProp("ro.build.version.sdk", &value) ? std::atoi(value.c_str()) : -1;
 }
-// android_get_application_target_sdk_version and friends (libc, API 24).
-int g_target_sdk = 36;
-int BIONIC_SYSV GetTargetSdk() { return g_target_sdk; }
-void BIONIC_SYSV SetTargetSdk(int v) { g_target_sdk = v; }
+// Public libdl target/path getters and private libdl_android mutators.
+int BIONIC_SYSV GetTargetSdk() { return elf::DefaultTargetSdkVersion(); }
+void BIONIC_SYSV SetTargetSdk(int v) { elf::SetDefaultTargetSdkVersion(v); }
 void BIONIC_SYSV GetLdLibraryPath(char* buf, size_t size) {
   std::string all;
-  for (const std::string& d : LibraryDirectories()) all += (all.empty() ? "" : ":") + d;
-  if (size > 0) {
-    size_t c = all.size() < size - 1 ? all.size() : size - 1;
-    std::memcpy(buf, all.data(), c);
-    buf[c] = 0;
+  for (const std::string& d : elf::DefaultLibraryPath()) all += (all.empty() ? "" : ":") + d;
+  if (size <= all.size()) {
+    std::fputs("android_get_LD_LIBRARY_PATH failed: buffer too small\n", stderr);
+    std::abort();
   }
+  std::memcpy(buf, all.c_str(), all.size() + 1);
 }
 void BIONIC_SYSV UpdateLdLibraryPath(const char* path) {
-  if (path == nullptr) return;
-  std::string p = path;
+  std::string p = path != nullptr ? path : "";
+  std::vector<std::string> paths;
   size_t start = 0;
   while (start <= p.size()) {
     size_t colon = p.find(':', start);
     std::string d = p.substr(start, colon == std::string::npos ? std::string::npos : colon - start);
-    if (!d.empty()) NoteLibraryDirectory(d);
+    if (!d.empty()) paths.push_back(std::move(d));
     if (colon == std::string::npos) break;
     start = colon + 1;
   }
+  elf::SetDefaultLibraryPath(paths);
 }
-
-// --- platform libraries for dlopen -------------------------------------------------
-
-struct PlatformLib {
-  const char* soname;
-  const char* probe;  // a symbol the shim has when it implements the library
-};
-const PlatformLib kPlatformLibs[] = {
-    {"libc.so", "malloc"},
-    {"libm.so", "sin"},
-    {"libdl.so", "dlopen"},
-    {"liblog.so", "__android_log_print"},
-    {"libz.so", "inflate"},
-    {"libandroid.so", "AAssetManager_open"},
-    {"libnativewindow.so", "ANativeWindow_acquire"},
-    {"libEGL.so", "eglGetDisplay"},
-    {"libGLESv1_CM.so", "glClear"},
-    {"libGLESv2.so", "glClear"},
-    {"libGLESv3.so", "glClear"},
-    {"libjnigraphics.so", "AndroidBitmap_getInfo"},
-    {"libOpenSLES.so", "slCreateEngine"},
-    {"libaaudio.so", "AAudio_createStreamBuilder"},
-    {"libmediandk.so", "AMediaFormat_new"},
-    {"libcamera2ndk.so", "ACameraManager_create"},
-    {"libvulkan.so", "vkCreateInstance"},
-    {"libsync.so", "sync_wait"},
-    {"libneuralnetworks.so", "ANeuralNetworksModel_create"},
-    {"libbinder_ndk.so", "AIBinder_Class_define"},
-    {"libstdc++.so", "__cxa_guard_acquire"},
-};
-constexpr size_t kPlatformLibCount = sizeof(kPlatformLibs) / sizeof(kPlatformLibs[0]);
-// Each handle is the address of one of these bytes.
-char g_platform_handles[kPlatformLibCount];
-
-std::mutex g_dirs_mutex;
-std::vector<std::string> g_dirs;
 
 }  // namespace
 
 // --- shared (extra_bionic.h) --------------------------------------------------------
-
-void* PlatformLibraryHandle(const char* path) {
-  if (path == nullptr) return nullptr;
-  const char* slash = std::strrchr(path, '/');
-  const char* base = slash != nullptr ? slash + 1 : path;
-  if (slash != nullptr) {
-    static const char* const kSystemDirs[] = {"/system/", "/vendor/", "/apex/", "/product/",
-                                              "/odm/",    "/system_ext/"};
-    bool system = false;
-    for (const char* d : kSystemDirs) system |= std::strncmp(path, d, std::strlen(d)) == 0;
-    if (!system) return nullptr;
-  }
-  for (size_t i = 0; i < kPlatformLibCount; ++i) {
-    if (std::strcmp(base, kPlatformLibs[i].soname) == 0) {
-      bool available = LookupBionicSymbol(kPlatformLibs[i].probe) != nullptr;
-      // The standalone native provider implements the font portion of
-      // libandroid without the framework AssetManager/JNI provider. As for
-      // every platform handle, unavailable individual symbols still fail
-      // through the ordinary dlsym lookup.
-      if (std::strcmp(base, "libandroid.so") == 0)
-        available |= LookupBionicSymbol("ASystemFontIterator_open") != nullptr;
-      return available ? &g_platform_handles[i] : nullptr;
-    }
-  }
-  return nullptr;
-}
-
-bool IsPlatformLibraryHandle(const void* handle) {
-  auto p = static_cast<const char*>(handle);
-  return p >= g_platform_handles && p < g_platform_handles + kPlatformLibCount;
-}
-
-const char* PlatformLibraryName(const void* handle) {
-  if (!IsPlatformLibraryHandle(handle)) return "";
-  return kPlatformLibs[static_cast<const char*>(handle) - g_platform_handles].soname;
-}
-
-void NoteLibraryDirectory(const std::string& dir) {
-  if (dir.empty()) return;
-  std::lock_guard<std::mutex> lock(g_dirs_mutex);
-  auto it = std::find(g_dirs.begin(), g_dirs.end(), dir);
-  if (it != g_dirs.end()) g_dirs.erase(it);
-  g_dirs.insert(g_dirs.begin(), dir);
-}
-
-std::vector<std::string> LibraryDirectories() {
-  std::vector<std::string> out;
-  {
-    std::lock_guard<std::mutex> lock(g_dirs_mutex);
-    out = g_dirs;
-  }
-  if (const char* lp = std::getenv("LD_LIBRARY_PATH")) {
-    std::string p = lp;
-    size_t start = 0;
-    while (start <= p.size()) {
-      size_t colon = p.find(':', start);
-      std::string d = p.substr(start, colon == std::string::npos ? std::string::npos : colon - start);
-      if (!d.empty() && std::find(out.begin(), out.end(), d) == out.end()) out.push_back(d);
-      if (colon == std::string::npos) break;
-      start = colon + 1;
-    }
-  }
-  return out;
-}
 
 void SetPropertyAccessors(PropertyGetter get, PropertySetter set) {
   std::lock_guard<std::mutex> lock(g_prop_mutex);
@@ -1667,103 +1568,6 @@ void RegisterExtra(SymbolTable& t) {
   E("tdelete", search::Tdelete);
   E("twalk", search::Twalk);
   E("tdestroy", search::Tdestroy);
-  // libm.
-  t["acosh"] = WRAPS(double (*)(double), ::acosh);
-  t["asinh"] = WRAPS(double (*)(double), ::asinh);
-  t["atanh"] = WRAPS(double (*)(double), ::atanh);
-  t["erf"] = WRAPS(double (*)(double), ::erf);
-  t["erfc"] = WRAPS(double (*)(double), ::erfc);
-  t["lgamma"] = WRAPS(double (*)(double), ::lgamma);
-  t["gamma"] = WRAPS(double (*)(double), ::lgamma);
-  t["tgamma"] = WRAPS(double (*)(double), ::tgamma);
-  t["logb"] = WRAPS(double (*)(double), ::logb);
-  t["ilogb"] = WRAPS(int (*)(double), ::ilogb);
-  t["nextafter"] = WRAPS(double (*)(double, double), ::nextafter);
-  t["fdim"] = WRAPS(double (*)(double, double), ::fdim);
-  t["drem"] = WRAPS(double (*)(double, double), ::remainder);
-  t["fma"] = WRAPS(double (*)(double, double, double), ::fma);
-  t["remquo"] = WRAPS(double (*)(double, double, int*), ::remquo);
-  t["frexpf"] = WRAPS(float (*)(float, int*), ::frexpf);
-  t["modff"] = WRAPS(float (*)(float, float*), ::modff);
-  t["acoshf"] = WRAPS(float (*)(float), ::acoshf);
-  t["asinhf"] = WRAPS(float (*)(float), ::asinhf);
-  t["atanhf"] = WRAPS(float (*)(float), ::atanhf);
-  t["sinhf"] = WRAPS(float (*)(float), ::sinhf);
-  t["coshf"] = WRAPS(float (*)(float), ::coshf);
-  t["erff"] = WRAPS(float (*)(float), ::erff);
-  t["erfcf"] = WRAPS(float (*)(float), ::erfcf);
-  t["lgammaf"] = WRAPS(float (*)(float), ::lgammaf);
-  t["gammaf"] = WRAPS(float (*)(float), ::lgammaf);
-  t["tgammaf"] = WRAPS(float (*)(float), ::tgammaf);
-  t["expm1f"] = WRAPS(float (*)(float), ::expm1f);
-  t["log1pf"] = WRAPS(float (*)(float), ::log1pf);
-  t["logbf"] = WRAPS(float (*)(float), ::logbf);
-  t["ilogbf"] = WRAPS(int (*)(float), ::ilogbf);
-  t["nearbyintf"] = WRAPS(float (*)(float), ::nearbyintf);
-  t["nextafterf"] = WRAPS(float (*)(float, float), ::nextafterf);
-  t["remainderf"] = WRAPS(float (*)(float, float), ::remainderf);
-  t["fdimf"] = WRAPS(float (*)(float, float), ::fdimf);
-  t["fmaf"] = WRAPS(float (*)(float, float, float), ::fmaf);
-  t["remquof"] = WRAPS(float (*)(float, float, int*), ::remquof);
-  E("scalbln", Scalbln);
-  E("scalblnf", Scalblnf);
-  E("nan", Nan);
-  E("nanf", Nanf);
-  E("lgamma_r", LgammaR);
-  E("lgammaf_r", LgammafR);
-  E("significand", Significand);
-  E("significandf", Significandf);
-  E("exp10", Exp10);
-  E("exp10f", Exp10f);
-  E("pow10", Exp10);
-  E("pow10f", Exp10f);
-  E("j0", J0);
-  E("j1", J1);
-  E("jn", Jn);
-  E("y0", Y0);
-  E("y1", Y1);
-  E("yn", Yn);
-  E("j0f", J0f);
-  E("j1f", J1f);
-  E("jnf", Jnf);
-  E("y0f", Y0f);
-  E("y1f", Y1f);
-  E("ynf", Ynf);
-  E("isnan", IsNan);
-  E("__isnan", IsNan);
-  E("isnanf", IsNanf);
-  E("__isnanf", IsNanf);
-  E("isinf", IsInf);
-  E("__isinf", IsInf);
-  E("isinff", IsInff);
-  E("__isinff", IsInff);
-  E("finite", Finite);
-  E("__isfinite", Finite);
-  E("finitef", Finitef);
-  E("__isfinitef", Finitef);
-  E("__isnormal", IsNormal);
-  E("__isnormalf", IsNormalf);
-  E("__signbit", SignBit);
-  E("__signbitf", SignBitf);
-  E("__fpclassify", Fpclassify);
-  E("__fpclassifyd", Fpclassify);
-  E("__fpclassifyf", Fpclassifyf);
-  // Floating-point environment (x86-64).
-  E("fegetenv", Fegetenv);
-  E("fesetenv", Fesetenv);
-  E("fegetround", Fegetround);
-  E("fesetround", Fesetround);
-  E("fetestexcept", Fetestexcept);
-  E("feclearexcept", Feclearexcept);
-  E("feraiseexcept", Feraiseexcept);
-  E("feholdexcept", Feholdexcept);
-  E("feupdateenv", Feupdateenv);
-  E("fegetexceptflag", Fegetexceptflag);
-  E("fesetexceptflag", Fesetexceptflag);
-  E("feenableexcept", Feenableexcept);
-  E("fedisableexcept", Fedisableexcept);
-  E("fegetexcept", Fegetexcept);
-  t["__fe_dfl_env"] = const_cast<HostFenv*>(&kDefaultFenv);
   // stdlib.
   E("div", Div);
   E("ldiv", Ldiv);
@@ -1951,13 +1755,121 @@ void RegisterExtra(SymbolTable& t) {
   E("__system_property_wait_any", SystemPropertyWaitAny);
   E("__system_property_find_nth", SystemPropertyFindNth);
   E("android_get_device_api_level", GetDeviceApiLevel);
+
+
+  // Bionic exports these classification helpers from libc, despite their math API.
+  E("isnan", IsNan);
+  E("__isnan", IsNan);
+  E("isnanf", IsNanf);
+  E("__isnanf", IsNanf);
+  E("isinf", IsInf);
+  E("__isinf", IsInf);
+  E("isinff", IsInff);
+  E("__isinff", IsInff);
+  E("__isfinite", Finite);
+  E("__isfinitef", Finitef);
+  E("__isnormal", IsNormal);
+  E("__isnormalf", IsNormalf);
+  E("__fpclassify", Fpclassify);
+  E("__fpclassifyd", Fpclassify);
+  E("__fpclassifyf", Fpclassifyf);
+  RegisterExtraSys(t);
+}
+
+void RegisterExtraLibm(SymbolTable& t) {
+  // libm.
+  t["acosh"] = WRAPS(double (*)(double), ::acosh);
+  t["asinh"] = WRAPS(double (*)(double), ::asinh);
+  t["atanh"] = WRAPS(double (*)(double), ::atanh);
+  t["erf"] = WRAPS(double (*)(double), ::erf);
+  t["erfc"] = WRAPS(double (*)(double), ::erfc);
+  t["lgamma"] = WRAPS(double (*)(double), ::lgamma);
+  t["gamma"] = WRAPS(double (*)(double), ::lgamma);
+  t["tgamma"] = WRAPS(double (*)(double), ::tgamma);
+  t["logb"] = WRAPS(double (*)(double), ::logb);
+  t["ilogb"] = WRAPS(int (*)(double), ::ilogb);
+  t["nextafter"] = WRAPS(double (*)(double, double), ::nextafter);
+  t["fdim"] = WRAPS(double (*)(double, double), ::fdim);
+  t["drem"] = WRAPS(double (*)(double, double), ::remainder);
+  t["fma"] = WRAPS(double (*)(double, double, double), ::fma);
+  t["remquo"] = WRAPS(double (*)(double, double, int*), ::remquo);
+  t["frexpf"] = WRAPS(float (*)(float, int*), ::frexpf);
+  t["modff"] = WRAPS(float (*)(float, float*), ::modff);
+  t["acoshf"] = WRAPS(float (*)(float), ::acoshf);
+  t["asinhf"] = WRAPS(float (*)(float), ::asinhf);
+  t["atanhf"] = WRAPS(float (*)(float), ::atanhf);
+  t["sinhf"] = WRAPS(float (*)(float), ::sinhf);
+  t["coshf"] = WRAPS(float (*)(float), ::coshf);
+  t["erff"] = WRAPS(float (*)(float), ::erff);
+  t["erfcf"] = WRAPS(float (*)(float), ::erfcf);
+  t["lgammaf"] = WRAPS(float (*)(float), ::lgammaf);
+  t["gammaf"] = WRAPS(float (*)(float), ::lgammaf);
+  t["tgammaf"] = WRAPS(float (*)(float), ::tgammaf);
+  t["expm1f"] = WRAPS(float (*)(float), ::expm1f);
+  t["log1pf"] = WRAPS(float (*)(float), ::log1pf);
+  t["logbf"] = WRAPS(float (*)(float), ::logbf);
+  t["ilogbf"] = WRAPS(int (*)(float), ::ilogbf);
+  t["nearbyintf"] = WRAPS(float (*)(float), ::nearbyintf);
+  t["nextafterf"] = WRAPS(float (*)(float, float), ::nextafterf);
+  t["remainderf"] = WRAPS(float (*)(float, float), ::remainderf);
+  t["fdimf"] = WRAPS(float (*)(float, float), ::fdimf);
+  t["fmaf"] = WRAPS(float (*)(float, float, float), ::fmaf);
+  t["remquof"] = WRAPS(float (*)(float, float, int*), ::remquof);
+  E("scalbln", Scalbln);
+  E("scalblnf", Scalblnf);
+  E("nan", Nan);
+  E("nanf", Nanf);
+  E("lgamma_r", LgammaR);
+  E("lgammaf_r", LgammafR);
+  E("significand", Significand);
+  E("significandf", Significandf);
+  E("exp10", Exp10);
+  E("exp10f", Exp10f);
+  E("pow10", Exp10);
+  E("pow10f", Exp10f);
+  E("j0", J0);
+  E("j1", J1);
+  E("jn", Jn);
+  E("y0", Y0);
+  E("y1", Y1);
+  E("yn", Yn);
+  E("j0f", J0f);
+  E("j1f", J1f);
+  E("jnf", Jnf);
+  E("y0f", Y0f);
+  E("y1f", Y1f);
+  E("ynf", Ynf);
+  E("finite", Finite);
+  E("finitef", Finitef);
+  E("__signbit", SignBit);
+  E("__signbitf", SignBitf);
+  // Floating-point environment (x86-64).
+  E("fegetenv", Fegetenv);
+  E("fesetenv", Fesetenv);
+  E("fegetround", Fegetround);
+  E("fesetround", Fesetround);
+  E("fetestexcept", Fetestexcept);
+  E("feclearexcept", Feclearexcept);
+  E("feraiseexcept", Feraiseexcept);
+  E("feholdexcept", Feholdexcept);
+  E("feupdateenv", Feupdateenv);
+  E("fegetexceptflag", Fegetexceptflag);
+  E("fesetexceptflag", Fesetexceptflag);
+  E("feenableexcept", Feenableexcept);
+  E("fedisableexcept", Fedisableexcept);
+  E("fegetexcept", Fegetexcept);
+  t["__fe_dfl_env"] = const_cast<HostFenv*>(&kDefaultFenv);
+}
+
+void RegisterExtraLibdl(SymbolTable& t) {
   E("android_get_application_target_sdk_version", GetTargetSdk);
+  E("android_get_LD_LIBRARY_PATH", GetLdLibraryPath);
+}
+
+void RegisterExtraLibdlAndroid(SymbolTable& t) {
   E("android_set_application_target_sdk_version", SetTargetSdk);
   E("android_get_LD_LIBRARY_PATH", GetLdLibraryPath);
   E("android_update_LD_LIBRARY_PATH", UpdateLdLibraryPath);
-
-  RegisterExtraSys(t);
-  RegisterZlib(t);
 }
 
 }  // namespace gesher::bionic

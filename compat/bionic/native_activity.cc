@@ -36,6 +36,7 @@
 #define LOG_TAG "NativeActivity"
 
 #include "jni_bridge.h"
+#include "native_activity_dispatch.h"
 #include "shim_internal.h"
 
 #include <gesher/bionic_shim.h>
@@ -47,6 +48,7 @@
 #include <input/Input.h>
 #include <log/log.h>
 #include <nativehelper/JNIHelp.h>
+#include <nativeloader/native_loader.h>
 #include <utils/Looper.h>
 #include <utils/Mutex.h>
 
@@ -80,18 +82,9 @@ using android::Looper;
 using android::MotionEvent;
 using android::sp;
 
-// Calls a function pointer of loaded code, whose type is written with the
-// default (Microsoft) ABI in the NDK's headers, as the System V function it is.
-template <typename F>
-struct SysvOf;
-template <typename R, typename... A>
-struct SysvOf<R (*)(A...)> {
-  using type = R(BIONIC_SYSV*)(A...);
-};
 template <typename F, typename... Args>
 auto CallSysv(F fn, Args... args) {
-  EnterLoadedCode();
-  return reinterpret_cast<typename SysvOf<F>::type>(fn)(args...);
+  return native_activity::Call(fn, args...);
 }
 
 JavaVM* g_vm = nullptr;
@@ -261,27 +254,28 @@ std::string Utf(JNIEnv* env, jstring s) {
 jlong JNICALL LoadNativeCode(JNIEnv* env, jobject clazz, jstring path, jstring funcName,
                              jobject messageQueue, jstring internalDataDir, jstring obbDir,
                              jstring externalDataDir, jint sdkVersion, jobject jAssetMgr,
-                             jbyteArray savedState, jobject /*classLoader*/,
-                             jstring /*libraryPath*/) {
+                             jbyteArray savedState, jobject classLoader,
+                             jstring libraryPath) {
   std::string pathStr = Utf(env, path);
   std::string funcStr = Utf(env, funcName);
-  // The ELF file goes through gesher-base's dlopen to the loader (the JNI
-  // bridge's hook), its DT_NEEDED libraries found next to it, as
-  // System.loadLibrary's are; one global namespace (no linker namespaces).
-  dlerror();
-  void* handle = dlopen(pathStr.c_str(), RTLD_NOW);
+  bool needs_native_bridge = false;
+  char* error = nullptr;
+  void* handle = android::OpenNativeLibrary(env, sdkVersion, pathStr.c_str(), classLoader,
+                                            nullptr, libraryPath, &needs_native_bridge, &error);
   if (handle == nullptr) {
-    const char* e = dlerror();
-    g_error_msg = e != nullptr ? e : "dlopen failed";
+    g_error_msg = error != nullptr ? error : "native library load failed";
+    android::NativeLoaderFreeErrorMessage(error);
     ALOGW("NativeActivity LoadNativeLibrary(\"%s\") failed: %s", pathStr.c_str(),
           g_error_msg.c_str());
     return 0;
   }
-  void* create = dlsym(handle, funcStr.c_str());  // a raw System V address
+  void* raw_create = dlsym(handle, funcStr.c_str());
+  void* create = native_activity::Entry(raw_create);
   auto code = std::make_unique<NativeCode>(handle, create);
   if (code->createActivityFunc == nullptr) {
     const char* e = dlerror();
-    g_error_msg = e != nullptr ? e : (funcStr + " not found");
+    g_error_msg = e != nullptr ? e : (raw_create != nullptr
+        ? "Unable to prepare native entry for " + funcStr : funcStr + " not found");
     ALOGW("%s not found: %s", funcStr.c_str(), g_error_msg.c_str());
     return 0;
   }
@@ -989,7 +983,7 @@ void Register() {
   };
 #undef PF
 #undef E
-  for (const Entry& e : kEntries) AddBionicSymbol(e.name, e.fn);
+  for (const Entry& e : kEntries) AddBionicSymbol("libandroid.so", e.name, e.fn);
 }
 
 [[maybe_unused]] const bool g_registered = (Register(), true);

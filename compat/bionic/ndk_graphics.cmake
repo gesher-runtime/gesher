@@ -22,11 +22,18 @@ foreach(h EGL/egl.h EGL/eglext.h GLES3/gl32.h GLES3/gl31.h GLES3/gl3.h GLES2/gl2
     GLES2/gl2ext.h GLES/gl.h GLES/glext.h)
   list(APPEND _gl_headers ${_gl_include}/${h})
 endforeach()
+set(_gl_provider_maps)
+foreach(lib libEGL libGLESv1_CM libGLESv2 libGLESv3)
+  list(APPEND _gl_provider_maps ${_gl_include}/../libs/${lib}.map.txt)
+endforeach()
+set(_gl_provider_sources ${_gl_include}/../libs/GLES2/gl2_api.in
+  ${_gl_include}/../libs/GLES2/gl2ext_api.in ${_gl_include}/../libs/EGL/eglApi.cpp)
 add_custom_command(OUTPUT ${_gl_gen}/gl_thunks.inc
   COMMAND ${CMAKE_COMMAND} -E make_directory ${_gl_gen}
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/gen_gl_thunks.py
     ${_gl_gen}/gl_thunks.inc ${_gl_include} ${_gl_handwritten}
-  DEPENDS ${CMAKE_CURRENT_LIST_DIR}/gen_gl_thunks.py ${_gl_headers}
+  DEPENDS ${CMAKE_CURRENT_LIST_DIR}/gen_gl_thunks.py ${_gl_headers} ${_gl_provider_maps}
+    ${_gl_provider_sources}
   COMMENT "Generating the EGL/GLES System V thunks"
   VERBATIM)
 

@@ -1,0 +1,282 @@
+// Host contract fixture: the production native bridge's registry and TLS
+// reservation methods are inserted verbatim. Win32 thread identity and cache
+// flush are explicit seams; native ARM execution and TLS attachment are not
+// exercised. The blocks supplied below model already attached live threads.
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <shared_mutex>
+#include <thread>
+#include <vector>
+
+using DWORD = uint32_t;
+std::atomic<DWORD> next_thread{1};
+thread_local DWORD this_thread_id = next_thread.fetch_add(1);
+DWORD GetCurrentThreadId() { return this_thread_id; }
+void* GetCurrentProcess() { return nullptr; }
+int FlushInstructionCache(void*, const void*, size_t) { return 1; }
+
+void Require(bool condition, const char* expression, int line) {
+  if (!condition) {
+    std::fprintf(stderr, "FAIL native ARM64 rollback line %d: %s\n", line, expression);
+    std::abort();
+  }
+}
+#define REQUIRE(expression) Require((expression), #expression, __LINE__)
+
+namespace fixture {
+@REGIONS@
+@TLS@
+@CLASSIFY@
+
+void TestRegions() {
+  const auto address = [](uintptr_t value) { return reinterpret_cast<void*>(value); };
+  NativeAddCode(address(0x101000), 4096, "pending-a");
+  NativeAddCode(address(0x103000), 512, "pending-b");
+  NativeAddCode(address(0x200000), 4096, "stable");
+  NativeAddCode(address(0xff000), 0x12000, "covering");
+  REQUIRE(g_regions.size() == 4);
+  NativeAddCode(address(UINTPTR_MAX - 15), 32, "overflow");
+  NativeAddCode(address(0x104000), 0, "empty");
+  REQUIRE(g_regions.size() == 4);
+  REQUIRE(NativeIsGuestCode(address(0x101000)) && NativeIsGuestCode(address(0x103100)));
+  NativeRemoveCode(address(0x100000), 0x10000);
+  REQUIRE(g_regions.size() == 3);
+  REQUIRE(!NativeIsGuestCode(address(0x101000)) && !NativeIsGuestCode(address(0x103100)));
+  REQUIRE(NativeIsGuestCode(address(0x200800)) && NativeIsGuestCode(address(0xff800)));
+  REQUIRE(NativeIsGuestCode(address(0x110000)) && !NativeIsGuestCode(address(0x10ffff)));
+  NativeRemoveCode(address(0x100000), 0x10000);
+  NativeRemoveCode(address(UINTPTR_MAX - 15), 32);
+  NativeRemoveCode(address(0x200000), 0);
+  REQUIRE(g_regions.size() == 3);
+  NativeAddCode(address(0x101000), 4096, "retry");
+  REQUIRE(NativeIsGuestCode(address(0x101000)));
+  std::puts("PASS native ARM64 rollback: code removal splits overlaps, preserves outside regions and permits retry");
+}
+
+void TestNativeTlsUnavailable() {
+  REQUIRE(!g_tls_images.empty());
+  // The raw native bridge has no architectural TP attachment. Its public
+  // lookup must not substitute a separate copy of a thread-local variable.
+  REQUIRE(NativeTlsAddress(g_tls_images.front().offset, 0) == nullptr);
+  REQUIRE(NativeTlsAddress(g_tls_images.front().offset, SIZE_MAX) == nullptr);
+  REQUIRE(NativeTlsAddress(-1, 0) == nullptr);
+  std::puts("PASS native ARM64 lookup: unavailable TP attachment returns no fabricated TLS address");
+}
+
+void TestTls() {
+  std::array<uint8_t, kTlsBlockSize> live{};
+  std::array<uint8_t, kTlsBlockSize> second{};
+  g_tls_blocks = {{live.data(), GetCurrentThreadId()}, {second.data(), GetCurrentThreadId()}};
+  static const uint8_t image[] = {0x13, 0x24, 0x35, 0x46};
+  static const uint8_t replacement[] = {0xee, 0xdd};
+  REQUIRE(NativeTlsRegister(64, 3) == -1);
+  REQUIRE(NativeTlsRegister(64, SIZE_MAX) == -1);
+  REQUIRE(NativeTlsRegister(SIZE_MAX, 16) == -1);
+  REQUIRE(NativeTlsRegister(kTlsBlockSize, 1) == -1);
+  REQUIRE(g_tls_offset == kTcbSize && g_tls_images.empty());
+  REQUIRE(!NativeTlsRollback(-1, 64));
+  NativeTlsPublish(64, image, sizeof(image), 64);
+  REQUIRE(g_tls_images.empty());
+
+  const int64_t empty_a = NativeTlsRegister(0, 1);
+  const int64_t empty_b = NativeTlsRegister(0, 1);
+  REQUIRE(empty_a == static_cast<int64_t>(kTcbSize) && empty_b == empty_a + 1);
+  REQUIRE(NativeTlsRollback(empty_a, 0) && g_tls_offset == static_cast<size_t>(empty_b + 1));
+  REQUIRE(NativeTlsRollback(empty_b, 0) && g_tls_offset == kTcbSize);
+  REQUIRE(!NativeTlsRollback(empty_b, 0) && g_tls_images.empty());
+  std::puts("PASS native ARM64 rollback: invalid extents and distinct empty reservations");
+
+  const int64_t stable = NativeTlsRegister(64, 64);
+  REQUIRE(stable == static_cast<int64_t>(kTcbSize));
+  NativeTlsPublish(stable, image, sizeof(image), 64);
+  REQUIRE(std::memcmp(live.data() + stable, image, sizeof(image)) == 0);
+  REQUIRE(std::memcmp(second.data() + stable, image, sizeof(image)) == 0);
+  live[stable] = 0xa1;
+  second[stable] = 0xb2;
+  NativeTlsPublish(stable, replacement, sizeof(replacement), 64);
+  REQUIRE(!NativeTlsRollback(stable, 64));
+  REQUIRE(live[stable] == 0xa1 && second[stable] == 0xb2);
+  std::puts("PASS native ARM64 rollback: publication initializes live blocks and protects committed state");
+
+  const int64_t pending = NativeTlsRegister(100, 16);
+  REQUIRE(pending >= 0);
+  NativeTlsPublish(pending, image, 101, 100);
+  NativeTlsPublish(pending, nullptr, 1, 100);
+  NativeTlsPublish(pending, image, sizeof(image), 99);
+  REQUIRE(!g_tls_images.back().published);
+  std::memset(live.data() + pending, 0xcc, 100);
+  std::memset(second.data() + pending, 0xdd, 100);
+  std::thread foreign([&] {
+    REQUIRE(!NativeTlsRollback(pending, 100));
+    NativeTlsPublish(pending, image, sizeof(image), 100);
+  });
+  foreign.join();
+  REQUIRE(!g_tls_images.back().published && live[pending] == 0xcc && second[pending] == 0xdd);
+  REQUIRE(!NativeTlsRollback(pending, 99));
+  REQUIRE(NativeTlsRollback(pending, 100));
+  REQUIRE(!NativeTlsRollback(pending, 100));
+  for (size_t i = 0; i < 100; ++i) REQUIRE(live[pending + i] == 0 && second[pending + i] == 0);
+  REQUIRE(live[stable] == 0xa1 && second[stable] == 0xb2);
+  REQUIRE(g_tls_images.size() == 1 && g_tls_offset == static_cast<size_t>(stable) + 64);
+  std::puts("PASS native ARM64 rollback: ownership, exact reservation identity, clearing and repeat rejection");
+
+  const int64_t outer = NativeTlsRegister(4096, 64);
+  const int64_t nested = NativeTlsRegister(64, 64);
+  REQUIRE(outer >= 0 && nested >= outer + 4096);
+  std::memset(live.data() + outer, 0x75, 4096);
+  NativeTlsPublish(nested, image, sizeof(image), 64);
+  live[nested] = 0xe3;
+  second[nested] = 0xf4;
+  const size_t nested_extent = g_tls_offset;
+  REQUIRE(NativeTlsRollback(outer, 4096));
+  REQUIRE(g_tls_offset == nested_extent && live[nested] == 0xe3 && second[nested] == 0xf4);
+  REQUIRE(!NativeTlsRollback(nested, 64));
+  const int64_t reused = NativeTlsRegister(200, 1);
+  REQUIRE(reused == outer);
+  REQUIRE(g_tls_offset == nested_extent);
+  REQUIRE(NativeTlsRollback(reused, 200) && g_tls_offset == nested_extent);
+  REQUIRE(g_tls_images.size() == 2);
+  // Reservations arrive out of address order when alignment leaves a gap.
+  const int64_t unaligned = NativeTlsRegister(13, 1);
+  const int64_t aligned = NativeTlsRegister(17, 64);
+  const int64_t padding = NativeTlsRegister(9, 1);
+  REQUIRE(unaligned == outer && aligned == outer + 64 && padding == outer + 13);
+  REQUIRE(NativeTlsRollback(aligned, 17) && NativeTlsRollback(unaligned, 13));
+  REQUIRE(NativeTlsRollback(padding, 9) && g_tls_images.size() == 2);
+  REQUIRE(g_tls_offset == nested_extent && live[nested] == 0xe3 && second[nested] == 0xf4);
+  std::puts("PASS native ARM64 rollback: aligned interior gaps are reusable without moving committed offsets");
+
+  for (int attempt = 0; attempt < 64; ++attempt) {
+    const int64_t interior = NativeTlsRegister(4096, 1);
+    REQUIRE(interior == outer && g_tls_offset == nested_extent);
+    const size_t remaining = kTlsBlockSize - g_tls_offset;
+    const int64_t full = NativeTlsRegister(remaining, 1);
+    REQUIRE(full >= 0 && g_tls_offset == kTlsBlockSize);
+    REQUIRE(NativeTlsRegister(1, 1) == -1);
+    REQUIRE(NativeTlsRollback(interior, 4096) && g_tls_offset == kTlsBlockSize);
+    REQUIRE(NativeTlsRollback(full, remaining));
+    REQUIRE(g_tls_offset == nested_extent && g_tls_images.size() == 2);
+  }
+  REQUIRE(live[stable] == 0xa1 && second[stable] == 0xb2);
+  REQUIRE(live[nested] == 0xe3 && second[nested] == 0xf4);
+  g_tls_blocks.clear();
+  std::puts("PASS native ARM64 rollback: 64 full-budget failure/retry cycles retain no pending records");
+}
+
+void TestTlsInteriorReuse() {
+  REQUIRE(g_tls_blocks.empty());
+  std::array<uint8_t, kTlsBlockSize> live{};
+  std::array<uint8_t, kTlsBlockSize> peer{};
+  const size_t committed_before = g_tls_images.size();
+  // These explicit blocks represent already attached threads. Their older
+  // committed modules contain different mutations which rollback must keep.
+  for (const TlsImage& entry : g_tls_images) {
+    REQUIRE(entry.published && entry.total_size != 0);
+    live[entry.offset] = 0xa5;
+    peer[entry.offset] = 0x5a;
+  }
+  g_tls_blocks = {{live.data(), GetCurrentThreadId()}, {peer.data(), GetCurrentThreadId()}};
+  static const uint8_t image[] = {0x42, 0x73};
+  std::array<int64_t, 128> nested{};
+  for (size_t attempt = 0; attempt < nested.size(); ++attempt) {
+    const size_t outer_size = 64 * 1024;
+    const int64_t outer = NativeTlsRegister(outer_size, 512);
+    if (outer < 0 || static_cast<size_t>(outer) > kTlsBlockSize - outer_size) {
+      std::fprintf(stderr, "FAIL repeated TLS allocation: attempt %zu, offset %lld\n",
+                   attempt, static_cast<long long>(outer));
+      std::abort();
+    }
+    REQUIRE(outer % 512 == 0);
+    const size_t outer_offset = static_cast<size_t>(outer);
+    std::memset(live.data() + outer_offset, 0xcc, outer_size);
+    std::memset(peer.data() + outer_offset, 0xdd, outer_size);
+    nested[attempt] = NativeTlsRegister(64, 64);
+    REQUIRE(nested[attempt] >= 0 && nested[attempt] % 64 == 0);
+    NativeTlsPublish(nested[attempt], image, sizeof(image), 64);
+    live[nested[attempt]] = static_cast<uint8_t>(attempt + 1);
+    peer[nested[attempt]] = static_cast<uint8_t>(255 - attempt);
+    REQUIRE(NativeTlsRollback(outer, outer_size));
+    REQUIRE(live[outer] == 0 && peer[outer] == 0);
+    REQUIRE(live[outer + outer_size - 1] == 0 && peer[outer + outer_size - 1] == 0);
+    REQUIRE(g_tls_images.size() == committed_before + attempt + 1);
+    for (size_t i = 0; i <= attempt; ++i) {
+      REQUIRE(live[nested[i]] == static_cast<uint8_t>(i + 1));
+      REQUIRE(peer[nested[i]] == static_cast<uint8_t>(255 - i));
+    }
+    for (size_t i = 0; i < committed_before; ++i) {
+      REQUIRE(live[g_tls_images[i].offset] == 0xa5);
+      REQUIRE(peer[g_tls_images[i].offset] == 0x5a);
+    }
+  }
+  g_tls_blocks.clear();
+  std::puts("PASS native ARM64 rollback: 128 failed 64KiB outer loads preserve distinct nested commits and reclaim interior capacity");
+}
+
+void TestTlsPreparation() {
+  REQUIRE(g_tls_blocks.empty());
+  std::array<uint8_t, kTlsBlockSize> owner{};
+  std::array<uint8_t, kTlsBlockSize> foreign{};
+  DWORD foreign_id = 0;
+  std::thread identify([&] { foreign_id = GetCurrentThreadId(); });
+  identify.join();
+  // As in TestTls, these blocks are an explicit attachment boundary, with
+  // identities obtained from two different host fixture threads.
+  g_tls_blocks = {{owner.data(), GetCurrentThreadId()}, {foreign.data(), foreign_id}};
+  static const uint32_t initial = 37, different = 42;
+  const auto read = [](const auto& block, int64_t off) {
+    uint32_t value;
+    std::memcpy(&value, block.data() + off, sizeof(value));
+    return value;
+  };
+  const auto mutate = [](auto& block, int64_t off) {
+    const uint32_t value = 93;
+    std::memcpy(block.data() + off, &value, sizeof(value));
+  };
+  const int64_t abandoned = NativeTlsRegister(16, 4);
+  REQUIRE(abandoned >= 0);
+  REQUIRE(!NativeTlsPrepare(abandoned, nullptr, sizeof(initial), 16));
+  REQUIRE(!NativeTlsPrepare(abandoned, &initial, 17, 16));
+  REQUIRE(!NativeTlsPrepare(abandoned, &initial, sizeof(initial), 15));
+  std::thread non_owner([&] {
+    REQUIRE(!NativeTlsPrepare(abandoned, &initial, sizeof(initial), 16));
+  });
+  non_owner.join();
+  REQUIRE(NativeTlsPrepare(abandoned, &initial, sizeof(initial), 16));
+  REQUIRE(read(owner, abandoned) == 37 && read(foreign, abandoned) == 0);
+  mutate(owner, abandoned);
+  REQUIRE(NativeTlsPrepare(abandoned, &initial, sizeof(initial), 16));
+  REQUIRE(read(owner, abandoned) == 93 && read(foreign, abandoned) == 0);
+  REQUIRE(!NativeTlsPrepare(abandoned, &different, sizeof(different), 16));
+  REQUIRE(NativeTlsRollback(abandoned, 16));
+  REQUIRE(read(owner, abandoned) == 0 && read(foreign, abandoned) == 0);
+  const int64_t committed = NativeTlsRegister(16, 4);
+  REQUIRE(committed == abandoned);
+  REQUIRE(NativeTlsPrepare(committed, &initial, sizeof(initial), 16));
+  mutate(owner, committed);
+  NativeTlsPublish(committed, &different, sizeof(different), 16);
+  REQUIRE(read(owner, committed) == 93 && read(foreign, committed) == 0);
+  NativeTlsPublish(committed, &initial, sizeof(initial), 16);
+  REQUIRE(read(owner, committed) == 93 && read(foreign, committed) == 37);
+  NativeTlsPublish(committed, &initial, sizeof(initial), 16);
+  REQUIRE(read(owner, committed) == 93 && read(foreign, committed) == 37);
+  REQUIRE(!NativeTlsPrepare(committed, &initial, sizeof(initial), 16));
+  REQUIRE(!NativeTlsRollback(committed, 16));
+  g_tls_blocks.clear();
+  std::puts("PASS native ARM64 rollback: private TLS preparation preserves IFUNC writes while publication initializes foreign blocks");
+}
+}  // namespace fixture
+
+int main() {
+  fixture::TestRegions();
+  fixture::TestTls();
+  fixture::TestTlsInteriorReuse();
+  fixture::TestTlsPreparation();
+  fixture::TestNativeTlsUnavailable();
+  std::puts("Native ARM64 rollback host contracts passed (exact production methods; explicit Win32/live-block seams)");
+}

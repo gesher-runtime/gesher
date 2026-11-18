@@ -12,28 +12,12 @@ namespace gesher::bionic {
 
 // Registered before every other part of the shim (shim.cc's Table()), so a
 // name the core files define keeps their definition: these fill gaps only.
-void RegisterExtra(SymbolTable& table);     // extra_bionic.cc
+void RegisterExtra(SymbolTable& table);     // extra_bionic.cc: libc
+void RegisterExtraLibm(SymbolTable& table); // extra_bionic.cc: libm
+void RegisterExtraLibdl(SymbolTable& table); // extra_bionic.cc: libdl
+void RegisterExtraLibdlAndroid(SymbolTable& table); // private libdl_android
 void RegisterExtraSys(SymbolTable& table);  // extra_sys_bionic.cc
 void RegisterZlib(SymbolTable& table);      // zlib_bionic.cc
-
-// --- dlopen of the platform's libraries ---------------------------------------
-// The NDK libraries the shim implements symbol by symbol (libc.so, libEGL.so,
-// libz.so, ...) have no file: dlopen() of one of them by name or by its
-// /system/lib64 path gives a handle of its own, valid for dlsym() and dlclose().
-// nullptr if `path` names no such library, or the shim lacks it in this
-// process (libEGL.so outside dalvikvm, libvulkan.so).
-void* PlatformLibraryHandle(const char* path);
-// Is `handle` one PlatformLibraryHandle returned?
-bool IsPlatformLibraryHandle(const void* handle);
-// The soname of such a handle ("libEGL.so").
-const char* PlatformLibraryName(const void* handle);
-
-// Directories app libraries were loaded from (the APK's extracted lib/<abi>,
-// as the JNI bridge and dlopen() with a path saw them) and $LD_LIBRARY_PATH:
-// where dlopen() of a bare name not loaded yet looks, as the app's linker
-// namespace's search path does on Android. Most recent first.
-void NoteLibraryDirectory(const std::string& dir);
-std::vector<std::string> LibraryDirectories();
 
 // --- system properties --------------------------------------------------------
 // Where __system_property_* read and write. dalvikvm's runtime has the

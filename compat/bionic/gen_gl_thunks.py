@@ -17,9 +17,9 @@ callee-saved xmm6-15). Pointers are resolved on first call
 The output (included by egl_gles.cc) has, inside namespace
 gesher::bionic::gl:
   - enum I_<name>: the index of every function, handwritten ones included;
-  - kGlNames[]: {name, library} for each index;
+  - kGlNames[]: {name, ANGLE library, Android provider owners} for each index;
   - T_<name>(): the thunks (not for handwritten names);
-  - kGlThunks[]: {name, thunk} for every generated thunk.
+  - kGlThunks[]: {name, thunk, Android provider owners} for every generated thunk.
 
 Functions taking or returning a callback type (GLDEBUGPROC, EGLDEBUGPROCKHR,
 the blob cache functions, GLVULKANPROCNV, eglGetProcAddress) cannot be
@@ -127,9 +127,48 @@ def parse(include_dir):
     return funcs, order
 
 
+def provider_owners(include_dir):
+    """Owned exports, distinct from the broader eglGetProcAddress extension set.
+
+    GLESv1 uses its map as a version script. EGL/GLESv2/GLESv3 use their maps
+    for SDK/LLNDK stubs, so their actual default-visible definitions can be
+    broader. GLESv2 and GLESv3 compile the same GLES2 implementation lists;
+    EGL's public wrapper definitions are in eglApi.cpp. Intersect those
+    definitions with the declared header surface, keeping internal helpers
+    and ANGLE-only proc-address extensions out of DSO ownership.
+    """
+    directory = os.path.join(include_dir, '..', 'libs')
+    owners = {}
+    for soname, mask in [('libEGL', 1), ('libGLESv1_CM', 2),
+                          ('libGLESv2', 12), ('libGLESv3', 12)]:
+        with open(os.path.join(directory, soname + '.map.txt'), encoding='utf-8') as f:
+            names = re.findall(r'^\s+([A-Za-z_][A-Za-z_0-9]*)\s*;', f.read(), re.MULTILINE)
+        for name in names:
+            owners[name] = owners.get(name, 0) | mask
+    declared, _ = parse(include_dir)
+    for filename in ['GLES2/gl2_api.in', 'GLES2/gl2ext_api.in']:
+        with open(os.path.join(directory, filename), encoding='utf-8') as f:
+            names = re.findall(r'\bAPI_ENTRY\((gl[A-Z][A-Za-z_0-9]*)\)', f.read())
+        if not names:
+            raise SystemExit(f'{filename}: no actual GLES implementation entries')
+        for name in names:
+            if name in declared:
+                owners[name] = owners.get(name, 0) | 12
+    with open(os.path.join(directory, 'EGL/eglApi.cpp'), encoding='utf-8') as f:
+        names = re.findall(r'^\s*(?:extern\s+"C"\s+)?[A-Za-z_][\w\s:*&]*?\b'
+                           r'(egl[A-Z][A-Za-z_0-9]*)\s*\([^;{}]*\)\s*\{', f.read(), re.MULTILINE)
+    if not names:
+        raise SystemExit('EGL/eglApi.cpp: no actual EGL wrapper definitions')
+    for name in names:
+        if name in declared:
+            owners[name] = owners.get(name, 0) | 1
+    return owners
+
+
 def main():
     out, include_dir, handwritten = sys.argv[1], sys.argv[2], set(sys.argv[3:])
     funcs, order = parse(include_dir)
+    owners = provider_owners(include_dir)
     missing = handwritten - set(funcs)
     if missing:
         raise SystemExit(f'handwritten names not in the headers: {sorted(missing)}')
@@ -147,7 +186,7 @@ def main():
               'const GlName kGlNames[kGlCount] = {']
     for name in order:
         lib = 'kLibEgl' if name.startswith('egl') else 'kLibGles'
-        lines.append(f'    {{"{name}", {lib}}},')
+        lines.append(f'    {{"{name}", {lib}, {owners.get(name, 0)}}},')
     lines += ['};', '']
     thunks = []
     left_out = []
@@ -174,7 +213,7 @@ def main():
         thunks.append(name)
     lines += ['', 'const GlThunk kGlThunks[] = {']
     for name in thunks:
-        lines.append(f'    {{"{name}", reinterpret_cast<void*>(&T_{name})}},')
+        lines.append(f'    {{"{name}", reinterpret_cast<void*>(&T_{name}), {owners.get(name, 0)}}},')
     lines += ['};', '']
     lines.append('// Not provided (a callback type the thunks cannot forward): ' +
                  (', '.join(left_out) or 'none') + '.')

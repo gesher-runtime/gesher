@@ -39,6 +39,7 @@ jobs:
             tests/apps/nativeapp
             tests/apps/glapp
             tests/apps/nativeactivity
+            tools
 
       - name: Cache the Android NDK
         id: ndk
@@ -60,6 +61,21 @@ jobs:
           cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${ANDROID_API}-clang"
           mkdir -p dist-native
           bash tests/native/build-lookup-graph.sh "$cc" dist-native
+          bash tests/native/build-load-transaction-graph.sh \
+            "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
+            dist-native/elf-load-transaction
+          bash tests/native/build-elf-versions.sh \
+            "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
+            dist-native/elf-versions
+          bash tests/native/build-elf-namespaces.sh \
+            "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
+            dist-native/elf-namespaces
+          mkdir -p dist-native/native-activity-dispatch
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
+            -shared -fPIC -ffreestanding -nostdlib -Wall -Wextra -Werror \
+            -Wl,--hash-style=both -Wl,-soname,libnativeactivity_fixture.so \
+            tests/native/native_activity_guest_fixture.c \
+            -o dist-native/native-activity-dispatch/libnativeactivity_fixture.so
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
             -std=c11 -O2 -Wall -Wextra -Werror tests/native/aaudio_builder_contract_test.c \
             -laaudio -ldl -o dist-native/aaudio_builder_x64
@@ -228,6 +244,14 @@ jobs:
           cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
           rm -rf bt.zip pf.zip tmp-bt tmp-pf
           ls sdk sdk/build-tools
+
+      - name: Build classloader and native-installation contract fixtures
+        run: |
+          python3 tools/build_native_namespace_fixtures.py \
+            --aapt2 "$PWD/sdk/build-tools/aapt2" --android-jar "$PWD/sdk/android.jar" \
+            --jdk "$JAVA_HOME" --d8-jar "$PWD/r8.jar" \
+            --cc "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android31-clang" \
+            --output dist-native/native-namespace-fixtures
 
       # gesher-app's test app with native code: lib/x86_64/libnativeapp.so and
       # libc++_shared.so in the APK (tests/apps/nativeapp).

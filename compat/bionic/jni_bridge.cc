@@ -1,7 +1,7 @@
 // gesher: JNI for the Android .so files the ELF loader loads (phase 6).
 //
 // ART's host path for System.loadLibrary / System.load is libnativeloader's
-// OpenNativeLibrary, which calls plain dlopen, then dlsym for JNI_OnLoad and
+// OpenNativeLibrary, which passes the classloader namespace, then dlsym for JNI_OnLoad and
 // for each Java_* native (art/libnativeloader/native_loader.cpp,
 // art/runtime/jni/java_vm_ext.cc). gesher-base's dlopen hands ELF files to the
 // loader registered here (<gesher/elf_dlopen.h>), which loads them with
@@ -840,7 +840,12 @@ void Install() {
   std::call_once(g_install_once, [] {
     FillTables();
     gesher::bionic::InstallBionicShim();
-    gesher::bionic::AddBionicSymbol("JNI_GetCreatedJavaVMs",
+    // Since API 31 the NDK's invocation API belongs to libnativehelper.
+    // ART also exports this entry privately; both owners use the same actual
+    // bridge, without advertising other unimplemented invocation exports.
+    gesher::bionic::AddBionicSymbol("libnativehelper.so", "JNI_GetCreatedJavaVMs",
+                                    reinterpret_cast<void*>(&GetCreatedJavaVMsSysv));
+    gesher::bionic::AddBionicSymbol("libart.so", "JNI_GetCreatedJavaVMs",
                                     reinterpret_cast<void*>(&GetCreatedJavaVMsSysv));
   });
 }
@@ -979,26 +984,32 @@ void LoadArtShimFor(const char* path) {
                path, shim.c_str());
 }
 
-void* ElfOpen(const char* path, int /*flags*/, char* error, size_t error_size) {
+void* ElfOpenInNamespace(const char* path, int flags, const gesher_elf_load_context* context,
+                         char* error, size_t error_size) {
   Install();
-  LoadArtShimFor(path);
+  if (path != nullptr) LoadArtShimFor(path);
   elf::LoadOptions options;
-  // DT_NEEDED libraries the APK ships (libc++_shared.so, ...) sit next to it.
-  std::string dir(path);
-  size_t slash = dir.find_last_of("/\\");
-  dir = slash == std::string::npos ? std::string(".") : dir.substr(0, slash);
-  options.search_paths.push_back(dir);
+  options.flags = flags;
+  if (context != nullptr) {
+    options.context.name_space = static_cast<elf::Namespace*>(context->name_space);
+    options.context.caller_address = context->caller_address;
+    options.context.architecture = static_cast<elf::Architecture>(context->architecture);
+  }
+  // Namespace paths and each requester's RUNPATH determine dependency search.
+  // Loading one file never mutates another classloader's search directories.
   std::string message;
   elf::Library* lib = elf::Load(path, &message, options);
   if (lib == nullptr) std::snprintf(error, error_size, "%s", message.c_str());
-  // The app's library directory: where its dlopen() of a bare name looks.
-  if (lib != nullptr) gesher::bionic::NoteLibraryDirectory(dir);
   if (lib != nullptr && elf::IsAarch64(lib)) {
     // An app's arm64-v8a library (System.loadLibrary): say so in its log.
     std::fprintf(stderr, "gesher arm64: %s is arm64-v8a: translated (gesher_arm64.dll)\n",
                  elf::Soname(lib));
   }
   return lib;
+}
+
+void* ElfOpen(const char* path, int flags, char* error, size_t error_size) {
+  return ElfOpenInNamespace(path, flags, nullptr, error, error_size);
 }
 
 void* ElfSym(void* handle, const char* symbol) {
@@ -1017,10 +1028,15 @@ int ElfClose(void* handle) {
 }
 
 const gesher_elf_dlopen_ops kElfOps = {&ElfOpen, &ElfSym, &ElfClose};
+const gesher_elf_namespace_ops kNamespaceOps = {
+    1, sizeof(gesher_elf_namespace_ops), &ElfOpenInNamespace};
 
-[[maybe_unused]] const bool g_registered = (gesher_set_elf_dlopen(&kElfOps), true);
+[[maybe_unused]] const bool g_registered =
+    (gesher_set_elf_dlopen(&kElfOps), gesher_set_elf_namespace_ops(&kNamespaceOps) == 0);
 
 }  // namespace
+
+void gesher::bionic::InstallJniBridge() { Install(); }
 
 JNIEnv* gesher::bionic::RealJniEnv(JNIEnv* env) {
   if (env == nullptr) return nullptr;

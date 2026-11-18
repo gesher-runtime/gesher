@@ -1,0 +1,218 @@
+// Production libdl dispatch/export/error code with an explicit lookup seam.
+// The seam records forwarding; real ELF version matching has a separate suite.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+#if defined(__x86_64__)
+#define BIONIC_SYSV __attribute__((sysv_abi))
+#else
+#define BIONIC_SYSV
+#endif
+
+namespace {
+int checks;
+void Check(bool condition, const char* message) {
+  ++checks;
+  if (!condition) {
+    std::fprintf(stderr, "FAIL dlvsym shim: %s (check %d)\n", message, checks);
+    std::exit(1);
+  }
+}
+int BIONIC_SYSV V1() { return 111; }
+int BIONIC_SYSV V2() { return 222; }
+int BIONIC_SYSV Unversioned() { return 777; }
+enum class Route { handle, global, handle_version, global_version, next, next_version, main, main_version, provider, shim };
+struct Call { Route route; std::string symbol, version; };
+thread_local std::vector<Call> calls;
+char platform_handle;
+void* Answer(Route route, const char* name, const char* version = nullptr) {
+  calls.push_back({route, name, version ? version : ""});
+  if (route == Route::shim || route == Route::provider)
+    return std::strcmp(name, "unversioned") == 0 || std::strcmp(name, "selected_unavailable") == 0
+        ? reinterpret_cast<void*>(&Unversioned) : nullptr;
+  if (std::strcmp(name, "versioned") != 0) return nullptr;
+  if (version == nullptr || std::strcmp(version, "V2") == 0) return reinterpret_cast<void*>(&V2);
+  if (std::strcmp(version, "V1") == 0) return reinterpret_cast<void*>(&V1);
+  return nullptr;
+}
+int Invoke(void* value) {
+  return value ? reinterpret_cast<int(BIONIC_SYSV*)()>(value)() : -1;
+}
+}  // namespace
+
+namespace gesher::elf {
+struct Library {};
+struct LoaderContext { const void* caller_address = nullptr; };
+enum class LookupKind { kHandle, kDefault, kNext, kMain };
+enum class LookupStatus { kNotFound, kResolved, kUnavailable };
+const void* last_caller;
+void* LookupScoped(Library* handle, const char* name, const char* version,
+                    LookupKind kind, const LoaderContext& context, std::string* error,
+                    LookupStatus* status = nullptr) {
+  if (error) error->clear();
+  if (status) *status = LookupStatus::kNotFound;
+  last_caller = context.caller_address;
+  Route route = version == nullptr ? Route::handle : Route::handle_version;
+  if (kind == LookupKind::kDefault) route = version == nullptr ? Route::global : Route::global_version;
+  if (kind == LookupKind::kNext) route = version == nullptr ? Route::next : Route::next_version;
+  if (kind == LookupKind::kMain) route = version == nullptr ? Route::main : Route::main_version;
+  if (handle == reinterpret_cast<Library*>(&platform_handle)) route = Route::provider;
+  void* answer = Answer(route, name, version);
+  const bool successful_null = std::strcmp(name, "null_ifunc") == 0 ||
+                               std::strcmp(name, "selected_null") == 0;
+  const bool unavailable = std::strcmp(name, "selected_unavailable") == 0;
+  if (status) *status = unavailable ? LookupStatus::kUnavailable :
+      answer || successful_null ? LookupStatus::kResolved : LookupStatus::kNotFound;
+  if (error && !answer && !successful_null) {
+    *error = std::string(unavailable ? "current-thread TLS address unavailable: " : "undefined symbol: ") + name;
+    if (version != nullptr) *error += std::string(", version ") + version;
+  }
+  return answer;
+}
+void* Lookup(Library*, const char* name) { return Answer(Route::handle, name); }
+void* LookupGlobal(const char* name) { return Answer(Route::global, name); }
+void* LookupVersion(Library* library, const char* name, const char* version, LookupStatus* status = nullptr) {
+  return LookupScoped(library, name, version, LookupKind::kHandle, {}, nullptr, status);
+}
+void* LookupGlobalVersion(const char* name, const char* version, LookupStatus* status = nullptr) {
+  return LookupScoped(nullptr, name, version, LookupKind::kDefault, {}, nullptr, status);
+}
+}  // namespace gesher::elf
+
+namespace gesher::bionic {
+namespace {
+[[maybe_unused]] bool IsPlatformLibraryHandle(const void* handle) { return handle == &platform_handle; }
+[[maybe_unused]] void* LookupBionicSymbol(const char* name) { return Answer(Route::shim, name); }
+bool TraceDl() { return false; }
+@ERROR_STATE@
+@LIBDL_IMPLEMENTATION@
+}  // namespace
+}  // namespace gesher::bionic
+
+int main() {
+  using namespace gesher::bionic;
+  std::unordered_map<std::string, void*> table;
+#define ENTRY(name, value) table.emplace(name, reinterpret_cast<void*>(value))
+@LIBDL_ENTRIES@
+#undef ENTRY
+  auto sym = reinterpret_cast<void*(BIONIC_SYSV*)(void*, const char*)>(table.at("dlsym"));
+  auto vsym = reinterpret_cast<void*(BIONIC_SYSV*)(void*, const char*, const char*)>(table.at("dlvsym"));
+  auto error = reinterpret_cast<const char*(BIONIC_SYSV*)()>(table.at("dlerror"));
+  gesher::elf::Library library;
+  Check(error() == nullptr, "no initial error");
+  Check(sym(&library, "null_ifunc") == nullptr && error() == nullptr,
+        "a successfully selected null IFUNC result does not fabricate an error");
+  Check(Invoke(sym(&library, "versioned")) == 222 && calls.front().route == Route::handle,
+        "ordinary dlsym keeps the unversioned lookup path");
+  calls.clear();
+  Check(Invoke(vsym(&library, "versioned", "V1")) == 111,
+        "actual dlvsym export forwards its third argument");
+  Check(calls.size() == 1 && calls.front().route == Route::handle_version &&
+        calls.front().version == "V1", "handle lookup receives the exact version");
+  for (int repeat = 0; repeat < 24; ++repeat) {
+    Check(Invoke(vsym(&library, "versioned", "V2")) == 222, "alternating V2 lookup");
+    Check(Invoke(vsym(&library, "versioned", "V1")) == 111, "alternating V1 lookup");
+  }
+  calls.clear();
+  Check(Invoke(vsym(&library, "versioned", nullptr)) == 222 && calls.front().route == Route::handle,
+        "null version preserves Bionic ordinary lookup semantics");
+  calls.clear();
+  Check(vsym(&library, "versioned", "") == nullptr && calls.front().route == Route::handle_version,
+        "empty version remains an explicit request");
+  Check(std::string(error()) == "undefined symbol: versioned, version ", "empty version diagnostic is retained");
+  Check(error() == nullptr, "error is consumed once");
+
+  char missing_name[] = "missing_symbol", missing_version[] = "OLDER_ABI";
+  Check(vsym(&library, missing_name, missing_version) == nullptr, "missing versioned lookup fails");
+  std::memset(missing_name, 'x', sizeof(missing_name) - 1);
+  std::memset(missing_version, 'y', sizeof(missing_version) - 1);
+  const char* retained = error();
+  Check(retained && std::string(retained) == "undefined symbol: missing_symbol, version OLDER_ABI",
+        "error owns both name and version after caller buffers change");
+  Check(error() == nullptr && std::string(retained).find("OLDER_ABI") != std::string::npos,
+        "consuming the error leaves returned storage valid");
+  Check(Invoke(vsym(&library, "versioned", "V2")) == 222 && error() == nullptr,
+        "successful lookup introduces no error");
+  Check(std::string(retained).find("OLDER_ABI") != std::string::npos,
+        "successful lookup does not rewrite previous error storage");
+  Check(vsym(&library, "versioned", "ABSENT") == nullptr, "requested unavailable version fails");
+  Check(Invoke(sym(&library, "versioned")) == 222, "success after failure is usable");
+  Check(std::string(error()) == "undefined symbol: versioned, version ABSENT",
+        "success does not clear an unconsumed error");
+
+  for (void* handle : {static_cast<void*>(nullptr), reinterpret_cast<void*>(-1), reinterpret_cast<void*>(-2)}) {
+    calls.clear();
+    Check(Invoke(vsym(handle, "versioned", "V1")) == 111 &&
+          calls.front().route == (handle == nullptr ? Route::global_version :
+          handle == reinterpret_cast<void*>(-1) ? Route::next_version : Route::main_version),
+          "DEFAULT, NEXT and main use distinct scoped routes with the exact version");
+  }
+  calls.clear();
+  Check(Invoke(vsym(&platform_handle, "unversioned", "REQUESTED_ABI")) == 777 &&
+        calls.size() == 1 && calls.front().route == Route::provider,
+        "existing unversioned virtual provider returns only an actual export");
+  calls.clear();
+  Check(vsym(&library, "unversioned", "REQUESTED_ABI") == nullptr &&
+        calls.size() == 1 && calls[0].route == Route::handle_version,
+        "ordinary handle failure never falls back to the internal aggregate");
+  Check(gesher::elf::last_caller != nullptr, "public wrapper captures its actual return PC");
+  error();
+  Check(vsym(&platform_handle, "not_provided", "REQUESTED_ABI") == nullptr,
+        "virtual provider does not fabricate a missing export");
+  Check(std::string(error()) == "undefined symbol: not_provided, version REQUESTED_ABI",
+        "virtual-provider failure identifies the requested version");
+  calls.clear();
+  Check(vsym(&library, nullptr, "V1") == nullptr && calls.empty(), "null symbol never reaches a lookup");
+  Check(std::string(error()) == "dlsym: null symbol name", "null symbol uses the common existing diagnostic");
+
+  Check(vsym(&library, "main_missing", "MAIN_ABI") == nullptr, "main thread keeps its own failure");
+  bool worker_empty = false, worker_once = false;
+  std::string worker_error;
+  std::thread worker([&] {
+    worker_empty = error() == nullptr;
+    vsym(&library, "worker_missing", "WORKER_ABI");
+    if (const char* value = error()) worker_error = value;
+    worker_once = error() == nullptr;
+  });
+  worker.join();
+  Check(worker_empty && worker_once && worker_error == "undefined symbol: worker_missing, version WORKER_ABI",
+        "worker error storage starts empty and is independently consumed");
+  Check(std::string(error()) == "undefined symbol: main_missing, version MAIN_ABI",
+        "worker failure does not replace the main thread's pending error");
+  Check(error() == nullptr, "main error is consumed once");
+  for (void* handle : {static_cast<void*>(&library), static_cast<void*>(nullptr)}) {
+    calls.clear();
+    Check(vsym(handle, "selected_null", "V_NULL") == nullptr && error() == nullptr,
+          "selected null address succeeds without introducing an error");
+    Check(calls.size() == 1 && calls[0].route != Route::shim,
+          "selected null address never asks the shim for a replacement");
+    Check(vsym(handle, "missing_before_null", "V_MISSING") == nullptr,
+          "create a pending error before selected null success");
+    Check(vsym(handle, "selected_null", "V_NULL") == nullptr,
+          "null success preserves its actual result after a failure");
+    const char* pending = error();
+    Check(pending && std::string(pending) == "undefined symbol: missing_before_null, version V_MISSING",
+          "null success leaves previous unconsumed error storage intact");
+    Check(error() == nullptr, "pending error after null success is consumed once");
+  }
+  for (void* handle : {static_cast<void*>(&library), static_cast<void*>(nullptr)}) {
+    for (const char* version : {static_cast<const char*>(nullptr), "V_TLS"}) {
+      calls.clear();
+      Check(vsym(handle, "selected_unavailable", version) == nullptr,
+            "unavailable selected address does not become a builtin");
+      Check(calls.size() == 1 && calls[0].route != Route::shim,
+            "unavailable selection never asks another provider for the same name");
+      const char* unavailable = error();
+      Check(unavailable && std::string(unavailable).find("unavailable") != std::string::npos &&
+            std::string(unavailable).find("selected_unavailable") != std::string::npos,
+            "unavailable selected address reports its own failure");
+      Check(error() == nullptr, "unavailable-address failure is consumed once");
+    }
+  }
+  std::printf("dlvsym shim dispatch/error contracts: %d checks passed (explicit lookup seam)\n", checks);
+}

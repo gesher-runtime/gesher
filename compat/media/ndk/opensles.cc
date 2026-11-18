@@ -1009,10 +1009,10 @@ SLresult SYSV QueryEngineInterfaces(SLuint32 index, SLInterfaceID* id) {
 
 void Register() {
   using gesher::bionic::AddBionicSymbol;
-  AddBionicSymbol("slCreateEngine", reinterpret_cast<void*>(&CreateEngine));
-  AddBionicSymbol("slQueryNumSupportedEngineInterfaces", reinterpret_cast<void*>(&QueryNumEngineInterfaces));
-  AddBionicSymbol("slQuerySupportedEngineInterfaces", reinterpret_cast<void*>(&QueryEngineInterfaces));
-#define OPENSL_IID(name, ...) AddBionicSymbol(#name, const_cast<SLInterfaceID*>(&name));
+  AddBionicSymbol("libOpenSLES.so", "slCreateEngine", reinterpret_cast<void*>(&CreateEngine));
+  AddBionicSymbol("libOpenSLES.so", "slQueryNumSupportedEngineInterfaces", reinterpret_cast<void*>(&QueryNumEngineInterfaces));
+  AddBionicSymbol("libOpenSLES.so", "slQuerySupportedEngineInterfaces", reinterpret_cast<void*>(&QueryEngineInterfaces));
+#define OPENSL_IID(name, ...) AddBionicSymbol("libOpenSLES.so", #name, const_cast<SLInterfaceID*>(&name));
 #include "opensles_iids.inc"
 #undef OPENSL_IID
 }

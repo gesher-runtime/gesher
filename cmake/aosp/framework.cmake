@@ -125,10 +125,11 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 target_include_directories(framework_runtime PRIVATE
   ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include
-  ${AOSP_DIR}/frameworks/native/libs/binderthreadstate/include)
+  ${AOSP_DIR}/frameworks/native/libs/binderthreadstate/include
+  ${AOSP_DIR}/art/libnativeloader/include ${CMAKE_SOURCE_DIR}/compat/art/include)
 # AndroidCharacter uses ICU4C directly, as the platform build does.
 target_link_libraries(framework_runtime PUBLIC androidfw binder ziparchive nativehelper utils cutils log base
-  icu_headers icuuc boringssl_crypto)
+  icu_headers icuuc boringssl_crypto PRIVATE "$<LINK_ONLY:art_nativeloader>")
 # Android.bp's libandroid_runtime warning set, plus what -Wextra and C++20
 # add that Soong's global flags do not report: a deprecated implicit copy
 # (utils/TypeHelpers.h), anonymous enum arithmetic (ResourceTypes.h), and an

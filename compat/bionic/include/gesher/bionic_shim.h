@@ -5,18 +5,28 @@
 
 namespace gesher::bionic {
 
-// Registers the shim with the ELF loader (gesher/elf_loader.h) as the
-// resolver for symbols no loaded ELF object defines, and as the reporter for
-// calls to imports nothing defines. Call once before loading a .so.
+// Registers the actual library providers with the ELF loader. Ordinary guest
+// lookups reach their owned exports through the selected dependency scope.
+// Also installs the separate resolver used by internal host/translator code.
 void InstallBionicShim();
 
-// The shim's System V entry point (or data object) for `name`, or nullptr.
+// Initializes the compiled ART JNI bridge and its owned invocation exports.
+// Call before taking a classloader's provider snapshot. This does not create
+// a VM, enter guest code, allocate guest TLS, or build guest proxy tables.
+void InstallJniBridge();
+
+// Internal host/translator lookup in the combined shim table. This is not an
+// Android guest visibility rule and must not be an ordinary libdl fallback.
 void* LookupBionicSymbol(const char* name);
 
-// Adds (or replaces) a symbol the shim provides, e.g. JNI_GetCreatedJavaVMs
-// from the JNI bridge (compat/bionic/jni_bridge.cc). Call before the .so that
-// imports it is loaded.
+// Adds an internal host/translator symbol. It is not exported by any Android
+// library. Existing provider ownership is unchanged by this overload.
 void AddBionicSymbol(const char* name, void* address);
+
+// Adds (or replaces) a real export owned by `soname` and also updates the
+// internal combined table. Register a shared export once for each actual
+// owning library; provider callbacks observe subsequent replacements.
+void AddBionicSymbol(const char* soname, const char* name, void* address);
 
 // Sets up this thread's real ELF TLS once before entering loaded code.
 // Also used by native media callbacks, without a Java VM dependency.

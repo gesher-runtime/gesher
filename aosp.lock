@@ -83,8 +83,8 @@ external/tagsoup *.bp
 frameworks/av *.bp media/ndk/include/
 frameworks/hardware/interfaces *.bp
 frameworks/libs/systemui *.bp
-frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/ cmds/servicemanager/ /include/ libs/ui/ libs/nativewindow/ libs/nativebase/ libs/nativedisplay/ libs/arect/ libs/input/ libs/math/ opengl/include/ opengl/libs/ETC1/ libs/attestation/ libs/gui/include/gui/TraceUtils.h
-bionic libc/kernel/uapi/linux/android/
+frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/ cmds/servicemanager/ /include/ libs/ui/ libs/nativewindow/ libs/nativebase/ libs/nativedisplay/ libs/arect/ libs/input/ libs/math/ opengl/include/ opengl/libs/ETC1/ opengl/libs/lib*.map.txt opengl/libs/GLES2/gl2_api.in opengl/libs/GLES2/gl2ext_api.in opengl/libs/EGL/eglApi.cpp libs/attestation/ libs/gui/include/gui/TraceUtils.h
+bionic libc/kernel/uapi/linux/android/ tools/generate-version-script.py libc/libc.map.txt libm/libm.map.txt libdl/libdl.map.txt libdl/libdl_android.map.txt
 frameworks/opt/telephony *.bp
 frameworks/proto_logging
 hardware/interfaces *.bp graphics/common/aidl/

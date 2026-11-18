@@ -885,96 +885,133 @@ int BIONIC_SYSV Atexit(void (BIONIC_SYSV* func)(void)) {
 thread_local std::string t_dlerror;
 thread_local bool t_has_dlerror = false;
 
-// dlopen: the platform's libraries the shim implements (libc.so,
-// libEGL.so, libz.so, ... by name or by their /system/lib64 path) are handles
-// of their own (extra_bionic.cc); an object already loaded is found by its
-// soname; a bare name is looked up, as an app's linker namespace does, in the
-// directories app libraries came from and $LD_LIBRARY_PATH; a path is loaded.
-bool Exists(const std::string& path) {
-  struct stat st;
-  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
-}
-std::string DirOf(const std::string& path) {
-  size_t slash = path.find_last_of('/');
-  return slash == std::string::npos ? std::string() : path.substr(0, slash == 0 ? 1 : slash);
-}
-// GESHER_TRACE_DL: each dlopen and its outcome, and each dlsym that finds
-// nothing, on stderr (an app's log): what a library looked for and lacked.
+// GESHER_TRACE_DL: each dlopen and its outcome, and each failed symbol lookup.
 bool TraceDl() {
   static const bool on = std::getenv("GESHER_TRACE_DL") != nullptr;
   return on;
 }
-void* DlOpenImpl(const char* filename);
-void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
-  void* handle = DlOpenImpl(filename);
+
+void* DlOpenImpl(const char* filename, int flags, const void* caller,
+                 gesher::elf::Namespace* name_space = nullptr) {
+  gesher::elf::LoadOptions options;
+  options.flags = flags;
+  options.context.name_space = name_space;
+  options.context.caller_address = caller;
+  std::string error;
+  void* handle = gesher::elf::Load(filename, &error, options);
+  if (handle == nullptr) {
+    t_dlerror = "dlopen failed: " + error;
+    t_has_dlerror = true;
+  }
   if (TraceDl()) {
     std::fprintf(stderr, "gesher dl: dlopen(\"%s\") = %s%s%s\n", filename ? filename : "(null)",
                  handle ? "ok" : "null", handle ? "" : ": ", handle ? "" : t_dlerror.c_str());
   }
   return handle;
 }
-void* DlOpenImpl(const char* filename) {
-  if (filename == nullptr) return reinterpret_cast<void*>(-2);  // the "main program"
-  if (void* platform = PlatformLibraryHandle(filename)) return platform;
-  const char* slash = std::strrchr(filename, '/');
-  const char* base = slash ? slash + 1 : filename;
-  if (gesher::elf::Library* existing = gesher::elf::Find(base)) return existing;
-  std::string path = filename;
-  std::vector<std::string> dirs = LibraryDirectories();
-  if (slash == nullptr) {
-    path.clear();
-    for (const std::string& d : dirs) {
-      if (Exists(d + "/" + filename)) {
-        path = d + "/" + filename;
-        break;
-      }
-    }
-    if (path.empty()) {
-      t_dlerror = std::string("dlopen failed: library \"") + filename + "\" not found";
+
+void* BIONIC_SYSV LoaderDlopen(const char* filename, int flags, const void* caller) {
+  return DlOpenImpl(filename, flags, caller);
+}
+
+__attribute__((noinline)) void* BIONIC_SYSV DlOpen(const char* filename, int flags) {
+  return LoaderDlopen(filename, flags, __builtin_extract_return_addr(__builtin_return_address(0)));
+}
+
+// Android's LP64 android_dlextinfo layout, independent of the Windows off_t.
+struct BionicDlextinfo {
+  uint64_t flags;
+  void* reserved_addr;
+  uint64_t reserved_size;
+  int32_t relro_fd;
+  int32_t library_fd;
+  int64_t library_fd_offset;
+  gesher::elf::Namespace* library_namespace;
+};
+static_assert(sizeof(BionicDlextinfo) == 48);
+
+void* BIONIC_SYSV LoaderAndroidDlopenExt(const char* filename, int flags,
+                                        const BionicDlextinfo* extinfo, const void* caller) {
+  constexpr uint64_t kUseNamespace = 0x200;
+  if (extinfo != nullptr && (extinfo->flags & ~kUseNamespace) != 0) {
+    t_dlerror = "android_dlopen_ext: requested extended flags are not supported";
+    t_has_dlerror = true;
+    return nullptr;
+  }
+  gesher::elf::Namespace* name_space = nullptr;
+  if (extinfo != nullptr && (extinfo->flags & kUseNamespace) != 0) {
+    name_space = extinfo->library_namespace;
+    if (name_space == nullptr) {
+      t_dlerror = "android_dlopen_ext: USE_NAMESPACE requires a namespace";
       t_has_dlerror = true;
       return nullptr;
     }
   }
-  gesher::elf::LoadOptions options;
-  std::string dir = DirOf(path);
-  if (!dir.empty()) options.search_paths.push_back(dir);
-  for (const std::string& d : dirs) options.search_paths.push_back(d);
-  std::string error;
-  gesher::elf::Library* lib = gesher::elf::Load(path.c_str(), &error, options);
-  if (lib == nullptr) {
-    t_dlerror = "dlopen failed: " + error;
-    t_has_dlerror = true;
-  } else if (!dir.empty()) {
-    NoteLibraryDirectory(dir);
-  }
-  return lib;
+  return DlOpenImpl(filename, flags, caller, name_space);
 }
-// dlsym: the shim's own symbols stand in for the libraries it implements, as
-// bionic's search reaches libc.so & co. through a library's dependencies.
-void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
-  void* p = nullptr;
+
+__attribute__((noinline)) void* BIONIC_SYSV AndroidDlopenExt(
+    const char* filename, int flags, const BionicDlextinfo* extinfo) {
+  return LoaderAndroidDlopenExt(filename, flags, extinfo,
+                                __builtin_extract_return_addr(__builtin_return_address(0)));
+}
+
+// dlsym: providers and ELF objects share the common namespace/dependency walk.
+// There is no aggregate shim fallback after an ordinary scoped lookup fails.
+void* DlSymImpl(void* handle, const char* symbol, const char* version, const void* caller) {
   if (symbol == nullptr) {
     t_dlerror = "dlsym: null symbol name";
     t_has_dlerror = true;
     return nullptr;
   }
-  if (IsPlatformLibraryHandle(handle)) {
-    p = LookupBionicSymbol(symbol);
-  } else if (handle == nullptr || handle == reinterpret_cast<void*>(-1) ||
-             handle == reinterpret_cast<void*>(-2)) {
-    // RTLD_DEFAULT is 0 and RTLD_NEXT -1 on bionic LP64; -2 is dlopen(NULL).
-    p = gesher::elf::LookupGlobal(symbol);
-    if (p == nullptr) p = LookupBionicSymbol(symbol);
-  } else {
-    p = gesher::elf::Lookup(static_cast<gesher::elf::Library*>(handle), symbol);
-    if (p == nullptr) p = LookupBionicSymbol(symbol);
+  gesher::elf::LoaderContext context;
+  context.caller_address = caller;
+  auto kind = gesher::elf::LookupKind::kHandle;
+  auto* library = static_cast<gesher::elf::Library*>(handle);
+  if (handle == nullptr) {
+    kind = gesher::elf::LookupKind::kDefault;
+  } else if (handle == reinterpret_cast<void*>(-1)) {
+    kind = gesher::elf::LookupKind::kNext;
+    library = nullptr;
+  } else if (handle == reinterpret_cast<void*>(-2)) {
+    kind = gesher::elf::LookupKind::kMain;
+    library = nullptr;
   }
-  if (p == nullptr) {
-    t_dlerror = std::string("undefined symbol: ") + symbol;
+  std::string error;
+  gesher::elf::LookupStatus status = gesher::elf::LookupStatus::kNotFound;
+  void* p = gesher::elf::LookupScoped(library, symbol, version, kind, context, &error, &status);
+  if (status != gesher::elf::LookupStatus::kResolved) {
+    // A found IFUNC may legitimately return a null address. The common loader
+    // reports lookup failure independently of that successful null result.
+    t_dlerror = error;
     t_has_dlerror = true;
-    if (TraceDl()) std::fprintf(stderr, "gesher dl: dlsym(%p, \"%s\") = null\n", handle, symbol);
+    if (TraceDl()) {
+      if (version == nullptr)
+        std::fprintf(stderr, "gesher dl: dlsym(%p, \"%s\") = null\n", handle, symbol);
+      else
+        std::fprintf(stderr, "gesher dl: dlvsym(%p, \"%s\", \"%s\") = null\n", handle, symbol, version);
+    }
   }
   return p;
+}
+
+void* BIONIC_SYSV LoaderDlsym(void* handle, const char* symbol, const void* caller) {
+  return DlSymImpl(handle, symbol, nullptr, caller);
+}
+
+void* BIONIC_SYSV LoaderDlvsym(void* handle, const char* symbol, const char* version,
+                              const void* caller) {
+  return DlSymImpl(handle, symbol, version, caller);
+}
+
+__attribute__((noinline)) void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
+  return LoaderDlsym(handle, symbol, __builtin_extract_return_addr(__builtin_return_address(0)));
+}
+
+__attribute__((noinline)) void* BIONIC_SYSV DlVSym(void* handle, const char* symbol,
+                                                const char* version) {
+  return LoaderDlvsym(handle, symbol, version,
+                      __builtin_extract_return_addr(__builtin_return_address(0)));
 }
 int BIONIC_SYSV DlClose(void*) { return 0; }
 const char* BIONIC_SYSV DlError() {
@@ -1256,6 +1293,21 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("munmap", Munmap);
   ENTRY("mprotect", Mprotect);
   ENTRY("mremap", Mremap);
+  // Bionic exports ldexp from libc; libm reaches it through that dependency.
+  ENTRY("ldexp", Ldexp);
+  // C runtime support.
+  ENTRY("syscall", Syscall);
+  ENTRY("__stack_chk_fail", StackChkFail);
+  ENTRY("__stack_chk_guard", &g_stack_chk_guard);
+  ENTRY("__cxa_atexit", CxaAtexit);
+  ENTRY("__cxa_finalize", CxaFinalize);
+  ENTRY("atexit", Atexit);
+  ENTRY("__tls_get_addr", TlsGetAddr);
+  ENTRY("__gcov_dump", GcovStub);
+  ENTRY("__gcov_flush", GcovStub);
+}
+
+void RegisterLibm(SymbolTable& t) {
   // libm (forwarded to the CRT; overloads selected by signature).
   MATH(sin); MATH(cos); MATH(tan); MATH(asin); MATH(acos); MATH(atan);
   MATH(sinh); MATH(cosh); MATH(tanh); MATH(exp); MATH(exp2); MATH(log);
@@ -1270,7 +1322,6 @@ void RegisterLibc(SymbolTable& t) {
   MATHF(rintf); MATHF(cbrtf);
   MATH2F(powf); MATH2F(atan2f); MATH2F(fmodf); MATH2F(hypotf); MATH2F(fminf);
   MATH2F(fmaxf); MATH2F(copysignf);
-  ENTRY("ldexp", Ldexp);
   ENTRY("scalbn", Ldexp);
   ENTRY("ldexpf", Ldexpf);
   ENTRY("scalbnf", Ldexpf);
@@ -1288,63 +1339,210 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("llrintf", Lrintf);
   ENTRY("lroundl", Llroundl);
   ENTRY("llroundl", Llroundl);
+}
+
+void RegisterLibdl(SymbolTable& t) {
   // libdl.
   ENTRY("dlopen", DlOpen);
-  ENTRY("android_dlopen_ext", DlOpen);
+  ENTRY("android_dlopen_ext", AndroidDlopenExt);
   ENTRY("dlsym", DlSym);
-  ENTRY("dlvsym", DlSym);
+  ENTRY("dlvsym", DlVSym);
   ENTRY("dlclose", DlClose);
   ENTRY("dlerror", DlError);
   ENTRY("dladdr", DlAddr);
   ENTRY("dl_iterate_phdr", DlIteratePhdr);
-  // C runtime support.
-  ENTRY("syscall", Syscall);
-  ENTRY("__stack_chk_fail", StackChkFail);
-  ENTRY("__stack_chk_guard", &g_stack_chk_guard);
-  ENTRY("__cxa_atexit", CxaAtexit);
-  ENTRY("__cxa_finalize", CxaFinalize);
-  ENTRY("atexit", Atexit);
-  ENTRY("__tls_get_addr", TlsGetAddr);
-  ENTRY("__gcov_dump", GcovStub);
-  ENTRY("__gcov_flush", GcovStub);
 }
 
 namespace {
-SymbolTable& Table() {
-  static SymbolTable* t = [] {
-    auto* table = new SymbolTable();
-    RegisterExtra(*table);  // first: the core files' definitions replace these
-    RegisterLibc(*table);
-    RegisterStdio(*table);
-    RegisterPthread(*table);
-    RegisterLocale(*table);
-    RegisterPosix(*table);
-    RegisterSocket(*table);
-    RegisterDnsWire(*table);
-    RegisterSignal(*table);
-    RegisterTime(*table);
-    RegisterSyscall(*table);
-    RegisterProcess(*table);  // last: it wraps entries already there
-    return table;
+struct BionicRegistry {
+  std::mutex mutex;
+  SymbolTable aggregate;
+  std::unordered_map<std::string, SymbolTable> libraries;
+};
+
+BionicRegistry& Registry() {
+  static BionicRegistry* registry = [] {
+    auto* state = new BionicRegistry();
+    SymbolTable& libc = state->libraries["libc.so"];
+    SymbolTable& libm = state->libraries["libm.so"];
+    SymbolTable& libdl = state->libraries["libdl.so"];
+    SymbolTable& libdl_android = state->libraries["libdl_android.so"];
+    SymbolTable& liblog = state->libraries["liblog.so"];
+    SymbolTable& libz = state->libraries["libz.so"];
+    SymbolTable& libandroid = state->libraries["libandroid.so"];
+    // Keep the original replacement order within every actual owner. The
+    // process wrappers run last and retain the preceding libc definitions.
+    RegisterExtra(libc);
+    RegisterExtraLibm(libm);
+    RegisterExtraLibdl(libdl);
+    RegisterExtraLibdlAndroid(libdl_android);
+    RegisterZlib(libz);
+    RegisterLibc(libc);
+    RegisterLibm(libm);
+    RegisterLibdl(libdl);
+    RegisterStdio(libc);
+    RegisterLog(liblog);
+    RegisterPthread(libc);
+    RegisterLocale(libc);
+    RegisterPosix(libc);
+    RegisterSocket(libc);
+    RegisterAndroidNetwork(libandroid);
+    RegisterDnsWire(libc);
+    RegisterSignal(libc);
+    RegisterTime(libc);
+    RegisterSyscall(libc);
+    RegisterProcess(libc);
+    for (const SymbolTable* table : {&libc, &libm, &libdl, &libdl_android, &liblog, &libz, &libandroid}) {
+      for (const auto& entry : *table) state->aggregate[entry.first] = entry.second;
+    }
+    // These compatibility helpers are not exports of either supported LP64
+    // Bionic DSO. This includes map entries tagged only for arm/x86: compare
+    // the architecture-filtered version scripts, not their unfiltered input.
+    // Retain deliberate host/translator access without assigning false owners.
+    for (const char* name : {"bcmp", "explicit_bzero", "getw", "strverscmp", "__environ",
+                             "closefrom", "__gcov_dump", "__gcov_flush",
+                             "timerfd_gettime64", "timerfd_settime64",
+                             "atexit", "bcopy", "bsd_signal", "bzero", "gmtime64_r",
+                             "localtime64_r", "mktime64", "putw", "sysv_signal", "timegm64", "tkill",
+                             "__gesher_arm64_set_thread_stack", "__gesher_arm64_pthread_getattr_np",
+                             "__gesher_arm64_ns_name_ntop", "__gesher_arm64_ns_name_uncompress",
+                             "__gesher_arm64_dn_expand"}) libc.erase(name);
+    for (const char* name : {"exp10", "exp10f", "pow10", "pow10f"}) libm.erase(name);
+    state->aggregate["__loader_dlopen"] = reinterpret_cast<void*>(&LoaderDlopen);
+    state->aggregate["__loader_android_dlopen_ext"] = reinterpret_cast<void*>(&LoaderAndroidDlopenExt);
+    state->aggregate["__loader_dlsym"] = reinterpret_cast<void*>(&LoaderDlsym);
+    state->aggregate["__loader_dlvsym"] = reinterpret_cast<void*>(&LoaderDlvsym);
+    return state;
   }();
-  return *t;
+  return *registry;
+}
+
+void* LookupOwnedSymbol(const std::string& soname, const char* name) {
+  if (name == nullptr) return nullptr;
+  BionicRegistry& registry = Registry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  auto library = registry.libraries.find(soname);
+  if (library == registry.libraries.end()) return nullptr;
+  auto symbol = library->second.find(name);
+  return symbol != library->second.end() ? symbol->second : nullptr;
+}
+
+bool HasOwnedSymbols(const std::string& soname) {
+  BionicRegistry& registry = Registry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  auto library = registry.libraries.find(soname);
+  return library != registry.libraries.end() && !library->second.empty();
+}
+
+struct ProviderDefinition {
+  const char* soname;
+  gesher::elf::ProviderVisibility visibility;
+  std::vector<std::string> dependencies;
+};
+
+const std::vector<ProviderDefinition>& ProviderDefinitions() {
+  using Visibility = gesher::elf::ProviderVisibility;
+  // These are implemented libraries. No probe symbol makes an unrelated or
+  // unavailable platform library appear in the catalog. See docs/native-libs.md.
+  static const std::vector<ProviderDefinition> providers = {
+      {"libc.so", Visibility::kNdkPublic, {"libdl.so"}},
+      {"libm.so", Visibility::kNdkPublic, {"libc.so"}},
+      {"libdl.so", Visibility::kNdkPublic, {}},
+      {"libdl_android.so", Visibility::kPrivate, {}},
+      {"liblog.so", Visibility::kNdkPublic, {"libc.so", "libm.so", "libdl.so"}},
+      {"libz.so", Visibility::kNdkPublic, {"libc.so", "libm.so", "libdl.so"}},
+      {"libandroid.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libnativewindow.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libEGL.so", Visibility::kNdkPublic,
+       {"liblog.so", "libdl.so", "libnativewindow.so", "libz.so", "libc.so", "libm.so"}},
+      {"libGLESv1_CM.so", Visibility::kNdkPublic,
+       {"liblog.so", "libdl.so", "libEGL.so", "libc.so", "libm.so"}},
+      {"libGLESv2.so", Visibility::kNdkPublic,
+       {"liblog.so", "libdl.so", "libEGL.so", "libc.so", "libm.so"}},
+      {"libGLESv3.so", Visibility::kNdkPublic,
+       {"liblog.so", "libdl.so", "libEGL.so", "libc.so", "libm.so"}},
+      {"libjnigraphics.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libOpenSLES.so", Visibility::kNdkPublic,
+       {"liblog.so", "libnativewindow.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libaaudio.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libmediandk.so", Visibility::kNdkPublic,
+       {"liblog.so", "libnativewindow.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libnativehelper.so", Visibility::kNdkPublic, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
+      {"libart.so", Visibility::kPrivate, {"liblog.so", "libc.so", "libm.so", "libdl.so"}},
+  };
+  return providers;
+}
+
+void RegisterProviders() {
+  for (const ProviderDefinition& definition : ProviderDefinitions()) {
+    gesher::elf::ProviderOptions options;
+    options.soname = definition.soname;
+    options.visibility = definition.visibility;
+    options.dependencies = definition.dependencies;
+    if (options.soname == "libandroid.so") {
+      // The independently linked network/font subset does not contain the
+      // framework graphics implementation. Its own asset registration marks
+      // that implementation being linked, with its real EGL/GLES dependency
+      // edges. Never remove a required edge merely because its target lacks
+      // exports: the common loader validates that complete snapshot on use.
+      options.dependency_snapshot = [] {
+        if (LookupOwnedSymbol("libandroid.so", "AAssetManager_open") != nullptr) {
+          return std::vector<std::string>{"liblog.so", "libEGL.so", "libGLESv2.so",
+                                           "libc.so", "libm.so", "libdl.so"};
+        }
+        return std::vector<std::string>{"liblog.so", "libc.so", "libm.so", "libdl.so"};
+      };
+    }
+    options.path_aliases.push_back(std::string("/system/lib64/") + definition.soname);
+    if (options.soname == "libc.so" || options.soname == "libm.so" || options.soname == "libdl.so") {
+      options.path_aliases.push_back("/apex/com.android.runtime/lib64/bionic/" + options.soname);
+    } else if (options.soname == "libart.so" || options.soname == "libnativehelper.so") {
+      options.path_aliases.push_back("/apex/com.android.art/lib64/" + options.soname);
+    }
+    options.lookup = [name = options.soname](const char* symbol) { return LookupOwnedSymbol(name, symbol); };
+    options.available = [name = options.soname] { return HasOwnedSymbols(name); };
+    std::string error;
+    if (gesher::elf::RegisterProvider(options, &error) == nullptr) {
+      std::fprintf(stderr, "gesher: cannot register provider %s: %s\n", definition.soname, error.c_str());
+      std::abort();
+    }
+  }
 }
 }  // namespace
 
 void* LookupBionicSymbol(const char* name) {
-  auto& table = Table();
-  auto it = table.find(name);
-  return it != table.end() ? it->second : nullptr;
+  if (name == nullptr) return nullptr;
+  BionicRegistry& registry = Registry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  auto it = registry.aggregate.find(name);
+  return it != registry.aggregate.end() ? it->second : nullptr;
 }
 
-void AddBionicSymbol(const char* name, void* address) { Table()[name] = address; }
+void AddBionicSymbol(const char* name, void* address) {
+  if (name == nullptr) return;
+  BionicRegistry& registry = Registry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  registry.aggregate[name] = address;
+}
+
+void AddBionicSymbol(const char* soname, const char* name, void* address) {
+  if (soname == nullptr || name == nullptr) return;
+  BionicRegistry& registry = Registry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  registry.libraries[soname][name] = address;
+  registry.aggregate[name] = address;
+}
 
 void InstallBionicShim() {
-  Table();
-  gesher::elf::SetBionicResolver([](const char* name) { return LookupBionicSymbol(name); });
-  gesher::elf::SetUnresolvedHandler(ReportUnresolved);
-  gesher::elf::SetRawSyscallHandler(RawSyscallX64);
-  InstallSignalHook(false);
+  static std::once_flag once;
+  std::call_once(once, [] {
+    Registry();
+    RegisterProviders();
+    gesher::elf::SetBionicResolver([](const char* name) { return LookupBionicSymbol(name); });
+    gesher::elf::SetUnresolvedHandler(ReportUnresolved);
+    gesher::elf::SetRawSyscallHandler(RawSyscallX64);
+    InstallSignalHook(false);
+  });
 }
 
 }  // namespace gesher::bionic

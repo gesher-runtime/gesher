@@ -269,14 +269,14 @@ DWORD WINAPI ProgramThread(void*) {
   // Linux's default (docs/exec.md).
   gesher::bionic::InstallSignalHook(true);
   g_shim_getauxval = reinterpret_cast<GetauxvalFn>(gesher::bionic::LookupBionicSymbol("getauxval"));
-  gesher::bionic::AddBionicSymbol("__libc_init", reinterpret_cast<void*>(&LibcInit));
-  gesher::bionic::AddBionicSymbol("exit", reinterpret_cast<void*>(&Exit));
-  gesher::bionic::AddBionicSymbol("_exit", reinterpret_cast<void*>(&UnderscoreExit));
-  gesher::bionic::AddBionicSymbol("_Exit", reinterpret_cast<void*>(&UnderscoreExit));
-  gesher::bionic::AddBionicSymbol("getauxval", reinterpret_cast<void*>(&Getauxval));
-  gesher::bionic::AddBionicSymbol("environ", &g_environ);
+  gesher::bionic::AddBionicSymbol("libc.so", "__libc_init", reinterpret_cast<void*>(&LibcInit));
+  gesher::bionic::AddBionicSymbol("libc.so", "exit", reinterpret_cast<void*>(&Exit));
+  gesher::bionic::AddBionicSymbol("libc.so", "_exit", reinterpret_cast<void*>(&UnderscoreExit));
+  gesher::bionic::AddBionicSymbol("libc.so", "_Exit", reinterpret_cast<void*>(&UnderscoreExit));
+  gesher::bionic::AddBionicSymbol("libc.so", "getauxval", reinterpret_cast<void*>(&Getauxval));
+  gesher::bionic::AddBionicSymbol("libc.so", "environ", &g_environ);
   gesher::bionic::AddBionicSymbol("__environ", &g_environ);
-  gesher::bionic::AddBionicSymbol("__progname", &g_progname);
+  gesher::bionic::AddBionicSymbol("libc.so", "__progname", &g_progname);
 
   int argc = static_cast<int>(p.args.size());
   g_environ = p.envp.data();

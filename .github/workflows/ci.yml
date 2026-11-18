@@ -165,6 +165,11 @@ jobs:
           python3 tools/test_utc_time_contracts.py --sanitize
           python3 tools/test_sleep_contracts.py --sanitize
 
+      - name: Compiler for original data-only AArch64 ELF contract fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang lld
+
       - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
         run: |
           python3 tools/test_bionic_key_contracts.py --sanitize
@@ -182,6 +187,19 @@ jobs:
           python3 tools/test_elf_lookup_contracts.py --sanitize
           python3 tools/test_elf_lookup_contracts.py --linux-reference
           python3 tools/test_elf_lookup_performance.py --sanitize
+          python3 tools/test_elf_atomic_load.py --sanitize
+          python3 tools/test_elf_versions.py --sanitize
+          python3 tools/test_elf_unavailable_tls.py --sanitize
+          python3 tools/test_elf_namespaces.py --sanitize
+          python3 tools/test_guest_libdl_namespaces.py --sanitize
+          python3 tools/test_native_namespaces.py --jdk "$JAVA_HOME"
+          python3 tools/test_native_activity_dispatch.py --sanitize
+          python3 tools/test_elf_dlvsym_shim.py --sanitize
+          python3 tools/test_arm64_dlvsym_dispatch.py --sanitize
+          python3 tools/test_elf_tls_rollback.py --sanitize
+          python3 tools/test_arm64_pending_rollback.py --sanitize
+          python3 tools/test_arm64_native_rollback.py --sanitize
+          python3 tools/test_arm64_tls_address.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
@@ -353,6 +371,12 @@ jobs:
 
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
+
+      - name: EGL and GLES provider ownership follows the pinned public exports
+        run: python3 tools/test_gl_provider_ownership.py --include-dir third_party/aosp/frameworks/native/opengl/include
+
+      - name: Check Bionic provider ownership for both guest architectures
+        run: python3 tools/test_bionic_provider_ownership.py --bionic-source third_party/aosp/bionic --sanitize
 
       - uses: actions/setup-java@v4
         with:

@@ -1,0 +1,126 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Complete production ELF plus the actual shim dispatch/error/export section.
+// Win32 primitives and the builtin catalogue are explicit host boundaries.
+#include <gesher/elf_loader.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <unordered_map>
+
+#define BIONIC_SYSV __attribute__((sysv_abi))
+namespace {
+int checks, builtin_lookups, constructor_calls, client_constructor_calls;
+void Check(bool ok, const char* label) {
+  ++checks;
+  if (!ok) {
+    std::fprintf(stderr, "FAIL real null IFUNC dispatch: %s (check %d)\n", label, checks);
+    std::exit(1);
+  }
+}
+int BIONIC_SYSV BuiltinGetpid() { return 719; }
+void BIONIC_SYSV Event(int role) {
+  Check(role == 1 || role == 3, "real provider/client reports its own constructor");
+  if (role == 1) ++constructor_calls;
+  else ++client_constructor_calls;
+}
+void* Builtin(const char* name) {
+  ++builtin_lookups;
+  return std::strcmp(name, "getpid") == 0 ? reinterpret_cast<void*>(&BuiltinGetpid) : nullptr;
+}
+void* Resolve(const char* name) {
+  return std::strcmp(name, "gv_event") == 0 ? reinterpret_cast<void*>(&Event) : Builtin(name);
+}
+}  // namespace
+
+namespace gesher::bionic {
+namespace {
+[[maybe_unused]] bool IsPlatformLibraryHandle(const void*) { return false; }
+[[maybe_unused]] void* LookupBionicSymbol(const char* name) { return Builtin(name); }
+bool TraceDl() { return false; }
+@ERROR_STATE@
+@LIBDL_IMPLEMENTATION@
+}  // namespace
+}  // namespace gesher::bionic
+
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  using namespace gesher::bionic;
+  std::unordered_map<std::string, void*> table;
+#define ENTRY(name, value) table.emplace(name, reinterpret_cast<void*>(value))
+@LIBDL_ENTRIES@
+#undef ENTRY
+  auto sym = reinterpret_cast<void*(BIONIC_SYSV*)(void*, const char*)>(table.at("dlsym"));
+  auto vsym = reinterpret_cast<void*(BIONIC_SYSV*)(void*, const char*, const char*)>(table.at("dlvsym"));
+  auto error = reinterpret_cast<const char*(BIONIC_SYSV*)()>(table.at("dlerror"));
+  gesher::elf::SetBionicResolver(Resolve);
+  gesher::elf::ProviderOptions callbacks;
+  callbacks.soname = "libgv_test_host.so";
+  callbacks.lookup = [](const char* name) -> void* {
+    return std::strcmp(name, "gv_event") == 0 ? reinterpret_cast<void*>(&Event) : nullptr;
+  };
+  std::string provider_error;
+  Check(gesher::elf::RegisterProvider(callbacks, &provider_error) != nullptr,
+        "register the callback provider declared by the actual DSOs");
+  gesher::elf::LoadOptions options;
+  options.flags = 0x102;
+  options.allow_shimmed_needed = true;
+  options.stub_unresolved_functions = false;
+  std::string diagnostic;
+  const std::string root = argv[1];
+  auto* provider = gesher::elf::Load((root + "/null-global/libgv_provider.so").c_str(), &diagnostic, options);
+  Check(provider != nullptr && constructor_calls == 1, "actual versioned provider loads once");
+  auto* client = gesher::elf::Load((root + "/required/good/libgv_client.so").c_str(), &diagnostic, options);
+  Check(client != nullptr && client_constructor_calls == 1, "actual dependency client loads once");
+  auto count = reinterpret_cast<int(BIONIC_SYSV*)()>(sym(provider, "gv_null_resolutions"));
+  Check(count != nullptr && error() == nullptr, "resolver count is a real ELF definition");
+  for (void* scope : {static_cast<void*>(provider), static_cast<void*>(client), static_cast<void*>(nullptr)}) {
+    for (const char* name : {"gv_null", "getpid"}) {
+      const int fallback_before = builtin_lookups;
+      gesher::elf::LookupStatus status = gesher::elf::LookupStatus::kNotFound;
+      const int before_wrapper = count();
+      void* selected = scope ? gesher::elf::LookupVersion(static_cast<gesher::elf::Library*>(scope), name, "GV_2", &status)
+                             : gesher::elf::LookupGlobalVersion(name, "GV_2", &status);
+      Check(selected == nullptr && status == gesher::elf::LookupStatus::kResolved,
+            "direct/dependency/global wrapper retains resolved-null status");
+      Check(count() == before_wrapper + 1, "status reporting never repeats the IFUNC resolver");
+      std::string scoped_error = "old scoped error";
+      status = gesher::elf::LookupStatus::kNotFound;
+      selected = gesher::elf::LookupScoped(static_cast<gesher::elf::Library*>(scope), name, "GV_2",
+          scope ? gesher::elf::LookupKind::kHandle : gesher::elf::LookupKind::kDefault, {}, &scoped_error, &status);
+      Check(selected == nullptr && status == gesher::elf::LookupStatus::kResolved && scoped_error.empty(),
+            "scoped lookup exposes successful null independently of error storage");
+      Check(count() == before_wrapper + 2 && builtin_lookups == fallback_before,
+            "scoped status neither reruns the resolver nor falls back");
+      const int before = count();
+      Check(vsym(scope, name, "GV_2") == nullptr, "versioned IFUNC retains its zero result");
+      Check(error() == nullptr, "selected zero result creates no dlerror");
+      Check(count() == before + 1, "versioned dispatch invokes the resolver exactly once");
+      Check(builtin_lookups == fallback_before, "zero selection never requests a builtin fallback");
+      Check(sym(scope, name) == nullptr && error() == nullptr,
+            "ordinary lookup preserves the same successful null definition");
+      Check(vsym(scope, "missing_before_null", "GV_MISSING") == nullptr,
+            "create a real error before a null success");
+      Check(vsym(scope, name, "GV_2") == nullptr, "null success is retained after a previous failure");
+      const char* pending = error();
+      Check(pending && std::string(pending) == "undefined symbol: missing_before_null, version GV_MISSING",
+            "null success preserves the exact earlier unconsumed error");
+      Check(error() == nullptr, "preserved error is consumed once");
+    }
+    Check(vsym(scope, "gv_null", "GV_MISSING") == nullptr, "genuinely absent version returns null");
+    const char* absent = error();
+    Check(absent && std::string(absent) == "undefined symbol: gv_null, version GV_MISSING",
+          "genuinely absent version still reports its own error");
+  }
+  const int before = count(), fallback_before = builtin_lookups;
+  auto* imported = gesher::elf::Load((root + "/libgv_null_import.so").c_str(), &diagnostic, options);
+  if (!imported) std::fprintf(stderr, "null import load failed: %s\n", diagnostic.c_str());
+  Check(imported != nullptr, "global null IFUNC relocation is a successful definition");
+  auto imported_value = reinterpret_cast<void*(BIONIC_SYSV*)()>(sym(imported, "gv_null_import"));
+  Check(imported_value && imported_value() == nullptr, "global relocation retains zero instead of a builtin");
+  Check(count() == before + 1 && builtin_lookups == fallback_before,
+        "global relocation resolves once without a builtin retry");
+  Check(constructor_calls == 1, "lookup and relocation do not rerun provider constructors");
+  std::printf("real null IFUNC dispatch: %d checks passed (complete ELF and actual shim; host boundaries)\n", checks);
+}

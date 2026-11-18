@@ -82,10 +82,12 @@ enum Lib : uint8_t { kLibEgl, kLibGles };
 struct GlName {
   const char* name;
   Lib lib;
+  unsigned owners;
 };
 struct GlThunk {
   const char* name;
   void* thunk;
+  unsigned owners;
 };
 
 void* ResolveGl(int index);
@@ -581,22 +583,22 @@ void BIONIC_SYSV SetBlobCacheFuncs(EGLDisplay dpy, SysvSetBlob set, SysvGetBlob 
 // --- the table -----------------------------------------------------------------------------------
 
 const GlThunk kHandwritten[] = {
-    {"eglGetDisplay", reinterpret_cast<void*>(&GetDisplay)},
-    {"eglGetPlatformDisplay", reinterpret_cast<void*>(&GetPlatformDisplay)},
-    {"eglGetPlatformDisplayEXT", reinterpret_cast<void*>(&GetPlatformDisplayExt)},
-    {"eglChooseConfig", reinterpret_cast<void*>(&ChooseConfig)},
-    {"eglGetConfigAttrib", reinterpret_cast<void*>(&GetConfigAttrib)},
-    {"eglCreateWindowSurface", reinterpret_cast<void*>(&CreateWindowSurfaceSysv)},
-    {"eglCreatePlatformWindowSurface", reinterpret_cast<void*>(&CreatePlatformWindowSurface)},
-    {"eglCreatePlatformWindowSurfaceEXT", reinterpret_cast<void*>(&CreatePlatformWindowSurfaceExt)},
-    {"eglDestroySurface", reinterpret_cast<void*>(&DestroySurface)},
-    {"eglSwapBuffers", reinterpret_cast<void*>(&SwapBuffers)},
-    {"eglSwapBuffersWithDamageKHR", reinterpret_cast<void*>(&SwapBuffersWithDamageKhr)},
-    {"eglSwapBuffersWithDamageEXT", reinterpret_cast<void*>(&SwapBuffersWithDamageExt)},
-    {"eglDebugMessageControlKHR", reinterpret_cast<void*>(&DebugMessageControlKhr)},
-    {"eglSetBlobCacheFuncsANDROID", reinterpret_cast<void*>(&SetBlobCacheFuncs)},
-    {"glDebugMessageCallback", reinterpret_cast<void*>(&DebugMessageCallback)},
-    {"glDebugMessageCallbackKHR", reinterpret_cast<void*>(&DebugMessageCallbackKhr)},
+    {"eglGetDisplay", reinterpret_cast<void*>(&GetDisplay), kGlNames[I_eglGetDisplay].owners},
+    {"eglGetPlatformDisplay", reinterpret_cast<void*>(&GetPlatformDisplay), kGlNames[I_eglGetPlatformDisplay].owners},
+    {"eglGetPlatformDisplayEXT", reinterpret_cast<void*>(&GetPlatformDisplayExt), kGlNames[I_eglGetPlatformDisplayEXT].owners},
+    {"eglChooseConfig", reinterpret_cast<void*>(&ChooseConfig), kGlNames[I_eglChooseConfig].owners},
+    {"eglGetConfigAttrib", reinterpret_cast<void*>(&GetConfigAttrib), kGlNames[I_eglGetConfigAttrib].owners},
+    {"eglCreateWindowSurface", reinterpret_cast<void*>(&CreateWindowSurfaceSysv), kGlNames[I_eglCreateWindowSurface].owners},
+    {"eglCreatePlatformWindowSurface", reinterpret_cast<void*>(&CreatePlatformWindowSurface), kGlNames[I_eglCreatePlatformWindowSurface].owners},
+    {"eglCreatePlatformWindowSurfaceEXT", reinterpret_cast<void*>(&CreatePlatformWindowSurfaceExt), kGlNames[I_eglCreatePlatformWindowSurfaceEXT].owners},
+    {"eglDestroySurface", reinterpret_cast<void*>(&DestroySurface), kGlNames[I_eglDestroySurface].owners},
+    {"eglSwapBuffers", reinterpret_cast<void*>(&SwapBuffers), kGlNames[I_eglSwapBuffers].owners},
+    {"eglSwapBuffersWithDamageKHR", reinterpret_cast<void*>(&SwapBuffersWithDamageKhr), kGlNames[I_eglSwapBuffersWithDamageKHR].owners},
+    {"eglSwapBuffersWithDamageEXT", reinterpret_cast<void*>(&SwapBuffersWithDamageExt), kGlNames[I_eglSwapBuffersWithDamageEXT].owners},
+    {"eglDebugMessageControlKHR", reinterpret_cast<void*>(&DebugMessageControlKhr), kGlNames[I_eglDebugMessageControlKHR].owners},
+    {"eglSetBlobCacheFuncsANDROID", reinterpret_cast<void*>(&SetBlobCacheFuncs), kGlNames[I_eglSetBlobCacheFuncsANDROID].owners},
+    {"glDebugMessageCallback", reinterpret_cast<void*>(&DebugMessageCallback), kGlNames[I_glDebugMessageCallback].owners},
+    {"glDebugMessageCallbackKHR", reinterpret_cast<void*>(&DebugMessageCallbackKhr), kGlNames[I_glDebugMessageCallbackKHR].owners},
     // eglGetProcAddress is added by Register().
 };
 
@@ -613,13 +615,20 @@ __eglMustCastToProperFunctionPointerType BIONIC_SYSV EglGetProcAddress(const cha
 }
 
 void Register() {
-  auto add = [](const char* name, void* fn) {
+  auto add = [](const char* name, void* fn, unsigned owners) {
     ByName()[name] = fn;
+    // Internal proc-address plumbing also contains extension entry points
+    // which are not exported by any provided Android DSO.
     AddBionicSymbol(name, fn);
+    if (owners & 1) AddBionicSymbol("libEGL.so", name, fn);
+    if (owners & 2) AddBionicSymbol("libGLESv1_CM.so", name, fn);
+    if (owners & 4) AddBionicSymbol("libGLESv2.so", name, fn);
+    if (owners & 8) AddBionicSymbol("libGLESv3.so", name, fn);
   };
-  for (const GlThunk& t : kGlThunks) add(t.name, t.thunk);
-  for (const GlThunk& t : kHandwritten) add(t.name, t.thunk);
-  add("eglGetProcAddress", reinterpret_cast<void*>(&EglGetProcAddress));
+  for (const GlThunk& t : kGlThunks) add(t.name, t.thunk, t.owners);
+  for (const GlThunk& t : kHandwritten) add(t.name, t.thunk, t.owners);
+  add("eglGetProcAddress", reinterpret_cast<void*>(&EglGetProcAddress),
+      kGlNames[I_eglGetProcAddress].owners);
 }
 
 [[maybe_unused]] const bool g_registered = (Register(), true);

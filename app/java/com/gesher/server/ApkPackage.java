@@ -34,11 +34,13 @@ import com.android.internal.pm.pkg.component.ParsedActivity;
 import com.android.internal.pm.pkg.component.ParsedComponent;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 import com.android.internal.pm.pkg.component.ParsedMainComponent;
+import com.gesher.app.NativeLibs;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -184,13 +186,18 @@ public final class ApkPackage {
         };
     }
 
-    private ApkPackage(String apkPath, ParsedPackage parsed) throws IOException {
+    private ApkPackage(String apkPath, ParsedPackage parsed, String[] nativeCodePaths) throws Exception {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
         if ("android".equals(packageName)) {
             throw new SecurityException("The platform package name is reserved");
         }
+        // Resolve native requirements before allocating a UID or changing an
+        // installed generation. For an install candidate the selected ABI
+        // includes the supplied splits; for installed code it is the parsed set.
+        mPrimaryCpuAbi = NativeLibs.abiFor(nativeCodePaths);
+        NativeLibraryCatalog.resolve(parsed, mPrimaryCpuAbi);
         mUid = PackageUids.uidFor(packageName);
         // Resolve the newly parsed APK, including before an install replaces the old one.
         sharedLibraries = SharedLibraryRegistry.resolve(parsed);
@@ -234,7 +241,81 @@ public final class ApkPackage {
 
     /** Parses one APK; unrelated files beside an external APK are never part of it. */
     public static ApkPackage parse(String apkPath) throws Exception {
-        return parse(apkPath, new File(apkPath));
+        return parse(apkPath, new File(apkPath), null);
+    }
+
+    /** Parse exactly the selected incoming cluster before UID or generation allocation. */
+    static ApkPackage parseInstallCandidate(String apkPath, File[] splits) throws Exception {
+        if (splits == null || splits.length == 0) return parse(apkPath);
+        File base = new File(apkPath).getAbsoluteFile();
+        List<String> paths = new ArrayList<>();
+        paths.add(base.getPath());
+        ParsedPackage pkg;
+        // PackageParser2's full cluster API enumerates a directory. Its
+        // PackageLite API constructs archived metadata without parsing split
+        // manifests. Give the real cluster parser only the selected files;
+        // unrelated siblings of an external APK must not become package input.
+        try (SelectedApkCluster cluster = new SelectedApkCluster()) {
+            cluster.copy(base, "base.apk");
+            for (int i = 0; i < splits.length; ++i) {
+                if (splits[i] == null) throw new IOException("Missing selected split APK");
+                File split = splits[i].getAbsoluteFile();
+                paths.add(split.getPath());
+                cluster.copy(split, "split_" + i + ".apk");
+            }
+            pkg = parseManifest(cluster.directory.toFile());
+            if (!base.getPath().equals(cluster.originalPath(pkg.getBaseApkPath()))) {
+                throw new IOException("The selected base APK is not the cluster's base: " + base);
+            }
+            String[] splitPaths = pkg.getSplitCodePaths();
+            if (splitPaths != null) {
+                String[] originalPaths = new String[splitPaths.length];
+                for (int i = 0; i < splitPaths.length; ++i) {
+                    originalPaths[i] = cluster.originalPath(splitPaths[i]);
+                }
+                pkg.setSplitCodePaths(originalPaths);
+            }
+            pkg.setBaseApkPath(base.getPath()).setPath(base.getParent());
+        }
+        // Temporary APK assets have been released and their files removed.
+        // The constructor validates the merged native requirements before UID
+        // allocation; the installer still verifies the final staged bytes.
+        return finishParse(base.getPath(), pkg, paths.toArray(new String[0]));
+    }
+
+    private static final class SelectedApkCluster implements AutoCloseable {
+        final Path directory = Files.createTempDirectory("gesher-package-preflight-");
+        private final List<Path> copies = new ArrayList<>();
+        private final Map<String, String> originalPaths = new LinkedHashMap<>();
+
+        SelectedApkCluster() throws IOException { }
+
+        void copy(File source, String name) throws IOException {
+            Path target = directory.resolve(name);
+            copies.add(target); // Also clean up a partial copy on an I/O error.
+            Files.copy(source.toPath(), target);
+            originalPaths.put(target.toFile().getCanonicalPath(), source.getAbsolutePath());
+        }
+
+        String originalPath(String copiedPath) throws IOException {
+            String original = originalPaths.get(new File(copiedPath).getCanonicalPath());
+            if (original == null) throw new IOException("Parser returned an unselected APK: " + copiedPath);
+            return original;
+        }
+
+        @Override public void close() throws IOException {
+            IOException failure = null;
+            List<Path> owned = new ArrayList<>(copies);
+            owned.add(directory);
+            for (Path path : owned) {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException error) {
+                    if (failure == null) failure = error; else failure.addSuppressed(error);
+                }
+            }
+            if (failure != null) throw failure;
+        }
     }
 
     /**
@@ -283,7 +364,7 @@ public final class ApkPackage {
                     PackageManager.INSTALL_FAILED_MISSING_SPLIT,
                     "INSTALL_FAILED_MISSING_SPLIT: " + baseLite.getPackageName());
         }
-        return parse(base.getPath(), directory);
+        return parse(base.getPath(), directory, null);
     }
 
     private static ApkLite codeApkLite(File file) throws IOException {
@@ -299,18 +380,31 @@ public final class ApkPackage {
         return result.getResult();
     }
 
-    private static ApkPackage parse(String apkPath, File parseRoot) throws Exception {
-        ParsedPackage pkg;
+    private static ApkPackage parse(String apkPath, File parseRoot, String[] nativeCodePaths) throws Exception {
+        return finishParse(apkPath, parseManifest(parseRoot), nativeCodePaths);
+    }
+
+    private static ParsedPackage parseManifest(File parseRoot) throws Exception {
         try (PackageParser2 parser = new PackageParser2(null /* separateProcesses */,
                 null /* displayMetrics: the defaults */, null /* cacher */,
                 new ParserCallback())) {
-            pkg = parser.parsePackage(parseRoot, 0 /* flags */, false /* useCaches */);
+            return parser.parsePackage(parseRoot, 0 /* flags */, false /* useCaches */);
         }
+    }
+
+    private static ApkPackage finishParse(String apkPath, ParsedPackage pkg, String[] nativeCodePaths)
+            throws Exception {
         SigningDetails signing = signingDetails(apkPath);
         if (signing != null) {
             pkg.setSigningDetails(signing);
         }
-        ApkPackage appPkg = new ApkPackage(apkPath, pkg);
+        if (nativeCodePaths == null) {
+            List<String> paths = new ArrayList<>();
+            paths.add(apkPath);
+            if (pkg.getSplitCodePaths() != null) Collections.addAll(paths, pkg.getSplitCodePaths());
+            nativeCodePaths = paths.toArray(new String[0]);
+        }
+        ApkPackage appPkg = new ApkPackage(apkPath, pkg, nativeCodePaths);
         if (pkg.getSigningDetails() == null || pkg.getSigningDetails() == SigningDetails.UNKNOWN) {
             Signature[] verified = appPkg.verifiedSignatures();
             if (verified != null) {
@@ -978,7 +1072,10 @@ public final class ApkPackage {
             SharedLibraryGraph graph = SharedLibraryRegistry.usesNone(parsed) ? sharedLibraries
                     : SharedLibraryRegistry.resolve(parsed);
             graph.apply(ai);
-        } catch (IOException invalidLibrary) {
+            // Native entries are handed to LoadedApk separately from Java
+            // shared-library files and never change the dex context/cache key.
+            NativeLibraryCatalog.apply(ai, NativeLibraryCatalog.resolve(parsed, mPrimaryCpuAbi));
+        } catch (IOException | android.content.pm.PackageParser.PackageParserException invalidLibrary) {
             throw new IllegalStateException("shared libraries changed for " + packageName, invalidLibrary);
         }
     }

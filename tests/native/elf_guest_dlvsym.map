@@ -1,0 +1,4 @@
+GV_GUEST {
+  global: open; __fe_dfl_env; gv_guest_dlvsym;
+  local: *;
+};

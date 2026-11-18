@@ -1,0 +1,176 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Actual Dynarmic executes the original AArch64 DSOs. Production Enter,
+// JitAt, CallSVC, RunGuest, CallHost, caller getter and libdl wrappers below
+// are copied verbatim by the runner. Linux stack/storage/profiling boundaries
+// replace Windows attachment. This is not complete Windows DLL execution.
+#include <gesher/arm64_runtime.h>
+#include <gesher/arm64_va_list.h>
+#include <gesher/elf_loader.h>
+#include <gesher/symbol_table.h>
+#include "translator.h"
+#include "guest_counter.h"
+#include <windows.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cfenv>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
+#include <vector>
+#include <xmmintrin.h>
+#include "dynarmic/interface/A64/a64.h"
+#include "dynarmic/interface/A64/config.h"
+#include "dynarmic/interface/exclusive_monitor.h"
+#include "tests/A64/testenv.h"
+namespace A64 = Dynarmic::A64;
+@HOST_CALL@
+@ENTRY_FRAME@
+// The unchanged assembly thunk has a Microsoft entry (RCX), even on Linux.
+extern "C" uint64_t __attribute__((ms_abi)) gesher_call_host_sysv(HostCall*);
+extern "C" void gesher_guest_entry_shim();
+
+namespace gesher_arm64 {
+const gesher_arm64_host* g_host = nullptr;
+[[noreturn]] void GuestCrash(int, int, const char*, uint64_t pc, const char* text) {
+  std::fprintf(stderr, "actual ARM libdl fixture: %s at 0x%llx\n", text,
+               static_cast<unsigned long long>(pc));
+  std::abort();
+}
+int64_t GuestRawSyscall(uint64_t, const uint64_t[6]) { std::abort(); }
+namespace {
+bool FastmemEnabled() { return false; }
+bool ProfilePreciseEnabled() { return false; }
+uint64_t QpcFrequency() { return 1000000000; }
+DWORD GetEnvironmentVariableA(const char*, char*, DWORD) { return 0; }
+@FENV@
+@CODE_REGIONS@
+@MONITOR@
+@VA_LIST@
+@COUNTERS@
+uintptr_t g_return_stub = 0;
+thread_local int t_guest_running = 0;
+class Env;
+thread_local Env* t_env = nullptr;
+
+class Env final : public A64TestEnv {
+ public:
+  Env() : stack_data_(8 << 20) {
+    stack_base_ = stack_data_.data();
+    stack_top_ = reinterpret_cast<uint64_t>(stack_base_ + stack_data_.size()) & ~uint64_t{15};
+    stack_cur_ = stack_top_;
+  }
+  ~Env() override {
+    jits_.clear();
+    for (size_t id : ids_) ReleaseProcessorId(id);
+  }
+  std::optional<uint32_t> MemoryReadCode(uint64_t address) override {
+    if (!InGuestCode(address)) return std::nullopt;
+    uint32_t result;
+    std::memcpy(&result, reinterpret_cast<const void*>(address), sizeof(result));
+    return result;
+  }
+  uint8_t MemoryRead8(uint64_t address) override {
+    return *reinterpret_cast<const uint8_t*>(address);
+  }
+  void MemoryWrite8(uint64_t address, uint8_t value) override {
+    *reinterpret_cast<uint8_t*>(address) = value;
+  }
+@JIT_AT@
+  A64::Jit* CurrentJit() { return depth_ ? jits_[depth_ - 1].get() : nullptr; }
+@CALL_SVC@
+@ENTER@
+@RESULT_GETTERS@
+  uint64_t host_caller() const { return host_caller_; }
+@HOST_DISPATCH@
+  std::vector<std::unique_ptr<A64::Jit>> jits_;
+  std::vector<uint64_t> code_generations_;
+  std::vector<size_t> ids_;
+  std::vector<uint8_t> stack_data_;
+  PendingHostCall pending_call_;
+  uint32_t fpcr_ = 0, fpsr_ = 0;
+  size_t depth_ = 0;
+  uint64_t tls_pointer_ = 0;
+  uint8_t* stack_base_ = nullptr;
+  uint64_t stack_top_ = 0, stack_cur_ = 0;
+  uint64_t last_fp_result_ = 0, last_x1_ = 0;
+  void* host_fn_ = nullptr;
+  uint64_t host_caller_ = 0;
+  ThreadCounters counters_;
+  std::atomic<A64::Jit*> running_jit_{nullptr};
+  std::atomic<void*> sampled_host_fn_{nullptr};
+  std::atomic<uint64_t> last_syscall_{0};
+};
+Env* ThreadEnv() {
+  static thread_local Env environment;
+  t_env = &environment;
+  return t_env;
+}
+@ENTER_GUEST@
+@HOST_ENTRY@
+@API_CALL@
+// This Linux host-entry fixture only calls signatures with at most six
+// integer arguments. It does not assert Windows stack-bound discovery.
+size_t EntryStackWords(const uint64_t*) { return 0; }
+}  // namespace
+extern "C" uint64_t __attribute__((ms_abi)) gesher_guest_entry_trampoline(const void*, EntryFrame*);
+@ENTRY_TRAMPOLINE@
+@CLASSIFIER@
+@CALLER_GETTER@
+@BIND_HOST@
+@ADD_CODE@
+@EMIT_CODE@
+
+namespace {
+gesher::SymbolTable g_overrides;
+@HOST_LOOKUP@
+@GUEST_LIBDL@
+@OVERRIDE@
+}  // namespace
+@GUEST_SYMBOL@
+void InitGuestLibc() {
+@LIBDL_REGISTRATION@
+}
+void InitializeFixtureBridge() {
+  static const gesher_arm64_host host{GESHER_ARM64_API_VERSION, gesher::elf::ResolveBionic, nullptr};
+  g_host = &host;
+@RETURN_STUB@
+  InitGuestLibc();
+}
+}  // namespace gesher_arm64
+
+// The actual DLL loader is Windows-specific. Only this fixture's exercised
+// no-TLS routes are connected to the actual methods above; other routes abort.
+namespace gesher::arm64 {
+bool EnsureLoaded() {
+  static const bool loaded = [] { gesher_arm64::InitializeFixtureBridge(); return true; }();
+  return loaded;
+}
+bool Available() { return EnsureLoaded(); }
+void AddCode(const void* start, size_t size, const char*) { gesher_arm64::AddGuestCode(start, size); }
+void RemoveCode(const void*, size_t) { std::abort(); }
+void* BindHostFunction(void* function) { return gesher_arm64::BindHost(function); }
+void UnbindHostFunction(void*) { std::abort(); }
+void* HostEntry(const void* function) { return gesher_arm64::MakeHostEntry(function); }
+uint64_t Call(const void* function, const uint64_t* args, size_t count) {
+  return gesher_arm64::ApiCall(function, args, count);
+}
+int64_t TlsRegister(size_t, size_t) { std::abort(); }
+bool TlsPrepare(int64_t, const void*, size_t, size_t) { std::abort(); }
+void TlsPublish(int64_t, const void*, size_t, size_t) { std::abort(); }
+bool TlsRollback(int64_t, size_t) { std::abort(); }
+void* TlsAddress(int64_t, size_t) { std::abort(); }
+void AddVaListFunction(const void*, int) { std::abort(); }
+bool IsGuestCode(const void* address) { return gesher_arm64::InGuestCode(reinterpret_cast<uintptr_t>(address)); }
+uint64_t RunProgram(const void*, const uint64_t*, size_t) { std::abort(); }
+void* GuestSymbol(const char* name) { return gesher_arm64::GuestSymbol(name); }
+void* TlsDescStatic() { std::abort(); }
+void* TlsDescUnresolvedWeak() { std::abort(); }
+uint64_t CallIfuncResolver(const void*) { std::abort(); }
+}  // namespace gesher::arm64

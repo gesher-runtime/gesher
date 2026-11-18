@@ -21,34 +21,116 @@
 
 namespace gesher::elf {
 
-// A loaded ELF object. Opaque; created by Load(), owned by the loader.
+// An ELF object or actual virtual provider. Opaque; owned by the loader.
 struct Library;
+struct Namespace;
+
+// Acquire before an embedding registry's mutex when configuring namespaces.
+// The loader already holds this recursive lock while calling constructors;
+// the shared order prevents registry -> loader / loader -> registry deadlocks.
+// Release the embedding registry's mutex before entering application code.
+class ScopedLoaderOperation {
+ public:
+  ScopedLoaderOperation();
+  ~ScopedLoaderOperation();
+  ScopedLoaderOperation(const ScopedLoaderOperation&) = delete;
+  ScopedLoaderOperation& operator=(const ScopedLoaderOperation&) = delete;
+};
+
+enum class Architecture { kAuto = 0, kX86_64 = 1, kAarch64 = 2 };
+enum class ProviderVisibility { kPrivate = 0, kNdkPublic = 1, kDevicePublic = 2 };
+enum class LookupKind { kHandle, kDefault, kNext, kMain };
+
+struct LoaderContext {
+  Namespace* name_space = nullptr;
+  const void* caller_address = nullptr;
+  Architecture architecture = Architecture::kAuto;
+};
+
+struct NamespaceOptions {
+  std::string name;
+  std::vector<std::string> ld_library_paths;
+  std::vector<std::string> default_library_paths;
+  std::vector<std::string> permitted_paths;
+  Namespace* parent = nullptr;
+  int target_sdk_version = 36;
+  bool isolated = true;
+  bool shared = false;
+  bool exempt_list_enabled = false;
+};
+
+// Namespace identities remain stable while their loaded objects are retained.
+Namespace* DefaultNamespace();
+Namespace* CreateNamespace(const NamespaceOptions& options, std::string* error);
+bool LinkNamespaces(Namespace* from, Namespace* to,
+                    const std::vector<std::string>& sonames, std::string* error);
+bool SetAnonymousNamespace(Namespace* name_space, std::string* error);
+void SetDefaultLibraryPath(const std::vector<std::string>& paths);
+std::vector<std::string> DefaultLibraryPath();
+void SetDefaultTargetSdkVersion(int target_sdk_version);
+int DefaultTargetSdkVersion();
 
 // Resolves a symbol the loaded object imports but none of the ELF objects on
 // its dependency graph define: the bionic shim's libc/libm/libdl/liblog/...
 // symbols. Returns the address, or nullptr if unknown.
 using SymbolResolver = std::function<void*(const char* name)>;
 
-// Registers the process-wide resolver for symbols not found among loaded ELF
-// objects (compat/bionic installs it). Without one, only self-contained
-// objects load.
-void SetBionicResolver(SymbolResolver resolver);
+// An actual virtual library. The callback searches owned exports only; the
+// loader walks its declared dependencies using the same scope rules as ELF.
+struct ProviderOptions {
+  std::string soname;
+  std::vector<std::string> path_aliases;
+  std::vector<std::string> dependencies;
+  // A port may add a compiled provider after initial registration. This
+  // snapshot describes the actual implementation subset, never a filter that
+  // hides an unavailable required dependency. Empty uses the static list.
+  std::function<std::vector<std::string>()> dependency_snapshot;
+  ProviderVisibility visibility = ProviderVisibility::kPrivate;
+  unsigned architecture_mask = 3;
+  SymbolResolver lookup;
+  std::function<bool()> available;
+};
+struct ProviderInfo {
+  std::string soname;
+  ProviderVisibility visibility;
+  unsigned architecture_mask;
+};
+Library* RegisterProvider(const ProviderOptions& options, std::string* error);
+std::vector<ProviderInfo> AvailableProviders();
+bool IsProvider(const Library* library);
+Namespace* LibraryNamespace(const Library* library);
+Library* FindCaller(const void* address);
+// Legacy embedder callback retained for source compatibility. It cannot
+// establish provider identity or satisfy a scoped dependency; use RegisterProvider.
+using LibraryProvider = std::function<bool(const char* soname)>;
+
+// Registers internal host/translator plumbing and explicit diagnostic fallback.
+// Ordinary guest loads resolve only through their ELF/provider graph.
+void SetBionicResolver(SymbolResolver resolver, LibraryProvider library_provider = {});
 
 // Options for a load.
 struct LoadOptions {
-  // Directories searched for a DT_NEEDED soname, in order, before the resolver.
-  // The APK's extracted lib/x86_64 goes here.
+  LoaderContext context;
+  int flags = 2;  // Android LP64 RTLD_NOW; RTLD_LOCAL is zero.
+  // Explicit embedder search paths for this operation, after requester RUNPATH
+  // and before namespace defaults. Ordinary classloader paths belong to its
+  // namespace, so one request never modifies another loader's search state.
   std::vector<std::string> search_paths;
-  // When true, missing DT_NEEDED libraries that the bionic resolver can satisfy
-  // symbol-by-symbol (libc.so, libm.so, libdl.so, liblog.so, libandroid.so,
-  // libc++_shared.so provided by the shim) are not an error.
+  // Allows actual registered virtual providers to satisfy DT_NEEDED.
+  // An unrecognized or unavailable dependency is still a load failure.
   bool allow_shimmed_needed = true;
   // When true, an undefined function import that nothing defines is bound to
   // a stub that reports it when called (SetUnresolvedHandler), and an
   // undefined data import to a placeholder in an inaccessible region whose
   // use names the symbol and aborts, instead of failing the load. TLS imports
   // must always resolve.
-  bool stub_unresolved_functions = true;
+  bool stub_unresolved_functions = false;
+  // Explicit embedder/diagnostic support. Ordinary guest and JNI loads never
+  // resolve an import through the aggregate host table outside its scope.
+  bool allow_unscoped_resolver = false;
+  // Optional stable identity for a memory source. Null means a fresh source;
+  // the diagnostic name alone never establishes file identity.
+  const void* memory_identity = nullptr;
   // Only the initial dynamic executable, before its dependencies. Enables
   // link-time local-exec TLS offsets when its PT_TLS layout is compatible.
   bool main_executable = false;
@@ -65,13 +147,29 @@ Library* LoadFromMemory(const char* name, const void* data, size_t size, std::st
                         const LoadOptions& options = {});
 
 // The address of exported symbol `name` in `library` (and its dependencies),
-// or nullptr. STT_GNU_IFUNC symbols are resolved to their target.
+// or nullptr. STT_GNU_IFUNC symbols are resolved to their target; STT_TLS
+// symbols identify the calling thread's instance of the selected object.
 void* Lookup(Library* library, const char* name);
 
-// Looks up `name` across every loaded ELF object (for RTLD_DEFAULT-style
-// lookup, and for the bionic resolver to find symbols one object exports to
-// another). nullptr if not found.
+// Explicit version lookup (dlvsym). nullptr version is ordinary lookup;
+// non-default/hidden definitions can be selected by their exact version name.
+// Selection and address availability are separate: an IFUNC may successfully
+// resolve to nullptr, while missing current-thread TLS storage is unavailable.
+// A selected-but-unavailable symbol must not fall back to another provider.
+enum class LookupStatus { kNotFound, kResolved, kUnavailable };
+void* LookupVersion(Library* library, const char* name, const char* version,
+                    LookupStatus* status = nullptr);
+
+// Caller-aware libdl lookup. An explicit handle uses its own namespace; NEXT
+// needs an identified ELF caller. Errors own their text for the caller to copy.
+void* LookupScoped(Library* handle, const char* name, const char* version,
+                   LookupKind kind, const LoaderContext& context, std::string* error,
+                   LookupStatus* status = nullptr);
+
+// RTLD_DEFAULT lookup for an unidentified host caller in the configured
+// anonymous/default namespace. Use LookupScoped for actual guest caller scope.
 void* LookupGlobal(const char* name);
+void* LookupGlobalVersion(const char* name, const char* version, LookupStatus* status = nullptr);
 
 // Resolves `name` through the bionic resolver (SetBionicResolver) alone: the
 // host (shim) definition, or nullptr. The arm64 translator wraps some of them.
@@ -80,11 +178,11 @@ void* ResolveBionic(const char* name);
 // Is `library` an arm64-v8a object (run by the arm64 translator, ADR 0047)?
 bool IsAarch64(Library* library);
 
-// Returns the already-loaded object whose soname or file base name is `name`,
-// or nullptr. Load() uses this to share dependencies.
+// Finds a visible bare SONAME in the default namespace and its allowed links.
+// Paths and missing SONAMEs require Load's opened-file identity check.
 Library* Find(const char* name);
 
-// The soname (DT_SONAME, else the file base name) of a loaded object.
+// Actual DT_SONAME; absent stays empty for target SDK >= 23.
 const char* Soname(Library* library);
 
 // Runs the object's DT_FINI_ARRAY / DT_FINI and marks it closed. The mapping is
@@ -94,7 +192,7 @@ void Close(Library* library);
 // What dl_iterate_phdr reports for one loaded object.
 struct PhdrInfo {
   uintptr_t addr = 0;            // load bias
-  const char* name = "";         // soname
+  const char* name = "";         // resolved source path, or memory diagnostic name
   const void* phdr = nullptr;    // Elf64_Phdr[phnum], inside the mapping
   uint16_t phnum = 0;
   size_t tls_modid = 0;          // 0 when the object has no PT_TLS
@@ -108,7 +206,7 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn);
 // For dladdr: the object containing `addr` and the closest exported symbol at
 // or below it. Returns false if `addr` is in no loaded object.
 struct AddressInfo {
-  const char* soname = "";
+  const char* soname = "";       // dli_fname: resolved source path (legacy field name)
   void* base = nullptr;          // the mapping's start
   const char* symbol = nullptr;  // nullptr if no symbol covers it
   void* symbol_addr = nullptr;

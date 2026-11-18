@@ -30,6 +30,8 @@ const gesher_builtin_symbol kJavacrypto[] = {
 const bool registered = [] {
   gesher_register_builtin_library("libjavacrypto.so", kJavacrypto,
                                   sizeof(kJavacrypto) / sizeof(kJavacrypto[0]));
+  gesher_register_builtin_library_alias("libjavacrypto.so",
+                                        "/apex/com.android.conscrypt/lib64/libjavacrypto.so");
   return true;
 }();
 

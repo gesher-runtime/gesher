@@ -1,0 +1,121 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Actual registry execution; source-derived registration keys use inert
+// addresses. This does not execute the registered compatibility functions.
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <mutex>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include "symbol_table.h"
+
+namespace gesher::bionic {
+@TABLE_TYPE@
+@REGISTRATION_BOOTSTRAP@
+
+// Registry stores these addresses; no loader entry is called in this gate.
+void LoaderDlopen() {}
+void LoaderAndroidDlopenExt() {}
+void LoaderDlsym() {}
+void LoaderDlvsym() {}
+
+@REGISTRY_IMPLEMENTATION@
+@PUBLIC_LOOKUP_IMPLEMENTATION@
+}  // namespace gesher::bionic
+
+namespace {
+unsigned checks = 0;
+void Check(bool condition, const std::string& message) {
+  ++checks;
+  if (!condition) {
+    std::fprintf(stderr, "FAIL provider ownership: %s (check %u)\n", message.c_str(), checks);
+    std::exit(1);
+  }
+}
+
+std::set<std::string> ReadMap(const std::string& path) {
+  std::ifstream input(path);
+  Check(input.good(), "read actual generated map " + path);
+  std::set<std::string> names;
+  std::string line;
+  while (std::getline(input, line)) {
+    const size_t end = line.find(';');
+    if (end == std::string::npos) continue;
+    std::string name = line.substr(0, end);
+    const size_t begin = name.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) continue;
+    name.erase(0, begin);
+    name.erase(name.find_last_not_of(" \t\r\n") + 1);
+    bool identifier = std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_';
+    for (unsigned char c : name) identifier &= std::isalnum(c) || c == '_';
+    if (identifier) names.insert(name);
+  }
+  Check(!names.empty(), "generated map contains real symbol names " + path);
+  return names;
+}
+
+constexpr const char* kInternalCompatibility[] = {
+    "atexit", "bcopy", "bsd_signal", "bzero", "gmtime64_r", "localtime64_r",
+    "mktime64", "putw", "sysv_signal", "timegm64", "tkill"};
+struct Positive {
+  const char* owner;
+  const char* name;
+};
+constexpr Positive kPublicEntries[] = {
+    {"libc", "__cxa_atexit"}, {"libc", "memcpy"}, {"libc", "gmtime_r"},
+    {"libc", "localtime_r"}, {"libc", "mktime"}, {"libc", "timegm"}, {"libc", "tgkill"},
+    {"libm", "cos"}, {"libdl", "dlsym"},
+    {"libdl_android", "android_update_LD_LIBRARY_PATH"}};
+}  // namespace
+
+int main(int argc, char** argv) {
+  using namespace gesher::bionic;
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+  if (argc != 2) {
+    std::fprintf(stderr, "usage: %s <generated-map-directory>\n", argv[0]);
+    return 2;
+  }
+  const std::string directory = argv[1];
+  const auto unfiltered = ReadMap(directory + "/libc.unfiltered.map.txt");
+  for (const char* architecture : {"arm64", "x86_64"}) {
+    std::unordered_map<std::string, std::set<std::string>> allowed;
+    for (const char* owner : {"libc", "libm", "libdl", "libdl_android"}) {
+      allowed.emplace(owner, ReadMap(directory + "/" + owner + "-" + architecture + ".map.txt"));
+    }
+    for (const char* name : kInternalCompatibility) {
+      const std::string label = std::string(architecture) + "/libc/" + name;
+      Check(unfiltered.count(name) == 1, label + " is present in unfiltered source map");
+      Check(allowed.at("libc").count(name) == 0, label + " is excluded by Android's architecture filter");
+      Check(LookupBionicSymbol(name) != nullptr, label + " remains in the internal aggregate");
+      Check(LookupOwnedSymbol("libc.so", name) == nullptr, label + " has no false LP64 owner");
+    }
+    for (const Positive& entry : kPublicEntries) {
+      const std::string soname = std::string(entry.owner) + ".so";
+      Check(allowed.at(entry.owner).count(entry.name) == 1,
+            std::string(architecture) + "/" + soname + "/" + entry.name + " has source evidence");
+      void* address = LookupOwnedSymbol(soname, entry.name);
+      Check(address != nullptr, soname + "/" + entry.name + " remains owned");
+      Check(LookupBionicSymbol(entry.name) == address, soname + "/" + entry.name + " retains internal address");
+    }
+    for (const char* owner : {"libc", "libm", "libdl", "libdl_android"}) {
+      const std::string soname = std::string(owner) + ".so";
+      Check(HasOwnedSymbols(soname), soname + " has an actual initialized registry");
+      const auto& table = Registry().libraries.at(soname);
+      for (const auto& [name, address] : table) {
+        const std::string label = std::string(architecture) + "/" + soname + "/" + name;
+        Check(allowed.at(owner).count(name) == 1, label + " is in the actual generated map");
+        Check(LookupOwnedSymbol(soname, name.c_str()) == address && address != nullptr,
+              label + " is returned by the actual owned lookup");
+        Check(LookupBionicSymbol(name.c_str()) != nullptr, label + " retains internal availability");
+      }
+      std::printf("OWNERS %s %s %zu\n", architecture, soname.c_str(), table.size());
+    }
+  }
+  Check(LookupOwnedSymbol("libc.so", nullptr) == nullptr, "owned null-name lookup remains absent");
+  Check(LookupBionicSymbol(nullptr) == nullptr, "internal null-name lookup remains absent");
+  std::printf("Bionic provider ownership contracts: %u checks passed; both supported LP64 maps\n", checks);
+}

@@ -14,10 +14,12 @@
 // psapi.h needs windows.h first.
 #include <psapi.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
 #include <string>
-#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "internal.h"
@@ -41,6 +43,7 @@ struct BuiltinLibrary {
   std::string name;
   const gesher_builtin_symbol* symbols;
   size_t count;
+  std::vector<std::string> aliases;
 };
 
 std::mutex builtins_mutex;
@@ -50,17 +53,25 @@ std::vector<BuiltinLibrary*>& Builtins() {
   return builtins;
 }
 
-// The file name in a path, '/' or '\' separated.
-std::string_view BaseName(std::string_view path) {
-  size_t slash = path.find_last_of("/\\");
-  return slash == std::string_view::npos ? path : path.substr(slash + 1);
+std::string BuiltinPathKey(const char* value) {
+  std::string path(value);
+  std::replace(path.begin(), path.end(), '\\', '/');
+  return path;
 }
 
 BuiltinLibrary* FindBuiltin(const char* filename) {
-  std::string_view base = BaseName(filename);
+  const std::string path = BuiltinPathKey(filename);
   std::lock_guard<std::mutex> lock(builtins_mutex);
   for (BuiltinLibrary* library : Builtins()) {
-    if (library->name == base) return library;
+    if (library->name == path || "/system/lib64/" + library->name == path) return library;
+    if (const char* root = std::getenv("ANDROID_ROOT")) {
+      std::string runtime = BuiltinPathKey(root);
+      while (!runtime.empty() && runtime.back() == '/') runtime.pop_back();
+      if (!runtime.empty() && runtime + "/lib64/" + library->name == path) return library;
+    }
+    for (const std::string& alias : library->aliases) {
+      if (alias == path) return library;
+    }
   }
   return nullptr;
 }
@@ -76,19 +87,17 @@ BuiltinLibrary* AsBuiltin(void* handle) {
 // --- ELF objects (<gesher/elf_dlopen.h>) ------------------------------------
 
 std::atomic<const gesher_elf_dlopen_ops*> elf_ops{nullptr};
+std::atomic<const gesher_elf_namespace_ops*> namespace_ops{nullptr};
 
 // Handles the ELF loader returned, under builtins_mutex.
-std::vector<void*>& ElfHandles() {
-  static std::vector<void*> handles;
+std::unordered_set<void*>& ElfHandles() {
+  static std::unordered_set<void*> handles;
   return handles;
 }
 
 bool IsElfHandle(void* handle) {
   std::lock_guard<std::mutex> lock(builtins_mutex);
-  for (void* h : ElfHandles()) {
-    if (h == handle) return true;
-  }
-  return false;
+  return ElfHandles().count(handle) != 0;
 }
 
 // Whether the file at `path` starts with the ELF magic.
@@ -117,7 +126,7 @@ void* OpenElf(const char* filename, int flags) {
     return nullptr;
   }
   std::lock_guard<std::mutex> lock(builtins_mutex);
-  ElfHandles().push_back(handle);
+  ElfHandles().insert(handle);
   return handle;
 }
 
@@ -130,10 +139,63 @@ void gesher_set_elf_dlopen(const gesher_elf_dlopen_ops* ops) { elf_ops.store(ops
 void gesher_register_builtin_library(const char* name, const gesher_builtin_symbol* symbols,
                                      size_t count) {
   std::lock_guard<std::mutex> lock(builtins_mutex);
-  Builtins().push_back(new BuiltinLibrary{name, symbols, count});
+  Builtins().push_back(new BuiltinLibrary{name, symbols, count, {}});
 }
 
-void* dlopen(const char* filename, int flags) {
+int gesher_register_builtin_library_alias(const char* name, const char* path) {
+  std::lock_guard<std::mutex> lock(builtins_mutex);
+  if (name != nullptr && path != nullptr && path[0] != '\0') {
+    for (BuiltinLibrary* library : Builtins()) {
+      if (library->name == name) {
+        library->aliases.push_back(BuiltinPathKey(path));
+        return 0;
+      }
+    }
+  }
+  last_error = "builtin alias: library is not registered or path is empty";
+  has_error = true;
+  return -1;
+}
+
+int gesher_set_elf_namespace_ops(const gesher_elf_namespace_ops* ops) {
+  if (ops == nullptr || ops->version != 1 || ops->size < sizeof(*ops) || ops->open == nullptr) {
+    last_error = "ELF namespace loader: unsupported registration";
+    has_error = true;
+    return -1;
+  }
+  namespace_ops.store(ops);
+  return 0;
+}
+
+void* gesher_dlopen_in_namespace(const char* filename, int flags,
+                                const gesher_elf_load_context* context) {
+  if (context == nullptr || context->version != 1 || context->size < sizeof(*context) ||
+      context->architecture > 2) {
+    last_error = "dlopen: unsupported ELF namespace context";
+    has_error = true;
+    return nullptr;
+  }
+  const gesher_elf_namespace_ops* scoped = namespace_ops.load();
+  const gesher_elf_dlopen_ops* legacy = elf_ops.load();
+  if (scoped == nullptr || legacy == nullptr || legacy->sym == nullptr || legacy->close == nullptr) {
+    last_error = "dlopen: ELF namespace loader is not installed";
+    has_error = true;
+    return nullptr;
+  }
+  char error[1024] = {};
+  void* handle = scoped->open(filename, flags, context, error, sizeof(error));
+  error[sizeof(error) - 1] = '\0';
+  if (handle == nullptr) {
+    last_error = error[0] ? error : "dlopen: ELF namespace load failed";
+    has_error = true;
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(builtins_mutex);
+  ElfHandles().insert(handle);
+  return handle;
+}
+
+void* gesher_dlopen_host(const char* filename, int flags) {
   if (filename == nullptr) return GetModuleHandleW(nullptr);
   if (BuiltinLibrary* library = FindBuiltin(filename)) return library;
   if (IsElfFile(filename)) return OpenElf(filename, flags);
@@ -146,7 +208,14 @@ void* dlopen(const char* filename, int flags) {
   return module;
 }
 
+void* dlopen(const char* filename, int flags) { return gesher_dlopen_host(filename, flags); }
+
 void* dlsym(void* handle, const char* symbol) {
+  if (symbol == nullptr) {
+    last_error = "dlsym: null symbol name";
+    has_error = true;
+    return nullptr;
+  }
   if (BuiltinLibrary* library = AsBuiltin(handle)) {
     for (size_t i = 0; i < library->count; ++i) {
       if (strcmp(library->symbols[i].name, symbol) == 0) return library->symbols[i].address;

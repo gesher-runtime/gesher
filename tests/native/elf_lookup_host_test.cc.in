@@ -1,18 +1,38 @@
 // The production graph walk with observing symbol tables. Real ELF parsing,
-// relocations and Android guest calls are exercised by lookup_graph.c in CI.
+// relocations and Android guest calls are exercised by complete-loader gates.
+// Namespace eligibility is explicitly all-visible in this graph-order unit.
+#include <mutex>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
-struct Elf64_Sym { int value; };
+std::recursive_mutex g_mutex;
+struct Elf64_Sym { int value; uint8_t st_info = 0; };
+constexpr unsigned STT_TLS = 6;
+constexpr unsigned ELF64_ST_TYPE(unsigned info) { return info & 0xf; }
+enum class LookupStatus { kNotFound, kResolved, kUnavailable };
+struct SymbolVersion { uint32_t hash; const char* name; const char* provider; };
+struct Namespace {};
+struct LoaderContext {};
+enum class Architecture { kAuto };
+enum class LookupKind { kHandle };
+struct FixtureProvider { void* (*lookup)(const char*); };
 struct Library {
   std::vector<Library*> dependencies;
   std::map<std::string, Elf64_Sym> symbols;
+  Namespace* name_space = nullptr;
+  const std::vector<Library*>* load_scope = nullptr;
+  FixtureProvider* provider = nullptr;
 };
+inline bool Available(Library* library) { return library != nullptr; }
+inline bool MatchesArchitecture(Library*, Architecture) { return true; }
+inline bool Accessible(Namespace*, Library*, const std::vector<Library*>*) { return true; }
+inline bool RefreshProviderGraph(Library*, Architecture, std::string*) { std::abort(); }
 static std::vector<Library*> visited;
 static Library* resolved;
 static int checks, failures, hashes, resolutions;
@@ -23,7 +43,7 @@ static void Check(const char* label, bool ok) {
 static uint32_t GnuHash(const char*) { ++hashes; return 123; }
 static uint32_t SysvHash(const char*) { ++hashes; return 456; }
 static const Elf64_Sym* FindDefinedSymbol(Library* lib, const char* name,
-                                         uint32_t gh, uint32_t sh) {
+                                         uint32_t gh, uint32_t sh, const SymbolVersion* = nullptr) {
   Check("cached symbol hashes", gh == 123 && sh == 456);
   visited.push_back(lib);
   const auto it = lib->symbols.find(name);
@@ -33,6 +53,9 @@ static void* SymbolAddress(Library* lib, const Elf64_Sym* sym) {
   resolved = lib;
   ++resolutions;
   return const_cast<Elf64_Sym*>(sym);
+}
+[[maybe_unused]] static void* LookupSymbolAddress(Library* lib, const Elf64_Sym* sym) {
+  return SymbolAddress(lib, sym);
 }
 
 @LOOKUP_IMPLEMENTATION@

@@ -332,7 +332,7 @@ float BIONIC_SYSV AxisValue(const Font* font, uint32_t index) {
 
 [[maybe_unused]] const bool registered = [] {
 #define E(name, function) \
-  AddBionicSymbol(name, reinterpret_cast<void*>(&function))
+  AddBionicSymbol("libandroid.so", name, reinterpret_cast<void*>(&function))
   E("ASystemFontIterator_open", OpenIterator);
   E("ASystemFontIterator_next", NextFont);
   E("ASystemFontIterator_close", CloseIterator);

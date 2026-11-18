@@ -101,7 +101,10 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override public String[] getSystemSharedLibraryNames() {
         try {
-            return SharedLibraryRegistry.readSystem().names();
+            java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+            java.util.Collections.addAll(names, SharedLibraryRegistry.readSystem().names());
+            java.util.Collections.addAll(names, NativeLibraryCatalog.readSystem().names());
+            return names.toArray(new String[0]);
         } catch (java.io.IOException e) {
             throw new IllegalStateException("Cannot read system shared libraries", e);
         }

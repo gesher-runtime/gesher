@@ -17,7 +17,7 @@
 //  - four O_* open flags (O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE);
 //  - localeconv's CHAR_MAX sentinels (unsigned char on Android arm64);
 //  - DNS bitstring rendering's plain-char promotion (unsigned on arm64);
-//  - dlsym: returns these definitions for those names;
+//  - libdl: pass the actual guest caller, then adapt selected shim symbols;
 //  - the shim's va_list functions (vsnprintf...): registered so the guest's
 //    AAPCS64 va_list is converted to System V when the guest calls them.
 // The loader asks guest_symbol(name) before binding a guest import to the shim.
@@ -523,21 +523,54 @@ int64_t GESHER_SYSV GuestSyscall(int64_t nr, int64_t a0, int64_t a1, int64_t a2,
   return DoSyscall(static_cast<uint64_t>(nr), a);
 }
 
-// --- dlsym --------------------------------------------------------------------------
-// The shim's dlopen/dlsym serve the guest too: the platform's libraries
-// (libEGL.so, libOpenSLES.so, ...) by name or /system/lib64 path, and its own
-// symbols behind a library's handle or RTLD_DEFAULT (compat/bionic,
-// ADR 0057). Only the names this file defines differently for the guest are
-// answered here first. The host function pointers the shim returns are called
-// by the guest directly (the translator's host-pointer path).
+// --- libdl --------------------------------------------------------------------------
+// A translated host return address cannot identify the Android caller. Pass
+// the X30 saved by Env's host-call boundary to the shim's internal loader
+// entries, using the same explicit caller argument as Bionic's libdl wrappers.
+// Namespace, handle, dependency and version selection happen before any
+// architecture-specific representation is substituted below.
+void* g_dlopen = nullptr;
+void* g_android_dlopen_ext = nullptr;
 void* g_dlsym = nullptr;
+void* g_dlvsym = nullptr;
+
+void* GESHER_SYSV GuestDlopen(const char* filename, int flags) {
+  return g_dlopen != nullptr
+      ? reinterpret_cast<void*(GESHER_SYSV*)(const char*, int, const void*)>(g_dlopen)(
+            filename, flags, GuestCallerAddress())
+      : nullptr;
+}
+
+void* GESHER_SYSV GuestAndroidDlopenExt(const char* filename, int flags, const void* extinfo) {
+  return g_android_dlopen_ext != nullptr
+      ? reinterpret_cast<void*(GESHER_SYSV*)(const char*, int, const void*, const void*)>(
+            g_android_dlopen_ext)(filename, flags, extinfo, GuestCallerAddress())
+      : nullptr;
+}
+
+void* GuestSelectedSymbol(void* selected, const char* name) {
+  // Preserve the host's scoped/versioned selection and error storage. An ELF
+  // definition with this name is not the shim definition and must stay intact.
+  if (selected != nullptr && name != nullptr && selected == Host(name)) {
+    if (void* guest = GuestSymbol(name)) return guest;
+  }
+  return selected;
+}
 
 void* GESHER_SYSV GuestDlsym(void* handle, const char* name) {
-  if (name == nullptr) return nullptr;
-  if (void* g = GuestSymbol(name)) return g;
-  return g_dlsym != nullptr
-             ? reinterpret_cast<void*(GESHER_SYSV*)(void*, const char*)>(g_dlsym)(handle, name)
-             : nullptr;
+  void* selected = g_dlsym != nullptr
+      ? reinterpret_cast<void*(GESHER_SYSV*)(void*, const char*, const void*)>(g_dlsym)(
+            handle, name, GuestCallerAddress())
+      : nullptr;
+  return GuestSelectedSymbol(selected, name);
+}
+
+void* GESHER_SYSV GuestDlvsym(void* handle, const char* name, const char* version) {
+  void* selected = g_dlvsym != nullptr
+      ? reinterpret_cast<void*(GESHER_SYSV*)(void*, const char*, const char*, const void*)>(g_dlvsym)(
+            handle, name, version, GuestCallerAddress())
+      : nullptr;
+  return GuestSelectedSymbol(selected, name);
 }
 
 // --- setjmp / longjmp (guest code) -------------------------------------------------
@@ -772,8 +805,15 @@ void InitGuestLibc() {
   if (g_fcntl) Override("fcntl", reinterpret_cast<void*>(&GuestFcntl));
   if (g_spawn_addopen) Override("posix_spawn_file_actions_addopen", reinterpret_cast<void*>(&GuestSpawnAddOpen));
 
-  g_dlsym = Host("dlsym");
+  g_dlopen = Host("__loader_dlopen");
+  if (g_dlopen) Override("dlopen", reinterpret_cast<void*>(&GuestDlopen));
+  g_android_dlopen_ext = Host("__loader_android_dlopen_ext");
+  if (g_android_dlopen_ext)
+    Override("android_dlopen_ext", reinterpret_cast<void*>(&GuestAndroidDlopenExt));
+  g_dlsym = Host("__loader_dlsym");
   if (g_dlsym) Override("dlsym", reinterpret_cast<void*>(&GuestDlsym));
+  g_dlvsym = Host("__loader_dlvsym");
+  if (g_dlvsym) Override("dlvsym", reinterpret_cast<void*>(&GuestDlvsym));
 
   for (const Fallback& f : kFenv) Override(f.name, f.fn);
   // Data imports and dlsym must return the ARM object itself, never a callable

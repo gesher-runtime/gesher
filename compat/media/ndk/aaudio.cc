@@ -755,7 +755,7 @@ const char* SYSV StateToText(int32_t state) {
 
 void Register() {
   using gesher::bionic::AddBionicSymbol;
-#define E(name, fn) AddBionicSymbol(name, reinterpret_cast<void*>(&fn))
+#define E(name, fn) AddBionicSymbol("libaaudio.so", name, reinterpret_cast<void*>(&fn))
   E("AAudio_createStreamBuilder", CreateStreamBuilder);
   E("AAudio_convertResultToText", ResultToText);
   E("AAudio_convertStreamStateToText", StateToText);

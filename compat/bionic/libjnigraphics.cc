@@ -75,7 +75,7 @@ int BIONIC_SYSV Compress(const AndroidBitmapInfo* info, int32_t data_space, cons
 }
 
 [[maybe_unused]] const bool registered = [] {
-#define E(name, function) AddBionicSymbol(name, reinterpret_cast<void*>(&function))
+#define E(name, function) AddBionicSymbol("libjnigraphics.so", name, reinterpret_cast<void*>(&function))
   E("AndroidBitmap_getInfo", GetInfo);
   E("AndroidBitmap_getDataSpace", GetDataSpace);
   E("AndroidBitmap_lockPixels", LockPixels);

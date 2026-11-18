@@ -324,7 +324,7 @@ void Register() {
         DataGetFrameTimelineDeadlineNanos),
   };
 #undef E
-  for (const Entry& e : kEntries) AddBionicSymbol(e.name, e.fn);
+  for (const Entry& e : kEntries) AddBionicSymbol("libandroid.so", e.name, e.fn);
 }
 
 [[maybe_unused]] const bool g_registered = (Register(), true);

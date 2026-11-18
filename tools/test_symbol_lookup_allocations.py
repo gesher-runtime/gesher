@@ -43,7 +43,13 @@ def main() -> None:
     def implementation(target: str) -> str:
         if target == "bionic":
             table_type = section(read("compat/bionic/shim_internal.h"), "// Symbol name ->", "// Each part of the shim")
-            lookup = section(read("compat/bionic/shim.cc"), "void* LookupBionicSymbol(const char* name) {", "void InstallBionicShim() {")
+            source = read("compat/bionic/shim.cc")
+            lookup = section(source, "void* LookupBionicSymbol(const char* name) {", "void InstallBionicShim() {")
+            if "struct BionicRegistry {" in source:
+                registry = section(source, "struct BionicRegistry {", "BionicRegistry& Registry() {")
+                bootstrap = ("BionicRegistry& Registry() { static BionicRegistry value; return value; }\n"
+                             "SymbolTable& Table() { return Registry().aggregate; }\n")
+                return table_type + registry + bootstrap + lookup
             return table_type + "SymbolTable& Table() { static SymbolTable table; return table; }\n" + lookup
         if target == "egl":
             source = read("compat/bionic/egl_gles.cc")

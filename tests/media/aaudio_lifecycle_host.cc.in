@@ -29,7 +29,7 @@ int AndroidClockGettime(clockid_t clock, timespec* value) { return clock_gettime
 namespace gesher::bionic {
 std::unordered_map<std::string, void*> exports;
 void EnterLoadedCode() {}
-void AddBionicSymbol(const char* name, void* value) { exports[name] = value; }
+void AddBionicSymbol(const char*, const char* name, void* value) { exports[name] = value; }
 }
 namespace gesher::media {
 void RaiseAudioThreadPriority(bool) {}

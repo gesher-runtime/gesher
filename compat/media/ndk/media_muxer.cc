@@ -210,7 +210,7 @@ struct Sysv<F> {
 
 void Register() {
   using gesher::bionic::AddBionicSymbol;
-#define MUXER_ENTRY(name, fn) AddBionicSymbol(name, reinterpret_cast<void*>(&Sysv<&fn>::Call))
+#define MUXER_ENTRY(name, fn) AddBionicSymbol("libmediandk.so", name, reinterpret_cast<void*>(&Sysv<&fn>::Call))
   MUXER_ENTRY("AMediaMuxer_new", New);
   MUXER_ENTRY("AMediaMuxer_delete", Delete);
   MUXER_ENTRY("AMediaMuxer_setLocation", SetLocation);

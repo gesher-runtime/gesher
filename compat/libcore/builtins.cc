@@ -101,6 +101,10 @@ const bool registered = [] {
   gesher_register_builtin_library("libopenjdk.so", kOpenjdk, sizeof(kOpenjdk) / sizeof(kOpenjdk[0]));
   gesher_register_builtin_library("libopenjdkd.so", kOpenjdk,
                                   sizeof(kOpenjdk) / sizeof(kOpenjdk[0]));
+  gesher_register_builtin_library_alias("libicu_jni.so", "/apex/com.android.i18n/lib64/libicu_jni.so");
+  gesher_register_builtin_library_alias("libjavacore.so", "/apex/com.android.art/lib64/libjavacore.so");
+  gesher_register_builtin_library_alias("libopenjdk.so", "/apex/com.android.art/lib64/libopenjdk.so");
+  gesher_register_builtin_library_alias("libopenjdkd.so", "/apex/com.android.art/lib64/libopenjdkd.so");
   return true;
 }();
 

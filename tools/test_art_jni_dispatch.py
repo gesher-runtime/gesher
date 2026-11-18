@@ -30,11 +30,13 @@ def main():
         return (ROOT / path).read_text(encoding='utf-8')
 
     source = read('compat/bionic/jni_bridge.cc')
-    start = re.search(r'^(?:void|bool) InstallCallerAbiJniTable\(\) \{', source, re.M)
-    if start is None:
-        raise ValueError('ART JNI installer boundary changed')
-    end = source.index('\nvoid* ElfOpen(', start.start())
-    implementation = source[start.start():end]
+    installer = re.search(r'^(?:void|bool) InstallCallerAbiJniTable\(\) \{\n.*?^\}$',
+                          source, re.M | re.S)
+    shim = re.search(r'^void LoadArtShimFor\(const char\* path\) \{\n.*?^\}$',
+                     source, re.M | re.S)
+    if installer is None or shim is None:
+        raise ValueError('ART JNI installer or shim boundary changed')
+    implementation = installer[0] + '\n\n' + shim[0]
     declaration = re.findall(r'^extern "C" .* gesher_art_load_class_hook;', source, re.M)
     patch = read('patches/art/0800-packer-load-class-hook.patch')
     definition = re.findall(r'^\+((?:std::atomic<void\*>|void\* volatile) '

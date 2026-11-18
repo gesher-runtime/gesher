@@ -137,10 +137,11 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     `ThreadExitCallback` gives `Thread::Current()` the thread back without
     re-setting its key, as bionic's build does (patches/art/0770), where
     winpthreads would call it a second time and it would abort; `JniTest`.
-  - Imports nothing defines: the loader binds a function import it cannot
-    resolve to a stub that names the symbol and aborts **when called**, so a
-    `.so` with unused missing imports still loads (`LoadOptions::
-    stub_unresolved_functions`).
+  - Unresolved strong imports fail ordinary loads. Explicit diagnostic
+    embedders can opt into `LoadOptions::stub_unresolved_functions`, but
+    application/JNI loads leave it disabled. Missing dependencies must be
+    supplied by an accessible real ELF or registered provider; see
+    [native namespaces](native-namespaces.md).
 
   - `locale_bionic.cc`: what libc++ needs of `<locale.h>`, `<wchar.h>` and
     `<wctype.h>`: `newlocale`/`uselocale` (C and UTF-8 locales, UTF-8 by
@@ -289,24 +290,24 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     rate callbacks; a 60 Hz vsync clock, callbacks run from the thread's
     Looper when it is polled.
 
-- **Unresolved data imports** no longer fail a load: the loader binds each to
-  its own slot in a reserved, inaccessible region and prints "data '...' is
-  not provided"; touching it is caught by a vectored handler that names the
-  symbol and aborts (like the stubs for missing functions).
+- **Unresolved strong data imports** fail ordinary loads. In explicit
+  diagnostic mode, an inaccessible placeholder can identify a missing symbol
+  when touched. That tooling mode is not an application's loading policy.
 
 - **The JNI bridge** ([0017](decisions/0017-native-libs-jni-bridge.md),
-  `compat/bionic/jni_bridge.cc`, linked into dalvikvm). ART's host
-  `OpenNativeLibrary` calls plain `dlopen`; gesher-base's `dlopen` hands a
-  file with the ELF magic to the loader registered through
-  `<gesher/elf_dlopen.h>`, which is this bridge. `dlsym` on such a handle
+  `compat/bionic/jni_bridge.cc`, linked into dalvikvm). ART's Gesher host
+  `OpenNativeLibrary` carries its classloader namespace through the scoped
+  extension in `<gesher/elf_dlopen.h>` to this bridge. Boot host builtins
+  retain their separate host route. `dlsym` on an ELF handle
   gives ART a Microsoft-ABI stub for `JNI_OnLoad`/`JNI_OnUnload`, and for
   `Java_*` (and functions passed to `RegisterNatives`) a System V entry stub
   that sets the thread up (`SetupThreadTls`) and swaps ART's `JNIEnv*` for a
   per-thread proxy. The `.so` only sees proxy `JNIEnv`/`JavaVM` objects whose
   System V tables forward to ART's Microsoft-ABI ones; variadic and `va_list`
   calls are turned into `jvalue` arrays by the method's parameter types.
-  DT_NEEDED libraries are looked up next to the library (an APK's
-  `libc++_shared.so`).
+  DT_NEEDED libraries use namespace paths, requester RUNPATH and permitted
+  links. The classloader's configured native directory makes an APK's
+  `libc++_shared.so` available without changing another loader's search path.
 
 - **gesher-app** copies the APK's `lib/x86_64/*.so` into
   `ApplicationInfo.nativeLibraryDir` before launching
@@ -611,8 +612,9 @@ see "After that" for what is left._
   natives in an app library pass the entry stub untouched, but that is not
   tested. JVMTI environments from `GetEnv` are not wrapped. `dlsym` results
   other than `JNI_OnLoad`/`JNI_OnUnload`/`Java_*` are raw System V
-  addresses. No linker namespaces: all app libraries share one global scope.
-  `dlclose` (class loader unloading) runs fini functions but never unmaps.
+  addresses. [Classloader namespaces](native-namespaces.md) govern app loads
+  and lookup. Complete `dlclose`/classloader unloading remains separate work;
+  retaining namespace identity does not imply mapping/TLS reclamation.
 - **libc++**: every import of the NDK's `libc++_shared.so` now resolves.
   Locales other than C/UTF-8 do not exist (collation and `strftime_l` are the
   C locale's). Symbolic links: `symlink` fails with `EPERM` and `readlink`
@@ -633,7 +635,7 @@ see "After that" for what is left._
   terminate does (`abort()` for the core-dumping signals).
 - **libandroid stand-ins**: sensors (none), tracing (off), OBB mounting
   (unsupported; scanning works), AChoreographer's vsync (a 60 Hz clock, not
-  the display's). Not provided at all (they bind to the aborting stubs):
+  the display's). Unavailable strong imports fail ordinary loading:
   `ASurfaceControl_*`/`ASurfaceTexture_*`, `AHardwareBuffer_*`,
   `AThermal_*`, `APerformanceHint_*`, `ASharedMemory_dupFromJava`,
   `android_getaddrinfofornetwork` & co.
@@ -665,14 +667,13 @@ see "After that" for what is left._
   `int3` sites that abort with a message if reached; none occur in the test
   libraries.
 - Shim gaps left: `fork`/`exec*`/`posix_spawn`/`popen`/`system`, `getopt`,
-  `getpwnam`/`getpwuid`, `dl*` namespaces, `wordexp`/`glob`, `iconv`,
+  `getpwnam`/`getpwuid`, `wordexp`/`glob`, `iconv`,
   `strptime`, `wprintf`/`fwprintf`/`vfwprintf`/`fgetws`/`wscanf`,
   wide-character `%ls` in `scanf`, and `__system_property_get` (every
   property reads as ""). `fcntl` record locks always succeed (not modelled).
-  `environ` is the environment as the shim found it. Missing **function**
-  imports load as stubs that print the name and abort when called; missing
-  **data** imports load as inaccessible placeholders that name the symbol if
-  touched.
+  `environ` is the environment as the shim found it. Ordinary loads reject
+  missing strong function/data imports; diagnostic stubs/placeholders require
+  an explicit embedding option and are not enabled for apps.
 - `__system_property_get` returns "" for everything; `__android_log_*` writes
   `P/tag: text` to stderr.
 - Closing a library does not unmap it or release its TLS offset.
@@ -783,10 +784,10 @@ Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
   getentropy, memfd_create, madvise, dup3, tgkill, flock, lockf,
   posix_fadvise/fallocate, inotify_*, **setjmp/longjmp/sigsetjmp for x86-64**
   (asm; were missing: libpng/libjpeg aborted); libz.so (shadow z_stream, gz*).
-- `shim.cc`: `dlopen` of platform libraries by name and `/system/lib64`
-  path (pseudo handles, `PlatformLibraryHandle`), bare names searched in app
-  library dirs (noted by `jni_bridge.cc`) and `$LD_LIBRARY_PATH`; `dlsym`
-  falls back to the shim table for RTLD_DEFAULT and library handles.
+- `shim.cc`: platform loading now uses actual registered providers with
+  explicit aliases, owned exports and dependency edges. Namespace/caller scope
+  replaces the earlier aggregate fallback for RTLD_DEFAULT and handles; see
+  [the current search and identity contract](native-namespaces.md).
 - `compat/arm64/dll/guest_libc.cc`: the ~50 fallbacks removed (now in the
   shim); pseudo dlopen handles removed; kept arm64-specific: stat/epoll,
   syscalls (+inotify, flock numbers), setjmp, getauxval, FP environment, and

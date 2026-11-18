@@ -50,6 +50,11 @@ void* GuestSymbol(const char* name);
 // wraps and registers the shim's va_list functions.
 void InitGuestLibc();
 
+// The real guest link register saved before entering the current host call.
+// Nested host->guest->host calls save/restore this value with their guest frame.
+// libdl uses it to select the caller's namespace and RTLD_NEXT starting point.
+const void* GuestCallerAddress();
+
 // The calling guest thread's actual FPCR, including changes made by MSR.
 // Host callbacks run outside Jit::Run; setters take effect before resuming.
 uint32_t GuestFpcr();

@@ -66,8 +66,10 @@ void Register() {
   struct Entry {
     const char* name;
     void* fn;
+    bool also_libandroid;
   };
-#define E(name, fn) {name, reinterpret_cast<void*>(&fn)}
+#define E(name, fn) {name, reinterpret_cast<void*>(&fn), true}
+#define N(name, fn) {name, reinterpret_cast<void*>(&fn), false}
   static const Entry kEntries[] = {
       E("ANativeWindow_acquire", Acquire),
       E("ANativeWindow_release", Release),
@@ -77,16 +79,22 @@ void Register() {
       E("ANativeWindow_setBuffersGeometry", SetBuffersGeometry),
       E("ANativeWindow_lock", Lock),
       E("ANativeWindow_unlockAndPost", UnlockAndPost),
-      E("ANativeWindow_setBuffersTransform", SetBuffersTransform),
-      E("ANativeWindow_setBuffersDataSpace", SetBuffersDataSpace),
-      E("ANativeWindow_getBuffersDataSpace", GetBuffersDataSpace),
-      E("ANativeWindow_getBuffersDefaultDataSpace", GetBuffersDefaultDataSpace),
-      E("ANativeWindow_setFrameRate", SetFrameRate),
-      E("ANativeWindow_setFrameRateWithChangeStrategy", SetFrameRateWithChangeStrategy),
-      E("ANativeWindow_tryAllocateBuffers", TryAllocateBuffers),
+      N("ANativeWindow_setBuffersTransform", SetBuffersTransform),
+      N("ANativeWindow_setBuffersDataSpace", SetBuffersDataSpace),
+      N("ANativeWindow_getBuffersDataSpace", GetBuffersDataSpace),
+      N("ANativeWindow_getBuffersDefaultDataSpace", GetBuffersDefaultDataSpace),
+      N("ANativeWindow_setFrameRate", SetFrameRate),
+      N("ANativeWindow_setFrameRateWithChangeStrategy", SetFrameRateWithChangeStrategy),
+      N("ANativeWindow_tryAllocateBuffers", TryAllocateBuffers),
   };
 #undef E
-  for (const Entry& e : kEntries) AddBionicSymbol(e.name, e.fn);
+#undef N
+  for (const Entry& e : kEntries) {
+    AddBionicSymbol("libnativewindow.so", e.name, e.fn);
+    // libandroid's historical exports coexist with libnativewindow's exports.
+    // New nativewindow-only functions remain owned by that library.
+    if (e.also_libandroid) AddBionicSymbol("libandroid.so", e.name, e.fn);
+  }
 }
 
 [[maybe_unused]] const bool g_registered = (Register(), true);

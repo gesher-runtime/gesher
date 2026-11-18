@@ -5,11 +5,14 @@ The Windows native/ARM64 guest graph and a Linux dlopen oracle independently
 exercise real ELF objects built by tests/native/build-lookup-graph.sh.
 """
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import shlex
 import subprocess
 import tempfile
+
+from test_elf_lookup_performance import lookup_section
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,10 +34,14 @@ def main():
                            check=True, timeout=15)
             return
         source = args.source.read_text()
-        begin, end = "void* Lookup(Library* library, const char* name) {", "void* LookupGlobal("
-        if source.count(begin) != 1 or source.count(end) != 1:
-            raise ValueError("ELF lookup source boundary changed")
-        implementation = source[source.index(begin):source.index(end)]
+        scope = (args.source.with_name("lookup_scope_internal.h").read_text()
+                 if '#include "lookup_scope_internal.h"' in source else None)
+        implementation = lookup_section(source, scope)
+        print("BOUNDARY actual production handle BFS; observing symbols and all-visible namespace seam", flush=True)
+        print("SOURCE_SHA256 elf_loader.cc " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
+        if scope is not None:
+            print("SOURCE_SHA256 lookup_scope_internal.h " + hashlib.sha256(scope.encode()).hexdigest(), flush=True)
+        print("LOOKUP_SHA256 " + hashlib.sha256(implementation.encode()).hexdigest(), flush=True)
         fixture = (ROOT / "tests/native/elf_lookup_host_test.cc.in").read_text()
         if fixture.count("@LOOKUP_IMPLEMENTATION@") != 1:
             raise ValueError("ELF lookup fixture boundary changed")

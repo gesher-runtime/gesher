@@ -1,16 +1,10 @@
 // Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Complete production Close and lookup, with explicit owned fixture metadata.
+// Only ARM Call is observed; this does not execute the translator.
+#include "elf_loader.cc"
 #include <atomic>
 #include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <elf.h>
-#include <mutex>
 #include <thread>
-#include <vector>
-#include <cstdint>
-
-#define SYSV __attribute__((sysv_abi))
 using Finalizer = void (SYSV*)();
 static std::vector<const void*> translated;
 namespace gesher::arm64 {
@@ -20,32 +14,17 @@ uint64_t Call(const void* function, const uint64_t* arguments, size_t count) {
   return 0;
 }
 }
-namespace gesher::elf {
-struct Library {
-  bool is_closed = false;
-  bool is_aarch64 = false;
-  Finalizer* fini_array = nullptr;
-  size_t fini_array_count = 0;
-  Finalizer fini_func = nullptr;
-  bool is_closing = false;
-  Elf64_Sym symbol{};
-  const char* symbol_name = nullptr;
-  void* symbol_address = nullptr;
-};
-std::mutex g_mutex;
-static std::vector<Library*> loaded;
-static const std::vector<Library*>& Loaded() { return loaded; }
-// The fixture only supplies symbol storage. Visibility and loader locking use
-// the production global-lookup traversal, as called by a finalizer.
-static uint32_t GnuHash(const char*) { return 0; }
-static uint32_t SysvHash(const char*) { return 0; }
-static const Elf64_Sym* FindDefinedSymbol(const Library* lib, const char* name, uint32_t, uint32_t) {
-  return lib->symbol_name && std::strcmp(name, lib->symbol_name) == 0 ? &lib->symbol : nullptr;
-}
-static void* SymbolAddress(const Library* lib, const Elf64_Sym*) { return lib->symbol_address; }
-@LOOKUP_GLOBAL_LOCKED_IMPLEMENTATION@
-@LOOKUP_GLOBAL_IMPLEMENTATION@
-@CLOSE_IMPLEMENTATION@
+static gesher::elf::Library* Owner(bool arm, Finalizer* array, size_t count, Finalizer fini) {
+  namespace elf = gesher::elf;
+  auto* lib = new elf::Library();
+  lib->is_aarch64 = arm; lib->fini_array = array; lib->fini_array_count = count; lib->fini_func = fini;
+#if GESHER_HAS_NAMESPACES
+  lib->name_space = elf::DefaultNamespace(); lib->local_group_root = lib;
+  lib->target_sdk_version = 22;  // Local visibility before SDK23, without GLOBAL retention.
+  lib->name_space->libraries.push_back(lib);
+#endif
+  elf::Loaded().push_back(lib);
+  return lib;
 }
 using gesher::elf::Library;
 using gesher::elf::Close;
@@ -74,13 +53,13 @@ static void Check(bool ok, const char* message) {
 int main() {
   Close(nullptr);
   Finalizer callbacks[] = {One, Two};
-  Library native{false, false, callbacks, 2, Three};
+  Library& native = *Owner(false, callbacks, 2, Three);
   Close(&native);
   Check(order == 213, "reverse native array then DT_FINI");
   Close(&native);
   Check(order == 213, "native finalizers run once");
   order = 0;
-  Library guest{false, true, callbacks, 2, Three};
+  Library& guest = *Owner(true, callbacks, 2, Three);
   Close(&guest);
   Check(order == 0, "ARM64 callbacks do not execute as host instructions");
   Check(translated == std::vector<const void*>{reinterpret_cast<void*>(Two),
@@ -88,21 +67,29 @@ int main() {
   Close(&guest);
   Check(translated.size() == 3, "translated finalizers run once");
   Finalizer sentinels[] = {nullptr, reinterpret_cast<Finalizer>(-1), One};
-  Library empty{false, false, sentinels, 3, reinterpret_cast<Finalizer>(-1)};
+  Library& empty = *Owner(false, sentinels, 3, reinterpret_cast<Finalizer>(-1));
   Close(&empty);
   Check(order == 1, "null and minus-one finalizer entries are skipped");
-  Library recursive{false, false, nullptr, 0, Reentrant};
-  recursive.symbol.st_info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
-  recursive.symbol_name = "finalizer_visible";
-  recursive.symbol_address = &order;
-  gesher::elf::loaded.push_back(&recursive);
+  Library& recursive = *Owner(false, nullptr, 0, Reentrant);
+  static Elf64_Sym symbols[2]{};
+  static const uint32_t bucket[] = {1}, chain[] = {0, 0};
+  symbols[1].st_info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
+  symbols[1].st_shndx = 1;
+  symbols[1].st_name = 1;
+  symbols[1].st_size = sizeof(order);
+  recursive.symtab = symbols;
+  recursive.strtab = "\0finalizer_visible";
+  recursive.load_bias = reinterpret_cast<uint8_t*>(&order);
+  recursive.has_sysv_hash = true;
+  recursive.sysv_nbucket = 1; recursive.sysv_nchain = 2;
+  recursive.sysv_buckets = bucket; recursive.sysv_chain = chain;
   reentrant = &recursive; order = 0;
   Check(gesher::elf::LookupGlobal("finalizer_visible") == &order, "symbol visible before Close");
   Close(&recursive);
   Check(order == 1, "recursive close does not repeat finalization");
   Check(visible_during_finalization, "symbol remains visible while finalizers run");
   Check(gesher::elf::LookupGlobal("finalizer_visible") == nullptr, "symbol hidden after Close");
-  Library shared{false, false, nullptr, 0, Concurrent};
+  Library& shared = *Owner(false, nullptr, 0, Concurrent);
   std::vector<std::thread> threads;
   for (int i = 0; i < 12; ++i) threads.emplace_back([&] { Close(&shared); });
   for (auto& thread : threads) thread.join();

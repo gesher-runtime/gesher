@@ -131,12 +131,16 @@ using SymbolTable = gesher::SymbolTable;
 
 // Each part of the shim adds its symbols.
 void RegisterLibc(SymbolTable& table);     // shim.cc
+void RegisterLibm(SymbolTable& table);     // shim.cc
+void RegisterLibdl(SymbolTable& table);    // shim.cc
 void RegisterStdio(SymbolTable& table);    // stdio_bionic.cc
+void RegisterLog(SymbolTable& table);      // stdio_bionic.cc
 void RegisterPthread(SymbolTable& table);  // pthread_bionic.cc
 void RegisterLocale(SymbolTable& table);   // locale_bionic.cc
 void RegisterPosix(SymbolTable& table);    // posix_bionic.cc
 void RegisterDnsWire(SymbolTable& table); // dns_wire.cc
 void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
+void RegisterAndroidNetwork(SymbolTable& table); // libandroid exports in socket_bionic.cc
 void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
 void RegisterTime(SymbolTable& table);     // time_bionic.cc
 // x86-64 Linux numeric timerfd syscalls share the libc exports' implementation.

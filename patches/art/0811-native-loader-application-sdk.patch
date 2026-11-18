@@ -1,0 +1,24 @@
+--- a/runtime/native/dalvik_system_VMRuntime.cc
++++ b/runtime/native/dalvik_system_VMRuntime.cc
+@@ -24,6 +24,10 @@
+ #include <inttypes.h>
+ #include <limits.h>
+ 
++#if defined(GESHER_NATIVE_LOADER)
++#include <gesher/native_loader.h>
++#endif
++
+ #include <limits>
+ 
+ #include "android-base/properties.h"
+@@ -264,7 +268,9 @@
+                               : static_cast<uint32_t>(target_sdk_version);
+   Runtime::Current()->SetTargetSdkVersion(uint_target_sdk_version);
+ 
+-#ifdef ART_TARGET_ANDROID
++#if defined(GESHER_NATIVE_LOADER)
++  gesher::nativeloader::SetApplicationTargetSdkVersion(uint_target_sdk_version);
++#elif defined(ART_TARGET_ANDROID)
+   // This part is letting libc/dynamic linker know about current app's
+   // target sdk version to enable compatibility workarounds.
+   android_set_application_target_sdk_version(uint_target_sdk_version);

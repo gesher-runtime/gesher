@@ -562,7 +562,7 @@ void Register() {
   };
 #undef CFG
 #undef E
-  for (const Entry& e : kEntries) AddBionicSymbol(e.name, e.fn);
+  for (const Entry& e : kEntries) AddBionicSymbol("libandroid.so", e.name, e.fn);
   // __system_property_* read and write the runtime's properties (what
   // gesher-app loaded from build.prop), as an app's code sees them on a
   // device (extra_bionic.cc).

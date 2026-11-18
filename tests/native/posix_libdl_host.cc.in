@@ -1,0 +1,112 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Complete production POSIX libdl source; explicit Windows/ELF hook seams.
+#include "@PRODUCTION_SOURCE@"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
+
+namespace {
+int checks, context_calls, legacy_calls, close_calls;
+char scoped_handle, legacy_handle, namespace_identity, caller_identity;
+bool fail_context;
+const gesher_elf_load_context* seen_context;
+int seen_flags;
+int CoreOnLoad() { return 31; }
+int JavaOnLoad() { return 41; }
+int ElfOnLoad() { return 51; }
+void Check(bool condition, const char* message) {
+  ++checks;
+  if (!condition) {
+    std::fprintf(stderr, "FAIL POSIX libdl dispatch: %s (check %d)\n", message, checks);
+    std::exit(1);
+  }
+}
+void* LegacyOpen(const char*, int, char*, size_t) { ++legacy_calls; return &legacy_handle; }
+void* ElfSymbol(void* handle, const char* name) {
+  return (handle == &legacy_handle || handle == &scoped_handle) && std::strcmp(name, "JNI_OnLoad") == 0
+      ? reinterpret_cast<void*>(&ElfOnLoad) : nullptr;
+}
+int ElfClose(void*) { ++close_calls; return 0; }
+void* ContextOpen(const char*, int flags, const gesher_elf_load_context* context,
+                   char* error, size_t size) {
+  ++context_calls; seen_context = context; seen_flags = flags;
+  // Calling a host builtin here verifies no inventory lock spans callbacks.
+  Check(gesher_dlopen_host("libjavacore.so", 2) != nullptr, "context callback may reenter host loading");
+  if (fail_context) {
+    std::snprintf(error, size, "fixture namespace denied this library");
+    return nullptr;
+  }
+  return &scoped_handle;
+}
+}  // namespace
+
+int main(int argc, char** argv) {
+  Check(argc == 2, "real valid ELF with a builtin-like basename is supplied");
+  const gesher_builtin_symbol core[] = {{"JNI_OnLoad", reinterpret_cast<void*>(&CoreOnLoad)}};
+  const gesher_builtin_symbol java[] = {{"JNI_OnLoad", reinterpret_cast<void*>(&JavaOnLoad)}};
+  gesher_register_builtin_library("libjavacore.so", core, 1);
+  gesher_register_builtin_library("libopenjdk.so", java, 1);
+  void* c = gesher_dlopen_host("libjavacore.so", 2);
+  void* j = gesher_dlopen_host("libopenjdk.so", 2);
+  Check(c && j && c != j, "host builtin identities stay distinct");
+  Check(dlsym(c, "JNI_OnLoad") == reinterpret_cast<void*>(&CoreOnLoad) &&
+        dlsym(j, "JNI_OnLoad") == reinterpret_cast<void*>(&JavaOnLoad),
+        "each host builtin keeps its own JNI_OnLoad");
+  Check(gesher_dlopen_host("/system/lib64/libjavacore.so", 2) == c, "exact system alias works");
+  Check(gesher_register_builtin_library_alias("libjavacore.so",
+        "/apex/com.android.art/lib64/libjavacore.so") == 0, "exact APEX alias registers");
+  Check(gesher_dlopen_host("/apex/com.android.art/lib64/libjavacore.so", 2) == c,
+        "registered APEX alias retains the core identity");
+  setenv("ANDROID_ROOT", "C:\\runtime\\system\\", 1);
+  Check(gesher_dlopen_host("C:/runtime/system/lib64/libjavacore.so", 2) == c &&
+        gesher_dlopen_host("C:\\runtime\\system\\lib64\\libjavacore.so", 2) == c,
+        "exact runtime alias accepts Windows path separators");
+  unsetenv("ANDROID_ROOT");
+  const gesher_elf_dlopen_ops legacy{LegacyOpen, ElfSymbol, ElfClose};
+  gesher_set_elf_dlopen(&legacy);
+  Check(gesher_dlopen_host(argv[1], 2) == &legacy_handle && legacy_calls == 1,
+        "valid app ELF named libjavacore.so is not replaced by a host builtin");
+  Check(dlsym(&legacy_handle, "JNI_OnLoad") == reinterpret_cast<void*>(&ElfOnLoad),
+        "legacy ELF handles retain the existing JNI adaptation hook");
+  const gesher_elf_namespace_ops scoped{1, sizeof(gesher_elf_namespace_ops), ContextOpen};
+  Check(gesher_set_elf_namespace_ops(&scoped) == 0, "supported context extension registers");
+  gesher_elf_load_context context{1, sizeof(gesher_elf_load_context), &namespace_identity, &caller_identity, 2};
+  Check(gesher_dlopen_in_namespace("libjavacore.so", 0x102, &context) == &scoped_handle,
+        "application route reaches the contextual ELF callback even for a host builtin name");
+  Check(seen_context == &context && seen_flags == 0x102 && pe_loads == 0,
+        "exact namespace, architecture, caller and flags reach the contextual callback");
+  Check(dlsym(&scoped_handle, "JNI_OnLoad") == reinterpret_cast<void*>(&ElfOnLoad),
+        "contextual handle uses the same JNI symbol adaptation");
+  Check(dlclose(&scoped_handle) == 0 && close_calls == 1, "contextual close reaches the ELF hook");
+  for (int i = 0; i < 4096; ++i)
+    Check(gesher_dlopen_in_namespace("librepeat.so", 2, &context) == &scoped_handle,
+          "repeated identity remains stable");
+  Check(ElfHandles().size() == 2, "handle inventory does not grow per alias/repeated open");
+  fail_context = true;
+  Check(gesher_dlopen_in_namespace("engine.dll", 2, &context) == nullptr && pe_loads == 0,
+        "context failure cannot fall back to PE loading");
+  Check(std::string(dlerror()) == "fixture namespace denied this library" && dlerror() == nullptr,
+        "context failure text is owned and consumed once");
+  context.version = 2;
+  const int before = context_calls;
+  Check(gesher_dlopen_in_namespace("engine.dll", 2, &context) == nullptr && context_calls == before,
+        "unknown context version is rejected before dispatch");
+  dlerror();
+  context.version = 1;
+  bool worker_once = false;
+  std::thread worker([&] {
+    Check(dlerror() == nullptr, "another thread starts without a pending error");
+    gesher_dlopen_in_namespace("worker.so", 2, &context);
+    worker_once = dlerror() != nullptr && dlerror() == nullptr;
+  });
+  worker.join();
+  Check(worker_once && dlerror() == nullptr, "context error state stays thread-local");
+  void* pe = gesher_dlopen_host("engine.dll", 2);
+  Check(pe == &pe_module && pe_loads == 1, "explicit host route retains Windows PE loading");
+  Check(dlsym(pe, "entry") == reinterpret_cast<void*>(&PeSymbol) && pe_symbols == 1,
+        "host PE symbol routing is retained");
+  Check(dlclose(pe) == 0 && pe_closes == 1, "host PE close is retained");
+  std::printf("POSIX libdl dispatch: %d checks; complete production source; explicit Win32/hook seams\n", checks);
+}

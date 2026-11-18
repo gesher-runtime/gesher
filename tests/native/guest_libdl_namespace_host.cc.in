@@ -1,0 +1,79 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Unchanged production libdl section with isolated provider initialization.
+// The shared driver also links complete gesher_bionic in Windows gates.
+#include <gesher/elf_loader.h>
+#include <gesher/bionic_shim.h>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <sys/stat.h>
+#include <unordered_map>
+#include <vector>
+#define BIONIC_SYSV __attribute__((sysv_abi))
+
+namespace gesher::bionic {
+namespace {
+using Table = std::unordered_map<std::string, void*>;
+Table aggregate;
+std::unordered_map<std::string, Table> owned;
+gesher::elf::Library* libdl_provider;
+#if !GESHER_CONTEXTUAL_LIBDL
+// Historical route control: the old directory/virtual-handle interfaces are
+// explicit seams. The current common loader remains complete and unchanged.
+bool IsPlatformLibraryHandle(const void* handle) { return handle == libdl_provider; }
+void* PlatformLibraryHandle(const char* name) {
+  return name && std::strcmp(name, "libdl.so") == 0 ? libdl_provider : nullptr;
+}
+std::vector<std::string> LibraryDirectories() { return {}; }
+void NoteLibraryDirectory(const std::string&) {}
+#endif
+@LIBDL_IMPLEMENTATION@
+}  // namespace
+
+void* LookupBionicSymbol(const char* name) {
+  auto found = aggregate.find(name);
+  return found == aggregate.end() ? nullptr : found->second;
+}
+void AddBionicSymbol(const char* name, void* address) { aggregate[name] = address; }
+void AddBionicSymbol(const char* soname, const char* name, void* address) {
+  owned[soname][name] = address;
+  aggregate[name] = address;
+}
+void EnterLoadedCode() {}
+void InstallBionicShim() {
+  using namespace gesher::elf;
+#define ENTRY(name, value) AddBionicSymbol("libdl.so", name, reinterpret_cast<void*>(value))
+@LIBDL_ENTRIES@
+#undef ENTRY
+#if GESHER_CONTEXTUAL_LIBDL
+  AddBionicSymbol("__loader_dlopen", reinterpret_cast<void*>(&LoaderDlopen));
+  AddBionicSymbol("__loader_android_dlopen_ext", reinterpret_cast<void*>(&LoaderAndroidDlopenExt));
+  AddBionicSymbol("__loader_dlsym", reinterpret_cast<void*>(&LoaderDlsym));
+  AddBionicSymbol("__loader_dlvsym", reinterpret_cast<void*>(&LoaderDlvsym));
+#endif
+  for (const char* soname : {"libdl.so", "libc.so", "liblog.so"}) {
+    ProviderOptions options;
+    options.soname = soname;
+    options.visibility = ProviderVisibility::kNdkPublic;
+    if (options.soname == "libc.so") options.dependencies = {"libdl.so"};
+    if (options.soname == "liblog.so") options.dependencies = {"libc.so"};
+    options.lookup = [library = options.soname](const char* name) -> void* {
+      auto& symbols = owned[library];
+      auto found = symbols.find(name);
+      return found == symbols.end() ? nullptr : found->second;
+    };
+    options.available = [] { return true; };
+    std::string error;
+    auto* provider = RegisterProvider(options, &error);
+    if (!provider) {
+      std::fprintf(stderr, "fixture provider registration failed: %s\n", error.c_str());
+      std::abort();
+    }
+    if (options.soname == "libdl.so") libdl_provider = provider;
+  }
+  SetBionicResolver(LookupBionicSymbol);
+}
+}  // namespace gesher::bionic

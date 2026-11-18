@@ -13,9 +13,12 @@ add_library(gesher_native_activity OBJECT
   ${CMAKE_CURRENT_LIST_DIR}/native_activity.cc
   ${CMAKE_CURRENT_LIST_DIR}/choreographer.cc)
 target_include_directories(gesher_native_activity PRIVATE ${CMAKE_CURRENT_LIST_DIR}
-  ${_na_fwbase}/core/jni ${_na_fwbase}/core/jni/include ${CMAKE_SOURCE_DIR}/compat/framework/include)
+  ${_na_fwbase}/core/jni ${_na_fwbase}/core/jni/include ${CMAKE_SOURCE_DIR}/compat/framework/include
+  ${AOSP_DIR}/art/libnativeloader/include)
 target_link_libraries(gesher_native_activity PRIVATE gesher_bionic gesher_elf android_input input_jni
-  graphics_native_headers androidfw nativehelper utils cutils log base)
+  graphics_native_headers androidfw nativehelper utils cutils log base "$<LINK_ONLY:art_nativeloader>")
+# Only the public JNI facade is used here. Keep ART's internal runtime compile
+# flags separate from the framework/NDK translation unit's warning contract.
 # As cmake/aosp/hwui.cmake's gesher_graphics_cxx (defined after this file):
 # C++23 (utils/Trace.h and <stdatomic.h>), and what AOSP's headers trip.
 set_target_properties(gesher_native_activity PROPERTIES CXX_STANDARD 23)

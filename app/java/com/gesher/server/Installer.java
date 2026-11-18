@@ -190,10 +190,9 @@ final class Installer {
      * them is one Gesher runs ({@link NativeLibs#SUPPORTED}); null if one is, or if
      * there is no native code.
      */
-    private static String[] unsupportedAbis(File apk) throws IOException {
+    private static String[] unsupportedAbis(File apk, File[] splits) throws IOException {
         List<File> files = new ArrayList<>();
         files.add(apk);
-        File[] splits = companionSplits(apk);
         if (splits != null) files.addAll(Arrays.asList(splits));
         java.util.Set<String> abis = new java.util.TreeSet<>();
         for (File f : files) {
@@ -315,7 +314,8 @@ final class Installer {
                 if (mainApk == null) mainApk = apks[0];
                 source = mainApk;
             }
-            ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
+            File[] incomingSplits = companionSplits(source);
+            ApkPackage parsed = ApkPackage.parseInstallCandidate(source.getAbsolutePath(), incomingSplits);
             String pkg = parsed.packageName;
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
@@ -326,7 +326,7 @@ final class Installer {
                             + result.getErrorMessage(), result.getException());
                 }
             }
-            String[] foreign = unsupportedAbis(source);
+            String[] foreign = unsupportedAbis(source, incomingSplits);
             if (foreign != null) {
                 // Native code only for ABIs Gesher cannot run (32-bit armeabi-v7a, x86):
                 // refused, as a device refuses it, instead of an app whose libraries
@@ -350,7 +350,6 @@ final class Installer {
                     && !parsed.updateContinuityFrom(previous)) {
                 throw new SecurityException("INSTALL_FAILED_UPDATE_INCOMPATIBLE: " + pkg);
             }
-            File[] incomingSplits = companionSplits(source);
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
                     android.content.pm.Signature[] splitSigners = ApkPackage.verifySignatures(split.getPath());
@@ -394,9 +393,8 @@ final class Installer {
             File base = new File(code, "base.apk");
             copy(source, base);
             if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));
-            File[] companionSplits = companionSplits(source);
-            if (companionSplits != null) {
-                for (File split : companionSplits) {
+            if (incomingSplits != null) {
+                for (File split : incomingSplits) {
                     String targetName = split.getName().startsWith("split_")
                             ? split.getName() : "split_" + split.getName();
                     copy(split, new File(code, targetName));

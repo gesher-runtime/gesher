@@ -1,0 +1,70 @@
+--- a/libnativeloader/native_loader.cpp
++++ b/libnativeloader/native_loader.cpp
+@@ -17,6 +17,10 @@
+ #define LOG_TAG "nativeloader"
+ 
+ #include "nativeloader/native_loader.h"
++
++#if defined(GESHER_NATIVE_LOADER)
++#include <gesher/native_loader.h>
++#endif
+ 
+ #include <dlfcn.h>
+ #include <sys/types.h>
+@@ -211,14 +215,18 @@
+ }  // namespace
+ 
+ void InitializeNativeLoader() {
+-#if defined(ART_TARGET_ANDROID)
++#if defined(GESHER_NATIVE_LOADER)
++  gesher::nativeloader::Initialize();
++#elif defined(ART_TARGET_ANDROID)
+   std::lock_guard<std::mutex> guard(g_namespaces_mutex);
+   g_namespaces->Initialize();
+ #endif
+ }
+ 
+ void ResetNativeLoader() {
+-#if defined(ART_TARGET_ANDROID)
++#if defined(GESHER_NATIVE_LOADER)
++  gesher::nativeloader::Reset();
++#elif defined(ART_TARGET_ANDROID)
+   std::lock_guard<std::mutex> guard(g_namespaces_mutex);
+   g_namespaces->Reset();
+   delete g_nativeloader_extra_libs_namespace;
+@@ -236,7 +244,16 @@
+                                    jstring library_path_j,
+                                    jstring permitted_path_j,
+                                    jstring uses_library_list_j) {
+-#if defined(ART_TARGET_ANDROID)
++#if defined(GESHER_NATIVE_LOADER)
++  return gesher::nativeloader::CreateClassLoaderNamespace(env,
++                                                         target_sdk_version,
++                                                         class_loader,
++                                                         is_shared,
++                                                         dex_path_j,
++                                                         library_path_j,
++                                                         permitted_path_j,
++                                                         uses_library_list_j);
++#elif defined(ART_TARGET_ANDROID)
+   std::string dex_path;
+   if (dex_path_j != nullptr) {
+     ScopedUtfChars dex_path_chars(env, dex_path_j);
+@@ -299,7 +316,16 @@
+                         jstring library_path_j,
+                         bool* needs_native_bridge,
+                         char** error_msg) {
+-#if defined(ART_TARGET_ANDROID)
++#if defined(GESHER_NATIVE_LOADER)
++  return gesher::nativeloader::OpenNativeLibrary(env,
++                                               target_sdk_version,
++                                               path,
++                                               class_loader,
++                                               caller_location,
++                                               library_path_j,
++                                               needs_native_bridge,
++                                               error_msg);
++#elif defined(ART_TARGET_ANDROID)
+   if (class_loader == nullptr) {
+     // class_loader is null only for the boot class loader (see
+     // IsBootClassLoader call in JavaVMExt::LoadNativeLibrary), i.e. the caller

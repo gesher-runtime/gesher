@@ -23,6 +23,76 @@ Check 'ELF loader: load a trivial .so and call it' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
 } @('elf_load_test all passed')
 
+# Public loading/lookup/iteration on real ELF dependency graphs. The second
+# executable changes only the test copy's protection primitive for one failure.
+foreach ($transactionExe in 'elf_load_transaction_test.exe', 'elf_load_transaction_failure_test.exe') {
+  Check "ELF loader: graph rollback, retry, cycles, constructors and concurrent publication ($transactionExe)" {
+    & "$Dir/$transactionExe" (NoDrive "$Dir/elf-load-transaction")
+  } @('elf_load_transaction_test all passed')
+}
+
+# Each version case uses a fresh process so alternate providers with the same
+# SONAME cannot be satisfied by an earlier scenario's retained library.
+foreach ($versionCase in 'lookup-gnu', 'lookup-sysv', 'required', 'weak', 'weak-present', 'unversioned', 'global', 'virtual', 'tls', 'tls-weak', 'tls-weak-present', 'tls-scope') {
+  Check "ELF versions: real provider and relocation contracts ($versionCase)" {
+    & "$Dir/elf_versions_test.exe" (NoDrive "$Dir/elf-versions") $versionCase
+  } @('elf_versions_test all passed')
+}
+Check 'ELF versions: actual dlvsym ABI, version selection and thread-local errors' {
+  & "$Dir/elf_dlvsym_test.exe" (NoDrive "$Dir/elf-versions")
+} @('elf_dlvsym_test all passed')
+
+# Reuse the existing finite process/output/handle owner. A timeout or incomplete
+# cleanup stays a failure even if the process printed its final assertion.
+. "$PSScriptRoot/../helpers/GtestProcess.ps1"
+function NamespaceRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 120) {
+  $result = Invoke-GtestProcess $Exe $Arguments $Dir $Seconds
+  $complete = -not $result.TimedOut -and $result.ProcessComplete -and $result.ReadersComplete -and
+    $result.ReaderTasksComplete -and $result.PipesClosed -and $result.Disposed -and -not $result.Problem
+  $global:LASTEXITCODE = if ($complete -and $null -ne $result.Exit) { $result.Exit } else { -1 }
+  return $result.Stdout + $result.Stderr + [Environment]::NewLine + $result.Problem
+}
+foreach ($namespaceCase in 'identity', 'memory', 'search', 'scope', 'groups', 'links', 'providers', 'concurrent') {
+  Check "ELF namespaces: file identity, visibility and caller scope ($namespaceCase)" {
+    NamespaceRun "$Dir/elf_namespaces_test.exe" @((NoDrive "$Dir/elf-namespaces"), $namespaceCase)
+  } @("ELF namespaces $($namespaceCase):", 'checks passed')
+}
+Check 'ELF namespaces: complete libdl providers and actual guest caller transport' {
+  NamespaceRun "$Dir/guest_libdl_namespaces_test.exe" @((NoDrive "$Dir/elf-namespaces"))
+} @('Actual guest libdl namespace contracts:', 'checks; architecture=x86-64 native ELF')
+Check 'NativeActivity: original ELF entry and typed callbacks use the production dispatch helper' {
+  NamespaceRun "$Dir/native_activity_guest_test.exe" @((NoDrive "$Dir/native-activity-dispatch"))
+} @('NativeActivity dispatch contracts:', 'checks; architecture=x86-64 native ELF')
+
+# Each process receives its own fixture copy. The install test temporarily
+# removes a provider and must not change another invocation's native catalog.
+foreach ($namespaceArtClass in 'NativeNamespaceArtTest', 'NativeLibraryInstallTest') {
+  Check "ART native namespaces: $namespaceArtClass" {
+    $namespaceWork = Join-Path $env:RUNNER_TEMP ("gesher-native-namespace-" + [Guid]::NewGuid().ToString('N'))
+    $namespaceFixtures = Join-Path $namespaceWork 'fixtures'
+    $namespaceData = Join-Path $namespaceWork 'data'
+    try {
+      New-Item -ItemType Directory -Path $namespaceWork -ErrorAction Stop | Out-Null
+      Copy-Item -LiteralPath "$Dir/native-namespace-fixtures" -Destination $namespaceFixtures -Recurse -ErrorAction Stop
+      $namespaceArguments = @(
+        "-Xbootclasspath:$bcpApp",
+        "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+        '-cp', (NoDrive "$Dir/services-tests.dex"),
+        "gesher.services.$namespaceArtClass",
+        (NoDrive "$Dir/build.prop"), (NoDrive "$Dir/framework-res.apk"),
+        (NoDrive $namespaceFixtures))
+      if ($namespaceArtClass -eq 'NativeLibraryInstallTest') {
+        $namespaceArguments += (NoDrive $namespaceData)
+      }
+      NamespaceRun "$Dir/dalvikvm.exe" $namespaceArguments
+    } finally {
+      if (Test-Path -LiteralPath $namespaceWork) {
+        Remove-Item -LiteralPath $namespaceWork -Recurse -Force -ErrorAction Stop
+      }
+    }
+  } @("$namespaceArtClass all passed")
+}
+
 # textrel.so contains dynamic relocations into a read-only pointer table.
 # Its constructor and selftest both require the relocated pointers to work.
 Check 'ELF loader: TEXTREL pages relocate before constructors and selftest' {

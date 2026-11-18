@@ -32,7 +32,7 @@ struct Sysv<F> {
 
 void Register() {
   using gesher::bionic::AddBionicSymbol;
-#define FORMAT_ENTRY(name) AddBionicSymbol(#name, reinterpret_cast<void*>(&Sysv<&name>::Call))
+#define FORMAT_ENTRY(name) AddBionicSymbol("libmediandk.so", #name, reinterpret_cast<void*>(&Sysv<&name>::Call))
   FORMAT_ENTRY(AMediaFormat_new);
   FORMAT_ENTRY(AMediaFormat_delete);
   FORMAT_ENTRY(AMediaFormat_toString);
@@ -57,7 +57,7 @@ void Register() {
 #undef FORMAT_ENTRY
   // An ELF data import dereferences this slot. Its string pointee is not
   // the symbol's address; publish the actual AOSP const-char-pointer object.
-#define MEDIA_FORMAT_KEY(name) AddBionicSymbol(#name, &name);
+#define MEDIA_FORMAT_KEY(name) AddBionicSymbol("libmediandk.so", #name, &name);
 #include "media_format_keys.inc"
 #undef MEDIA_FORMAT_KEY
 }

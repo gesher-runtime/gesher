@@ -186,6 +186,45 @@ add_executable(elf_load_test tests/native/elf_load_test.cc)
 target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf)
 
+# Original dependency graphs exercise the actual loader, including concurrent
+# publication and constructor reentry. The failure target redirects only its
+# private copy of mprotect; production gesher_elf has no injection mechanism.
+add_executable(elf_load_transaction_test tests/native/elf_load_transaction_test.cc)
+target_compile_options(elf_load_transaction_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(elf_load_transaction_test PRIVATE gesher_elf)
+get_target_property(_elf_transaction_sources gesher_elf SOURCES)
+get_target_property(_elf_transaction_includes gesher_elf INCLUDE_DIRECTORIES)
+add_library(gesher_elf_transaction_failure STATIC ${_elf_transaction_sources})
+target_include_directories(gesher_elf_transaction_failure PUBLIC ${_elf_transaction_includes})
+target_compile_options(gesher_elf_transaction_failure PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(gesher_elf_transaction_failure PRIVATE
+  mprotect=gesher_elf_test_mprotect)
+add_executable(elf_load_transaction_failure_test tests/native/elf_load_transaction_test.cc)
+target_compile_options(elf_load_transaction_failure_test PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(elf_load_transaction_failure_test PRIVATE GESHER_ELF_TRANSACTION_FAILURE)
+target_link_libraries(elf_load_transaction_failure_test PRIVATE gesher_elf_transaction_failure)
+
+# Original version-script DSOs cover public lookup and relocation matching; the
+# companion driver calls the actual three-argument libdl shim entry points.
+add_executable(elf_versions_test tests/native/elf_versions_test.cc)
+target_compile_options(elf_versions_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(elf_versions_test PRIVATE gesher_elf)
+add_executable(elf_dlvsym_test tests/native/elf_dlvsym_test.cc)
+target_compile_options(elf_dlvsym_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(elf_dlvsym_test PRIVATE gesher_bionic)
+
+# Valid original namespace graphs and a separately linked full libdl driver.
+add_executable(elf_namespaces_test tests/native/elf_namespaces_test.cc)
+target_compile_options(elf_namespaces_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(elf_namespaces_test PRIVATE gesher_elf)
+add_executable(guest_libdl_namespaces_test tests/native/guest_libdl_namespace_test.cc)
+target_compile_options(guest_libdl_namespaces_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(guest_libdl_namespaces_test PRIVATE gesher_bionic gesher_elf)
+add_executable(native_activity_guest_test tests/native/native_activity_guest_test.cc)
+target_include_directories(native_activity_guest_test PRIVATE compat/bionic)
+target_compile_options(native_activity_guest_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(native_activity_guest_test PRIVATE gesher_bionic gesher_elf)
+
 # Compare guest pthread metadata with independently observed Win32 target stacks.
 add_executable(pthread_attributes_target_test tests/native/pthread_attributes_target_test.cc)
 target_compile_options(pthread_attributes_target_test PRIVATE -Wall -Wextra -Werror)

@@ -677,13 +677,6 @@ void RegisterSocket(SymbolTable& t) {
   E("__sendto_chk", SendtoChk);
   E("__recvfrom_chk", RecvfromChk);
   E("getaddrinfo", Getaddrinfo);
-  E("android_setprocnetwork", SetProcNetwork);
-  E("android_setsocknetwork", SetSockNetwork);
-  E("android_getaddrinfofornetwork", GetaddrinfoForNetwork);
-  E("android_res_nquery", ResNquery);
-  E("android_res_nsend", ResNsend);
-  E("android_res_nresult", ResNresult);
-  E("android_res_cancel", ResCancel);
   E("freeaddrinfo", Freeaddrinfo);
   E("gai_strerror", GaiStrerror);
   E("getnameinfo", Getnameinfo);
@@ -736,6 +729,18 @@ void RegisterSocket(SymbolTable& t) {
   E("preadv64", Preadv);
   E("pwritev", Pwritev);
   E("pwritev64", Pwritev);
+#undef E
+}
+
+void RegisterAndroidNetwork(SymbolTable& t) {
+#define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
+  E("android_setprocnetwork", SetProcNetwork);
+  E("android_setsocknetwork", SetSockNetwork);
+  E("android_getaddrinfofornetwork", GetaddrinfoForNetwork);
+  E("android_res_nquery", ResNquery);
+  E("android_res_nsend", ResNsend);
+  E("android_res_nresult", ResNresult);
+  E("android_res_cancel", ResCancel);
 #undef E
 }
 

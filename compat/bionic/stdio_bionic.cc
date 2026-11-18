@@ -992,6 +992,9 @@ void RegisterStdio(SymbolTable& t) {
   E("stdout", g_stdout);
   E("stderr", g_stderr);
   E("__sF", g_sF);
+}
+
+void RegisterLog(SymbolTable& t) {
   // liblog.
   E("__android_log_write", gesher_bionic_android_log_write);
   E("__android_log_buf_write", gesher_bionic_android_log_buf_write);

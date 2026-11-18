@@ -11,9 +11,8 @@
 //   duplicates its handle), as ActivityManagerService sends it in
 //   bindApplication.
 // - com.android.internal.os.ClassLoaderFactory.createClassloaderNamespace:
-//   libnativeloader's linker namespaces do not exist on Windows (gesher-base's
-//   dlopen loads a library by path); every class loader gets the success
-//   answer, null, so LoadedApk's own class loader path runs.
+//   forwards the complete Android namespace contract to Gesher's libnativeloader
+//   host adapter, shared by ART System.loadLibrary and NativeActivity.
 // - android.app.ActivityThread's two natives (android_app_ActivityThread.cpp):
 //   nPurgePendingResources (hwui's caches and SQLite's memory, none here) and
 //   nInitZygoteChildHeapProfiling (heapprofd, which does not exist), no-ops.
@@ -27,6 +26,8 @@
 #include <jni.h>
 #include <log/log.h>
 #include <nativehelper/JNIHelp.h>
+#include <nativeloader/native_loader.h>
+#include <gesher/native_loader.h>
 #include <unistd.h>
 
 #include "core_jni_helpers.h"
@@ -82,11 +83,25 @@ int register_gesher_ApplicationSharedMemory(JNIEnv* env) {
 }
 
 static jstring ClassLoaderFactory_createClassloaderNamespace(
-        JNIEnv*, jclass, jobject /* classLoader */, jint /* targetSdkVersion */,
-        jstring /* librarySearchPath */, jstring /* libraryPermittedPath */,
-        jboolean /* isShared */, jstring /* dexPath */, jstring /* sonameList */) {
-    return nullptr;
+        JNIEnv* env, jclass, jobject classLoader, jint targetSdkVersion,
+        jstring librarySearchPath, jstring libraryPermittedPath,
+        jboolean isShared, jstring dexPath, jstring sonameList) {
+    return android::CreateClassLoaderNamespace(env, targetSdkVersion, classLoader,
+            isShared == JNI_TRUE, dexPath, librarySearchPath, libraryPermittedPath, sonameList);
 }
+
+static jobjectArray NativeLibraryCatalog_builtins(JNIEnv* env, jclass) {
+    return gesher::nativeloader::BuiltinCatalog(env);
+}
+
+static jobjectArray NativeLibraryCatalog_publicFiles(JNIEnv* env, jclass) {
+    return gesher::nativeloader::PublicFileCatalog(env);
+}
+
+static const JNINativeMethod gNativeLibraryCatalogMethods[] = {
+    {"nativeBuiltinCatalog", "()[[Ljava/lang/String;", GESHER_JNI(NativeLibraryCatalog_builtins)},
+    {"nativePublicFileCatalog", "()[[Ljava/lang/String;", GESHER_JNI(NativeLibraryCatalog_publicFiles)},
+};
 
 static const JNINativeMethod gClassLoaderFactoryMethods[] = {
     {"createClassloaderNamespace",
@@ -96,6 +111,8 @@ static const JNINativeMethod gClassLoaderFactoryMethods[] = {
 };
 
 int register_gesher_ClassLoaderFactory(JNIEnv* env) {
+    RegisterGesherNatives(env, "com/gesher/server/NativeLibraryCatalog",
+                          gNativeLibraryCatalogMethods, NELEM(gNativeLibraryCatalogMethods));
     return RegisterGesherNatives(env, "com/android/internal/os/ClassLoaderFactory",
                                 gClassLoaderFactoryMethods, NELEM(gClassLoaderFactoryMethods));
 }
