@@ -44,17 +44,15 @@ def main() -> int:
         pattern = r'^  E\("' + symbol + r'", Freopen\);$'
         if len(re.findall(pattern, guest, re.M)) != 1:
             raise ValueError("missing or ambiguous guest registration: " + symbol)
-    guest_close = section(guest, "int CloseBionicStream(", "namespace {\n\n// /dev/zero")
-    if guest_close.count("gesher_fclose_with_reset(") != 1:
-        raise ValueError("guest native close boundary changed")
     guest_reopen = section(guest, "FILE* BIONIC_SYSV Freopen(", "int BIONIC_SYSV Fgetpos(")
-    if guest_reopen.count("gesher_freopen_with_reset(") != 1:
+    if guest_reopen.count("gesher_freopen_state(") != 1:
         raise ValueError("guest native reopen boundary changed")
     sections = {
         "@HOST_PARSE_MODE@": section(host, "bool ParseMode(", "// Random characters"),
-        "@HOST_FCLOSE@": section(host, "int gesher_fclose_with_reset(", "// The stream is reopened"),
-        "@HOST_FREOPEN@": section(host, "FILE* gesher_freopen_with_reset(", "char* mkdtemp("),
-        "@GUEST_FCLOSE@": guest_close,
+        "@HOST_FCLOSE@": section(host, "int gesher_fclose_state(", "// The stream is reopened"),
+        "@HOST_FREOPEN@": section(host, "FILE* gesher_freopen_state(", "char* mkdtemp("),
+        "@GUEST_CRT_MODE@": section(guest, "std::string CrtMode(", "}  // namespace\n\nint CloseBionicStream"),
+        "@GUEST_CLOSE@": section(guest, "int CloseBionicStream(FILE* stream, int* retired_out)", "namespace {\n\n// /dev/zero"),
         "@GUEST_FREOPEN@": guest_reopen,
     }
     template = (ROOT / "tests/native/freopen_mode_host_test.cc.in").read_text(encoding="utf-8")
@@ -62,11 +60,12 @@ def main() -> int:
         if template.count(marker) != 1:
             raise ValueError("missing or ambiguous template marker: " + marker)
         print(marker.strip("@") + " SHA256 " + hashlib.sha256(value.encode()).hexdigest(), flush=True)
-        if marker in ("@GUEST_FCLOSE@", "@GUEST_FREOPEN@"):
+        if marker == "@GUEST_FREOPEN@":
             # Route the production call into the production host adapter in
             # this executable, rather than bypassing it via Linux's libc.
-            value = value.replace("gesher_fclose_with_reset(", "host::gesher_fclose_with_reset(")
-            value = value.replace("gesher_freopen_with_reset(", "host::gesher_freopen_with_reset(")
+            value = value.replace("gesher_freopen_state(", "HostFreopen(")
+        if marker == "@GUEST_CLOSE@":
+            value = value.replace("gesher_fclose_state(", "host::gesher_fclose_state(")
         if marker == "@HOST_FREOPEN@":
             # Production defines these C entry points in the global scope.
             # Qualify the unchanged alias target after nesting them here, so

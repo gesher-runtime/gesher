@@ -34,6 +34,7 @@ public final class ConnectivityService extends IConnectivity.Stub {
     private final PackageManagerService mPm;
     private final ActivityTaskManagerService mAtm;
     private final List<IConnectivity.IListener> mListeners = new ArrayList<>();
+    private final List<Runnable> mSystemListeners = new ArrayList<>();
     private String mSnapshot;
     private Thread mWatcher;
 
@@ -194,6 +195,14 @@ public final class ConnectivityService extends IConnectivity.Stub {
         }
     }
 
+    /** In-process system observers do not inherit an app's Binder identity. */
+    synchronized void addSystemListener(Runnable listener) {
+        if (!mSystemListeners.contains(listener)) mSystemListeners.add(listener);
+        startWatching();
+    }
+
+    String snapshotForSystem() { return snapshot(); }
+
     private synchronized String snapshot() {
         // Queries alone do not start the watcher. Do not cache their first answer
         // forever, or an app polling after a reconnect will keep seeing startup
@@ -215,15 +224,21 @@ public final class ConnectivityService extends IConnectivity.Stub {
             WindowsNetworks.waitForChange(15_000);
             String now = WindowsNetworks.snapshot();
             List<IConnectivity.IListener> listeners;
+            List<Runnable> systemListeners;
             synchronized (this) {
                 if (now.equals(mSnapshot)) continue;
                 mSnapshot = now;
                 listeners = new ArrayList<>(mListeners);
+                systemListeners = new ArrayList<>(mSystemListeners);
             }
             if (Boolean.getBoolean("gesher.net.trace")) {
                 SystemServer.log("connectivity: Windows' networks changed:\n" + now);
             }
             connectivityChanged(now, true);
+            for (Runnable listener : systemListeners) {
+                try { listener.run(); }
+                catch (RuntimeException e) { SystemServer.log("connectivity: system listener failed: " + e); }
+            }
             for (IConnectivity.IListener l : listeners) {
                 try {
                     l.onSnapshot(now);

@@ -1,0 +1,147 @@
+// Exact production state/close/reopen methods; declared Windows host boundaries.
+#include <array>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <fcntl.h>
+#include <unistd.h>
+static int checks, failures, lock_depth, descriptor_depth, admission_error, finish_error, crt_calls;
+static bool close_error_after;
+static void check(const char* name,bool value) {
+  ++checks; if(!value){++failures;std::fprintf(stderr,"FAIL %s\n",name);}
+}
+struct StreamLock {
+  explicit StreamLock(FILE*) { ++lock_depth; }
+  ~StreamLock() { --lock_depth; }
+};
+enum class PathKind { kFile, kNull, kMissing };
+namespace gesher {
+void ForgetStreamDevice(int,bool) {}
+PathKind MapPath(const char* path,std::wstring* output) {
+  if(std::strcmp(path,"missing:")==0)return PathKind::kMissing;
+  *output=std::wstring(path,path+std::strlen(path));return PathKind::kFile;
+}
+namespace record_locks {
+struct ClosingDescriptor {
+  int error=admission_error; bool finished=false;
+  explicit ClosingDescriptor(int) {
+    check("guest and host own the recursive FILE lock before the descriptor guard",lock_depth==2 && descriptor_depth==0);
+    ++descriptor_depth;
+  }
+  int Error() const {return error;}
+  int Finish(bool) { check("descriptor completion is under both guards",!finished && lock_depth==2 && descriptor_depth==1);finished=true;return finish_error; }
+  ~ClosingDescriptor(){--descriptor_depth;}
+};
+}
+}
+static int _fileno(FILE* stream){return fileno(stream);}
+static int gesher_errno_from_crt(int error){return error;}
+static bool HasNonDirectoryParent(const std::wstring&){return false;}
+static int _fclose_nolock(FILE* stream){
+  check("real close stays under both guards",lock_depth==2 && descriptor_depth==1);++crt_calls;
+  int result=std::fclose(stream);return close_error_after?(errno=EIO,EOF):result;
+}
+static FILE* _wfreopen(const wchar_t* path,const wchar_t* mode,FILE* stream){
+  check("real reopen stays under both guards",lock_depth==2 && descriptor_depth==1);++crt_calls;
+  std::wstring wp(path),wm(mode);std::string p(wp.begin(),wp.end()),m(wm.begin(),wm.end());
+  for(char& c:m)if(c=='N')c='e';
+  return std::freopen(p.c_str(),m.c_str(),stream);
+}
+namespace host {
+@PARSE@
+@HOST_CLOSE@
+@HOST_REOPEN@
+}
+namespace shim {
+#define BIONIC_SYSV
+constexpr int kEINVAL=EINVAL;
+static FILE* F(void* f){return static_cast<FILE*>(f);}
+@STATE@
+@MODE@
+@CLOSE@
+@REOPEN@
+// Process-wait boundary: count whether production pclose waits, and preserve
+// its real child-association map. No child process execution is claimed here.
+static std::mutex g_popen_mutex;
+static std::unordered_map<void*,int> g_popen;
+static int collect_calls;
+static int CollectOne(int pid,int* status,int) { ++collect_calls;*status=0x2300;return pid; }
+@PCLOSE@
+}
+static bool recorded(FILE* f){
+  auto& b=shim::StreamBucket(f);std::lock_guard<std::mutex> lock(b.mutex);return b.streams.contains(f);
+}
+static bool intact(FILE* f){
+  auto& b=shim::StreamBucket(f);std::lock_guard<std::mutex> lock(b.mutex);auto it=b.streams.find(f);
+  if(it==b.streams.end())return false;
+  const auto& s=it->second;
+  return s.orientation==1 && s.conversion_error && s.pushback==0x1f642 && s.input_state[3]==0x5a;
+}
+static FILE* prepared(){
+  FILE* f=std::tmpfile();if(!f)std::abort();auto& s=shim::State(f);
+  s.orientation=1;s.conversion_error=true;s.pushback=0x1f642;s.input_state[3]=0x5a;return f;
+}
+int main(){
+  FILE* f=prepared();int fd=fileno(f);int calls=crt_calls;admission_error=EBUSY;
+  check("pre-close failure is returned",shim::CloseBionicStream(f)==EOF && errno==EBUSY);
+  check("pre-close failure never invokes the CRT",crt_calls==calls);
+  check("pre-close failure preserves all wide state",intact(f));
+  check("pre-close failure leaves its real descriptor open",fcntl(fd,F_GETFD)>=0);
+  admission_error=0;check("successful retry closes",shim::CloseBionicStream(f)==0);
+  check("successful retry retires state",!recorded(f));
+
+  f=prepared();close_error_after=true;
+  check("CRT error after actual close is returned",shim::CloseBionicStream(f)==EOF && errno==EIO);
+  check("CRT error after close retires state",!recorded(f));close_error_after=false;
+  f=prepared();finish_error=EROFS;
+  check("metadata failure after close is returned",shim::CloseBionicStream(f)==EOF && errno==EROFS);
+  check("metadata failure after close retires state",!recorded(f));finish_error=0;
+
+  f=prepared();fd=fileno(f);calls=crt_calls;admission_error=EBUSY;
+  check("pre-reopen failure is returned",shim::Freopen("/dev/null","rb",f)==nullptr && errno==EBUSY);
+  check("pre-reopen failure never invokes the CRT",crt_calls==calls);
+  check("pre-reopen failure preserves all wide state",intact(f));
+  check("pre-reopen failure leaves its real descriptor open",fcntl(fd,F_GETFD)>=0);admission_error=0;
+  check("successful retry reopens the FILE",shim::Freopen("/dev/null","rb",f)==f);
+  check("successful reopen retires all previous wide state",!recorded(f));
+  check("next state starts unoriented",shim::State(f).orientation==0);
+  shim::CloseBionicStream(f);
+
+  f=prepared();
+  check("invalid mode closes original stream",shim::Freopen("/dev/null","bad",f)==nullptr && errno==EINVAL);
+  check("invalid-mode retirement is recorded",!recorded(f));
+  f=prepared();
+  check("path rejection closes original stream",shim::Freopen("missing:","rb",f)==nullptr && errno==ENOENT);
+  check("path-rejection retirement is recorded",!recorded(f));
+  f=prepared();
+  check("CRT reopen failure is returned",shim::Freopen("absent/destination","rb",f)==nullptr);
+  check("CRT reopen failure retires closed FILE state",!recorded(f));
+
+  f=prepared();finish_error=EROFS;
+  check("metadata failure after replacement is returned",shim::Freopen("/dev/null","rb",f)==nullptr && errno==EROFS);
+  check("metadata failure does not resurrect old FILE state",!recorded(f));finish_error=0;
+  shim::CloseBionicStream(f);
+
+  f=prepared();fd=fileno(f);shim::g_popen.emplace(f,42);admission_error=EBUSY;
+  check("pclose returns a pre-close error",shim::Pclose(f)==-1 && errno==EBUSY);
+  check("pclose does not wait while the writer is still open",shim::collect_calls==0);
+  check("pclose preserves the child association for retry",shim::g_popen.contains(f));
+  check("pclose preserves live descriptor and wide state",fcntl(fd,F_GETFD)>=0 && intact(f));
+  admission_error=0;
+  check("pclose retry returns the child status",shim::Pclose(f)==0x2300);
+  check("pclose retry waits once and removes its association",shim::collect_calls==1 && !shim::g_popen.contains(f));
+  check("pclose retry retires the state",!recorded(f));
+  f=prepared();shim::g_popen.emplace(f,43);close_error_after=true;
+  check("pclose still reaps its child after a retired-stream close error",shim::Pclose(f)==0x2300);
+  check("retired pclose removes the association and wide state",shim::collect_calls==2 && !shim::g_popen.contains(f) && !recorded(f));
+  close_error_after=false;
+  check("all guards released",lock_depth==0 && descriptor_depth==0);
+  size_t remaining=0;for(auto& bucket:shim::g_stream_states)remaining+=bucket.streams.size();
+  check("no retired state accumulates",remaining==0);
+  std::printf("stdio lifetime: %d checks, %d failures\n",checks,failures);return failures?1:0;
+}

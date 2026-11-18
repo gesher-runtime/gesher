@@ -190,6 +190,7 @@ int ReadPthreadCpuClock(int clock_id, int64_t* nanos);
 
 // Close a Bionic stream and retire its orientation and wide I/O state.
 int CloseBionicStream(FILE* stream);
+int CloseBionicStream(FILE* stream, int* retired);
 
 // IEEE binary128 (bionic's x86-64 long double) from a double, as 16 bytes.
 void DoubleToBinary128(double d, void* out);

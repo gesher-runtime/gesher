@@ -32,3 +32,7 @@ target_compile_options(gesher_bionic PRIVATE -Wall -Wextra -Werror)
 # regcomp/regexec over std::regex, which reports a bad pattern by throwing.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/syscall_bionic.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")
+# Wide formatting translates allocator failures to Android's errno contract.
+# Catch them inside the wide C entry points before returning across the guest ABI.
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/stdio_bionic.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")

@@ -1,21 +1,24 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Run against exported Bionic symbols on Windows and directly against glibc
-// on Linux. Host lock witnesses verify that Bionic owns the CRT's actual lock.
+// Run against exported Bionic symbols on Windows or Bionic on Android. The
+// Linux/glibc run is only a portable control; Android-specific contracts are
+// deliberately not inferred from glibc. Host lock witnesses use the CRT lock.
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 
 #ifdef _WIN32
+#include <windows.h>
 #include <gesher/bionic_shim.h>
 #include <io.h>
-#include <windows.h>
 #else
 #include <unistd.h>
+#include <sys/wait.h>
 #endif
 
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <clocale>
 #include <cstdint>
 #include <cstdio>
@@ -296,99 +299,150 @@ void TestWideOutput(const Api& api) {
   constexpr char formatted[] = "\xc3\xa9|   \xc3\xa9|\xc3\xa9|\xf0\x9f\x99\x82";
   ExpectBytes(f, formatted, sizeof(formatted) - 1);
   Check("wide formatted stream closes", api.close(f) == 0);
+  const Wide aliases[] = {'%', 'C', '/', '%', 'S', 0};
+  const Wide alias_expected[] = {0x3b1, '/', 0xe9, 0x1f642, 0};
+  Check("Android wide aliases preserve characters", api.print_buffer(buffer, 32, aliases, Wint{0x3b1}, text) == 4 &&
+        std::memcmp(buffer, alias_expected, sizeof(alias_expected)) == 0);
+#if defined(_WIN32) || defined(__BIONIC__)
+  const Wide plain[] = {'a', 'b', 'c', 0};
+  *api.errno_value() = 0;
+  Check("zero wide buffer reports EINVAL", api.print_buffer(buffer, 0, plain) == -1 && *api.errno_value() == 22);
+  *api.errno_value() = 0;
+  Check("truncated wide buffer reports EOVERFLOW", api.print_buffer(buffer, 2, plain) == -1 &&
+        *api.errno_value() == 75 && buffer[0] == 'a' && buffer[1] == 0);
+  const Wide scalar[] = {'%', 'l', 'c', 0};
+  for (Wint invalid : {Wint{0xd800}, Wint{0x110000}, Wint{0x200000}}) {
+    buffer[0] = 0x7777; *api.errno_value() = 0;
+    Check("wide buffer follows Android encode/decode errors", api.print_buffer(buffer, 32, scalar, invalid) == -1 &&
+          *api.errno_value() == 84 && buffer[0] == 0x7777);
+  }
+  const Wide nul[] = {'A', '%', 'l', 'c', 'Z', 0};
+  buffer[2] = 0x7777;
+  Check("wide buffer retains Bionic embedded-NUL conversion boundary", api.print_buffer(buffer, 32, nul, Wint{0}) == 3 &&
+        buffer[0] == 'A' && buffer[1] == 0 && buffer[2] == 0x7777);
+  const Wide escaped[] = {'%', '%', 'n', 0};
+  Check("escaped percent-n remains literal", api.print_buffer(buffer, 32, escaped) == 2 &&
+        buffer[0] == '%' && buffer[1] == 'n' && buffer[2] == 0);
+  f = Stream();
+  const Wide partial[] = {'A', '%', 's', 'Z', 0};
+  *api.errno_value() = 0;
+  Check("wide stream conversion error retains earlier output", api.print(f, partial, "\xff") == -1 &&
+        *api.errno_value() == 84 && api.error(f));
+  ExpectBytes(f, "A", 1);
+  api.close(f);
+  f = Stream();
+  const Wide invalid_byte[] = {'A', '%', '3', 'c', 'Z', 0};
+  *api.errno_value() = 0;
+  Check("wide percent-c preserves padding before Bionic btowc failure", api.print(f, invalid_byte, 0x80) == -1 &&
+        *api.errno_value() == 84 && api.error(f));
+  ExpectBytes(f, "A  ", 3);
+  api.close(f);
+  f = Stream();
+  Check("wide percent-c follows Bionic single-byte narrowing", api.print(f, invalid_byte, 0x100) == 5);
+  ExpectBytes(f, "A  \0Z", 5);
+  api.close(f);
+  const Wide overflow[] = {'A', '%', '2', '1', '4', '7', '4', '8', '3', '6', '4', '8', 'd', 0};
+  buffer[0] = 0x7777; *api.errno_value() = 0;
+  Check("wide format-size overflow uses Bionic ENOMEM", api.print_buffer(buffer, 32, overflow, 1) == -1 &&
+        *api.errno_value() == 12 && buffer[0] == 0x7777);
+  f = Stream(); *api.errno_value() = 0;
+  Check("format-size overflow preserves prefix without marking an I/O error", api.print(f, overflow, 1) == -1 &&
+        *api.errno_value() == 12 && !api.error(f));
+  ExpectBytes(f, "A", 1);
+  api.close(f);
+#endif
 #endif
 }
 
-#if defined(_WIN32) && defined(__x86_64__)
-void TestBionicWideFormatting(const Api& api) {
-  constexpr Wide simple[] = {'A', 'B', 'C', 0};
-  constexpr Wide character[] = {'%', 'l', 'c', 0};
-  constexpr Wide aliases[] = {'%', 'C', '|', '%', 'S', 0};
-  constexpr Wide alias_result[] = {0x1f642, '|', 0xe9, 0};
-  constexpr Wide word[] = {0xe9, 0};
-  constexpr Wide invalid_input[] = {'A', '%', 's', 'Z', 0};
-  constexpr Wide zero_character[] = {'A', '%', 'l', 'c', 'Z', 0};
-  constexpr Wide escaped_count[] = {'%', '%', 'n', 0};
-  Wide buffer[8] = {'?', '?', '?', '?'};
-
-  *api.errno_value() = 0;
-  Check("zero swprintf capacity reports EINVAL without modifying output",
-        api.print_buffer(buffer, 0, simple) == -1 && *api.errno_value() == EINVAL && buffer[0] == '?');
-  *api.errno_value() = 0;
-  Check("insufficient swprintf capacity reports EOVERFLOW and terminates the prefix",
-        api.print_buffer(buffer, 3, simple) == -1 && *api.errno_value() == 75 &&
-        buffer[0] == 'A' && buffer[1] == 'B' && buffer[2] == 0 && buffer[3] == '?');
-  *api.errno_value() = 0;
-  Check("surrogate wide conversion reports EILSEQ",
-        api.print_buffer(buffer, 8, character, Wint{0xd800}) == -1 && *api.errno_value() == 84);
-  *api.errno_value() = 0;
-  Check("out-of-range wide conversion reports EILSEQ",
-        api.print_buffer(buffer, 8, character, Wint{0x110000}) == -1 && *api.errno_value() == 84);
-  Check("Bionic recognizes the wide %C and %S forms",
-        api.print_buffer(buffer, 8, aliases, Wint{0x1f642}, word) == 3 &&
-        std::memcmp(buffer, alias_result, sizeof(alias_result)) == 0);
-  buffer[2] = '?';
-  Check("an embedded NUL ends swprintf's decode without changing the format count",
-        api.print_buffer(buffer, 8, zero_character, Wint{0}) == 3 &&
-        buffer[0] == 'A' && buffer[1] == 0 && buffer[2] == '?');
-  Check("an escaped percent followed by n remains literal",
-        api.print_buffer(buffer, 8, escaped_count) == 2 && buffer[0] == '%' && buffer[1] == 'n');
-
-  FILE* stream = Stream();
-  *api.errno_value() = 0;
-  Check("fwprintf reports a malformed multibyte conversion and sets ferror",
-        api.print(stream, invalid_input, "\xff") == -1 && *api.errno_value() == 84 &&
-        api.error(stream));
-  ExpectBytes(stream, "A", 1);
-  Check("stream from failed conversion closes", api.close(stream) == 0);
+#if (defined(_WIN32) && !defined(__aarch64__)) || defined(__BIONIC__)
+int FatalFormatChild(const Api& api, bool narrow, bool positional = false) {
+  int count = -1;
+  if (narrow) {
+    using Print = int(SYSV*)(char*, size_t, const char*, ...);
+#ifdef _WIN32
+    Print print = Load<Print>("snprintf");
+#else
+    Print print = snprintf;
+#endif
+    char buffer[8]; print(buffer, sizeof(buffer), positional ? "ab%1$ln" : "ab%n", &count);
+  } else {
+    const Wide format[] = {'a', 'b', '%', 'n', 0};
+    const Wide numbered[] = {'a', 'b', '%', '1', '$', 'l', 'n', 0};
+    Wide buffer[8]; api.print_buffer(buffer, 8, positional ? numbered : format, &count);
+  }
+  return 77;  // Reaching this sentinel means Android's fatal rule was lost.
 }
 
-bool CheckFortifyExit(const wchar_t* option) {
-  std::wstring path(32768, L'\0');
-  DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-  if (length == 0 || length >= path.size()) return false;
-  path.resize(length);
-  std::wstring command = L"bionic_stdio_contract_test.exe ";
-  command += option;
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
+bool FatalFormat(bool narrow, bool positional = false) {
+#ifdef _WIN32
+  wchar_t executable[32768];
+  DWORD length = GetModuleFileNameW(nullptr, executable, sizeof(executable) / sizeof(*executable));
+  if (length == 0 || length >= sizeof(executable) / sizeof(*executable)) return false;
+  std::wstring command = std::wstring(L"\"") + executable + L"\" --fatal-" + (narrow ? L"narrow" : L"wide");
+  if (positional) command += L"-positional";
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+  HANDLE reader = nullptr, writer = nullptr;
+  if (!CreatePipe(&reader, &writer, &attributes, 0)) return false;
+  SetHandleInformation(reader, HANDLE_FLAG_INHERIT, 0);
+  STARTUPINFOW start{}; start.cb = sizeof(start); start.dwFlags = STARTF_USESTDHANDLES;
+  start.hStdInput = GetStdHandle(STD_INPUT_HANDLE); start.hStdOutput = writer; start.hStdError = writer;
   PROCESS_INFORMATION process{};
-  if (!CreateProcessW(path.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
-                      &startup, &process)) return false;
-  DWORD wait = WaitForSingleObject(process.hProcess, 10000);
-  if (wait != WAIT_OBJECT_0) TerminateProcess(process.hProcess, 1);
-  DWORD exit_code = 0;
-  bool aborted = wait == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &exit_code) && exit_code == 3;
-  CloseHandle(process.hThread);
-  CloseHandle(process.hProcess);
-  return aborted;
+  bool created = CreateProcessW(executable, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                nullptr, nullptr, &start, &process);
+  CloseHandle(writer);
+  if (!created) { CloseHandle(reader); return false; }
+  auto output = std::async(std::launch::async, [reader] {
+    std::string text; char bytes[1024]; DWORD size;
+    while (ReadFile(reader, bytes, sizeof(bytes), &size, nullptr) && size) {
+      if (text.size() < 16384) text.append(bytes, size);
+    }
+    CloseHandle(reader); return text;
+  });
+  bool finished = WaitForSingleObject(process.hProcess, 10000) == WAIT_OBJECT_0;
+  if (!finished) { TerminateProcess(process.hProcess, 78); WaitForSingleObject(process.hProcess, 5000); }
+  DWORD status = 0; GetExitCodeProcess(process.hProcess, &status);
+  CloseHandle(process.hThread); CloseHandle(process.hProcess);
+  return finished && status != 0 && status != 77 &&
+      output.get().find("FORTIFY: %n not allowed on Android") != std::string::npos;
+#else
+  int fds[2]; if (pipe(fds)) return false;
+  pid_t child = fork();
+  if (child == 0) {
+    close(fds[0]); dup2(fds[1], STDERR_FILENO); close(fds[1]);
+    alarm(10);
+    _exit(FatalFormatChild(Resolve(), narrow, positional));
+  }
+  close(fds[1]);
+  if (child < 0) { close(fds[0]); return false; }
+  std::string text; char bytes[1024]; ssize_t size;
+  while ((size = read(fds[0], bytes, sizeof(bytes))) > 0) {
+    if (text.size() < 16384) text.append(bytes, size);
+  }
+  close(fds[0]); int status = 0;
+  return waitpid(child, &status, 0) == child && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+      text.find("FORTIFY: %n not allowed on Android") != std::string::npos;
+#endif
 }
 #endif
 }  // namespace
 
 int main(int argc, char** argv) {
   const Api api = Resolve();
-#if defined(_WIN32) && defined(__x86_64__)
-  if (argc == 2) {
-    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-    int count = 0;
-    if (std::strcmp(argv[1], "--wide-fortify") == 0) {
-      constexpr Wide fmt[] = {'A', '%', '1', '$', 'l', 'n', 0};
-      Wide buffer[8]{};
-      api.print_buffer(buffer, 8, fmt, &count);
-    } else if (std::strcmp(argv[1], "--narrow-fortify") == 0) {
-      using Print = int(SYSV*)(char*, size_t, const char*, ...);
-      char buffer[8]{};
-      Load<Print>("snprintf")(buffer, sizeof(buffer), "A%n", &count);
-    }
-    return 2;
-  }
-  TestBionicWideFormatting(api);
-  Check("printf %n triggers FORTIFY", CheckFortifyExit(L"--narrow-fortify"));
-  Check("wide printf %n triggers FORTIFY", CheckFortifyExit(L"--wide-fortify"));
+#if (defined(_WIN32) && !defined(__aarch64__)) || defined(__BIONIC__)
+#ifdef _WIN32
+  SetErrorMode(SEM_NOGPFAULTERRORBOX);
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
+  if (argc == 2 && std::strcmp(argv[1], "--fatal-narrow") == 0) return FatalFormatChild(api, true);
+  if (argc == 2 && std::strcmp(argv[1], "--fatal-wide") == 0) return FatalFormatChild(api, false);
+  if (argc == 2 && std::strcmp(argv[1], "--fatal-narrow-positional") == 0) return FatalFormatChild(api, true, true);
+  if (argc == 2 && std::strcmp(argv[1], "--fatal-wide-positional") == 0) return FatalFormatChild(api, false, true);
+  Check("narrow printf %n is fatal with Bionic diagnostic", FatalFormat(true));
+  Check("wide printf %n is fatal with Bionic diagnostic", FatalFormat(false));
+  Check("positional narrow printf %n is fatal", FatalFormat(true, true));
+  Check("positional wide printf %n is fatal", FatalFormat(false, true));
 #else
-  (void)argc;
-  (void)argv;
+  (void)argc; (void)argv;
 #endif
   TestLocks(api);
   TestWideInput(api);
