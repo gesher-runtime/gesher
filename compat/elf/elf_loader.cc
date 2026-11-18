@@ -1129,13 +1129,16 @@ bool ApplyRelr(Library* lib, std::string* error) {
 // libraries linked with --pack-dyn-relocs=android carry all their non-PLT
 // relocations here (libwaze.so: 281843; their GOT, .init_array and
 // .data.rel.ro are zeros in the file until these are applied).
-bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* out,
-                       std::string* error) {
-  const uint8_t* end = p + size;
+// Validation checks every group and encoded field without materializing its
+// relocations. The application pass may only consume that same owned, validated
+// snapshot; it reconstructs values once and calls the visitor in wire order.
+template <bool ValidateOnly, typename Visit>
+bool DecodeAndroidRela(const uint8_t* p, size_t size, Visit&& visit, std::string* error) {
   if (size < 4 || std::memcmp(p, "APS2", 4) != 0) {
     Fail(error, "DT_ANDROID_RELA is not APS2-packed");
     return false;
   }
+  const uint8_t* end = p + size;
   p += 4;
   bool ok = true;
   auto sleb = [&]() -> uint64_t {
@@ -1143,9 +1146,11 @@ bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* o
     unsigned shift = 0;
     uint8_t byte = 0;
     do {
-      if (p >= end) {
-        ok = false;
-        return 0;
+      if constexpr (ValidateOnly) {
+        if (p >= end) {
+          ok = false;
+          return 0;
+        }
       }
       byte = *p++;
       if (shift < 64) value |= static_cast<uint64_t>(byte & 0x7f) << shift;
@@ -1159,29 +1164,53 @@ bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* o
   const uint64_t count = sleb();
   Elf64_Rela r{};
   r.r_offset = sleb();
-  if (ok && count < size * 8) out->reserve(count);
-  while (ok && out->size() < count) {
+  uint64_t decoded = 0;
+  while (ok && decoded < count) {
     const uint64_t group_size = sleb();
     const uint64_t flags = sleb();
-    if (!ok || group_size == 0 || group_size > count - out->size()) {
+    if (!ok || group_size == 0 || group_size > count - decoded) {
       ok = false;
       break;
     }
     const uint64_t delta = (flags & kGroupedByOffsetDelta) ? sleb() : 0;
     if (flags & kGroupedByInfo) r.r_info = sleb();
     if ((flags & kGroupHasAddend) && (flags & kGroupedByAddend)) {
-      r.r_addend += static_cast<int64_t>(sleb());
+      r.r_addend = static_cast<int64_t>(static_cast<uint64_t>(r.r_addend) + sleb());
     } else if (!(flags & kGroupHasAddend)) {
       r.r_addend = 0;
+    }
+    if constexpr (ValidateOnly) {
+      // Each member has the same number of ungrouped SLEB128 fields. Only
+      // their terminating bytes matter to validation: no offsets or addends
+      // need to be decoded twice. Fully grouped members have no encoded
+      // fields, so even a large group is validated in constant work.
+      const uint64_t fields = !(flags & kGroupedByOffsetDelta) +
+                              !(flags & kGroupedByInfo) +
+                              ((flags & kGroupHasAddend) && !(flags & kGroupedByAddend));
+      if (fields != 0) {
+        if (group_size > static_cast<uint64_t>(end - p) / fields) {
+          ok = false;
+          break;
+        }
+        uint64_t left = group_size * fields;
+        while (left != 0 && p < end) left -= (*p++ & 0x80) == 0;
+        if (left != 0) {
+          ok = false;
+          break;
+        }
+      }
+      decoded += group_size;
+      continue;
     }
     for (uint64_t i = 0; ok && i < group_size; ++i) {
       r.r_offset += (flags & kGroupedByOffsetDelta) ? delta : sleb();
       if (!(flags & kGroupedByInfo)) r.r_info = sleb();
       if ((flags & kGroupHasAddend) && !(flags & kGroupedByAddend)) {
-        r.r_addend += static_cast<int64_t>(sleb());
+        r.r_addend = static_cast<int64_t>(static_cast<uint64_t>(r.r_addend) + sleb());
       }
-      out->push_back(r);
+      if (ok && !visit(r)) return false;
     }
+    decoded += group_size;
   }
   if (!ok) {
     Fail(error, "malformed DT_ANDROID_RELA (APS2) relocations");
@@ -1193,18 +1222,30 @@ bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* o
 bool Relocate(Library* lib, std::string* error) {
   // DT_RELR is arch-neutral (load-bias add).
   if (lib->relr && !ApplyRelr(lib, error)) return false;
-  std::vector<Elf64_Rela> packed;
-  if (lib->android_rela != nullptr &&
-      !DecodeAndroidRela(lib->android_rela, lib->android_rela_size, &packed, error)) {
-    return false;
+  // Keep the original validate-before-apply and snapshot semantics. A regular
+  // RELA, packed relocation or IFUNC may overwrite mapped APS2 metadata, and a
+  // resolver may reenter this loader. Own only its compact bytes for this load;
+  // do not retain an expanded 24-byte record for every relocation.
+  std::vector<uint8_t> packed;
+  if (lib->android_rela != nullptr) {
+    // Preserve the old header-only rejection: an invalid signature must not
+    // make us copy or inspect the rest of the claimed section.
+    if (lib->android_rela_size < 4 || std::memcmp(lib->android_rela, "APS2", 4) != 0) {
+      Fail(error, "DT_ANDROID_RELA is not APS2-packed");
+      return false;
+    }
+    packed.assign(lib->android_rela, lib->android_rela + lib->android_rela_size);
+    if (!DecodeAndroidRela<true>(packed.data(), packed.size(),
+                                [](const Elf64_Rela&) { return true; }, error)) return false;
   }
   if (lib->is_aarch64) {
     for (size_t i = 0; i < lib->rela_count; ++i) {
       if (!ApplyRelaAarch64(lib, lib->rela[i], error)) return false;
     }
-    for (const Elf64_Rela& r : packed) {
-      if (!ApplyRelaAarch64(lib, r, error)) return false;
-    }
+    if (!packed.empty() &&
+        !DecodeAndroidRela<false>(packed.data(), packed.size(),
+                                 [&](const Elf64_Rela& r) { return ApplyRelaAarch64(lib, r, error); },
+                                 error)) return false;
     for (size_t i = 0; i < lib->jmprel_count; ++i) {
       if (!ApplyRelaAarch64(lib, lib->jmprel[i], error)) return false;
     }
@@ -1213,9 +1254,10 @@ bool Relocate(Library* lib, std::string* error) {
   for (size_t i = 0; i < lib->rela_count; ++i) {
     if (!ApplyRela(lib, lib->rela[i], error)) return false;
   }
-  for (const Elf64_Rela& r : packed) {
-    if (!ApplyRela(lib, r, error)) return false;
-  }
+  if (!packed.empty() &&
+      !DecodeAndroidRela<false>(packed.data(), packed.size(),
+                               [&](const Elf64_Rela& r) { return ApplyRela(lib, r, error); },
+                               error)) return false;
   for (size_t i = 0; i < lib->jmprel_count; ++i) {
     if (!ApplyRela(lib, lib->jmprel[i], error)) return false;
   }
