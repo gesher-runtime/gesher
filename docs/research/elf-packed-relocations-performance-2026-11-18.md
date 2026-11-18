@@ -183,8 +183,8 @@ python3 tools/test_elf_packed_relocations.py --measure-only \
 ```
 
 At this revision, the complete production file SHA-256 is
-`dcdec6646a35ba02e1259b629ea8352656c8a6ea1858855ea24371e31bb33f4d`;
+`50fc1607510440f71c25b617b7c7d348a9ec7ec622bb3b758410b8f3048502cd`;
 the extracted changed decoder/dispatcher digest printed by the runner is
-`b85c4d0655cc698c09bef32bf525e877caaa870feedb7aa72a2fc4783bb93e65`.
+`e7185eda22777ed39961f75fdb2edd78f9c5c3fc6f4b9db4c3f66239c42bcae3`.
 The exact baseline section digest is
 `88e596e7cc4e13ef3aa251d7f34c07dc94d2b6e96a569e4ddc13a5ac03681e4f`.
