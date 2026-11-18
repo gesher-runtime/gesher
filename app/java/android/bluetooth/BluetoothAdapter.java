@@ -263,9 +263,10 @@ public final class BluetoothAdapter {
         return false;
     }
 
-    /** Report delays (batches) are done in the app's process. */
+    /** Whether the controller provides on-chip scan batching, not app-process batching. */
     public boolean isOffloadedScanBatchingSupported() {
-        return true;
+        // The Windows advertisement watcher does not expose controller batching.
+        return false;
     }
 
     public boolean isLe2MPhySupported() {

@@ -8,6 +8,10 @@ asks for a general code review without repeating the policy.
 
 - Gesher provides Android compatibility on Windows. Preserve Android-visible
   contracts and application workflows when implementing desktop integration.
+- Windows APIs, real hardware, desktop presentation and different internal
+  mechanisms are expected implementation choices. Match the meaning of the
+  requested operation and its observable results; do not require AOSP's internal
+  implementation or treat a Windows-specific choice as a defect by itself.
 - Do not substitute inputs, fabricate capabilities or success, or bypass an
   application's requirements to make a specific application operation succeed.
   Changing only Gesher rather than the APK does not exempt a change.
@@ -15,8 +19,12 @@ asks for a general code review without repeating the policy.
   integrations when they preserve their respective contracts. Replacing live
   camera capture with a saved image to satisfy an application's capture flow
   is outside scope.
+- Selecting a real camera or explicitly configuring its physical mounting is
+  legitimate when it describes reality. It does not by itself establish a
+  higher hardware level, additional capabilities or different sensor geometry.
 - Preserve Android lifecycle, permission, error and capability contracts. Discuss
-  unclear Windows adaptations or non-runtime scope questions, but do not treat
+  materially unclear application-visible contracts or non-runtime scope questions,
+  but do not treat
   maintainer approval as permission to waive those contracts. Continue ordinary
   compatibility work without additional scope approval.
 - Test the relevant production behavior and describe validation limits. Keep
@@ -32,7 +40,12 @@ asks for a general code review without repeating the policy.
    are changed to bypass its expectations. Inspect affected call paths and tests
    where needed; green CI does not establish policy compliance.
 3. Mark a policy violation as a **merge blocker**. Cite the code location,
-   the policy rule and the behavior it causes. Recommend removal or redesign,
+   what the application requested, what the implementation does, the applicable
+   contract and the observable consequence. Base removal or redesign on that
+   mismatch or a concrete correctness, security, performance or resource problem.
+   Preserve useful Windows adaptations without a substantiated defect; internal
+   differences from AOSP are not sufficient grounds for rejection.
+   Recommend removal or redesign of the violating behavior,
    and do not recommend approval while the violation remains unresolved.
    Maintainer approval does not waive the Android-contract requirements.
 4. Verify contract evidence and any relevant scope discussion in the supplied or
