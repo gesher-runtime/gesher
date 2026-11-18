@@ -40,12 +40,15 @@ public final class SettingsProviderContractTest {
         throw new AssertionError("Expected " + expected.getSimpleName());
     }
     private static ContentProvider provider(File file) throws Exception {
+        return provider(file, null);
+    }
+    private static ContentProvider provider(File file, Object packages) throws Exception {
         Class<?> type = Class.forName("com.gesher.server.SettingsProvider");
         Constructor<?> constructor; Object[] arguments;
         try {
             constructor = type.getDeclaredConstructor(Class.forName("com.gesher.server.PackageManagerService"),
                     Class.forName("com.gesher.server.ActivityTaskManagerService"), File.class);
-            arguments = new Object[]{null, null, file};
+            arguments = new Object[]{packages, null, file};
         } catch (NoSuchMethodException baseline) {
             constructor = type.getDeclaredConstructor(); arguments = new Object[0];
         }
@@ -181,6 +184,40 @@ public final class SettingsProviderContractTest {
             Binder.restoreCallingIdentity(identity);
         }
     }
+    private static void transientCheckerRows(File file) throws Exception {
+        Class<?> packageType = Class.forName("com.gesher.server.PackageManagerService");
+        Constructor<?> constructor = packageType.getDeclaredConstructor(java.util.Collection.class, boolean.class);
+        constructor.setAccessible(true);
+        ContentProvider p = provider(file, constructor.newInstance(java.util.List.of(), false));
+        Class<?> type = p.getClass();
+        var settings = type.getDeclaredMethod("spellCheckerSettings");
+        settings.setAccessible(true);
+        var initialize = type.getDeclaredMethod("initializeSpellChecker",
+                Class.forName("com.gesher.server.SettingsProvider$SpellCheckerSettings"),
+                Class.forName("com.gesher.server.SpellCheckerCatalog$Entry"));
+        initialize.setAccessible(true);
+        check((Boolean) initialize.invoke(p, settings.invoke(p), null), "Transient checker initialization");
+        Uri secure = Uri.parse("content://settings/secure");
+        java.util.Set<Long> ids = new java.util.HashSet<>();
+        int textRows = 0;
+        try (Cursor c = p.query(secure, null, null, null, null)) {
+            while (c.moveToNext()) {
+                check(ids.add(c.getLong(c.getColumnIndexOrThrow("_id"))), "Duplicate secure row ID");
+                String name = c.getString(c.getColumnIndexOrThrow("name"));
+                String value = c.getString(c.getColumnIndexOrThrow("value"));
+                if (Settings.Secure.SELECTED_SPELL_CHECKER.equals(name)) {
+                    check("".equals(value), "Transient checker row value"); textRows++;
+                } else if (Settings.Secure.SELECTED_SPELL_CHECKER_SUBTYPE.equals(name)) {
+                    check("0".equals(value), "Transient subtype row value"); textRows++;
+                }
+            }
+        }
+        check(textRows == 2, "Transient text-service rows missing from query");
+        rejects(SecurityException.class, () -> p.call("PUT_secure",
+                Settings.Secure.SELECTED_SPELL_CHECKER_SUBTYPE, value("42")));
+        check(!new File(file.toString() + ".spell-checker").exists(),
+                "Transient profile touched privileged checker storage");
+    }
     private static void limits(ContentProvider p) throws Exception {
         p.call("PUT_system", "limit", value("x".repeat(32768)));
         check(read(p, "limit").length() == 32768, "Maximum accepted value");
@@ -230,12 +267,13 @@ public final class SettingsProviderContractTest {
         clock.setAccessible(true); clock.set(null, Boolean.TRUE); // Declared host locale boundary.
         File directory = Files.createTempDirectory("gesher-settings-contract-").toFile();
         try {
-            for (String name : new String[]{"query", "crud", "call", "persistence", "limits", "observers"}) {
+            for (String name : new String[]{"query", "crud", "call", "persistence", "transient", "limits", "observers"}) {
                 if (!group.equals("all") && !group.equals(name)) continue;
                 File file = new File(directory, name + ".bin"); ContentProvider p = provider(file);
                 switch (name) {
                     case "query": query(p); break; case "crud": crud(p); break;
                     case "call": call(p); break; case "persistence": persistence(file); break;
+                    case "transient": transientCheckerRows(file); break;
                     case "limits": limits(p); break; case "observers": observers(p); break;
                     default: throw new AssertionError(name);
                 }

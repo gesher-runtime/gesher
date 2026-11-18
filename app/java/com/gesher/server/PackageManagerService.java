@@ -410,8 +410,13 @@ public final class PackageManagerService extends IPackageManager.Default {
         Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
         for (String removing : mRemoving.keySet()) packages.remove(removing);
         ApkPackage caller = packages.get(source);
-        return caller != null && new PackageVisibility(packages, false, false, false,
-                this::isProtectedBroadcast).canSee(caller.uid(), target);
+        if (caller == null) return false;
+        PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
+                this::isProtectedBroadcast);
+        // A compatibility UID is not a genuine shared-UID relationship. The
+        // authenticated package still owns its own queries in the legacy mode.
+        return GmsSignatureSpoofing.isEnabled() ? visibility.canSee(caller.uid(), target)
+                : visibility.canSeeFromPackage(source, target);
     }
 
     /** The services {@code intent} resolves to, in every package. */

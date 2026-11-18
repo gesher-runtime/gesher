@@ -385,6 +385,16 @@ final class SettingsProvider extends ContentProvider {
         return textKey(table, name) ? mTextStore : mStore;
     }
 
+    private long rowId(String table, String name) {
+        SettingsStore store = store(table, name);
+        // Single-process profiles expose the server's initial text-service rows
+        // without opening the privileged device store. Give those read-only rows
+        // distinct IDs too; a normal default-projection query must remain usable.
+        long id = store != null ? store.id(table, name)
+                : SELECTED_CHECKER.equals(name) ? 0 : CHECKER_SUBTYPE.equals(name) ? 1 : 2;
+        return textKey(table, name) ? (1L << 62) | id : id;
+    }
+
     private boolean put(String table, String name, String value, boolean existingOnly) {
         synchronized (this) {
             if (SECURE.equals(table) && SELECTED_CHECKER.equals(name)) {
@@ -482,9 +492,7 @@ final class SettingsProvider extends ContentProvider {
                 for (int i = 0; i < columns.length; i++) {
                     switch (columns[i]) {
                         case "_id":
-                            long id = store(args.table, entry.getKey()).id(args.table, entry.getKey());
-                            // Distinguish rows from the two durable stores in a mixed SECURE query.
-                            row[i] = Long.toString(textKey(args.table, entry.getKey()) ? (1L << 62) | id : id);
+                            row[i] = Long.toString(rowId(args.table, entry.getKey()));
                             break;
                         case "name": row[i] = entry.getKey(); break;
                         case "value": row[i] = visible(args.table, entry.getKey(), entry.getValue()); break;
