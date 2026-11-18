@@ -222,6 +222,8 @@ public final class SystemServer {
             device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
                     idleTimeoutS);
             services.put(GesherService.NAME, new GesherService(device));
+        } else {
+            Installer.attachMetadata(created.pm, created.atm);
         }
         for (Map.Entry<String, IBinder> e : services.entrySet()) {
             ServiceManager.addService(e.getKey(), e.getValue());

@@ -313,6 +313,37 @@ public final class PackageVisibilityContractTest {
             as(installer.uid(), () -> expect(PackageManager.NameNotFoundException.class,
                     () -> publicClient.getInstallSourceInfo(A), "Installer visibility was made bidirectional"));
         }
+        // AOSP grants separate visibility edges to the still-installed initiator and
+        // the reassigned installer. Third-party callers filter those two roles independently.
+        String d = "fixture.visibility.d", e = "fixture.visibility.e";
+        ApkPackage nextInstaller = record(parsed(d));
+        set(nextInstaller, "mEnabledOwner", "932c12b3-57c3-40eb-9d6e-d0913c506914");
+        PackageImpl seesNext = parsed(C); seesNext.addQueriesPackage(A); seesNext.addQueriesPackage(d);
+        observerRecord = record(seesNext);
+        PackageImpl seesInitiator = parsed(e); seesInitiator.addQueriesPackage(A); seesInitiator.addQueriesPackage(B);
+        ApkPackage initiatingObserver = record(seesInitiator);
+        var replace = type.getDeclaredMethod("withInstaller", ApkPackage.class); replace.setAccessible(true);
+        set(target, "mInstallSource", replace.invoke(attribution, nextInstaller));
+        set(pm, "mPackages", Map.of(A, target, B, installer, C, observerRecord, d, nextInstaller, e, initiatingObserver));
+        as(target.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(B.equals(source.getInitiatingPackageName()) && d.equals(source.getInstallingPackageName()),
+                    "Reassignment replaced the historical initiator");
+            check(publicClient.canPackageQuery(A, B) && publicClient.canPackageQuery(A, d),
+                    "Installed initiator lost its visibility edge after reassignment");
+        });
+        if (target.uid() != observerRecord.uid()) {
+            as(observerRecord.uid(), () -> {
+                InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+                check(source.getInitiatingPackageName() == null && d.equals(source.getInstallingPackageName()),
+                        "Current installer visibility leaked the independent initiator");
+            });
+            as(initiatingObserver.uid(), () -> {
+                InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+                check(B.equals(source.getInitiatingPackageName()) && source.getInstallingPackageName() == null,
+                        "Initiator visibility depended on visibility of the current installer");
+            });
+        }
         set(pm, "mPackages", Map.of(A, target, C, observerRecord));
         check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
                 "Removed installer remained installer of record");

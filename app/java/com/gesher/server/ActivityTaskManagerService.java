@@ -1763,6 +1763,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return app != null && !app.dead ? app.packageName : null;
     }
 
+    /** Capture current installed code, so a later name lookup cannot adopt a replacement. */
+    synchronized ApkPackage authenticatedPackageCodeForPid(int pid, int uid) {
+        // A scheduled exit does not end the identity of an attached, live process.
+        ProcessRecord app = attachedProcessByPid(pid);
+        ApkPackage code = app == null || app.dead ? null : app.packageCode;
+        return code != null && app.uid == uid && code.uid() == uid
+                && code.packageName.equals(app.packageName) && mPm.get(code.packageName) == code
+                && !mPm.isRemovalPending(code.packageName) ? code : null;
+    }
+
     /** One-time enrollment in a mode that already permits real self-attachment. */
     private synchronized boolean legacyBootstrapProcess(ProcessRecord app,
             IApplicationThread thread, int pid, int uid) {

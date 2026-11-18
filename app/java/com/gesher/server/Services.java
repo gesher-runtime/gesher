@@ -91,6 +91,7 @@ public final class Services {
         Map<String, IBinder> services = new LinkedHashMap<>();
         PackageManagerService pm = new PackageManagerService(packages, persistentAccounts);
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        pm.attachInstallSourceCallers(atm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         sLast = new Created(pm, atm, am);

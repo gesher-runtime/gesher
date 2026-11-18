@@ -126,8 +126,9 @@ final class PackageVisibility {
 
     private boolean declaresVisibility(Entry source, Entry target) {
         if (source.apk == null) return false;
-        // AOSP makes the actual installer visible to the app it installed.
-        if (source.apk.installSource().isInstaller(target.apk)) return true;
+        // Android preserves both the current installer and the still-installed initiator.
+        if (source.apk.installSource().isInstaller(target.apk)
+                || source.apk.installSource().isInitiator(target.apk)) return true;
         ParsedPackage querying = source.apk.parsed;
         if (querying.getQueriesPackages().contains(target.name)) return true;
         if (target.apk == null) {
