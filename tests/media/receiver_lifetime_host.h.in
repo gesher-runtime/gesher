@@ -141,7 +141,8 @@ struct Recorder {
   RecorderConfig& config() { return settings; }
   InputSurface* input_surface() { return &surface; }
   bool Prepare(std::string*) { recorder_gate.Pass(); return true; }
-  bool Start(std::string*) {
+  bool Start(std::string*, bool* invalid_state = nullptr) {
+    if (invalid_state != nullptr) *invalid_state = false;
     if (recorder_event_mode.load() != 0) listener(2, recorder_event_mode.load());
     return true;
   }
