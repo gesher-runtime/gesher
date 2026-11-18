@@ -522,6 +522,12 @@ jobs:
           python3 tools/test_media_routing_contracts.py \
             --framework-classes out/framework/classes --core-classes out/coremod
 
+      - name: Account authentication session terminal lifetimes
+        run: |
+          python3 tools/test_account_session_lifetime.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Sync admission, results and adapter lifecycle contracts
         run: |
           python3 tools/test_sync_manager.py --java-home "$JAVA_HOME" \
