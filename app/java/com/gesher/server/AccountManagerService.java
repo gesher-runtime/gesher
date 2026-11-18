@@ -173,9 +173,15 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
     // Calls to authenticators wait on their binding and answer: off the binder threads.
     private final java.util.concurrent.ScheduledExecutorService mSessionTimeout =
-            Executors.newSingleThreadScheduledExecutor(r -> {
+            sessionTimer();
+    private static java.util.concurrent.ScheduledThreadPoolExecutor sessionTimer() {
+        java.util.concurrent.ScheduledThreadPoolExecutor timer =
+            new java.util.concurrent.ScheduledThreadPoolExecutor(1, r -> {
                 Thread t = new Thread(r, "account-session-timeout"); t.setDaemon(true); return t;
             });
+        timer.setRemoveOnCancelPolicy(true);
+        return timer;
+    }
     private final ExecutorService mCalls = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "accounts");
         t.setDaemon(true);
@@ -1465,6 +1471,17 @@ public final class AccountManagerService extends IAccountManager.Default {
         private java.util.function.Consumer<Bundle> listener;
         private java.util.function.BiConsumer<Integer, String> errorListener;
         private boolean complete, failed;
+        private java.util.concurrent.ScheduledFuture<?> timeout;
+
+        /** Called with this Answer's monitor held on every terminal session path. */
+        private void completeLocked() {
+            complete = true;
+            if (timeout != null) { timeout.cancel(false); timeout = null; }
+            listener = null;
+            errorListener = null;
+            result = null;
+            pending.clear();
+        }
 
         Answer(Authenticator owner) { this(owner, null); }
         Answer(Authenticator owner, Caller client) {
@@ -1480,9 +1497,11 @@ public final class AccountManagerService extends IAccountManager.Default {
             java.util.function.BiConsumer<Integer, String> listener;
             synchronized (this) {
                 if (complete) return;
-                complete = true; failed = true; result = null; pending.clear();
+                failed = true;
                 code = AccountManager.ERROR_CODE_CANCELED; message = "Account package access removed";
-                listener = errorListener; done.countDown();
+                listener = errorListener;
+                completeLocked();
+                done.countDown();
             }
             if (listener != null) mCalls.execute(() -> listener.accept(
                     AccountManager.ERROR_CODE_CANCELED, "Account package access removed"));
@@ -1523,7 +1542,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             synchronized (this) {
                 if (complete) return;
                 code = errorCode; message = errorMessage; failed = true; deliver = errorListener;
-                if (deliver != null) complete = true;
+                if (deliver != null) completeLocked();
                 done.countDown();
             }
             if (deliver != null) deliver.accept(errorCode, errorMessage);
@@ -1543,8 +1562,10 @@ public final class AccountManagerService extends IAccountManager.Default {
         void deliverSession(IAccountManagerResponse response, ResultCheck check) {
             if (!current()) { cancelForRemoval(); error(response, code, message); return; }
             List<Bundle> initial;
+            java.util.function.Consumer<Bundle> continuation;
             synchronized (this) {
-                if (result == null || failed) { complete = true; error(response, code, message); return; }
+                if (complete) return;
+                if (result == null || failed) { completeLocked(); error(response, code, message); return; }
                 listener = value -> {
                     synchronized (this) { if (complete) return; }
                     Bundle checked;
@@ -1552,23 +1573,27 @@ public final class AccountManagerService extends IAccountManager.Default {
                     catch (RuntimeException e) { checked = null; }
                     synchronized (this) {
                         if (complete) return;
-                        if (checked == null || !checked.containsKey(AccountManager.KEY_INTENT)) complete = true;
+                        if (checked == null || !checked.containsKey(AccountManager.KEY_INTENT)) completeLocked();
                     }
                     if (checked == null) error(response, AccountManager.ERROR_CODE_INVALID_RESPONSE, "Invalid authenticator response");
                     else reply(response, checked);
                 };
                 errorListener = (c, m) -> error(response, c, m);
                 initial = new ArrayList<>(); initial.add(result); initial.addAll(pending); pending.clear();
+                result = null;
+                continuation = listener;
             }
-            for (Bundle value : initial) listener.accept(value);
-            synchronized (this) { if (complete) return; }
-            mSessionTimeout.schedule(() -> {
-                synchronized (this) {
-                    if (complete) return;
-                    complete = true;
-                }
-                error(response, AccountManager.ERROR_CODE_CANCELED, "Authentication session expired");
-            }, 10, TimeUnit.MINUTES);
+            for (Bundle value : initial) continuation.accept(value);
+            synchronized (this) {
+                if (complete) return;
+                timeout = mSessionTimeout.schedule(() -> {
+                    synchronized (this) {
+                        if (complete) return;
+                        completeLocked();
+                    }
+                    error(response, AccountManager.ERROR_CODE_CANCELED, "Authentication session expired");
+                }, 10, TimeUnit.MINUTES);
+            }
         }
     }
 
