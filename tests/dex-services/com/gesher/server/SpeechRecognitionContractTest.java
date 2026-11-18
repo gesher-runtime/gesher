@@ -296,7 +296,7 @@ public final class SpeechRecognitionContractTest {
                 "actual owning process death cancels even with its session token still live");
     }
 
-    private static void unavailableAndBounded() throws Exception {
+    private static void unavailableAndShared() throws Exception {
         Backend backend = new Backend();
         SpeechRecognitionManagerService manager = new SpeechRecognitionManagerService(backend, 80);
         Admission callback = new Admission();
@@ -397,7 +397,7 @@ public final class SpeechRecognitionContractTest {
         manifestEligibility();
         lifecycle();
         supportAndDeath();
-        unavailableAndBounded();
+        unavailableAndShared();
         java.lang.System.out.println("SpeechRecognitionContractTest all passed: " + checks + " checks");
     }
 }
