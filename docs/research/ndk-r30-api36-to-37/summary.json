@@ -4520,7 +4520,7 @@
   "delta_rows_sha256": "6d699937ab281f349f8f21f20b1483165f4850b5a08bbd10181c68d0b4642797",
   "generator_files_sha256": {
     "elf_symbol_inventory.py": "9e5b1e39212685145cb9056d20b8103e6ba3a311b16a15fa6e954060f26ec07a",
-    "ndk_platform_diff.py": "7cf38050a113ab5d5c2d39b610c3cc473d92221e7994df249817a3818710526e"
+    "ndk_platform_diff.py": "90112086bfc6c3a9fa44d3e761135e3fe50b67a2273995ef9402a30fc46e74ad"
   },
   "interpretation": [
     "Every ABI declared by this package's abis.json is considered; default=false and minimum OS versions are retained. Packaged ABI presence is not device/runtime qualification.",

@@ -30,7 +30,7 @@ def symbol(version="V1", default=True, size=None):
             "default_version": default if version else None}
 
 
-def ndk_fixture(path):
+def ndk_fixture(path, duplicate_existing=False):
     compiler = "toolchains/llvm/prebuilt/linux-x86_64/"
     metadata = {
         "source.properties": "Pkg.Desc = Synthetic NDK fixture\nPkg.Revision = 30.0.0\nPkg.ReleaseName = fixture\n",
@@ -45,6 +45,8 @@ def ndk_fixture(path):
         for api in apis:
             prefix = f"{compiler}sysroot/usr/lib/{arch}-linux-android/{api}/"
             names = ["existing"] + (["added"] if api == 37 else [])
+            if duplicate_existing:
+                names.append("existing")
             files[prefix + "libplatform.so"] = static_elf_fixture(machine=machine, symbols=[{"name": n} for n in names])
             if api == 37:
                 files[prefix + "liblater.so"] = static_elf_fixture(machine=machine, symbols=[{"name": "introduced_library_api"}])
@@ -160,6 +162,24 @@ class NdkPlatformDiffTests(unittest.TestCase):
             wrong["archive"]["sha256"] = "0" * 64
             with self.assertRaisesRegex(ValueError, "ndk_archive_pin_mismatch"):
                 diff.compare(archive, wrong)
+
+    def test_profile_denominator_counts_identities_and_preserves_duplicate_records(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "duplicates.zip"
+            manifest = ndk_fixture(archive, duplicate_existing=True)
+            report, _ = diff.compare(archive, manifest)
+            profiles = report["profiles"]["x86_64"]
+            comparison = report["comparisons"]["x86_64"]["defined_exports"]
+            for side, identities, records in (("before", 1, 2), ("after", 3, 4)):
+                profile = profiles[side]
+                self.assertEqual(profile["public_export_denominator"], identities)
+                self.assertEqual(profile["observed_export_records"], records)
+                self.assertEqual(comparison[side], identities)
+                self.assertEqual(comparison[side + "_records"], records)
+                self.assertEqual(profile["public_export_denominator"], sum(
+                    library["defined_export_identities"] for library in profile["libraries"].values()))
+            self.assertIn("| x86_64 | True | available / 1 | available / 3 | 2 | 0 | 0 |",
+                          diff.markdown(report))
 
 
 if __name__ == "__main__":

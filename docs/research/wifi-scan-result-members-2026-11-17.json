@@ -1,0 +1,806 @@
+{
+  "schema_version": 1,
+  "scope": "Focused SDK36 member lookup on freshly compiled value classes and candidate application DEX; not a full boot-provider inventory or behavioral compatibility percentage.",
+  "baseline_source_commit": "0af3fd8333e43cdeb7a3b4bcd0403758e6d556c2",
+  "sdk_api": 36,
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "framework_core_compile_artifact_source_commit_prefix": "db5e76bd",
+  "candidate_app_dex_sha256": "e6d9539e663a392b65ceebd41cc22723f470790aecbb489648cc468e33691be8",
+  "baseline_resolution": "Fresh current-main ScanResult class; Object and Parcelable hierarchy from framework/core compile artifact. Absent value types verified absent from baseline app sources and saved boot inventory.",
+  "summary": [
+    {
+      "class": "android.net.wifi.ScanResult",
+      "sdk_public_protected_members": 55,
+      "baseline_missing_members": 44,
+      "candidate_missing_or_incompatible_members": 0
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "sdk_public_protected_members": 10,
+      "baseline_missing_members": 10,
+      "candidate_missing_or_incompatible_members": 0
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "sdk_public_protected_members": 21,
+      "baseline_missing_members": 21,
+      "candidate_missing_or_incompatible_members": 0
+    }
+  ],
+  "rows": [
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "BSSID",
+      "descriptor": "Ljava/lang/String;",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "CHANNEL_WIDTH_160MHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "CHANNEL_WIDTH_20MHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "CHANNEL_WIDTH_320MHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "CHANNEL_WIDTH_40MHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "CHANNEL_WIDTH_80MHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "CHANNEL_WIDTH_80MHZ_PLUS_MHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "PREAMBLE_EHT",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "PREAMBLE_HE",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "PREAMBLE_HT",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "PREAMBLE_LEGACY",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "PREAMBLE_VHT",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "SSID",
+      "descriptor": "Ljava/lang/String;",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "UNSPECIFIED",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_BAND_24_GHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_BAND_5_GHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_BAND_60_GHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_BAND_6_GHZ",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_STANDARD_11AC",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_STANDARD_11AD",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_STANDARD_11AX",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_STANDARD_11BE",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_STANDARD_11N",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_STANDARD_LEGACY",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "WIFI_STANDARD_UNKNOWN",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "capabilities",
+      "descriptor": "Ljava/lang/String;",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "centerFreq0",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "centerFreq1",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "channelWidth",
+      "descriptor": "I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "frequency",
+      "descriptor": "I",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "level",
+      "descriptor": "I",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "operatorFriendlyName",
+      "descriptor": "Ljava/lang/CharSequence;",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "timestamp",
+      "descriptor": "J",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "field",
+      "name": "venueName",
+      "descriptor": "Ljava/lang/CharSequence;",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/ScanResult;)V",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "convertChannelToFrequencyMhzIfSupported",
+      "descriptor": "(II)I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "convertFrequencyMhzToChannelIfSupported",
+      "descriptor": "(I)I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "getAffiliatedMloLinks",
+      "descriptor": "()Ljava/util/List;",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "getApMldMacAddress",
+      "descriptor": "()Landroid/net/MacAddress;",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "getApMloLinkId",
+      "descriptor": "()I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "getInformationElements",
+      "descriptor": "()Ljava/util/List;",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "getSecurityTypes",
+      "descriptor": "()[I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "getWifiSsid",
+      "descriptor": "()Landroid/net/wifi/WifiSsid;",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "getWifiStandard",
+      "descriptor": "()I",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "is80211azNtbResponder",
+      "descriptor": "()Z",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "is80211mcResponder",
+      "descriptor": "()Z",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "isPasspointNetwork",
+      "descriptor": "()Z",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "isRangingFrameProtectionRequired",
+      "descriptor": "()Z",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "isSecureHeLtfSupported",
+      "descriptor": "()Z",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "isTwtResponder",
+      "descriptor": "()Z",
+      "baseline": "absent_from_present_class",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "baseline": "descriptor_found",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/ScanResult$InformationElement;)V",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(II[B)V",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "equals",
+      "descriptor": "(Ljava/lang/Object;)Z",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "getBytes",
+      "descriptor": "()Ljava/nio/ByteBuffer;",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "getId",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "getIdExt",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "hashCode",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.ScanResult$InformationElement",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "field",
+      "name": "INVALID_MLO_LINK_ID",
+      "descriptor": "I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "field",
+      "name": "MLO_LINK_STATE_ACTIVE",
+      "descriptor": "I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "field",
+      "name": "MLO_LINK_STATE_IDLE",
+      "descriptor": "I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "field",
+      "name": "MLO_LINK_STATE_INVALID",
+      "descriptor": "I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "field",
+      "name": "MLO_LINK_STATE_UNASSOCIATED",
+      "descriptor": "I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "equals",
+      "descriptor": "(Ljava/lang/Object;)Z",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getApMacAddress",
+      "descriptor": "()Landroid/net/MacAddress;",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getBand",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getChannel",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getLinkId",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getRssi",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getRxLinkSpeedMbps",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getStaMacAddress",
+      "descriptor": "()Landroid/net/MacAddress;",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getState",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "getTxLinkSpeedMbps",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "hashCode",
+      "descriptor": "()I",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    },
+    {
+      "class": "android.net.wifi.MloLink",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "baseline": "declaring_class_absent",
+      "candidate_dex": "descriptor_found",
+      "flag_issues": []
+    }
+  ]
+}
