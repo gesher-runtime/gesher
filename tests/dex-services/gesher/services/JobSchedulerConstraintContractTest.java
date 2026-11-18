@@ -1348,6 +1348,83 @@ public final class JobSchedulerConstraintContractTest {
         handle.params.getCallback().jobFinished(id, false);
     }
 
+    private static void awaitBlocked(Thread thread, String message) throws InterruptedException {
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (thread.isAlive() && thread.getState() != Thread.State.BLOCKED && System.nanoTime() < until) {
+            Thread.sleep(1);
+        }
+        check(thread.getState() == Thread.State.BLOCKED, message);
+    }
+
+    private static void testCancelDuringStartObservation(Harness h) throws Exception {
+        int id = 178;
+        h.setPowerStatus(new int[]{1, 8, 70});
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true).build());
+        Object run = h.begin(id);
+        TestService service = new TestService();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread starter = new Thread(() -> {
+            try {
+                invoke(run, "started", new Class<?>[]{IBinder.class}, service.asBinder());
+            } catch (Throwable unexpected) {
+                failure.compareAndSet(null, unexpected);
+            }
+        }, "job-start-observation-test");
+        Thread canceller = new Thread(() -> {
+            try {
+                h.cancel(id);
+            } catch (Throwable unexpected) {
+                failure.compareAndSet(null, unexpected);
+            }
+        }, "job-cancel-observation-test");
+        starter.setDaemon(true);
+        canceller.setDaemon(true);
+        synchronized (h.atm) {
+            starter.start();
+            awaitBlocked(starter, "Job did not wait for the top activity observation");
+            canceller.start();
+            awaitBlocked(canceller, "Cancellation did not wait for the run dispatch gate");
+            check(h.getPendingJob(id) == null, "Cancellation did not retire the schedule");
+        }
+        starter.join(5_000);
+        canceller.join(5_000);
+        check(!starter.isAlive() && !canceller.isAlive() && failure.get() == null,
+                "Start or cancellation did not finish: " + failure.get());
+        check(service.starts == 0 && service.stops == 0 && h.runningCount() == 0,
+                "Canceled binding still called the job service");
+    }
+
+    private static void testPendingReasonRefreshesObservation(Harness h) throws Exception {
+        int id = 179;
+        h.setNetworkState(0);
+        h.setPowerStatus(new int[]{1, 8, 70});
+        h.schedule(new JobInfo.Builder(id, serviceComponent()).setRequiresCharging(true)
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build());
+        AtomicReference<int[]> reasons = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread reader = new Thread(() -> {
+            try {
+                reasons.set(h.reasons(id));
+            } catch (Throwable unexpected) {
+                failure.set(unexpected);
+            }
+        }, "job-pending-observation-test");
+        reader.setDaemon(true);
+        synchronized (h.atm) {
+            reader.start();
+            awaitBlocked(reader, "Pending query did not wait for the top activity observation");
+            // Publish the native network event without performing a synchronous test pass.
+            set(h.scheduler, "mNetworkSnapshotOverride", snapshot(60, "wifi", false, false));
+            int network = field(h.schedulerType, "OBSERVE_NETWORK").getInt(null);
+            invoke(h.scheduler, "constraintsChanged", new Class<?>[]{int.class}, network);
+        }
+        reader.join(5_000);
+        check(!reader.isAlive() && failure.get() == null, "Pending query failed: " + failure.get());
+        check(Arrays.equals(reasons.get(), new int[]{JobScheduler.PENDING_JOB_REASON_UNDEFINED}),
+                "Pending query returned a superseded network observation");
+        h.cancel(id);
+    }
+
     private static void testWindowsPowerEventWakesWorker(Harness h) throws Exception {
         int id = 177;
         h.setPowerStatus(new int[]{1, 8, 70});
@@ -1441,6 +1518,8 @@ public final class JobSchedulerConstraintContractTest {
             testPendingReasonsAndHistory(h);
             testAdmissionOrderAndCapacity(h);
             testSupersededConstraintObservation(h);
+            testCancelDuringStartObservation(h);
+            testPendingReasonRefreshesObservation(h);
             testNetworkPermission(h);
         }
         try (Harness h = new Harness()) {
