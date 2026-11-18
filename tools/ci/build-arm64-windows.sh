@@ -8,7 +8,7 @@ if [[ -n "${BUILD_JOBS:-}" ]]; then
   build_args=(-j "$BUILD_JOBS")
 fi
 
-ccache --set-config=max_size=2G
+ccache --set-config=max_size="${CCACHE_LIMIT:-2G}"
 cmake -S . -B out-arm64 -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw-arm64.cmake \
   -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" \
