@@ -1,0 +1,137 @@
+{
+  "comparison": {
+    "categories": {
+      "aidl_source_file:added": 195,
+      "aidl_source_file:bytes_changed": 95,
+      "aidl_source_file:removed": 21,
+      "compat_source_field:annotation_syntax_or_order_changed": 1,
+      "compat_source_field:source_occurrence_added": 17,
+      "compat_source_field:source_occurrence_removed": 1,
+      "selected_repository_reference:commit_changed": 117
+    },
+    "compat_source_presence_comparable": true,
+    "complete_resolved_metadata_comparable": true,
+    "local_or_anonymous_occurrences_not_paired": 0,
+    "resolved_id_additions": [
+      333566037,
+      416031865,
+      417951523,
+      421623328,
+      430681066,
+      433336412,
+      447093535,
+      454307959,
+      454542168,
+      454795633,
+      458413887,
+      460405642,
+      460838111,
+      463899193,
+      464275874,
+      483802160
+    ],
+    "resolved_id_removals": [
+      314961188
+    ]
+  },
+  "comparison_id": "aosp16r4-api36.1-to17r1-api37.0-core-source",
+  "compat_inventory_sha256": "7ff463d19598a8448696143d2916b0f503b1e2f1a6a8ed9c5491d32cc1ff7e8a",
+  "delta_records": 447,
+  "delta_sha256": "ea84f9771dd42f17005a5143f0622bed3f3fa30b2b7bb026aa137fcc680ed9b3",
+  "generator_sha256": {
+    "SourceCompatInventory.java": "f59bfe830df8beca3fbfff69faeff1e49e1985f664399271fa5e5e1843e3e7fd",
+    "source_release_diff.py": "e4f7db42076ca81848f7478b165778792c20a1f792ce0155166aa669b89262f8"
+  },
+  "manifest_sha256": "c89d839e21c50a67b14ac6008b4a3375da2cd09fbe02b51925df9074c0ff2d73",
+  "profile_data_sha256": "ddf311562f64fe1d00f02e591aaee0ef0cf89f596946fa74d9d447ea7e253764",
+  "profiles": [
+    {
+      "aidl_files": 1532,
+      "build_id": "BP4A.251205.006",
+      "canonical_field_identities": 137,
+      "changeid_occurrences": 137,
+      "complete_resolved_metadata": true,
+      "complete_source_field_denominator": 137,
+      "duplicate_change_ids": {},
+      "duplicate_declaring_fields": {},
+      "id": "android16r4",
+      "java_files": 4358,
+      "parsed_java_files": 4358,
+      "repositories": 121,
+      "sdk": {
+        "full_spelling": "36.1",
+        "major": 36,
+        "minor": 1,
+        "status": "resolved_selected_platform_config"
+      },
+      "selectors": 123,
+      "tag": "android-16.0.0_r4",
+      "unique_ids": 137,
+      "validity_counts": {
+        "valid_for_measured_source_rules": 137
+      }
+    },
+    {
+      "aidl_files": 1706,
+      "build_id": "CP2A.260605.016",
+      "canonical_field_identities": 152,
+      "changeid_occurrences": 153,
+      "complete_resolved_metadata": true,
+      "complete_source_field_denominator": 153,
+      "duplicate_change_ids": {
+        "421623328": [
+          {
+            "field": "android.os.MessageQueue#USE_NEW_MESSAGEQUEUE",
+            "line": 77,
+            "path": "android/os/CombinedDeliMessageQueue/MessageQueue.java"
+          },
+          {
+            "field": "android.os.MessageQueue#USE_NEW_MESSAGEQUEUE",
+            "line": 83,
+            "path": "android/os/CombinedMessageQueue/MessageQueue.java"
+          }
+        ]
+      },
+      "duplicate_declaring_fields": {
+        "android.os.MessageQueue#USE_NEW_MESSAGEQUEUE": [
+          {
+            "field": "android.os.MessageQueue#USE_NEW_MESSAGEQUEUE",
+            "line": 77,
+            "path": "android/os/CombinedDeliMessageQueue/MessageQueue.java"
+          },
+          {
+            "field": "android.os.MessageQueue#USE_NEW_MESSAGEQUEUE",
+            "line": 83,
+            "path": "android/os/CombinedMessageQueue/MessageQueue.java"
+          }
+        ]
+      },
+      "id": "android17r1",
+      "java_files": 4638,
+      "parsed_java_files": 4638,
+      "repositories": 121,
+      "sdk": {
+        "full_spelling": "37.0",
+        "major": 37,
+        "minor": 0,
+        "status": "resolved_selected_platform_config"
+      },
+      "selectors": 123,
+      "tag": "android-17.0.0_r1",
+      "unique_ids": 152,
+      "validity_counts": {
+        "valid_for_measured_source_rules": 153
+      }
+    }
+  ],
+  "schema_version": 1,
+  "unmeasured": {
+    "aidl_semantics": "Only complete source AIDL file bytes are compared. Imports, transactions, parcel layouts, Stable AIDL APIs and generated Binder ABI are unmeasured.",
+    "java_semantics": "AST parsing and bounded lexical constant resolution are not full compiler attribution; inherited/external name resolution and unsupported expressions remain outside the measured rules.",
+    "module_equivalence": "Repository/tag/manifest reference matching is not APEX, built module, runtime image or SDK/NDK artifact equivalence.",
+    "product_build": "Selected platform version fields are traced in build/release only; vendor/product overlays and aconfig flag selection are not evaluated.",
+    "qualification": "CTS/CDD links and release names are reference metadata only. No CTS/CDD or API37 runtime qualification was performed.",
+    "runtime": "Per-app compatibility enable state, overrides, runtime providers, permissions, capabilities, SDK_INT behavior and device execution are unmeasured.",
+    "source_selection": "core/java only; other framework directories/modules, build-selected membership and generated compat_config are unmeasured."
+  }
+}
