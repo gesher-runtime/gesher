@@ -39,6 +39,22 @@ static bool WaitChild(PROCESS_INFORMATION* child) {
   *child = {};
   return done && status == 0;
 }
+static bool StandardDescriptors(bool diagnostic_stdio) {
+  for (int fd : {0, 1, 2}) {
+    errno = 0;
+    const int flags = fcntl(fd, F_GETFD);
+    const int error = errno;
+    HANDLE handle = GetStdHandle(fd == 0 ? STD_INPUT_HANDLE :
+                                 fd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE);
+    const bool native_open = handle && handle != INVALID_HANDLE_VALUE;
+    if (diagnostic_stdio && fd != 0) {
+      if (flags < 0 || !native_open) return false;
+    } else if (flags != -1 || error != EBADF || native_open) {
+      return false;
+    }
+  }
+  return true;
+}
 static void NativePeer(const std::wstring& native) {
   int input[2], output[2];
   if (pipe2(input, O_CLOEXEC) < 0) { Check("native input pipe", false); return; }
@@ -97,13 +113,15 @@ static void AwarePeer(const std::wstring& self, bool diagnostic_stdio) {
   }
   std::printf("PIPE_AWARE_SCENARIO diagnostic_stdio=%d\n", diagnostic_stdio);
   PROCESS_INFORMATION child{};
-  DWORD error = gesher::exec::SpawnWithFds(Target(self, L"--aware-flags"), nullptr, L"", files, &child);
+  DWORD error = gesher::exec::SpawnWithFds(Target(self, diagnostic_stdio ?
+      L"--aware-flags-stdio" : L"--aware-flags"), nullptr, L"", files, &child);
   std::printf("PIPE_AWARE_LAUNCH mode=flags error=%lu\n", error);
   Check("aware child imports high alias and shared pipe policy", !error && WaitChild(&child));
   const int shared_flags = fcntl(ends[0], F_GETFL);
   Check("aware mode update reaches parent", shared_flags >= 0 && (shared_flags & O_NONBLOCK) != 0);
   Check("parent restores actual blocking mode", fcntl(ends[0], F_SETFL, 0) == 0);
-  error = gesher::exec::SpawnWithFds(Target(self, L"--aware-read"), nullptr, L"", files, &child);
+  error = gesher::exec::SpawnWithFds(Target(self, diagnostic_stdio ?
+      L"--aware-read-stdio" : L"--aware-read"), nullptr, L"", files, &child);
   std::printf("PIPE_AWARE_LAUNCH mode=read error=%lu\n", error);
   Check("aware blocked reader starts", error == 0);
   if (!error) {
@@ -176,7 +194,9 @@ static void ExternalPipe(bool asynchronous) {
   close(fd);
 }
 int main(int argc, char** argv) {
-  if (argc == 2 && std::strcmp(argv[1], "--aware-flags") == 0) {
+  if (argc == 2 && (std::strcmp(argv[1], "--aware-flags") == 0 ||
+                    std::strcmp(argv[1], "--aware-flags-stdio") == 0)) {
+    if (!StandardDescriptors(std::strcmp(argv[1], "--aware-flags-stdio") == 0)) return 22;
     const int changed = fcntl(37, F_SETFL, O_NONBLOCK);
     const int changed_error = errno;
     const int flags = fcntl(7100, F_GETFL);
@@ -184,7 +204,9 @@ int main(int argc, char** argv) {
                 changed, changed_error, flags, errno);
     return changed == 0 && flags >= 0 && (flags & O_NONBLOCK) != 0 ? 0 : 20;
   }
-  if (argc == 2 && std::strcmp(argv[1], "--aware-read") == 0) {
+  if (argc == 2 && (std::strcmp(argv[1], "--aware-read") == 0 ||
+                    std::strcmp(argv[1], "--aware-read-stdio") == 0)) {
+    if (!StandardDescriptors(std::strcmp(argv[1], "--aware-read-stdio") == 0)) return 23;
     char byte = 0;
     const int result = read(37, &byte, 1);
     std::printf("PIPE_AWARE_READ result=%d byte=%d errno=%d\n", result, byte, errno);

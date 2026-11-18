@@ -423,6 +423,9 @@ static int ErrnoFromWin32(DWORD error) {
 }
 static int FailWithLastError() { return errno = ErrnoFromWin32(GetLastError()), -1; }
 static HANDLE HandleFromFd(int fd) { return reinterpret_cast<HANDLE>(_get_osfhandle(fd)); }
+// The host descriptor boundary already returns EBADF; UCRT startup and its
+// invalid-parameter handler are exercised by pipe_native_process_test.
+static void InitializeCrtDescriptorErrors() {}
 namespace record_locks {
 struct DescriptorGuard {
   DescriptorGuard() { host::descriptors.lock(); }

@@ -33,6 +33,10 @@ inline int CrtResult(int result) {
 // The Win32 handle behind a CRT file descriptor, or INVALID_HANDLE_VALUE.
 HANDLE HandleFromFd(int fd);
 
+// Make invalid CRT descriptors report their documented errors instead of
+// terminating the process. Lazy OFD import can run before C++ initializers.
+void InitializeCrtDescriptorErrors();
+
 // After a successful write to `fd` (fd.cc's write, pwrite): IN_MODIFY for the
 // inotify watches on the file or its directory in this process at once, as
 // Linux reports each write; NTFS tells ReadDirectoryChangesW only when it

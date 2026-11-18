@@ -586,8 +586,20 @@ namespace {
 // documented error.
 void IgnoreInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t) {}
 
+}  // namespace
+
+namespace gesher {
+
+void InitializeCrtDescriptorErrors() {
+  _set_invalid_parameter_handler(IgnoreInvalidParameter);
+}
+
+}  // namespace gesher
+
+namespace {
+
 const bool invalid_parameter_handler_installed =
-    (_set_invalid_parameter_handler(IgnoreInvalidParameter), true);
+    (gesher::InitializeCrtDescriptorErrors(), true);
 
 // Linux has no text mode: files the CRT opens without an explicit mode
 // (fopen(path, "r"), _wopen without _O_TEXT) are binary, so reads return

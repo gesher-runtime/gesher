@@ -145,6 +145,11 @@ INIT_ONCE table_once = INIT_ONCE_STATIC_INIT;
 Table* table = nullptr;
 
 BOOL CALLBACK CreateTable(PINIT_ONCE, void*, void**) {
+  // MinGW calls our setvbuf(stderr) before its invalid-parameter handler or
+  // C++ initializers run. That call lazily imports the child's descriptors,
+  // including closing requested stdio slots. Its subsequent descriptor probe
+  // must return EBADF, not invoke the UCRT's default process termination.
+  InitializeCrtDescriptorErrors();
   void* storage = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Table));
   if (!storage) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
   // Process lifetime: no static destructor closes descriptions while another
