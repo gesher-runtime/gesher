@@ -2,7 +2,7 @@
 // Deterministic REST fixtures exercise the production controller without writes.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const run = require('./native-merge-queue.js');
+const run = require('./label-automerge.js');
 const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const BASE = 'c'.repeat(40);
@@ -18,9 +18,9 @@ function world(over = {}) {
       base: {sha: BASE, ref: 'main', repo: {id: 10}}, labels: [{name: 'automerge'}]},
     events: [{id: 50, event: 'labeled', label: {name: 'automerge'}, created_at: T(30),
       actor: {id: 42, login: 'maintainer'}}],
-    runs: [], checks: [{name: 'build', status: 'completed', conclusion: 'success'},
-      {name: 'optional', status: 'completed', conclusion: 'skipped'}],
-    statuses: [], comments: [], reviews: [], permission: 'write',
+    runs: [], checks: ['ci-required', 'arm64-required'].map((name, i) => ({id: 10 + i,
+      name, status: 'completed', conclusion: 'success', app: {id: 15368}, check_suite: {id: 1000 + i}})),
+    statuses: [], comments: [], reviews: [], permission: 'write', nativeAutoMethod: null,
     mergeError: null, mergeResult: {merged: true}, calls: [], hooks: {}, warnings: [],
     mergeProof: {sha: MERGE, parents: [{sha: BASE}, {sha: HEAD}]},
     targetHead: BASE,
@@ -28,7 +28,7 @@ function world(over = {}) {
     ...over,
   };
   if (!over.runs) w.runs = ['ci', 'arm64-windows'].map((name, i) => ({
-    id: 100 + i, workflow_id: 1 + i, name, path: '.github/workflows/' + name + '.yml',
+    id: 100 + i, workflow_id: 1 + i, check_suite_id: 1000 + i, name, path: '.github/workflows/' + name + '.yml',
     event: 'pull_request', status: 'completed', conclusion: 'success', created_at: T(10),
     head_sha: HEAD, head_branch: 'topic', head_repository: {id: 10}, repository: {id: 10},
     pull_requests: [{number: 7, head: clone(w.pr.head), base: clone(w.pr.base)}],
@@ -138,13 +138,12 @@ function world(over = {}) {
     },
   }};
   github.graphql = async (query, args) => {
-    if (query.includes('mergeQueue(branch:')) return {repository: {mergeQueue: {id: 'QUEUE'}}};
-    if (query.includes('autoMergeRequest')) return {node: {autoMergeRequest: w.pr.labels.length ? null : {}, mergeQueueEntry: w.pr.labels.length ? null : {id: 'ENTRY'}}};
+    if (query.includes('autoMergeRequest')) return {node: {autoMergeRequest: w.nativeAutoMethod ? {mergeMethod: w.nativeAutoMethod} : null}};
     if (query.includes('enablePullRequestAutoMerge')) {
-      w.calls.push(['nativeWait', clone(args)]); return {};
+      w.calls.push(['nativeWait', clone(args)]); w.nativeAutoMethod = 'SQUASH'; return {};
     }
     if (query.includes('dequeuePullRequest') || query.includes('disablePullRequestAutoMerge')) {
-      w.calls.push(['nativeCancel', clone(args)]); return {};
+      w.calls.push(['nativeCancel', clone(args)]); w.nativeAutoMethod = null; return {};
     }
     const bot = args.id.startsWith('BOT_');
     const name = bot ? 'approvalNode' : 'reviewNode';
@@ -165,7 +164,8 @@ function world(over = {}) {
   w.labeled = (snapshot = w.pr) => fire('pull_request_target', {action: 'labeled',
     label: {name: 'automerge'}, sender: {id: 42}, pull_request: snapshot});
   w.pushed = (snapshot = w.pr) => fire('pull_request_target', {action: 'synchronize', pull_request: snapshot});
-  w.ciDone = (sha = HEAD) => fire('workflow_run', {workflow_run: {head_sha: sha}});
+  w.ciDone = (sha = HEAD, sourceRepo = w.pr.head.repo.id) => fire('workflow_run', {
+    workflow_run: {event: 'pull_request', head_sha: sha, head_repository: {id: sourceRepo}}});
   w.sweep = () => fire('schedule', {});
   w.fire = fire;
   w.github = github;

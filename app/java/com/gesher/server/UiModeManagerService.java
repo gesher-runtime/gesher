@@ -295,12 +295,18 @@ public final class UiModeManagerService extends IUiModeManager.Default implement
     @Override public void setCustomNightModeStart(long time) { setCustomTime(time, true); }
     @Override public void setCustomNightModeEnd(long time) { setCustomTime(time, false); }
     private void setCustomTime(long micros, boolean start) {
-        // AOSP ignores times outside LocalTime's range; units are microseconds, not millis.
-        if (micros < 0 || micros >= DAY_MICROS) return;
         boolean changed;
         synchronized (mLock) {
             ensureOpen();
             State next = new State(mState);
+            // AOSP retains the configured endpoint on invalid input, but its
+            // DateTimeException path unregisters the inactive-device wait.
+            // Do not publish resources or alter durable policy in this path.
+            if (micros < 0 || micros >= DAY_MICROS) {
+                next.waitForInactive = false;
+                mState = next;
+                return;
+            }
             if (start) next.start = micros; else next.end = micros;
             if (next.mode == MODE_NIGHT_CUSTOM) {
                 next.overrideOn = next.overrideOff = false;

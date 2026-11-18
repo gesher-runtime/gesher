@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -101,7 +102,18 @@ public final class UiModeFixture {
                 pm, atm, source.bridge(sourceType), file, standalone, changed);
     }
     private static void refresh(UiModeManagerService service) throws Exception {
-        invoke(service, "refreshEnvironment", new Class<?>[]{});
+        // Match production's single observation worker. An AUTO refresh queued
+        // before this call must not publish its old snapshot after this one.
+        try {
+            ((ScheduledThreadPoolExecutor) get(service, "mWorker")).submit(() -> {
+                invoke(service, "refreshEnvironment", new Class<?>[]{});
+                return null;
+            }).get(3, TimeUnit.SECONDS);
+        } catch (ExecutionException failure) {
+            if (failure.getCause() instanceof Error error) throw error;
+            if (failure.getCause() instanceof Exception cause) throw cause;
+            throw new AssertionError(failure.getCause());
+        }
     }
     private static boolean between(LocalTime now, LocalTime start, LocalTime end) throws Exception {
         return (Boolean) call(UiModeManagerService.class, null, "between",
@@ -408,6 +420,44 @@ public final class UiModeFixture {
             check(saved(file).getProperty("overrideOn").equals("false")
                             && saved(file).getProperty("overrideOff").equals("false"),
                     "Storage recovery did not save the pending derived override reset");
+        }
+    }
+
+    private static void invalidCustomTime(boolean binder, PackageManagerService pm,
+            ActivityTaskManagerService atm) throws Exception {
+        for (boolean start : new boolean[]{true, false}) {
+            for (long bad : new long[]{-1, 86_400_000_000L, Long.MAX_VALUE}) {
+                Source source = new Source();
+                AtomicInteger dispatches = new AtomicInteger();
+                try (UiModeManagerService service = service(pm, atm, source, null, null,
+                        ignored -> dispatches.incrementAndGet())) {
+                    IUiModeManager api = api(service, binder);
+                    api.setNightMode(MODE_NIGHT_NO);
+                    api.setNightMode(MODE_NIGHT_CUSTOM);
+                    awaitWorker(service);
+                    check((Boolean) get(get(service, "mState"), "waitForInactive"),
+                            "CUSTOM did not establish the inactive-device wait");
+                    long beforeStart = api.getCustomNightModeStart();
+                    long beforeEnd = api.getCustomNightModeEnd();
+                    Object before = get(service, "mState");
+                    int published = dispatches.get();
+                    if (start) api.setCustomNightModeStart(bad); else api.setCustomNightModeEnd(bad);
+                    Object after = get(service, "mState");
+                    check(api.getCustomNightModeStart() == beforeStart && api.getCustomNightModeEnd() == beforeEnd,
+                            "Invalid custom endpoint changed a configured time");
+                    check(!(Boolean) get(after, "waitForInactive"),
+                            "Invalid custom endpoint retained the inactive-device wait");
+                    check(get(before, "overrideOn").equals(get(after, "overrideOn"))
+                                    && get(before, "overrideOff").equals(get(after, "overrideOff"))
+                                    && dispatches.get() == published
+                                    && UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
+                            "Invalid custom endpoint changed overrides or published resources");
+                    api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
+                    check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES
+                                    && dispatches.get() == published + 1,
+                            "Attention stayed deferred after invalid custom time cleared the wait");
+                }
+            }
         }
     }
 
@@ -803,6 +853,7 @@ public final class UiModeFixture {
             derivedOverrideStorage(binder, h.pm, h.atm, directory, MODE_NIGHT_AUTO, false);
             derivedOverrideStorage(binder, h.pm, h.atm, directory, MODE_NIGHT_CUSTOM, false);
             derivedOverrideStorage(binder, h.pm, h.atm, directory, MODE_NIGHT_AUTO, true);
+            invalidCustomTime(binder, h.pm, h.atm);
             attentionWait(binder, h.pm, h.atm, MODE_NIGHT_AUTO);
             attentionWait(binder, h.pm, h.atm, MODE_NIGHT_CUSTOM);
             for (int mode : new int[]{MODE_NIGHT_AUTO, MODE_NIGHT_CUSTOM}) {
