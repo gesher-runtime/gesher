@@ -87,13 +87,16 @@ final class NotificationIcons {
             if (b == null) return null;
             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
             if (!b.compress(Bitmap.CompressFormat.PNG, 100, out)) return null;
-            File png = new File(dir(), packageName + "-" + Integer.toHexString(key.hashCode())
-                    + ".png");
+            File png = largeFile(packageName, key);
             write(png, out.toByteArray());
             return png;
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    private static File largeFile(String packageName, String key) {
+        return new File(dir(), packageName + "-sha256-" + NotificationIdentity.digest(key) + ".png");
     }
 
     /** The largest PNG image of an .ico (AppIcon writes PNGs from 64 pixels on). */

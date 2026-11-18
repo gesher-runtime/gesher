@@ -63,6 +63,10 @@ final class NotificationStore {
     }
 
     private static File file(String pkg, String key) {
+        return new File(dir(pkg), "sha256-" + NotificationIdentity.digest(key) + ".n");
+    }
+
+    private static File legacyFile(String pkg, String key) {
         return new File(dir(pkg), Integer.toHexString(key.hashCode()) + ".n");
     }
 
@@ -118,6 +122,7 @@ final class NotificationStore {
             try (OutputStream out = new FileOutputStream(f)) {
                 out.write(p.marshall());
             }
+            deleteLegacy(pkg, key);
         } catch (Throwable t) {
             SystemServer.log("notification: keeping " + key + " for later clicks failed: " + t);
         } finally {
@@ -163,7 +168,10 @@ final class NotificationStore {
 
     /** The stored notification with {@code key} of {@code pkg}, or null. */
     static Stored load(String pkg, String key) {
-        return load(pkg, key, file(pkg, key));
+        File current = file(pkg, key);
+        // Existing Windows toasts keep their activation key after an upgrade.
+        // The reader verifies the full key before accepting a legacy hash file.
+        return load(pkg, key, current.isFile() ? current : legacyFile(pkg, key));
     }
 
     private static Stored load(String pkg, String key, File f) {
@@ -204,6 +212,12 @@ final class NotificationStore {
 
     static void delete(String pkg, String key) {
         file(pkg, key).delete();
+        deleteLegacy(pkg, key);
+    }
+
+    private static void deleteLegacy(String pkg, String key) {
+        File legacy = legacyFile(pkg, key);
+        if (load(pkg, key, legacy) != null) legacy.delete();
     }
 
     /** Retained Windows toasts can outlive the system server's in-memory records. */
