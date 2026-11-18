@@ -45,6 +45,14 @@ collisions, manual runs, another repository or another check suite cannot supply
 that evidence. It then rechecks current label, permission, receipt and QA proof
 before turning the required gate green. GitHub applies all branch protections.
 
+When either registered PR workflow finishes with a failure, timeout or action
+required, the controller removes `automerge`, cancels native auto-merge and posts
+one short bot comment linking to the failed run. It reads the current run attempt
+before acting, so a delayed failure event cannot revoke a newer pending or
+successful rerun. Newer heads and label applications are preserved. Pending or
+cancelled runs cannot release the QA gate. After fixing or rerunning failed CI,
+review the result and reapply the label; success alone does not restore approval.
+
 `ci-required` covers every root production CI job, including Windows shards,
 packaging and e2e; failed, cancelled or skipped root jobs fail it. `arm64-required`
 covers source identity and the ARM64 build. The deployed configuration is
