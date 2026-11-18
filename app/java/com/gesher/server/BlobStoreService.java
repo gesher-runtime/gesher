@@ -630,11 +630,9 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             Contribution contribution = blob.contributions.get(stage.owner.name);
             return contribution != null && contribution.owner.equals(stage.owner);
         }).count();
-        // Replacing this owner's existing contribution does not consume a new
-        // committed-blob slot. A changed install generation is a new owner and
-        // must pass the admission limit independently.
-        boolean newContribution = previous == null || !previous.owner.equals(stage.owner);
-        if (committedQuotaExceeded(newContribution, committed, MAX_COMMITTED)) return false;
+        // Android applies the admission limit before replacing a contribution.
+        // A successful replacement still occupies only the original stored slot.
+        if (committed >= MAX_COMMITTED) return false;
         Map<String, Contribution> contributions = existing == null
                 ? new LinkedHashMap<>() : new LinkedHashMap<>(existing.contributions);
         long committedAt = previous != null && previous.owner.equals(stage.owner)
@@ -655,15 +653,6 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
     private boolean liveLease(Blob blob, Owner owner, long now) {
         Lease lease = blob.leases.get(owner.name);
         return lease != null && lease.owner.equals(owner) && lease.active(now);
-    }
-
-    static boolean leaseQuotaExceeded(boolean renewing, long live, long maximum,
-            long blobSize, long remainingBytes) {
-        return !renewing && (live >= maximum || blobSize > remainingBytes);
-    }
-
-    static boolean committedQuotaExceeded(boolean newContribution, long committed, long maximum) {
-        return newContribution && committed >= maximum;
     }
 
     private long quota(Owner owner, long now) {
@@ -711,14 +700,13 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             throw new IllegalArgumentException("Invalid blob lease expiry or description");
         }
         long now = System.currentTimeMillis();
-        Blob blob = accessible(key, owner, now);
+        index();
         long live = mIndex.blobs.values().stream().filter(item -> liveLease(item, owner, now)).count();
-        Lease previousLease = blob.leases.get(owner.name);
-        boolean renewing = previousLease != null && previousLease.owner.equals(owner)
-                && previousLease.active(now);
-        // Extending an active lease changes neither the leased-blob count nor
-        // its byte charge. Only a genuinely new lease consumes quota.
-        if (leaseQuotaExceeded(renewing, live, MAX_LEASED, blob.size, quota(owner, now))) {
+        // Android checks admission for every acquireLease call, including renewal.
+        // Map replacement below keeps the resulting count and byte charge singular.
+        if (live >= MAX_LEASED) throw limit("Too many leased blobs");
+        Blob blob = accessible(key, owner, now);
+        if (blob.size > quota(owner, now)) {
             throw limit("Blob lease quota exceeded");
         }
         String text = description == null ? null

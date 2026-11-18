@@ -123,27 +123,7 @@ public final class BlobStoreContractTest {
         long expiry = System.currentTimeMillis() + TimeUnit.HOURS.toMillis(1);
         BlobHandle handle = handle(bytes, tag, expiry);
         IBlobStoreManager service = IBlobStoreManager.Stub.asInterface(binder);
-        Class<?> blobService = Class.forName("com.gesher.server.BlobStoreService");
-        var leaseAdmission = blobService.getDeclaredMethod("leaseQuotaExceeded",
-                boolean.class, long.class, long.class, long.class, long.class);
-        leaseAdmission.setAccessible(true);
-        check(!(boolean) leaseAdmission.invoke(null, true, 500L, 500L, 4096L, 0L),
-                "renewing an active lease does not consume a second count or byte quota");
-        check((boolean) leaseAdmission.invoke(null, false, 500L, 500L, 4096L, 8192L),
-                "a new lease is rejected at the count limit");
-        check((boolean) leaseAdmission.invoke(null, false, 1L, 500L, 8192L, 4096L),
-                "a new lease is rejected when remaining byte quota is insufficient");
-        check(!(boolean) leaseAdmission.invoke(null, false, 1L, 500L, 4096L, 8192L),
-                "a new lease is admitted below both quota limits");
-        var commitAdmission = blobService.getDeclaredMethod(
-                "committedQuotaExceeded", boolean.class, long.class, long.class);
-        commitAdmission.setAccessible(true);
-        check(!(boolean) commitAdmission.invoke(null, false, 1000L, 1000L),
-                "replacing an owner's existing contribution does not consume another committed slot");
-        check((boolean) commitAdmission.invoke(null, true, 1000L, 1000L),
-                "a new contribution is rejected at the committed-blob limit");
-        check(!(boolean) commitAdmission.invoke(null, true, 999L, 1000L),
-                "a new contribution is admitted below the committed-blob limit");
+        checks += BlobStoreQuotaContractTest.contracts();
         long quota = manager.getRemainingLeaseQuotaBytes();
         check(quota >= 300L * 1024 * 1024, "quota reflects managed storage");
         check(!manager.getLeasedBlobs().contains(handle), "new handle is unleased");
