@@ -360,21 +360,27 @@ public final class SpeechRecognitionContractTest {
         Engine fanoutEngine = new Engine();
         fanoutLink.connected(SERVICE, fanoutEngine, null, false);
         IRecognitionService fanoutClient = (IRecognitionService) take(fanoutAdmission.events);
-        List<IRecognitionSupportCallback> supportCallbacks = new ArrayList<>();
-        for (int i = 0; i < 17; i++) {
-            IRecognitionSupportCallback request = new IRecognitionSupportCallback.Stub() {
-                @Override public void onSupportResult(RecognitionSupport result) {}
+        for (int i = 0; i < 16; i++) {
+            IModelDownloadListener request = new IModelDownloadListener.Stub() {
+                @Override public void onProgress(int percent) {}
+                @Override public void onSuccess() {}
+                @Override public void onScheduled() {}
                 @Override public void onError(int code) {}
             };
-            supportCallbacks.add(request);
-            fanoutClient.checkRecognitionSupport(INTENT, backend.attribution(), request);
+            fanoutClient.triggerModelDownload(INTENT, backend.attribution(), request);
         }
-        for (int i = 0; i < 17; i++) {
-            IRecognitionSupportCallback forwarded = take(fanoutEngine.support);
-            forwarded.onError(SpeechRecognizer.ERROR_CLIENT);
-        }
-        check(supportCallbacks.size() == 17,
-                "seventeenth support request reaches the provider while earlier callbacks are pending");
+        List<IModelDownloadListener> downloads = new ArrayList<>();
+        for (int i = 0; i < 16; i++) downloads.add(take(fanoutEngine.downloads));
+        IRecognitionSupportCallback supportRequest = new IRecognitionSupportCallback.Stub() {
+            @Override public void onSupportResult(RecognitionSupport result) {}
+            @Override public void onError(int code) {}
+        };
+        fanoutClient.checkRecognitionSupport(INTENT, backend.attribution(), supportRequest);
+        IRecognitionSupportCallback forwardedSupport = take(fanoutEngine.support);
+        check(downloads.size() == 16 && forwardedSupport != null,
+                "support query reaches provider while sixteen model-download callbacks remain pending");
+        for (IModelDownloadListener download : downloads) download.onError(SpeechRecognizer.ERROR_CLIENT);
+        forwardedSupport.onError(SpeechRecognizer.ERROR_CLIENT);
         fanoutClient.cancel(null, true);
         check(take(backend.unbindings) == fanoutLink, "request fanout session releases its provider connection");
     }
