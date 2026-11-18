@@ -173,7 +173,7 @@ class Env final : public A64::UserCallbacks {
   std::atomic<A64::Jit*> running_jit_{nullptr};
   std::atomic<uint64_t> last_syscall_{0};
   ThreadCounters counters_;
-  std::function<void(A64::Jit*, void*, int)> host_call;
+  std::function<void(A64::Jit*, void*, int, int)> host_call;
   Env() { REQUIRE(tls_block_ != nullptr); }
   ~Env() override {
     UnattachForTest();
@@ -199,9 +199,9 @@ class Env final : public A64::UserCallbacks {
     RunGuest(jit);
     depth_ = previous_depth;
   }
-  void CallHost(A64::Jit* jit, void* fn, int index) {
+  void CallHost(A64::Jit* jit, void* fn, int index, int pointer_variadic_fixed) {
     REQUIRE(!jit->running && t_guest_running == 0 && static_cast<bool>(host_call));
-    host_call(jit, fn, index);
+    host_call(jit, fn, index, pointer_variadic_fixed);
   }
 @ATTACH@
 @CALLSVC@
@@ -283,8 +283,9 @@ void TestNestedAndPooledDispatch() {
   REQUIRE(env.code_generations_.capacity() == 1);
   const unsigned old_clears = outer->clear_count;
   unsigned outer_runs = 0, callbacks = 0;
-  env.host_call = [&](A64::Jit* jit, void* fn, int index) {
+  env.host_call = [&](A64::Jit* jit, void* fn, int index, int pointer_variadic_fixed) {
     REQUIRE(jit == outer && fn == reinterpret_cast<void*>(&NestedHost) && index == -1);
+    REQUIRE(pointer_variadic_fixed == -1);
     REQUIRE(!outer->running && env.depth_ == 1);
     ++callbacks;
     ApiRemoveCode(image, kPage);
@@ -382,8 +383,8 @@ void TestSvcSnapshot() {
   std::thread reader([&] {
     Env env;
     unsigned runs = 0;
-    env.host_call = [&](A64::Jit*, void* target, int index) {
-      REQUIRE(target == fn && (index == 0 || index == 1));
+    env.host_call = [&](A64::Jit*, void* target, int index, int pointer_variadic_fixed) {
+      REQUIRE(target == fn && (index == 0 || index == 1) && pointer_variadic_fixed == -1);
       calls.fetch_add(1, std::memory_order_relaxed);
     };
     barrier.arrive_and_wait();
@@ -396,6 +397,23 @@ void TestSvcSnapshot() {
   for (unsigned i = 0; i < iterations; ++i) AddVaListFunction(fn, static_cast<int>(i & 1));
   reader.join();
   REQUIRE(calls.load() == iterations);
+
+  // Register a pointer-variadic target after binding and dispatch the same SVC.
+  // The changed signature must reach the host callback without replacing the slot.
+  void* variadic_target = reinterpret_cast<void*>(&NestedHost);
+  AddPointerVariadicFunction(fn, variadic_target, 2);
+  REQUIRE(BindHost(fn, -2) == trampoline);
+  Env env;
+  unsigned runs = 0, pointer_calls = 0;
+  env.host_call = [&](A64::Jit*, void* target, int index, int pointer_variadic_fixed) {
+    REQUIRE(target == variadic_target && index == -1 && pointer_variadic_fixed == 2);
+    ++pointer_calls;
+  };
+  env.Dispatch(0, [&](A64::Jit&) {
+    env.CallSVC(runs++ == 0 ? service : kReturnSvc);
+  });
+  REQUIRE(pointer_calls == 1);
+  ApiUnbindHostFunction(fn);
   std::puts("PASS ARM64 pending rollback: real CallSVC snapshots synchronized metadata during va_list updates");
 }
 
