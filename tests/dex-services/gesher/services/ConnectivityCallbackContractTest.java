@@ -19,6 +19,7 @@ import android.os.HandlerThread;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Message;
+import android.os.MessageQueue;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import com.gesher.net.IConnectivity;
@@ -68,21 +69,42 @@ public final class ConnectivityCallbackContractTest {
     }
     private static NetworkRequest request() { return new NetworkRequest.Builder().clearCapabilities().build(); }
 
-    /** This legal Handler subclass captures messages rather than substituting framework classes. */
+    /** Controlled enqueue/dispatch over a real legacy MessageQueue linked list.
+     * Handler.removeCallbacks and MessageQueue removal/recycling run unchanged;
+     * no native poller is created. This test process selects legacy queue mode. */
     private static final class ControlledHandler extends Handler {
         private static final class Task {
-            final Runnable callback; final boolean delayed;
-            Task(Runnable callback, boolean delayed) { this.callback = callback; this.delayed = delayed; }
+            final Message message; final Runnable callback; final boolean delayed;
+            Task(Message message, boolean delayed) { this.message = message; this.callback = message.getCallback(); this.delayed = delayed; }
         }
         List<Task> tasks;
+        MessageQueue queue;
+        static Field declared(Class<?> type, String name) throws Exception {
+            Field field = type.getDeclaredField(name); field.setAccessible(true); return field;
+        }
         private ControlledHandler() { super(); }
         static ControlledHandler create() throws Exception {
             ControlledHandler handler = (ControlledHandler)UNSAFE.allocateInstance(ControlledHandler.class);
+            handler.queue = (MessageQueue)UNSAFE.allocateInstance(MessageQueue.class);
+            declared(MessageQueue.class, "sUseConcurrentInitialized").setBoolean(null, true);
+            declared(MessageQueue.class, "sUseConcurrent").setBoolean(null, false);
+            declared(MessageQueue.class, "mMessageCount").set(handler.queue, new java.util.concurrent.atomic.AtomicLong());
+            declared(Handler.class, "mQueue").set(handler, handler.queue);
             handler.tasks = new ArrayList<>(); return handler;
         }
+        void prune() { tasks.removeIf(t -> t.message.getCallback() != t.callback); }
         @Override public boolean sendMessageAtTime(Message message, long when) {
             synchronized (tasks) {
-                tasks.add(new Task(message.getCallback(), when > SystemClock.uptimeMillis() + 1000));
+                prune();
+                try {
+                    synchronized (queue) {
+                        message.setTarget(this);
+                        declared(Message.class, "next").set(message, declared(MessageQueue.class, "mMessages").get(queue));
+                        declared(MessageQueue.class, "mMessages").set(queue, message);
+                        ((java.util.concurrent.atomic.AtomicLong)declared(MessageQueue.class, "mMessageCount").get(queue)).incrementAndGet();
+                    }
+                } catch (Exception e) { throw new AssertionError(e); }
+                tasks.add(new Task(message, when > SystemClock.uptimeMillis() + 1000));
             }
             return true;
         }
@@ -90,8 +112,9 @@ public final class ConnectivityCallbackContractTest {
             while (true) {
                 Runnable next = null;
                 synchronized (tasks) {
+                    prune();
                     for (int i = 0; i < tasks.size(); i++) {
-                        if (!tasks.get(i).delayed) { next = tasks.remove(i).callback; break; }
+                        if (!tasks.get(i).delayed) { next = tasks.remove(i).message.getCallback(); removeCallbacks(next); break; }
                     }
                 }
                 if (next == null) return;
@@ -100,11 +123,63 @@ public final class ConnectivityCallbackContractTest {
         }
         Runnable timeout() {
             synchronized (tasks) {
+                prune();
                 for (int i = 0; i < tasks.size(); i++) {
-                    if (tasks.get(i).delayed) return tasks.remove(i).callback;
+                    if (tasks.get(i).delayed) {
+                        Runnable next = tasks.remove(i).message.getCallback(); removeCallbacks(next); return next;
+                    }
                 }
             }
             throw new AssertionError("Expected a request deadline");
+        }
+        int deadlines() { synchronized (tasks) { prune(); return (int)tasks.stream().filter(t -> t.delayed).count(); } }
+    }
+    /** Real Handler timestamp ordering, with one controlled registration-thread
+     * deschedule after enqueue. This queue has no native poller; removal and
+     * ordering use the unchanged framework MessageQueue implementation. */
+    private static final class OrderedHandler extends Handler {
+        MessageQueue queue;
+        boolean paused;
+        private OrderedHandler() { super(); }
+        static OrderedHandler create() throws Exception {
+            OrderedHandler handler = (OrderedHandler)UNSAFE.allocateInstance(OrderedHandler.class);
+            handler.queue = (MessageQueue)UNSAFE.allocateInstance(MessageQueue.class);
+            ControlledHandler.declared(MessageQueue.class, "sUseConcurrentInitialized").setBoolean(null, true);
+            ControlledHandler.declared(MessageQueue.class, "sUseConcurrent").setBoolean(null, false);
+            ControlledHandler.declared(MessageQueue.class, "mMessageCount").set(handler.queue,
+                    new java.util.concurrent.atomic.AtomicLong());
+            ControlledHandler.declared(Handler.class, "mQueue").set(handler, handler.queue);
+            return handler;
+        }
+        private static void until(long when) {
+            while (SystemClock.uptimeMillis() < when) {
+                try { Thread.sleep(1); }
+                catch (InterruptedException e) {
+                    Thread.currentThread().interrupt(); throw new AssertionError(e);
+                }
+            }
+        }
+        @Override public boolean sendMessageAtTime(Message message, long when) {
+            boolean accepted = super.sendMessageAtTime(message, when);
+            if (!paused) {
+                paused = true;
+                until(when + 20);
+            }
+            return accepted;
+        }
+        void drain() throws Exception {
+            for (int count = 0; count < 8; count++) {
+                Message message;
+                synchronized (queue) {
+                    message = (Message)ControlledHandler.declared(MessageQueue.class, "mMessages").get(queue);
+                }
+                if (message == null) return;
+                until(message.getWhen());
+                Runnable callback = message.getCallback();
+                removeCallbacks(callback);
+                callback.run();
+            }
+            throw new AssertionError("Unexpected request queue growth");
         }
     }
     private static class Callback extends ConnectivityManager.NetworkCallback {
@@ -460,6 +535,30 @@ public final class ConnectivityCallbackContractTest {
         }
     }
     private static void timeouts(boolean parcel) throws Exception {
+        try (Harness h = new Harness(parcel)) {
+            h.service.snapshot = ONLINE;
+            OrderedHandler handler = OrderedHandler.create();
+            Callback callback = new Callback();
+            h.manager.requestNetwork(request(), callback, handler, 10);
+            handler.drain();
+            check(callback.available == 1 && callback.unavailable == 0 && h.count() == 1,
+                    "already available network precedes its deadline after registration descheduling");
+        }
+        try (Harness h = new Harness(parcel)) {
+            Callback callback = new Callback();
+            h.manager.requestNetwork(request(), callback, h.handler, Integer.MAX_VALUE);
+            check(h.handler.deadlines() == 1, "long deadline really queued");
+            h.manager.unregisterNetworkCallback(callback);
+            check(h.handler.deadlines() == 0, "unregister retained a long deadline");
+            h.manager.requestNetwork(request(), callback, h.handler, Integer.MAX_VALUE);
+            h.service.emit(ONLINE); h.handler.immediate();
+            check(h.handler.deadlines() == 0, "first availability retained its deadline");
+            h.manager.unregisterNetworkCallback(callback);
+            h.service.snapshot = ONLINE;
+            h.manager.requestNetwork(request(), callback, h.handler, Integer.MAX_VALUE);
+            h.handler.immediate();
+            check(h.handler.deadlines() == 0, "initial availability raced timeout installation");
+        }
         try (Harness h = new Harness(parcel)) {
             Callback callback = new Callback();
             Runnable obsolete = h.request(callback);

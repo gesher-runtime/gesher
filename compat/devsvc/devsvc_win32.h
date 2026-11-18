@@ -21,6 +21,7 @@ enum Event : unsigned {
   kPowerStatus = 1u << 3,     // WM_POWERBROADCAST PBT_APMPOWERSTATUSCHANGE (AC, battery)
   kSuspending = 1u << 4,      // WM_POWERBROADCAST PBT_APMSUSPEND
   kSettingChanged = 1u << 5,  // WM_SETTINGCHANGE (time zone, regional settings...)
+  kDisplayState = 1u << 7,   // GUID_SESSION_DISPLAY_STATUS (on/off/dimmed)
   kToastActivated = 1u << 6,  // a toast this process showed was clicked (see PopActivation)
 };
 
@@ -72,6 +73,10 @@ bool PowerStatus(int out[4]);
 bool KeepAwake(const std::u16string& reason, bool system, bool display);
 // Milliseconds since the user's last input (GetLastInputInfo).
 uint32_t IdleMillis();
+// Continuous observed session display-off time without input; zero if active/unknown.
+uint64_t JobIdleMillis();
+// GUID_SESSION_DISPLAY_STATUS: -1 unknown, 0 off, 1 on, 2 dimmed.
+int SessionDisplayState();
 // The network list manager's view: bit 0 connected, bit 1 internet, bit 2 the
 // internet connection is metered (not unrestricted). -1 if it cannot tell.
 int NetworkState();

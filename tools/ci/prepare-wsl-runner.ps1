@@ -8,6 +8,11 @@ $orgName = 'gesher-runtime'
 $groupName = 'gesher-build-trial'
 $workflow = "$repoName/.github/workflows/arm64-windows-self-hosted.yml@refs/heads/main"
 
+$allowedWorkflows = @(
+    $workflow,
+    "$repoName/.github/workflows/framework.yml@93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7"
+)
+
 function Invoke-GhApi {
     param([string]$Endpoint, [string]$Method = 'GET', [hashtable]$Body)
     if ($null -ne $Body) {
@@ -42,7 +47,7 @@ if ($matchingGroups.Count -eq 0) {
         selected_repository_ids = @([long]$repoInfo.id)
         allows_public_repositories = $true
         restricted_to_workflows = $true
-        selected_workflows = @($workflow)
+        selected_workflows = $allowedWorkflows
     }
 } else {
     $group = $matchingGroups[0]
@@ -52,11 +57,22 @@ $selectedRepos = Invoke-GhApi "orgs/$orgName/actions/runner-groups/$($group.id)/
 if ($group.visibility -ne 'selected' -or
     $group.allows_public_repositories -ne $true -or
     $group.restricted_to_workflows -ne $true -or
-    @($group.selected_workflows).Count -ne 1 -or
-    $group.selected_workflows[0] -cne $workflow -or
+    @($group.selected_workflows | Where-Object { $_ -cnotin $allowedWorkflows }).Count -ne 0 -or
     $selectedRepos.total_count -ne 1 -or
     $selectedRepos.repositories[0].id -ne $repoInfo.id) {
     throw 'Runner group policy is not restrictive enough. No runner was registered. Do not use the Default group as a fallback.'
+}
+
+$missingWorkflows = @($allowedWorkflows | Where-Object { $_ -cnotin @($group.selected_workflows) })
+if ($missingWorkflows.Count) {
+    $group = Invoke-GhApi "orgs/$orgName/actions/runner-groups/$($group.id)" 'PATCH' @{
+        restricted_to_workflows = $true
+        selected_workflows = $allowedWorkflows
+    }
+}
+if (@($group.selected_workflows).Count -ne $allowedWorkflows.Count -or
+    @($allowedWorkflows | Where-Object { $_ -cnotin @($group.selected_workflows) }).Count) {
+    throw 'GitHub did not return the exact approved workflow allowlist.'
 }
 
 $release = Invoke-GhApi 'repos/actions/runner/releases/latest'
@@ -75,6 +91,7 @@ $package = @{
     runner_group = $groupName
     runner_group_id = [long]$group.id
     allowed_workflow = $workflow
+    allowed_workflows = $allowedWorkflows
     download_url = $assets[0].browser_download_url
     sha256 = $assets[0].digest.Substring(7)
 }
