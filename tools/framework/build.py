@@ -446,11 +446,12 @@ class Builder:
             run([self.tool('sysprop_java'), '--scope', 'internal', '--java-output-dir', d,
                  self.path(f)])
 
-    # Both official Maven Central endpoints serve these exact Commons CLI 1.2
-    # bytes. Keep the dependency fixed when an endpoint temporarily fails.
+    # Maven Central and Google's documented Central mirror serve the same pinned
+    # Commons CLI 1.2 bytes. The independent mirror also handles Central's 429s.
     XSDC_COMMONS_CLI_URLS = (
         'https://repo.maven.apache.org/maven2/commons-cli/commons-cli/1.2/commons-cli-1.2.jar',
         'https://repo1.maven.org/maven2/commons-cli/commons-cli/1.2/commons-cli-1.2.jar',
+        'https://maven-central.storage-download.googleapis.com/maven2/commons-cli/commons-cli/1.2/commons-cli-1.2.jar',
     )
     XSDC_COMMONS_CLI_SHA256 = 'e7cd8951956d349b568b7ccfd4f5b2529a8c113e67c32b028f52ffda371259d9'
 

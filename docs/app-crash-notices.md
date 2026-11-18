@@ -53,7 +53,9 @@ rejected helper arguments.
 --output OUTPUT` runs on Windows without a Bluetooth radio. The isolated fixture
 calls the production Android Bluetooth API after drawing a real application
 window. It verifies the original null-receiver exception, exit 1, a readable text
-report, the Hebrew Bluetooth notice surviving ART process exit, and explicit
-suppression. It uses standalone Android services and a separate profile. It does
+report, the Hebrew Bluetooth notice surviving ART process exit, explicit
+suppression, and suppression after drawing an offscreen `--hidden-window` frame.
+The visibility gate also respects the nearest activity's desktop visibility,
+including attached dialogs. It uses standalone Android services and a separate profile. It does
 not establish multi-process device-mode behavior, native crash handling, or JBL
 headphone connectivity. It never uses the synthetic Bluetooth backend.

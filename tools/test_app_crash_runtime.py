@@ -46,8 +46,9 @@ def notices(package, log_path):
     return found
 
 
-def run(runtime, fixture, output, enabled):
-    profile = output / ('enabled' if enabled else 'disabled')
+def run(runtime, fixture, output, enabled, visible):
+    profile = output / (('visible' if visible else 'hidden')
+                        + ('-enabled' if enabled else '-disabled'))
     profile.mkdir(parents=True, exist_ok=True)
     for part in ('system/framework', 'system/etc', 'system/fonts', 'data', 'art', 'i18n/etc/icu'):
         (profile / part).mkdir(parents=True, exist_ok=True)
@@ -72,7 +73,7 @@ def run(runtime, fixture, output, enabled):
     bcp = ':'.join(nd(runtime / (p + '.jar')) for p in ('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app'))
     cmd = [str(runtime / 'dalvikvm.exe'), '-Xbootclasspath:' + bcp,
            '-Ximage:' + nd(runtime / 'framework/boot.art'), '-Xint', '-Xusejit:false',
-           'com.gesher.app.Main', '--window', nd(fixture)]
+           'com.gesher.app.Main', '--window' if visible else '--hidden-window', nd(fixture)]
     report = profile / 'logs/com.gesher.crashnotice.crash.log'
     with (profile / 'runtime.log').open('wb') as log:
         p = subprocess.Popen(cmd, cwd=runtime, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -84,14 +85,15 @@ def run(runtime, fixture, output, enabled):
                 p.wait()
     trace = (profile / 'runtime.log').read_text(encoding='utf-8', errors='replace')
     assert "getBluetoothLeScanner()' on a null object reference" in trace, trace[-5000:]
-    assert 'first frame drawn' in trace, 'fixture did not show a real app window'
+    assert 'first frame drawn' in trace, 'fixture did not draw an application frame'
     found = []
     # The ART process has exited; its independently owned notice must still work.
+    expected_notice = enabled and visible
     deadline = time.monotonic() + (5 if enabled else 1)
     while time.monotonic() < deadline and not found:
         found += notices('com.gesher.crashnotice', str(report))
         time.sleep(.05)
-    if enabled:
+    if expected_notice:
         assert len(found) == 1 and 'Bluetooth' in found[0] and 'Windows' in found[0], found
         evidence = report.read_text(encoding='utf-8')
         assert 'getBluetoothLeScanner' in evidence
@@ -100,7 +102,10 @@ def run(runtime, fixture, output, enabled):
         assert events and events[-1] in found[0], 'notice does not identify its report entry'
     else:
         assert not found, 'dialog suppression failed'
-    print('PASS: actual Windows/ART missing-radio crash, exit 1, notice ' + ('survived process exit' if enabled else 'suppressed'))
+        assert not report.exists(), 'suppressed crash created a desktop-notice report'
+    print('PASS: actual Windows/ART missing-radio crash, exit 1, '
+          + ('visible' if visible else 'hidden') + ' window, notice '
+          + ('survived process exit' if expected_notice else 'suppressed'))
 
 
 if __name__ == '__main__':
@@ -109,5 +114,5 @@ if __name__ == '__main__':
     parser.add_argument('--fixture', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    for enabled in (True, False):
-        run(args.runtime.resolve(), args.fixture.resolve(), args.output.resolve(), enabled)
+    for enabled, visible in ((True, True), (False, True), (True, False)):
+        run(args.runtime.resolve(), args.fixture.resolve(), args.output.resolve(), enabled, visible)

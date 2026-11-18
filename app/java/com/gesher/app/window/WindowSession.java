@@ -359,7 +359,8 @@ public final class WindowSession extends IWindowSession.Stub {
         synchronized (mWindows) {
             for (int i = 0; i < mWindows.size(); i++) {
                 AppWindow w = mWindows.valueAt(i);
-                if (w.shown && w.nativeWindow != null && isApplicationWindow(w.attrs.type)) {
+                if (w.shown && w.nativeWindow != null && isApplicationWindow(w.attrs.type)
+                        && shownOnDesktop(w)) {
                     return true;
                 }
             }
