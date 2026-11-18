@@ -49,7 +49,12 @@ final class CodecControlsTest {
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar, LOW, 90);
         MediaCodec codec = MediaCodec.createEncoderByType("video/avc");
         try {
-            require(codec.getMetrics().isEmpty(), "fresh codec exposes a previous session");
+            PersistableBundle fresh = codec.getMetrics();
+            require(codec.getName().equals(fresh.getString(CODEC))
+                    && MODE_VIDEO.equals(fresh.getString(MODE))
+                    && !fresh.containsKey(BITRATE)
+                    && !fresh.containsKey(MediaCodec.MetricsConstants.WIDTH),
+                    "fresh codec does not expose identity without session data: " + fresh);
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             expectIllegalState(() -> codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE));
             PersistableBundle initial = videoMetrics(codec, 90, LOW);
@@ -100,7 +105,7 @@ final class CodecControlsTest {
                     }
                 }
                 require(submitted == end && received == end, "encoder did not finish phase " + phase);
-                videoMetrics(codec, 90, targets[phase]);
+                videoMetrics(codec, 90, LOW);
                 require(codec.getOutputFormat().getInteger(MediaFormat.KEY_BIT_RATE) == targets[phase],
                         "effective target missing from output format");
             }
@@ -116,7 +121,7 @@ final class CodecControlsTest {
             videoMetrics(codec, 90, LOW);
             expectIllegalState(codec::start);
             codec.reset();
-            require(codec.getMetrics().isEmpty(), "reset kept stale codec metrics");
+            videoMetrics(codec, 90, LOW);
             codec.configure(videoFormat(MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar,
                     HIGH, 0), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             videoMetrics(codec, 0, HIGH);
@@ -142,10 +147,12 @@ final class CodecControlsTest {
                 input.unlockCanvasAndPost(canvas);
                 codec.signalEndOfInputStream();
                 awaitEos(codec);
-                videoMetrics(codec, 0, HIGH);
+                require(codec.getOutputFormat().getInteger(MediaFormat.KEY_BIT_RATE) == HIGH,
+                        "surface input did not apply the live bitrate");
+                videoMetrics(codec, 0, LOW);
                 codec.stop();
                 requireRetiredSurface(input);
-                videoMetrics(codec, 0, HIGH);
+                videoMetrics(codec, 0, LOW);
             } finally {
                 input.release();
             }
@@ -177,9 +184,10 @@ final class CodecControlsTest {
                     && metrics.getInt(SECURE, -1) == 0
                     && metrics.getInt("android.media.mediacodec.sampleRate") == 48_000
                     && metrics.getInt("android.media.mediacodec.channelCount") == 1
-                    && !metrics.containsKey(BITRATE)
+                    && metrics.getInt(BITRATE, -1) == 96_000
+                    && codec.getOutputFormat().getInteger(MediaFormat.KEY_BIT_RATE) == 96_000
                     && !metrics.containsKey(MediaCodec.MetricsConstants.WIDTH),
-                    "audio metrics contain stale video fields: " + metrics);
+                    "unexpected audio encoder metrics: " + metrics);
             codec.stop();
         } finally {
             codec.release();

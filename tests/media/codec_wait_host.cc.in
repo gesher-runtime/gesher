@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -77,7 +78,11 @@ struct JNIEnv { void CallVoidMethod(jobject info, int, int, int, jlong, int) { +
 struct { int buffer_info_set = 1; } gJ;
 struct ANativeWindow { int releases = 0; };
 void ANativeWindow_release(ANativeWindow* window) { ++window->releases; }
-struct FakeInput { int abandonments = 0; void Abandon() { ++abandonments; } };
+struct FakeInput {
+  explicit FakeInput(int& count) : abandonments(count) {}
+  void Abandon() { ++abandonments; }
+  int& abandonments;
+};
 struct Slot {
   bool client = false;
   int size = 0, flags = 0;
@@ -117,6 +122,9 @@ class Codec {
   bool configured_ = true, started_ = false, flushed_ = false, async_ = false;
   bool flush_requested_ = false, failed_ = false, stall_flush_ = false;
   bool surface_eos_ = false, enc_eos_sent_ = false, output_known_ = false, format_pending_ = false;
+  bool force_key_ = false;
+  std::optional<int> metrics_, target_bitrate_, pending_bitrate_;
+  int64_t last_out_us_ = 0;
   int posted_ = 0;
   Slot inputs_[kSlots], outputs_[kSlots];
   std::unique_ptr<int> video_enc_, audio_enc_, video_, audio_;
@@ -129,6 +137,12 @@ class Codec {
 void Start(Codec& codec) {
   std::string error;
   Check(codec.Start(&error), "configured receiver starts");
+}
+
+void Reconfigure(Codec& codec) {
+  // Configure itself uses Android/encoder boundaries exercised by the ART gate.
+  std::lock_guard<std::mutex> lock(codec.mu_);
+  codec.configured_ = true;
 }
 
 void RestartedDequeue(bool input) {
@@ -151,6 +165,7 @@ void RestartedDequeue(bool input) {
   Require(paused.waiting, "dequeue waits for an ordinary unavailable buffer");
   codec.Stop();
   Require(paused.woken, "stop wakes the old dequeue");
+  Reconfigure(codec);
   Start(codec);
   {
     std::lock_guard<std::mutex> lock(codec.mu_);
@@ -184,6 +199,7 @@ void RestartedFlush() {
   Require(paused.waiting, "flush waits for the controlled decoder boundary");
   codec.Stop();
   Require(paused.woken, "stop interrupts the previous flush");
+  Reconfigure(codec);
   Start(codec);
   {
     std::lock_guard<std::mutex> lock(codec.mu_);
@@ -236,19 +252,37 @@ void ReleasedWait(int operation) {
 }
 
 void ReleaseResources() {
-  Codec codec;
   ANativeWindow window;
+  int abandonments = 0;
+  Codec codec;
   codec.window_ = &window;
   codec.reader_ = std::make_shared<int>(1);
   std::weak_ptr<int> reader = codec.reader_;
-  codec.input_surface_ = std::make_unique<FakeInput>();
+  codec.input_surface_ = std::make_unique<FakeInput>(abandonments);
   codec.Release();
   Check(window.releases == 1 && codec.window_ == nullptr, "release drops output window immediately");
   Check(reader.expired(), "release drops its reader reference");
-  Check(codec.input_surface_->abandonments == 1, "release retires the input callback boundary");
+  Check(abandonments == 1, "release retires the input callback boundary");
   codec.Release();
-  Check(window.releases == 1 && codec.input_surface_->abandonments == 1,
+  Check(window.releases == 1 && abandonments == 1,
         "repeated release does not retire resources twice");
+}
+#endif
+
+#if STOP_REQUIRES_CONFIGURE
+void StopResources() {
+  int abandonments = 0;
+  Codec codec;
+  codec.input_surface_ = std::make_unique<FakeInput>(abandonments);
+  codec.pending_bitrate_ = 500'000;
+  codec.force_key_ = true;
+  Start(codec);
+  codec.Stop();
+  Check(abandonments == 1 && codec.input_surface_ == nullptr,
+        "stop disconnects the old input surface");
+  Check(!codec.pending_bitrate_ && !codec.force_key_, "stop retires queued encoder controls");
+  codec.Release();
+  Check(abandonments == 1, "release does not retire a stopped surface twice");
 }
 #endif
 
@@ -260,6 +294,11 @@ void OrdinaryLifecycle() {
   Check(codec.DequeueInput(0) == 0, "completed flush makes input slots reusable");
   codec.Stop();
   Check(codec.DequeueInput(0) == kInfoTryAgainLater, "stopped receiver cannot give a buffer");
+#if STOP_REQUIRES_CONFIGURE
+  std::string stop_error;
+  Check(!codec.Start(&stop_error), "stop requires a new configuration before restart");
+#endif
+  Reconfigure(codec);
   Start(codec);
   codec.Reset();
   std::string error;
@@ -274,6 +313,9 @@ int main() {
 #if HAS_RELEASE
   for (int operation = 0; operation != 3; ++operation) ReleasedWait(operation);
   ReleaseResources();
+#endif
+#if STOP_REQUIRES_CONFIGURE
+  StopResources();
 #endif
   std::printf("codec wait contracts: %d checks, %d failures\n", checks.load(), failures.load());
   return failures != 0;

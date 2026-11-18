@@ -43,12 +43,14 @@ def generate(component: str, ref: str | None) -> str:
     else:
         source = (ROOT / SOURCE).read_text()
     has_release = "  void Release() {" in source
+    definitions = {"HAS_RELEASE": has_release}
     if component == "receiver":
         replacements = {
             "GET_CODEC": method(source, "CodecOwner GetCodec(" if "CodecOwner GetCodec(" in source else "Codec* GetCodec("),
             "SETUP": method(source, "void JNICALL MC_setup("),
             "RELEASE": method(source, "void JNICALL MC_release("),
         }
+        definitions["HAS_OPTIONAL_LOOKUP"] = "throw_if_null" in replacements["GET_CODEC"]
     else:
         markers = {
             "DESTRUCTOR": "  ~Codec()",
@@ -63,6 +65,8 @@ def generate(component: str, ref: str | None) -> str:
         replacements = {name: method(source, marker) for name, marker in markers.items()}
         replacements["RELEASE"] = method(source, "  void Release()") if has_release else ""
         replacements["STOP_LOCKED"] = method(source, "  void StopLocked()") if has_release else ""
+        definitions["STOP_REQUIRES_CONFIGURE"] = ref is None or any(
+            "configured_ = false;" in replacements[name] for name in ("STOP", "STOP_LOCKED"))
     template = (ROOT / ("tests/media/codec_" + component + "_host.cc.in")).read_text()
     for name, body in replacements.items():
         marker = "@" + name + "@"
@@ -71,7 +75,7 @@ def generate(component: str, ref: str | None) -> str:
         template = template.replace(marker, body)
     digest = hashlib.sha256(source.encode()).hexdigest()
     print(component + " production SHA256 " + digest, flush=True)
-    return "#define HAS_RELEASE " + str(int(has_release)) + "\n" + template
+    return "".join(f"#define {key} {int(value)}\n" for key, value in definitions.items()) + template
 
 
 def main() -> int:

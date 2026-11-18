@@ -178,10 +178,11 @@ struct {
 struct CodecMetrics {
   int32_t width = 0, height = 0, rotation = 0;
   int32_t sample_rate = 0, channel_count = 0;
+  int32_t bitrate = 0;
 };
 
-jobject MakeMetricsBundle(JNIEnv* env, const CodecEntry& entry, const CodecMetrics& metrics,
-                          std::optional<int> target_bitrate) {
+jobject MakeMetricsBundle(JNIEnv* env, const CodecEntry& entry,
+                          const std::optional<CodecMetrics>& metrics) {
   jobject bundle = env->NewObject(gJ.persistable_bundle, gJ.persistable_bundle_ctor);
   if (bundle == nullptr) return nullptr;
   const std::string prefix = "android.media.mediacodec.";
@@ -202,20 +203,21 @@ jobject MakeMetricsBundle(JNIEnv* env, const CodecEntry& entry, const CodecMetri
     env->DeleteLocalRef(key);
   };
   put_string("codec", entry.name.c_str());
-  put_string("mime", entry.mime.c_str());
   put_string("mode", entry.video ? "video" : "audio");
+  if (!metrics) return bundle;
+  put_string("mime", entry.mime.c_str());
   put_int("encoder", entry.encoder ? 1 : 0);
   put_int("secure", 0);  // Configure rejects protected sessions.
   if (entry.video) {
-    if (metrics.width > 0) put_int("width", metrics.width);
-    if (metrics.height > 0) put_int("height", metrics.height);
-    put_int("rotation", metrics.rotation);          // MediaCodec.MetricsConstants.ROTATION
-    put_int("rotation-degrees", metrics.rotation);  // Stagefright's metric spelling
+    if (metrics->width > 0) put_int("width", metrics->width);
+    if (metrics->height > 0) put_int("height", metrics->height);
+    put_int("rotation", metrics->rotation);          // MediaCodec.MetricsConstants.ROTATION
+    put_int("rotation-degrees", metrics->rotation);  // Stagefright's metric spelling
   } else {
-    if (metrics.sample_rate > 0) put_int("sampleRate", metrics.sample_rate);
-    if (metrics.channel_count > 0) put_int("channelCount", metrics.channel_count);
+    if (metrics->sample_rate > 0) put_int("sampleRate", metrics->sample_rate);
+    if (metrics->channel_count > 0) put_int("channelCount", metrics->channel_count);
   }
-  if (target_bitrate.has_value()) put_int("bitrate", *target_bitrate);
+  if (metrics->bitrate > 0) put_int("bitrate", metrics->bitrate);
   return bundle;
 }
 
@@ -543,20 +545,17 @@ class Codec {
 
   jobject GetMetrics(JNIEnv* env) {
     std::optional<CodecMetrics> metrics;
-    std::optional<int> target_bitrate;
     bool released;
     {
       std::lock_guard<std::mutex> lock(mu_);
       released = released_;
       metrics = metrics_;
-      target_bitrate = target_bitrate_;
     }
     if (released) {
       jniThrow(env, "java/lang/IllegalStateException", "getMetrics() after release()");
       return nullptr;
     }
-    if (!metrics) return env->NewObject(gJ.persistable_bundle, gJ.persistable_bundle_ctor);
-    return MakeMetricsBundle(env, entry_, *metrics, target_bitrate);
+    return MakeMetricsBundle(env, entry_, metrics);
   }
 
   void SetAsync(bool async) {
@@ -637,8 +636,7 @@ class Codec {
     std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     StopLocked();
     std::lock_guard<std::mutex> lock(mu_);
-    configured_ = false;
-    metrics_.reset();
+    // As with stop, getMetrics keeps the last session until a new configure.
     target_bitrate_.reset();
   }
 
@@ -1066,23 +1064,27 @@ class Codec {
   }
 
   // Only replace the previous session's metrics after successful configuration.
-  // Stop and worker failure retain them for getMetrics().
+  // Stop, reset and worker failure retain them for getMetrics().
   void BeginMetricsLocked() {
     CodecMetrics metrics;
+    target_bitrate_.reset();
     if (entry_.video) {
       input_format_.GetInt32("width", &metrics.width);
       input_format_.GetInt32("height", &metrics.height);
       input_format_.GetInt32("rotation-degrees", &metrics.rotation);
+      if (entry_.encoder) {
+        metrics.bitrate = std::max(enc_params_.bitrate, 64000);
+        target_bitrate_ = metrics.bitrate;
+      }
     } else if (entry_.encoder) {
       metrics.sample_rate = static_cast<int32_t>(audio_params_.sample_rate);
       metrics.channel_count = static_cast<int32_t>(audio_params_.channels);
+      metrics.bitrate = audio_params_.bitrate;
     } else {
       input_format_.GetInt32("sample-rate", &metrics.sample_rate);
       input_format_.GetInt32("channel-count", &metrics.channel_count);
     }
     metrics_ = metrics;
-    target_bitrate_ = entry_.video && entry_.encoder
-        ? std::optional<int>(std::max(enc_params_.bitrate, 64000)) : std::nullopt;
     pending_bitrate_.reset();
     force_key_ = false;
     failed_ = false;
