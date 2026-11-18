@@ -21,6 +21,11 @@ static int stream_depth;
 static int transactions;
 static int completions;
 static int crt_calls;
+static int admission_error;
+static bool fail_close_after_consuming;
+static bool expect_reset;
+static FILE* reset_stream;
+static int resets;
 struct StreamLock {
   explicit StreamLock(FILE*) { ++stream_depth; }
   ~StreamLock() { --stream_depth; }
@@ -38,7 +43,7 @@ class ClosingDescriptor {
     check("freopen descriptor transaction starts inside its stream lock", stream_depth == 1);
     ++transactions;
   }
-  int Error() const { return 0; }
+  int Error() const { return admission_error; }
   int Finish(bool) {
     check("freopen descriptor transaction completes once inside its stream lock",
           !finished_ && stream_depth == 1);
@@ -46,7 +51,7 @@ class ClosingDescriptor {
     ++completions;
     return 0;
   }
-  ~ClosingDescriptor() { check("freopen completes descriptor transaction", finished_); }
+  ~ClosingDescriptor() { check("freopen completes descriptor transaction", admission_error || finished_); }
  private:
   bool finished_ = false;
 };
@@ -54,11 +59,16 @@ class ClosingDescriptor {
 }  // namespace gesher
 
 static int _fileno(FILE* stream) { return fileno(stream); }
-static int _fclose_nolock(FILE* stream) { return std::fclose(stream); }
+static int _fclose_nolock(FILE* stream) {
+  if (expect_reset) check("stream state retires before fclose", reset_stream == stream);
+  int result = std::fclose(stream);
+  return fail_close_after_consuming ? (errno = EIO, EOF) : result;
+}
 static int gesher_errno_from_crt(int error) { return error; }
 static bool HasNonDirectoryParent(const std::wstring&) { return false; }
 static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
   ++crt_calls;
+  if (expect_reset) check("stream state retires before CRT freopen", reset_stream == stream);
   check("freopen keeps the CRT reopen inside its stream transaction", stream_depth == 1);
   std::wstring wide_path(path), wide_mode(mode);
   std::string narrow_path(wide_path.begin(), wide_path.end());
@@ -69,19 +79,57 @@ static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
 
 namespace host {
 @HOST_PARSE_MODE@
+@HOST_FCLOSE@
 @HOST_FREOPEN@
 }  // namespace host
 
 namespace guest {
 #define BIONIC_SYSV
-constexpr int kEINVAL = EINVAL;
 static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
-static FILE* HostFreopen(const char* path, const char* mode, FILE* stream) {
-  return host::freopen(path, mode, stream);
+static void ResetStream(FILE* stream) {
+  check("guest state reset while the CRT stream lock is held", stream_depth == 1);
+  reset_stream = stream;
+  ++resets;
 }
-@GUEST_CRT_MODE@
+@GUEST_FCLOSE@
 @GUEST_FREOPEN@
 }  // namespace guest
+
+static void CheckGuestStreamLifecycle() {
+  FILE* stream = std::tmpfile();
+  if (!stream) std::abort();
+  int before = resets;
+  admission_error = EBUSY;
+  check("rejected close leaves the original stream open and state intact",
+        guest::CloseBionicStream(stream) == EOF && errno == EBUSY && resets == before &&
+        std::fputc('c', stream) == 'c');
+  check("rejected reopen leaves the original stream open and state intact",
+        guest::Freopen("/dev/null", "w", stream) == nullptr && errno == EBUSY &&
+        resets == before && std::fputc('r', stream) == 'r');
+  admission_error = 0;
+  expect_reset = fail_close_after_consuming = true;
+  check("error after CRT close still retires guest state exactly once",
+        guest::CloseBionicStream(stream) == EOF && errno == EIO && resets == before + 1);
+  expect_reset = fail_close_after_consuming = false;
+
+  stream = std::tmpfile();
+  if (!stream) std::abort();
+  reset_stream = nullptr;
+  expect_reset = true;
+  check("invalid mode consumes the original stream and retires guest state",
+        guest::Freopen("/dev/null", "x", stream) == nullptr && errno == EINVAL && resets == before + 2);
+  expect_reset = false;
+
+  stream = std::tmpfile();
+  if (!stream) std::abort();
+  reset_stream = nullptr;
+  expect_reset = true;
+  check("successful native reopen resets state",
+        guest::Freopen("/dev/null", "w", stream) == stream && resets == before + 3);
+  expect_reset = false;
+  check("successfully reopened stream remains usable", std::fputc('s', stream) == 's');
+  std::fclose(stream);
+}
 
 static FILE* GuestReopen(const char* path, const char* mode, FILE* stream) {
   return guest::Freopen(path, mode, stream);
@@ -105,6 +153,7 @@ int main(int argc, char** argv) {
   test_freopen_mode_contracts();
   check("freopen leaves no stream lock or descriptor transaction active",
         stream_depth == 0 && transactions == completions && completions == crt_calls);
+  if (reopen_call == GuestReopen) CheckGuestStreamLifecycle();
   std::printf("freopen %s: %d checks, %d failures\n", argv[1], checks, failures);
   return failures ? 1 : 0;
 }

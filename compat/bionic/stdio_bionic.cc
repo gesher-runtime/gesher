@@ -128,6 +128,7 @@ std::string Utf32ToUtf8(const uint32_t* s, int max_units) {
 constexpr int kEilseq = 84;  // Linux EILSEQ
 constexpr int kEoverflow = 75;  // Linux EOVERFLOW
 size_t DecodeWide(uint32_t* wc, const char* input, size_t size, void* state);
+size_t EncodeWide(char* output, uint32_t wc);
 
 using WideText = std::vector<uint32_t>;
 
@@ -170,12 +171,26 @@ template <class Char>
 using FormatText = std::conditional_t<std::is_same_v<Char, char>, std::string, WideText>;
 
 template <class Char>
-FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr) {
+bool SkipArgumentNumber(const Char*& cursor) {
+  const Char* end = cursor;
+  while (*end >= '0' && *end <= '9') ++end;
+  if (end == cursor || *end != '$') return false;
+  cursor = end + 1;
+  return true;
+}
+
+template <class Char, class Flush>
+bool FormatTo(const Char* fmt, SysvVaList* ap, FormatText<Char>& out, Flush flush) {
   constexpr bool wide = !std::is_same_v<Char, char>;
-  FormatText<Char> out;
-  if (valid) *valid = true;
   const Char* p = fmt;
-  while (*p != 0) {
+  while (true) {
+    // Bionic emits each wide field before parsing the next one. A later
+    // conversion failure must not discard the prefix of a real stream.
+    if constexpr (wide) {
+      if (!out.empty() && !flush(out)) return false;
+      out.clear();
+    }
+    if (*p == 0) return true;
     if (*p != '%') {
       const Char* begin = p;
       if constexpr (wide) {
@@ -193,6 +208,9 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr) 
       ++p;
       continue;
     }
+    // This shim does not resolve positional arguments. Parse their selectors
+    // so even positional %n reaches the same Bionic FORTIFY check.
+    bool positional = SkipArgumentNumber(p);
     std::string flags;
     while (*p > 0 && *p <= 0x7f && std::strchr("-+ #0'", *p) != nullptr) {
       if (*p != '\'') flags += *p;  // the CRT has no grouping flag
@@ -200,25 +218,37 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr) 
     }
     int width = -1;
     if (*p == '*') {
-      width = static_cast<int>(NextGp(ap));
-      if (width < 0) {
-        flags += '-';
-        width = -width;
-      }
       ++p;
+      positional = SkipArgumentNumber(p) || positional;
+      if (!positional) {
+        width = static_cast<int>(NextGp(ap));
+        if (width < 0) {
+          flags += '-';
+          if (width == INT_MIN) return errno = kENOMEM, false;
+          width = -width;
+        }
+      }
     } else {
-      while (*p >= '0' && *p <= '9') width = (width < 0 ? 0 : width * 10) + (*p++ - '0');
+      while (*p >= '0' && *p <= '9') {
+        int digit = *p++ - '0';
+        if (width > (INT_MAX - digit) / 10) return errno = kENOMEM, false;
+        width = (width < 0 ? 0 : width * 10) + digit;
+      }
     }
     int prec = -1;
     if (*p == '.') {
       ++p;
       if (*p == '*') {
-        prec = static_cast<int>(NextGp(ap));
-        if (prec < 0) prec = -1;
         ++p;
+        positional = SkipArgumentNumber(p) || positional;
+        if (!positional) prec = static_cast<int>(NextGp(ap));
       } else {
         prec = 0;
-        while (*p >= '0' && *p <= '9') prec = prec * 10 + (*p++ - '0');
+        while (*p >= '0' && *p <= '9') {
+          int digit = *p++ - '0';
+          if (prec > (INT_MAX - digit) / 10) return errno = kENOMEM, false;
+          prec = prec * 10 + digit;
+        }
       }
     }
     Len len = Len::kNone;
@@ -244,18 +274,38 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr) 
       case 'j': ++p; len = Len::kJ; break;
       case 'z': ++p; len = Len::kZ; break;
       case 't': ++p; len = Len::kT; break;
+      case 'w': {
+        // Fixed-width integer conversions remain unsupported, but the
+        // length modifier cannot suppress FORTIFY for a following %n.
+        const Char* end = p + 1;
+        if (*end == 'f') ++end;
+        while (*end >= '0' && *end <= '9') ++end;
+        if (*end == 'n') p = end;
+        break;
+      }
       default: break;
     }
     if (*p == 0) {
-      out.insert(out.end(), start, p);
-      break;
+      if constexpr (!wide) out.insert(out.end(), start, p);
+      return true;
     }
     Char conversion = *p++;
-    if (conversion < 0 || conversion > 0x7f) {
+    if (positional && conversion != 'n') {
       out.insert(out.end(), start, p);
       continue;
     }
+    if (conversion < 0 || conversion > 0x7f) {
+      if constexpr (wide) out.push_back(conversion);
+      else out.insert(out.end(), start, p);
+      continue;
+    }
     char conv = static_cast<char>(conversion);
+    if constexpr (wide) {
+      if (conv == 'C' || conv == 'S') {
+        conv = conv == 'C' ? 'c' : 's';
+        len = Len::kL;
+      }
+    }
 
     std::string spec = "%" + flags;
     if (width >= 0) spec += std::to_string(width);
@@ -297,12 +347,7 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr) 
           uint32_t wc = static_cast<uint32_t>(raw);
           if (len != Len::kL) {
             unsigned char byte = static_cast<unsigned char>(raw);
-            if (byte >= 0x80) {
-              errno = kEilseq;
-              *valid = false;
-              return {};
-            }
-            wc = byte;
+            wc = byte < 0x80 ? byte : UINT32_MAX;  // btowc returns WEOF.
           }
           AppendWideField(&out, {wc}, width, flags.find('-') != std::string::npos);
         } else if (len == Len::kL) {
@@ -324,8 +369,7 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr) 
             while ((prec < 0 || text.size() < static_cast<size_t>(prec)) && *ws != 0)
               text.push_back(*ws++);
           } else if (!DecodeWideString(static_cast<const char*>(ptr), prec, &text)) {
-            *valid = false;
-            return {};
+            return false;
           }
           AppendWideField(&out, text, width, flags.find('-') != std::string::npos);
         } else if (ptr == nullptr) {
@@ -350,28 +394,37 @@ FormatText<Char> Format(const Char* fmt, SysvVaList* ap, bool* valid = nullptr) 
         AppendF(&out, (spec + conv).c_str(), v);
         break;
       }
-      case 'n': {
-        void* ptr = reinterpret_cast<void*>(NextGp(ap));
-        if (ptr != nullptr) {
-          int64_t n = static_cast<int64_t>(out.size());
-          switch (len) {
-            case Len::kHH: *static_cast<signed char*>(ptr) = static_cast<signed char>(n); break;
-            case Len::kH: *static_cast<short*>(ptr) = static_cast<short>(n); break;
-            case Len::kNone: *static_cast<int*>(ptr) = static_cast<int>(n); break;
-            default: *static_cast<int64_t*>(ptr) = n; break;
-          }
-        }
-        break;
-      }
+      case 'n':
+        std::fputs("gesher bionic: FORTIFY: %n not allowed on Android\n", stderr);
+        std::abort();
       case 'm':  // bionic/glibc: strerror(errno), no argument
         AppendF(&out, (spec + "s").c_str(), strerror(errno));
         break;
-      default:  // unknown: copy the conversion through
-        out.insert(out.end(), start, p);
+      default:
+        if constexpr (wide) out.push_back(conversion);
+        else out.insert(out.end(), start, p);
         break;
     }
   }
-  return out;
+}
+
+bool Format(const char* fmt, SysvVaList* ap, std::string& out) {
+  return FormatTo(fmt, ap, out, [](const std::string&) { return true; });
+}
+
+template <class Sink>
+int FormatWide(const uint32_t* fmt, SysvVaList* ap, Sink write) {
+  int count = 0;
+  WideText field;
+  bool ok = FormatTo(fmt, ap, field, [&](const WideText& text) {
+    if (text.size() > static_cast<size_t>(INT_MAX - count)) return errno = kENOMEM, false;
+    for (uint32_t wc : text) {
+      if (!write(wc)) return false;
+    }
+    count += static_cast<int>(text.size());
+    return true;
+  });
+  return ok ? count : -1;
 }
 
 // --- FILE ------------------------------------------------------------------
@@ -479,12 +532,7 @@ std::string CrtMode(const char* mode) {
 }  // namespace
 
 int CloseBionicStream(FILE* stream) {
-  // UCRT fclose marks its stream slot reusable. Allocation takes its lock
-  // before reusing it; the lock persists until CRT shutdown or fcloseall.
-  // Keep our state removal in the same transaction as Gesher POSIX fclose.
-  StreamLock lock(stream);
-  ResetStream(stream);
-  return std::fclose(stream);
+  return gesher_fclose_with_reset(stream, ResetStream);
 }
 
 namespace {
@@ -542,20 +590,7 @@ FILE* BIONIC_SYSV Fdopen(int fd, const char* mode) {
   return fdopen(fd, m.c_str());
 }
 FILE* BIONIC_SYSV Freopen(const char* path, const char* mode, void* f) {
-  std::string m = CrtMode(mode);
-  if (m.empty()) {
-    CloseBionicStream(F(f));
-    return errno = kEINVAL, nullptr;
-  }
-  // gesher-base's freopen consumes Linux modes and maps them for the CRT.
-  // Passing CrtMode's 'N' would lose Android's 'e' before that mapping.
-  FILE* stream = F(f);
-  StreamLock lock(stream);
-  FILE* reopened = std::freopen(path, mode, stream);
-  // freopen closes the original stream on failure as well. The host's
-  // successful null-path mode-change stand-in still returns the same stream.
-  ResetStream(stream);
-  return reopened;
+  return gesher_freopen_with_reset(path, mode, F(f), ResetStream);
 }
 int BIONIC_SYSV Fgetpos(void* f, int64_t* pos) {
   int64_t p = _ftelli64(F(f));
@@ -1019,7 +1054,8 @@ int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool f
 extern "C" {
 
 int BIONIC_SYSV gesher_bionic_vsnprintf(char* buf, size_t n, const char* fmt, SysvVaList* ap) {
-  std::string s = Format(fmt, ap);
+  std::string s;
+  if (!Format(fmt, ap, s)) return -1;
   if (n != 0) {
     size_t c = s.size() < n - 1 ? s.size() : n - 1;
     std::memcpy(buf, s.data(), c);
@@ -1028,7 +1064,8 @@ int BIONIC_SYSV gesher_bionic_vsnprintf(char* buf, size_t n, const char* fmt, Sy
   return static_cast<int>(s.size());
 }
 int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* ap) {
-  std::string s = Format(fmt, ap);
+  std::string s;
+  if (!Format(fmt, ap, s)) return -1;
   std::memcpy(buf, s.c_str(), s.size() + 1);
   return static_cast<int>(s.size());
 }
@@ -1036,18 +1073,21 @@ int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt, SysvVaList* ap)
   FILE* stream = F(f);
   StreamLock lock(stream);
   Orient(State(stream), -1);
-  std::string s = Format(fmt, ap);
+  std::string s;
+  if (!Format(fmt, ap, s)) return -1;
   return _fwrite_nolock(s.data(), 1, s.size(), stream) == s.size() ? static_cast<int>(s.size()) : -1;
 }
 int BIONIC_SYSV gesher_bionic_vprintf(const char* fmt, SysvVaList* ap) {
   return gesher_bionic_vfprintf(stdout, fmt, ap);
 }
 int BIONIC_SYSV gesher_bionic_vdprintf(int fd, const char* fmt, SysvVaList* ap) {
-  std::string s = Format(fmt, ap);
+  std::string s;
+  if (!Format(fmt, ap, s)) return -1;
   return write(fd, s.data(), static_cast<unsigned>(s.size()));
 }
 int BIONIC_SYSV gesher_bionic_vasprintf(char** out, const char* fmt, SysvVaList* ap) {
-  std::string s = Format(fmt, ap);
+  std::string s;
+  if (!Format(fmt, ap, s)) return -1;
   *out = static_cast<char*>(std::malloc(s.size() + 1));
   if (*out == nullptr) return -1;
   std::memcpy(*out, s.c_str(), s.size() + 1);
@@ -1063,7 +1103,8 @@ int BIONIC_SYSV gesher_bionic_vsnprintf_chk(char* buf, size_t n, int /*flags*/, 
 }
 int BIONIC_SYSV gesher_bionic_vsprintf_chk(char* buf, int /*flags*/, size_t slen, const char* fmt,
                                           SysvVaList* ap) {
-  std::string s = Format(fmt, ap);
+  std::string s;
+  if (!Format(fmt, ap, s)) return -1;
   if (s.size() >= slen) {
     std::fprintf(stderr, "gesher bionic: FORTIFY: vsprintf: buffer overflow detected\n");
     std::abort();
@@ -1085,55 +1126,69 @@ int BIONIC_SYSV gesher_bionic_vscanf(const char* fmt, SysvVaList* ap) {
 }
 int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t* fmt,
                                        SysvVaList* ap) {
-  if (n == 0) return -1;
-  bool valid;
-  WideText text = Format(fmt, ap, &valid);
-  if (!valid) return -1;
-  size_t count = text.size() < n - 1 ? text.size() : n - 1;
-  if (count != 0) std::memcpy(buf, text.data(), count * sizeof(uint32_t));
-  buf[count] = 0;
-  if (text.size() > INT_MAX) return errno = kEoverflow, -1;
-  return text.size() < n ? static_cast<int>(text.size()) : -1;
+  if (n == 0) return errno = kEINVAL, -1;
+  // Bionic renders through a multibyte stream before converting back. Its
+  // UTF-8 encoder and decoder accept different scalar ranges, and the first
+  // encoded NUL ends the conversion even if formatting emitted more text.
+  std::string bytes;
+  int count = FormatWide(fmt, ap, [&](uint32_t wc) {
+    char encoded[4];
+    size_t size = EncodeWide(encoded, wc);
+    if (size == static_cast<size_t>(-1)) return false;
+    bytes.append(encoded, size);
+    return true;
+  });
+  if (count < 0) return -1;
+  std::array<uint8_t, 8> state{};
+  size_t offset = 0;
+  for (size_t i = 0; i < n; ++i) {
+    uint32_t wc = 0;
+    size_t size = DecodeWide(&wc, bytes.c_str() + offset, bytes.size() + 1 - offset, state.data());
+    if (size == static_cast<size_t>(-1) || size == static_cast<size_t>(-2))
+      return errno = kEilseq, -1;
+    buf[i] = wc;
+    if (size == 0) return count;
+    offset += size;
+  }
+  buf[n - 1] = 0;
+  return errno = kEoverflow, -1;
 }
 int BIONIC_SYSV gesher_bionic_vfwprintf(void* f, const uint32_t* fmt, SysvVaList* ap) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   auto& state = State(stream);
   Orient(state, 1);
-  bool valid;
-  WideText text = Format(fmt, ap, &valid);
-  if (!valid) {
-    state.conversion_error = true;
-    return -1;
-  }
-  if (text.size() > INT_MAX) return errno = kEoverflow, -1;
-  for (uint32_t wc : text) {
-    if (!WriteWide(stream, state, wc)) return -1;
-  }
-  return static_cast<int>(text.size());
+  int count = FormatWide(fmt, ap, [&](uint32_t wc) { return WriteWide(stream, state, wc); });
+  if (count < 0 && errno == kEilseq) state.conversion_error = true;
+  return count;
 }
 int BIONIC_SYSV gesher_bionic_vwprintf(const uint32_t* fmt, SysvVaList* ap) {
   return gesher_bionic_vfwprintf(stdout, fmt, ap);
 }
 int BIONIC_SYSV gesher_bionic_android_log_vprint(int prio, const char* tag, const char* fmt,
                                                 SysvVaList* ap) {
-  return LogWrite(prio, tag, Format(fmt, ap).c_str());
+  std::string text;
+  return Format(fmt, ap, text) ? LogWrite(prio, tag, text.c_str()) : -1;
 }
 int BIONIC_SYSV gesher_bionic_android_log_buf_vprint(int buf, int prio, const char* tag,
                                                     const char* fmt, SysvVaList* ap) {
-  return LogWrite(prio, tag, Format(fmt, ap).c_str(), buf);
+  std::string text;
+  return Format(fmt, ap, text) ? LogWrite(prio, tag, text.c_str(), buf) : -1;
 }
 void BIONIC_SYSV gesher_bionic_android_log_vassert(const char* cond, const char* tag,
                                                   const char* fmt, SysvVaList* ap) {
-  if (fmt != nullptr) {
-    LogWrite(7, tag, Format(fmt, ap).c_str(), 0, false);
+  std::string text;
+  if (fmt != nullptr && Format(fmt, ap, text)) {
+    LogWrite(7, tag, text.c_str(), 0, false);
   } else {
     LogWrite(7, tag, cond ? cond : "assertion failed", 0, false);
   }
   std::abort();
 }
 void BIONIC_SYSV gesher_bionic_vsyslog(int prio, const char* fmt, SysvVaList* ap) {
-  LogWrite(prio <= 3 ? 6 : prio <= 4 ? 5 : prio <= 6 ? 4 : 3, "syslog", Format(fmt, ap).c_str());
+  std::string text;
+  if (Format(fmt, ap, text))
+    LogWrite(prio <= 3 ? 6 : prio <= 4 ? 5 : prio <= 6 ? 4 : 3, "syslog", text.c_str());
 }
 int BIONIC_SYSV gesher_bionic_android_log_write(int prio, const char* tag, const char* text) {
   return LogWrite(prio, tag, text);

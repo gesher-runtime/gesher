@@ -9,6 +9,7 @@
 #ifdef _WIN32
 #include <gesher/bionic_shim.h>
 #include <io.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -22,6 +23,7 @@
 #include <cstring>
 #include <cwchar>
 #include <future>
+#include <string>
 #include <thread>
 
 #if defined(_WIN32) && defined(__x86_64__)
@@ -282,26 +284,112 @@ void TestWideOutput(const Api& api) {
   // translator has a separate argument adapter unavailable to a native PE.
   f = Stream();
   const Wide fmt[] = {0xe9, '|', '%', '4', '.', '1', 'l', 's', '|', '%', '.', '1', 's',
-                      '|', '%', 'l', 'c', '%', 'n', 0};
+                      '|', '%', 'l', 'c', 0};
   const Wide expected[] = {0xe9, '|', ' ', ' ', ' ', 0xe9, '|', 0xe9, '|', 0x1f642, 0};
   const char narrow[] = "\xc3\xa9Q";
   Wide buffer[32]{};
-  int count = -1;
-  Check("swprintf precision, padding, %n and count use wide characters",
-        api.print_buffer(buffer, 32, fmt, text, narrow, Wint{0x1f642}, &count) == 10 && count == 10 &&
+  Check("swprintf precision, padding and count use wide characters",
+        api.print_buffer(buffer, 32, fmt, text, narrow, Wint{0x1f642}) == 10 &&
         std::memcmp(buffer, expected, sizeof(expected)) == 0);
-  count = -1;
   Check("fwprintf counts wide characters and sets orientation",
-        api.print(f, fmt, text, narrow, Wint{0x1f642}, &count) == 10 && count == 10 && api.orient(f, 0) > 0);
+        api.print(f, fmt, text, narrow, Wint{0x1f642}) == 10 && api.orient(f, 0) > 0);
   constexpr char formatted[] = "\xc3\xa9|   \xc3\xa9|\xc3\xa9|\xf0\x9f\x99\x82";
   ExpectBytes(f, formatted, sizeof(formatted) - 1);
   Check("wide formatted stream closes", api.close(f) == 0);
 #endif
 }
+
+#if defined(_WIN32) && defined(__x86_64__)
+void TestBionicWideFormatting(const Api& api) {
+  constexpr Wide simple[] = {'A', 'B', 'C', 0};
+  constexpr Wide character[] = {'%', 'l', 'c', 0};
+  constexpr Wide aliases[] = {'%', 'C', '|', '%', 'S', 0};
+  constexpr Wide alias_result[] = {0x1f642, '|', 0xe9, 0};
+  constexpr Wide word[] = {0xe9, 0};
+  constexpr Wide invalid_input[] = {'A', '%', 's', 'Z', 0};
+  constexpr Wide zero_character[] = {'A', '%', 'l', 'c', 'Z', 0};
+  constexpr Wide escaped_count[] = {'%', '%', 'n', 0};
+  Wide buffer[8] = {'?', '?', '?', '?'};
+
+  *api.errno_value() = 0;
+  Check("zero swprintf capacity reports EINVAL without modifying output",
+        api.print_buffer(buffer, 0, simple) == -1 && *api.errno_value() == EINVAL && buffer[0] == '?');
+  *api.errno_value() = 0;
+  Check("insufficient swprintf capacity reports EOVERFLOW and terminates the prefix",
+        api.print_buffer(buffer, 3, simple) == -1 && *api.errno_value() == 75 &&
+        buffer[0] == 'A' && buffer[1] == 'B' && buffer[2] == 0 && buffer[3] == '?');
+  *api.errno_value() = 0;
+  Check("surrogate wide conversion reports EILSEQ",
+        api.print_buffer(buffer, 8, character, Wint{0xd800}) == -1 && *api.errno_value() == 84);
+  *api.errno_value() = 0;
+  Check("out-of-range wide conversion reports EILSEQ",
+        api.print_buffer(buffer, 8, character, Wint{0x110000}) == -1 && *api.errno_value() == 84);
+  Check("Bionic recognizes the wide %C and %S forms",
+        api.print_buffer(buffer, 8, aliases, Wint{0x1f642}, word) == 3 &&
+        std::memcmp(buffer, alias_result, sizeof(alias_result)) == 0);
+  buffer[2] = '?';
+  Check("an embedded NUL ends swprintf's decode without changing the format count",
+        api.print_buffer(buffer, 8, zero_character, Wint{0}) == 3 &&
+        buffer[0] == 'A' && buffer[1] == 0 && buffer[2] == '?');
+  Check("an escaped percent followed by n remains literal",
+        api.print_buffer(buffer, 8, escaped_count) == 2 && buffer[0] == '%' && buffer[1] == 'n');
+
+  FILE* stream = Stream();
+  *api.errno_value() = 0;
+  Check("fwprintf reports a malformed multibyte conversion and sets ferror",
+        api.print(stream, invalid_input, "\xff") == -1 && *api.errno_value() == 84 &&
+        api.error(stream));
+  ExpectBytes(stream, "A", 1);
+  Check("stream from failed conversion closes", api.close(stream) == 0);
+}
+
+bool CheckFortifyExit(const wchar_t* option) {
+  std::wstring path(32768, L'\0');
+  DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  if (length == 0 || length >= path.size()) return false;
+  path.resize(length);
+  std::wstring command = L"bionic_stdio_contract_test.exe ";
+  command += option;
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if (!CreateProcessW(path.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+                      &startup, &process)) return false;
+  DWORD wait = WaitForSingleObject(process.hProcess, 10000);
+  if (wait != WAIT_OBJECT_0) TerminateProcess(process.hProcess, 1);
+  DWORD exit_code = 0;
+  bool aborted = wait == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &exit_code) && exit_code == 3;
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return aborted;
+}
+#endif
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   const Api api = Resolve();
+#if defined(_WIN32) && defined(__x86_64__)
+  if (argc == 2) {
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    int count = 0;
+    if (std::strcmp(argv[1], "--wide-fortify") == 0) {
+      constexpr Wide fmt[] = {'A', '%', '1', '$', 'l', 'n', 0};
+      Wide buffer[8]{};
+      api.print_buffer(buffer, 8, fmt, &count);
+    } else if (std::strcmp(argv[1], "--narrow-fortify") == 0) {
+      using Print = int(SYSV*)(char*, size_t, const char*, ...);
+      char buffer[8]{};
+      Load<Print>("snprintf")(buffer, sizeof(buffer), "A%n", &count);
+    }
+    return 2;
+  }
+  TestBionicWideFormatting(api);
+  Check("printf %n triggers FORTIFY", CheckFortifyExit(L"--narrow-fortify"));
+  Check("wide printf %n triggers FORTIFY", CheckFortifyExit(L"--wide-fortify"));
+#else
+  (void)argc;
+  (void)argv;
+#endif
   TestLocks(api);
   TestWideInput(api);
   TestWideOutput(api);

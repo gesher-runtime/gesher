@@ -9,6 +9,12 @@
 extern "C" {
 #endif
 
+// Retire optional caller-owned state under the CRT stream lock once the
+// descriptor transaction has admitted close or reopen of the old stream.
+int gesher_fclose_with_reset(FILE* stream, void (*reset)(FILE*));
+FILE* gesher_freopen_with_reset(const char* path, const char* mode, FILE* stream,
+                                void (*reset)(FILE*));
+
 ssize_t getline(char** lineptr, size_t* n, FILE* stream);
 // rename, renameat and renameat2 replace the new name atomically, as Linux's
 // do (src/fsops.cc). RENAME_EXCHANGE is not supported (EINVAL).
