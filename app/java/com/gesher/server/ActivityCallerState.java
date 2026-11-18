@@ -90,6 +90,10 @@ final class ActivityCallerState {
         callers.put(Objects.requireNonNull(token), Objects.requireNonNull(snapshot));
     }
 
+    synchronized void remove(IBinder token) {
+        callers.remove(token);
+    }
+
     synchronized Snapshot get(IBinder token) {
         return token == null ? null : callers.get(token);
     }

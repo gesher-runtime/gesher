@@ -68,9 +68,10 @@ public final class LegacyCamera {
     public static void info(int id, Camera.CameraInfo info) {
         List<WindowsCamera.Device> d = devices();
         if (id < 0 || id >= d.size()) throw new RuntimeException("Unknown camera ID");
-        info.facing = d.get(id).test ? Camera.CameraInfo.CAMERA_FACING_BACK
+        boolean rear = d.get(id).isRearFacing();
+        info.facing = rear ? Camera.CameraInfo.CAMERA_FACING_BACK
                 : Camera.CameraInfo.CAMERA_FACING_FRONT;
-        info.orientation = 0;
+        info.orientation = CameraService.sensorOrientation();
         info.canDisableShutterSound = true;
     }
 
@@ -85,6 +86,8 @@ public final class LegacyCamera {
         Surface textureSurface;  // setPreviewTexture's (released when replaced)
         boolean callback;
         boolean manualBuffers;
+        boolean frameInFlight;
+        long callbackGeneration;
         Thread preview;
         volatile boolean previewing;
         WindowsCamera.Capture capture;
@@ -110,6 +113,15 @@ public final class LegacyCamera {
 
     /** Camera.postEventFromNative(weakThis, what, arg1, arg2, obj). */
     private static void post(Session s, int what, int arg1, int arg2, Object obj) {
+        boolean trackInFlight = false;
+        if (what == MSG_PREVIEW_FRAME) {
+            synchronized (s) {
+                if (!s.manualBuffers) {
+                    s.frameInFlight = true;
+                    trackInFlight = true;
+                }
+            }
+        }
         try {
             Method m = sPost;
             if (m == null) {
@@ -120,6 +132,11 @@ public final class LegacyCamera {
             }
             m.invoke(null, s.weakThis, what, arg1, arg2, obj);
         } catch (ReflectiveOperationException e) {
+            if (trackInFlight) {
+                synchronized (s) {
+                    s.frameInFlight = false;
+                }
+            }
             log("posting event " + what + " failed: " + e);
         }
     }
@@ -310,9 +327,11 @@ public final class LegacyCamera {
     public static void setHasPreviewCallback(Camera camera, boolean installed, boolean manual) {
         Session s = session(camera);
         synchronized (s) {
+            if (s.callback != installed || s.manualBuffers != manual) ++s.callbackGeneration;
             s.callback = installed;
             s.manualBuffers = manual;
-            if (!installed) s.buffers.clear();
+            s.frameInFlight = false;
+            if (!installed || !manual) s.buffers.clear();
         }
     }
 
@@ -376,29 +395,39 @@ public final class LegacyCamera {
             Surface surface;
             boolean callback;
             boolean manual;
+            boolean inFlight;
+            long callbackGeneration;
             synchronized (s) {
                 if (!s.previewing || s.capture != capture) break;
                 surface = s.previewSurface;
                 callback = s.callback;
                 manual = s.manualBuffers;
+                inFlight = s.frameInFlight;
+                callbackGeneration = s.callbackGeneration;
             }
-            if (surface != null && !surfaceFailed) {
+            if (surface != null) {
                 int r = CameraFrames.deliver(surface, nv12, capture.width, capture.height,
                         System.nanoTime(), null);
                 if (r != CameraFrames.OK) {
-                    surfaceFailed = true;
-                    log("the preview surface takes no frames (no native window)");
+                    if (!surfaceFailed) {
+                        surfaceFailed = true;
+                        log("the preview surface takes no frames (no native window)");
+                    }
+                } else {
+                    surfaceFailed = false;
                 }
             }
             synchronized (s) {
                 // Native surface delivery can also outlive the bounded stop join.
                 if (!s.previewing || s.capture != capture) break;
             }
-            if (callback) {
-                byte[] frame = frame(s, nv12, capture.width, capture.height, w, h, manual, capture);
+            if (callback && (manual || !inFlight)) {
+                byte[] frame = frame(s, nv12, capture.width, capture.height, w, h, manual,
+                        capture, callbackGeneration);
                 if (frame != null) {
                     synchronized (s) {
                         if (!s.previewing || s.capture != capture) break;
+                        if (!s.callback || s.callbackGeneration != callbackGeneration) continue;
                         // Camera.postEventFromNative only enqueues a Handler message;
                         // keep admission atomic with stop/restart, never conversion.
                         post(s, MSG_PREVIEW_FRAME, 0, 0, frame);
@@ -410,13 +439,14 @@ public final class LegacyCamera {
 
     /** A preview frame in the preview format: NV21 (yuv420sp) or YV12 (yuv420p). */
     private static byte[] frame(Session s, byte[] nv12, int cw, int ch, int w, int h,
-            boolean manual, WindowsCamera.Capture capture) {
+            boolean manual, WindowsCamera.Capture capture, long callbackGeneration) {
         String format;
         byte[] buffer;
         synchronized (s) {
             // Recheck while reserving a buffer, including a restart immediately
             // after the post-delivery check above.
             if (!s.previewing || s.capture != capture) return null;
+            if (!s.callback || s.callbackGeneration != callbackGeneration) return null;
             format = s.params.get("preview-format");
             buffer = manual ? s.buffers.poll() : null;
         }
@@ -467,6 +497,7 @@ public final class LegacyCamera {
         synchronized (s) {
             if (!s.previewing && s.capture == null) return;
             s.previewing = false;
+            s.frameInFlight = false;
             t = s.preview;
             capture = s.capture;
             s.preview = null;

@@ -256,11 +256,12 @@ public final class CameraService extends ICameraService.Default {
                 durations.toArray(new StreamConfigurationDuration[0]));
         m.set(CameraCharacteristics.SCALER_AVAILABLE_STALL_DURATIONS,
                 stalls.toArray(new StreamConfigurationDuration[0]));
-        m.set(CameraCharacteristics.LENS_FACING, d.test ? CameraMetadata.LENS_FACING_BACK
+        m.set(CameraCharacteristics.LENS_FACING, d.isRearFacing() ? CameraMetadata.LENS_FACING_BACK
                 : CameraMetadata.LENS_FACING_EXTERNAL);
         m.set(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL,
                 CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL);
-        m.set(CameraCharacteristics.SENSOR_ORIENTATION, 0);
+        m.set(CameraCharacteristics.SENSOR_ORIENTATION,
+                sensorOrientation());
         m.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES,
                 new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
         m.set(CameraCharacteristics.REQUEST_PARTIAL_RESULT_COUNT, 1);
@@ -329,6 +330,15 @@ public final class CameraService extends ICameraService.Default {
 
     /** CameraDevice.TEMPLATE_PREVIEW (ICameraDeviceUser's too). */
     static final int CameraDevice_TEMPLATE_PREVIEW = ICameraDeviceUser.TEMPLATE_PREVIEW;
+
+    /**
+     * Media Foundation supplies frames in the backend's native coordinates. Keep this
+     * mounting angle independent of an activity's display rotation; clients combine the
+     * sensor angle with that rotation themselves. A rear-role choice does not rotate pixels.
+     */
+    static int sensorOrientation() {
+        return 0;
+    }
 
     /** The tags of what {@code m} holds, for the available-keys lists. */
     private static int[] tagsOf(CameraMetadataNative m) {
