@@ -1,4 +1,4 @@
-"""Required queue checks must cover every job and reject skipped dependencies."""
+"""One PR CI run covers every job and native auto-merge retains QA gating."""
 import json
 from pathlib import Path
 import subprocess
@@ -14,7 +14,8 @@ class QueueWorkflows(unittest.TestCase):
         for workflow, gate in [('ci', 'ci-required'), ('arm64-windows', 'arm64-required')]:
             doc = yaml.safe_load((ROOT / f'.github/workflows/{workflow}.yml').read_text(encoding='utf-8'))
             # PyYAML's YAML 1.1 reader treats the unquoted key 'on' as True.
-            self.assertIn('merge_group', doc[True])
+            self.assertIn('pull_request', doc[True])
+            self.assertNotIn('merge_group', doc[True])
             jobs = doc['jobs']
             self.assertEqual(set(jobs[gate]['needs']), set(jobs) - {gate})
             self.assertEqual(jobs[gate]['if'], 'always()')
@@ -28,11 +29,15 @@ class QueueWorkflows(unittest.TestCase):
     def test_no_controller_polling_or_direct_merging(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
         self.assertNotIn('schedule', doc[True])
-        self.assertNotIn('workflow_run', doc[True])
+        self.assertIn('workflow_run', doc[True])
+        self.assertNotIn('merge_group', doc[True])
         self.assertIn('unlabeled', doc[True]['pull_request_target']['types'])
-        script = (ROOT / '.github/scripts/native-merge-queue.js').read_text()
+        script = (ROOT / '.github/scripts/label-automerge.js').read_text()
         self.assertNotIn('pulls.merge(', script)
         self.assertIn('expectedHeadOid: $head', script)
+        self.assertIn('pull_request.head.repo.id == github.event.pull_request.base.repo.id', doc['jobs']['automerge']['if'])
+        rules = json.loads((ROOT / '.github/automerge-ruleset.json').read_text())
+        self.assertNotIn('merge_queue', [rule['type'] for rule in rules['rules']])
 
 
 if __name__ == '__main__':

@@ -95,8 +95,8 @@ public final class CameraSelectionOrientationHost {
 
         List<WindowsCamera.Device> def = WindowsCamera.resolveDevices(rawLines, null, false, false);
         check(def.size() == 2, "expected 2 valid cameras");
-        check(def.get(0).isRearFacing() && !def.get(1).isRearFacing(),
-                "default physical mapping should promote first camera to rear");
+        check(!def.get(0).isRearFacing() && !def.get(1).isRearFacing(),
+                "enumeration order must not invent a physical mounting direction");
 
         String rearKey = WindowsCamera.selectionKey(rawLines[1].split("\t")[0]);
         List<WindowsCamera.Device> selected = WindowsCamera.resolveDevices(rawLines, rearKey, true, false);
@@ -110,24 +110,34 @@ public final class CameraSelectionOrientationHost {
         List<WindowsCamera.Device> testActive = WindowsCamera.resolveDevices(withTest, null, false, true);
         check(!testActive.get(0).isRearFacing() && testActive.get(1).isRearFacing(),
                 "GESHER_CAMERA_TEST should own rear role when no explicit rear selection is set");
+        check(WindowsCamera.resolveDevices(withTest, null, false, false).size() == 1,
+                "synthetic camera leaked into ordinary device discovery");
+        List<WindowsCamera.Device> reordered = WindowsCamera.resolveDevices(
+                new String[] {rawLines[1], rawLines[0]}, rearKey, true, false);
+        check(reordered.get(0).isRearFacing() && !reordered.get(1).isRearFacing(),
+                "explicit mounting selection changed when enumeration order changed");
+        List<WindowsCamera.Device> missing = WindowsCamera.resolveDevices(
+                rawLines, WindowsCamera.selectionKey("disconnected"), true, false);
+        check(!missing.get(0).isRearFacing() && !missing.get(1).isRearFacing(),
+                "disconnected selected device must not promote another camera");
 
         sActiveRotation = Surface.ROTATION_0;
         sDisplayRotation = Surface.ROTATION_270;
-        check(sensorOrientation(true) == 0 && sensorOrientation(false) == 0,
+        check(sensorOrientation() == 0,
                 "active window ROTATION_0 mismatch");
         sActiveRotation = Surface.ROTATION_90;
-        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
-                "active window ROTATION_90 rear/front orientation formula mismatch");
+        check(sensorOrientation() == 0,
+                "display rotation changed the stationary sensor geometry");
         sActiveRotation = Surface.ROTATION_180;
-        check(sensorOrientation(true) == 180 && sensorOrientation(false) == 180,
-                "active window ROTATION_180 mismatch");
+        check(sensorOrientation() == 0,
+                "active window ROTATION_180 changed sensor geometry");
         sActiveRotation = Surface.ROTATION_270;
-        check(sensorOrientation(true) == 270 && sensorOrientation(false) == 90,
-                "active window ROTATION_270 rear/front orientation formula mismatch");
+        check(sensorOrientation() == 0,
+                "active window ROTATION_270 changed sensor geometry");
         sActiveRotation = WindowConfiguration.ROTATION_UNDEFINED;
         sDisplayRotation = Surface.ROTATION_90;
-        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
-                "display fallback orientation mismatch when active window undefined");
+        check(sensorOrientation() == 0,
+                "display fallback changed sensor geometry");
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> emptyFeat =
                 new android.util.ArrayMap<>();
@@ -136,7 +146,7 @@ public final class CameraSelectionOrientationHost {
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> rearOnlyFeat =
                 new android.util.ArrayMap<>();
-        addCameraFeatures(rearOnlyFeat, Collections.singletonList(def.get(0)));
+        addCameraFeatures(rearOnlyFeat, Collections.singletonList(selected.get(1)));
         check(rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
                 && rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA)
                 && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
@@ -147,10 +157,10 @@ public final class CameraSelectionOrientationHost {
                 new android.util.ArrayMap<>();
         addCameraFeatures(dualFeat, def);
         check(dualFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
-                && dualFeat.containsKey(PackageManager.FEATURE_CAMERA)
-                && dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
+                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA)
+                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
                 && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
-                "dual-camera feature map mismatch or unexpected autofocus feature");
+                "uncalibrated cameras invented directional or autofocus capabilities");
 
         System.out.println("Camera selection & orientation PASS: " + checks + " checks");
     }

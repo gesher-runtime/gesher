@@ -63,12 +63,11 @@ public final class WindowsCamera {
         return devices;
     }
 
-    /** Parses native Media Foundation lines into devices with rear-camera mapping. */
+    /** Parses real devices with an explicit rear-mounting choice; enumeration implies no facing. */
     static List<Device> resolveDevices(String[] lines, String rearSelection,
             boolean hasSelection, boolean testCameraEnabled) {
         List<Device> found = new ArrayList<>();
         if (lines == null) return found;
-        boolean assignedDefaultRear = false;
         for (String line : lines) {
             String[] f = line.split("\t", -1);
             if (f.length < 3) continue;
@@ -82,13 +81,11 @@ public final class WindowsCamera {
             }
             if (sizes.isEmpty()) continue;
             boolean isTest = "gesher-test".equals(f[0]);
+            if (isTest && !testCameraEnabled) continue;
             boolean rear = false;
             if (!isTest) {
                 if (hasSelection) {
                     rear = rearSelection.equals(selectionKey(f[0]));
-                } else if (!testCameraEnabled && !assignedDefaultRear) {
-                    rear = true;
-                    assignedDefaultRear = true;
                 }
             }
             found.add(new Device(f[0], f[1], sizes, rear));

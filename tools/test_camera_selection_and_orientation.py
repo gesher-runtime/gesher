@@ -28,8 +28,7 @@ def main() -> None:
         method(wc_src, 'static String selectionKey(String windowsId)'),
     ])
     cs_parts = '\n'.join([
-        method(cs_src, 'static int sensorOrientation(boolean rearFacing)'),
-        method(cs_src, 'private static int displayDegrees()'),
+        method(cs_src, 'static int sensorOrientation()'),
     ])
     pm_parts = '\n'.join([
         method(pm_src, 'static void addCameraFeatures('),

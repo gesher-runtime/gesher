@@ -110,41 +110,4 @@ public final class GesherActivityWindow {
         a.mDecor = null;
         a.mWindowAdded = false;
     }
-
-    /**
-     * Returns the {@code Surface.ROTATION_*} display rotation of the active (top-resumed or
-     * currently launching/resuming) Activity in this process, or
-     * {@link WindowConfiguration#ROTATION_UNDEFINED} when none is active (for example in a
-     * service or {@link GesherAppDriver}).
-     */
-    public static int activeDisplayRotation() {
-        ActivityThread at = ActivityThread.currentActivityThread();
-        if (at == null) return WindowConfiguration.ROTATION_UNDEFINED;
-        int fallback = WindowConfiguration.ROTATION_UNDEFINED;
-        try {
-            for (int i = at.mActivities.size() - 1; i >= 0; i--) {
-                ActivityThread.ActivityClientRecord r = at.mActivities.valueAt(i);
-                if (r == null || r.paused || r.stopped) continue;
-                if (r.activity != null && r.activity.mFinished) continue;
-                int rot = rotationOf(r);
-                if (rot == WindowConfiguration.ROTATION_UNDEFINED) continue;
-                if (r.isTopResumedActivity) return rot;
-                if (fallback == WindowConfiguration.ROTATION_UNDEFINED) fallback = rot;
-            }
-        } catch (RuntimeException ignored) {
-        }
-        return fallback;
-    }
-
-    private static int rotationOf(ActivityThread.ActivityClientRecord r) {
-        if (r.activity != null) {
-            int rot = r.activity.getResources().getConfiguration()
-                    .windowConfiguration.getDisplayRotation();
-            if (rot != WindowConfiguration.ROTATION_UNDEFINED) return rot;
-        }
-        if (r.overrideConfig != null) {
-            return r.overrideConfig.windowConfiguration.getDisplayRotation();
-        }
-        return WindowConfiguration.ROTATION_UNDEFINED;
-    }
 }

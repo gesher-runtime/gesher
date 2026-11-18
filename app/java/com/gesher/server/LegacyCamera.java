@@ -71,7 +71,7 @@ public final class LegacyCamera {
         boolean rear = d.get(id).isRearFacing();
         info.facing = rear ? Camera.CameraInfo.CAMERA_FACING_BACK
                 : Camera.CameraInfo.CAMERA_FACING_FRONT;
-        info.orientation = CameraService.sensorOrientation(rear);
+        info.orientation = CameraService.sensorOrientation();
         info.canDisableShutterSound = true;
     }
 
@@ -87,6 +87,7 @@ public final class LegacyCamera {
         boolean callback;
         boolean manualBuffers;
         boolean frameInFlight;
+        long callbackGeneration;
         Thread preview;
         volatile boolean previewing;
         WindowsCamera.Capture capture;
@@ -326,11 +327,11 @@ public final class LegacyCamera {
     public static void setHasPreviewCallback(Camera camera, boolean installed, boolean manual) {
         Session s = session(camera);
         synchronized (s) {
-            boolean clearingManual = s.manualBuffers && !manual;
+            if (s.callback != installed || s.manualBuffers != manual) ++s.callbackGeneration;
             s.callback = installed;
             s.manualBuffers = manual;
             s.frameInFlight = false;
-            if (!installed || clearingManual) s.buffers.clear();
+            if (!installed || !manual) s.buffers.clear();
         }
     }
 
@@ -338,7 +339,6 @@ public final class LegacyCamera {
         Session s = session(camera);
         if (msgType != MSG_PREVIEW_FRAME || buffer == null) return;  // no raw images
         synchronized (s) {
-            if ((s.callback && !s.manualBuffers) || s.buffers.size() >= 16) return;
             s.buffers.add(buffer);
         }
     }
@@ -396,12 +396,14 @@ public final class LegacyCamera {
             boolean callback;
             boolean manual;
             boolean inFlight;
+            long callbackGeneration;
             synchronized (s) {
                 if (!s.previewing || s.capture != capture) break;
                 surface = s.previewSurface;
                 callback = s.callback;
                 manual = s.manualBuffers;
                 inFlight = s.frameInFlight;
+                callbackGeneration = s.callbackGeneration;
             }
             if (surface != null) {
                 int r = CameraFrames.deliver(surface, nv12, capture.width, capture.height,
@@ -420,10 +422,12 @@ public final class LegacyCamera {
                 if (!s.previewing || s.capture != capture) break;
             }
             if (callback && (manual || !inFlight)) {
-                byte[] frame = frame(s, nv12, capture.width, capture.height, w, h, manual, capture);
+                byte[] frame = frame(s, nv12, capture.width, capture.height, w, h, manual,
+                        capture, callbackGeneration);
                 if (frame != null) {
                     synchronized (s) {
                         if (!s.previewing || s.capture != capture) break;
+                        if (!s.callback || s.callbackGeneration != callbackGeneration) continue;
                         // Camera.postEventFromNative only enqueues a Handler message;
                         // keep admission atomic with stop/restart, never conversion.
                         post(s, MSG_PREVIEW_FRAME, 0, 0, frame);
@@ -435,13 +439,14 @@ public final class LegacyCamera {
 
     /** A preview frame in the preview format: NV21 (yuv420sp) or YV12 (yuv420p). */
     private static byte[] frame(Session s, byte[] nv12, int cw, int ch, int w, int h,
-            boolean manual, WindowsCamera.Capture capture) {
+            boolean manual, WindowsCamera.Capture capture, long callbackGeneration) {
         String format;
         byte[] buffer;
         synchronized (s) {
             // Recheck while reserving a buffer, including a restart immediately
             // after the post-delivery check above.
             if (!s.previewing || s.capture != capture) return null;
+            if (!s.callback || s.callbackGeneration != callbackGeneration) return null;
             format = s.params.get("preview-format");
             buffer = manual ? s.buffers.poll() : null;
         }

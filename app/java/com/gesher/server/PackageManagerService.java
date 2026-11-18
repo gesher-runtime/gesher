@@ -826,14 +826,13 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
     }
 
-    /** The camera features of {@code cameras} (rear, front; no unimplemented autofocus). */
+    /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */
     static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
-            addFeature(features, camera.isRearFacing() ? PackageManager.FEATURE_CAMERA
-                    : PackageManager.FEATURE_CAMERA_FRONT);
+            if (camera.isRearFacing()) addFeature(features, PackageManager.FEATURE_CAMERA);
         }
     }
 

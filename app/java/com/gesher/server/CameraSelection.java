@@ -37,7 +37,7 @@ public final class CameraSelection {
                 WindowsCamera.Device d = devices.get(i);
                 if (!d.test) {
                     System.out.println(i + "  " + d.name + "  " + d.sizes
-                            + (d.isRearFacing() ? "  [rear]" : ""));
+                            + (d.isRearFacing() ? "  [configured rear mounting]" : "  [external]"));
                 }
             }
             return;
@@ -50,6 +50,8 @@ public final class CameraSelection {
             throw new IllegalArgumentException("No physical camera with ID " + index);
         }
         String selection = WindowsCamera.selectionKey(devices.get(index).id);
+        // This is the user's physical mounting choice. It does not upgrade the
+        // device's hardware level or alter its frame geometry.
         FileOutputStream out = setting.startWrite();
         try {
             out.write(selection.getBytes(StandardCharsets.US_ASCII));

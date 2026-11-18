@@ -160,7 +160,7 @@ public final class LegacyPreviewHost {
                         check(posted.get(0) == exact && posted.get(1) == large, "caller buffer identity/order changed");
                         check(session.buffers.isEmpty(), "queued undersized buffers were not consumed");
                         for (int i = required; i < large.length; ++i) check(large[i] == 0x5a, "oversized buffer suffix changed");
-                    } else check(session.buffers.size() == 3, "automatic mode consumed manual buffers");
+                    } else check(session.buffers.isEmpty(), "automatic callback rearm retained caller buffers");
                     for (int i = 0; i < posted.size(); ++i) {
                         check(Arrays.equals(Arrays.copyOf(posted.get(i), required), expected(format, w, h, frameIds.get(i))),
                                 "packed bytes or zero padding changed");
@@ -250,21 +250,58 @@ public final class LegacyPreviewHost {
         check(delivered == 1 && frameIds.get(0) == 2 && err.frameInFlight,
                 "failed post left frameInFlight stuck");
 
-        // Manual callback buffer cap and automatic-mode guard, plus surface recovery.
+        // Buffers may be prepared before selecting manual mode. Selecting automatic
+        // mode itself clears them, as the native Android callback does.
         reset();
         Session cap = session("yuv420sp", true, false, true);
         Camera capCam = activeCamera;
         addCallbackBuffer(capCam, new byte[8], MSG_PREVIEW_FRAME);
-        check(cap.buffers.isEmpty(), "manual buffer accepted while non-manual callback active");
+        check(cap.buffers.size() == 1, "caller buffer discarded before manual mode selection");
+        setHasPreviewCallback(capCam, true, false);
+        check(cap.buffers.isEmpty(), "automatic mode selection retained caller buffers");
         setHasPreviewCallback(capCam, true, true);
         for (int i = 0; i < 20; ++i) addCallbackBuffer(capCam, new byte[8], MSG_PREVIEW_FRAME);
-        check(cap.buffers.size() == 16, "manual buffer queue exceeded cap");
+        check(cap.buffers.size() == 20, "valid caller buffers silently discarded");
         nextSurfaceResult = -1;
         onDeliver = () -> {
             if (currentFrame == 1) nextSurfaceResult = CameraFrames.OK;
         };
         previewLoop(cap, new WindowsCamera.Capture(cap, 16, 4, 3), new Size(16, 4));
         check(surfaces == 2, "preview surface did not recover after transient delivery failure");
+
+        reset();
+        Session allBuffers = session("yuv420sp", true, true, false);
+        for (int i = 0; i < 20; ++i) addCallbackBuffer(activeCamera, new byte[96], MSG_PREVIEW_FRAME);
+        previewLoop(allBuffers, new WindowsCamera.Capture(allBuffers, 16, 4, 20), new Size(16, 4));
+        check(delivered == 20 && allBuffers.buffers.isEmpty(), "not all supplied buffers reached callbacks");
+
+        reset();
+        Session prepared = session("yuv420sp", true, false, false);
+        addCallbackBuffer(activeCamera, new byte[96], MSG_PREVIEW_FRAME);
+        setHasPreviewCallback(activeCamera, true, true);
+        previewLoop(prepared, new WindowsCamera.Capture(prepared, 16, 4, 1), new Size(16, 4));
+        check(delivered == 1, "prequeued buffer was lost when manual mode was selected");
+
+        reset();
+        Session surfaceSwitch = session("yuv420sp", true, false, true);
+        Camera surfaceCam = activeCamera;
+        onDeliver = () -> setHasPreviewCallback(surfaceCam, true, true);
+        previewLoop(surfaceSwitch, new WindowsCamera.Capture(surfaceSwitch, 16, 4, 1), new Size(16, 4));
+        check(delivered == 0 && conversions == 0, "surface delivery admitted a superseded automatic callback");
+
+        reset();
+        Session conversionSwitch = session("yuv420sp", true, false, false);
+        Camera conversionCam = activeCamera;
+        onConvert = () -> setHasPreviewCallback(conversionCam, true, true);
+        previewLoop(conversionSwitch, new WindowsCamera.Capture(conversionSwitch, 16, 4, 1), new Size(16, 4));
+        check(delivered == 0 && conversions == 1, "converted automatic frame reached a manual callback");
+
+        reset();
+        Session disable = session("yuv420sp", true, false, false);
+        Camera disableCam = activeCamera;
+        onConvert = () -> setHasPreviewCallback(disableCam, false, false);
+        previewLoop(disable, new WindowsCamera.Capture(disable, 16, 4, 1), new Size(16, 4));
+        check(delivered == 0, "disabled callback received a converted frame");
     }
     private static void measured(String format, boolean withBuffer, boolean gate) {
         reset(); collect = false; recycle = withBuffer;
