@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <windows.h>
@@ -37,6 +38,9 @@ void RejectedIo(int fd) {
   Check(posix_fallocate(fd, 0, 4096) == EPERM, "revoked allocation");
   Check(fstat(fd, &info) == -1 && errno == EPERM, "revoked size query");
   Check(lseek(fd, 0, SEEK_SET) == -1 && errno == EPERM, "revoked seek");
+  Check(fchmod(fd, 0600) == -1 && errno == EPERM, "revoked mode change");
+  Check(futimens(fd, nullptr) == -1 && errno == EPERM, "revoked nanosecond timestamp change");
+  Check(futimes(fd, nullptr) == -1 && errno == EPERM, "revoked timestamp change");
 }
 void Lifecycle(bool wait_for_operation) {
   char path[] = "/tmp/gesher-revocable-XXXXXX";
@@ -47,8 +51,10 @@ void Lifecycle(bool wait_for_operation) {
   uint64_t controller = gesher::CreateRevocableFileGroup();
   Check(controller != 0 && gesher::AttachRevocableFileGroup(controller, fd) == 0, "create and attach group");
   Check(gesher::AttachRevocableFileGroup(controller, fd) == -1 && errno == EBUSY, "cannot replace capability");
+  Check(fchmod(fd, 0600) == 0 && futimens(fd, nullptr) == 0 && futimes(fd, nullptr) == 0,
+        "ordinary descriptor metadata changes before finalization");
   Check(write(fd, "payload", 7) == 7, "ordinary write before finalization");
-  Check(posix_fallocate(fd, 0, 4096) == 0 && lseek(fd, 0, SEEK_CUR) == 7,
+  Check(posix_fallocate(fd, 0, 8192) == 0 && lseek(fd, 0, SEEK_CUR) == 7,
         "allocation extends real file and preserves cursor");
   Check(pwrite(fd, "P", 1, 0) == 1 && lseek(fd, 0, SEEK_CUR) == 7, "positioned write preserves cursor");
   int duplicate = dup(fd);
@@ -68,7 +74,30 @@ void Lifecycle(bool wait_for_operation) {
   Check(link_size > 0 && strstr(link, "gesher-revocable") != nullptr && strstr(link, path) == nullptr,
         "proc readlink does not expose private backing pathname");
   Check(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) == MAP_FAILED && errno == ENODEV,
-        "shared mappings cannot escape revocation");
+        "unsupported shared writable mappings report the missing capability");
+  auto* shared_read = static_cast<char*>(mmap(nullptr, 8192, PROT_READ, MAP_SHARED, readonly, 0));
+  Check(shared_read != MAP_FAILED && shared_read[0] == 'P', "read-only session descriptor supports shared mapping");
+  auto* shared_writer_read = static_cast<char*>(mmap(nullptr, 8192, PROT_READ, MAP_SHARED, fd, 0));
+  Check(shared_writer_read != MAP_FAILED && shared_writer_read[0] == 'P',
+        "writable session descriptor supports a read-only shared mapping");
+  auto* shared_alias = static_cast<char*>(mremap(shared_writer_read, 0, 8192, MREMAP_MAYMOVE));
+  Check(shared_alias != MAP_FAILED, "read-only shared mapping can retain a shared alias");
+  Check(pwrite(fd, "R", 1, 0) == 1 && fsync(fd) == 0 && shared_read[0] == 'R' &&
+        shared_writer_read[0] == 'R' && shared_alias[0] == 'R',
+        "read-only shared views observe permitted stage writes");
+  Check(pwrite(fd, "P", 1, 0) == 1 && fsync(fd) == 0 && shared_read[0] == 'P',
+        "restore fixture bytes through ordinary staged I/O");
+  Check(mprotect(shared_read, 8192, PROT_READ | PROT_WRITE) == -1 && errno == EACCES,
+        "read-only section cannot gain deferred write access");
+  Check(mprotect(shared_writer_read, 8192, PROT_READ | PROT_WRITE) == -1 && errno == EACCES,
+        "read-only section of a writer cannot gain deferred write access");
+  Check(mprotect(shared_alias, 4096, PROT_READ | PROT_WRITE) == -1 && errno == EACCES,
+        "shared alias retains read-only section permissions");
+  Check(munmap(shared_alias, 4096) == 0 &&
+        mprotect(shared_alias + 4096, 4096, PROT_READ | PROT_WRITE) == -1 && errno == EACCES,
+        "remaining shared view retains read-only permissions after partial unmap");
+  Check(mprotect(shared_read, 4096, PROT_NONE) == 0 && mprotect(shared_read, 4096, PROT_READ) == 0 &&
+        shared_read[0] == 'P', "read-only shared mapping can restore its permitted protection");
   auto* private_view = static_cast<char*>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0));
   Check(private_view != MAP_FAILED, "private mappings remain usable");
   private_view[0] = 'X';
@@ -96,7 +125,12 @@ void Lifecycle(bool wait_for_operation) {
   }
   for (int value : {fd, duplicate, close_exec, reopened, readonly}) RejectedIo(value);
   Check(open(proc.c_str(), O_RDWR) == -1 && errno == EPERM, "cannot reopen revoked descriptor");
+  Check(mmap(nullptr, 4096, PROT_READ, MAP_SHARED, readonly, 0) == MAP_FAILED && errno == EPERM,
+        "cannot create a new read-only mapping after revocation");
   gesher::ReleaseRevocableFileGroup(controller);
+  Check(munmap(shared_read, 8192) == 0 && munmap(shared_writer_read, 8192) == 0 &&
+        munmap(shared_alias + 4096, 4096) == 0,
+        "release read-only shared views after revocation");
   Check(munmap(private_view, 4096) == 0, "release private view after revoke");
   for (int value : {fd, duplicate, close_exec, reopened, readonly, trusted}) Check(close(value) == 0, "close aliases");
   snapshot.reset();

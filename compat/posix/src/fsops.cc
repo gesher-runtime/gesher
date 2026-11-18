@@ -27,6 +27,7 @@
 #include "internal.h"
 #include "descriptor_resources.h"
 #include "record_lock_descriptors.h"
+#include "revocable_internal.h"
 #include "stdio_internal.h"
 
 using gesher::PathKind;
@@ -573,8 +574,11 @@ int fchmodat(int dirfd, const char* path, mode_t mode, int flags) {
 // Linux lets the owner change the mode through any fd, so this works on a
 // second handle with the access it needs (as futimens, path.cc).
 int fchmod(int fd, mode_t mode) {
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  HANDLE h = snapshot->handle;
   if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
   HANDLE writable = ReOpenFile(h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,

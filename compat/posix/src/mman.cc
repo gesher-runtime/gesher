@@ -1307,15 +1307,18 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
   length = RoundUp(length, s.page_size);
   if (fixed && length > UINTPTR_MAX - begin) { errno = ENOMEM; return MAP_FAILED; }
   if ((flags & MAP_ANONYMOUS) == 0 && fd < 0) { errno = EBADF; return MAP_FAILED; }
-  // Shared writable views would bypass the session's write barrier. AppFuse
-  // direct-I/O descriptors likewise reject shared mmap with ENODEV. Private
-  // copy-on-write views cannot alter the session or a committed snapshot.
+  // This backend cannot drain deferred writes from a shared writable view.
+  // Report that missing capability rather than bypassing the session barrier.
+  // Shared read-only views remain supported: MapFile creates a read-only
+  // section, so mprotect cannot add write access. Private copy-on-write views
+  // likewise cannot alter the session or a committed snapshot.
   gesher::DescriptorSnapshotPtr snapshot;
   const bool binder_mapping = (flags & MAP_ANONYMOUS) == 0 && gesher::IsBinderFd(fd);
   if ((flags & MAP_ANONYMOUS) == 0 && !binder_mapping) {
     snapshot = gesher::CaptureDescriptor(fd);
     if (!snapshot) return MAP_FAILED;
-    if (gesher::FileDescriptionIsRevocable(snapshot) && type != MAP_PRIVATE) {
+    if (gesher::FileDescriptionIsRevocable(snapshot) && type != MAP_PRIVATE &&
+        (prot & PROT_WRITE) != 0) {
       errno = ENODEV;
       return MAP_FAILED;
     }

@@ -34,6 +34,7 @@
 #include "binder_internal.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
+#include "revocable_internal.h"
 
 namespace gesher {
 namespace {
@@ -710,9 +711,11 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
 // so this works on a second handle with the access it needs.
 int futimens(int fd, const struct timespec times[2]) {
   if (BothTimesOmitted(times)) return 0;
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-  return SetHandleTimes(h, times);
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  return SetHandleTimes(snapshot->handle, times);
 }
 
 int utimes(const char* path, const struct timeval tv[2]) {

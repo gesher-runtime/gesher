@@ -8,7 +8,26 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import time
+import urllib.error
 import urllib.request
+
+
+def fetch(url: str) -> bytes:
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                return response.read(2 * 1024 * 1024 + 1)
+        except (urllib.error.URLError, TimeoutError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code not in (
+                429, 500, 502, 503, 504
+            ):
+                raise
+            if attempt == 3:
+                raise
+            print(f"Pinned component input temporarily unavailable; retry {attempt + 1}: {error}")
+            time.sleep(2 ** (attempt + 1))
+    raise AssertionError("Unreachable input fetch state")
 
 
 def main() -> None:
@@ -27,8 +46,7 @@ def main() -> None:
         ("external/icu", "icu4c/source/data/misc/windowsZones.txt"),
     ):
         url = f"https://android.googlesource.com/platform/{project}/+/refs/tags/{tag}/{relative}?format=TEXT"
-        with urllib.request.urlopen(url, timeout=60) as response:
-            encoded = response.read(2 * 1024 * 1024 + 1)
+        encoded = fetch(url)
         if len(encoded) > 2 * 1024 * 1024:
             raise ValueError("Component input exceeds its size limit")
         data = base64.b64decode(encoded, validate=True)
