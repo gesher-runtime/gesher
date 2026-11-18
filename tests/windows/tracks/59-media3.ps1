@@ -13,8 +13,8 @@ New-Item -ItemType Directory -Force $m3Tmp | Out-Null
 $captureProbe = Join-Path $Dir 'media_probe-media-capture-test.exe'
 $captureRuntime = Join-Path $Dir 'dalvikvm-media-capture-test.exe'
 Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
-foreach ($case in @('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'fixture-env',
-                    'opensl-missing', 'opensl-start', 'opensl-disconnect', 'recorder-start', 'recorder-disconnect', 'jni-read')) {
+foreach ($case in @('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'last-owner', 'stale-peer', 'fixture-env',
+                    'opensl-missing', 'opensl-descriptors', 'opensl-start', 'opensl-disconnect', 'recorder-start', 'recorder-disconnect', 'jni-read')) {
   CheckTimed "media3: unavailable/disconnected capture contract ($case)" "$Dir/capture_failure_contract_test.exe" @($case) @("capture failure ${case}:") 20
 }
 foreach ($case in @('fixture-env', 'fixture-bad-file')) {
