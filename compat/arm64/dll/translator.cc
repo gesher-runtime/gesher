@@ -1974,9 +1974,8 @@ void AddPointerVariadicFunction(const void* fn, void* va_fn, int fixed_arguments
   std::lock_guard<std::mutex> lock(g_tramp_mutex);
   auto it = g_tramp_by_fn.find(const_cast<void*>(fn));
   if (it != g_tramp_by_fn.end()) {
-    uint32_t svc;
-    std::memcpy(&svc, it->second, 4);
-    g_tramps[((svc >> 5) & 0xFFFF) - 1] = signature;
+    signature.guest_code = g_tramps[it->second].guest_code;
+    g_tramps[it->second] = signature;
   }
 }
 
