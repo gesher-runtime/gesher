@@ -271,7 +271,8 @@ void JNICALL MR_setOutputFile(JNIEnv* env, jobject thiz, jobject fd) {
   // exceed a valid completed-file size limit even when every new write fits.
   // As in Stagefright, a non-regular descriptor is allowed here and its
   // actual seek/write failure is reported by prepare/start/stop.
-  (void)ftruncate(copy, 0);
+  const int truncate_result = ftruncate(copy, 0);
+  (void)truncate_result;
   RecorderConfig& c = r->recorder->config();
   c.fd = copy;
 }

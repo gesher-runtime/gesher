@@ -52,6 +52,7 @@ struct Case {
   MuxerFormat format;
   bool opus = false, video = false, mixed = false, irregular = false, delayed = false, location = false;
   int64_t interval_us = 20000;
+  int64_t delay_us = 1000000;
 };
 struct Result { uint64_t bytes; size_t count; };
 Result Run(const std::string& path, const Case& c, int64_t limit, size_t maximum,
@@ -82,7 +83,7 @@ Result Run(const std::string& path, const Case& c, int64_t limit, size_t maximum
     const auto& data = v ? avc : packets[i % packets.size()];
     int64_t time = static_cast<int64_t>(i) * c.interval_us;
     if (c.irregular) time += static_cast<int64_t>(i % 3) * 1000;
-    if (c.delayed && v) time += 1000000;
+    if (c.delayed && v) time += c.delay_us;
     assert(mux->WriteSample(v ? vt : at, data.data(), data.size(), time,
                             v && i % 2 == 0 ? 1 : 0, &error));
     if (mux->FileSizeLimitReached()) break;
@@ -131,5 +132,71 @@ int main(int argc, char** argv) {
       }
     }
   }
+  // A few real packets exercise wide timing headers without recording or
+  // decoding a long timeline. Every limit is checked against actual file size.
+  Case timing[] = {
+    {"wide-audio.mp4", MuxerFormat::kMpeg4},
+    {"wide-video.mp4", MuxerFormat::kMpeg4, false, true},
+    {"wide-edit.mp4", MuxerFormat::kMpeg4, false, false, true, false, true},
+    {"submillisecond.mp4", MuxerFormat::kMpeg4, false, false, true, false, true},
+  };
+  timing[0].interval_us = 50000000000;
+  timing[1].interval_us = 30000000000;
+  timing[2].delay_us = 5000000000000;
+  timing[3].interval_us = 0;
+  timing[3].delay_us = 500;
+  for (const Case& c : timing) {
+    for (size_t count : {size_t{3}, size_t{17}}) {
+      auto baseline = Run(work + "/timing-baseline-" + c.name, c, 0, count,
+                          aac, opus, head, avc, false);
+      auto exact = Run(work + "/timing-exact-" + c.name, c, baseline.bytes + 1, count + 1,
+                       aac, opus, head, avc, true);
+      assert(exact.count == count && exact.bytes == baseline.bytes);
+    }
+  }
+  // A two-packet input exercises the timestamp range without a long run or a
+  // large allocation. Failure leaves the accepted sample/file unchanged and
+  // a following representable timestamp remains writable.
+  for (int64_t first : {int64_t{0}, INT64_MIN + 1}) {
+    const std::string path = work + (first == 0 ? "/timestamp-gap.mp4" : "/timestamp-span.mp4");
+    int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600); assert(fd >= 0);
+    std::string error;
+    auto mux = Muxer::Create(fd, MuxerFormat::kMpeg4, &error); assert(mux);
+    Format audio; audio.get()->mime = "audio/mp4a-latm";
+    audio.get()->integers = {{"sample-rate", 48000}, {"channel-count", 1}};
+    audio.get()->buffers["csd-0"] = {0x11, 0x88};
+    int track = mux->AddTrack(audio, &error); assert(track >= 0 && mux->Start(&error));
+    const auto& packet = aac.front();
+    assert(mux->WriteSample(track, packet.data(), packet.size(), first, 0, &error));
+    const int64_t before = mux->BytesWritten();
+    assert(!mux->WriteSample(track, packet.data(), packet.size(), INT64_MAX, 0, &error));
+    assert(mux->BytesWritten() == before);
+    assert(mux->WriteSample(track, packet.data(), packet.size(), first + 20000, 0, &error));
+    assert(mux->Stop(&error));
+    close(fd);
+  }
+  // File-size admission belongs to Recorder's audio/video path. NDK metadata
+  // muxing stays available; a metadata limit is explicitly unsupported.
+  for (bool limit_first : {false, true}) {
+    const std::string path = work + (limit_first ? "/metadata-limited.mp4" : "/metadata-unlimited.mp4");
+    int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600); assert(fd >= 0);
+    std::string error;
+    auto mux = Muxer::Create(fd, MuxerFormat::kMpeg4, &error); assert(mux);
+    if (limit_first) assert(mux->SetFileSizeLimit(4096));
+    Format metadata; metadata.get()->mime = "application/octet-stream";
+    int track = mux->AddTrack(metadata, &error); assert(track >= 0);
+    if (limit_first) {
+      assert(!mux->Start(&error));
+      struct stat info {}; assert(fstat(fd, &info) == 0 && info.st_size == 0);
+    } else {
+      assert(!mux->SetFileSizeLimit(4096));
+      assert(mux->SetFileSizeLimit(0) && mux->Start(&error));
+      const uint8_t payload[] = {1, 2, 3};
+      assert(mux->WriteSample(track, payload, sizeof(payload), 0, 0, &error));
+      assert(mux->Stop(&error));
+    }
+    close(fd);
+  }
+  std::cout << "Recorder wide timing and metadata capability controls passed\n";
   std::cout << "Recorder completed-container budgets passed\n";
 }

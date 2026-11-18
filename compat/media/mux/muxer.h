@@ -60,6 +60,7 @@ class Muxer {
 
  protected:
   virtual bool SupportsFileSizeLimit() const { return false; }
+  bool HasFileSizeLimit() const { return max_file_size_ != 0; }
   bool AdmitFinalSize(uint64_t bytes, bool approaching_notification = false) {
     if (max_file_size_ == 0) return true;
     if (bytes >= max_file_size_) {
