@@ -40,12 +40,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/workflows
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: automerge rules (label, push, CI-not-run, pending/failed checks)
-        run: node --test .github/scripts/automerge.test.js
+      - name: Label approval, fork and exact-head QA contracts
+        run: node --test .github/scripts/label-automerge.test.js
+      - name: Workflow coverage and failure propagation
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 .github/scripts/test_automerge_workflows.py
   update-contracts:
     needs: [source-identity]
     strategy:
@@ -118,6 +124,7 @@ jobs:
           python3 tools/ci/receipt_identity.py
           python3 -m unittest discover -s tools/ci -p test_source_identity.py
           python3 -m unittest discover -s tools/ci -p test_workflow_actor_metadata.py
+          python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
           python3 -m unittest discover -s tools/ci -p test_github_read.py
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
@@ -2301,3 +2308,21 @@ jobs:
       - name: Verify raw archive and exact producer, then run actual host and both ABI paths
         shell: pwsh
         run: tools/net-tcp-priority/run-component.ps1
+
+  ci-required:
+    name: ci-required
+    if: always()
+    needs: [source-identity, automerge-script, update-contracts, reader-ownership, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every production CI job
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['JOB_RESULTS'])
+          failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
+          if not results or failed:
+              raise SystemExit(f"Required jobs did not succeed: {failed}")
+          PY
