@@ -49,8 +49,8 @@ def identity_errors(identity: object, app: dict, observed: dict) -> list[str]:
                 isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]*", value)):
             errors.append(f"invalid SDK identity {key}")
     minimum = identity.get("declared_min_sdk")
-    effective_minimum = minimum if minimum is not None else 1
     target = identity.get("declared_target_sdk")
+    effective_minimum = minimum if minimum is not None else (target if isinstance(target, str) else 1)
     effective_target = target if target is not None else effective_minimum
     if identity.get("min_sdk") != effective_minimum or identity.get("target_sdk") != effective_target:
         errors.append("SDK effective versions do not follow the declared manifest/defaults")
@@ -73,12 +73,28 @@ def identity_errors(identity: object, app: dict, observed: dict) -> list[str]:
     stamp = identity.get("source_stamp_certificate_sha256")
     if stamp is not None and (not isinstance(stamp, str) or not SHA256.fullmatch(stamp)):
         errors.append("SDK source stamp certificate must be a SHA-256 hash or null")
+    ranges = identity.get("signer_api_ranges", [])
+    if not isinstance(ranges, list):
+        errors.append("SDK signer API ranges must be a list")
+    else:
+        for item in ranges:
+            if (not isinstance(item, dict) or item.get("scheme") not in ("v3", "v3.1")
+                    or type(item.get("min_sdk")) is not int or type(item.get("max_sdk")) is not int
+                    or not 0 <= item["min_sdk"] <= item["max_sdk"] <= 0x7fffffff
+                    or type(item.get("rotation_targets_dev_release")) is not bool
+                    or not isinstance(item.get("certificate_sha256"), str)
+                    or not SHA256.fullmatch(item["certificate_sha256"])):
+                errors.append("SDK signer API range is malformed")
     if identity.get("signature_verification") != "apksigner_default_supported_platforms":
         errors.append("SDK signature verification scope is missing")
     tools = identity.get("tools")
     if not isinstance(tools, dict) or any(not isinstance(tools.get(key), str) or not SHA256.fullmatch(tools[key])
             for key in ("aapt2_sha256", "apksigner_jar_sha256", "java_executable_sha256")):
         errors.append("SDK identity lacks collector tool hashes")
+    if isinstance(tools, dict) and "signer_helper_sha256" in tools and (
+            not isinstance(tools["signer_helper_sha256"], str)
+            or not SHA256.fullmatch(tools["signer_helper_sha256"])):
+        errors.append("SDK signer helper source hash is malformed")
     if observed.get("identity_error"):
         errors.append("SDK identity has a collector error")
     return errors
@@ -320,6 +336,7 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
             "declared_target_sdk": identity.get("declared_target_sdk"),
             "runtime_parsed_target_sdk": observed.get("target_sdk"),
             "signer_certificate_sha256": identity.get("signer_certificate_sha256"),
+            "signer_api_ranges": identity.get("signer_api_ranges", []),
             "source_stamp_certificate_sha256": identity.get("source_stamp_certificate_sha256"),
             "packaged_native_abis": identity.get("packaged_native_abis"),
             "selected_abi": observed.get("selected_abi"),

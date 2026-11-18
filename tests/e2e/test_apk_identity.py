@@ -6,6 +6,7 @@ CI supplies both; parser tests use isolated strings and make no runtime claims.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -48,6 +49,8 @@ class ApkIdentityContracts(unittest.TestCase):
         self.assertIsNone(result["min_sdk"])
         self.assertIsNone(result["target_sdk"])
         self.assertEqual(result["packaged_native_abis"], [])
+        absent_version = BADGING.splitlines()[0].replace("versionCode='7'", "versionCode=''")
+        self.assertIsNone(identity.parse_badging(absent_version)["version_code"])
 
     def test_manifest_version_uses_root_attributes_only(self):
         tree = """N: android=http://schemas.android.com/apk/res/android (line=1)
@@ -129,6 +132,18 @@ class ApkIdentityContracts(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 identity.parse_certificates(output)
 
+    def test_sdk_api_current_signers_and_range_records_stay_separate(self):
+        result = {"signer_certificate_sha256": [HASH], "source_stamp_certificate_sha256": None,
+                  "signer_api_ranges": [{"scheme": "v3", "min_sdk": 24, "max_sdk": 32,
+                    "rotation_targets_dev_release": False, "certificate_sha256": "b" * 64}]}
+        self.assertEqual(identity.parse_verified_signers(json.dumps(result)), result)
+        for field, value in (("scheme", "unknown"), ("min_sdk", True), ("max_sdk", 23),
+                             ("certificate_sha256", "invalid"), ("rotation_targets_dev_release", 1)):
+            wrong = json.loads(json.dumps(result))
+            wrong["signer_api_ranges"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                identity.parse_verified_signers(json.dumps(wrong))
+
     def test_tools_have_deadline_output_limit_and_nonzero_exit_is_not_parsed(self):
         with self.assertRaisesRegex(ValueError, "failed.*exit 7"):
             identity.run_tool([sys.executable, "-c", "print('pretend success'); raise SystemExit(7)"], "fixture")
@@ -153,10 +168,12 @@ class RealSdkIdentity(unittest.TestCase):
             raise unittest.SkipTest("real SDK fixture requires GESHER_TEST_BUILD_TOOLS and GESHER_TEST_ANDROID_JAR")
         cls.tools, cls.android = identity.build_tools(Path(tools)), Path(android)
 
-    def signed_fixture(self, root, sdk, attributes="", abis=(), source_stamp=False):
+    def signed_fixture(self, root, sdk, attributes="", abis=(), source_stamp=False,
+                       version_code=7, rotation=False):
         manifest = root / "AndroidManifest.xml"
+        version_attribute = "" if version_code is None else f'android:versionCode="{version_code}"'
         manifest.write_text(f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  package="com.gesher.identityfixture" android:versionCode="7">
+  package="com.gesher.identityfixture" {version_attribute}>
   {sdk}<application android:hasCode="false" {attributes}/>
 </manifest>''', encoding="utf-8")
         apk = root / "fixture.apk"
@@ -170,7 +187,8 @@ class RealSdkIdentity(unittest.TestCase):
         self.assertIsNotNone(keytool, "keytool is required for the real SDK fixture")
         key = root / "fixture.jks"
         hashes = {}
-        for alias in (["app", "stamp"] if source_stamp else ["app"]):
+        aliases = ["app"] + (["rotated"] if rotation else []) + (["stamp"] if source_stamp else [])
+        for alias in aliases:
             identity.run_tool([keytool, "-genkeypair", "-alias", alias, "-keystore", str(key),
                 "-storepass", "fixture-only", "-keypass", "fixture-only", "-keyalg", "RSA",
                 "-keysize", "2048", "-validity", "2", "-dname", f"CN=Isolated {alias} fixture"], "fixture key")
@@ -182,11 +200,48 @@ class RealSdkIdentity(unittest.TestCase):
             return ["--ks", str(key), "--ks-key-alias", alias, "--ks-pass", "pass:fixture-only",
                     "--key-pass", "pass:fixture-only"]
         command = [java, "-jar", str(self.tools / "lib/apksigner.jar"), "sign"] + key_arguments("app")
+        if rotation:
+            lineage = root / "fixture.lineage"
+            identity.run_tool([java, "-jar", str(self.tools / "lib/apksigner.jar"), "rotate",
+                "--out", str(lineage), "--old-signer"] + key_arguments("app")
+                + ["--new-signer"] + key_arguments("rotated"), "fixture signing lineage")
+            command += ["--lineage", str(lineage), "--rotation-min-sdk-version", "33",
+                        "--next-signer"] + key_arguments("rotated")
         if source_stamp:
             command += ["--stamp-signer"] + key_arguments("stamp")
         identity.run_tool(command + [str(apk)], "fixture signature")
-        result = identity.collect(apk, "com.gesher.identityfixture", 7, identity.hash_file(apk), self.tools)
+        result = identity.collect(apk, "com.gesher.identityfixture",
+                                  0 if version_code is None else version_code, identity.hash_file(apk), self.tools)
         return result, hashes
+
+    def test_real_v31_rotation_reports_current_signer_and_separate_api_ranges(self):
+        with tempfile.TemporaryDirectory(prefix="gesher-rotation-fixture-") as temporary:
+            result, hashes = self.signed_fixture(Path(temporary),
+                '<uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36"/>', rotation=True)
+            self.assertEqual(result["signer_certificate_sha256"], [hashes["rotated"]])
+            ranges = {item["scheme"]: item for item in result["signer_api_ranges"]}
+            self.assertEqual(ranges["v3"]["certificate_sha256"], hashes["app"])
+            self.assertEqual(ranges["v3.1"]["certificate_sha256"], hashes["rotated"])
+            self.assertEqual((ranges["v3"]["max_sdk"], ranges["v3.1"]["min_sdk"]), (32, 33))
+            self.assertRegex(result["tools"]["signer_helper_sha256"], "^[0-9a-f]{64}$")
+
+    def test_real_omitted_version_code_defaults_only_after_manifest_confirmation(self):
+        for version in (None, 0, 7):
+            with self.subTest(version=version), tempfile.TemporaryDirectory(prefix="gesher-version-default-") as temporary:
+                root = Path(temporary)
+                result, _ = self.signed_fixture(root,
+                    '<uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36"/>', version_code=version)
+                self.assertEqual(result["version_code"], 0 if version is None else version)
+                self.assertEqual(result["declared_version_code"], version)
+                if version == 7:
+                    ordinary_run = identity.run_tool
+                    def omit_explicit_version(argv, role, timeout=45):
+                        output = ordinary_run(argv, role, timeout)
+                        return output.replace("versionCode='7'", "versionCode=''") if role == "aapt2" else output
+                    with mock.patch.object(identity, "run_tool", side_effect=omit_explicit_version):
+                        with self.assertRaisesRegex(ValueError, "omitted a nonzero"):
+                            identity.collect(root / "fixture.apk", result["package"], 7,
+                                             result["apk_sha256"], self.tools)
 
     def test_real_multiarch_inventory_includes_all_four_packaged_abis(self):
         with tempfile.TemporaryDirectory(prefix="gesher-multiarch-fixture-") as temporary:
@@ -213,6 +268,7 @@ class RealSdkIdentity(unittest.TestCase):
             ('<uses-sdk android:minSdkVersion="23"/>', 23, None, 23, 23),
             ("", None, None, 1, 1),
             ('<uses-sdk android:targetSdkVersion="36"/>', None, 36, 1, 36),
+            ('<uses-sdk android:targetSdkVersion="Baklava"/>', None, "Baklava", "Baklava", "Baklava"),
         ]:
             with self.subTest(sdk=sdk), tempfile.TemporaryDirectory(prefix="gesher-sdk-defaults-") as temporary:
                 result, _ = self.signed_fixture(Path(temporary), sdk)
@@ -222,7 +278,8 @@ class RealSdkIdentity(unittest.TestCase):
                 self.assertEqual(result["target_sdk"], target)
                 package = result["package"]
                 manifest = {"apps": [{"package": package, "versionCode": 7, "sha256": result["apk_sha256"]}]}
-                apk = {"package": package, "sha256": result["apk_sha256"], "target_sdk": target,
+                apk = {"package": package, "sha256": result["apk_sha256"],
+                       "target_sdk": target if isinstance(target, int) else None,
                        "sdk_identity": result}
                 observed = {"schema_version": 1, "invocation_id": "1" * 32,
                             "manifest_sha256": HASH, "completed": True,
@@ -232,10 +289,15 @@ class RealSdkIdentity(unittest.TestCase):
                                 "finished_at": "2026-01-01T00:00:00Z"}
                                 for scenario in ("launch", "association", "shortcut")]}
                 self.assertTrue(coverage.summarize(manifest, observed, HASH)["gate_passed"])
-                apk["target_sdk"] = target + 1
+                if isinstance(target, int):
+                    apk["target_sdk"] = target + 1
+                    expected_error = "targetSdk disagree"
+                else:
+                    result["min_sdk"] = 1
+                    expected_error = "effective versions"
                 report = coverage.summarize(manifest, observed, HASH)
                 self.assertFalse(report["gate_passed"])
-                self.assertTrue(any("targetSdk disagree" in problem for problem in report["validation_errors"]))
+                self.assertTrue(any(expected_error in problem for problem in report["validation_errors"]))
 
     def test_real_signed_apk_and_tampered_package(self):
         with tempfile.TemporaryDirectory(prefix="gesher-sdk-fixture-") as temporary:

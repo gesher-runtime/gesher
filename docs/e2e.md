@@ -125,14 +125,29 @@ never added to the application's signer set. The collector also hashes the
 actual AAPT2 executable, apksigner JAR and Java launcher used for collection.
 Certificate subject names and local tool paths are not included in the ledger.
 
+For v3.1 rotation, apksigner prints certificates for API ranges rather than a
+numbered current signer set. The source-launched `SdkApkSigners.java` adapter
+uses the same SDK JAR's `ApkVerifier.Result.getSignerCertificates()` for the
+current set. It records `signer_api_ranges` separately, including development
+release targeting, without treating old range certificates as concurrent
+signers or inferring the selected signer for a running device. This path needs
+a JDK 17 or newer; CI supplies JDK 21. The adapter source hash is recorded with
+the tool hashes. API-range observations are not the complete signing lineage.
+
 `declared_min_sdk` and `declared_target_sdk` record attributes actually present
 in the manifest's direct `uses-sdk` element. `min_sdk` and `target_sdk` record
-the effective values: an omitted minimum is 1, and an omitted target inherits
-the minimum, following the [Android manifest contract](https://developer.android.com/guide/topics/manifest/uses-sdk-element).
+the effective requirements: an omitted minimum is 1 for a numeric or absent
+target, while a preview target codename propagates to an omitted minimum.
+An omitted target inherits the minimum. Codenames remain symbolic; resolving
+them requires a platform profile and does not establish release-device support.
+These rules follow the [Android manifest contract](https://developer.android.com/guide/topics/manifest/uses-sdk-element)
+and [AOSP's manifest parser](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/content/pm/parsing/ApkLiteParseUtils.java).
 The collector inspects `dump xmltree` before applying these defaults; a missing
 badging line alone cannot establish that an attribute was omitted. The reporter
 checks the declared/effective relationship and compares the effective target
 with Gesher's package-parser result, including for legacy APKs without `uses-sdk`.
+An omitted `versionCode` similarly becomes zero only after xmltree confirms its
+absence; `declared_version_code` distinguishes omission from explicit zero.
 
 Each manifest version has a `compatibility_matrix` row, even when excluded or
 not run. This connects the APK identity to the measured/declared runtime fields,
@@ -158,7 +173,8 @@ The `e2e-evidence` workflow also builds and signs project-owned,
 non-executable fixture APKs on Linux and Windows. It verifies the actual SDK
 collector against valid bytes, mismatched manifest identity and modifications
 after signing, a four-ABI `multiArch` APK, source stamps with a distinct key,
-and omitted SDK attributes. These tests establish metadata handling, not app compatibility.
+omitted version/SDK attributes, and real v3.1 key rotation. These tests establish
+metadata handling, not app compatibility.
 Signer rotation history, split-APK sets and measured runtime/provider/hardware
 selection remain follow-up work in issue #56 A01/T01/T13/T14.
 

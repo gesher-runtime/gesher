@@ -343,6 +343,29 @@ class CoverageContractTest(unittest.TestCase):
         del data["declared_min_sdk"]
         self.assertFalse(self.report()["gate_passed"])
 
+    def test_preview_target_inherits_missing_minimum_without_claiming_runtime_resolution(self):
+        self.add_sdk_identities()
+        data = self.observed["apks"][0]["sdk_identity"]
+        data.update(declared_min_sdk=None, declared_target_sdk="Baklava",
+                    min_sdk="Baklava", target_sdk="Baklava")
+        self.observed["apks"][0]["target_sdk"] = None
+        report = self.report()
+        self.assertTrue(report["gate_passed"])
+        self.assertEqual(report["compatibility_matrix"][0]["min_sdk"], "Baklava")
+        data["min_sdk"] = 1
+        self.assertFalse(self.report()["gate_passed"])
+
+    def test_signer_ranges_remain_distinct_and_malformed_ranges_are_rejected(self):
+        self.add_sdk_identities()
+        data = self.observed["apks"][0]["sdk_identity"]
+        data["signer_api_ranges"] = [{"scheme": "v3", "min_sdk": 24, "max_sdk": 32,
+            "rotation_targets_dev_release": False, "certificate_sha256": "7" * 64}]
+        profile = self.report()["compatibility_matrix"][0]
+        self.assertEqual(profile["signer_api_ranges"], data["signer_api_ranges"])
+        self.assertEqual(profile["signer_certificate_sha256"], ["b" * 64, "c" * 64])
+        data["signer_api_ranges"][0]["max_sdk"] = 23
+        self.assertFalse(self.report()["gate_passed"])
+
     def test_source_stamp_remains_separate_from_app_signers(self):
         self.add_sdk_identities()
         data = self.observed["apks"][0]["sdk_identity"]

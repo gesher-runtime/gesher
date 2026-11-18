@@ -81,12 +81,12 @@ def parse_badging(text: str) -> dict:
     # machine identifiers and numeric versionCode fields, not display labels.
     line = package_lines[0]
     package = re.search(r"(?:^|\s)name='([A-Za-z0-9_.]+)'(?:\s|$)", line)
-    version = re.search(r"(?:^|\s)versionCode='([0-9]+)'(?:\s|$)", line)
+    version = re.search(r"(?:^|\s)versionCode='([0-9]*)'(?:\s|$)", line)
     major = re.search(r"(?:^|\s)versionCodeMajor='([0-9]+)'(?:\s|$)", line)
     if not package or not version:
         raise ValueError("aapt2 package name or versionCode is malformed")
-    low, high = int(version[1]), int(major[1]) if major else 0
-    if low > 0xffffffff or high > 0x7fffffff:
+    low, high = int(version[1]) if version[1] else None, int(major[1]) if major else 0
+    if (low is not None and low > 0xffffffff) or high > 0x7fffffff:
         raise ValueError("aapt2 versionCode is outside the Android long-version range")
 
     def sdk(prefix):
@@ -119,7 +119,7 @@ def parse_badging(text: str) -> dict:
     minimum, legacy_minimum = sdk("minSdkVersion"), sdk("sdkVersion")
     if minimum is not None and legacy_minimum is not None and minimum != legacy_minimum:
         raise ValueError("aapt2 returned conflicting minimum SDK values")
-    return {"package": package[1], "version_code": (high << 32) | low,
+    return {"package": package[1], "version_code": None if low is None else (high << 32) | low,
             "min_sdk": minimum if minimum is not None else legacy_minimum, "target_sdk": sdk("targetSdkVersion"),
             "packaged_native_abis": sorted(abis)}
 
@@ -181,8 +181,13 @@ def parse_manifest(text: str) -> dict:
     low, high = version.get("versionCode", 0), version.get("versionCodeMajor", 0)
     if low > 0xffffffff or high > 0x7fffffff:
         raise ValueError("manifest version is outside the Android long-version range")
-    minimum = sdk.get("minSdkVersion", 1)
+    minimum = sdk.get("minSdkVersion")
+    if minimum is None:
+        # Android propagates a target preview codename into an unassigned
+        # minimum. Keep the codename; resolving it requires a platform profile.
+        minimum = sdk.get("targetSdkVersion") if isinstance(sdk.get("targetSdkVersion"), str) else 1
     return {"version_code": (high << 32) | low,
+            "declared_version_code": version.get("versionCode"),
             "declared_min_sdk": sdk.get("minSdkVersion"), "declared_target_sdk": sdk.get("targetSdkVersion"),
             "min_sdk": minimum, "target_sdk": sdk.get("targetSdkVersion", minimum)}
 
@@ -217,6 +222,35 @@ def parse_certificates(text: str) -> dict:
             "source_stamp_certificate_sha256": source_stamp}
 
 
+def parse_verified_signers(text: str) -> dict:
+    """Validate the SDK-API helper's machine output, without deriving signer roles."""
+    result = json.loads(text)
+    if not isinstance(result, dict) or set(result) != {
+            "signer_certificate_sha256", "source_stamp_certificate_sha256", "signer_api_ranges"}:
+        raise ValueError("SDK signer helper returned an unexpected schema")
+    signers, stamp, ranges = (result[key] for key in (
+        "signer_certificate_sha256", "source_stamp_certificate_sha256", "signer_api_ranges"))
+    if (not isinstance(signers, list) or not signers
+            or any(not isinstance(value, str) or not HASH.fullmatch(value) for value in signers)
+            or len(set(signers)) != len(signers)):
+        raise ValueError("SDK signer helper returned an invalid current signer set")
+    if stamp is not None and (not isinstance(stamp, str) or not HASH.fullmatch(stamp)):
+        raise ValueError("SDK signer helper returned an invalid source stamp")
+    if not isinstance(ranges, list):
+        raise ValueError("SDK signer helper returned invalid API ranges")
+    for item in ranges:
+        if (not isinstance(item, dict) or set(item) != {
+                "scheme", "min_sdk", "max_sdk", "rotation_targets_dev_release", "certificate_sha256"}
+                or item["scheme"] not in ("v3", "v3.1")
+                or type(item["min_sdk"]) is not int or type(item["max_sdk"]) is not int
+                or not 0 <= item["min_sdk"] <= item["max_sdk"] <= 0x7fffffff
+                or type(item["rotation_targets_dev_release"]) is not bool
+                or not isinstance(item["certificate_sha256"], str)
+                or not HASH.fullmatch(item["certificate_sha256"])):
+            raise ValueError("SDK signer helper returned an invalid API range")
+    return result
+
+
 def collect(apk: Path, expected_package: str, expected_version_code: int,
             expected_sha256: str, tools: Path, java: str = "java") -> dict:
     if not HASH.fullmatch(expected_sha256):
@@ -225,12 +259,14 @@ def collect(apk: Path, expected_package: str, expected_version_code: int,
         raise ValueError("expected versionCode must be a nonnegative integer")
     aapt = tools / ("aapt2.exe" if os.name == "nt" else "aapt2")
     signer = tools / "lib/apksigner.jar"
+    signer_helper = Path(__file__).with_name("SdkApkSigners.java")
     java_executable = shutil.which(java)
     if not java_executable:
         raise ValueError("Java is required to verify APK signatures")
     tool_identity = {"build_tools_directory_name": tools.name,
                      "aapt2_sha256": hash_file(aapt), "apksigner_jar_sha256": hash_file(signer),
-                     "java_executable_sha256": hash_file(Path(java_executable))}
+                     "java_executable_sha256": hash_file(Path(java_executable)),
+                     "signer_helper_sha256": hash_file(signer_helper)}
     with tempfile.TemporaryDirectory(prefix="gesher-apk-identity-") as directory:
         snapshot = Path(directory) / "pinned.apk"
         shutil.copyfile(apk, snapshot)
@@ -240,7 +276,13 @@ def collect(apk: Path, expected_package: str, expected_version_code: int,
         metadata = parse_badging(run_tool([str(aapt), "dump", "badging", str(snapshot)], "aapt2"))
         manifest = parse_manifest(run_tool([
             str(aapt), "dump", "xmltree", "--file", "AndroidManifest.xml", str(snapshot)], "aapt2 manifest"))
-        if (metadata["version_code"] & 0xffffffff) != (manifest["version_code"] & 0xffffffff):
+        if metadata["version_code"] is None:
+            # AAPT2 prints the empty form for both omission and explicit zero.
+            # The manifest establishes which case occurred; never default a
+            # contradictory nonzero declaration to zero.
+            if manifest["declared_version_code"] not in (None, 0):
+                raise ValueError("aapt2 badging omitted a nonzero manifest versionCode")
+        elif (metadata["version_code"] & 0xffffffff) != (manifest["version_code"] & 0xffffffff):
             raise ValueError("aapt2 badging and manifest versionCode disagree")
         for field in ("min_sdk", "target_sdk"):
             declared = manifest["declared_" + field]
@@ -252,8 +294,17 @@ def collect(apk: Path, expected_package: str, expected_version_code: int,
         metadata.update(manifest)
         if metadata["package"] != expected_package or metadata["version_code"] != expected_version_code:
             raise ValueError("APK package/versionCode does not match the manifest entry")
-        certificates = parse_certificates(run_tool([
-            java_executable, "-jar", str(signer), "verify", "--print-certs", str(snapshot)], "apksigner"))
+        certificate_output = run_tool([
+            java_executable, "-jar", str(signer), "verify", "--print-certs", str(snapshot)], "apksigner")
+        if re.search(r"^Signer \(", certificate_output, re.MULTILINE):
+            # v3.1 CLI output lists API-range signers without identifying the
+            # current set. Obtain that set from the same SDK verifier's result;
+            # neither output order nor the largest SDK range defines identity.
+            certificates = parse_verified_signers(run_tool([
+                java_executable, "--class-path", str(signer), str(signer_helper), str(snapshot)],
+                "SDK verified signer identity (JDK 17+ required)"))
+        else:
+            certificates = {**parse_certificates(certificate_output), "signer_api_ranges": []}
         if hash_file(snapshot) != measured:
             raise ValueError("APK snapshot changed during identity collection")
     return {"schema_version": 1, "source": "android_sdk_build_tools", "apk_sha256": measured,
