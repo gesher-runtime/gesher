@@ -10,7 +10,9 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
+#include <utility>
 
 #include "../audio/log.h"
 #include "../player/data_source.h"
@@ -293,6 +295,31 @@ jobject RetrieverBitmapConfig(JNIEnv* env, jobject params, jfieldID* actual_fiel
   return env->GetStaticObjectField(config, argb_field);
 }
 
+// Use the extractor's display geometry before fitting into the caller's bounds.
+std::pair<int, int> RetrieverBitmapDimensions(int w, int h, const Format& track, int rotation,
+                                              int dst_w, int dst_h) {
+  int bitmap_w = w, bitmap_h = h;
+  int32_t sar_w, sar_h, display_w, display_h;
+  if (track.GetInt32("sar-width", &sar_w) && track.GetInt32("sar-height", &sar_h) &&
+      sar_w > 0 && sar_h > 0) {
+    const int64_t corrected_width = static_cast<int64_t>(w) * sar_w / sar_h;
+    if (corrected_width <= 0 || corrected_width > std::numeric_limits<int>::max()) return {};
+    bitmap_w = static_cast<int>(corrected_width);
+  } else if (track.GetInt32("display-width", &display_w) &&
+             track.GetInt32("display-height", &display_h) && display_w > 0 && display_h > 0) {
+    bitmap_w = display_w;
+    bitmap_h = display_h;
+  }
+  if (rotation == 90 || rotation == 270) std::swap(bitmap_w, bitmap_h);
+  if (dst_w > 0 && dst_h > 0) {
+    const double scale = std::min(static_cast<double>(dst_w) / bitmap_w,
+                                  static_cast<double>(dst_h) / bitmap_h);
+    bitmap_w = std::max(1, static_cast<int>(bitmap_w * scale + 0.5));
+    bitmap_h = std::max(1, static_cast<int>(bitmap_h * scale + 0.5));
+  }
+  return {bitmap_w, bitmap_h};
+}
+
 // Clockwise rotation from coded pixels to presentation orientation.
 size_t RetrieverPixelIndex(int x, int y, int w, int h, int rotation) {
   switch (rotation) {
@@ -303,27 +330,33 @@ size_t RetrieverPixelIndex(int x, int y, int w, int h, int rotation) {
   }
 }
 
-jobject CreateRetrieverBitmap(JNIEnv* env, const VideoFrame& frame, jobject config,
-                              int dst_w, int dst_h, int rotation) {
-  int w = frame.visible_width(), h = frame.visible_height();
-  if (w <= 0 || h <= 0) return nullptr;
-  int bitmap_w = w, bitmap_h = h;
+jobject CreateRetrieverBitmap(JNIEnv* env, const VideoFrame& frame, const Format& track,
+                              jobject config, int dst_w, int dst_h) {
+  const int visible_w = frame.visible_width(), visible_h = frame.visible_height();
+  if (visible_w <= 0 || visible_h <= 0) return nullptr;
+  int32_t rotation = 0;
+  track.GetInt32("rotation-degrees", &rotation);
+  const auto [bitmap_w, bitmap_h] =
+      RetrieverBitmapDimensions(visible_w, visible_h, track, rotation, dst_w, dst_h);
+  if (bitmap_w <= 0 || bitmap_h <= 0) return nullptr;
   const bool transpose = rotation == 90 || rotation == 270;
-  if (transpose) std::swap(bitmap_w, bitmap_h);
-  if (dst_w > 0 && dst_h > 0 && (dst_w != bitmap_w || dst_h != bitmap_h)) {
-    double scale = std::min(static_cast<double>(dst_w) / bitmap_w,
-                            static_cast<double>(dst_h) / bitmap_h);
-    bitmap_w = std::max(1, static_cast<int>(bitmap_w * scale + 0.5));
-    bitmap_h = std::max(1, static_cast<int>(bitmap_h * scale + 0.5));
-    w = transpose ? bitmap_h : bitmap_w;
-    h = transpose ? bitmap_w : bitmap_h;
-  }
+  const int w = transpose ? bitmap_h : bitmap_w;
+  const int h = transpose ? bitmap_w : bitmap_h;
   const size_t pixel_count = static_cast<size_t>(w) * h;
-  if (pixel_count > static_cast<size_t>(std::numeric_limits<jsize>::max())) return nullptr;
+  if (pixel_count > static_cast<size_t>(std::numeric_limits<jsize>::max()) / sizeof(jint)) {
+    return nullptr;
+  }
   if (env->PushLocalFrame(3) < 0) return nullptr;
-  std::vector<uint32_t> rgba(pixel_count);
-  I420ToRgba(frame, rgba.data(), w, w, h);
-  std::vector<jint> argb(pixel_count);
+  const jsize length = static_cast<jsize>(pixel_count);
+  jintArray colors = env->NewIntArray(length);
+  if (colors == nullptr) return env->PopLocalFrame(nullptr);
+  std::unique_ptr<uint32_t[]> rgba(new (std::nothrow) uint32_t[pixel_count]);
+  std::unique_ptr<jint[]> argb(new (std::nothrow) jint[pixel_count]);
+  if (rgba == nullptr || argb == nullptr) {
+    jniThrow(env, "java/lang/OutOfMemoryError", "Could not allocate retriever pixels");
+    return env->PopLocalFrame(nullptr);
+  }
+  I420ToRgba(frame, rgba.get(), w, w, h);
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
       const uint32_t p = rgba[static_cast<size_t>(y) * w + x];
@@ -331,10 +364,7 @@ jobject CreateRetrieverBitmap(JNIEnv* env, const VideoFrame& frame, jobject conf
           0xff000000u | ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu));
     }
   }
-  const jsize length = static_cast<jsize>(pixel_count);
-  jintArray colors = env->NewIntArray(length);
-  if (colors == nullptr) return env->PopLocalFrame(nullptr);
-  env->SetIntArrayRegion(colors, 0, length, argb.data());
+  env->SetIntArrayRegion(colors, 0, length, argb.get());
   if (env->ExceptionCheck()) return env->PopLocalFrame(nullptr);
   jclass bitmap = env->FindClass("android/graphics/Bitmap");
   if (bitmap == nullptr) return env->PopLocalFrame(nullptr);
@@ -357,14 +387,14 @@ jobject JNICALL MMR_getFrameAtTime(JNIEnv* env, jobject thiz, jlong time_us, jin
   if (ex == nullptr) return nullptr;
   std::unique_ptr<VideoDecoder> decoder;
   std::unique_ptr<TrackReader> reader;
-  int32_t rotation = 0;
+  Format video_track(nullptr);
   for (size_t i = 0; i < ex->TrackCount() && decoder == nullptr; i++) {
     Format f = ex->TrackFormat(i);
     if (f.Mime().rfind("video/", 0) != 0) continue;
     decoder = VideoDecoder::Create(f, &error);
     if (decoder != nullptr) {
       reader = ex->OpenTrack(i);
-      f.GetInt32("rotation-degrees", &rotation);
+      video_track = std::move(f);
     }
   }
   if (decoder == nullptr || reader == nullptr) {
@@ -377,7 +407,7 @@ jobject JNICALL MMR_getFrameAtTime(JNIEnv* env, jobject thiz, jlong time_us, jin
   jfieldID actual_field = nullptr;
   jobject config = RetrieverBitmapConfig(env, params, &actual_field);
   if (config == nullptr) return nullptr;
-  jobject result = CreateRetrieverBitmap(env, *chosen, config, dst_w, dst_h, rotation);
+  jobject result = CreateRetrieverBitmap(env, *chosen, video_track, config, dst_w, dst_h);
   if (CheckException(env, "MediaMetadataRetriever.getFrameAtTime")) return nullptr;
   if (result != nullptr && actual_field != nullptr) env->SetObjectField(params, actual_field, config);
   return result;
@@ -410,21 +440,20 @@ jobject JNICALL MMR_getFrameAtIndex(JNIEnv* env, jobject thiz, jint frame_index,
     for (size_t i = 0; i < ex->TrackCount(); ++i) {
       Format format = ex->TrackFormat(i);
       if (format.Mime().rfind("video/", 0) != 0) continue;
-      int32_t available, rotation = 0;
+      int32_t available;
       if (!format.GetInt32("frame-count", &available) || available <= 0) break;
       if (frame_index < 0 || frame_index >= available || frame_count < 1 ||
           frame_count > available - frame_index) {
         jniThrow(env, "java/lang/IllegalArgumentException", "Invalid frameIndex or numFrames");
         return nullptr;
       }
-      format.GetInt32("rotation-degrees", &rotation);
       auto decoder = VideoDecoder::Create(format, &error);
       auto reader = ex->OpenTrack(i);
       if (decoder == nullptr || reader == nullptr) break;
       VisitRetrieverFrames(reader.get(), decoder.get(), frame_index, SeekMode::kFrameIndex, 0,
                            [&](const VideoFrame& frame) {
                              jobject bitmap =
-                                 CreateRetrieverBitmap(env, frame, config, -1, -1, rotation);
+                                 CreateRetrieverBitmap(env, frame, format, config, -1, -1);
                              if (bitmap == nullptr) return false;
                              env->CallBooleanMethod(list, add, bitmap);
                              env->DeleteLocalRef(bitmap);

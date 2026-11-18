@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -14,11 +15,13 @@
 #include "compat/media/video/video_decoder.h"
 
 #define HAS_INDEXED_SELECTOR @HAS_INDEXED_SELECTOR@
+#define HAS_DISPLAY_GEOMETRY @HAS_DISPLAY_GEOMETRY@
 
 struct AMediaFormat {
   bool has_time = true, has_target = false, has_sync = true, has_valid_samples = false;
   int64_t time = 0, target = -1;
   int32_t sync = 0, valid_samples = -1;
+  std::map<std::string, int32_t> attributes;
 };
 bool AMediaFormat_getInt64(AMediaFormat* format, const char* key, int64_t* out) {
   if (std::strcmp(key, "timeUs") == 0 && format->has_time) { *out = format->time; return true; }
@@ -33,6 +36,11 @@ bool AMediaFormat_getInt32(AMediaFormat* format, const char* key, int32_t* out) 
   }
   if (std::strcmp(key, "valid-samples") == 0 && format->has_valid_samples) {
     *out = format->valid_samples; return true;
+  }
+  auto attribute = format->attributes.find(key);
+  if (attribute != format->attributes.end()) {
+    *out = attribute->second;
+    return true;
   }
   return false;
 }
@@ -63,6 +71,10 @@ struct MediaBufferGroup { void* wrap() { return this; } };
 }  // namespace android
 
 namespace gesher::media {
+Format::~Format() { delete f_; }
+bool Format::GetInt32(const char* key, int32_t* out) const {
+  return AMediaFormat_getInt32(f_, key, out);
+}
 @TRACK_READER@
 @RETRIEVER_SELECTION@
 @PRESENTATION_ORIENTATION@
@@ -300,6 +312,29 @@ void Orientation() {
   Check(rotated(270) == std::vector<int>({2, 5, 1, 4, 0, 3}), "wide bitmap rotates counterclockwise");
 }
 
+#if HAS_DISPLAY_GEOMETRY
+void DisplayDimensions() {
+  Format track(new AMediaFormat);
+  auto dimensions = [&](int rotation, int dst_w = -1, int dst_h = -1) {
+    return RetrieverBitmapDimensions(320, 240, track, rotation, dst_w, dst_h);
+  };
+  Check(dimensions(0) == std::pair<int, int>(320, 240), "absent metadata keeps visible size");
+  track.get()->attributes = {{"display-width", 352}, {"display-height", 264}};
+  Check(dimensions(0) == std::pair<int, int>(352, 264), "display geometry applies to indexed bitmaps");
+  track.get()->attributes["sar-width"] = 3;
+  track.get()->attributes["sar-height"] = 2;
+  Check(dimensions(0) == std::pair<int, int>(480, 240), "pixel aspect ratio takes precedence");
+  Check(dimensions(90) == std::pair<int, int>(240, 480), "rotate corrected display geometry");
+  Check(dimensions(270, 160, 160) == std::pair<int, int>(80, 160),
+        "scaled frames fit within the requested bounds using the display ratio");
+  track.get()->attributes["sar-height"] = 0;
+  Check(dimensions(0) == std::pair<int, int>(352, 264), "invalid SAR falls back to display dimensions");
+  track.get()->attributes["sar-width"] = std::numeric_limits<int32_t>::max();
+  track.get()->attributes["sar-height"] = 1;
+  Check(dimensions(0) == std::pair<int, int>(), "unrepresentable display geometry fails");
+}
+#endif
+
 void IndexedFrames() {
   for (int batch : {1, 7, 0}) {
     Track track(Tail(1466666));
@@ -393,6 +428,9 @@ int main() {
 #if HAS_INDEXED_SELECTOR
   IndexedFrames();
   Orientation();
+#if HAS_DISPLAY_GEOMETRY
+  DisplayDimensions();
+#endif
 #endif
   Errors();
   std::cout << "Retriever frame contracts: " << checks - failures << '/' << checks
