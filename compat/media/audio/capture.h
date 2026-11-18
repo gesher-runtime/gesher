@@ -21,6 +21,7 @@
 #include <sys/types.h>
 
 #include <condition_variable>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -126,6 +127,9 @@ class CaptureStream {
   // The resampler's state: the fractional source position and the last frame.
   double phase_ = 0;
   std::vector<float> last_;
+  // Protected by mu_; at most the ring's capacity of converted frames.
+  std::vector<float> converted_;
+  std::array<float, 8> current_frame_{}, previous_frame_{};
   bool primed_ = false;
   uint32_t marker_ = 0;
   bool marker_reached_ = false;

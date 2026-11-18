@@ -241,7 +241,8 @@ void WrapAndFull(PcmFormat format, uint32_t channels, FILE* file) {
 
 // Independent QA: consume a wrapped publication in its callback, synchronously
 // push another block, then release from the nested callback. Both invocations
-// must keep their own conversion scratch and invoke events outside the mutex.
+// may reuse conversion scratch only after ring publication, and must invoke
+// events outside the mutex with invocation-local callback storage.
 void ReentrantReadAndPush(PcmFormat format, uint32_t channels, FILE* file) {
   CaptureParams p;
   p.format = format; p.channels = channels; p.capacity_frames = 5;
@@ -310,9 +311,40 @@ void Measure(uint32_t channels, uint32_t rate, bool gate) {
   }
   count_allocations = false;
   double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
-  if (gate) Check(allocations == 300, "three call-local storage allocations per Push, independent of output-frame count");
+  if (gate) Check(allocations == 0, "warmed capture Push/Read must not allocate without callbacks");
   std::printf("Capture Push 48k stereo -> %uHz %uch: 100 blocks, %zu allocations, %zu bytes, %.3f ms\n",
               rate, channels, allocations, allocated_bytes, ms);
+}
+
+template<class Stream> void ScratchBound(Stream& stream, bool released, bool gate) {
+  if constexpr (requires { stream.converted_; }) {
+    if (gate) Check(released ? stream.converted_.capacity() == 0
+                            : stream.converted_.capacity() <= stream.capacity_frames() * stream.params().channels,
+                    released ? "Release returns conversion scratch storage" : "conversion scratch exceeds ring capacity");
+  }
+}
+
+void LargeBlockAndRateChanges(FILE* file, bool gate) {
+  CaptureParams p;
+  p.sample_rate = 44100; p.channels = 8; p.capacity_frames = 37;
+  CaptureStream stream(&engine, p);
+  stream.Start();
+  auto source = Input(0, 8192, 2);
+  std::vector<uint8_t> bytes(37 * stream.frame_size());
+  for (uint32_t rate : {4000u, 48000u, 192000u, 44100u}) {
+    stream.Push(source.data(), 8192, rate, 2, rate);
+    Check(stream.Available() == 37 && stream.overrun_frames() > 0, "large source preserves ring limit and overflow accounting");
+    ScratchBound(stream, false, gate);
+    Record(file, stream);
+    ssize_t got = stream.Read(bytes.data(), bytes.size(), false);
+    Field(file, got); Write(file, bytes.data(), static_cast<size_t>(got));
+  }
+  stream.Stop(); stream.Start();
+  stream.Push(source.data(), 8192, 48000, 2, 999);
+  Record(file, stream);
+  stream.Release();
+  ScratchBound(stream, true, gate);
+  Record(file, stream);
 }
 
 void ReadSpans(bool gate) {
@@ -403,6 +435,7 @@ int main(int argc, char** argv) {
     for (uint32_t channels : {3u, 5u}) ReentrantReadAndPush(format, channels, file);
   for (uint32_t channels : {1u, 2u, 8u})
     for (uint32_t rate : {44100u, 48000u}) Measure(channels, rate, gate);
+  LargeBlockAndRateChanges(file, gate);
   ReadSpans(gate);
   std::fclose(file);
   std::printf("Audio capture: %zu checks, %zu failures\n", checks, failures);

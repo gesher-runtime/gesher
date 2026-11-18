@@ -445,15 +445,20 @@ void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uin
         }
       }
     };
-    std::vector<float> out;
-    out.reserve(static_cast<size_t>(frames / step + 2) * ch);
+    const size_t cap = params_.capacity_frames;
+    const size_t room = cap - static_cast<size_t>(written_ - read_);
+    auto& out = converted_;
+    out.clear();
+    out.reserve(std::min(static_cast<size_t>(frames / step + 2), room) * ch);
     if (!primed_ && frames > 0) {
       source_frame(0, last_.data());
       primed_ = true;
     }
     // phase_: the position of the next output frame, in source frames, relative
     // to the frame before src[0] (last_).
-    std::vector<float> cur(ch), prev(ch);
+    auto& cur = current_frame_;
+    auto& prev = previous_frame_;
+    size_t n = 0;
     while (true) {
       const double pos = phase_;
       const size_t i = static_cast<size_t>(pos);  // between frame i-1 (last_ when 0) and i
@@ -461,18 +466,20 @@ void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uin
       const float t = static_cast<float>(pos - static_cast<double>(i));
       source_frame(i, cur.data());
       if (i == 0) {
-        prev = last_;
+        std::copy(last_.begin(), last_.end(), prev.begin());
       } else {
         source_frame(i - 1, prev.data());
       }
-      for (uint32_t c = 0; c < ch; c++) out.push_back(prev[c] + (cur[c] - prev[c]) * t);
+      // Advance through discarded frames too: phase/history and lost-frame
+      // accounting must not depend on how much room the consumer left.
+      if (n < room) {
+        for (uint32_t c = 0; c < ch; c++) out.push_back(prev[c] + (cur[c] - prev[c]) * t);
+      }
+      ++n;
       phase_ += step;
     }
     phase_ -= static_cast<double>(frames);
     source_frame(frames - 1, last_.data());
-    const size_t n = out.size() / ch;
-    const size_t cap = params_.capacity_frames;
-    size_t room = cap - static_cast<size_t>(written_ - read_);
     size_t take = std::min(n, room);
     if (take < n) {
       overruns_ += static_cast<uint32_t>(n - take);
@@ -624,6 +631,7 @@ void CaptureStream::Release() {
     if (released_) return;
     released_ = true;
     started_ = false;
+    std::vector<float>().swap(converted_);
   }
   cv_.notify_all();
   engine_->Wake();
