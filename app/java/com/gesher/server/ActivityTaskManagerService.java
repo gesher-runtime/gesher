@@ -357,6 +357,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final List<Integer> mTaskOrder = new ArrayList<>();
     /** The activity told it is the top resumed one (onTopResumedActivityChanged), or null. */
     private ActivityRecord mTopResumed;
+
+    /** Current top application for scheduler policy; does not infer foreground from mere liveness. */
+    synchronized int topResumedUid() {
+        return mTopResumed != null && mTopResumed.app != null ? mTopResumed.app.uid : -1;
+    }
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
