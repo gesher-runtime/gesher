@@ -1,0 +1,65 @@
+name: qa-native-contract-observations
+
+on:
+  push:
+    branches: ['palmoni5/qa-native-contract-observations-20261118']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Compile isolated native observations
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SOURCE) { throw 'Source identity mismatch' }
+          New-Item -ItemType Directory -Force native-observations | Out-Null
+          $actual | Set-Content native-observations/source.txt
+          Get-FileHash tools/qa/native-contracts/observe.cc -Algorithm SHA256 | Format-List | Out-File native-observations/source-hash.txt
+          $finder = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $installation = (& $finder -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'MSVC installation unavailable' }
+          Import-Module (Join-Path $installation 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          & cl.exe /nologo /EHsc /std:c++20 /W4 /WX /O2 /MT /utf-8 tools/qa/native-contracts/observe.cc /Fenative-observations/observe.exe /Fonative-observations/observe.obj 2>&1 | Tee-Object native-observations/compile.log
+          if ($LASTEXITCODE -ne 0) { throw 'Observation executable did not compile' }
+          Get-FileHash native-observations/observe.exe -Algorithm SHA256 | Format-List | Out-File native-observations/executable-hash.txt
+      - name: Observe actual Windows boundaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host 'DIAGNOSTIC_ONLY production_backend_validated=0 android_contract_approved=0'
+          $process = Start-Process -FilePath .\native-observations\observe.exe -PassThru -RedirectStandardOutput native-observations/results.log -RedirectStandardError native-observations/errors.log
+          if (-not $process.WaitForExit(60000)) {
+            & taskkill.exe /PID $process.Id /T /F
+            Get-Content native-observations/results.log
+            Get-Content native-observations/errors.log
+            throw 'Observation process timed out; no contract approval'
+          }
+          $process.Refresh()
+          Get-Content native-observations/results.log
+          Get-Content native-observations/errors.log
+          if ($process.ExitCode -ne 0) { throw "Observation setup failed: exit $($process.ExitCode)" }
+          Write-Host 'Observation collection completed. Inspect every row; this is not production QA.'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-contract-observations-${{ matrix.os }}-${{ github.sha }}
+          path: native-observations/
+          if-no-files-found: error
