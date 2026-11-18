@@ -800,7 +800,6 @@ jobs:
             tools/ci
             tools/surface
             tools/web3
-            tools/media_capture
             tests/windows/shell
             tests/windows/graphics
             tools/toolchain
@@ -808,7 +807,6 @@ jobs:
             .github/workflows
             tools/fonts
             tools/binder
-            tools/media_capture
 
       - name: Verify PowerShell UI translations
         shell: powershell
@@ -1680,6 +1678,7 @@ jobs:
             tools/symbolize.py
             tools/boot-image
             tools/web3
+            tools/media_capture
             tools/package
             tools/windows4
             tools/net-udp

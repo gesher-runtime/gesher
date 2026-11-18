@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import unittest
@@ -98,6 +99,13 @@ class CaptureRoles(unittest.TestCase):
         path = self.dist / 'media-capture-production-role.json'; role = json.loads(path.read_text())
         role['files'].pop('media_probe.exe'); path.write_text(json.dumps(role))
         with self.assertRaises(SystemExit): roles.verify(self.dist, True)
+
+    def test_services_checkout_contains_role_verifier(self):
+        workflow = (roles.shared.ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        job = re.search(r'(?ms)^  test-shards:.*?(?=^  [a-zA-Z0-9_-]+:|\Z)', workflow).group()
+        checkout = job.split('sparse-checkout: |', 1)[1].split('\n      - ', 1)[0]
+        self.assertIn('tools/media_capture', checkout.split())
+        self.assertIn('--name media-capture-test --producer "build"', job)
 
 
 if __name__ == '__main__': unittest.main()
