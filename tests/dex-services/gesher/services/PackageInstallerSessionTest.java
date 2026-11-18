@@ -357,7 +357,7 @@ public final class PackageInstallerSessionTest {
         method(serviceClass, "attach", atmClass, installerClass).invoke(service, atm, backend);
         callbacks(service, serviceClass);
         rejected(() -> create(service, "not.the.caller", pkg), SecurityException.class);
-        PackageInstaller.SessionParams advanced = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_INHERIT_EXISTING);
+        PackageInstaller.SessionParams advanced = new PackageInstaller.SessionParams(-1);
         rejected(() -> service.createSession(advanced, pkg, null, 0), UnsupportedOperationException.class);
         PackageInstaller.SessionParams apex = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         apex.setInstallAsApex();

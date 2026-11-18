@@ -211,7 +211,9 @@ public final class SplitPackageContractTest {
         Map<String, byte[]> inputs = new LinkedHashMap<>();
         try (ZipFile zip = new ZipFile(args[0])) {
             for (String name : new String[]{"base", "core", "entry", "entry-revised", "core-major", "foreign",
-                    "base-required", "core-typed", "base-required-signed"}) {
+                    "base-required", "core-typed", "base-required-signed", "base-signed", "core-signed",
+                    "entry-signed", "entry-revised-signed", "core-typed-signed", "core-major-signed",
+                    "foreign-signed", "core-foreign-signer-signed", "core-foreign-abi-signed"}) {
                 try (java.io.InputStream in = zip.getInputStream(zip.getEntry(name + ".apk"))) {
                     inputs.put(name, in.readAllBytes());
                 }
@@ -282,6 +284,7 @@ public final class SplitPackageContractTest {
         invalidUpdates(data, inputs, good, pm, installer, install);
         cachedSourceUpdates(data, inputs);
         codeRootBoundary(data, installerType);
+        inheritedSplitSessions(data, inputs);
         System.out.println("SplitPackageContractTest all passed: " + checks + " checks");
     }
 
@@ -394,9 +397,8 @@ public final class SplitPackageContractTest {
                 "Opening the same lone base stopped preserving its installed feature set");
         metadata(pm.get(PACKAGE));
 
-        // PackageInstallerService supports MODE_FULL_INSTALL only. Its empty
-        // auxiliary metadata is still an explicit complete APK set, not an
-        // instruction to inherit the previously installed optional splits.
+        // Full session metadata is explicit even when there are no sidecars:
+        // it describes a complete set and discards unspecified optional splits.
         Class<?> metadataType = Class.forName("com.gesher.server.InstallSessionMetadata");
         Object sessionMetadata = construct(metadataType, new Class<?>[]{File.class}, source);
         Method fullInstall = method(installerType, "install", String.class, metadataType);
@@ -523,6 +525,288 @@ public final class SplitPackageContractTest {
                 "Failed missing-split session altered the installed package or its code generations");
         require(service.getSessionInfo(id) == null && jobs.isEmpty(),
                 "Failed missing-split session did not retire exactly once");
+    }
+
+    private static void inheritedSplitSessions(File parent, Map<String, byte[]> inputs) throws Exception {
+        String original = System.getenv("ANDROID_DATA");
+        File data = new File(parent, "inherit-session-device");
+        require(data.mkdir(), "Could not create inherited split fixture device");
+        android.system.Os.setenv("ANDROID_DATA", data.getPath(), true);
+        try {
+            InheritedSessions fixture = new InheritedSessions(data);
+            final int full = PackageInstaller.SessionParams.MODE_FULL_INSTALL;
+            final int inherit = PackageInstaller.SessionParams.MODE_INHERIT_EXISTING;
+            final int success = PackageInstaller.STATUS_SUCCESS;
+            final int invalid = PackageInstaller.STATUS_FAILURE_INVALID;
+
+            int missing = fixture.create(inherit, PACKAGE);
+            stage(fixture.open(missing), "base", inputs.get("base-signed"));
+            fixture.commit(missing, invalid);
+            require(fixture.pm.get(PACKAGE) == null && fixture.prompts == 0,
+                    "An inherit session without an installed target was treated as a fresh install");
+
+            int initial = fixture.create(full, PACKAGE);
+            stage(fixture.open(initial), "stream-base", inputs.get("base-signed"));
+            stage(fixture.open(initial), "stream-base.dm", splitDexMetadata());
+            stage(fixture.open(initial), "stream-core", inputs.get("core-signed"));
+            fixture.commit(initial, success);
+            ApkPackage first = fixture.pm.get(PACKAGE);
+            ApplicationInfo firstInfo = first.applicationInfo(0);
+            require(Arrays.equals(firstInfo.splitNames, new String[]{"feature.core"}),
+                    "Positive fixture did not install the signed starting cluster");
+            File saved = new File(firstInfo.dataDir, "inherited-session-state");
+            Files.writeString(saved.toPath(), "keep me");
+
+            int add = fixture.create(inherit, PACKAGE);
+            PackageInstaller.Session addSession = fixture.open(add);
+            require(fixture.service.getSessionInfo(add).getMode() == inherit,
+                    "SessionInfo did not expose the requested inherit mode");
+            stage(addSession, "arbitrary-download", inputs.get("entry-signed"));
+            stage(addSession, "arbitrary-download.dm", splitDexMetadata());
+            require(fixture.service.openSession(add).fetchPackageNames().equals(Collections.singletonList(PACKAGE)),
+                    "A staged split failed to resolve its manifest package without a staged base");
+            fixture.commit(add, success);
+            ApplicationInfo added = fixture.pm.get(PACKAGE).applicationInfo(0);
+            require(Arrays.equals(added.splitNames, new String[]{"feature.core", "feature.entry"})
+                            && !added.sourceDir.equals(firstInfo.sourceDir),
+                    "Feature addition did not carry forward the old base and feature core");
+            require(Arrays.equals(Files.readAllBytes(new File(added.sourceDir).toPath()), inputs.get("base-signed"))
+                            && Arrays.equals(Files.readAllBytes(new File(added.splitSourceDirs[0]).toPath()),
+                                    inputs.get("core-signed")),
+                    "Inherited APK contents differed from the installed generation");
+            File addedCode = new File(added.sourceDir).getParentFile();
+            require(new File(addedCode, "base.dm").isFile()
+                            && new File(addedCode, "split_feature.entry.dm").isFile(),
+                    "Staged and inherited dex metadata did not follow their APKs");
+            loadFeature(added);
+
+            int replace = fixture.create(inherit, PACKAGE);
+            stage(fixture.open(replace), "new-feature-bytes", inputs.get("entry-revised-signed"));
+            fixture.commit(replace, success);
+            ApkPackage revised = fixture.pm.get(PACKAGE);
+            ApplicationInfo revisedInfo = revised.applicationInfo(0);
+            require(Arrays.equals(revised.packageInfo(0).splitRevisionCodes, new int[]{0, 7})
+                            && !revisedInfo.splitSourceDirs[1].equals(added.splitSourceDirs[1])
+                            && Arrays.equals(Files.readAllBytes(new File(revisedInfo.splitSourceDirs[1]).toPath()),
+                                    inputs.get("entry-revised-signed")),
+                    "Replacement was selected by staging filename instead of manifest split name");
+            require(!new File(new File(revisedInfo.sourceDir).getParentFile(), "split_feature.entry.dm").exists(),
+                    "Replaced APK inherited a stale dex metadata sidecar");
+            loadFeature(revisedInfo);
+
+            int wrongRevision = PackageManager.installStatusToPublicStatus(PackageManager.INSTALL_FAILED_VERSION_DOWNGRADE);
+            for (String incompatible : new String[]{"foreign-signed", "core-major-signed", "core-foreign-signer-signed",
+                    "entry-signed", "core-foreign-abi-signed"}) {
+                int attempt = fixture.create(inherit, PACKAGE);
+                stage(fixture.open(attempt), "staged", inputs.get(incompatible));
+                int expected = incompatible.equals("entry-signed") ? wrongRevision
+                        : incompatible.equals("core-foreign-abi-signed")
+                                  ? PackageInstaller.STATUS_FAILURE_INCOMPATIBLE : invalid;
+                fixture.rejectUpdate(attempt, expected);
+            }
+            int duplicate = fixture.create(inherit, PACKAGE);
+            stage(fixture.open(duplicate), "first", inputs.get("entry-revised-signed"));
+            stage(fixture.open(duplicate), "second", inputs.get("entry-revised-signed"));
+            fixture.rejectUpdate(duplicate, invalid);
+
+            int absent = fixture.create(inherit, PACKAGE);
+            fixture.open(absent).removeSplit("feature.absent");
+            fixture.rejectUpdate(absent, invalid);
+
+            int removeDependency = fixture.create(inherit, PACKAGE);
+            fixture.open(removeDependency).removeSplit("feature.core");
+            fixture.rejectUpdate(removeDependency, invalid);
+
+            int remove = fixture.create(inherit, PACKAGE);
+            PackageInstaller.Session removal = fixture.open(remove);
+            fixture.caller.set("foreign.application");
+            try {
+                removal.removeSplit("feature.entry");
+                throw new AssertionError("Foreign caller marked a split for removal");
+            } catch (SecurityException expected) { checks++; }
+            fixture.caller.set("android");
+            try {
+                removal.removeSplit("../feature.entry");
+                throw new AssertionError("Split removal escaped the session directory");
+            } catch (IllegalArgumentException expected) { checks++; }
+            try {
+                removal.openWrite("feature.core.removed", 0, 0);
+                throw new AssertionError("A writable FD created a removal marker");
+            } catch (IllegalArgumentException expected) { checks++; }
+            removal.removeSplit("feature.entry");
+            removal.removeSplit("feature.entry");
+            require(Arrays.equals(removal.getNames(), new String[]{"feature.entry.removed"}),
+                    "A repeated removal request did not remain one marker");
+            fixture.allow = false;
+            fixture.rejectUpdate(remove, PackageInstaller.STATUS_FAILURE_ABORTED);
+            fixture.allow = true;
+
+            int storageFailure = fixture.create(inherit, PACKAGE);
+            fixture.open(storageFailure).removeSplit("feature.entry");
+            File blockedTemp = new File(data, "system/packages.list.tmp");
+            require(blockedTemp.mkdir(), "Could not inject registry write failure");
+            try {
+                fixture.rejectUpdate(storageFailure, PackageInstaller.STATUS_FAILURE_STORAGE);
+            } finally {
+                require(blockedTemp.delete(), "Registry failure injection leaked");
+            }
+
+            int eventuallyRemoved = fixture.create(inherit, PACKAGE);
+            fixture.open(eventuallyRemoved).removeSplit("feature.entry");
+            fixture.commit(eventuallyRemoved, success);
+            require(Arrays.equals(fixture.pm.get(PACKAGE).applicationInfo(0).splitNames, new String[]{"feature.core"})
+                            && fixture.pm.getActivityInfo(new ComponentName(PACKAGE, PACKAGE + ".FeatureActivity"),
+                                    0, 0) == null,
+                    "Removal-only session kept feature code or registered feature components");
+            require("keep me".equals(Files.readString(saved.toPath()))
+                            && firstInfo.uid == fixture.pm.get(PACKAGE).uid(),
+                    "Split removal replaced app data or its identity");
+            @SuppressWarnings("unchecked")
+            List<ApkPackage> reloaded = (List<ApkPackage>) method(fixture.installer.getClass(), "loadInstalled").invoke(null);
+            require(reloaded.size() == 1 && Arrays.equals(reloaded.get(0).applicationInfo(0).splitNames,
+                            new String[]{"feature.core"})
+                            && fixture.pm.get(PACKAGE).apkPath.equals(reloaded.get(0).apkPath),
+                    "Split removal failed to survive a fresh registry load");
+
+            int stale = fixture.create(inherit, PACKAGE);
+            stage(fixture.open(stale), "entry", inputs.get("entry-revised-signed"));
+            int required = fixture.create(full, PACKAGE);
+            stage(fixture.open(required), "base", inputs.get("base-required-signed"));
+            stage(fixture.open(required), "core", inputs.get("core-typed-signed"));
+            fixture.duringConsent = () -> fixture.commit(required, success);
+            fixture.commit(stale, PackageInstaller.STATUS_FAILURE_BLOCKED);
+            require(Arrays.equals(fixture.pm.get(PACKAGE).applicationInfo(0).splitNames, new String[]{"feature.core"}),
+                    "Stale approval changed the concurrently published split set");
+            int removeRequired = fixture.create(inherit, PACKAGE);
+            fixture.open(removeRequired).removeSplit("feature.core");
+            fixture.rejectUpdate(removeRequired, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE);
+        } finally {
+            android.system.Os.setenv("ANDROID_DATA", original, true);
+        }
+    }
+
+    private static byte[] splitDexMetadata() throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (ZipOutputStream output = new ZipOutputStream(bytes)) {
+            output.putNextEntry(new ZipEntry("manifest.json"));
+            output.write(("{\"packageName\":\"" + PACKAGE + "\",\"versionCode\":1}")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            output.closeEntry();
+        }
+        return bytes.toByteArray();
+    }
+
+    private static void stage(PackageInstaller.Session session, String name, byte[] bytes) throws IOException {
+        try (OutputStream output = session.openWrite(name, 0, bytes.length)) {
+            output.write(bytes);
+            session.fsync(output);
+        }
+    }
+
+    private interface ConsentChange { void run() throws Exception; }
+
+    private static final class InheritedSessions {
+        final File data;
+        final PackageManagerService pm = new PackageManagerService(Collections.emptyList());
+        final Object installer;
+        final android.content.pm.IPackageInstaller service;
+        final List<Runnable> jobs = new ArrayList<>();
+        final AtomicReference<String> caller = new AtomicReference<>("android");
+        boolean allow = true;
+        int prompts;
+        ConsentChange duringConsent;
+
+        InheritedSessions(File data) throws Exception {
+            this.data = data;
+            field(PackageManagerService.class, "mPackageEventSender").set(pm, (Consumer<android.content.Intent>) event -> {});
+            Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
+            Object atm = construct(atmType, new Class<?>[]{PackageManagerService.class}, pm);
+            Class<?> installerType = Class.forName("com.gesher.server.Installer");
+            installer = construct(installerType, new Class<?>[]{PackageManagerService.class, atmType, Map.class},
+                    pm, atm, new LinkedHashMap<>());
+            Class<?> serviceType = Class.forName("com.gesher.server.PackageInstallerService");
+            Class<?> consentType = Class.forName(serviceType.getName() + "$Consent");
+            Class<?> transportType = Class.forName("com.gesher.server.InstallFileBridge$Transport");
+            Object consent = Proxy.newProxyInstance(consentType.getClassLoader(),
+                    new Class<?>[]{consentType}, (proxy, called, values) -> {
+                        require(PACKAGE.equals(values[1]) && Long.valueOf(1).equals(values[2]),
+                                "Consent did not describe the package and inherited version");
+                        prompts++;
+                        ConsentChange change = duringConsent;
+                        duringConsent = null;
+                        if (change != null) change.run();
+                        return allow;
+                    });
+            Object transport = Proxy.newProxyInstance(transportType.getClassLoader(),
+                    new Class<?>[]{transportType}, (proxy, called, values) -> {
+                        if (called.getName().equals("create")) {
+                            return android.os.ParcelFileDescriptor.createSocketPair();
+                        }
+                        ((android.os.ParcelFileDescriptor) values[0]).close();
+                        return null;
+                    });
+            service = (android.content.pm.IPackageInstaller) construct(serviceType,
+                    new Class<?>[]{PackageManagerService.class, Executor.class, consentType, Supplier.class,
+                            transportType}, pm, (Executor) jobs::add, consent, (Supplier<String>) caller::get, transport);
+            method(serviceType, "attach", atmType, installerType).invoke(service, atm, installer);
+        }
+
+        int create(int mode, String target) throws Exception {
+            PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(mode);
+            params.setAppPackageName(target);
+            return service.createSession(params, caller.get(), null, 0);
+        }
+
+        PackageInstaller.Session open(int id) throws Exception {
+            return new PackageInstaller.Session(service.openSession(id));
+        }
+
+        void commit(int id, int expected) throws Exception {
+            AtomicReference<android.content.Intent> result = new AtomicReference<>();
+            AtomicInteger callbacks = new AtomicInteger();
+            android.content.IntentSender receiver = new android.content.IntentSender(
+                    (android.content.IIntentSender) new android.content.IIntentSender.Stub() {
+                        @Override public void send(int code, android.content.Intent intent, String type,
+                                android.os.IBinder token, android.content.IIntentReceiver finished,
+                                String permission, android.os.Bundle options) {
+                            callbacks.incrementAndGet();
+                            result.set(intent);
+                        }
+                    });
+            open(id).commit(receiver);
+            require(result.get() == null && jobs.size() == 1, "Inherited session commit was not queued");
+            jobs.remove(0).run();
+            android.content.Intent intent = result.get();
+            require(callbacks.get() == 1 && intent != null
+                            && intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) == id
+                            && intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -99) == expected,
+                    "Unexpected inherited session result for " + id + " (expected " + expected + "): "
+                            + (intent == null ? null : intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                                    + " " + intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)));
+            require(service.getSessionInfo(id) == null && jobs.isEmpty(),
+                    "Completed inherited session did not retire");
+        }
+
+        void rejectUpdate(int id, int expected) throws Exception {
+            PathSnapshot before = new PathSnapshot(data);
+            ApkPackage installed = pm.get(PACKAGE);
+            commit(id, expected);
+            require(pm.get(PACKAGE) == installed && before.unchanged(data),
+                    "Failed inherited update changed its published package, registry or code generations");
+        }
+    }
+
+    private static final class PathSnapshot {
+        private final byte[] registry;
+        private final String[] generations;
+        PathSnapshot(File data) throws IOException {
+            registry = Files.readAllBytes(new File(data, "system/packages.list").toPath());
+            generations = codeGenerations(data);
+        }
+        boolean unchanged(File data) throws IOException {
+            return Arrays.equals(registry, Files.readAllBytes(new File(data, "system/packages.list").toPath()))
+                    && Arrays.equals(generations, codeGenerations(data));
+        }
     }
 
     private static void invalidUpdates(File data, Map<String, byte[]> inputs, Map<String, byte[]> good,
