@@ -28,10 +28,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     parser.add_argument("--sanitize", action="store_true")
+    parser.add_argument("--source-ref", help="negative control for the exact production OFD implementation")
     args = parser.parse_args()
     public = (ROOT / "compat/posix/include/gesher/file_description.h").read_text()
     private = (ROOT / "compat/posix/src/ofd_internal.h").read_text()
-    implementation = (ROOT / "compat/posix/src/ofd.cc").read_text()
+    implementation = subprocess.check_output(["git", "show", args.source_ref +
+        ":compat/posix/src/ofd.cc"], cwd=ROOT, text=True) if args.source_ref else (
+        ROOT / "compat/posix/src/ofd.cc").read_text()
     spawn = (ROOT / "compat/elf/exec/exec_spawn.cc").read_text()
     begin, end = "DWORD SpawnWithFds(", "\nstd::wstring EnvironmentBlock("
     if spawn.count(begin) != 1 or spawn.count(end) != 1:

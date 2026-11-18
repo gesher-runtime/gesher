@@ -12,6 +12,7 @@
 #include <charconv>
 #include <cwchar>
 #include <fcntl.h>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -24,6 +25,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <utility>
@@ -111,6 +113,7 @@ static uint64_t next_identity = 1;
 static thread_local DWORD error;
 static int duplicate_fail_after = -1, map_error, handle_information_error;
 static int create_process_error;
+static int pipe_mode_sets;
 static bool image_transport = true;
 static size_t last_inherited_handles;
 static WORD last_startup_bytes;
@@ -288,7 +291,13 @@ static BOOL UnmapViewOfFile(const void* view) {
   host::views.erase(found);
   return TRUE;
 }
+static std::function<void()> file_type_interleave;
 static DWORD GetFileType(HANDLE handle) {
+  if (file_type_interleave) {
+    auto action = std::move(file_type_interleave);
+    file_type_interleave = {};
+    action();
+  }
   struct stat info{};
   if (fstat(host::Native(handle), &info) < 0) { SetLastError(errno); return 0; }
   return S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : S_ISCHR(info.st_mode) ? FILE_TYPE_CHAR : FILE_TYPE_DISK;
@@ -408,6 +417,7 @@ int PipeStatusFlags(HANDLE handle, int flags) {
   return native < 0 ? -1 : (flags & ~O_NONBLOCK) | (native & O_NONBLOCK);
 }
 int SetPipeNonBlocking(HANDLE handle, bool nonblocking) {
+  ++host::pipe_mode_sets;
   const int fd = host::Native(handle), flags = fcntl(fd, F_GETFL);
   return flags < 0 ? -1 : fcntl(fd, F_SETFL, nonblocking ? flags | O_NONBLOCK : flags & ~O_NONBLOCK);
 }
@@ -668,6 +678,67 @@ int main(int argc, char** argv) {
       gesher::InitializePipeDescription(gesher::CaptureDescriptor(41), O_WRONLY) == 0);
   Check("pipe read permission discovered", gesher::GetFileStatusFlags(40) == O_RDONLY);
   Check("pipe write permission discovered", gesher::GetFileStatusFlags(41) == O_WRONLY);
+  {
+    const size_t before = host::owned.size();
+    auto parent = gesher::CaptureDescriptor(40);
+    HANDLE inherited = nullptr, inherited_file = nullptr;
+    Check("duplicate shared pipe state and endpoint for a separate aware process",
+        DuplicateHandle(GetCurrentProcess(), gesher::ShareFileDescription(parent),
+            GetCurrentProcess(), &inherited, 0, FALSE, DUPLICATE_SAME_ACCESS) &&
+        DuplicateHandle(GetCurrentProcess(), parent->handle, GetCurrentProcess(),
+            &inherited_file, 0, FALSE, DUPLICATE_SAME_ACCESS));
+    auto child = std::make_shared<gesher::DescriptorSnapshot>();
+    child->handle = inherited_file;
+    child->description = std::make_shared<gesher::OpenFileDescription>();
+    Check("aware processes have distinct local mutexes and one shared pipe state",
+        child->description->Adopt(inherited) && child->description != parent->description);
+    for (int initial : {0, O_NONBLOCK}) {
+      for (int metadata : {0, O_APPEND}) {
+        Check("prepare shared endpoint interleaving", gesher::SetFileDescriptionFlags(parent, initial) == 0);
+        int competing = -1;
+        file_type_interleave = [&] {
+          competing = gesher::SetFileDescriptionFlags(parent, initial ^ O_NONBLOCK);
+        };
+        const int desired = initial | metadata;
+        const int result = gesher::SetFileDescriptionFlags(child, desired);
+        const int reported = gesher::FileDescriptionFlags(child);
+        const int native = fcntl(host::Native(child->handle), F_GETFL);
+        Check("delayed same-mode request never overwrites a completed kernel transition",
+            competing == 0 && result == 0 && (reported & (O_NONBLOCK | O_APPEND)) == desired &&
+            (native & O_NONBLOCK) == (desired & O_NONBLOCK) &&
+            gesher::FileDescriptionFlags(parent) == reported);
+      }
+      Check("prepare shared transition admission", gesher::SetFileDescriptionFlags(parent, initial) == 0);
+      int competing = -1;
+      file_type_interleave = [&] {
+        competing = gesher::SetFileDescriptionFlags(parent, initial ^ O_NONBLOCK);
+      };
+      const int calls = host::pipe_mode_sets;
+      const int result = gesher::SetFileDescriptionFlags(child, initial ^ O_NONBLOCK);
+      Check("transition re-reads flags after shared admission and avoids a duplicate native change",
+          competing == 0 && result == 0 && host::pipe_mode_sets == calls + 1);
+    }
+    Check("restore shared pipe policy after interleavings", gesher::SetFileDescriptionFlags(parent, 0) == 0);
+    std::atomic<bool> holding{false}, release{false};
+    std::thread active_io([&] {
+      host::Require(WaitForSingleObject(child->description->pipe_mutex, 0) == WAIT_OBJECT_0);
+      holding.store(true);
+      while (!release.load()) std::this_thread::yield();
+      ReleaseMutex(child->description->pipe_mutex);
+    });
+    while (!holding.load()) std::this_thread::yield();
+    Check("unchanged and metadata-only flags remain usable during endpoint I/O",
+        gesher::SetFileDescriptionFlags(parent, 0) == 0 &&
+        gesher::SetFileDescriptionFlags(parent, O_APPEND) == 0 &&
+        (gesher::FileDescriptionFlags(child) & O_APPEND) != 0);
+    Check("active endpoint still refuses a real mode transition without changing flags",
+        gesher::SetFileDescriptionFlags(parent, O_NONBLOCK) == -1 && errno == EOPNOTSUPP &&
+        (gesher::FileDescriptionFlags(child) & (O_NONBLOCK | O_APPEND)) == O_APPEND);
+    release.store(true); active_io.join();
+    Check("restore metadata after active-I/O checks", gesher::SetFileDescriptionFlags(parent, 0) == 0);
+    child.reset(); parent.reset();
+    Check("shared-state interleavings release every retained native handle", host::owned.size() == before);
+  }
   Check("stateless device kind fixture", OpenFixture("/dev/null", 42, O_RDWR) == 42 &&
       gesher::SetDescriptorKind(42, gesher::DescriptorKind::kZero) == 0);
   Check("private resource fixture", OpenFixture("private", 50) == 50 &&

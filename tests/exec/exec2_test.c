@@ -128,6 +128,19 @@ int main(int argc, char** argv) {
        line);
   }
 
+  {
+    FILE* f = popen("read value; test \"$value\" = from-parent", "w");
+    int write_ok = f != NULL && fputs("from-parent\n", f) >= 0 && fflush(f) == 0;
+    int status = f != NULL ? pclose(f) : -1;
+    ok("popen writes actual bytes to the shell read builtin",
+       write_ok && WIFEXITED(status) && WEXITSTATUS(status) == 0, "popen write/read");
+  }
+  {
+    int status = system("echo pipeline-data | { read value; test \"$value\" = pipeline-data; }");
+    ok("shell pipeline preserves bytes for the read builtin",
+       status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0, "pipeline read");
+  }
+
   // --- posix_spawn() with a file action (stdout to a pipe) -------------------
   {
     phase("spawn actions begin");

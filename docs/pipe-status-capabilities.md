@@ -25,6 +25,12 @@ transition: if its owner dies before completion, potentially stale status is
 reported as unavailable. Readiness and byte-count queries acquire admission
 without waiting and read actual `FilePipeLocalInformation`.
 
+An aware process re-reads the shared flags after obtaining transition
+admission. Unchanged-mode and metadata-only updates compare-exchange the full
+observed flags and retry if another process changed them. A delayed caller
+cannot overwrite a completed native mode change with stale metadata, while
+no-op and metadata-only updates remain usable during an admitted transfer.
+
 | App request | Behavior and explicit capability limit |
 | --- | --- |
 | Pipe `read`/`write` | Real bytes, EOF and peer errors. Blocking writes wait for actual reader progress. |
@@ -61,13 +67,24 @@ direct Win32 use bypassing that boundary is not exclusively mediated I/O.
 Known immediate nonblocking I/O executes directly. Blocking I/O also runs on
 the calling thread, without a dedicated worker or new 64 KiB stack per call.
 A Windows thread-pool wait invokes a callback only on a winpthreads
-cancellation event. It cancels the exact async request and/or pinned calling
+cancellation event or an explicitly supplied interruption event. It cancels
+the exact async request and/or pinned calling
 thread's synchronous request, retrying the pre-entry race. Every callback is
 joined before buffers, events, thread references or admission are released.
 
 Cancellation delivery is disabled internally until native retirement and
 cleanup finish. An already disabled caller gets no callback: its I/O completes
 normally and its pending cancellation remains available after reenable.
+
+Shell pipeline and `popen` creators initialize their fresh pipe descriptions
+before publication. Shell reads validate access separately from public status
+availability, then read actual bytes through the same native transfer path.
+One shell mailbox event can interrupt an idle external pipe read so its trap
+runs on the shell thread; a non-interruptible command read handles the trap
+and resumes. The event has process lifetime and is noninheritable. Each read
+retires its wait callbacks before that event is reset or its buffer is reused.
+Unknown external wait mode is never converted into invented `O_NONBLOCK`, EOF,
+or success, and no native mode query is issued behind pending pipe I/O.
 
 ## Native evidence and retained PR #68 coverage
 

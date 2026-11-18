@@ -21,7 +21,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -101,7 +103,7 @@ static inline int open(const char* p, int f, int m = 0) {
 }
 #pragma clang diagnostic pop
 
-static inline int fcntl(int fd, int /*cmd*/, int /*arg*/) {
+[[maybe_unused]] static inline int fcntl(int fd, int /*cmd*/, int /*arg*/) {
   return _dup(fd);
 }
 
@@ -152,6 +154,53 @@ static inline int ErrnoFromWin32(DWORD error) {
 // This fixture tests procfs contents and actual native access reduction. The
 // canonical OFD table is exercised by its separate production transfer suite.
 static inline int RegisterOfd(int, int) { return 0; }
+// Declared procfs boundaries, not a substitute for the production revocable
+// suite. Reopening must delegate the retained snapshot and requested flags.
+struct RevocableBoundary {
+  int fd = -1;
+  int next_result = -1;
+  int error = EACCES;
+  unsigned calls = 0;
+  int flags = 0;
+  bool retained_disk = false;
+};
+static RevocableBoundary revocable_boundary;
+static unsigned active_snapshots = 0;
+struct DescriptorSnapshot {
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  bool revocable = false;
+  DescriptorSnapshot() { ++active_snapshots; }
+  ~DescriptorSnapshot() {
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    --active_snapshots;
+  }
+};
+static std::unique_ptr<DescriptorSnapshot> CaptureDescriptor(int fd) {
+  auto snapshot = std::unique_ptr<DescriptorSnapshot>(new (std::nothrow) DescriptorSnapshot);
+  if (!snapshot) { errno = ENOMEM; return nullptr; }
+  if (!DuplicateHandle(GetCurrentProcess(), HandleFromFd(fd), GetCurrentProcess(),
+          &snapshot->handle, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+    snapshot->handle = INVALID_HANDLE_VALUE;
+    errno = ErrnoFromWin32(GetLastError());
+    return nullptr;
+  }
+  snapshot->revocable = fd == revocable_boundary.fd;
+  return snapshot;
+}
+static bool FileDescriptionIsRevocable(const std::unique_ptr<DescriptorSnapshot>& snapshot) {
+  return snapshot && snapshot->revocable;
+}
+static int ReopenRevocableFileDescription(
+    const std::unique_ptr<DescriptorSnapshot>& snapshot, int flags) {
+  ++revocable_boundary.calls;
+  revocable_boundary.flags = flags;
+  revocable_boundary.retained_disk = snapshot && snapshot->revocable &&
+      GetFileType(snapshot->handle) == FILE_TYPE_DISK;
+  if (revocable_boundary.next_result < 0) return errno = revocable_boundary.error, -1;
+  const int result = revocable_boundary.next_result;
+  revocable_boundary.next_result = -1;
+  return result;
+}
 namespace record_locks {
 static std::recursive_mutex descriptor_mutex;
 struct DescriptorGuard { std::lock_guard<std::recursive_mutex> lock{descriptor_mutex}; };
@@ -409,6 +458,75 @@ int main() {
     int n = _read(fd_online, buf, sizeof(buf));
     Check(n > 0 && buf[0] == '0', "Read from Open online CPU list valid");
     _close(fd_online);
+  }
+
+  // Hide private backing paths and delegate revocable opens and their errors.
+  // A successful boundary result is a real read-only native descriptor;
+  // revocation-group enforcement has its own production-source suite.
+  int backing = memfd_create("proc-revocable-boundary", 0);
+  Check(backing >= 0, "Create real private backing file for proc-fd delegation");
+  if (backing >= 0) {
+    constexpr char payload[] = "retained bytes";
+    Check(_write(backing, payload, sizeof(payload)) == static_cast<int>(sizeof(payload)), "Write real backing bytes");
+    Check(_lseeki64(backing, 0, SEEK_SET) == 0, "Rewind real backing bytes");
+    const std::wstring proc_fd = L"proc/self/fd/" + std::to_wstring(backing);
+    gesher::revocable_boundary = {};
+    gesher::revocable_boundary.fd = backing;
+    target.clear();
+    Check(ReadLink(proc_fd, &target), "Read revocable proc-fd link");
+    Check(target == "anon_inode:[gesher-revocable]", "Revocable link does not disclose its backing pathname");
+    Check(gesher::active_snapshots == 0, "Readlink retires its retained native snapshot");
+
+    HANDLE readonly = INVALID_HANDLE_VALUE;
+    const BOOL duplicated = DuplicateHandle(GetCurrentProcess(), gesher::HandleFromFd(backing),
+        GetCurrentProcess(), &readonly, FILE_GENERIC_READ, FALSE, 0);
+    Check(duplicated != FALSE, "Create real read-only result at revocable boundary");
+    if (duplicated) {
+      const int expected = _open_osfhandle(reinterpret_cast<intptr_t>(readonly), _O_RDONLY | _O_BINARY);
+      Check(expected >= 0, "Attach real read-only result descriptor");
+      if (expected < 0) CloseHandle(readonly);
+      else {
+        gesher::revocable_boundary.next_result = expected;
+        const int requested = O_RDONLY | O_CLOEXEC;
+        const int reopened = Open(proc_fd, requested);
+        Check(reopened == expected, "Proc-fd returns the revocable boundary's actual descriptor");
+        Check(gesher::revocable_boundary.calls == 1 && gesher::revocable_boundary.flags == requested,
+              "Proc-fd delegates exactly once with the requested flags");
+        Check(gesher::revocable_boundary.retained_disk, "Delegation retains the selected real disk handle");
+        Check(gesher::active_snapshots == 0, "Successful reopen retires its native snapshot");
+        if (reopened >= 0) {
+          char observed[sizeof(payload)]{};
+          Check(_read(reopened, observed, sizeof(observed)) == static_cast<int>(sizeof(payload)) &&
+                    std::memcmp(observed, payload, sizeof(payload)) == 0,
+                "Delegated descriptor reads the real backing bytes");
+          DWORD written = 0;
+          Check(!WriteFile(gesher::HandleFromFd(reopened), "x", 1, &written, nullptr) &&
+                    GetLastError() == ERROR_ACCESS_DENIED,
+                "Delegated descriptor retains its actual read-only access");
+          _close(reopened);
+        }
+        if (gesher::revocable_boundary.next_result >= 0) {
+          _close(gesher::revocable_boundary.next_result);
+          gesher::revocable_boundary.next_result = -1;
+        }
+      }
+    }
+    const unsigned before_error = gesher::revocable_boundary.calls;
+    gesher::revocable_boundary.error = EACCES;
+    errno = 0;
+    Check(Open(proc_fd, O_WRONLY | O_TRUNC) == -1 && errno == EACCES,
+          "Proc-fd preserves delegated access failure without reopening a pathname");
+    Check(gesher::revocable_boundary.calls == before_error + 1 &&
+              gesher::revocable_boundary.flags == (O_WRONLY | O_TRUNC),
+          "Failed reopen delegates the requested write and truncate flags exactly once");
+    Check(gesher::active_snapshots == 0, "Failed reopen retires its native snapshot");
+    errno = 0;
+    Check(Open(proc_fd, O_RDONLY | O_NOFOLLOW) == -1 && errno == ELOOP,
+          "NOFOLLOW still rejects the proc-fd symlink");
+    Check(gesher::revocable_boundary.calls == before_error + 1,
+          "NOFOLLOW rejection does not call the revocable boundary");
+    gesher::revocable_boundary = {};
+    _close(backing);
   }
 
   if (g_failed == 0) {

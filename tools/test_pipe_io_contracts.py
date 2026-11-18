@@ -22,6 +22,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'g++'))
     parser.add_argument('--sanitize', action='store_true')
+    parser.add_argument('--shell-source-ref', help='negative control for the exact shell ReadByte body')
     args = parser.parse_args()
     source = (ROOT / 'compat/posix/src/pipe_io.cc').read_text()
     first, create, after = ('namespace gesher {', 'int CreatePipeDescriptors(',
@@ -32,7 +33,15 @@ def main():
     template = (ROOT / 'tests/native/pipe_io_host_test.cc.in').read_text()
     assert template.count('@PIPE_IMPLEMENTATION@') == 1
     template = template.replace('@PIPE_IMPLEMENTATION@', implementation)
+    shell = subprocess.check_output(['git', 'show', args.shell_source_ref +
+        ':compat/elf/exec/shell_execute.inc'], cwd=ROOT, text=True) if args.shell_source_ref else (
+        ROOT / 'compat/elf/exec/shell_execute.inc').read_text()
+    marker = 'int ReadByte(Shell* sh, Io io, HANDLE input, char* value, bool interruptible) {'
+    assert shell.count(marker) == 1 and template.count('@SHELL_READ_BYTE@') == 1
+    shell_read = shell[shell.index(marker):]
+    template = template.replace('@SHELL_READ_BYTE@', shell_read)
     print('Production pipe I/O SHA256', hashlib.sha256(implementation.encode()).hexdigest(), flush=True)
+    print('Production shell ReadByte SHA256', hashlib.sha256(shell_read.encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix='gesher-pipe-io-') as temporary:
         folder = Path(temporary)
         cpp, binary = folder / 'pipe.cc', folder / 'pipe'

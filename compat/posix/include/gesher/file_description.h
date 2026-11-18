@@ -65,6 +65,11 @@ class NativeFileDescriptionExport {
 // Raw-handle consumers such as the shell retain this snapshot and use the
 // same I/O policy as descriptor callers, including shared status and devices.
 int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count);
+// Real pipe input with an additional borrowed manual-reset interruption event.
+// The event remains alive until this call returns; native cancellation retires
+// before returning EINTR, so the caller may run its handler on its own thread.
+int ReadPipeDescriptionInterruptible(const DescriptorSnapshotPtr& snapshot, void* bytes,
+                                     unsigned count, HANDLE interrupted);
 int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count);
 // Linux pwrite policy (including O_APPEND) while retaining the shared cursor.
 int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,

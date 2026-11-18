@@ -274,6 +274,69 @@ static void DisabledCancellation() {
 }
 
 #ifdef _WIN32
+struct NativeInterruptedRead {
+  gesher::DescriptorSnapshotPtr snapshot;
+  HANDLE interrupted;
+  std::atomic<bool> entered{false};
+  int result = 0, error = 0;
+};
+static void* ReadNativeInterrupted(void* raw) {
+  auto* state = static_cast<NativeInterruptedRead*>(raw);
+  state->entered.store(true);
+  char byte;
+  state->result = gesher::ReadPipeDescriptionInterruptible(state->snapshot, &byte, 1, state->interrupted);
+  state->error = errno;
+  return nullptr;
+}
+static void ExternalInterruption() {
+  Phase("external-pipe-signal-interruption-and-retirement");
+  HANDLE reader = nullptr, writer = nullptr;
+  if (!CreatePipe(&reader, &writer, nullptr, 0)) { Check("raw external pipe created", false); return; }
+  auto snapshot = gesher::CaptureFileHandle(reader);
+  HANDLE interrupted = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!snapshot || !interrupted) {
+    Check("external pipe snapshot and signal event created", false);
+    if (interrupted) CloseHandle(interrupted);
+    CloseHandle(reader); CloseHandle(writer); return;
+  }
+  Check("native pipe public flags remain unknown", gesher::FileDescriptionFlags(snapshot) == -1 && errno == EOPNOTSUPP);
+  DWORD put = 0;
+  char byte = 0;
+  Check("unknown external pipe still yields its real queued byte", WriteFile(writer, "s", 1, &put, nullptr) && put == 1 &&
+      gesher::ReadPipeDescriptionInterruptible(snapshot, &byte, 1, interrupted) == 1 && byte == 's');
+  SetEvent(interrupted);
+  Check("already pending shell event wins before native entry",
+      gesher::ReadPipeDescriptionInterruptible(snapshot, &byte, 1, interrupted) == -1 && errno == EINTR);
+  DWORD handles_before = 0, handles_after = 0;
+  for (int iteration = 0; iteration != 9; ++iteration) {
+    ResetEvent(interrupted);
+    NativeInterruptedRead state{snapshot, interrupted};
+    pthread_t caller;
+    const bool started = pthread_create(&caller, nullptr, ReadNativeInterrupted, &state) == 0;
+    Check("external interruptible reader starts", started);
+    if (!started) break;
+    while (!state.entered.load()) Pause();
+    BOOL pending = FALSE;
+    for (int retry = 0; retry != 2000 && !pending; ++retry) {
+      if (!GetThreadIOPendingFlag(static_cast<HANDLE>(pthread_gethandle(caller)), &pending)) break;
+      if (!pending) Pause();
+    }
+    Check("external reader reached actual pending native I/O", pending != FALSE);
+    Check("external signal event can interrupt the reader", SetEvent(interrupted) != 0);
+    Check("external interruption reports EINTR after joining native callbacks",
+        pthread_join(caller, nullptr) == 0 && state.result == -1 && state.error == EINTR);
+    if (!iteration) GetProcessHandleCount(GetCurrentProcess(), &handles_before);
+    if (!pending) break;
+  }
+  GetProcessHandleCount(GetCurrentProcess(), &handles_after);
+  Check("external interruption retains no per-read native handles", handles_after == handles_before);
+  ResetEvent(interrupted);
+  CloseHandle(writer);
+  Check("external interrupted endpoint later reports real EOF",
+      gesher::ReadPipeDescriptionInterruptible(snapshot, &byte, 1, interrupted) == 0);
+  snapshot.reset(); CloseHandle(reader); CloseHandle(interrupted);
+}
+
 static void NativeReopenEvidence() {
   Phase("native-ReOpenFile-observations");
   for (int endpoint = 0; endpoint != 2; ++endpoint) {
@@ -318,6 +381,7 @@ int main() {
   // Capture independent native observations before any blocking regression
   // can time out. These observations never waive the public assertions.
   NativeReopenEvidence();
+  ExternalInterruption();
 #endif
   Admission();
   BlockingCompletion();

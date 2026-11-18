@@ -673,8 +673,12 @@ int ExecNode(Shell* sh, const NodeP& node, Io io) {
               status = 1;
               break;
             }
-            reader = std::make_shared<OwnedHandle>(read_end);
-            writer = std::make_shared<OwnedHandle>(write_end);
+            reader = std::make_shared<OwnedHandle>(read_end, -1, O_RDONLY);
+            writer = std::make_shared<OwnedHandle>(write_end, -1, O_WRONLY);
+            if (reader->h == INVALID_HANDLE_VALUE || writer->h == INVALID_HANDLE_VALUE) {
+              status = 1;
+              break;
+            }
             stage.set(1, writer->h, writer);
           }
           PROCESS_INFORMATION child = {};
@@ -751,36 +755,30 @@ int RunPendingSignals(Shell* sh, Io io) {
   return caught;
 }
 
-// ProcessBuilder and shell pipeline input are synchronous Win32 pipes. Do not
-// block in ReadFile with no data: mailbox traps must run on the shell thread.
-// Return one byte, EOF, or minus the caught signal for an interruptible read.
+// Pipe reads keep their real native wait policy. The mailbox event interrupts
+// a pending operation so traps still run on the shell thread. Return one byte,
+// EOF, or minus the caught signal for an interruptible read.
 int ReadByte(Shell* sh, Io io, HANDLE input, char* value, bool interruptible) {
   auto description = gesher::CaptureFileHandle(input);
   if (!description) return -256;  // An I/O error, distinct from a caught signal.
-  int flags = gesher::FileDescriptionFlags(description);
+  int flags = gesher::FileDescriptionIoFlags(description);
   if (flags < 0) return -256;
   if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) { errno = EBADF; return -256; }
+  const bool pipe = GetFileType(description->handle) == FILE_TYPE_PIPE;
+  HANDLE interrupted = pipe ? PipeSignalEvent() : nullptr;
+  if (pipe && !interrupted) { errno = ErrnoFromWin32(GetLastError()); return -256; }
   for (;;) {
+    // Reset before draining the mailbox. A signal arriving after the drain
+    // sets the event and cancels a pending native read, including its entry race.
+    if (interrupted && !ResetEvent(interrupted)) {
+      errno = ErrnoFromWin32(GetLastError());
+      return -256;
+    }
     int caught = RunPendingSignals(sh, io);
     if (sh->exiting) return 0;
     if (caught && interruptible) return -caught;
-    if (GetFileType(description->handle) == FILE_TYPE_PIPE) {
-      DWORD available = 0;
-      if (!PeekNamedPipe(description->handle, nullptr, 0, nullptr, &available, nullptr)) {
-        if (GetLastError() == ERROR_BROKEN_PIPE) return 0;
-        errno = ErrnoFromWin32(GetLastError());
-        return -256;
-      }
-      if (!available) {
-        if ((gesher::FileDescriptionFlags(description) & O_NONBLOCK) != 0) {
-          errno = EAGAIN;
-          return -256;
-        }
-        Sleep(10);
-        continue;
-      }
-    }
-    int count = gesher::ReadFileDescription(description, value, 1);
+    int count = pipe ? gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)
+                     : gesher::ReadFileDescription(description, value, 1);
     if (count < 0 && errno == EINTR) continue;
     return count < 0 ? -256 : count;
   }

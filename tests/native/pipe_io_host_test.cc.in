@@ -55,6 +55,7 @@ constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_ABANDONED = 128, WAIT_TIMEOUT = 258,
 constexpr DWORD PIPE_READMODE_BYTE = 0, PIPE_WAIT = 0, PIPE_NOWAIT = 1;
 static thread_local DWORD last_error;
 static std::atomic<int> live_handles{0}, live_waits{0}, created_waits{0}, cancel_calls{0}, queries{0};
+static int wait_failure_after = -1;
 static void (*before_io)(HANDLE, bool);
 static DWORD GetLastError() { return last_error; }
 static void Sleep(DWORD milliseconds) {
@@ -147,6 +148,19 @@ static BOOL CloseHandle(HANDLE handle) {
   if (!handle->allocated) std::abort();
   --live_handles; delete handle; return TRUE;
 }
+[[maybe_unused]] static BOOL ResetEvent(HANDLE event) { event->signaled.store(false); return TRUE; }
+static BOOL SetEvent(HANDLE event) { event->signaled.store(true); return TRUE; }
+constexpr DWORD FILE_TYPE_PIPE = 3;
+static DWORD GetFileType(HANDLE file) { return file && file->kind == Kind::File ? FILE_TYPE_PIPE : 0; }
+// Kept for the unchanged-head shell negative control.
+[[maybe_unused]] static BOOL PeekNamedPipe(HANDLE file, void*, DWORD, DWORD*, DWORD* available, DWORD*) {
+  int count = 0;
+  if (ioctl(file->fd, FIONREAD, &count) < 0) { last_error = errno; return FALSE; }
+  pollfd descriptor{file->fd, POLLIN, 0};
+  if (poll(&descriptor, 1, 0) < 0) { last_error = errno; return FALSE; }
+  if (!count && (descriptor.revents & POLLHUP)) { last_error = ERROR_BROKEN_PIPE; return FALSE; }
+  *available = static_cast<DWORD>(count); return TRUE;
+}
 static BOOL GetOverlappedResult(HANDLE, OVERLAPPED*, DWORD*, BOOL) { std::abort(); }
 static BOOL CancelIoEx(HANDLE, OVERLAPPED*) { return FALSE; } // This boundary models synchronous Linux calls.
 static BOOL CancelSynchronousIo(HANDLE thread) {
@@ -164,6 +178,7 @@ struct ThreadpoolWait {
   std::thread watcher;
 };
 static PTP_WAIT CreateThreadpoolWait(WaitCallback callback, void* context, void*) {
+  if (wait_failure_after >= 0 && wait_failure_after-- == 0) { last_error = ENOMEM; return nullptr; }
   auto* wait = new ThreadpoolWait{callback, context, {}, {}};
   ++live_waits; ++created_waits; return wait;
 }
@@ -215,13 +230,50 @@ struct OpenFileDescription {
   bool KnownPipeStatus() const { return known; }
   int Flags() const { return flags; }
 };
-struct DescriptorSnapshot { HANDLE handle; std::shared_ptr<OpenFileDescription> description; };
+enum class DescriptorKind { kFile, kUnshareable };
+struct DescriptorSnapshot {
+  HANDLE handle;
+  std::shared_ptr<OpenFileDescription> description;
+  DescriptorKind kind = DescriptorKind::kFile;
+};
 using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
 static int ErrnoFromWin32(DWORD error) { return static_cast<int>(error); }
 static int FailWithLastError() { return errno = static_cast<int>(GetLastError()), -1; }
+static int FileDescriptionIoFlags(const DescriptorSnapshotPtr& snapshot) {
+  return snapshot ? snapshot->description->Flags() : (errno = EBADF, -1);
+}
+[[maybe_unused]] static int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
+  return snapshot && snapshot->description->KnownPipeStatus() && snapshot->description->OwnedPipe()
+      ? snapshot->description->Flags() : (errno = EOPNOTSUPP, -1);
+}
+static DescriptorSnapshotPtr shell_input;
+static DescriptorSnapshotPtr CaptureFileHandle(HANDLE handle) {
+  if (shell_input && shell_input->handle == handle) return shell_input;
+  errno = EBADF; return {};
+}
+static int ReadFileDescription(const DescriptorSnapshotPtr&, void*, unsigned) {
+  std::abort();  // This declared shell boundary supplies pipes only.
+}
 }
 
 @PIPE_IMPLEMENTATION@
+
+namespace shell_test {
+struct Shell {
+  bool exiting = false;
+  std::atomic<int> pending{0}, delivered{0};
+};
+struct Io {};
+static Handle signal_event;
+[[maybe_unused]] static HANDLE PipeSignalEvent() { signal_event.kind = Kind::Event; return &signal_event; }
+static int RunPendingSignals(Shell* shell, Io) {
+  int signal = shell->pending.exchange(0);
+  if (signal) ++shell->delivered;
+  return signal;
+}
+using gesher::ErrnoFromWin32;
+@SHELL_READ_BYTE@
+}
 
 static int checks, failures;
 static void Check(const char* name, bool ok) {
@@ -269,6 +321,101 @@ static int Mode(const gesher::DescriptorSnapshotPtr& snapshot, bool nonblocking)
   auto& flags = snapshot->description->flags;
   flags = nonblocking ? flags | O_NONBLOCK : flags & ~O_NONBLOCK;
   return 0;
+}
+
+static void ShellPipeContracts() {
+  int descriptors[2];
+  Require("shell external pipe created", pipe(descriptors) == 0);
+  Handle reader, writer; reader.fd = descriptors[0]; writer.fd = descriptors[1];
+  auto input = Snapshot(reader, O_RDONLY);
+  input->description->owned = false; input->description->known = false;
+  gesher::shell_input = input;
+  shell_test::Shell shell;
+  char byte = 0;
+  Check("external public pipe flags remain unavailable",
+      gesher::FileDescriptionFlags(input) == -1 && errno == EOPNOTSUPP);
+  Require("external shell input has real queued bytes", write(writer.fd, "q", 1) == 1);
+  const int first = shell_test::ReadByte(&shell, {}, &reader, &byte, true);
+  Check("shell reads real external bytes despite unavailable public status", first == 1 && byte == 'q');
+  if (first != 1 || byte != 'q') {
+    gesher::shell_input.reset(); CloseHandle(&reader); CloseHandle(&writer); return;
+  }
+  Require("external native endpoint becomes nonblocking", fcntl(reader.fd, F_SETFL, O_NONBLOCK) == 0);
+  Check("external native nonblocking empty read reports actual EAGAIN",
+      shell_test::ReadByte(&shell, {}, &reader, &byte, true) == -256 && errno == EAGAIN);
+  input->description->flags = O_WRONLY;
+  Check("shell rejects actual write-only access before reading",
+      shell_test::ReadByte(&shell, {}, &reader, &byte, true) == -256 && errno == EBADF);
+  input->description->flags = O_RDONLY;
+  input->kind = gesher::DescriptorKind::kUnshareable;
+  Check("shell does not read an unsupported logical resource as native pipe",
+      shell_test::ReadByte(&shell, {}, &reader, &byte, true) == -256 && errno == EOPNOTSUPP);
+  input->kind = gesher::DescriptorKind::kFile;
+  Require("external native endpoint becomes blocking", fcntl(reader.fd, F_SETFL, 0) == 0);
+
+  for (bool entry_race : {false, true}) {
+    std::atomic<bool> returned{false};
+    int result = 0;
+    shell.pending.store(0); shell.delivered.store(0);
+    if (entry_race) {
+      entering.store(false); release_entry.store(false); before_io = DelayEntry;
+    }
+    std::thread caller([&] {
+      result = shell_test::ReadByte(&shell, {}, &reader, &byte, true);
+      returned.store(true);
+    });
+    Await("external shell reader enters a real or entry-race read", [&] {
+      return entry_race ? entering.load() : reader.active.load();
+    });
+    const int before = cancel_calls.load();
+    shell.pending.store(10); SetEvent(&shell_test::signal_event);
+    if (entry_race) {
+      Await("shell interruption retries the native entry race", [&] { return cancel_calls.load() >= before + 3; });
+      release_entry.store(true);
+    }
+    Await("external idle shell read wakes for a mailbox trap", [&] { return returned.load(); });
+    caller.join();
+    Check("shell trap runs once and returns its signal after native retirement",
+        result == -10 && shell.delivered.load() == 1 && live_waits.load() == 0 && live_handles.load() == 0);
+  }
+  {
+    std::atomic<bool> returned{false};
+    shell.pending.store(0); shell.delivered.store(0);
+    int result = 0;
+    std::thread caller([&] {
+      result = shell_test::ReadByte(&shell, {}, &reader, &byte, false);
+      returned.store(true);
+    });
+    Await("non-interruptible shell input enters real read", [&] { return reader.active.load(); });
+    shell.pending.store(12); SetEvent(&shell_test::signal_event);
+    Await("non-interruptible shell input still executes its trap", [&] { return shell.delivered.load() == 1; });
+    Require("real byte follows the handled trap", write(writer.fd, "r", 1) == 1);
+    Await("shell input resumes after its handled trap", [&] { return returned.load(); });
+    caller.join();
+    Check("handled trap does not fabricate EOF or consume replacement input", result == 1 && byte == 'r');
+  }
+  const int waits_before = created_waits.load();
+  shell.pending.store(15); SetEvent(&shell_test::signal_event);
+  Check("queued shell trap is delivered before entering native I/O",
+      shell_test::ReadByte(&shell, {}, &reader, &byte, true) == -15 && created_waits.load() == waits_before);
+  wait_failure_after = 1;
+  Check("second wait allocation failure propagates and retires the first wait",
+      shell_test::ReadByte(&shell, {}, &reader, &byte, true) == -256 && errno == ENOMEM &&
+      live_waits.load() == 0 && live_handles.load() == 0);
+  wait_failure_after = -1;
+  input->description->owned = true; input->description->known = true;
+  Require("owned shell endpoint has real nonblocking mode", Mode(input, true) == 0);
+  const int immediate_waits = created_waits.load();
+  Check("owned nonblocking shell input uses the actual immediate path",
+      shell_test::ReadByte(&shell, {}, &reader, &byte, true) == -256 && errno == EAGAIN &&
+      created_waits.load() == immediate_waits);
+  input->description->owned = false; input->description->known = false;
+  CloseHandle(&writer);
+  Check("external shell input reports EOF from the real last writer",
+      shell_test::ReadByte(&shell, {}, &reader, &byte, true) == 0);
+  Check("shell transfers release every per-operation wait and handle",
+      live_waits.load() == 0 && live_handles.load() == 0);
+  gesher::shell_input.reset(); CloseHandle(&reader);
 }
 int main() {
   struct sigaction action{}; action.sa_handler = +[](int) {}; sigemptyset(&action.sa_mask);
@@ -375,6 +522,7 @@ int main() {
   Check("empty closed read pipe reports HUP only", gesher::PollPipeHandle(r, POLLIN, &ready) == 0 && ready == POLLHUP);
   Check("all per-operation resources retired", live_waits.load() == 0 && live_handles.load() == 0);
   CloseHandle(&alias); CloseHandle(&reader);
+  ShellPipeContracts();
   std::printf("Production pipe I/O: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

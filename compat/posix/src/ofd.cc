@@ -642,47 +642,67 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
   auto& description = *snapshot->description;
   const HANDLE file = snapshot->handle;
   std::lock_guard<std::mutex> lock(description.mutex);
-  const int old_flags = description.Flags();
-  if ((old_flags & O_PATH) != 0) return errno = EBADF, -1;
-  const DWORD type = GetFileType(file);
-  if (type == FILE_TYPE_PIPE && !description.KnownPipeStatus()) return errno = EOPNOTSUPP, -1;
-  // A raw native handle can already be unbuffered. Preserve that real mode;
-  // this backend cannot change buffering on an existing FILE_OBJECT.
-  if (((arg ^ old_flags) & O_DIRECT) != 0) return errno = EINVAL, -1;
-  if (type == FILE_TYPE_DISK && (old_flags & O_APPEND) != 0 && (arg & O_APPEND) == 0) {
-    uint32_t access = 0;
-    int error = record_locks::HandleAccess(file, &access);
-    if (error) return errno = error, -1;
-    if ((access & FILE_APPEND_DATA) != 0 && (access & FILE_WRITE_DATA) == 0) return errno = EPERM, -1;
-  }
-  // Timestamp suppression and SIGIO delivery have no implementation here.
-  // Failure is preferable to claiming a flag whose effect never occurs.
-  if (((arg ^ old_flags) & O_NOATIME) != 0) return errno = EOPNOTSUPP, -1;
-  if (type == FILE_TYPE_PIPE && ((arg ^ old_flags) & O_ASYNC) != 0) return errno = EOPNOTSUPP, -1;
-  int flags = (old_flags & ~kModifiableStatusFlags) | (arg & kModifiableStatusFlags);
-  // A normal Linux file has no fasync callback: this bit stays unchanged.
-  if (type == FILE_TYPE_DISK) flags = (flags & ~O_ASYNC) | (old_flags & O_ASYNC);
-  if (type == FILE_TYPE_PIPE && ((flags ^ old_flags) & O_NONBLOCK) != 0) {
-    // Never queue a mode query/change behind a pending synchronous transfer,
-    // including one in another runtime process. NPFS can also reject an idle
-    // transition while bytes remain buffered; retain the old flags on failure.
-    DWORD wait = WaitForSingleObject(description.pipe_mutex, 0);
-    if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED)
-      return wait == WAIT_TIMEOUT ? (errno = EOPNOTSUPP, -1) : FailWithLastError();
-    if (!description.KnownPipeStatus()) {
-      ReleaseMutex(description.pipe_mutex);
-      return errno = EOPNOTSUPP, -1;
+  for (;;) {
+    const int old_flags = description.Flags();
+    if ((old_flags & O_PATH) != 0) return errno = EBADF, -1;
+    const DWORD type = GetFileType(file);
+    if (type == FILE_TYPE_PIPE && !description.KnownPipeStatus()) return errno = EOPNOTSUPP, -1;
+    // A raw native handle can already be unbuffered. Preserve that real mode;
+    // this backend cannot change buffering on an existing FILE_OBJECT.
+    if (((arg ^ old_flags) & O_DIRECT) != 0) return errno = EINVAL, -1;
+    if (type == FILE_TYPE_DISK && (old_flags & O_APPEND) != 0 && (arg & O_APPEND) == 0) {
+      uint32_t access = 0;
+      int error = record_locks::HandleAccess(file, &access);
+      if (error) return errno = error, -1;
+      if ((access & FILE_APPEND_DATA) != 0 && (access & FILE_WRITE_DATA) == 0) return errno = EPERM, -1;
     }
-    description.PipeTransition(true);
-    int result = SetPipeNonBlocking(file, (flags & O_NONBLOCK) != 0);
-    const int error = errno;
-    if (result == 0) description.SetFlags(flags);
-    description.PipeTransition(false);
-    ReleaseMutex(description.pipe_mutex);
-    return result == 0 ? 0 : (errno = error, -1);
+    // Timestamp suppression and SIGIO delivery have no implementation here.
+    // Failure is preferable to claiming a flag whose effect never occurs.
+    if (((arg ^ old_flags) & O_NOATIME) != 0) return errno = EOPNOTSUPP, -1;
+    if (type == FILE_TYPE_PIPE && ((arg ^ old_flags) & O_ASYNC) != 0) return errno = EOPNOTSUPP, -1;
+    int flags = (old_flags & ~kModifiableStatusFlags) | (arg & kModifiableStatusFlags);
+    // A normal Linux file has no fasync callback: this bit stays unchanged.
+    if (type == FILE_TYPE_DISK) flags = (flags & ~O_ASYNC) | (old_flags & O_ASYNC);
+    if (type == FILE_TYPE_PIPE && ((flags ^ old_flags) & O_NONBLOCK) != 0) {
+      // Never queue a mode query/change behind a pending synchronous transfer,
+      // including one in another runtime process. NPFS can also reject an idle
+      // transition while bytes remain buffered; retain the old flags on failure.
+      DWORD wait = WaitForSingleObject(description.pipe_mutex, 0);
+      if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED)
+        return wait == WAIT_TIMEOUT ? (errno = EOPNOTSUPP, -1) : FailWithLastError();
+      if (!description.KnownPipeStatus()) {
+        ReleaseMutex(description.pipe_mutex);
+        return errno = EOPNOTSUPP, -1;
+      }
+      // Another aware process has its own description.mutex. It may have
+      // completed a transition before this shared endpoint admission succeeded.
+      const int current_flags = description.Flags();
+      flags = (current_flags & ~kModifiableStatusFlags) | (arg & kModifiableStatusFlags);
+      if (((flags ^ current_flags) & O_NONBLOCK) == 0) {
+        description.SetFlags(flags);
+        ReleaseMutex(description.pipe_mutex);
+        return 0;
+      }
+      description.PipeTransition(true);
+      int result = SetPipeNonBlocking(file, (flags & O_NONBLOCK) != 0);
+      const int error = errno;
+      if (result == 0) description.SetFlags(flags);
+      description.PipeTransition(false);
+      ReleaseMutex(description.pipe_mutex);
+      return result == 0 ? 0 : (errno = error, -1);
+    }
+    if (type == FILE_TYPE_PIPE) {
+      // No wait-mode change is needed, so keep no-op/metadata updates usable
+      // during active I/O. Never publish a stale mode after another process
+      // changed the native endpoint; retry against its complete current flags.
+      auto* shared = description.shared.load(std::memory_order_acquire);
+      if (InterlockedCompareExchange(&shared->flags, static_cast<LONG>(flags),
+                                      static_cast<LONG>(old_flags)) != old_flags) continue;
+      return 0;
+    }
+    description.SetFlags(flags);
+    return 0;
   }
-  description.SetFlags(flags);
-  return 0;
 }
 int ValidateNativeFileDescription(const DescriptorSnapshotPtr& snapshot) {
   int flags = FileDescriptionIoFlags(snapshot);

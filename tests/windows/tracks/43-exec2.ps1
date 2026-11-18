@@ -21,12 +21,14 @@ Check 'exec2: native processes from native code (system, popen, posix_spawn, sig
   & "$Dir/gesher-exec.exe" --elf $driver 'libexec2test.so' (NoDrive $child)
 } @('exec2: PASS system runs the shell and returns its status',
     'exec2: PASS popen reads a command''s output',
+    'exec2: PASS popen writes actual bytes to the shell read builtin',
+    'exec2: PASS shell pipeline preserves bytes for the read builtin',
     'exec2: PASS posix_spawn with a dup2 file action, output captured',
     'exec2: PASS waitpid decodes an exit code',
     'exec2: PASS kill() to another process runs its SIGUSR1 and SIGTERM handlers',
     'exec2: PASS signal 0 finds a running process',
     'exec2: PASS SIGKILL ends a process (WIFSIGNALED)',
-    'exec2: SUMMARY pass=8 fail=0')
+    'exec2: SUMMARY pass=10 fail=0')
 
 # exec*() outside a fork replaces the image: the launcher process exits with the
 # child's status (17).

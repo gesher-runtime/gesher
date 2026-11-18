@@ -299,38 +299,51 @@ void* BIONIC_SYSV Popen(const char* command, const char* mode) {
     CloseHandle(parent_end);
     return errno = error, nullptr;
   }
-  std::vector<ex::ChildFd> fds;
-  if (!InheritedFds(&fds)) {
+  auto child_description = gesher::CaptureFileHandle(child_end);
+  auto parent_description = gesher::CaptureFileHandle(parent_end);
+  int fd = -1;
+  if (!child_description || !parent_description ||
+      gesher::InitializePipeDescription(child_description, read ? O_WRONLY : O_RDONLY) < 0 ||
+      gesher::InitializePipeDescription(parent_description, read ? O_RDONLY : O_WRONLY) < 0 ||
+      (fd = gesher::AttachFileDescription(parent_description, true)) < 0) {
     int error = errno;
     CloseHandle(child_end);
     CloseHandle(parent_end);
     return errno = error, nullptr;
   }
+  CloseHandle(parent_end);
+  parent_description.reset();
+  std::vector<ex::ChildFd> fds;
+  if (!InheritedFds(&fds)) {
+    int error = errno;
+    CloseHandle(child_end);
+    ::close(fd);
+    return errno = error, nullptr;
+  }
   // Replace the child's stdout (read) or stdin (write) with the pipe.
   int target = read ? 1 : 0;
   for (auto& f : fds) {
-    if (f.fd == target) f = {target, child_end};
+    if (f.fd == target) f = {target, child_description->handle, child_description};
   }
   bool found = false;
   for (auto& f : fds) found = found || f.fd == target;
-  if (!found) fds.push_back({target, child_end});
+  if (!found) fds.push_back({target, child_description->handle, child_description});
   std::vector<std::string> argv{"/system/bin/sh", "-c", command};
   int pid = SpawnProgram("/system/bin/sh", argv, CurrentEnv(), CurrentDir(), false, fds);
   fds.clear();
   CloseHandle(child_end);
+  child_description.reset();
   if (pid < 0) {
-    CloseHandle(parent_end);
-    return nullptr;
-  }
-  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(parent_end),
-                           (read ? _O_RDONLY : _O_WRONLY) | _O_BINARY | _O_NOINHERIT);
-  if (fd < 0) {
-    CloseHandle(parent_end);
+    int error = errno;
+    ::close(fd);
+    errno = error;
     return nullptr;
   }
   FILE* f = _fdopen(fd, read ? "rb" : "wb");
   if (f == nullptr) {
-    _close(fd);
+    int error = errno;
+    ::close(fd);
+    errno = error;
     return nullptr;
   }
   std::lock_guard<std::mutex> lock(g_popen_mutex);

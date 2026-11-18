@@ -33,12 +33,13 @@ class PipeAdmission {
  public:
   ~PipeAdmission() { if (mutex_) ReleaseMutex(mutex_); }
   int Acquire(const DescriptorSnapshotPtr& snapshot, bool waiting, HANDLE canceled = nullptr,
-              bool nonblocking_io = false, bool require_known = true) {
+              bool nonblocking_io = false, bool require_known = true, HANDLE interrupted = nullptr) {
     auto& description = *snapshot->description;
     if (!description.OwnedPipe() || (require_known && !description.KnownPipeStatus()))
       return errno = EOPNOTSUPP, -1;
     for (;;) {
       if (canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
+      if (interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
       DWORD wait = WaitForSingleObject(description.pipe_mutex, waiting ? 10 : 0);
       if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
         mutex_ = description.pipe_mutex;
@@ -57,14 +58,15 @@ class PipeAdmission {
 struct NativePipeOperation {
   HANDLE file = nullptr, thread = nullptr;
   OVERLAPPED overlapped{};
-  PTP_WAIT wait = nullptr;
+  PTP_WAIT wait = nullptr, interrupt_wait = nullptr;
   std::atomic<bool> active{true};
   ~NativePipeOperation() {
     active.store(false, std::memory_order_release);
-    if (wait) {
-      SetThreadpoolWait(wait, nullptr, nullptr);
-      WaitForThreadpoolWaitCallbacks(wait, TRUE);
-      CloseThreadpoolWait(wait);
+    for (PTP_WAIT callback : {wait, interrupt_wait}) {
+      if (!callback) continue;
+      SetThreadpoolWait(callback, nullptr, nullptr);
+      WaitForThreadpoolWaitCallbacks(callback, TRUE);
+      CloseThreadpoolWait(callback);
     }
     if (thread) CloseHandle(thread);
     if (overlapped.hEvent) CloseHandle(overlapped.hEvent);
@@ -94,7 +96,7 @@ int CompletePipeIo(BOOL done, DWORD transferred, DWORD error, bool writing) {
   return errno = ErrnoFromWin32(error), -1;
 }
 int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
-                       bool immediate, HANDLE canceled) {
+                       bool immediate, HANDLE canceled, HANDLE interrupted) {
   DWORD transferred = 0;
   if (immediate) {
     const BOOL done = writing ? WriteFile(file, bytes, count, &transferred, nullptr)
@@ -105,12 +107,19 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
   operation.file = file;
   operation.overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!operation.overlapped.hEvent) return FailWithLastError();
-  if (canceled) {
+  if (canceled || interrupted) {
     if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
           &operation.thread, THREAD_TERMINATE, FALSE, 0)) return FailWithLastError();
-    operation.wait = CreateThreadpoolWait(CancelNativePipe, &operation, nullptr);
-    if (!operation.wait) return FailWithLastError();
-    SetThreadpoolWait(operation.wait, canceled, nullptr);
+    if (canceled) {
+      operation.wait = CreateThreadpoolWait(CancelNativePipe, &operation, nullptr);
+      if (!operation.wait) return FailWithLastError();
+      SetThreadpoolWait(operation.wait, canceled, nullptr);
+    }
+    if (interrupted && interrupted != canceled) {
+      operation.interrupt_wait = CreateThreadpoolWait(CancelNativePipe, &operation, nullptr);
+      if (!operation.interrupt_wait) return FailWithLastError();
+      SetThreadpoolWait(operation.interrupt_wait, interrupted, nullptr);
+    }
   }
   // A valid, unique OVERLAPPED is legal for synchronous handles too. It also
   // lets an external asynchronous pipe complete without relying on UCRT's
@@ -194,14 +203,15 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
 
 namespace {
 int TransferPipeBody(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count,
-                     bool writing, HANDLE canceled) {
+                     bool writing, HANDLE canceled, HANDLE interrupted) {
   if (canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
+  if (interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
   auto& description = *snapshot->description;
   PipeAdmission admission;
   bool immediate = false;
   if (description.OwnedPipe()) {
     const bool nonblocking = description.KnownPipeStatus() && (description.Flags() & O_NONBLOCK) != 0;
-    if (admission.Acquire(snapshot, !nonblocking, canceled, nonblocking, false) < 0) return -1;
+    if (admission.Acquire(snapshot, !nonblocking, canceled, nonblocking, false, interrupted) < 0) return -1;
     immediate = description.KnownPipeStatus() && (description.Flags() & O_NONBLOCK) != 0;
     if (writing && immediate && count > 4096) {
       FILE_PIPE_LOCAL_INFORMATION info{};
@@ -212,11 +222,12 @@ int TransferPipeBody(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigne
       count = std::min(count, amount);
     }
   }
-  return NativePipeTransfer(snapshot->handle, bytes, count, writing, immediate, canceled);
+  return NativePipeTransfer(snapshot->handle, bytes, count, writing, immediate, canceled, interrupted);
 }
 }
 
-int TransferPipe(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count, bool writing) {
+static int TransferPipeWithInterrupt(const DescriptorSnapshotPtr& snapshot, void* bytes,
+                                      unsigned count, bool writing, HANDLE interrupted) {
   if (!count) return 0;
   if (!bytes) return errno = EFAULT, -1;
   // winpthreads cancellation uses longjmp. Defer delivery until every native
@@ -228,12 +239,26 @@ int TransferPipe(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned co
   HANDLE canceled = previous == PTHREAD_CANCEL_ENABLE ? static_cast<HANDLE>(pthread_getevent()) : nullptr;
   int result;
   if (previous == PTHREAD_CANCEL_ENABLE && !canceled) result = (errno = ENOMEM, -1);
-  else result = TransferPipeBody(snapshot, bytes, count, writing, canceled);
+  else result = TransferPipeBody(snapshot, bytes, count, writing, canceled, interrupted);
   const int saved = errno;
   pthread_setcancelstate(previous, nullptr);
   pthread_testcancel();
   errno = saved;
   return result;
+}
+
+int TransferPipe(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count, bool writing) {
+  return TransferPipeWithInterrupt(snapshot, bytes, count, writing, nullptr);
+}
+
+int ReadPipeDescriptionInterruptible(const DescriptorSnapshotPtr& snapshot, void* bytes,
+                                     unsigned count, HANDLE interrupted) {
+  const int flags = FileDescriptionIoFlags(snapshot);
+  if (flags < 0) return -1;
+  if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) return errno = EBADF, -1;
+  if (snapshot->kind != DescriptorKind::kFile || GetFileType(snapshot->handle) != FILE_TYPE_PIPE)
+    return errno = EOPNOTSUPP, -1;
+  return TransferPipeWithInterrupt(snapshot, bytes, std::min(count, 0x7ffff000u), false, interrupted);
 }
 
 int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* ready) {
