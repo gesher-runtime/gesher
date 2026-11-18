@@ -89,6 +89,7 @@ class Recorder {
   void ReleasePipeline();
   void Clear();
   void RequestStop(StopReason reason, std::string error = {});
+  void RequestStopLocked(StopReason reason, std::string error);
   bool ShouldDrain();
   void CompleteWorker();
   void AudioLoop();

@@ -332,6 +332,15 @@ class Mp4Muxer : public Muxer {
       }
       return true;
     }
+    if (t.type != TrackType::kMetadata && !t.times.empty() && time_us > t.times.back()) {
+      // stts stores each duration in 32 bits. Reject an unrepresentable gap
+      // before writing a sample or converting its timestamp arithmetic.
+      constexpr uint64_t kMaxScaledUs = (uint64_t{UINT32_MAX} + 1) * 1000000 - 1;
+      if (ElapsedUs(time_us, t.times.back()) > kMaxScaledUs / t.timescale) {
+        *error = "MPEG-4: sample duration exceeds the sample-table range";
+        return false;
+      }
+    }
     std::vector<uint8_t> converted;
     const size_t old_csd_count = t.csd.size();
     const uint64_t old_entry_size = t.sample_entry_bytes;
@@ -418,8 +427,10 @@ class Mp4Muxer : public Muxer {
       return static_cast<uint32_t>(MetadataTicks(ElapsedUs(after, t.times.front())) -
                                    MetadataTicks(ElapsedUs(before, t.times.front())));
     }
-    const int64_t delta = after - before;
-    const uint32_t duration = delta > 0 ? static_cast<uint32_t>(delta * t.timescale / 1000000) : 1;
+    // WriteSample has checked representability. Unsigned elapsed time also
+    // covers a negative first timestamp without overflowing signed subtraction.
+    const uint32_t duration = after > before ? static_cast<uint32_t>(
+        ScaleTicks(ElapsedUs(after, before), 1000000, t.timescale, false)) : 1;
     return std::max<uint32_t>(duration, 1);
   }
 

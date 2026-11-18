@@ -280,17 +280,20 @@ bool Recorder::Resume(std::string* error, bool* invalid_state) {
     if (!running_) return true;
     if (!paused_) return true;
     restart_failed = capture_ != nullptr && capture_->Start() != kOk;
-    if (!restart_failed) {
+    if (restart_failed) {
+      error_state_ = true;
+      const std::string message = "audio capture restart failed";
+      if (error != nullptr) *error = message;
+      // Finalization can read the terminal reason as soon as both workers
+      // have exited. Publish this failure before either can reach it.
+      RequestStopLocked(StopReason::kError, message);
+    } else {
       resume_at_us_ = NowUs();
       paused_total_us_ += resume_at_us_ - pause_at_us_;
       paused_ = false;
     }
   }
   if (restart_failed) {
-    error_state_ = true;
-    const std::string message = "audio capture restart failed";
-    if (error != nullptr) *error = message;
-    RequestStop(StopReason::kError, message);
     if (audio_thread_.joinable()) audio_thread_.join();
     if (video_thread_.joinable()) video_thread_.join();
     return false;
@@ -307,20 +310,22 @@ bool Recorder::HasAudioInput() {
 }
 
 void Recorder::RequestStop(StopReason reason, std::string error) {
-  {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (stop_reason_ == StopReason::kError ||
-        (stop_reason_ != StopReason::kNone && reason != StopReason::kError)) return;
-    stop_reason_ = reason;
-    stop_error_ = std::move(error);
-    if (running_) {
-      stop_requested_us_ = NowUs();
-      pending_at_stop_ = frames_.size();
-    }
-    running_ = false;
-    if (reason == StopReason::kSize || reason == StopReason::kError) frames_.clear();
-    if (capture_ != nullptr) capture_->Stop();
+  std::lock_guard<std::mutex> lock(mu_);
+  RequestStopLocked(reason, std::move(error));
+}
+
+void Recorder::RequestStopLocked(StopReason reason, std::string error) {
+  if (stop_reason_ == StopReason::kError ||
+      (stop_reason_ != StopReason::kNone && reason != StopReason::kError)) return;
+  stop_reason_ = reason;
+  stop_error_ = std::move(error);
+  if (running_) {
+    stop_requested_us_ = NowUs();
+    pending_at_stop_ = frames_.size();
   }
+  running_ = false;
+  if (reason == StopReason::kSize || reason == StopReason::kError) frames_.clear();
+  if (capture_ != nullptr) capture_->Stop();
   cv_.notify_all();
 }
 
