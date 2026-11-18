@@ -1,8 +1,7 @@
 name: ci
 
 on:
-  push:
-    branches: [main]
+  # Temporarily pause CI on main pushes; restore push: branches: [main] to resume.
   pull_request:
   workflow_dispatch:
     inputs:
@@ -43,11 +42,14 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/workflows
+            .github/actions/runner-route
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Label approval, fork and exact-head QA contracts
         run: node --test .github/scripts/label-automerge.test.js
+      - name: Owner-only runner routing and source ancestry contracts
+        run: node --test .github/actions/runner-route/route.test.cjs
       - name: Workflow coverage and failure propagation
         run: |
           python3 -m pip install PyYAML==6.0.3
@@ -125,6 +127,7 @@ jobs:
           python3 -m unittest discover -s tools/ci -p test_source_identity.py
           python3 -m unittest discover -s tools/ci -p test_workflow_actor_metadata.py
           python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
+          python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p test_github_read.py
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
@@ -262,6 +265,7 @@ jobs:
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
           python3 tools/test_directory_rename_contracts.py --sanitize
+          python3 -m unittest discover -s tools/tests -p test_sqlite_source_download.py
           python3 tools/test_sqlite_paths.py --fetch --sanitize --negative-control
           python3 tools/test_media_source_contracts.py --sanitize
           python3 tools/test_media_callback_state.py --sanitize
@@ -325,6 +329,7 @@ jobs:
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
           python3 tools/test_install_metadata_comparison.py --java-home "$JAVA_HOME"
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
+          python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
 
@@ -663,7 +668,10 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     needs: [artifact-preflight]
-    uses: ./.github/workflows/framework.yml
+    # This immutable policy, not PR-controlled workflow YAML, may use the runner.
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7
+    with:
+      local-runner: true
 
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
