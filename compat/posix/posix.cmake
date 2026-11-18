@@ -88,6 +88,10 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_stdio_output_anchor_v1)
 # GNU scanf's parser uses public getc/ungetc; retain one stream lock around
 # its complete conversion sequence, including ANSI-mode assembly aliases.
 target_link_options(gesher_posix INTERFACE -Wl,--wrap=__mingw_vfscanf -Wl,--wrap=__mingw_vfwscanf)
+# The __real_ calls alone do not extract the original parser members from the
+# pinned MinGW archive with lld's COFF --wrap handling. Retain both actual
+# parsers; otherwise a successful link can leave a call to its next instruction.
+target_link_options(gesher_posix INTERFACE -Wl,-u,__mingw_vfscanf -Wl,-u,__mingw_vfwscanf)
 # posix_memalign() memory goes to free()/realloc() (src/memalign.cc).
 target_link_options(gesher_posix INTERFACE -Wl,--wrap=free -Wl,--wrap=realloc)
 target_include_directories(gesher_posix BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)

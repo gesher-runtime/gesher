@@ -69,10 +69,10 @@ $env:TEMP = $fixtureDir
 $env:TMP = $fixtureDir
 Push-Location -LiteralPath $fixtureDir
 try {
+    [void](Run-Owned 'stdio-ofd' 60000 (Join-Path $Dir 'stdio_ofd_test.exe') @() 0 'stdio OFD contracts: [1-9][0-9]* checks, 0 failures')
     [void](Run-Owned 'pipe-kernel' 45000 (Join-Path $Dir 'pipe_kernel_test.exe') @() 0 'pipe kernel contracts: [1-9][0-9]* checks, 0 failures')
     [void](Run-Owned 'pipe-process' 45000 (Join-Path $Dir 'pipe_native_process_test.exe') @() 0 'pipe native process contracts: [1-9][0-9]* checks, 0 failures')
     [void](Run-Owned 'file-flags' 45000 (Join-Path $Dir 'file_flags_ofd_test.exe') @() 0 'file_flags_ofd_test: [1-9][0-9]* assertions, 0 failures')
-    [void](Run-Owned 'stdio-ofd' 60000 (Join-Path $Dir 'stdio_ofd_test.exe') @() 0 'stdio OFD contracts: [1-9][0-9]* checks, 0 failures')
 } finally {
     Pop-Location
     $env:TEMP = $savedTemp

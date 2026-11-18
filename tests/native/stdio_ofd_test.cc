@@ -15,6 +15,27 @@ static void check(const char* name, int ok) {
 #include "stdio_cancel_contract.inc"
 static FILE* exit_stream;
 static void ExitOutput() { fputs("late", exit_stream); }
+// Exercise the wide real parser too: the shared corpus already executes the
+// narrow parser, but wide output alone cannot qualify vfwscanf's final link.
+static void WideScanner() {
+  char path[] = "gesher-stdio-wide-scan-XXXXXX";
+  int fd = mkstemp(path);
+  check("wide scanner fixture opens", fd >= 0);
+  if (fd < 0) return;
+  bool supplied = write(fd, "42 done!", 8) == 8 && lseek(fd, 0, SEEK_SET) == 0;
+  FILE* stream = fdopen(fd, "r");
+  check("wide scanner wraps the supplied descriptor", stream != nullptr);
+  if (stream) {
+    int value = -1;
+    wchar_t word[5] = {};
+    check("wide scanner reads real formatted input", supplied &&
+          fwscanf(stream, L"%d %4ls", &value, word) == 2 && value == 42 && wcscmp(word, L"done") == 0);
+    check("wide scanner leaves unconsumed input", fgetwc(stream) == L'!');
+    check("wide scanner EOF is not an I/O error", fgetwc(stream) == WEOF && feof(stream) && !ferror(stream));
+    check("wide scanner closes its descriptor", fclose(stream) == 0 && fcntl(fd, F_GETFD) == -1 && errno == EBADF);
+  } else close(fd);
+  unlink(path);
+}
 // Native CRT FILE tokens reach the lazy stream-registration path. A real
 // external pipe has usable access rights even though its unmediated wait mode
 // cannot be truthfully returned by F_GETFL.
@@ -60,6 +81,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   test_stdio_ofd_contracts();
+  WideScanner();
   test_stdio_virtual_contracts();
   test_stdio_cancel_contracts();
   ExternalPipeStreams();
