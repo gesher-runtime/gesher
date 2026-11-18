@@ -25,7 +25,9 @@ import com.android.internal.pm.pkg.component.ParsedActivityImpl;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.time.Instant;
 import java.time.LocalTime;
@@ -39,6 +41,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import sun.misc.Unsafe;
 
 /** AOSP-derived assertions on production policy, persistence and ATM transaction selection. */
@@ -71,7 +74,46 @@ public final class UiModeFixture {
         return constructor.newInstance(values);
     }
     private static void invoke(Object value, String name, Class<?>[] signature, Object... values) throws Exception {
-        Method method = value.getClass().getDeclaredMethod(name, signature); method.setAccessible(true); method.invoke(value, values);
+        call(value.getClass(), value, name, signature, values);
+    }
+    private static Object call(Class<?> owner, Object value, String name, Class<?>[] signature,
+            Object... values) throws Exception {
+        Method method = owner.getDeclaredMethod(name, signature); method.setAccessible(true);
+        try { return method.invoke(value, values); }
+        catch (InvocationTargetException failure) {
+            if (failure.getCause() instanceof Error error) throw error;
+            if (failure.getCause() instanceof Exception cause) throw cause;
+            throw new AssertionError(failure.getCause());
+        }
+    }
+    private static Class<?> uiType(String name) throws Exception {
+        return Class.forName("com.gesher.server.UiModeManagerService$" + name);
+    }
+    // ART defines production classes on the boot class path, while this fixture
+    // comes from services-tests.dex. Reflect on nonpublic test boundaries instead
+    // of relying on a matching package name or widening the production API.
+    private static UiModeManagerService service(PackageManagerService pm, ActivityTaskManagerService atm,
+            Source source, File file, String standalone, Consumer<String> changed) throws Exception {
+        Class<?> sourceType = uiType("Source");
+        return (UiModeManagerService) construct(UiModeManagerService.class,
+                new Class<?>[]{PackageManagerService.class, ActivityTaskManagerService.class, sourceType,
+                        File.class, String.class, Consumer.class},
+                pm, atm, source.bridge(sourceType), file, standalone, changed);
+    }
+    private static void refresh(UiModeManagerService service) throws Exception {
+        invoke(service, "refreshEnvironment", new Class<?>[]{});
+    }
+    private static boolean between(LocalTime now, LocalTime start, LocalTime end) throws Exception {
+        return (Boolean) call(UiModeManagerService.class, null, "between",
+                new Class<?>[]{LocalTime.class, LocalTime.class, LocalTime.class}, now, start, end);
+    }
+    private static String enabledStateOwner(ApkPackage pkg) throws Exception {
+        return (String) call(ApkPackage.class, pkg, "enabledStateOwner", new Class<?>[]{});
+    }
+    private static void onUiModeChanged(String name) {
+        try { call(LocaleManagerService.class, null, "onUiModeChanged", new Class<?>[]{String.class}, name); }
+        catch (RuntimeException | Error failure) { throw failure; }
+        catch (Exception failure) { throw new AssertionError("Cannot dispatch UiMode configuration", failure); }
     }
     private static Class<?> nested(String name) throws Exception {
         return Class.forName("com.gesher.server.ActivityTaskManagerService$" + name);
@@ -93,22 +135,39 @@ public final class UiModeFixture {
         set(result, "sharedLibraries", field(Class.forName("com.gesher.server.SharedLibraryGraph"), "EMPTY").get(null));
         return result;
     }
-    private static final class Source implements UiModeManagerService.Source {
+    private record Twilight(boolean night, long nextChange) { }
+    private static final class Source {
         volatile long time = Instant.parse("2026-11-17T12:00:00Z").toEpochMilli();
         volatile ZoneId zone = ZoneId.of("UTC");
         volatile int theme = 1, display = WindowsHost.DISPLAY_STATE_ON;
         volatile boolean power, closed;
-        volatile UiModeManagerService.Twilight twilight;
+        volatile Twilight twilight;
         final AtomicInteger events = new AtomicInteger();
         Runnable changed;
-        @Override public long now() { return time; }
-        @Override public ZoneId zone() { return zone; }
-        @Override public int takeEvents() { return events.getAndSet(0); }
-        @Override public UiModeManagerService.Environment read(boolean needsTwilight) {
-            return new UiModeManagerService.Environment(theme, display, power, needsTwilight ? twilight : null);
+        Object read(boolean needsTwilight) throws Exception {
+            Twilight observed = needsTwilight ? twilight : null;
+            Class<?> twilightType = uiType("Twilight");
+            Object value = observed == null ? null : construct(twilightType,
+                    new Class<?>[]{boolean.class, long.class}, observed.night(), observed.nextChange());
+            return construct(uiType("Environment"),
+                    new Class<?>[]{int.class, int.class, Boolean.class, twilightType}, theme, display, power, value);
         }
-        @Override public void listen(Runnable listener) { changed = listener; }
-        @Override public void close() { closed = true; changed = null; }
+        Object bridge(Class<?> sourceType) {
+            // A nonpublic interface's proxy must be defined by its owning loader.
+            return Proxy.newProxyInstance(sourceType.getClassLoader(), new Class<?>[]{sourceType},
+                    (proxy, method, args) -> switch (method.getName()) {
+                        case "now" -> time;
+                        case "zone" -> zone;
+                        case "takeEvents" -> events.getAndSet(0);
+                        case "read" -> read((Boolean) args[0]);
+                        case "listen" -> { changed = (Runnable) args[0]; yield null; }
+                        case "close" -> { closed = true; changed = null; yield null; }
+                        case "equals" -> proxy == args[0];
+                        case "hashCode" -> System.identityHashCode(proxy);
+                        case "toString" -> "UiMode fixture source";
+                        default -> throw new AssertionError("Unexpected source method: " + method);
+                    });
+        }
         void at(String time) { this.time = Instant.parse(time).toEpochMilli(); }
     }
     private static final class RecordingThread extends IApplicationThread.Default {
@@ -139,9 +198,13 @@ public final class UiModeFixture {
     }
     private static final class Harness {
         final ApkPackage a = pkg(A, 12345), b = pkg(B, 12345), c = pkg(C, 12346);
-        final PackageManagerService pm = new PackageManagerService(List.of(a, b, c), false);
-        final ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
-        final ActivityManagerService am = new ActivityManagerService(atm, pm, null);
+        final PackageManagerService pm = (PackageManagerService) construct(PackageManagerService.class,
+                new Class<?>[]{java.util.Collection.class, boolean.class}, List.of(a, b, c), false);
+        final ActivityTaskManagerService atm = (ActivityTaskManagerService) construct(ActivityTaskManagerService.class,
+                new Class<?>[]{PackageManagerService.class}, pm);
+        final ActivityManagerService am = (ActivityManagerService) construct(ActivityManagerService.class,
+                new Class<?>[]{ActivityTaskManagerService.class, PackageManagerService.class,
+                        Class.forName("com.gesher.server.NotificationManagerService")}, atm, pm, null);
         final Source source = new Source();
         final File file;
         final UiModeManagerService service;
@@ -150,10 +213,12 @@ public final class UiModeFixture {
         final List<String> dispatches = new ArrayList<>();
         Harness(boolean binder, File state) throws Exception {
             file = state;
-            new LocaleManagerService(am, atm, pm);
-            service = new UiModeManagerService(pm, atm, source, file, null, name -> {
+            construct(LocaleManagerService.class,
+                    new Class<?>[]{ActivityManagerService.class, ActivityTaskManagerService.class, PackageManagerService.class},
+                    am, atm, pm);
+            service = service(pm, atm, source, file, null, name -> {
                 synchronized (dispatches) { dispatches.add(name); }
-                LocaleManagerService.onUiModeChanged(name);
+                onUiModeChanged(name);
             });
             api = binder ? IUiModeManager.Stub.asInterface(remote(StandIn.of(IUiModeManager.class, service).asBinder())) : service;
             appA = process(a); appB = process(b); appC = process(c);
@@ -187,7 +252,7 @@ public final class UiModeFixture {
             invoke(atm, "attach", new Class<?>[]{type, nested("ProcessRecord")}, record, app.record);
             return record;
         }
-        void refresh() { service.refreshEnvironment(); }
+        void refresh() throws Exception { UiModeFixture.refresh(service); }
         int night(String name) { return LocaleManagerService.configurationFor(name).uiMode & UI_MODE_NIGHT_MASK; }
         int global() { return UiModeManagerService.getUiModeNight(); }
         void clear() { appA.thread.clear(); appB.thread.clear(); appC.thread.clear(); dispatches.clear(); }
@@ -226,7 +291,7 @@ public final class UiModeFixture {
         source.zone = ZoneId.of(zone); source.at(before);
         source.display = WindowsHost.DISPLAY_STATE_OFF;
         CountDownLatch applied = new CountDownLatch(1);
-        try (UiModeManagerService service = new UiModeManagerService(pm, atm, source, null, null, ignored -> {
+        try (UiModeManagerService service = service(pm, atm, source, null, null, ignored -> {
             if (UiModeManagerService.getUiModeNight() == expected) applied.countDown();
         })) {
             IUiModeManager api = api(service, binder);
@@ -255,9 +320,9 @@ public final class UiModeFixture {
         Files.createDirectory(parent.toPath());
         File file = new File(parent, "policy.properties");
         Source source = new Source(); source.display = WindowsHost.DISPLAY_STATE_OFF;
-        source.twilight = new UiModeManagerService.Twilight(false, source.time + 60_000);
+        source.twilight = new Twilight(false, source.time + 60_000);
         AtomicInteger dispatches = new AtomicInteger();
-        try (UiModeManagerService service = new UiModeManagerService(pm, atm, source, file, null,
+        try (UiModeManagerService service = service(pm, atm, source, file, null,
                 ignored -> dispatches.incrementAndGet())) {
             IUiModeManager api = api(service, binder);
             if (mode == MODE_NIGHT_CUSTOM) api.setNightModeCustomType(custom); else api.setNightMode(mode);
@@ -289,24 +354,24 @@ public final class UiModeFixture {
                 if (mode == MODE_NIGHT_AUTO || mode == MODE_NIGHT_CUSTOM && custom == MODE_NIGHT_CUSTOM_TYPE_SCHEDULE) {
                     source.display = WindowsHost.DISPLAY_STATE_ON;
                     source.at("2026-11-17T23:00:00Z");
-                    source.twilight = new UiModeManagerService.Twilight(true, source.time + 60_000);
-                    service.refreshEnvironment();
+                    source.twilight = new Twilight(true, source.time + 60_000);
+                    refresh(service);
                     check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
                             "Unavailable storage bypassed interactive automatic deferral");
                     source.display = WindowsHost.DISPLAY_STATE_OFF;
-                    service.refreshEnvironment();
+                    refresh(service);
                     check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
                             "Ordinary automatic night transition depended on policy storage");
                     source.at("2026-11-18T12:00:00Z");
-                    source.twilight = new UiModeManagerService.Twilight(false, source.time + 60_000);
-                    service.refreshEnvironment();
+                    source.twilight = new Twilight(false, source.time + 60_000);
+                    refresh(service);
                     check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
                             "Ordinary automatic day transition depended on policy storage");
                 }
             } finally { restoreStore(parent, backup); }
             check(java.util.Arrays.equals(durable, Files.readAllBytes(file.toPath())),
                     "A transient update rewrote unrelated durable policy");
-            service.refreshEnvironment();
+            refresh(service);
             check(api.getNightMode(0) == mode && UiModeManagerService.getUiModeNight() == initial,
                     "Storage recovery committed a previously rejected request");
         }
@@ -318,8 +383,8 @@ public final class UiModeFixture {
         Files.createDirectory(parent.toPath());
         File file = new File(parent, "policy.properties");
         Source source = new Source(); source.display = WindowsHost.DISPLAY_STATE_OFF;
-        source.twilight = new UiModeManagerService.Twilight(false, source.time + 60_000);
-        try (UiModeManagerService service = new UiModeManagerService(pm, atm, source, file, null, ignored -> {})) {
+        source.twilight = new Twilight(false, source.time + 60_000);
+        try (UiModeManagerService service = service(pm, atm, source, file, null, ignored -> {})) {
             IUiModeManager api = api(service, binder);
             api.setNightMode(mode); awaitWorker(service);
             check(api.setNightModeActivated(true), "Could not establish a durable automatic override");
@@ -327,19 +392,19 @@ public final class UiModeFixture {
             blockStore(parent, backup);
             try {
                 source.at("2026-11-17T23:00:00Z");
-                source.twilight = new UiModeManagerService.Twilight(true, source.time + 60_000);
-                service.refreshEnvironment();
+                source.twilight = new Twilight(true, source.time + 60_000);
+                refresh(service);
                 if (attention) api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_OFF);
                 check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES
                                 && api.getAttentionModeThemeOverlay() == MODE_ATTENTION_THEME_OVERLAY_OFF,
                         "A derived override reset failed to publish when its cache write failed");
                 source.at("2026-11-18T12:00:00Z");
-                source.twilight = new UiModeManagerService.Twilight(false, source.time + 60_000);
-                service.refreshEnvironment();
+                source.twilight = new Twilight(false, source.time + 60_000);
+                refresh(service);
                 check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
                         "Failed storage retained an obsolete automatic override in memory");
             } finally { restoreStore(parent, backup); }
-            service.refreshEnvironment();
+            refresh(service);
             check(saved(file).getProperty("overrideOn").equals("false")
                             && saved(file).getProperty("overrideOff").equals("false"),
                     "Storage recovery did not save the pending derived override reset");
@@ -349,9 +414,9 @@ public final class UiModeFixture {
     private static void attentionWait(boolean binder, PackageManagerService pm,
             ActivityTaskManagerService atm, int mode) throws Exception {
         Source source = new Source();
-        source.twilight = new UiModeManagerService.Twilight(false, source.time + 60_000);
+        source.twilight = new Twilight(false, source.time + 60_000);
         AtomicInteger dispatches = new AtomicInteger();
-        try (UiModeManagerService service = new UiModeManagerService(pm, atm, source, null, null,
+        try (UiModeManagerService service = service(pm, atm, source, null, null,
                 ignored -> dispatches.incrementAndGet())) {
             IUiModeManager api = api(service, binder);
             api.setNightMode(MODE_NIGHT_NO); api.setNightMode(mode); awaitWorker(service);
@@ -360,20 +425,20 @@ public final class UiModeFixture {
             check(api.getAttentionModeThemeOverlay() == MODE_ATTENTION_THEME_OVERLAY_NIGHT
                             && UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO && dispatches.get() == calls,
                     "Attention bypassed an automatic selection's pending inactive-device wait");
-            source.display = WindowsHost.DISPLAY_STATE_DIMMED; service.refreshEnvironment();
+            source.display = WindowsHost.DISPLAY_STATE_DIMMED; refresh(service);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO, "Dimmed display released an attention wait");
-            source.display = WindowsHost.DISPLAY_STATE_UNKNOWN; service.refreshEnvironment();
+            source.display = WindowsHost.DISPLAY_STATE_UNKNOWN; refresh(service);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO, "Unknown display released an attention wait");
             source.display = WindowsHost.DISPLAY_STATE_ON;
-            source.power = true; service.refreshEnvironment();
+            source.power = true; refresh(service);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES, "Battery saver did not bypass pending publication");
             api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_DAY);
-            source.power = false; service.refreshEnvironment();
+            source.power = false; refresh(service);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
                     "Battery-saver publication incorrectly cleared the existing wait");
-            source.display = WindowsHost.DISPLAY_STATE_OFF; service.refreshEnvironment();
+            source.display = WindowsHost.DISPLAY_STATE_OFF; refresh(service);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO, "Display-off did not release pending attention");
-            source.display = WindowsHost.DISPLAY_STATE_ON; service.refreshEnvironment();
+            source.display = WindowsHost.DISPLAY_STATE_ON; refresh(service);
             api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
                     "Interactive attention was deferred with no pending wait");
@@ -389,27 +454,27 @@ public final class UiModeFixture {
                     "Explicit activation retained an obsolete attention wait");
             api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_OFF);
             source.at("2026-11-17T23:00:00Z");
-            source.twilight = new UiModeManagerService.Twilight(true, source.time + 60_000);
-            service.refreshEnvironment();
+            source.twilight = new Twilight(true, source.time + 60_000);
+            refresh(service);
             api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
                     "An observed automatic transition did not rearm the inactive-device wait");
-            source.display = WindowsHost.DISPLAY_STATE_OFF; service.refreshEnvironment();
+            source.display = WindowsHost.DISPLAY_STATE_OFF; refresh(service);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
                     "Display-off did not publish the automatic transition's pending overlay");
-            source.display = WindowsHost.DISPLAY_STATE_ON; service.refreshEnvironment();
+            source.display = WindowsHost.DISPLAY_STATE_ON; refresh(service);
             api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_DAY);
             check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
                     "An unchanged display-on observation recreated a released wait");
             if (mode == MODE_NIGHT_CUSTOM) {
-                source.events.set(WindowsHost.EVENT_TIME_CHANGED); service.refreshEnvironment();
+                source.events.set(WindowsHost.EVENT_TIME_CHANGED); refresh(service);
                 api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_NIGHT);
                 check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
                         "A real clock-change event did not retain custom-mode deferral");
-                source.display = WindowsHost.DISPLAY_STATE_OFF; service.refreshEnvironment();
+                source.display = WindowsHost.DISPLAY_STATE_OFF; refresh(service);
                 check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
                         "Clock-change wait did not release at display-off");
-                source.display = WindowsHost.DISPLAY_STATE_ON; service.refreshEnvironment();
+                source.display = WindowsHost.DISPLAY_STATE_ON; refresh(service);
             }
             api.setNightMode(MODE_NIGHT_NO); api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_OFF);
             api.setNightMode(mode); awaitWorker(service);
@@ -425,7 +490,7 @@ public final class UiModeFixture {
 
     private static void observe(Source source, boolean night, int day) {
         source.at("2026-11-" + day + (night ? "T23:00:00Z" : "T12:00:00Z"));
-        source.twilight = new UiModeManagerService.Twilight(night, source.time + 86_400_000);
+        source.twilight = new Twilight(night, source.time + 86_400_000);
     }
     private static void deferredOverride(boolean binder, PackageManagerService pm,
             ActivityTaskManagerService atm, File directory, int mode, boolean active, String update) throws Exception {
@@ -436,17 +501,17 @@ public final class UiModeFixture {
         int manual = active ? UI_MODE_NIGHT_YES : UI_MODE_NIGHT_NO;
         int expected = update.equals("none") || update.equals("steady-power") ? manual
                 : active ? UI_MODE_NIGHT_NO : UI_MODE_NIGHT_YES;
-        try (UiModeManagerService service = new UiModeManagerService(pm, atm, source, file, null, ignored -> {})) {
+        try (UiModeManagerService service = service(pm, atm, source, file, null, ignored -> {})) {
             IUiModeManager api = api(service, binder);
             api.setNightMode(mode); awaitWorker(service);
             check(api.setNightModeActivated(active) && UiModeManagerService.getUiModeNight() == manual,
                     "Manual override setup failed: " + description);
             byte[] selected = Files.readAllBytes(file.toPath());
             if (update.equals("steady-power")) {
-                source.power = true; service.refreshEnvironment();
+                source.power = true; refresh(service);
             }
             source.display = WindowsHost.DISPLAY_STATE_ON;
-            observe(source, active, 18); service.refreshEnvironment();
+            observe(source, active, 18); refresh(service);
             check(java.util.Arrays.equals(selected, Files.readAllBytes(file.toPath())),
                     "Deferred catch-up retired the saved override: " + description);
             check((boolean) get(get(service, "mState"), "computed") == active,
@@ -461,21 +526,21 @@ public final class UiModeFixture {
                         "Attention failed to recompute policy while a wait was pending: " + description);
                 api.setAttentionModeThemeOverlay(MODE_ATTENTION_THEME_OVERLAY_OFF);
             } else if (update.equals("power-change")) {
-                source.power = true; service.refreshEnvironment();
-                source.power = false; service.refreshEnvironment();
+                source.power = true; refresh(service);
+                source.power = false; refresh(service);
             }
-            observe(source, !active, 19); service.refreshEnvironment();
+            observe(source, !active, 19); refresh(service);
             if (update.equals("none") || update.equals("steady-power")) {
                 check(java.util.Arrays.equals(selected, Files.readAllBytes(file.toPath()))
                                 && (boolean) get(get(service, "mState"), "computed") == active,
                         "Deferred return observation changed the override or computed cache: " + description);
             }
             if (update.equals("steady-power")) {
-                source.power = false; service.refreshEnvironment();
+                source.power = false; refresh(service);
                 check(UiModeManagerService.getUiModeNight() == manual,
                         "Automatic callbacks recomputed merely because power saver was already active: " + description);
             }
-            source.display = WindowsHost.DISPLAY_STATE_OFF; service.refreshEnvironment();
+            source.display = WindowsHost.DISPLAY_STATE_OFF; refresh(service);
             check(UiModeManagerService.getUiModeNight() == expected,
                     "Inactivity evaluated the wrong retained override: " + description);
         }
@@ -488,14 +553,17 @@ public final class UiModeFixture {
     /** Host child process leaves this service live so the production shutdown hook must save it. */
     public static void prepareShutdown(File file) throws Exception {
         Source source = new Source(); source.display = WindowsHost.DISPLAY_STATE_OFF;
-        source.twilight = new UiModeManagerService.Twilight(false, source.time + 60_000);
-        PackageManagerService pm = new PackageManagerService(List.of(), false);
-        UiModeManagerService service = new UiModeManagerService(pm, new ActivityTaskManagerService(pm),
+        source.twilight = new Twilight(false, source.time + 60_000);
+        PackageManagerService pm = (PackageManagerService) construct(PackageManagerService.class,
+                new Class<?>[]{java.util.Collection.class, boolean.class}, List.of(), false);
+        ActivityTaskManagerService atm = (ActivityTaskManagerService) construct(ActivityTaskManagerService.class,
+                new Class<?>[]{PackageManagerService.class}, pm);
+        UiModeManagerService service = service(pm, atm,
                 source, file, null, ignored -> {});
         service.setNightMode(MODE_NIGHT_AUTO); awaitWorker(service);
         byte[] durable = Files.readAllBytes(file.toPath());
-        source.twilight = new UiModeManagerService.Twilight(true, source.time + 60_000);
-        service.refreshEnvironment();
+        source.twilight = new Twilight(true, source.time + 60_000);
+        refresh(service);
         check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES
                         && java.util.Arrays.equals(durable, Files.readAllBytes(file.toPath())),
                 "AUTO publication wrote its shutdown cache eagerly");
@@ -580,7 +648,7 @@ public final class UiModeFixture {
             as(h.appB, () -> h.api.setApplicationNightMode(MODE_NIGHT_AUTO));
 
             h.api.setNightMode(MODE_NIGHT_NO);
-            h.source.twilight = new UiModeManagerService.Twilight(true, h.source.time + 10_000);
+            h.source.twilight = new Twilight(true, h.source.time + 10_000);
             h.api.setNightMode(MODE_NIGHT_AUTO); h.refresh();
             check(h.api.getNightMode(0) == MODE_NIGHT_AUTO, "AUTO getter reported effective mode");
             check(h.global() == UI_MODE_NIGHT_NO, "Astronomical automatic transition ignored interactive deferral");
@@ -594,12 +662,12 @@ public final class UiModeFixture {
             check(h.global() == UI_MODE_NIGHT_YES, "AUTO followed Windows light preference instead of twilight");
             h.source.twilight = null; h.refresh();
             check(h.global() == UI_MODE_NIGHT_YES, "Missing actual location fabricated a twilight state");
-            h.source.twilight = new UiModeManagerService.Twilight(false, h.source.time + 20_000); h.refresh();
+            h.source.twilight = new Twilight(false, h.source.time + 20_000); h.refresh();
             check(h.global() == UI_MODE_NIGHT_NO, "Astronomical day did not apply while inactive");
             check(h.api.setNightModeActivated(true) && h.global() == UI_MODE_NIGHT_YES, "Authorized AUTO manual activation");
             h.refresh(); check(h.global() == UI_MODE_NIGHT_YES, "Manual AUTO override did not persist until the underlying transition");
-            h.source.twilight = new UiModeManagerService.Twilight(true, h.source.time + 30_000); h.refresh();
-            h.source.twilight = new UiModeManagerService.Twilight(false, h.source.time + 40_000); h.refresh();
+            h.source.twilight = new Twilight(true, h.source.time + 30_000); h.refresh();
+            h.source.twilight = new Twilight(false, h.source.time + 40_000); h.refresh();
             check(h.global() == UI_MODE_NIGHT_NO, "Manual override was not reset when twilight caught up");
 
             h.api.setNightMode(MODE_NIGHT_CUSTOM);
@@ -616,8 +684,8 @@ public final class UiModeFixture {
             check(h.global() == UI_MODE_NIGHT_NO, "Overnight custom schedule did not turn off");
             h.source.zone = ZoneId.of("Asia/Tokyo"); h.source.at("2026-11-18T14:00:00Z"); h.refresh();
             check(h.global() == UI_MODE_NIGHT_YES, "Schedule ignored real local timezone");
-            check(UiModeManagerService.between(LocalTime.of(6, 0), LocalTime.of(22, 0), LocalTime.of(6, 0)), "Android inclusive end boundary changed");
-            check(UiModeManagerService.between(LocalTime.NOON, LocalTime.of(6, 0), LocalTime.of(6, 0)), "Equal Android schedule endpoints must cover all day");
+            check(between(LocalTime.of(6, 0), LocalTime.of(22, 0), LocalTime.of(6, 0)), "Android inclusive end boundary changed");
+            check(between(LocalTime.NOON, LocalTime.of(6, 0), LocalTime.of(6, 0)), "Equal Android schedule endpoints must cover all day");
             rejects(IllegalArgumentException.class, () -> h.api.setNightModeCustomType(44), "Invalid custom subtype");
             check(!h.api.setNightModeActivatedForCustomMode(MODE_NIGHT_CUSTOM_TYPE_BEDTIME, true), "Mismatched custom activation reported success");
             h.source.display = WindowsHost.DISPLAY_STATE_ON;
@@ -637,9 +705,9 @@ public final class UiModeFixture {
             check(state.isFile(), "Settings never persisted");
             h.service.close(); check(h.source.closed, "Service close retained host listener");
             Source restartedSource = new Source();
-            try (UiModeManagerService restart = new UiModeManagerService(h.pm, h.atm, restartedSource, state, null, ignored -> {})) {
+            try (UiModeManagerService restart = service(h.pm, h.atm, restartedSource, state, null, ignored -> {})) {
                 check(restart.getNightMode(0) == MODE_NIGHT_YES && h.night(A) == UI_MODE_NIGHT_NO, "Global/application settings lost across service restart");
-                String owner = h.a.enabledStateOwner();
+                String owner = enabledStateOwner(h.a);
                 set(h.a, "mEnabledOwner", java.util.UUID.randomUUID().toString());
                 check(h.night(A) == UI_MODE_NIGHT_YES, "A later installation inherited stale application preference");
                 set(h.a, "mEnabledOwner", owner);
@@ -648,7 +716,7 @@ public final class UiModeFixture {
             check(!((List<?>) get(h.pm, "mPackageRemoval")).contains(get(h.service, "mRemovalListener")), "Closed UI service retained package-removal listener");
             File blocker = new File(directory, "not-a-directory");
             Files.writeString(blocker.toPath(), "fixture");
-            try (UiModeManagerService failed = new UiModeManagerService(h.pm, h.atm, new Source(),
+            try (UiModeManagerService failed = service(h.pm, h.atm, new Source(),
                     new File(blocker, "settings"), null, ignored -> {})) {
                 rejects(IllegalStateException.class, () -> failed.setNightMode(MODE_NIGHT_YES), "Failed persistence acknowledged a mode change");
                 check(failed.getNightMode(0) == MODE_NIGHT_NO && UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
@@ -658,7 +726,7 @@ public final class UiModeFixture {
             // they do not acquire system permission merely by using a local Binder call.
             File standaloneState = new File(directory, "standalone.properties");
             App local = new App(null, android.os.Process.myPid(), h.a.uid(), null);
-            try (UiModeManagerService standalone = new UiModeManagerService(h.pm, h.atm, new Source(),
+            try (UiModeManagerService standalone = service(h.pm, h.atm, new Source(),
                     standaloneState, A, ignored -> {})) {
                 as(local, () -> {
                     standalone.setApplicationNightMode(MODE_NIGHT_YES);
@@ -668,9 +736,9 @@ public final class UiModeFixture {
                 check(h.night(A) == UI_MODE_NIGHT_YES && h.global() == UI_MODE_NIGHT_NO,
                         "Standalone application override affected global policy");
             }
-            String beforeOwner = h.a.enabledStateOwner();
+            String beforeOwner = enabledStateOwner(h.a);
             set(h.a, "mEnabledOwner", java.util.UUID.randomUUID().toString());
-            try (UiModeManagerService standalone = new UiModeManagerService(h.pm, h.atm, new Source(),
+            try (UiModeManagerService standalone = service(h.pm, h.atm, new Source(),
                     standaloneState, A, ignored -> {})) {
                 check(h.night(A) == UI_MODE_NIGHT_YES, "Standalone preferences were lost on a new process PM instance");
             }
@@ -678,28 +746,28 @@ public final class UiModeFixture {
             File autoState = new File(directory, "auto-restart.properties");
             Source knownNight = new Source();
             knownNight.display = WindowsHost.DISPLAY_STATE_OFF;
-            knownNight.twilight = new UiModeManagerService.Twilight(true, knownNight.time + 60_000);
-            try (UiModeManagerService automatic = new UiModeManagerService(h.pm, h.atm, knownNight,
+            knownNight.twilight = new Twilight(true, knownNight.time + 60_000);
+            try (UiModeManagerService automatic = service(h.pm, h.atm, knownNight,
                     autoState, null, ignored -> {})) {
                 automatic.setNightMode(MODE_NIGHT_AUTO);
-                automatic.refreshEnvironment();
+                refresh(automatic);
                 check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
                         "AUTO fixture did not establish a real twilight result");
             }
             Source noLocation = new Source();
             noLocation.theme = 1;
-            try (UiModeManagerService automatic = new UiModeManagerService(h.pm, h.atm, noLocation,
+            try (UiModeManagerService automatic = service(h.pm, h.atm, noLocation,
                     autoState, null, ignored -> {})) {
                 check(automatic.getNightMode(0) == MODE_NIGHT_AUTO
                                 && UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
                         "AUTO restart without location lost its last computed night state");
                 noLocation.display = WindowsHost.DISPLAY_STATE_OFF;
-                noLocation.twilight = new UiModeManagerService.Twilight(false, noLocation.time + 60_000);
-                automatic.refreshEnvironment();
+                noLocation.twilight = new Twilight(false, noLocation.time + 60_000);
+                refresh(automatic);
                 check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
                         "Restored AUTO state did not resume real twilight transitions");
             }
-            try (UiModeManagerService automatic = new UiModeManagerService(h.pm, h.atm, new Source(),
+            try (UiModeManagerService automatic = service(h.pm, h.atm, new Source(),
                     autoState, null, ignored -> {})) {
                 check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_NO,
                         "AUTO shutdown cache did not retain the last computed transition");
@@ -720,7 +788,7 @@ public final class UiModeFixture {
                     "2026-11-18T00:15:00Z", "2026-11-18T00:15:00.001Z", UI_MODE_NIGHT_YES, UI_MODE_NIGHT_NO, true);
             Source allDay = new Source(); allDay.at("2026-11-18T06:00:00Z");
             allDay.display = WindowsHost.DISPLAY_STATE_OFF;
-            try (UiModeManagerService service = new UiModeManagerService(h.pm, h.atm, allDay, null, null, ignored -> {})) {
+            try (UiModeManagerService service = service(h.pm, h.atm, allDay, null, null, ignored -> {})) {
                 service.setCustomNightModeStart(end); service.setCustomNightModeEnd(end);
                 service.setNightMode(MODE_NIGHT_CUSTOM);
                 check(UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES
@@ -746,14 +814,14 @@ public final class UiModeFixture {
             }
 
             Source replacementNight = new Source(); replacementNight.display = WindowsHost.DISPLAY_STATE_OFF;
-            replacementNight.twilight = new UiModeManagerService.Twilight(false, replacementNight.time + 60_000);
+            replacementNight.twilight = new Twilight(false, replacementNight.time + 60_000);
             File replacementState = new File(directory, "replacement-auto.properties");
-            UiModeManagerService prior = new UiModeManagerService(h.pm, h.atm, replacementNight,
+            UiModeManagerService prior = service(h.pm, h.atm, replacementNight,
                     replacementState, null, ignored -> {});
             prior.setNightMode(MODE_NIGHT_AUTO); awaitWorker(prior);
-            replacementNight.twilight = new UiModeManagerService.Twilight(true, replacementNight.time + 60_000);
-            prior.refreshEnvironment();
-            try (UiModeManagerService replacement = new UiModeManagerService(h.pm, h.atm, new Source(),
+            replacementNight.twilight = new Twilight(true, replacementNight.time + 60_000);
+            refresh(prior);
+            try (UiModeManagerService replacement = service(h.pm, h.atm, new Source(),
                     replacementState, null, ignored -> {})) {
                 check(replacementNight.closed && UiModeManagerService.getUiModeNight() == UI_MODE_NIGHT_YES,
                         "Replacement read AUTO's cache before the previous service saved it");
@@ -762,11 +830,11 @@ public final class UiModeFixture {
             File closeBackup = new File(directory, "close-failure-saved");
             File closeState = new File(closeParent, "policy.properties");
             Source closeSource = new Source(); closeSource.display = WindowsHost.DISPLAY_STATE_OFF;
-            closeSource.twilight = new UiModeManagerService.Twilight(false, closeSource.time + 60_000);
-            try (UiModeManagerService service = new UiModeManagerService(h.pm, h.atm, closeSource, closeState, null, ignored -> {})) {
+            closeSource.twilight = new Twilight(false, closeSource.time + 60_000);
+            try (UiModeManagerService service = service(h.pm, h.atm, closeSource, closeState, null, ignored -> {})) {
                 service.setNightMode(MODE_NIGHT_AUTO); awaitWorker(service);
-                closeSource.twilight = new UiModeManagerService.Twilight(true, closeSource.time + 60_000);
-                service.refreshEnvironment(); service.addCallback(new Callback(), 0);
+                closeSource.twilight = new Twilight(true, closeSource.time + 60_000);
+                refresh(service); service.addCallback(new Callback(), 0);
                 blockStore(closeParent, closeBackup);
                 try {
                     service.close();
@@ -779,10 +847,10 @@ public final class UiModeFixture {
                         "Failed shutdown cache write fabricated a durable computed result");
             }
             Source replacedSource = new Source();
-            UiModeManagerService replaced = new UiModeManagerService(h.pm, h.atm, replacedSource,
+            UiModeManagerService replaced = service(h.pm, h.atm, replacedSource,
                     null, null, ignored -> {});
             replaced.addCallback(new Callback(), 0);
-            try (UiModeManagerService replacement = new UiModeManagerService(h.pm, h.atm, new Source(),
+            try (UiModeManagerService replacement = service(h.pm, h.atm, new Source(),
                     null, null, ignored -> {})) {
                 check(replacedSource.closed, "Replacing the service retained its old host subscription");
                 check(((java.util.concurrent.ScheduledThreadPoolExecutor) get(replaced, "mWorker")).isShutdown(),

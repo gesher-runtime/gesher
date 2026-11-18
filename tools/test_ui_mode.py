@@ -29,14 +29,17 @@ def main():
         work = Path(temporary)
         classes = work / "classes"
         classes.mkdir()
+        fixtures = work / "fixtures"
+        fixtures.mkdir()
         library = work / "libui-mode_host.so"
         subprocess.run([compiler, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
                         str(ROOT / "tests/ui-mode/framework_host.c"), "-o", str(library)], check=True)
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
-                        "-d", str(classes), str(ROOT / "tests/dex-services/gesher/services/UiModeContractTest.java"),
-                        str(ROOT / "tests/ui-mode/UiModeHost.java"),
-                        str(ROOT / "tests/dex-services/com/gesher/server/UiModeFixture.java"),
+                        "-d", str(fixtures), str(ROOT / "tests/dex-services/gesher/services/UiModeContractTest.java"),
+                        str(ROOT / "tests/dex-services/com/gesher/server/UiModeFixture.java")], check=True)
+        subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
+                        "-d", str(classes), str(ROOT / "tests/ui-mode/UiModeHost.java"),
                         str(ROOT / "tests/ui-mode/SolarComparisonHost.java"),
                         str(ROOT / "tests/ui-mode/aosp/com/ibm/icu/impl/CalendarAstronomer.java")], check=True)
         cleaner = work / "cleaner/sun/misc"
@@ -52,11 +55,11 @@ def main():
                        check=True, timeout=30)
         subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData", "--patch-module",
                         "jdk.unsupported=" + str(work / "cleaner"), "-cp", str(classes) + os.pathsep + classpath,
-                        "UiModeHost", str(library)], env=env, check=True, timeout=90)
+                        "UiModeHost", str(library), str(fixtures)], env=env, check=True, timeout=90)
         shutdown_policy = work / "shutdown-policy.properties"
         subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData", "--patch-module",
                         "jdk.unsupported=" + str(work / "cleaner"), "-cp", str(classes) + os.pathsep + classpath,
-                        "UiModeHost", str(library), str(shutdown_policy)], env=env, check=True, timeout=30)
+                        "UiModeHost", str(library), str(fixtures), str(shutdown_policy)], env=env, check=True, timeout=30)
         if "\ncomputed=true\n" not in shutdown_policy.read_text():
             raise AssertionError("Production JVM shutdown hook did not save the last computed AUTO result")
         print("UiMode production shutdown hook persisted AUTO's last computed result", flush=True)
