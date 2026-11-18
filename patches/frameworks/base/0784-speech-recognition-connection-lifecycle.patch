@@ -4,6 +4,7 @@ Subject: [PATCH] Retire queued speech recognition commands on connection failure
 Keep the public app-side connection queue on the main looper. An admission
 failure completes each pending operation through its own callback. Late binds
 release their endpoint, and a canceled wait does not start a recording.
+Immediate and deferred failures follow the same ordered handler path.
 Errors retain the listener selected for each command. After a session Binder
 dies, its queued operations fail and the next operation can reconnect.
 
@@ -71,7 +72,7 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
          putMessage(Message.obtain(
                  mHandler, MSG_TRIGGER_MODEL_DOWNLOAD,
                  new ModelDownloadListenerArgs(recognizerIntent, null, null)));
-@@ -263,16 +254,14 @@
+@@ -263,15 +254,13 @@
              @NonNull @CallbackExecutor Executor executor,
              @NonNull ModelDownloadListener listener) {
          Objects.requireNonNull(recognizerIntent, "intent must not be null");
@@ -82,14 +83,13 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
              if (mService == null) {
                  Slog.i(TAG, "Connection is not established yet");
              }
-         }
+-        }
 -        if (mService == null) {
 -            // First time connection: first establish a connection, then dispatch.
 -            connectToSystemService();
--        }
+         }
          putMessage(Message.obtain(
                  mHandler, MSG_TRIGGER_MODEL_DOWNLOAD,
-                 new ModelDownloadListenerArgs(recognizerIntent, executor, listener)));
 @@ -293,10 +282,42 @@
      }
 
@@ -228,7 +228,7 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
      }
 
      /** changes the listener */
-@@ -439,49 +484,90 @@
+@@ -439,49 +484,97 @@
          }
 
          mService = null;
@@ -246,6 +246,8 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
 -            return;
 -        }
 -
++        mConnecting = true;
++        long generation = ++mConnectionGeneration;
          ComponentName componentName = getSpeechRecognizerComponentName();
 -
 -        if (!mOnDevice && componentName == null) {
@@ -254,11 +256,9 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
 -        }
 -
 +        if (!maybeInitializeManagerService() || (!mOnDevice && componentName == null)) {
-+            handleConnectionFailure(ERROR_CLIENT);
++            postConnectionFailure(ERROR_CLIENT, generation);
 +            return;
 +        }
-+        mConnecting = true;
-+        long generation = ++mConnectionGeneration;
          try {
 -            mManagerService.createSession(
 -                    componentName,
@@ -305,18 +305,25 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
 -                                    + errorCode);
 -                            mListener.onError(errorCode);
 +                        public void onError(int errorCode) {
-+                            mHandler.post(() -> {
-+                                if (mConnecting && generation == mConnectionGeneration) {
-+                                    handleConnectionFailure(errorCode);
-+                                }
-+                            });
++                            postConnectionFailure(errorCode, generation);
                          }
                      });
 -        } catch (RemoteException e) {
 -            e.rethrowFromSystemServer();
 +        } catch (RemoteException failure) {
-+            handleConnectionFailure(ERROR_CLIENT);
++            postConnectionFailure(ERROR_CLIENT, generation);
 +        }
++    }
++
++    private void postConnectionFailure(int error, long generation) {
++        // Earlier listener changes already on the handler must precede an
++        // immediate setup failure too. Later changes stay in the pending queue,
++        // so each failed command still captures its own listener in queue order.
++        mHandler.post(() -> {
++            if (mConnecting && generation == mConnectionGeneration) {
++                handleConnectionFailure(error);
++            }
++        });
 +    }
 +
 +    /** Fails each queued command at the callback belonging to that command. */
@@ -350,7 +357,7 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
          }
      }
 
-@@ -489,7 +575,7 @@
+@@ -489,7 +582,7 @@
          if (DBG) {
              Log.i(TAG, "#maybeInitializeManagerService found = " + mManagerService);
          }
@@ -359,7 +366,7 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
              return true;
          }
 
-@@ -499,13 +585,7 @@
+@@ -499,13 +592,7 @@
          }
          mManagerService = IRecognitionServiceManager.Stub.asInterface(service);
 
@@ -374,7 +381,7 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
      }
 
      /**
-@@ -536,6 +616,5 @@
+@@ -536,6 +623,5 @@
 
          if (TextUtils.isEmpty(serviceComponent)) {
              Log.e(TAG, "no selected voice recognition service");

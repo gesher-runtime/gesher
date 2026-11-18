@@ -42,8 +42,13 @@ public final class SpeechRecognizerConnectionTest {
     private static final class Manager extends IRecognitionServiceManager.Stub {
         final List<IRecognitionServiceManagerCallback> admissions = new ArrayList<>();
         final List<IBinder> tokens = new ArrayList<>();
+        boolean failImmediately;
+        boolean alive = true;
+        @Override public boolean isBinderAlive() { return alive; }
         @Override public void createSession(ComponentName component, IBinder token,
-                boolean onDevice, IRecognitionServiceManagerCallback callback) {
+                boolean onDevice, IRecognitionServiceManagerCallback callback)
+                throws android.os.RemoteException {
+            if (failImmediately) throw new android.os.RemoteException("Immediate fixture failure");
             check(component.equals(new ComponentName("fixture.engine", "fixture.engine.Provider"))
                     && !onDevice, "explicit component selected");
             admissions.add(callback);
@@ -132,11 +137,72 @@ public final class SpeechRecognizerConnectionTest {
                     disconnected.destroy();
                     main.post(() -> {
                         check(live.shutdowns == 1, "new session is released on destroy");
-                        throw new EndLoop();
+                        immediateFailure(main, manager, context, component, input);
                     });
                 }));
             });
         });
+    }
+
+    private static void immediateFailure(Handler main, Manager manager, Context context,
+            ComponentName component, Intent input) {
+        manager.failImmediately = true;
+        Listener before = new Listener(), after = new Listener();
+        SpeechRecognizer replaced = SpeechRecognizer.createSpeechRecognizer(context, component);
+        replaced.setRecognitionListener(before);
+        replaced.setRecognitionListener(after);
+        replaced.startListening(input);
+
+        Listener earlier = new Listener(), later = new Listener();
+        SpeechRecognizer ordered = SpeechRecognizer.createSpeechRecognizer(context, component);
+        ordered.setRecognitionListener(earlier);
+        ordered.startListening(input);
+        ordered.setRecognitionListener(later);
+        ordered.startListening(input);
+
+        Listener canceled = new Listener(), destroyed = new Listener();
+        SpeechRecognizer canceling = SpeechRecognizer.createSpeechRecognizer(context, component);
+        canceling.setRecognitionListener(canceled);
+        canceling.startListening(input);
+        canceling.cancel();
+        SpeechRecognizer destroying = SpeechRecognizer.createSpeechRecognizer(context, component);
+        destroying.setRecognitionListener(destroyed);
+        destroying.startListening(input);
+        destroying.destroy();
+
+        Listener unrelated = new Listener();
+        List<Integer> support = new ArrayList<>(), model = new ArrayList<>();
+        SpeechRecognizer commands = SpeechRecognizer.createSpeechRecognizer(context, component);
+        commands.setRecognitionListener(unrelated);
+        queueRequests(commands, input, support, model);
+
+        manager.failImmediately = false;
+        manager.alive = false;
+        Listener unavailableBefore = new Listener(), unavailableAfter = new Listener();
+        SpeechRecognizer unavailable = SpeechRecognizer.createSpeechRecognizer(context, component);
+        unavailable.setRecognitionListener(unavailableBefore);
+        unavailable.setRecognitionListener(unavailableAfter);
+        unavailable.startListening(input);
+        manager.alive = true;
+
+        main.post(() -> main.post(() -> {
+            check(before.errors.isEmpty() && after.errors.equals(List.of(FAILED)),
+                    "immediate failure uses the preceding listener replacement");
+            check(earlier.errors.equals(List.of(FAILED)) && later.errors.equals(List.of(FAILED)),
+                    "immediate failure preserves each queued command's listener");
+            check(canceled.errors.isEmpty(), "cancel retires a start before immediate failure dispatch");
+            check(destroyed.errors.isEmpty(), "destroy retires an immediate failure generation");
+            check(support.equals(List.of(FAILED)) && model.equals(List.of(FAILED))
+                    && unrelated.errors.isEmpty(), "immediate setup failure uses command-specific callbacks");
+            check(unavailableBefore.errors.isEmpty() && unavailableAfter.errors.equals(List.of(FAILED)),
+                    "unavailable manager uses the preceding listener replacement");
+            replaced.destroy();
+            ordered.destroy();
+            canceling.destroy();
+            commands.destroy();
+            unavailable.destroy();
+            main.post(() -> { throw new EndLoop(); });
+        }));
     }
 
     public static void main(String[] args) {
