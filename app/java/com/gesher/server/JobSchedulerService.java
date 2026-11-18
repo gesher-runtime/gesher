@@ -249,11 +249,13 @@ final class JobSchedulerService extends IJobScheduler.Default
                 while (true) {
                     long generation;
                     synchronized (JobSchedulerService.this) {
-                        if (done || stopping || state != BINDING || service != null) return;
+                        if (done || stopping || state != BINDING || service != null
+                                || !isScheduledRunLocked(this)) return;
                         generation = hostRevisionLocked(job.hostInputs);
                     }
                     ConstraintState constraints = readConstraints(job.hostInputs);
                     synchronized (JobSchedulerService.this) {
+                        if (!isScheduledRunLocked(this)) return;
                         if (generation != hostRevisionLocked(job.hostInputs)) continue;
                         topStarted |= job.packageName.equals(constraints.topPackage);
                         violation = runningConstraintViolation(job, constraints, SystemClock.elapsedRealtime());
@@ -286,7 +288,15 @@ final class JobSchedulerService extends IJobScheduler.Default
                     finish(this, true, "its service died before startJob: " + e);
                     return;
                 }
-                if (!current(job)) { finish(this, false, "its owner changed before dispatch"); return; }
+                boolean ownerCurrent = current(job);
+                boolean scheduled;
+                synchronized (JobSchedulerService.this) {
+                    scheduled = isScheduledRunLocked(this);
+                }
+                if (!ownerCurrent || !scheduled) {
+                    finish(this, false, "its job or owner changed before dispatch");
+                    return;
+                }
                 try {
                     SystemServer.log("jobscheduler: startJob " + job);
                     service.startJob(params);
@@ -786,28 +796,31 @@ final class JobSchedulerService extends IJobScheduler.Default
     @Override
     public int[] getPendingJobReasons(String namespace, int jobId) {
         String pkg = callerPackage();
-        int inputs;
-        synchronized (this) {
-            Job job = find(pkg, namespace, jobId);
-            if (job == null) return new int[] {JobScheduler.PENDING_JOB_REASON_INVALID_JOB_ID};
-            if (job.run != null) return new int[] {JobScheduler.PENDING_JOB_REASON_EXECUTING};
-            inputs = job.hostInputs;
-        }
-        // This is a diagnostic sample, not a scheduling decision. A changing
-        // interface must not hold an app's Binder query in a retry loop.
-        ConstraintState state = readConstraints(inputs);
-        synchronized (this) {
-            Job job = find(pkg, namespace, jobId);
-            if (job == null) return new int[] {JobScheduler.PENDING_JOB_REASON_INVALID_JOB_ID};
-            if (job.run != null) return new int[] {JobScheduler.PENDING_JOB_REASON_EXECUTING};
-            // A concurrent replacement can introduce an input we did not observe.
-            if ((job.hostInputs & ~inputs) != 0) return pendingReasonArray(0);
-            int reasons = pendingConstraints(job, SystemClock.elapsedRealtime(), state);
-            if (reasons == 0 && mRunning >= MAX_RUNNING) {
-                return new int[] {JobScheduler.PENDING_JOB_REASON_DEVICE_STATE};
+        // Retry one concurrent host or schedule change. A diagnostic query
+        // must return even when the inputs keep changing.
+        for (int attempt = 0; attempt < 2; attempt++) {
+            Job observed;
+            long revision;
+            synchronized (this) {
+                observed = find(pkg, namespace, jobId);
+                if (observed == null) return new int[] {JobScheduler.PENDING_JOB_REASON_INVALID_JOB_ID};
+                if (observed.run != null) return new int[] {JobScheduler.PENDING_JOB_REASON_EXECUTING};
+                revision = hostRevisionLocked(observed.hostInputs);
             }
-            return pendingReasonArray(reasons);
+            ConstraintState state = readConstraints(observed.hostInputs);
+            synchronized (this) {
+                Job job = find(pkg, namespace, jobId);
+                if (job == null) return new int[] {JobScheduler.PENDING_JOB_REASON_INVALID_JOB_ID};
+                if (job.run != null) return new int[] {JobScheduler.PENDING_JOB_REASON_EXECUTING};
+                if (job != observed || revision != hostRevisionLocked(job.hostInputs)) continue;
+                int reasons = pendingConstraints(job, SystemClock.elapsedRealtime(), state);
+                if (reasons == 0 && mRunning >= MAX_RUNNING) {
+                    return new int[] {JobScheduler.PENDING_JOB_REASON_DEVICE_STATE};
+                }
+                return pendingReasonArray(reasons);
+            }
         }
+        return pendingReasonArray(0);
     }
 
     @Override
@@ -1367,7 +1380,8 @@ final class JobSchedulerService extends IJobScheduler.Default
     private void bind(Run run) {
         synchronized (run.dispatch) {
             synchronized (this) {
-                if (run.done || run.stopping || run.state != BINDING) return;
+                if (run.done || run.stopping || run.state != BINDING
+                        || !isScheduledRunLocked(run)) return;
                 armTimeout(run, BIND_TIMEOUT_MS);
             }
             Job job = run.job;
@@ -1536,7 +1550,11 @@ final class JobSchedulerService extends IJobScheduler.Default
 
     private boolean canApplyConstraintUpdateLocked(Run run, long generation) {
         return generation == hostRevisionLocked(run.job.hostInputs) && !run.done && !run.stopping
-                && run.job.run == run && mJobs.contains(run.job) && current(run.job);
+                && isScheduledRunLocked(run) && current(run.job);
+    }
+
+    private boolean isScheduledRunLocked(Run run) {
+        return run.job.run == run && mJobs.contains(run.job);
     }
 
     /** Caller holds the run's dispatch gate, including for acknowledgement of start. */
