@@ -333,18 +333,50 @@ public final class SpeechRecognitionContractTest {
         client.cancel(new Listener(), true);
         check(take(backend.unbindings) == newLink, "terminal cleanup after timeout retry");
 
-        SpeechRecognitionManagerService bounded = new SpeechRecognitionManagerService(backend, 2000);
-        List<IRecognitionService> sessions = new ArrayList<>();
-        for (int i = 0; i < 10; i++) {
-            bounded.createSession(SERVICE, new Lifetime(), false, callback);
-            take(backend.bindings).connected(SERVICE, new Engine(), null, false);
-            sessions.add((IRecognitionService) take(callback.events));
+        SpeechRecognitionManagerService shared = new SpeechRecognitionManagerService(backend, 2000);
+        List<Admission> admissions = new ArrayList<>();
+        for (int i = 0; i < 11; i++) {
+            Admission next = new Admission();
+            admissions.add(next);
+            shared.createSession(SERVICE, new Lifetime(), false, next);
         }
-        bounded.createSession(SERVICE, new Lifetime(), false, callback);
-        check(take(callback.events).equals(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
-                && backend.bindings.isEmpty(), "per-client package admission limit");
+        IServiceConnection sharedLink = take(backend.bindings);
+        check(backend.bindings.isEmpty(), "eleven sessions for one UID/provider share one remote connection");
+        Engine sharedEngine = new Engine();
+        sharedLink.connected(SERVICE, sharedEngine, null, false);
+        List<IRecognitionService> sessions = new ArrayList<>();
+        for (Admission next : admissions) {
+            sessions.add((IRecognitionService) take(next.events));
+        }
+        check(sessions.size() == 11, "all eleven same-provider session tokens are independently admitted");
         for (IRecognitionService session : sessions) session.cancel(null, true);
-        for (int i = 0; i < 10; i++) take(backend.unbindings);
+        check(take(backend.unbindings) == sharedLink && backend.unbindings.isEmpty(),
+                "shared provider connection is released after the final client session");
+
+        SpeechRecognitionManagerService fanout = new SpeechRecognitionManagerService(backend, 2000);
+        Admission fanoutAdmission = new Admission();
+        fanout.createSession(SERVICE, new Lifetime(), false, fanoutAdmission);
+        IServiceConnection fanoutLink = take(backend.bindings);
+        Engine fanoutEngine = new Engine();
+        fanoutLink.connected(SERVICE, fanoutEngine, null, false);
+        IRecognitionService fanoutClient = (IRecognitionService) take(fanoutAdmission.events);
+        List<IRecognitionSupportCallback> supportCallbacks = new ArrayList<>();
+        for (int i = 0; i < 17; i++) {
+            IRecognitionSupportCallback request = new IRecognitionSupportCallback.Stub() {
+                @Override public void onSupportResult(RecognitionSupport result) {}
+                @Override public void onError(int code) {}
+            };
+            supportCallbacks.add(request);
+            fanoutClient.checkRecognitionSupport(INTENT, backend.attribution(), request);
+        }
+        for (int i = 0; i < 17; i++) {
+            IRecognitionSupportCallback forwarded = take(fanoutEngine.support);
+            forwarded.onError(SpeechRecognizer.ERROR_CLIENT);
+        }
+        check(supportCallbacks.size() == 17,
+                "seventeenth support request reaches the provider while earlier callbacks are pending");
+        fanoutClient.cancel(null, true);
+        check(take(backend.unbindings) == fanoutLink, "request fanout session releases its provider connection");
     }
 
     private static void manifestEligibility() {
