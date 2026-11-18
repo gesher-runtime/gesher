@@ -99,8 +99,7 @@ struct Watch {
   bool removed = false;  // rm'd or ended: dropped when its read completes
   bool ignored_sent = false;
   bool awaiting_rename = false;
-  bool dont_follow = false;
-  std::wstring deferred_write;  // a write to this file before the rename notification
+  std::set<std::wstring> deferred_writes;  // destination names written before their rename records
   std::set<std::wstring> writing;  // names to report IN_CLOSE_WRITE for
   // Each name's last modification time and size (extended records): a change
   // that moves neither is to metadata only (IN_ATTRIB).
@@ -218,16 +217,12 @@ bool MatchesFile(const Watch& w, const BY_HANDLE_FILE_INFORMATION& info) {
   return info.dwVolumeSerialNumber == w.volume && FileIndex(info) == w.index;
 }
 
-bool IsRenameTarget(const Watch& w, const std::wstring& name, unsigned long long file_id) {
-  if (w.index == 0) return false;
-  if (file_id != 0) return file_id == w.index;
-
-  // Basic notifications carry no identity and do not guarantee adjacent
-  // pairs. Resolve this name independently before adopting it.
-  DWORD flags = w.dont_follow ? FILE_FLAG_OPEN_REPARSE_POINT : FILE_ATTRIBUTE_NORMAL;
+bool MatchesNamedEntry(const Watch& w, const std::wstring& name) {
+  // Following a symlink here could identify its target as the watched file.
   HANDLE candidate = CreateFileW(Join(w.dir, name).c_str(), FILE_READ_ATTRIBUTES,
                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                 nullptr, OPEN_EXISTING, flags, nullptr);
+                                 nullptr, OPEN_EXISTING,
+                                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
   if (candidate == INVALID_HANDLE_VALUE) return false;
   BY_HANDLE_FILE_INFORMATION info;
   bool same = GetFileInformationByHandle(candidate, &info) && MatchesFile(w, info);
@@ -283,18 +278,22 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
     uint32_t isdir = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? IN_ISDIR : 0;
     if (!w.file.empty()) {
       // Track renames even when the user did not request IN_MOVE_SELF.
-      if (w.awaiting_rename) {
-        if (action == FILE_ACTION_RENAMED_NEW_NAME && IsRenameTarget(w, name, file_id)) {
+      if (w.awaiting_rename && action == FILE_ACTION_RENAMED_NEW_NAME) {
+        // Basic records carry no identity or guaranteed pairing. If their
+        // destination vanished, do not replay its write on a subsequent move.
+        bool same_file = w.index != 0 &&
+                         (file_id != 0 ? file_id == w.index : MatchesNamedEntry(w, name));
+        if (same_file) {
           w.file = name;
           w.awaiting_rename = false;
-          if (CompareStringOrdinal(name.c_str(), -1, w.deferred_write.c_str(), -1, TRUE) ==
-              CSTR_EQUAL) {
-            w.deferred_write.clear();
+          if (w.deferred_writes.erase(name) != 0) {
             EmitFor(w, IN_MODIFY, 0, L"");
             if (!w.removed) w.writing.insert(L"");
           }
+        } else if (file_id == 0) {
+          w.deferred_writes.erase(name);
         }
-      } else if ((file_id == 0 || w.index == 0 || file_id == w.index) &&
+      } else if (!w.awaiting_rename && (file_id == 0 || w.index == 0 || file_id == w.index) &&
                  CompareStringOrdinal(name.c_str(), -1, w.file.c_str(), -1, TRUE) == CSTR_EQUAL) {
         switch (action) {
           case FILE_ACTION_MODIFIED:
@@ -363,23 +362,36 @@ void Inotify::ProbeWriters() {
     }
   }
   for (auto& [wd, name] : probes) {
+    bool file_watch = name.empty();
     std::wstring path;
     {
       std::lock_guard<std::mutex> lock(mutex);
       auto it = watches.find(wd);
-      if (it == watches.end()) continue;
-      path = name.empty() ? Join(it->second->dir, it->second->file) : Join(it->second->dir, name);
+      if (it == watches.end() || it->second->removed) continue;
+      path = Join(it->second->dir, file_watch ? it->second->file : name);
     }
     // Denying write sharing fails while any handle can write.
+    DWORD flags = file_watch ? FILE_FLAG_OPEN_REPARSE_POINT : FILE_ATTRIBUTE_NORMAL;
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                           OPEN_EXISTING, flags, nullptr);
     DWORD error = h == INVALID_HANDLE_VALUE ? GetLastError() : 0;
-    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
     if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) continue;
+    // The file may have moved while its rename notification was queued.
+    if (file_watch && (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ||
+                       error == ERROR_DELETE_PENDING)) {
+      continue;
+    }
+    BY_HANDLE_FILE_INFORMATION info;
+    bool got_info = file_watch && error == 0 && GetFileInformationByHandle(h, &info);
     std::lock_guard<std::mutex> lock(mutex);
     auto it = watches.find(wd);
-    if (it == watches.end() || it->second->writing.erase(name) == 0) continue;
-    if (error == 0) EmitFor(*it->second, IN_CLOSE_WRITE, 0, name);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (it == watches.end() || it->second->removed) continue;
+    Watch& w = *it->second;
+    if (file_watch && error == 0 && w.index != 0 && (!got_info || !MatchesFile(w, info))) {
+      continue;
+    }
+    if (w.writing.erase(name) != 0 && error == 0) EmitFor(w, IN_CLOSE_WRITE, 0, name);
   }
 }
 
@@ -430,6 +442,7 @@ void Inotify::Run() {
     if (ok && bytes > 0) {
       Changes(*w, bytes);
     } else if (ok && IsDirectory(w->dir)) {
+      w->deferred_writes.clear();
       Emit(-1, IN_Q_OVERFLOW, 0, "");  // more changes than the buffer held
     }
     // The directory is gone (deleted, or its volume) when the read fails.
@@ -483,20 +496,31 @@ void InotifyNoteWrite(HANDLE h) {
           if (!w->removed) w->writing.insert(name);
           noted = true;
         } else if ((w->mask & (IN_MODIFY | IN_CLOSE_WRITE)) != 0) {
-          bool same_name = same(w->file, name);
+          // The normalized spelling also distinguishes case-only renames.
+          bool same_name = w->file == name;
           if (w->index != 0) {
             if (!queried_info) {
               got_info = GetFileInformationByHandle(h, &info);
               queried_info = true;
             }
             if (!got_info || !MatchesFile(*w, info)) continue;
-          } else if (!same_name) {
-            continue;
+            // A still-present hard-link alias is not a rename destination.
+            if (!same_name && !w->awaiting_rename && info.nNumberOfLinks > 1 &&
+                !same(w->file, name) && MatchesNamedEntry(*w, w->file)) {
+              continue;
+            }
+          } else {
+            if (!same(w->file, name)) continue;
+            same_name = true;
           }
           if (w->awaiting_rename || !same_name) {
-            // The write can precede processing the kernel rename. Remember
-            // the newest destination so MOVE_SELF stays ahead of MODIFY.
-            w->deferred_write = name;
+            // Several destinations can be written before the worker catches
+            // up. Replay each when its MOVE_SELF has been queued.
+            if (w->deferred_writes.size() < kMaxQueued) {
+              w->deferred_writes.insert(name);
+            } else if (w->deferred_writes.count(name) == 0) {
+              in->Emit(-1, IN_Q_OVERFLOW, 0, "");
+            }
             continue;
           }
           in->EmitFor(*w, IN_MODIFY, 0, L"");
@@ -601,7 +625,6 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   w->mask = events;
   w->volume = info.dwVolumeSerialNumber;
   w->index = index;
-  w->dont_follow = (mask & IN_DONT_FOLLOW) != 0;
   std::wstring full(final_path, n);
   if (directory) {
     w->dir = full;

@@ -672,11 +672,17 @@ struct Event {
 
 // Reads events until `want` is seen (or 3 s pass), appending all to `seen`.
 static bool WaitFor(int in, uint32_t want, const std::string& name, std::vector<Event>* seen,
-                    int wd = -1) {
+                    int wd = -1, size_t* cursor = nullptr) {
+  size_t start = cursor != nullptr ? *cursor : 0;
   for (int i = 0; i < 60; ++i) {
-    for (const Event& e : *seen) {
-      if ((wd == -1 || e.wd == wd) && (e.mask & want) == want && e.name == name) return true;
+    for (size_t j = start; j < seen->size(); ++j) {
+      const Event& e = (*seen)[j];
+      if ((wd == -1 || e.wd == wd) && (e.mask & want) == want && e.name == name) {
+        if (cursor != nullptr) *cursor = j + 1;
+        return true;
+      }
     }
+    start = seen->size();
     pollfd p = {in, POLLIN, 0};
     if (poll(&p, 1, 50) != 1) continue;
     alignas(8) char buf[4096];
@@ -750,6 +756,39 @@ static void InotifyFileRename(const std::string& dir) {
     CHECK(WaitFor(in, IN_MODIFY, "", &seen, wd));
     CHECK(seen.size() >= 2 && seen[0].wd == wd && seen[0].mask == IN_MOVE_SELF);
     CHECK(close(fd) == 0);
+    CHECK(unlink(new_path.c_str()) == 0);
+    close(in);
+  }
+
+  // Preserve writes at both destinations if the two renames reach the
+  // worker together. A case-only rename still precedes its destination write.
+  {
+    int in = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    CHECK(in >= 0);
+    std::string old_path = dir + "/inotify-chain.txt";
+    std::string middle_path = dir + "/INOTIFY-chain.txt";
+    std::string new_path = dir + "/inotify-chain-new.txt";
+    CHECK(PutFile(old_path, "original"));
+    int wd = inotify_add_watch(in, old_path.c_str(), IN_MOVE_SELF | IN_MODIFY | IN_CLOSE_WRITE);
+    CHECK(wd > 0);
+    CHECK(rename(old_path.c_str(), middle_path.c_str()) == 0);
+    int first = open(middle_path.c_str(), O_WRONLY | O_APPEND);
+    CHECK(first >= 0 && write(first, "x", 1) == 1);
+    CHECK(rename(middle_path.c_str(), new_path.c_str()) == 0);
+    int second = open(new_path.c_str(), O_WRONLY | O_APPEND);
+    CHECK(second >= 0 && write(second, "y", 1) == 1);
+
+    std::vector<Event> seen;
+    size_t cursor = 0;
+    for (int rename_count = 0; rename_count < 2; ++rename_count) {
+      CHECK(WaitFor(in, IN_MOVE_SELF, "", &seen, wd, &cursor));
+      CHECK(WaitFor(in, IN_MODIFY, "", &seen, wd, &cursor));
+    }
+    CHECK(!seen.empty() && seen.front().wd == wd && seen.front().mask == IN_MOVE_SELF);
+    for (const Event& event : seen) CHECK(event.mask != IN_CLOSE_WRITE);
+    CHECK(close(first) == 0);
+    CHECK(close(second) == 0);
+    CHECK(WaitFor(in, IN_CLOSE_WRITE, "", &seen, wd, &cursor));
     CHECK(unlink(new_path.c_str()) == 0);
     close(in);
   }
