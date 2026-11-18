@@ -66,8 +66,10 @@ public final class SpellCheckerCommands {
                 desired = component.flattenToShortString();
                 break;
             case "automatic":
-                key = Settings.Secure.SELECTED_SPELL_CHECKER;
-                desired = "";
+                // Select and publish on the server so a stale client catalog cannot
+                // turn an automatic choice into explicit consent to a new package.
+                key = null;
+                desired = null;
                 break;
             case "language":
                 int id = Integer.parseInt(args.get(1));
@@ -92,9 +94,17 @@ public final class SpellCheckerCommands {
         ContentProviderHolder settings = activity.getContentProviderExternal(Settings.AUTHORITY, 0, null, "spell-checker");
         if (settings == null || settings.provider == null) throw new IllegalStateException("Settings provider unavailable");
         AttributionSource source = new AttributionSource(Process.SHELL_UID, "com.android.shell", null);
-        Bundle value = new Bundle();
-        value.putString("value", desired);
-        settings.provider.call(source, Settings.AUTHORITY, "PUT_secure", key, value);
+        if (action.equals("automatic")) {
+            Bundle result = settings.provider.call(source, Settings.AUTHORITY,
+                    SettingsProvider.SELECT_DEFAULT_CHECKER, null, null);
+            if (result == null || !result.getBoolean("result")) {
+                throw new IllegalStateException("Spell-checker state changed during automatic selection");
+            }
+        } else {
+            Bundle value = new Bundle();
+            value.putString("value", desired);
+            settings.provider.call(source, Settings.AUTHORITY, "PUT_secure", key, value);
+        }
         System.out.println("Spell-checker setting updated");
         return 0;
     }

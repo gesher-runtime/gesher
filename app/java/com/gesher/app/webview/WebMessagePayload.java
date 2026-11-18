@@ -24,6 +24,11 @@ final class WebMessagePayload extends WebMessage {
         return message instanceof WebMessagePayload;
     }
 
+    static WebMessage withPorts(WebMessage message, WebMessagePort[] ports) {
+        return binary(message) ? new WebMessagePayload(((WebMessagePayload) message).mBytes, ports)
+                : new WebMessage(message.getData(), ports);
+    }
+
     static void write(JSONObject object, WebMessage message) throws JSONException {
         byte[] bytes = binary(message) ? ((WebMessagePayload) message).mBytes : null;
         object.put("data", bytes != null ? Base64.encodeToString(bytes, Base64.NO_WRAP)

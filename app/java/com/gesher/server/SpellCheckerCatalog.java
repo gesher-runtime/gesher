@@ -105,7 +105,7 @@ final class SpellCheckerCatalog {
     static SpellCheckerSubtype subtype(List<SpellCheckerSubtype> subtypes, int selected,
             boolean implicit, Locale deviceLocale) {
         if (selected == 0 && !implicit) return null;
-        Locale wanted = deviceLocale == null ? null : deviceLocale.stripExtensions();
+        Locale wanted = deviceLocale;
         SpellCheckerSubtype sameLanguage = null;
         for (SpellCheckerSubtype subtype : subtypes) {
             if (selected != 0) {
@@ -114,7 +114,7 @@ final class SpellCheckerCatalog {
             }
             Locale candidate = subtype.getLocaleObject();
             if (candidate == null || wanted == null) continue;
-            if (candidate.stripExtensions().equals(wanted)) return subtype;
+            if (candidate.equals(wanted)) return subtype;
             if (sameLanguage == null && !candidate.getLanguage().isEmpty()
                     && candidate.getLanguage().equals(wanted.getLanguage())) sameLanguage = subtype;
         }

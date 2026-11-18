@@ -40,6 +40,7 @@ import java.util.regex.Pattern;
  */
 final class SettingsProvider extends ContentProvider {
     static final String AUTHORITY = Settings.AUTHORITY;
+    static final String SELECT_DEFAULT_CHECKER = "gesher:select-default-spell-checker";
 
     private static final String SYSTEM = "system";
     private static final String SECURE = "secure";
@@ -52,6 +53,8 @@ final class SettingsProvider extends ContentProvider {
     // consent is read only from this store, whose keys require privileged writes.
     private final Map<String, Map<String, String>> mTextTables = new LinkedHashMap<>();
     private final SettingsStore mTextStore;
+    // Guarded by this. An automatic choice must not replace a concurrent privileged write.
+    private long mTextRevision;
     private static final String SELECTED_CHECKER = Settings.Secure.SELECTED_SPELL_CHECKER;
     private static final String CHECKER_SUBTYPE = Settings.Secure.SELECTED_SPELL_CHECKER_SUBTYPE;
     private static final String CHECKER_ENABLED = Settings.Secure.SPELL_CHECKER_ENABLED;
@@ -61,18 +64,30 @@ final class SettingsProvider extends ContentProvider {
     private final ProviderInfo mInfo = new ProviderInfo();
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
+    private volatile java.util.function.BooleanSupplier mAutomaticCheckerSelector;
+
+    void setAutomaticCheckerSelector(java.util.function.BooleanSupplier selector) {
+        mAutomaticCheckerSelector = selector;
+    }
 
     static final class SpellCheckerSettings {
         final String component;
         final String identity;
         final int subtype;
         final boolean enabled;
+        final long revision;
 
         SpellCheckerSettings(String component, String identity, int subtype, boolean enabled) {
+            this(component, identity, subtype, enabled, -1);
+        }
+
+        SpellCheckerSettings(String component, String identity, int subtype, boolean enabled,
+                long revision) {
             this.component = component;
             this.identity = identity;
             this.subtype = subtype;
             this.enabled = enabled;
+            this.revision = revision;
         }
     }
 
@@ -83,7 +98,36 @@ final class SettingsProvider extends ContentProvider {
         return new SpellCheckerSettings(delimiter < 0 ? null : selected.substring(0, delimiter),
                 delimiter < 0 ? null : selected.substring(delimiter + 1),
                 number(visible(SECURE, CHECKER_SUBTYPE, rows.get(CHECKER_SUBTYPE)), 0),
-                number(rows.get(CHECKER_ENABLED), 1) == 1);
+                number(rows.get(CHECKER_ENABLED), 1) == 1, mTextRevision);
+    }
+
+    /** Server-local default selection, using the same durable rows as an explicit choice. */
+    boolean initializeSpellChecker(SpellCheckerSettings expected, SpellCheckerCatalog.Entry entry) {
+        String value = "";
+        if (entry != null) {
+            if (!entry.owner.isSystemAddon()) throw new SecurityException("Automatic checker is not a system provider");
+            String identity = entry.codeIdentity();
+            if (identity == null) return false;
+            value = entry.info.getId() + "\n" + identity;
+        }
+        synchronized (this) {
+            if (mTextRevision != expected.revision) return false;
+            if (entry != null && (mPm == null || mPm.get(entry.owner.packageName) != entry.owner
+                    || mPm.isRemovalPending(entry.owner.packageName)
+                    || !entry.owner.componentEnabled(entry.info.getComponent().getClassName(),
+                            ApkPackage.ComponentKind.SERVICE))) return false;
+            if (mTextStore == null) {
+                // Single-process profiles have no persistent privileged consent store.
+                mTextTables.get(SECURE).put(SELECTED_CHECKER, value);
+                mTextTables.get(SECURE).put(CHECKER_SUBTYPE, "0");
+            } else {
+                // A newer selection row also invalidates an older subtype atomically.
+                mTextStore.put(SECURE, SELECTED_CHECKER, value, false);
+            }
+            mTextRevision++;
+        }
+        notifySetting(SECURE, SELECTED_CHECKER);
+        return true;
     }
 
     private static int number(String value, int fallback) {
@@ -98,7 +142,8 @@ final class SettingsProvider extends ContentProvider {
 
     private boolean checkerSubtypePredatesSelection() {
         Map<String, String> rows = mTextTables.get(SECURE);
-        return rows.containsKey(CHECKER_SUBTYPE) && rows.containsKey(SELECTED_CHECKER)
+        return mTextStore != null && rows.containsKey(CHECKER_SUBTYPE)
+                && rows.containsKey(SELECTED_CHECKER)
                 && mTextStore.id(SECURE, CHECKER_SUBTYPE) < mTextStore.id(SECURE, SELECTED_CHECKER);
     }
 
@@ -277,6 +322,14 @@ final class SettingsProvider extends ContentProvider {
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
         if (method == null) return null;
+        if (SELECT_DEFAULT_CHECKER.equals(method)) {
+            enforceWrite(SECURE, SELECTED_CHECKER);
+            java.util.function.BooleanSupplier selector = mAutomaticCheckerSelector;
+            if (selector == null) throw new IllegalStateException("Text services are unavailable");
+            Bundle result = new Bundle();
+            result.putBoolean("result", selector.getAsBoolean());
+            return result;
+        }
         String table = table(method);
         if (!mTables.containsKey(table)) {
             return method.startsWith("GET_") ? valueBundle(null) : null;
@@ -340,6 +393,7 @@ final class SettingsProvider extends ContentProvider {
             boolean newGeneration = SECURE.equals(table) && CHECKER_SUBTYPE.equals(name)
                     && checkerSubtypePredatesSelection();
             if (!store(table, name).put(table, name, value, existingOnly, newGeneration)) return false;
+            if (textKey(table, name)) mTextRevision++;
         }
         notifySetting(table, name); return true;
     }
@@ -351,6 +405,7 @@ final class SettingsProvider extends ContentProvider {
                 mTextStore.remove(SECURE, CHECKER_SUBTYPE);
             }
             if (!store(table, name).remove(table, name)) return false;
+            if (textKey(table, name)) mTextRevision++;
         }
         notifySetting(table, name); return true;
     }
@@ -362,6 +417,7 @@ final class SettingsProvider extends ContentProvider {
             if (component == null || !component.startsWith(packageName + "/")) return;
             // Keep a new selection generation, invalidating the previous subtype.
             mTextStore.put(SECURE, SELECTED_CHECKER, "", false);
+            mTextRevision++;
         }
         notifySetting(SECURE, SELECTED_CHECKER);
     }

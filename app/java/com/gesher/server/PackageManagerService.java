@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 /**
@@ -51,6 +52,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         return thread;
     });
     private Consumer<Intent> mPackageEventSender = PackageManagerService::broadcastPackageEvent;
+    private final List<Consumer<Intent>> mPackageEventListeners = new CopyOnWriteArrayList<>();
     private Consumer<ApkPackage> mEnabledStateKiller = this::restartEnabledPackage;
     private volatile Consumer<EnabledChange> mEnabledStateListener;
     private volatile Consumer<EnabledChange> mEnabledStateRestarter;
@@ -222,11 +224,21 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     private void sendPackageEvent(Intent intent) {
+        // Server-local listeners observe committed events after the installer/PM locks
+        // are released. An app cannot inject these callbacks by sending a broadcast.
+        for (Consumer<Intent> listener : mPackageEventListeners) {
+            try { listener.accept(new Intent(intent)); }
+            catch (RuntimeException failure) {
+                SystemServer.log("package listener failed: " + failure.getClass().getSimpleName());
+            }
+        }
         try { mPackageEventSender.accept(intent); }
         catch (RuntimeException failure) {
             SystemServer.log("package event unavailable: " + failure.getClass().getSimpleName());
         }
     }
+
+    void onPackageEvent(Consumer<Intent> listener) { mPackageEventListeners.add(listener); }
 
     private static void broadcastPackageEvent(Intent intent) {
         long identity = Binder.clearCallingIdentity();

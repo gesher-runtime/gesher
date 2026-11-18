@@ -27,7 +27,7 @@ public final class SpellCheckerActivity extends Activity {
         TextServicesManager manager = getSystemService(TextServicesManager.class);
         SpellCheckerInfo checker = manager.getCurrentSpellCheckerInfo();
         if (getIntent().getBooleanExtra("spell-checker-unselected", false)) {
-            check(!manager.isSpellCheckerEnabled() && checker == null,
+            check(manager.isSpellCheckerEnabled() && checker == null,
                     "Side-loaded checker must never be selected automatically");
             check(manager.getEnabledSpellCheckerInfos().size() == 1, "Valid checker should be discoverable");
             System.out.println("spell checker contract: unselected APK remains inactive");

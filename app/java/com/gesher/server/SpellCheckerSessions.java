@@ -20,9 +20,7 @@ import com.gesher.server.SpellCheckerCatalog.Entry;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 /** Owns one binding per client session. ActiveServices shares the provider's actual Service. */
 final class SpellCheckerSessions {
@@ -56,7 +54,6 @@ final class SpellCheckerSessions {
         boolean bound;
         IBinder provider;
         ISpellCheckerSession session;
-        ScheduledFuture<?> timeout;
 
         Request(Entry entry, int pid, String locale, ITextServicesSessionListener ready,
                 ISpellCheckerSessionListener listener, Bundle extras, int attributes) {
@@ -121,7 +118,6 @@ final class SpellCheckerSessions {
             retire(request, false);
             return;
         }
-        request.timeout = mWorker.schedule(() -> retire(request, false), 30, TimeUnit.SECONDS);
     }
 
     private void providerConnected(Request request, IBinder provider, boolean dead) {
@@ -159,7 +155,6 @@ final class SpellCheckerSessions {
             return;
         }
         request.session = session;
-        request.timeout.cancel(false);
         try {
             request.ready.onServiceConnected(session);
         } catch (RemoteException | RuntimeException failure) {
@@ -169,7 +164,6 @@ final class SpellCheckerSessions {
 
     private void retire(Request request, boolean closeDeliveredSession) {
         if (!mRequests.remove(request.client, request)) return;
-        if (request.timeout != null) request.timeout.cancel(false);
         unlink(request.client, request.death);
         if (request.provider != null) unlink(request.provider, request.death);
         // Explicit close already sends onClose via Android's SpellCheckerSession before

@@ -417,8 +417,10 @@ gesher-app spell-checker enable
 
 `list` prints the installed components and their language IDs. Use `language 0`
 for locale-based language choice, or pass an ID from `list` to choose a language.
-`disable` disables settings-based spell checking. `automatic` removes the
-explicit component selection and considers trusted system providers. Installed
+`disable` disables settings-based spell checking. `automatic` selects and saves
+the Android default from trusted system providers. Startup and committed package
+changes use Android's ordered locale fallback; ordinary reads and locale changes
+do not replace an existing selection. Installed
 third-party providers require explicit selection. Only the host shell or a
 caller with `WRITE_SECURE_SETTINGS` may change these settings, even on the
 legacy compatibility profile. The authorized provider identity is checked
@@ -430,5 +432,8 @@ receives the ordinary word and sentence requests, cancel, and close messages
 from the Android client through Binder. Gesher holds the provider binding while
 sessions are live, releases it after the final close and handles Binder death.
 When no checker can be selected, the manager remains available and new sessions
-return `null`. The distribution does not bundle a dictionary and this path
+return `null`; the enabled preference remains independent of provider availability.
+A live provider's session-creation request has no arbitrary timeout. Client close,
+Binder death, binding failure and package removal retire its request and binding.
+The distribution does not bundle a dictionary and this path
 requires the device's system server to start provider processes.

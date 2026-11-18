@@ -70,6 +70,9 @@ public final class TextServicesContractTest {
         rejects(SecurityException.class, () -> settingsHolder.provider.call(
                 new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
                 "PUT_secure", Settings.Secure.SPELL_CHECKER_ENABLED, disabled));
+        rejects(SecurityException.class, () -> settingsHolder.provider.call(
+                new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
+                "gesher:select-default-spell-checker", null, null));
         AtomicInteger transactions = new AtomicInteger();
         IBinder transport = new Binder() {
             @Override public IInterface queryLocalInterface(String descriptor) { return null; }
@@ -97,7 +100,7 @@ public final class TextServicesContractTest {
                 "real public TextServicesManager constructs");
         check(manager == context.getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE),
                 "typed and named lookups share manager");
-        check(!manager.isSpellCheckerEnabled(), "spell checking is disabled");
+        check(manager.isSpellCheckerEnabled(), "default enabled preference is independent of provider availability");
         check(manager.getCurrentSpellCheckerInfo() == null
                         && manager.getCurrentSpellCheckerSubtype(true) == null,
                 "no current checker or subtype is invented");
