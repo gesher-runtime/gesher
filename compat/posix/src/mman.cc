@@ -1552,6 +1552,17 @@ namespace {
 // the old mapping or a failed destination.
 int Unmap(State& s, uintptr_t begin, uintptr_t end) {
   std::vector<uintptr_t> groups;
+  struct EmptyGroupsCleanup {
+    State& state;
+    const std::vector<uintptr_t>& groups;
+    ~EmptyGroupsCleanup() {
+      // A later native failure must not strand reservations emptied earlier
+      // in this request. Cleanup must also preserve that failure's errno.
+      const int saved_errno = errno;
+      for (uintptr_t group : groups) ReleaseGroupIfEmpty(state, group);
+      errno = saved_errno;
+    }
+  } cleanup{s, groups};
   auto it = FindRegion(s, begin);
   if (it == s.regions.end()) it = s.regions.lower_bound(begin);
   while (it != s.regions.end() && it->first < end) {
@@ -1559,11 +1570,11 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
     Region& region = it->second;
     const uintptr_t from = std::max(begin, start);
     const uintptr_t to = std::min(end, start + region.size);
-    if (region.kind == Kind::kHole) { ++it; continue; }
     if (region.group != 0 &&
         std::find(groups.begin(), groups.end(), region.group) == groups.end()) {
       groups.push_back(region.group);
     }
+    if (region.kind == Kind::kHole) { ++it; continue; }
     if (region.group != 0 && region.kind == Kind::kAnon) {
       if (!VirtualFree(reinterpret_cast<void*>(from), to - from,
                        MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
@@ -1643,7 +1654,6 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
     region.live_pages -= removed;
     ++it;
   }
-  for (uintptr_t group : groups) ReleaseGroupIfEmpty(s, group);
   return 0;
 }
 

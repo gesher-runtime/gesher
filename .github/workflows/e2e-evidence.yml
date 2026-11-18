@@ -1,0 +1,40 @@
+name: e2e-evidence
+
+on:
+  pull_request:
+    paths:
+      - 'tests/e2e/**'
+      - '.github/workflows/e2e-evidence.yml'
+      - '.github/workflows/ci.yml'
+  push:
+    paths:
+      - 'tests/e2e/**'
+      - '.github/workflows/e2e-evidence.yml'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Coverage accounting contracts
+        run: python tests/e2e/test_coverage.py -v
+      - name: Actual evidence writer and runner syntax
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/e2e/test-evidence.ps1
+          exit $LASTEXITCODE
+      - name: Concurrent writer ownership and crash recovery
+        run: python tests/e2e/test_evidence_process.py -v
