@@ -81,18 +81,21 @@ static void NativePeer(const std::wstring& native) {
   files.clear(); reader.reset(); writer.reset();
   for (int fd : {input[0], input[1], output[0], output[1]}) if (fd >= 0) close(fd);
 }
-static void AwarePeer(const std::wstring& self) {
+static void AwarePeer(const std::wstring& self, bool diagnostic_stdio) {
   int ends[2];
   if (pipe2(ends, O_CLOEXEC) < 0) { Check("aware pipe", false); return; }
   auto snapshot = gesher::CaptureDescriptor(ends[0]);
   if (!snapshot) { Check("aware descriptor captured", false); close(ends[0]); close(ends[1]); return; }
   std::vector<gesher::exec::ChildFd> files{{37, snapshot->handle, snapshot}, {7100, snapshot->handle, snapshot}};
-  // Preserve real diagnostic handles so early importer failures in the child
-  // cannot disappear into intentionally closed standard descriptors.
-  for (int fd : {1, 2}) {
-    auto output = gesher::CaptureDescriptor(fd);
-    if (output) files.push_back({fd, output->handle, output});
+  // Exercise the original closed-stdio contract as well as a diagnostic run.
+  // Passing stdout/stderr must not hide a failure when those slots are closed.
+  if (diagnostic_stdio) {
+    for (int fd : {1, 2}) {
+      auto output = gesher::CaptureDescriptor(fd);
+      if (output) files.push_back({fd, output->handle, output});
+    }
   }
+  std::printf("PIPE_AWARE_SCENARIO diagnostic_stdio=%d\n", diagnostic_stdio);
   PROCESS_INFORMATION child{};
   DWORD error = gesher::exec::SpawnWithFds(Target(self, L"--aware-flags"), nullptr, L"", files, &child);
   std::printf("PIPE_AWARE_LAUNCH mode=flags error=%lu\n", error);
@@ -105,7 +108,8 @@ static void AwarePeer(const std::wstring& self) {
   Check("aware blocked reader starts", error == 0);
   if (!error) {
     bool busy = false;
-    for (int attempt = 0; attempt != 2000 && !busy; ++attempt) {
+    const ULONGLONG admission_start = GetTickCount64();
+    while (!busy && GetTickCount64() - admission_start < 2000) {
       pollfd descriptor{ends[0], POLLIN, 0};
       busy = poll(&descriptor, 1, 0) == -1 && errno == EOPNOTSUPP;
       if (!busy) Sleep(1);
@@ -192,7 +196,8 @@ int main(int argc, char** argv) {
   std::wstring self(path, length);
   std::wstring native = self.substr(0, self.find_last_of(L"/\\") + 1) + L"ofd_native_child.exe";
   NativePeer(native);
-  AwarePeer(self);
+  AwarePeer(self, false);
+  AwarePeer(self, true);
   ExternalPipe(false);
   ExternalPipe(true);
   std::printf("pipe native process contracts: %d checks, %d failures\n", checks, failures);

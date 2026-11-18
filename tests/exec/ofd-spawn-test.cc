@@ -38,7 +38,8 @@ static bool RefusesNative(const gesher::exec::Launch& launch,
 static int AwareChild() {
   for (int fd = 0; fd < 3; ++fd) if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) return 20;
   int flags = fcntl(37, F_GETFL);
-  if ((flags & O_APPEND) == 0 || flags != fcntl(7100, F_GETFL)) return 21;
+  const int alias_flags = fcntl(7100, F_GETFL);
+  if (flags < 0 || alias_flags < 0 || (flags & O_APPEND) == 0 || flags != alias_flags) return 21;
   unsigned char bytes[4] = {1, 1, 1, 1};
   if (read(42, bytes, sizeof(bytes)) != 4 || bytes[0] || bytes[1] || bytes[2] || bytes[3]) return 22;
   if (write(37, "X", 1) != 1 || fcntl(7100, F_SETFL, flags & ~O_APPEND) < 0) return 23;
@@ -58,7 +59,9 @@ static gesher::exec::Launch Target(const std::wstring& path, const wchar_t* mode
 int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--aware") == 0) return AwareChild();
   if (argc == 2 && std::strcmp(argv[1], "--pipe-aware") == 0) {
-    if (fcntl(37, F_SETFL, O_NONBLOCK) < 0 || (fcntl(7100, F_GETFL) & O_NONBLOCK) == 0) return 24;
+    if (fcntl(37, F_SETFL, O_NONBLOCK) < 0) return 24;
+    const int flags = fcntl(7100, F_GETFL);
+    if (flags < 0 || (flags & O_NONBLOCK) == 0) return 24;
     char byte;
     return read(37, &byte, 1) == -1 && errno == EAGAIN ? 0 : 25;
   }
@@ -98,7 +101,8 @@ int main(int argc, char** argv) {
     error = gesher::exec::SpawnWithFds(aware, nullptr, L"", files, &child);
     Check("discover and launch the real importer export", error == 0);
     Check("aware child imports aliases, high slots, device kind and closed stdio", error == 0 && WaitChild(&child));
-    Check("child status mutation propagates to its parent", (fcntl(fd, F_GETFL) & O_APPEND) == 0);
+    const int parent_flags = fcntl(fd, F_GETFL);
+    Check("child status mutation propagates to its parent", parent_flags >= 0 && (parent_flags & O_APPEND) == 0);
     Check("child append used the same kernel description", lseek(fd, 0, SEEK_CUR) == 4 &&
         pread(fd, result, 4, 0) == 4 && std::memcmp(result, "ABZX", 4) == 0);
   }
@@ -145,7 +149,8 @@ int main(int argc, char** argv) {
     files = {{37, shared_pipe->handle, shared_pipe}, {7100, shared_pipe->handle, shared_pipe}};
     error = gesher::exec::SpawnWithFds(Target(self, L"--pipe-aware"), nullptr, L"", files, &child);
     Check("aware child inherits the actual pipe description", error == 0 && WaitChild(&child));
-    Check("child pipe mode change reaches parent's native endpoint", (fcntl(pipes[0], F_GETFL) & O_NONBLOCK) != 0);
+    const int parent_flags = fcntl(pipes[0], F_GETFL);
+    Check("child pipe mode change reaches parent's native endpoint", parent_flags >= 0 && (parent_flags & O_NONBLOCK) != 0);
   } else Check("capture aware child pipe", false);
   files.clear(); shared_pipe.reset(); close(pipes[0]); close(pipes[1]);
   gesher::exec::Launch shell;
