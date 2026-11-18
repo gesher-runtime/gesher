@@ -343,7 +343,7 @@ framework.jar is compiled against those modules' API stubs
 so without them the initializer, and with it every `getSystemService`, would
 fail. `app/compat-java` has a no-op initializer for each module not in
 framework.jar (Connectivity, Wi-Fi, Bluetooth, NFC, AppSearch, Health,
-Stats, Media, Role, Scheduling, SDK sandbox, AdServices, UWB, Safety Center,
+Stats, Media, Scheduling, SDK sandbox, AdServices, UWB, Safety Center,
 Nearby, OnDevicePersonalization, OnDeviceIntelligence, DeviceLock,
 Virtualization, ConfigInfrastructure, EnhancedConfirmation, Profiling,
 Ranging, and the telephony module's `TelephonyServicesInitializer`) and
@@ -352,6 +352,9 @@ empty placeholders for `LocationManager`, `CountryDetector` and
 app-process path reaches a few more module classes; `app/java` has
 placeholders for them (they need framework types): `android.net.TrafficStats`
 (`handleBindApplication` calls `init`; no traffic accounting),
+`android.app.role.RoleManager` and `OnRoleHoldersChangedListener` (registered
+as `role` by `RoleFrameworkInitializer`: no roles are available or held, and
+`createRequestRoleIntent` returns the request-role `Intent`),
 `android.app.sdksandbox.sandboxactivity.SdkSandboxActivityAuthority` and
 `ActivityContextInfo` (no intent starts an SDK sandbox activity),
 `android.app.sdksandbox.SdkSandboxManager` (only the static capability query:
