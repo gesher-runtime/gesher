@@ -4,6 +4,7 @@
 Use --source-ref with --case admission/clock/results/cancellation for separate negative
 controls. The same Java fixture runs generated Binder/Parcel calls on Windows;
 this host path uses local service calls and the declared existing native adapter.
+The full current-source gate also runs the account sessions and retirement suite.
 --idle-policy-probe uses production classes only from --app-classes, which must be
 the full application built after combining this change with PR15's idle policy.
 """
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +83,12 @@ def main() -> None:
                         '-cp', str(classes) + os.pathsep + classpath,
                         main_class, str(library), args.case],
                        env=environment, check=True, timeout=90)
+
+    if args.case == 'all' and not args.source_ref and not args.idle_policy_probe:
+        subprocess.run([sys.executable, str(ROOT / 'tools/test_account_session_lifetime.py'),
+                        '--java-home', str(args.java_home), '--framework-classes', str(args.framework_classes),
+                        '--core-classes', str(args.core_classes), '--app-classes', str(args.app_classes),
+                        '--apksig-jar', str(args.apksig_jar), '--cc', cc], check=True)
 
 if __name__ == '__main__':
     main()

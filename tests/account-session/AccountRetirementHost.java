@@ -177,10 +177,28 @@ public final class AccountRetirementHost {
         check(h.queue.tasks.isEmpty(), "Completed notification work remained queued");
       }
     }
+    static void concurrentSyncAdmission() throws Exception {
+      try (H h = new H()) {
+        Object identities = get(h.accounts, "mCodeIdentities");
+        FutureTask<Boolean> access = new FutureTask<>(() -> h.access(RETAINED));
+        Thread worker = new Thread(access, "sync-admission");
+        worker.setDaemon(true);
+        synchronized (identities) {
+          worker.start();
+          long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+          while (worker.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+          }
+          check(worker.getState() == Thread.State.BLOCKED, "Sync access did not reach code identity lookup");
+          call(h.pm, "beginPackageRemoval", new Class<?>[]{t("ApkPackage")}, h.client);
+        }
+        check(!access.get(5, TimeUnit.SECONDS), "Sync access survived concurrent client removal");
+      }
+    }
     public static void main(String[] args)throws Exception {
       System.load(args[0]); PropertyInvalidatedCache.setTestMode(true);
       basic(); notification(false, false); notification(true, true); notification(true, false);
-      update(); handoff(); serialBatch();
+      update(); handoff(); serialBatch(); concurrentSyncAdmission();
       System.out.println("Account retirement contracts passed: " + checks + " checks; actual production services, declared host boundaries");
     }
 }

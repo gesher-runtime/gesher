@@ -761,8 +761,14 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     synchronized boolean canAccessAccount(Account account, String packageName) {
         Entry e = mAccounts.get(account);
-        return e != null && packageName != null && !mPm.isRemovalPending(packageName)
-                && visible(targetCaller(packageName), account, e);
+        if (e == null || packageName == null || mPm.isRemovalPending(packageName)) return false;
+        ApkPackage target = mPm.get(packageName);
+        String code = target == null ? null : codeIdentity(target);
+        // Sync admission must return a denial if removal starts while reading the code identity.
+        if (mPm.isRemovalPending(packageName) || mPm.get(packageName) != target) return false;
+        Caller caller = new Caller(packageName, code, false, target == null ? -1 : target.uid(),
+                -1, packageEpoch(packageName));
+        return visible(caller, account, e);
     }
 
     synchronized Account[] syncableAccounts() {
