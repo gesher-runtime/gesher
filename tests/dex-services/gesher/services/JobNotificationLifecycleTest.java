@@ -131,6 +131,13 @@ public final class JobNotificationLifecycleTest {
             Object job = make(jobType, new Class<?>[]{schedulerType, String.class, String.class, JobInfo.class},
                     scheduler, pkg, "notification-contract", builder.build());
             Object run = make(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
+            // The fixture constructs an executing job; startup ordering is covered
+            // independently by JobSchedulerConstraintContractTest.Run.started.
+            field(runType, "state").setInt(run, 2);
+            JobInfo info = (JobInfo) field(jobType, "info").get(job);
+            field(runType, "params").set(run, new JobParameters(((IJobCallback) run).asBinder(),
+                    "notification-contract", id, info.getExtras(), info.getTransientExtras(), null, 0,
+                    false, false, userInitiated, null, null, null));
             synchronized (scheduler) {
                 field(jobType, "run").set(job, run);
                 ((List<Object>) field(schedulerType, "mJobs").get(scheduler)).add(job);

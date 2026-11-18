@@ -100,6 +100,7 @@
 #define POSIX_FADV_SEQUENTIAL 2
 #define POSIX_FADV_WILLNEED   3
 #define POSIX_FADV_DONTNEED   4
+#define POSIX_FADV_NOREUSE    5
 
 #ifdef __cplusplus
 extern "C" {
