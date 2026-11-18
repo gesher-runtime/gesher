@@ -36,6 +36,13 @@ public final class NotificationIdentityDevice {
                 check(first != null && second != null && !first.equals(second), "Large icon paths alias");
                 check(!java.util.Arrays.equals(Files.readAllBytes(first.toPath()), Files.readAllBytes(second.toPath())),
                         "Distinct notification icons overwrote image content");
+                String longPackage = "com." + "a".repeat(200);
+                check(android.content.pm.parsing.FrameworkParsingPackageUtils.validateName(longPackage, true, true) == null,
+                        "Long-package fixture rejected by Android's package validator");
+                File longImage = NotificationIcons.largeIcon(longPackage,
+                        "0|" + longPackage + "|7|Aa|10000", Icon.createWithBitmap(red));
+                check(longImage != null && longImage.isFile() && longImage.getName().length() <= 255,
+                        "Long valid Android package could not write its large icon");
             } finally { red.recycle(); blue.recycle(); }
             NotificationStore.save(null, A, PKG, "Aa", 7, new Notification());
             NotificationStore.save(null, B, PKG, "BB", 7, new Notification());

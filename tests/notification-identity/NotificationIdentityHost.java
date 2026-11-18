@@ -41,6 +41,10 @@ public final class NotificationIdentityHost {
         File imageA = (File)call(NotificationIcons.class, "largeFile", new Class<?>[]{String.class, String.class}, PKG, A);
         File imageB = (File)call(NotificationIcons.class, "largeFile", new Class<?>[]{String.class, String.class}, PKG, B);
         check(!imageA.equals(imageB), "distinct notification keys share image path");
+        String longPackage = "com." + "a".repeat(200);
+        File longImage = (File)call(NotificationIcons.class, "largeFile", new Class<?>[]{String.class, String.class}, longPackage, A);
+        check(longImage.getName().length() <= 255, "valid long package exceeds Windows basename limit");
+        check(!longImage.equals(imageA), "package identity missing from image path");
         if (args[0].equals("write")) { save(A, "Aa", 7); save(B, "BB", 7); }
         else {
             // Separate JVM invocation: persisted records survive process restart.

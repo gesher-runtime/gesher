@@ -7,6 +7,8 @@ The second saved record replaces the first, so the first toast loses its stored
 activation state after the system server restarts.
 
 New records and large images use SHA-256 over the exact Java UTF-16 code units.
+Image basenames hash the length-delimited package/key pair, keeping the complete
+basename at 81 characters even for long valid Android package names.
 The Parcel record format and Android-visible notification key remain unchanged.
 Existing records still load through the old hash filename only after the existing
 reader verifies their full key and package/owner identity. Updating or canceling a
@@ -54,5 +56,7 @@ so it is not a full clean build of the complete application.
 Run with the normal Java/framework/core/app compile inputs plus `--runtime`
 (a built directory containing dalvikvm.exe, boot jars, build.prop, fonts,
 framework-res.apk and ICU data), `--d8-jar`, and a fresh `--output` directory.
-The 2026-11-18 local Windows run passed 6 write and 13 read checks. The same
+The 2026-11-18 local Windows run passed 8 write and 13 read checks, including an
+actual PNG write for a 204-character package name accepted by Android's package
+validator (the AOSP-derived validator's filename limit is 223 characters). The same
 command with `--source-ref 473beec7` failed at `Colliding keys share storage path`.

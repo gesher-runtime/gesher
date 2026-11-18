@@ -96,7 +96,10 @@ final class NotificationIcons {
     }
 
     private static File largeFile(String packageName, String key) {
-        return new File(dir(), packageName + "-sha256-" + NotificationIdentity.digest(key) + ".png");
+        // Keep the basename bounded even for long valid Android package names.
+        // Prefix the package's code-unit length to delimit it from the key.
+        return new File(dir(), "large-sha256-"
+                + NotificationIdentity.digest(packageName.length() + ":" + packageName + key) + ".png");
     }
 
     /** The largest PNG image of an .ico (AppIcon writes PNGs from 64 pixels on). */
