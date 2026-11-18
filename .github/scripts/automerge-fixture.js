@@ -29,7 +29,7 @@ function world(over = {}) {
   };
   if (!over.runs) w.runs = ['ci', 'arm64-windows'].map((name, i) => ({
     id: 100 + i, workflow_id: 1 + i, check_suite_id: 1000 + i, name, path: '.github/workflows/' + name + '.yml',
-    event: 'pull_request', status: 'completed', conclusion: 'success', created_at: T(10),
+    event: 'pull_request', status: 'completed', conclusion: 'success', run_attempt: 1, created_at: T(10),
     head_sha: HEAD, head_branch: 'topic', head_repository: {id: 10}, repository: {id: 10},
     pull_requests: [{number: 7, head: clone(w.pr.head), base: clone(w.pr.base)}],
     referenced_workflows: [{path: 'o/r/.github/workflows/source-identity.yml@' + MERGE,

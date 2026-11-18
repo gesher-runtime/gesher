@@ -22,7 +22,7 @@ on:
 permissions:
   contents: write       # enable native waiting; never call the merge API
   pull-requests: write  # read PRs, submit/dismiss bot approval reviews
-  issues: write         # remove labels; read events and legacy opening receipts
+  issues: write         # remove labels, explain CI failures; read approval evidence
   statuses: write
   actions: read
   checks: read
