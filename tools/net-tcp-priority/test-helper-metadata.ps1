@@ -31,6 +31,7 @@ foreach($stale in @(@{P='tools/windows4/TsfJobSupervisor.cs';H='d1cf9319268df1bc
  $bad=$actual.Clone();$bad[$stale.P]=$stale.H;if(ExactMap $bad){throw 'Historical stale helper hash accepted'}
 }
 $bad=$actual.Clone();$bad['tools/unreviewed.cs']='0'*40;if(ExactMap $bad){throw 'Additional helper accepted'}
+$bad=$actual.Clone();$bad['tools/ci/source_identity.py']='e03b6d4d926f954eecd524ee63ca182edfacdd17';if(ExactMap $bad){throw 'Pre-queue source identity helper accepted'}
 $limits=@{}
 foreach($class in @('TsfJobSupervisor','TcpPriorityDiagnostics.TsfJobSupervisor')){
  $source=if($class -ceq 'TsfJobSupervisor'){'tools/windows4/TsfJobSupervisor.cs'}else{'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'}
@@ -49,4 +50,4 @@ foreach($call in $calls){
 }
 foreach($bad in @(-1,0,45001,90000)){if($bad -ge 1 -and $bad -le 45000){throw 'Invalid budget accepted'}}
 Write-Host 'TCP_CALLER_BUDGET_METADATA_PASS actual_controller_max=45000 actual_Run_calls=4 old90000=REJECTED boundary_mutants=4 native_processes_started=0'
-Write-Host 'TCP_HELPER_METADATA_PASS pins=7 actual_sources=EXACT changed_missing_stale_additional=REJECTED negative_cases=18 native_processes_started=0 CSharp_compiles=0'
+Write-Host 'TCP_HELPER_METADATA_PASS pins=7 actual_sources=EXACT changed_missing_stale_additional_prequeue=REJECTED negative_cases=19 native_processes_started=0 CSharp_compiles=0'

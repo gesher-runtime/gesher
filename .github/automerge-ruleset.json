@@ -1,5 +1,5 @@
 {
-  "name": "main native merge queue and QA",
+  "name": "main label approval and required CI",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": [],
@@ -22,15 +22,6 @@
         {"context": "arm64-required", "integration_id": 15368},
         {"context": "qa/label-approval", "integration_id": 15368}
       ]
-    }},
-    {"type": "merge_queue", "parameters": {
-      "check_response_timeout_minutes": 360,
-      "grouping_strategy": "ALLGREEN",
-      "max_entries_to_build": 1,
-      "max_entries_to_merge": 1,
-      "merge_method": "SQUASH",
-      "min_entries_to_merge": 1,
-      "min_entries_to_merge_wait_minutes": 0
     }}
   ]
 }

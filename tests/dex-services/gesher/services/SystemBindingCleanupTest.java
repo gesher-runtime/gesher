@@ -152,6 +152,8 @@ public final class SystemBindingCleanupTest {
         // Use the production job bind path, not a test-specific connection registry.
         method(schedulerType, "bind", runType).invoke(scheduler, run);
         require(h.connectionCount() == 1 && h.thread.created == 1, "Job did not establish a real system binding");
+        // Manual execution boundary: this fixture tests the real binding retirement.
+        field(runType, "state").setInt(run, 2);
         h.reapNow();
         require(h.thread.exits == 0, "The idle reaper ended a process whose service a running job binds");
         long original = Binder.clearCallingIdentity();

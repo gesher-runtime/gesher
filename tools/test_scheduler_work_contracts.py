@@ -25,7 +25,7 @@ def main() -> None:
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
     parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
-    parser.add_argument('--case', choices=('all', 'drain', 'stopping', 'race', 'alarms', 'delivery'), default='all')
+    parser.add_argument('--case', choices=('all', 'drain', 'stopping', 'race', 'alarms', 'delivery', 'constraints'), default='all')
     args = parser.parse_args()
     cc = shutil.which('cc')
     if not cc:
@@ -52,6 +52,7 @@ def main() -> None:
             sources.append(str(source))
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/SchedulerWorkContractTest.java',
+            'tests/dex-services/gesher/services/JobSchedulerConstraintContractTest.java',
             'tests/scheduler/SchedulerWorkHost.java'))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), *sources], check=True)
