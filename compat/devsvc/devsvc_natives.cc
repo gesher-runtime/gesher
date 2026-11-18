@@ -204,6 +204,8 @@ jboolean WindowsHost_keepAwake(JNIEnv* env, jclass, jstring reason, jboolean sys
 }
 
 jlong WindowsHost_idleMillis(JNIEnv*, jclass) { return static_cast<jlong>(dev::IdleMillis()); }
+jlong WindowsHost_jobIdleMillis(JNIEnv*, jclass) { return static_cast<jlong>(dev::JobIdleMillis()); }
+jint WindowsHost_sessionDisplayState(JNIEnv*, jclass) { return dev::SessionDisplayState(); }
 
 jint WindowsHost_networkState(JNIEnv*, jclass) { return dev::NetworkState(); }
 
@@ -314,6 +316,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativePowerStatus", "()[I", GESHER_JNI(WindowsHost_powerStatus)},
     {"nativeKeepAwake", "(" DEVSVC_STRING "ZZ)Z", GESHER_JNI(WindowsHost_keepAwake)},
     {"nativeIdleMillis", "()J", GESHER_JNI(WindowsHost_idleMillis)},
+    {"nativeJobIdleMillis", "()J", GESHER_JNI(WindowsHost_jobIdleMillis)},
+    {"nativeSessionDisplayState", "()I", GESHER_JNI(WindowsHost_sessionDisplayState)},
     {"nativeNetworkState", "()I", GESHER_JNI(WindowsHost_networkState)},
     {"nativeTimeZoneKeyName", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_timeZoneKeyName)},
     {"nativeShowToast", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "ZZ)I",
