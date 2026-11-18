@@ -16,6 +16,18 @@
 # Runs on Linux and in Git Bash on Windows.
 set -euo pipefail
 
+# Retry interrupted transfers, including curl's HTTP/2 and partial-file errors.
+# Publish only a complete transfer, preserving an existing local tool on failure.
+download_build_tool() (
+  destination=$1
+  temporary=$(mktemp "${destination}.part.XXXXXX")
+  trap 'rm -f "$temporary"' EXIT
+  curl -fsSL --connect-timeout 10 --max-time 120 \
+    --retry 2 --retry-all-errors --retry-delay 1 --retry-max-time 360 \
+    -o "$temporary" "$2"
+  mv "$temporary" "$destination"
+)
+
 BUILD_TOOLS=36.1
 R8_VERSION=9.5.26
 # APP_DIR: another app directory to build with this script (tests/apps/components).
@@ -55,7 +67,7 @@ trap 'rm -rf "$work"' EXIT
 tools=${BUILD_TOOLS_DIR:-}
 if [[ -z $tools ]]; then
   tools=$work/build-tools
-  curl -fsSL -o "$work/build-tools.zip" \
+  download_build_tool "$work/build-tools.zip" \
     "https://dl.google.com/android/repository/build-tools_r${BUILD_TOOLS}_$host.zip"
   mkdir -p "$work/build-tools.tmp"
   (cd "$work/build-tools.tmp" && jar -xf "$(native "$work/build-tools.zip")")
@@ -67,7 +79,7 @@ zipalign=$tools/zipalign$exe
 
 r8=${R8_JAR:-$work/r8.jar}
 if [[ ! -f $r8 ]]; then
-  curl -fsSL -o "$r8" \
+  download_build_tool "$r8" \
     "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
 fi
 
