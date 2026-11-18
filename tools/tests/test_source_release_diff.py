@@ -1,12 +1,12 @@
 """Release configuration traces, genuine Git tree binding and offline replay."""
 
 import importlib.util
+import gzip
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
-import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -48,25 +48,32 @@ def config_result(configs, declarations, values, selected='child'):
 
 
 def git_archive(directory, name, files):
-    """Build a normal source tar; the installed Git, not the reader, supplies the tree ID."""
+    """Build a real Git tree/archive without host symlink or chmod privileges."""
     checkout = directory / (name + '-git')
     checkout.mkdir()
-    subprocess.run(['git', 'init', '-q', str(checkout)], check=True, capture_output=True)
-    for path, content in files.items():
-        target = checkout / path
-        target.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['git', 'init', '-q', '--object-format=sha1', str(checkout)],
+                   check=True, capture_output=True)
+    for path, content in sorted(files.items()):
         if isinstance(content, tuple) and content[0] == 'symlink':
-            target.symlink_to(content[1])
+            mode, data = '120000', content[1].encode('utf-8')
         else:
-            target.write_bytes(content if isinstance(content, bytes) else content.encode())
-            if path.endswith('.sh'):
-                target.chmod(0o755)
-    subprocess.run(['git', '-C', str(checkout), 'add', '.'], check=True, capture_output=True)
+            mode = '100755' if path.endswith('.sh') else '100644'
+            data = content if isinstance(content, bytes) else content.encode('utf-8')
+        blob_id = subprocess.check_output(
+            ['git', '-C', str(checkout), 'hash-object', '--no-filters', '-w', '--stdin'],
+            input=data).decode('ascii').strip()
+        subprocess.run(['git', '-C', str(checkout), 'update-index', '--add',
+                        '--cacheinfo', f'{mode},{blob_id},{path}'],
+                       check=True, capture_output=True)
     tree = subprocess.check_output(['git', '-C', str(checkout), 'write-tree'], text=True).strip()
     archive = directory / (name + '.tar.gz')
-    with tarfile.open(archive, 'w:gz') as tar:
-        for path in sorted(files):
-            tar.add(checkout / path, arcname=path, recursive=False)
+    # Git independently serializes its tree's actual file modes and link targets.
+    # The production reader then reconstructs the tree from this archive.
+    # archive applies core.autocrlf to text blobs too. Its fixture must retain
+    # the exact stored bytes, including an already-CRLF blob, on every host.
+    tar = subprocess.check_output(['git', '-C', str(checkout), '-c', 'core.autocrlf=false',
+                                   '-c', 'core.eol=lf', 'archive', '--format=tar', tree])
+    archive.write_bytes(gzip.compress(tar, mtime=0))
     data = archive.read_bytes()
     return {'filename': archive.name, 'bytes': len(data), 'sha256': diff.sha256(data),
             'git_tree': tree, 'files': len(files), 'url': 'fixture:source', 'repository': 'fixture/source',
@@ -145,15 +152,28 @@ class ArchiveAndReplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             files = {'a.java': 'class Plain {}\n', 'a/Value.aidl': 'parcelable Value;\n',
-                     'generator.sh': '# source text only\n', 'reference': ('symlink', 'a.java')}
-            pin = git_archive(root, 'tree', files)
+                     'generator.sh': '# source text only\n', 'reference': ('symlink', 'a.java'),
+                     'crlf.txt': b'first\r\nsecond\r\n'}
+            # A normal Git-for-Windows setting must not change fixture bytes.
+            # Symlink metadata must not require host symlink privileges either.
+            with patch.dict(os.environ, {'GIT_CONFIG_COUNT': '1',
+                                         'GIT_CONFIG_KEY_0': 'core.autocrlf',
+                                         'GIT_CONFIG_VALUE_0': 'true'}):
+                with patch.object(Path, 'symlink_to', side_effect=PermissionError('fixture has no symlink privilege')):
+                    pin = git_archive(root, 'tree', files)
             actual = diff.read_archive(root, pin)
             self.assertEqual(actual['git_tree'], pin['git_tree'])
-            self.assertEqual(len(actual['files']), 4)
+            self.assertEqual(len(actual['files']), 5)
             modes = {f['path']: f['mode'] for f in actual['files']}
             self.assertEqual(modes['generator.sh'], '100755')
             self.assertEqual(modes['reference'], '120000')
             self.assertEqual(actual['contents']['reference'], b'a.java')
+            # These are raw Git object bytes, independent of checkout newline
+            # filters, filesystem executable bits or symlink privileges.
+            self.assertEqual(actual['contents']['a.java'], files['a.java'].encode('utf-8'))
+            self.assertEqual(modes['a.java'], '100644')
+            self.assertEqual(modes['a/Value.aidl'], '100644')
+            self.assertEqual(actual['contents']['crlf.txt'], files['crlf.txt'])
             altered_pin = dict(pin, sha256='0' * 64)
             with self.assertRaisesRegex(diff.InputError, 'Pinned input differs'):
                 diff.read_archive(root, altered_pin)

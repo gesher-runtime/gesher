@@ -324,6 +324,12 @@ AIDL source file. Actual-output replay and exact-freeze independent review are
 separate validation steps; host fixtures are not Android runtime qualification.
 No CI rerun/dispatch, ADB/device action or target execution is required.
 
+The [normal A07 CI gate](api37-report-ci.md) selects both source suites on Linux
+and Windows and rejects unexpected skips. Its fixtures build real Git trees and
+archives directly, preserving symlink and executable modes without depending on
+host filesystem privileges. Hosted job execution and pinned actual-input replay
+remain separate evidence.
+
 Source build membership, general Java attribution, AIDL semantics, runtime
 compatibility decisions, Android17 module alignment and full behavioral API37
 support remain unmeasured. The

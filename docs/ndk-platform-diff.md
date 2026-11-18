@@ -217,7 +217,7 @@ python3 -m unittest discover -s tools/tests -p test_ndk_platform_diff.py -v
 python3 -m unittest discover -s tools/tests -p test_native_api_inventory.py -v
 ```
 
-The new suites contain ten tests. Reader fixtures compile isolated ELF32/ELF64
+The two suites contain eleven tests. Reader fixtures compile isolated ELF32/ELF64
 shared libraries with host C/C++ compilers and `-nostdlib`; they are never loaded
 or run. GNU `readelf` independently checks the dynamic-symbol records. Fixtures
 cover ordinary/weak/protected symbols, OBJECT/TLS sizes, GNU_UNIQUE, undefined
@@ -229,6 +229,13 @@ missing inputs, linker scripts, library introductions, distinct version
 identities and byte-identical replay. Compiled-reader tests require a Linux
 x86 host C/C++ toolchain with 32/64-bit ELF linking and GNU `readelf`; missing
 tools are reported as skips, not as successful independent validation.
+
+The [normal A07 CI gate](api37-report-ci.md) runs all eleven on Linux and rejects
+unexpected skips. Windows runs the six portable NDK tests and the static ELF
+table test; its four Linux compiler/readelf exclusions are explicitly named.
+The duplicate-record regression keeps raw observed symbol records separate from
+the per-library export-identity denominator. Hosted execution and the real NDK
+archive replay remain separately identified evidence.
 
 The author also cross-checked every one of the 225 genuine selected stubs against
 GNU `readelf` 2.44: all 43,048 defined symbol rows and 225 null rows, ELF

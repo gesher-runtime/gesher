@@ -220,7 +220,8 @@ def slice_inventory(zf, files, prefix, metadata, abi_name, requested, collected,
                     "libraries": {name: library_summary(item) for name, item in sorted(libraries.items())},
                     "excluded_files": exclusions})
     if profile["status"] == "available":
-        profile["public_export_denominator"] = profile["observed_export_records"]
+        profile["public_export_denominator"] = sum(
+            library["defined_export_identities"] for library in profile["libraries"].values())
     return profile, libraries
 
 
