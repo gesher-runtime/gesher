@@ -433,6 +433,9 @@ jobs:
           python3 tools/test_binder_reply_allocations.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/binder_reply_allocations_test.exe
+          python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/binder_lifetime_test.exe
           python3 tools/test_layered_bitmap_cache.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/layered_bitmap_cache_test.exe
