@@ -492,11 +492,25 @@ void CaptureStream::Fail(int error) {
     ++generation_;
   }
   cv_.notify_all();
+  NotifyStateWake();
 }
 
 int CaptureStream::error() const {
   std::lock_guard<std::mutex> lock(mu_);
   return error_;
+}
+
+uint64_t CaptureStream::StateWakeSequence() const {
+  return state_wake_sequence_.load(std::memory_order_acquire);
+}
+
+void CaptureStream::WaitForStateWake(uint64_t observed) const {
+  state_wake_sequence_.wait(observed, std::memory_order_acquire);
+}
+
+void CaptureStream::NotifyStateWake() {
+  state_wake_sequence_.fetch_add(1, std::memory_order_release);
+  state_wake_sequence_.notify_all();
 }
 
 void CaptureStream::Stop() {
@@ -506,6 +520,7 @@ void CaptureStream::Stop() {
     ++generation_;
   }
   cv_.notify_all();
+  NotifyStateWake();
   engine_->Wake();
 }
 
@@ -721,6 +736,7 @@ void CaptureStream::Release() {
     ++generation_;
   }
   cv_.notify_all();
+  NotifyStateWake();
   engine_->Wake();
 }
 

@@ -29,7 +29,7 @@ def main():
     sections = {
         "TYPES": types,
         "STREAM": section(source, "struct AAudioStream {", "namespace {\n\n// AAUDIO_USAGE_"),
-        "CALLBACKS": section(source, "int StreamForUsage(", "int64_t Now()") + section(source, "void InputDisconnected(", "// --- AAudioStreamBuilder"),
+        "CALLBACKS": section(source, "int StreamForUsage(", "int64_t Now()") + section(source, "bool SetInputDisconnectedLocked(", "// --- AAudioStreamBuilder"),
         "BUILDERS": section(source, "aaudio_result_t SYSV CreateStreamBuilder(", "// --- AAudioStream ---------------------------------------------------------------------"),
         "CLOSE": section(source, "aaudio_result_t ReleaseStream(", "// A timeout is a duration"),
         "QUERIES": section(source, "aaudio_result_t SYSV SetBufferSizeInFrames(", "const char* SYSV StateToText("),

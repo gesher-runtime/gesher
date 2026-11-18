@@ -26,10 +26,20 @@ callback that restarts a peer cannot deliver that peer an older batch. Wake
 only posts an atomic idle recheck: dropping the final weak-lock owner under
 the engine mutex cannot recursively lock the engine through stream destruction.
 
+The AAudio input worker observes a capture-owned atomic wake sequence. It
+snapshots that sequence before checking the stream state and terminal error,
+then waits without either stream mutex held. Fail, Stop and Release advance
+and notify the sequence, as do AAudio start and disconnect transitions. A
+failure delivered after Stop's error check therefore wakes an inactive monitor;
+notification between the predicate check and wait also cannot be lost. The
+AAudio stream retains its capture object until the worker joins. No API
+callback or API-mutex acquisition runs on the engine's failure path, and an
+inactive or error-only monitor does not poll for device loss.
+
 | Android API | Initialization/start failure | Device loss |
 | --- | --- | --- |
 | AudioRecord | Existing native setup failure (`-20`); failed native start leaves recording unstarted | A read first returns genuine bytes already transferred, then `ERROR_DEAD_OBJECT` (`-6`); zero-length reads remain zero |
-| AAudio input | `AAUDIO_ERROR_UNAVAILABLE` for unavailable capture; failed start preserves the previous stream state | `DISCONNECTED`, `AAUDIO_ERROR_DISCONNECTED`, and one registered error callback on the owned input worker, outside stream locks; partial synchronous reads return their transferred frame count first |
+| AAudio input | `AAUDIO_ERROR_UNAVAILABLE` for unavailable capture; failed start preserves the previous stream state | A separate terminal flag exposes `DISCONNECTED`; an asynchronous failure invokes one registered error callback on the owned input worker, outside stream locks. A synchronous read or active stop consumes pending disconnection without an error callback. Partial synchronous reads return their transferred frame count first. |
 | OpenSL recorder | Creation stores configuration; `Realize` returns `SL_RESULT_CONTENT_UNSUPPORTED` if capture cannot initialize and leaves the object unrealized | Queue filling stops without fabricated samples or buffer-completion callbacks; SetRecordState preserves Android's requested-state acknowledgment, and an unstartable capture cannot admit filling |
 | MediaRecorder | Prepare fails when capture cannot initialize; failed Start admits no muxer/recording thread, and muxer startup failure stops capture | The audio worker reports `MEDIA_RECORDER_ERROR_UNKNOWN`, stops feeding and wakes peer workers; Stop cleans up and reports failure |
 
@@ -38,6 +48,18 @@ Contract evidence:
 - [AudioRecord read/error semantics](https://developer.android.com/reference/android/media/AudioRecord)
   and [AOSP initialization status](https://android.googlesource.com/platform/frameworks/av/+/fd6444c51fb985d66ca9aae491759ce750bb173a/include/media/AudioRecord.h).
 - [AAudio disconnected streams and callback restrictions](https://developer.android.com/ndk/guides/audio/aaudio/aaudio#disconnected_audio_stream).
+  Android16 r4 [AudioStreamRecord](https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r4/media/libaaudio/src/legacy/AudioStreamRecord.cpp)
+  acknowledges a pending disconnect when stopping without calling the error
+  callback, and records a synchronous read's `DEAD_OBJECT` before returning.
+  [AudioStream](https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r4/media/libaaudio/src/core/AudioStream.cpp)
+  retains disconnection separately from internal lifecycle: a known disconnected
+  start returns `AAUDIO_ERROR_INVALID_STATE`, while valid/redundant stops retain
+  their lifecycle behavior and the external state stays `DISCONNECTED`.
+  [AudioStreamLegacy::onAudioDeviceUpdate](https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r4/media/libaaudio/src/legacy/AudioStreamLegacy.cpp)
+  calls `forceDisconnect()` with error notification when a new device update
+  arrives while the data callback is inactive. Only a pending disconnect
+  already consumed by stop or synchronous read suppresses that notification;
+  becoming stopped does not discard a genuinely late failure.
 - Android 16 [OpenSL recorder realization/start backend](https://android.googlesource.com/platform/frameworks/wilhelm/+/android-16.0.0_r1/src/android/AudioRecorder_to_android.cpp)
   maps unsuccessful `AudioRecord::initCheck()` to `CONTENT_UNSUPPORTED`.
   [IRecord](https://android.googlesource.com/platform/frameworks/wilhelm/+/android-16.0.0_r1/src/itf/IRecord.cpp)
@@ -74,8 +96,12 @@ Validation:
   audio device is opened by these fixtures.
 - `tools/test_aaudio_lifecycle_contracts.py` compiles all AAudio functions and
   exports with controlled Track/Capture observers, including partial input reads
-  and error-only callback delivery. Builder and existing PCM/callback/ring tests
-  remain separate checks.
+  and error-only callback delivery. Deterministic callback and monitor barriers
+  distinguish an error already pending at Stop from one delivered afterward,
+  both with an in-flight data callback and with an idle error-only monitor.
+  Builder and existing PCM/callback/ring tests remain separate checks; the
+  builder extractor includes the actual disconnect helper bodies and starts
+  callback streams through the production lifecycle.
 - Local production and fixture `media_probe` targets were built with real D:
   AOSP/toolchain inputs. Production rejected a synthetic override. The fixture
   captured a generated WAV for approximately two seconds; no physical

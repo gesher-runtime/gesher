@@ -116,13 +116,15 @@ struct AAudioStream {
   size_t frame_size;
   int32_t burst;
   std::atomic<int32_t> state{kStateOpen};
+  // AOSP keeps terminal disconnection separate from the internal lifecycle:
+  // stopping a disconnected stream is still a valid lifecycle operation.
+  std::atomic<bool> disconnected{false};
   std::atomic<int64_t> written{0};
   std::mutex mu;
   std::mutex release_mu;
   std::condition_variable cv;
   std::thread callback_thread;
   bool quit = false;
-  bool error_notified = false;
   uint64_t generation = 0;  // under mu; retires work admitted before a transition
 };
 
@@ -159,20 +161,37 @@ void TraceInput(AAudioStream* s, const char* operation, int32_t requested, int32
              static_cast<long long>(stats.timestamp_ns));
 }
 
+// mu is held. Synchronous reads and explicit stops consume a pending disconnect
+// without an error callback, as AudioStreamRecord does. The worker uses the same
+// one-shot transition before delivering an asynchronous error outside the lock.
+bool SetInputDisconnectedLocked(AAudioStream* s) {
+  if (s->quit || s->disconnected) return false;
+  s->disconnected = true;
+  ++s->generation;
+  s->cv.notify_all();
+  s->capture->NotifyStateWake();
+  return true;
+}
+
+aaudio_result_t CheckInputDisconnectLocked(AAudioStream* s) {
+  if (s->capture != nullptr && !s->disconnected
+      && s->capture->error() == kCaptureDeadObject) {
+    SetInputDisconnectedLocked(s);
+    return kErrorDisconnected;
+  }
+  return kOk;
+}
+
 // Called only by this stream's callback/monitor worker, outside capture locks.
 void InputDisconnected(AAudioStream* s) {
   ErrorCallback callback;
   void* user;
   {
     std::lock_guard<std::mutex> lock(s->mu);
-    if (s->quit || s->error_notified) return;
-    s->error_notified = true;
-    ++s->generation;
-    s->state = kStateDisconnected;
+    if (!SetInputDisconnectedLocked(s)) return;
     callback = s->b.error_cb;
     user = s->b.error_user;
   }
-  s->cv.notify_all();
   if (callback != nullptr) callback(s, user, kErrorDisconnected);
 }
 
@@ -183,20 +202,26 @@ void InputCallbackLoop(AAudioStream* s) {
   const int32_t callback_frames = s->b.frames_per_callback;
   std::vector<uint8_t> buf(static_cast<size_t>(callback_frames) * s->frame_size);
   for (;;) {
+    // CaptureStream stays owned until this worker has joined. Its sequence
+    // covers both backend failure and API lifecycle changes without crossing
+    // their mutexes. Snapshot before the predicates so a late Fail after Stop
+    // cannot notify between the check and wait and leave this monitor parked.
+    const uint64_t wake_sequence = s->capture->StateWakeSequence();
     uint64_t generation;
+    bool disconnected, wait_for_state;
     {
-      std::unique_lock<std::mutex> lock(s->mu);
-      s->cv.wait(lock, [s] { return s->quit || s->state == kStateStarted || s->state == kStateDisconnected; });
+      std::lock_guard<std::mutex> lock(s->mu);
       if (s->quit) return;
+      disconnected = s->disconnected || s->capture->error() != 0;
+      wait_for_state = s->state != kStateStarted || s->b.data_cb == nullptr;
       generation = s->generation;
     }
-    if (s->capture->error() != 0 || s->state == kStateDisconnected) {
+    if (disconnected) {
       InputDisconnected(s);
       return;
     }
-    if (s->b.data_cb == nullptr) {
-      std::unique_lock<std::mutex> lock(s->mu);
-      s->cv.wait_for(lock, std::chrono::milliseconds(50), [s] { return s->quit || s->state != kStateStarted; });
+    if (wait_for_state) {
+      s->capture->WaitForStateWake(wake_sequence);
       continue;
     }
     if (!s->capture->WaitForData(static_cast<size_t>(callback_frames), 50)) continue;
@@ -214,6 +239,9 @@ void InputCallbackLoop(AAudioStream* s) {
       s->capture->Stop();
       ++s->generation;
       s->state = kStateStopped;
+      // A callback's STOP uses the same no-error-callback acknowledgement as
+      // an explicit application stop, including a concurrent device loss.
+      CheckInputDisconnectLocked(s);
     }
   }
 }
@@ -534,8 +562,8 @@ aaudio_result_t SYSV RequestStart(AAudioStream* s) {
   if (t_callback_stream == s) return kErrorInvalidState;
   {
     std::lock_guard<std::mutex> lock(s->mu);
+    if (s->disconnected) return kErrorInvalidState;
     switch (s->state.load()) {
-      case kStateDisconnected: return kErrorDisconnected;
       case kStateOpen: case kStatePausing: case kStatePaused:
       case kStateFlushing: case kStateFlushed: case kStateStopping: case kStateStopped:
         break;
@@ -551,6 +579,7 @@ aaudio_result_t SYSV RequestStart(AAudioStream* s) {
     ++s->generation;
     s->state = kStateStarted;
   }
+  if (s->capture != nullptr) s->capture->NotifyStateWake();
   s->cv.notify_all();
   return kOk;
 }
@@ -592,8 +621,10 @@ aaudio_result_t SYSV RequestStop(AAudioStream* s) {
   if (s == nullptr) return kErrorNull;
   if (t_callback_stream == s) return kErrorInvalidState;
   std::lock_guard<std::mutex> lock(s->mu);
+  bool was_active = false;
   switch (s->state.load()) {
     case kStateStarting: case kStateStarted:
+      was_active = true;
       if (s->track != nullptr) s->track->Stop();
       if (s->capture != nullptr) s->capture->Stop();
       break;
@@ -607,9 +638,12 @@ aaudio_result_t SYSV RequestStop(AAudioStream* s) {
   TraceInput(s, "stop", 0, 0);
   ++s->generation;
   s->state = kStateStopped;
-  return kOk;
+  return was_active ? CheckInputDisconnectLocked(s) : kOk;
 }
-int32_t SYSV GetState(AAudioStream* s) { return s != nullptr ? s->state.load() : kStateUninitialized; }
+int32_t SYSV GetState(AAudioStream* s) {
+  if (s == nullptr) return kStateUninitialized;
+  return s->disconnected ? kStateDisconnected : s->state.load();
+}
 
 // A timeout is a duration, including values close to INT64_MAX. Do not let
 // adding the monotonic clock turn a long wait into an already-expired one.
@@ -622,9 +656,10 @@ int64_t StreamDeadline(int64_t timeout_ns) {
 aaudio_result_t SYSV WaitForStateChange(AAudioStream* s, int32_t input, int32_t* next, int64_t timeout_ns) {
   if (s == nullptr) return kErrorNull;
   const int64_t end = StreamDeadline(timeout_ns);
-  while (s->state == input && Now() < end) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  if (next != nullptr) *next = s->state;
-  return s->state == input ? kErrorTimeout : kOk;
+  while (GetState(s) == input && Now() < end) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  const int32_t observed = GetState(s);
+  if (next != nullptr) *next = observed;
+  return observed == input ? kErrorTimeout : kOk;
 }
 
 int32_t SYSV Write(AAudioStream* s, const void* data, int32_t frames, int64_t timeout_ns) {
@@ -655,13 +690,20 @@ int32_t SYSV Read(AAudioStream* s, void* data, int32_t frames, int64_t timeout_n
   if (frames == 0) return 0;
   if (s->state == kStateClosing || s->state == kStateClosed) return kErrorInvalidState;
   if (s->capture == nullptr || s->b.data_cb != nullptr) return kErrorInvalidState;
+  if (s->disconnected) return kErrorDisconnected;
   const int64_t end = StreamDeadline(timeout_ns);
   uint8_t* p = static_cast<uint8_t*>(data);
   int32_t done = 0;
   for (;;) {
     ssize_t n = s->capture->Read(p + static_cast<size_t>(done) * s->frame_size,
                                  static_cast<size_t>(frames - done) * s->frame_size, false);
-    if (n < 0) return done > 0 ? done : (n == kCaptureDeadObject ? kErrorDisconnected : kErrorInternal);
+    if (n < 0) {
+      if (n == kCaptureDeadObject) {
+        std::lock_guard<std::mutex> lock(s->mu);
+        SetInputDisconnectedLocked(s);
+      }
+      return done > 0 ? done : (n == kCaptureDeadObject ? kErrorDisconnected : kErrorInternal);
+    }
     done += static_cast<int32_t>(static_cast<size_t>(n) / s->frame_size);
     if (done >= frames || timeout_ns <= 0) break;
     const int64_t left = end - Now();
