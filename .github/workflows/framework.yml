@@ -509,6 +509,12 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Unsupported connectionless handwriting callback contracts
+        run: |
+          python3 tools/test_handwriting_unavailable.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Durable package enabled-state public manager contracts
         run: |
           python3 tools/test_package_enabled_state.py --java-home "$JAVA_HOME" \
@@ -523,6 +529,13 @@ jobs:
       - name: AppOps and permission data delivery contracts
         run: |
           python3 tools/test_appops.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Dynamic receiver export contracts against the built framework
+        run: |
+          python3 tools/test_receiver_exports.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
