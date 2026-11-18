@@ -337,13 +337,16 @@ The managed system server records confirmed activity resume, pause and stop tran
 Teardown closes any still-open activity interval. Package aggregates count overlapping
 activities only once per package, and paused activities continue to count toward visible
 time until stopped. Filtered event queries use an inclusive start and an exclusive end.
-Daily, weekly, monthly and yearly summaries use fixed-width UTC buckets and select the
-buckets that overlap the request.
+Daily, weekly, monthly and yearly summaries use fixed-duration buckets with persisted
+origins. Best-fit queries use available stored origins and default to daily when no
+origin matches.
 
-The history serves at most 30 days and 12,000 recent transitions. A background writer
+Public events retain at most 30 days and 12,000 recent transitions. Independent totals
+retain whole summary buckets that overlap the history window. A background writer
 atomically checkpoints updates at 30-second intervals and shutdown flushes pending work.
 After interruption the latest committed checkpoint closes the previous broker lifetime,
-so broker downtime contributes no usage. Uninstall clears the affected package's data
+so broker downtime contributes no usage. System clock corrections shift the event and
+bucket timestamps together without changing accrued durations. Uninstall clears the affected package's data
 before its name can be installed again. The single-process launcher provides empty
 usage history and never reads the managed device's usage file.
 

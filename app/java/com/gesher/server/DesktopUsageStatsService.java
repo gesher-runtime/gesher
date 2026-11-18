@@ -39,23 +39,23 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     private final boolean mManaged;
 
     DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file) {
-        this(packages, callers, file, usageClock());
+        this(packages, callers, file, System::currentTimeMillis, SystemClock::elapsedRealtime);
     }
 
     DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
             java.util.function.LongSupplier clock) {
+        this(packages, callers, file, clock, clock);
+    }
+
+    private DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
+            java.util.function.LongSupplier wall, java.util.function.LongSupplier elapsed) {
         mPackages = packages;
         mCallers = callers;
         mManaged = file != null;
-        mHistory = new ActivityUsageHistory(file, clock,
+        mHistory = new ActivityUsageHistory(file, wall, elapsed,
                 failure -> SystemServer.log("usage history I/O failed: "
                         + failure.getClass().getSimpleName()));
         if (mManaged) mPackages.onPackageRemoval(this::packageRemoved);
-    }
-
-    private static java.util.function.LongSupplier usageClock() {
-        long wall = System.currentTimeMillis(), elapsed = SystemClock.elapsedRealtime();
-        return () -> wall + (SystemClock.elapsedRealtime() - elapsed);
     }
 
     void transition(Object token, String pkg, String cls, ActivityUsageHistory.State state) {
@@ -140,22 +140,6 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
         };
     }
 
-    private static long intervalWidth(int interval, long begin, long end) {
-        long day = ActivityUsageHistory.DAY;
-        return switch (interval) {
-            case UsageStatsManager.INTERVAL_DAILY -> day;
-            case UsageStatsManager.INTERVAL_WEEKLY -> 7 * day;
-            case UsageStatsManager.INTERVAL_MONTHLY -> 30 * day;
-            case UsageStatsManager.INTERVAL_YEARLY -> 365 * day;
-            case UsageStatsManager.INTERVAL_BEST -> {
-                long span = end - Math.max(0, begin);
-                yield span <= day ? day : span <= 7 * day ? 7 * day : span <= 30 * day
-                        ? 30 * day : 365 * day;
-            }
-            default -> 0;
-        };
-    }
-
     private static SecurityException denied() {
         return new SecurityException("Gesher does not implement Android usage-limit or standby administration");
     }
@@ -164,11 +148,11 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
             String caller, int userId) {
         if (!usageAccess(caller)) return null;
         user(userId);
-        long width = intervalWidth(interval, begin, end);
-        if (width == 0 || begin >= end) return null;
+        if (interval < UsageStatsManager.INTERVAL_DAILY
+                || interval > UsageStatsManager.INTERVAL_BEST || begin >= end) return null;
         List<UsageStats> stats = new ArrayList<>();
         for (ActivityUsageHistory.Total total :
-                ActivityUsageHistory.aggregate(mHistory.snapshot(), width, begin, end)) {
+                mHistory.aggregate(interval, begin, end)) {
             UsageStats result = new UsageStats();
             result.mPackageName = total.pkg;
             result.mBeginTimeStamp = total.begin;

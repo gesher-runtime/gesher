@@ -247,6 +247,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean deferredHistory;
         boolean historyEntry;
         boolean launchScheduled;
+        boolean launchingPaused;
         /**
          * The configuration it was launched or relaunched with, or told of last: its
          * package's (locale track: LocaleManagerService.configurationFor) with its task's size
@@ -345,6 +346,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final List<Integer> mTaskOrder = new ArrayList<>();
     /** The activity told it is the top resumed one (onTopResumedActivityChanged), or null. */
     private ActivityRecord mTopResumed;
+
+    /** Current top application for scheduler policy; does not infer foreground from mere liveness. */
+    synchronized int topResumedUid() {
+        return mTopResumed != null && mTopResumed.app != null ? mTopResumed.app.uid : -1;
+    }
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
@@ -3039,7 +3045,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         } else {
             t.addTransactionItem(new PauseActivityItem(r.token, false, false, false, false));
         }
-        setState(r, State.LAUNCHING);
+        synchronized (this) {
+            r.launchingPaused = !andResume;
+            setState(r, State.LAUNCHING);
+        }
         schedule(r, t, andResume ? "LaunchActivityItem, ResumeActivityItem"
                 : "LaunchActivityItem, PauseActivityItem");
     }
@@ -3904,7 +3913,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
             // A pause or a finish may already be on its way (startActivity or finish() in
             // onResume).
-            if (r.app != null && !r.app.dead && (r.state == State.LAUNCHING
+            if (r.app != null && !r.app.dead && (r.state == State.LAUNCHING && !r.launchingPaused
                     || r.state == State.RESUMING || r.state == State.PAUSING)) {
                 recordUsage(r, ActivityUsageHistory.State.RESUMED);
             }
@@ -4175,9 +4184,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean needProcess = false;
         ActivityRecord processTarget = null;
         synchronized (this) {
-            if (r.state == State.PAUSING && r.app != null && !r.app.dead) {
+            if (r.app != null && !r.app.dead && (r.state == State.PAUSING
+                    || r.state == State.LAUNCHING && r.launchingPaused)) {
                 recordUsage(r, ActivityUsageHistory.State.PAUSED);
             }
+            r.launchingPaused = false;
             r.state = State.PAUSED;
             finishing = r.finishing;
             // Paused as its task went to the back: stopped now (nothing in front of it will
