@@ -36,6 +36,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_wait.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/procfs.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/resume.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/pthread.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/select.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/signal.cc
@@ -109,4 +110,6 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/stdio_output.cc PROPER
   COMPILE_OPTIONS "-fexceptions")
 # OFD/control-block allocations also report ENOMEM at their owner boundary.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/ofd.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")

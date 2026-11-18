@@ -18,14 +18,16 @@
 //                                 then data_size bytes and offsets_size bytes
 //   BC_TRANSACTION_SG, BC_REPLY_SG  the same with binder_transaction_data_sg
 //   every transaction header is followed by copy_error (s32); on success,
-//   owned data/offset bytes and buffers_size extra bytes follow. PTR buffer
+//   fd_description_count, owned data/offset bytes, buffers_size extra bytes
+//   and the FileDescription side table follow. PTR buffer
 //   addresses are relative offsets in extra bytes. A failed user copy sends
 //   no body and is reported through the ordinary BR_FAILED_REPLY path.
 //   BC_FREE_BUFFER                cmd, the broker's 64-bit buffer id
 // and the return stream likewise:
 //   BR_TRANSACTION, BR_REPLY      cmd, binder_transaction_data (pointers 0),
 //                                 the 64-bit buffer id, extra_size (u64),
-//                                 then data, offsets and owned extra bytes;
+//                                 fd_description_count (u32), then data,
+//                                 offsets, owned extra bytes and FD table;
 //                                 binder.cc copies them
 //                                 into one transaction allocation and rebases
 //                                 PTR objects and their parent pointer slots
@@ -39,7 +41,22 @@ namespace binder_wire {
 
 constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
 // Both endpoints must change together; an old endpoint rejects the hello.
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 3;
+
+// One entry for every FD object, in object-offset order. The file HANDLE still
+// occupies pad_binder on the wire; this side table carries the exact shared
+// open description without reusing Android's cookie or pad_flags fields.
+// A successful transaction body begins with count (u32); these entries follow
+// data, offsets and extra bytes. A delivered reply uses the same representation.
+struct FileDescription {
+  uint64_t object_offset;
+  uint64_t shared_handle;
+  uint32_t kind;
+  uint32_t reserved;
+};
+// One transaction cannot install more than the receiver's UCRT descriptor
+// ceiling. Bound metadata and native pin allocations before capturing handles.
+constexpr uint32_t kMaxFileDescriptions = 8192;
 
 enum Op : uint32_t {
   // -> {magic, version, pid, uid}; <- {status, proc id, key (u64)}

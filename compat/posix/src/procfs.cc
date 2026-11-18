@@ -41,6 +41,7 @@
 
 #include "internal.h"
 #include "ofd_internal.h"
+#include "revocable_internal.h"
 #include "record_lock_descriptors.h"
 
 #include <gesher/process_name.h>
@@ -844,7 +845,18 @@ bool ReadLink(const std::wstring& name, std::string* target) {
     }
     return errno = EINVAL, false;
   }
-  if (n.link == "fd") return FdTarget(n.fd, target);
+  if (n.link == "fd") {
+    auto snapshot = CaptureDescriptor(n.fd);
+    if (!snapshot) return false;
+    if (FileDescriptionIsRevocable(snapshot)) {
+      // A revocable capability is not permission to open its private backing
+      // pathname as an unrestricted file. Opening this proc link is handled
+      // below and retains the same revocation group.
+      *target = "anon_inode:[gesher-revocable]";
+      return true;
+    }
+    return FdTarget(n.fd, target);
+  }
   wchar_t buf[32768];
   DWORD length = n.link == "exe" ? GetModuleFileNameW(nullptr, buf, 32768)
                                  : GetCurrentDirectoryW(32768, buf);
@@ -872,6 +884,9 @@ int Open(const std::wstring& name, int flags) {
     if ((flags & O_NOFOLLOW) != 0 && (flags & O_PATH) == 0) return errno = ELOOP, -1;
     // Opening the link opens its file again (pipes and sockets: the same one).
     if (n.link == "fd") {
+      auto snapshot = CaptureDescriptor(n.fd);
+      if (!snapshot) return -1;
+      if (FileDescriptionIsRevocable(snapshot)) return ReopenRevocableFileDescription(snapshot, flags);
       HANDLE h = HandleFromFd(n.fd);
       if (h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_DISK) {
         return fcntl(n.fd, F_DUPFD_CLOEXEC, 0);

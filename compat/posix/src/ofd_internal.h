@@ -11,11 +11,15 @@
 
 namespace gesher {
 
+struct RevocableFileGroup;
 struct OpenFileDescription {
   struct Shared {
     uint64_t magic;
     uint32_t version;
     volatile LONG flags;
+    // Immutable after a fresh descriptor is attached, before publication.
+    // Empty for ordinary descriptors; otherwise a shared revocation group ID.
+    char revocation[33];
   };
   std::atomic<DescriptorKind> kind{DescriptorKind::kFile};
   std::atomic<int> local_flags{0};
@@ -25,6 +29,7 @@ struct OpenFileDescription {
   std::atomic<Shared*> shared{nullptr};
   HANDLE mapping = nullptr;
   std::mutex mutex;
+  std::shared_ptr<RevocableFileGroup> revocation;
   ~OpenFileDescription();
   int Flags() const;
   void SetFlags(int flags);

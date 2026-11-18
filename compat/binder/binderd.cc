@@ -49,6 +49,7 @@
 #include <linux/android/binder.h>
 
 #include "../posix/src/binder_wire.h"
+#include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 
 namespace {
@@ -157,6 +158,7 @@ struct Buffer {
   std::vector<uint8_t> data;
   std::vector<uint64_t> offsets;
   std::vector<uint8_t> extra;
+  std::vector<wire::FileDescription> descriptions;
 };
 
 struct Transaction : Work {
@@ -492,6 +494,20 @@ void CloseRemoteHandle(int pid, uint64_t handle) {
   CloseHandle(p);
 }
 
+wire::FileDescription* DescriptionAt(Buffer* buffer, uint64_t offset) {
+  // The manifest is ordered like the validated, strictly increasing offsets.
+  auto found = std::lower_bound(buffer->descriptions.begin(), buffer->descriptions.end(), offset,
+      [](const wire::FileDescription& entry, uint64_t value) { return entry.object_offset < value; });
+  return found != buffer->descriptions.end() && found->object_offset == offset ? &*found : nullptr;
+}
+
+void CloseStagingDescription(Buffer* buffer, uint64_t offset) {
+  if (auto* description = DescriptionAt(buffer, offset)) {
+    CloseRemoteHandle(buffer->proc->pid, description->shared_handle);
+    description->shared_handle = 0;
+  }
+}
+
 // binder_transaction_buffer_release: drops the references a buffer's objects
 // hold, in the receiver's terms.
 void ReleaseBufferObjects(Buffer* buffer) {
@@ -517,6 +533,7 @@ void ReleaseBufferObjects(Buffer* buffer) {
         // Staging handles always belong to the broker. Successful delivery
         // already closes/zeros them; abort/release closes any still present.
         CloseRemoteHandle(proc->pid, fp.binder);
+        CloseStagingDescription(buffer, off);
         break;
       default:
         break;
@@ -637,6 +654,7 @@ struct TransactionData {
   uint64_t buffers_size = 0;
   int32_t copy_error = 0;
   std::vector<uint8_t> extra;
+  std::vector<wire::FileDescription> descriptions;
 };
 
 // Translates the objects of a buffer from the sender's terms (proc) to the
@@ -684,6 +702,14 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
       }
       uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
       if (dup == 0) return BR_FAILED_REPLY;
+      auto* description = DescriptionAt(buffer, off);
+      uint64_t shared = description
+          ? DuplicateRemoteHandle(proc->pid, target_proc->pid, description->shared_handle) : 0;
+      if (shared == 0) {
+        CloseRemoteHandle(target_proc->pid, dup);
+        return BR_FAILED_REPLY;
+      }
+      description->shared_handle = shared;
       TRACE("proc %u: fd handle %llx -> %llx in proc %u", proc->id,
             (unsigned long long)fp.binder, (unsigned long long)dup, target_proc->id);
       fp.binder = dup;
@@ -816,7 +842,8 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
   }
   gesher::binder_sg::Layout sg_layout;
   if (td.copy_error != 0 ||
-      !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout)) {
+      !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout) ||
+      !wire::ValidFileDescriptions(td.data, td.offsets, td.descriptions)) {
     Log("proc %u: invalid transaction user copy or scatter-gather layout", proc->id);
     return fail(BR_FAILED_REPLY);
   }
@@ -841,6 +868,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
   buffer->data = std::move(td.data);
   buffer->offsets = std::move(td.offsets);
   buffer->extra = std::move(td.extra);
+  buffer->descriptions = std::move(td.descriptions);
   target_proc->buffers[buffer->id] = buffer;
   t->buffer = buffer;
 
@@ -930,6 +958,7 @@ void CloseStagingFds(Buffer* buffer) {
     object.pad_binder = 0;
     memcpy(buffer->data.data() + offset, &object, sizeof(object));
     CloseRemoteHandle(buffer->proc->pid, staging);
+    CloseStagingDescription(buffer, offset);
   }
 }
 
@@ -1166,14 +1195,22 @@ int ThreadWrite(Proc* proc, Thread* thread, In in, uint32_t* consumed) {
         if (!in.Get(&td.copy_error)) return -EFAULT;
         if (td.copy_error == 0) {
           if (!gesher::binder_sg::Dimensions(td.tr.data_size, td.tr.offsets_size, td.buffers_size)) return -EINVAL;
-          const uint64_t body_size = td.tr.data_size + td.tr.offsets_size + td.buffers_size;
+          uint32_t description_count;
+          if (!in.Get(&description_count) || description_count > td.tr.offsets_size / sizeof(binder_size_t) ||
+              description_count > wire::kMaxFileDescriptions)
+            return -EINVAL;
+          const uint64_t body_size = td.tr.data_size + td.tr.offsets_size + td.buffers_size +
+              static_cast<uint64_t>(description_count) * sizeof(wire::FileDescription);
           if (body_size > static_cast<uint64_t>(in.end - in.p)) return -EFAULT;
           td.data.resize(td.tr.data_size);
           td.offsets.resize(td.tr.offsets_size / sizeof(binder_size_t));
           td.extra.resize(td.buffers_size);
+          td.descriptions.resize(description_count);
           if (!in.Read(td.data.data(), td.data.size()) ||
               !in.Read(td.offsets.data(), td.tr.offsets_size) ||
-              !in.Read(td.extra.data(), td.extra.size())) return -EFAULT;
+              !in.Read(td.extra.data(), td.extra.size()) ||
+              !in.Read(td.descriptions.data(), td.descriptions.size() * sizeof(wire::FileDescription)))
+            return -EFAULT;
         }
         DoTransaction(proc, thread, td, cmd == BC_REPLY || cmd == BC_REPLY_SG);
         break;
@@ -1452,9 +1489,11 @@ retry:
     rs->size += sizeof(tr);
     rs->out.Put(buffer->id);
     rs->out.Put<uint64_t>(buffer->extra.size());
+    rs->out.Put<uint32_t>(static_cast<uint32_t>(buffer->descriptions.size()));
     rs->out.Write(buffer->data.data(), buffer->data.size());
     rs->out.Write(buffer->offsets.data(), tr.offsets_size);
     rs->out.Write(buffer->extra.data(), buffer->extra.size());
+    rs->out.Write(buffer->descriptions.data(), buffer->descriptions.size() * sizeof(wire::FileDescription));
     TRACE("proc %u thread %d: %s %d delivered", proc->id, thread->tid,
           cmd == BR_REPLY ? "reply" : "transaction", t->debug_id);
     if (cmd != BR_REPLY && (t->flags & TF_ONE_WAY) == 0) {

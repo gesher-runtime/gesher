@@ -225,9 +225,21 @@ enum class DescriptorKind { kFile, kZero, kRandom, kUnshareable };
 struct DescriptorSnapshot {
   HANDLE handle = nullptr;
   DescriptorKind kind = DescriptorKind::kFile;
+  int revocation_error = 0;
   ~DescriptorSnapshot() { if (handle) CloseHandle(handle); }
 };
 using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+// This preexisting OS-boundary fixture models ordinary descriptions. The
+// complete revocation implementation and real shared group objects are run by
+// test_revocable_file_contracts.py; an injected error also checks I/O routing.
+class FileOperationLease {
+ public:
+  explicit FileOperationLease(const DescriptorSnapshotPtr& value)
+      : error_(value ? value->revocation_error : EBADF) { if (guard_depth) std::abort(); }
+  int Error() const { return error_; }
+ private:
+  int error_;
+};
 static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
   auto value = std::make_shared<DescriptorSnapshot>();
   if (!DuplicateHandle(GetCurrentProcess(), HandleFromFd(fd), GetCurrentProcess(), &value->handle,

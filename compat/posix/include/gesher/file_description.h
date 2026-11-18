@@ -36,6 +36,10 @@ int AttachFileDescription(const DescriptorSnapshotPtr& snapshot, bool close_on_e
 // pins the exact object even when its original fd is closed or replaced.
 int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot);
 int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int flags);
+bool FileDescriptionIsRevocable(const DescriptorSnapshotPtr& snapshot);
+// Consumes both owned handles on every outcome. Used after a broker has
+// transferred the file and its exact shared description as one capability.
+int AdoptFileDescription(HANDLE file, HANDLE shared, DescriptorKind kind, bool close_on_exec);
 // Native Windows programs do not import Gesher metadata. Reject descriptions
 // whose current behavior cannot be supplied by the inherited kernel handle.
 int ValidateNativeFileDescription(const DescriptorSnapshotPtr& snapshot);
@@ -64,7 +68,7 @@ int InitializeInheritedFileDescriptions();
 
 namespace ofd_transfer {
 inline constexpr uint64_t kMagic = 0x3144464f52485347ull;  // GSHROFD1
-inline constexpr uint32_t kVersion = 1;
+inline constexpr uint32_t kVersion = 2;
 inline constexpr uint32_t kDescriptorLimit = 8192;
 struct Header {
   uint64_t magic;

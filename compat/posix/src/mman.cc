@@ -58,6 +58,7 @@
 
 #include "binder_internal.h"
 #include "internal.h"
+#include "revocable_internal.h"
 
 // Dedicated failure object only; normal production route is fixed Win32.
 #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
@@ -689,8 +690,7 @@ bool CopyFromFile(State& s, HANDLE file, uint64_t file_size, uint64_t offset, ui
 
 // A file mapping in a group. Returns MAP_FAILED with errno = 0 when it has to
 // be a plain view instead (a shared mapping that ends in a partial page).
-void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, off_t offset) {
-  HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+void* GroupFile(State& s, void* start, size_t len, int prot, int flags, HANDLE file, off_t offset) {
   LARGE_INTEGER file_length;
   if (file == INVALID_HANDLE_VALUE || !GetFileSizeEx(file, &file_length)) {
     errno = EBADF;
@@ -731,7 +731,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
         errno = EACCES;
         return MAP_FAILED;
       }
-      TRACE("no execute access to fd %d (%lu): its pages are copied\n", fd,
+      TRACE("no execute access to file %p (%lu): its pages are copied\n", file,
             GetLastError());
       in_view = 0;
     }
@@ -849,7 +849,7 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
     }
   }
   if (exec) FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(result), len);
-  TRACE("fd %d at %p: %s view of 0x%zx bytes, 0x%zx bytes copied\n", fd,
+  TRACE("file %p at %p: %s view of 0x%zx bytes, 0x%zx bytes copied\n", file,
         reinterpret_cast<void*>(result), in_view == 0 ? "no" : exec ? "an executable" : "a",
         in_view, len - in_view);
   return reinterpret_cast<void*>(result);
@@ -935,8 +935,7 @@ void* MapAnonymous(State& s, void* start, size_t len, int prot, int flags) {
 
 // MAP_PRIVATE | MAP_FIXED file pages over a plain anonymous region of ours:
 // fresh pages with the file's contents (zeros past its end), then `prot`.
-void* CopyFileInto(State& s, void* start, size_t len, int prot, int fd, off_t offset) {
-  HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+void* CopyFileInto(State& s, void* start, size_t len, int prot, HANDLE file, off_t offset) {
   LARGE_INTEGER file_length;
   if (file == INVALID_HANDLE_VALUE || !GetFileSizeEx(file, &file_length)) {
     errno = EBADF;
@@ -968,14 +967,14 @@ void* CopyFileInto(State& s, void* start, size_t len, int prot, int fd, off_t of
   return start;
 }
 
-void* MapFile(State& s, void* start, size_t len, int prot, int flags, int fd, off_t offset) {
+void* MapFile(State& s, void* start, size_t len, int prot, int flags, HANDLE file, off_t offset) {
   const uintptr_t addr = reinterpret_cast<uintptr_t>(start);
   const bool fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
   // The public entry point has already validated page-aligned file offsets.
   if (Placeholders().available() && static_cast<uint64_t>(offset) % s.page_size == 0) {
     auto it = FindRegion(s, addr);
     if (it == s.regions.end() || it->second.group != 0 || (flags & MAP_FIXED) == 0) {
-      void* result = GroupFile(s, start, len, prot, flags, fd, offset);
+      void* result = GroupFile(s, start, len, prot, flags, file, offset);
       if (result != MAP_FAILED || errno != 0) return result;
       // A shared mapping that ends in a partial page: a plain view.
       if (fixed) {
@@ -989,14 +988,13 @@ void* MapFile(State& s, void* start, size_t len, int prot, int flags, int fd, of
     auto it = FindRegion(s, addr);
     if (it != s.regions.end() && it->second.kind == Kind::kAnon && it->second.group == 0 &&
         addr + len <= it->first + it->second.size) {
-      return CopyFileInto(s, start, len, prot, fd, offset);
+      return CopyFileInto(s, start, len, prot, file, offset);
     }
   }
   if ((prot & PROT_EXEC) != 0) {
     errno = EINVAL;
     return MAP_FAILED;
   }
-  HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (file == INVALID_HANDLE_VALUE) {
     errno = EBADF;
     return MAP_FAILED;
@@ -1309,13 +1307,30 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
   length = RoundUp(length, s.page_size);
   if (fixed && length > UINTPTR_MAX - begin) { errno = ENOMEM; return MAP_FAILED; }
   if ((flags & MAP_ANONYMOUS) == 0 && fd < 0) { errno = EBADF; return MAP_FAILED; }
+  // Shared writable views would bypass the session's write barrier. AppFuse
+  // direct-I/O descriptors likewise reject shared mmap with ENODEV. Private
+  // copy-on-write views cannot alter the session or a committed snapshot.
+  gesher::DescriptorSnapshotPtr snapshot;
+  const bool binder_mapping = (flags & MAP_ANONYMOUS) == 0 && gesher::IsBinderFd(fd);
+  if ((flags & MAP_ANONYMOUS) == 0 && !binder_mapping) {
+    snapshot = gesher::CaptureDescriptor(fd);
+    if (!snapshot) return MAP_FAILED;
+    if (gesher::FileDescriptionIsRevocable(snapshot) && type != MAP_PRIVATE) {
+      errno = ENODEV;
+      return MAP_FAILED;
+    }
+  }
+  // The helpers use this pinned native object directly, without consuming an
+  // extra CRT fd slot or looking up the caller's possibly recycled fd again.
+  gesher::FileOperationLease operation(snapshot);
+  if (snapshot && operation.Error()) { errno = operation.Error(); return MAP_FAILED; }
   // An ordinary address is only a hint, and need not be page aligned.
   if (!fixed) addr = reinterpret_cast<void*>(begin - begin % s.page_size);
   std::lock_guard<std::mutex> guard(s.lock);
   void* result;
   if ((flags & MAP_ANONYMOUS) != 0) {
     result = MapAnonymous(s, addr, length, prot, flags);
-  } else if (gesher::IsBinderFd(fd)) {
+  } else if (binder_mapping) {
     // /dev/binder's receive buffer: memory binder.cc copies the process's
     // incoming transactions into, read-only to the process on Linux.
     result = MapAnonymous(s, addr, length, PROT_READ | PROT_WRITE, flags & ~MAP_SHARED);
@@ -1327,7 +1342,7 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
       gesher::SetBinderMapping(fd, result, length);
     }
   } else {
-    result = MapFile(s, addr, length, prot, flags, fd, offset);
+    result = MapFile(s, addr, length, prot, flags, snapshot->handle, offset);
   }
   TRACE("mmap(%p, 0x%zx, prot=%d, flags=0x%x, fd=%d, offset=0x%llx) = %p\n", addr, length, prot,
         flags, fd, static_cast<unsigned long long>(offset), result);

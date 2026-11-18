@@ -29,6 +29,7 @@
 #include "descriptor_resources.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "revocable_internal.h"
 #include "pipe_io.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
@@ -246,6 +247,8 @@ bool NativeFileIo(int fd, void* buffer, unsigned int count, bool writing, int* r
     snapshot = gesher::CaptureDescriptor(fd);
   }
   if (!snapshot) { *result = -1; return true; }
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) { *result = (errno = operation.Error(), -1); return true; }
   const int flags = gesher::FileDescriptionFlags(snapshot);
   if (flags < 0) { *result = -1; return true; }
   if ((flags & O_PATH) != 0 ||
@@ -367,6 +370,8 @@ RetiredDescriptor::~RetiredDescriptor() {
   errno = saved;
 }
 int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count) {
+  FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = FileDescriptionFlags(snapshot);
   if (flags < 0) return -1;
   if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) return errno = EBADF, -1;
@@ -381,6 +386,8 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
   return TransferFileHandle(snapshot->handle, bytes, count, false, false);
 }
 int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count) {
+  FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = FileDescriptionFlags(snapshot);
   if (flags < 0) return -1;
   if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_RDONLY) return errno = EBADF, -1;

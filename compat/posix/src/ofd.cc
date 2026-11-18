@@ -56,6 +56,7 @@ HANDLE OpenFileDescription::Share() {
   }
   view->magic = ofd_transfer::kMagic;
   view->version = ofd_transfer::kVersion;
+  std::memset(view->revocation, 0, sizeof(view->revocation));
   InterlockedExchange(&view->flags, static_cast<LONG>(local_flags.load()));
   mapping = candidate;
   shared.store(view, std::memory_order_release);
@@ -580,6 +581,7 @@ int ValidateNativeFileDescription(const DescriptorSnapshotPtr& snapshot) {
   int flags = FileDescriptionFlags(snapshot);
   if (flags < 0) return -1;
   if (snapshot->kind != DescriptorKind::kFile) return errno = EOPNOTSUPP, -1;
+  if (FileDescriptionIsRevocable(snapshot)) return errno = EOPNOTSUPP, -1;
   int native = NativeFlags(snapshot->handle);
   if (native < 0) return -1;
   // The Windows program will use the handle directly. There is no importer
@@ -590,6 +592,34 @@ int ValidateNativeFileDescription(const DescriptorSnapshotPtr& snapshot) {
   if (GetFileType(snapshot->handle) == FILE_TYPE_PIPE && (flags & (O_NONBLOCK | O_ASYNC)) != 0)
     return errno = EOPNOTSUPP, -1;
   return 0;
+}
+bool FileDescriptionIsRevocable(const DescriptorSnapshotPtr& snapshot) {
+  if (!snapshot || !snapshot->description) return false;
+  auto* view = snapshot->description->shared.load(std::memory_order_acquire);
+  return view && view->revocation[0] != '\0';
+}
+int AdoptFileDescription(HANDLE file, HANDLE shared, DescriptorKind kind, bool close_on_exec) try {
+  struct Owned {
+    HANDLE file, shared;
+    ~Owned() {
+      if (file && file != INVALID_HANDLE_VALUE) CloseHandle(file);
+      if (shared && shared != INVALID_HANDLE_VALUE) CloseHandle(shared);
+    }
+  } cleanup{file, shared};
+  if (!file || file == INVALID_HANDLE_VALUE || !shared || shared == INVALID_HANDLE_VALUE ||
+      kind > DescriptorKind::kRandom) return errno = EINVAL, -1;
+  auto description = std::make_shared<OpenFileDescription>();
+  if (!description->Adopt(shared)) return -1;
+  cleanup.shared = nullptr;
+  description->kind = kind;
+  auto snapshot = std::make_shared<DescriptorSnapshot>();
+  snapshot->handle = file;
+  cleanup.file = nullptr;
+  snapshot->description = std::move(description);
+  snapshot->kind = kind;
+  return AttachFileDescription(snapshot, close_on_exec);
+} catch (const std::bad_alloc&) {
+  return errno = ENOMEM, -1;
 }
 int CaptureDescriptors(std::vector<std::pair<int, DescriptorSnapshotPtr>>* out, bool include_close_on_exec) {
   const auto* owner = Owner();

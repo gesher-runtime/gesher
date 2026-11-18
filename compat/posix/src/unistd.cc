@@ -19,6 +19,7 @@
 #include <string>
 
 #include "internal.h"
+#include "revocable_internal.h"
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "record_lock_descriptors.h"
@@ -299,8 +300,11 @@ int pipe(int fds[2]) { return pipe2(fds, 0); }
 // has read everything, where Linux fails at once with EINVAL (pipes, sockets,
 // character devices).
 int fsync(int fd) {
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  const HANDLE h = snapshot->handle;
   if (GetFileType(h) != FILE_TYPE_DISK) return errno = EINVAL, -1;
   // A directory (opened for reading, as Linux programs do to fsync a rename):
   // NTFS journals its entries; FlushFileBuffers would need write access.
@@ -308,15 +312,17 @@ int fsync(int fd) {
   if (GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
     return 0;
   }
-  return gesher::CrtResult(_commit(fd));
+  return FlushFileBuffers(h) ? 0 : gesher::FailWithLastError();
 }
 int gesher_ftruncate(int fd, off_t length) {
   if (length < 0) return errno = EINVAL, -1;
-  // Pin the actual descriptor throughout the resize and cache update. A path
-  // lookup or an unguarded fd would allow close/dup2 to change the target.
-  gesher::record_locks::DescriptorGuard descriptor_guard;
-  HANDLE file = gesher::HandleFromFd(fd);
-  if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  // Pin the exact object without holding the descriptor table lock while a
+  // revocation barrier or filesystem operation waits.
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  const HANDLE file = snapshot->handle;
   uint32_t access = 0;
   int error = gesher::record_locks::HandleAccess(file, &access);
   if (error) return errno = error, -1;
@@ -326,9 +332,12 @@ int gesher_ftruncate(int fd, off_t length) {
   if ((access & FILE_WRITE_DATA) == 0) return errno = EINVAL, -1;
   LARGE_INTEGER before{};
   const bool have_size = GetFileSizeEx(file, &before) != FALSE;
-  int result = _chsize_s(fd, length);
-  // Keep the existing guest wrapper's CRT error convention.
-  if (result != 0) return errno = result == EBADF ? EBADF : EINVAL, -1;
+  if (!have_size || before.QuadPart != length) {
+    FILE_END_OF_FILE_INFO end{};
+    end.EndOfFile.QuadPart = length;
+    if (!SetFileInformationByHandle(file, FileEndOfFileInfo, &end, sizeof(end)))
+      return gesher::FailWithLastError();
+  }
   if (!have_size || length == 0 || before.QuadPart != length) return 0;
 
   SYSTEM_INFO system{};
@@ -513,6 +522,8 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
     is_device = gesher::DeviceFromFd(fd, &device);
   }
   if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE file = snapshot->handle;
   SetLastError(ERROR_SUCCESS);
   const DWORD type = GetFileType(file);
@@ -592,6 +603,8 @@ off_t lseek(int fd, off_t offset, int whence) {
                   gesher::DeviceFromFd(fd, &device);
   }
   if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = gesher::FileDescriptionFlags(snapshot);
   if (flags < 0) return -1;
   if ((flags & O_PATH) != 0) return errno = EBADF, -1;
@@ -735,6 +748,8 @@ namespace gesher {
 int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,
                               unsigned count, int64_t offset) {
   if (offset < 0) return errno = EINVAL, -1;
+  FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = FileDescriptionFlags(snapshot);
   if (flags < 0) return -1;
   if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_RDONLY) return errno = EBADF, -1;

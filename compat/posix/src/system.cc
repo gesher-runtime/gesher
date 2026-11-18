@@ -38,6 +38,7 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "revocable_internal.h"
 #include "linux_socket.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_duplicate.h"
@@ -351,9 +352,12 @@ int ioctl(int fd, unsigned long request, ...) {
     }
     return errno = ENOTTY, -1;
   }
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   if (request != FIONREAD) return errno = ENOTTY, -1;
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  const HANDLE h = snapshot->handle;
   switch (GetFileType(h)) {
     case FILE_TYPE_PIPE: {
       DWORD avail = 0;
@@ -524,8 +528,27 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
     if (len > std::numeric_limits<off_t>::max() - offset) return EFBIG;
     const off_t end = offset + len;
 
-    // Keep the descriptor's actual file object stable through inspection and
-    // growth. F_GETFL's generic fallback is not evidence of write access.
+    // Revocable files serialize growth with all writes in the same session.
+    // Do not hold the process descriptor lock while entering that barrier.
+    auto snapshot = gesher::CaptureDescriptor(fd);
+    if (!snapshot) return errno;
+    gesher::FileOperationLease operation(snapshot);
+    if (operation.Error()) return operation.Error();
+    if (gesher::FileDescriptionIsRevocable(snapshot)) {
+      const int flags = gesher::FileDescriptionFlags(snapshot);
+      if (flags < 0) return errno;
+      if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_RDONLY) return EBADF;
+      LARGE_INTEGER size{};
+      if (!GetFileSizeEx(snapshot->handle, &size)) return gesher::ErrnoFromWin32(GetLastError());
+      if (end > size.QuadPart) {
+        FILE_END_OF_FILE_INFO info{};
+        info.EndOfFile.QuadPart = end;
+        if (!SetFileInformationByHandle(snapshot->handle, FileEndOfFileInfo, &info, sizeof(info)))
+          return gesher::ErrnoFromWin32(GetLastError());
+      }
+      return 0;
+    }
+    // Preserve the ordinary CRT growth path for unrelated descriptors.
     gesher::record_locks::DescriptorGuard descriptor_guard;
     HANDLE handle = gesher::HandleFromFd(fd);
     if (handle == INVALID_HANDLE_VALUE) return EBADF;
