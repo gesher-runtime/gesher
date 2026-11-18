@@ -595,7 +595,46 @@ public final class SyncManagerContractTest {
         }
     }
 
+    private static void timerRetention(boolean wire) throws Exception {
+        Method factory = type("SyncManager").getDeclaredMethod("timer");
+        factory.setAccessible(true);
+        ScheduledExecutorService timer = (ScheduledExecutorService) factory.invoke(null);
+        try {
+            // Hold the worker so no canceled task can disappear by reaching its deadline.
+            CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+            timer.execute(() -> {
+                entered.countDown();
+                try { release.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            });
+            try {
+                await(entered, "timer worker");
+                for (int i = 0; i < 10000; ++i) {
+                    timer.schedule(() -> {}, 365, TimeUnit.DAYS).cancel(false);
+                }
+                check(timer instanceof java.util.concurrent.ScheduledThreadPoolExecutor
+                                && ((java.util.concurrent.ScheduledThreadPoolExecutor) timer).getQueue().isEmpty(),
+                        "Canceled long-delay sync timers accumulated in the production queue");
+            } finally { release.countDown(); }
+        } finally { timer.shutdownNow(); }
+        for (boolean cancel : new boolean[]{false, true}) {
+            try (Harness h = new Harness(false, wire)) {
+                h.enqueue(ONE, extras("watchdog-retention")); h.timer.drain();
+                Object active = h.firstActive();
+                ScheduledFuture<?> watchdog = (ScheduledFuture<?>) get(active, "watchdog");
+                check(watchdog != null && !watchdog.isDone(), "Running sync has no watchdog");
+                if (cancel) { h.cancel(ONE, AUTHORITY); h.timer.drain(); }
+                else h.finish(0, new SyncResult());
+                check(watchdog.isCancelled() && get(active, "watchdog") == null,
+                        "Finished sync retained its watchdog and active object graph");
+                int queued = h.timer.queue.size();
+                invoke(h.sync, "watch", new Class<?>[]{active.getClass()}, active);
+                check(h.timer.queue.size() == queued, "Stale watchdog rearmed a finished sync");
+            }
+        }
+    }
+
     public static void contracts(String group, boolean wire) throws Exception {
+        if (group.equals("all") || group.equals("retention")) timerRetention(wire);
         if (group.equals("all") || group.equals("admission")) admission(wire);
         if (group.equals("all") || group.equals("clock")) clock(wire);
         if (group.equals("all") || group.equals("results")) results(wire);
