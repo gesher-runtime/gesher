@@ -12,6 +12,14 @@ $m3Tmp = Join-Path $env:RUNNER_TEMP 'gesher-media3'
 New-Item -ItemType Directory -Force $m3Tmp | Out-Null
 $captureProbe = Join-Path $Dir 'media_probe-media-capture-test.exe'
 $captureRuntime = Join-Path $Dir 'dalvikvm-media-capture-test.exe'
+Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
+foreach ($case in @('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'fixture-env',
+                    'opensl-missing', 'opensl-start', 'opensl-disconnect', 'recorder-start', 'recorder-disconnect', 'jni-read')) {
+  CheckTimed "media3: unavailable/disconnected capture contract ($case)" "$Dir/capture_failure_contract_test.exe" @($case) @("capture failure ${case}:") 20
+}
+foreach ($case in @('fixture-env', 'fixture-bad-file')) {
+  CheckTimed "media3: isolated capture fixture contract ($case)" "$Dir/capture_failure_fixture_test.exe" @($case) @("capture failure ${case}:") 20
+}
 if (-not (Test-Path -LiteralPath $captureProbe) -or -not (Test-Path -LiteralPath $captureRuntime)) {
   Write-Host 'FAIL  media3: isolated capture fixture binaries are missing'
   $failed++

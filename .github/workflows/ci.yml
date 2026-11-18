@@ -428,6 +428,10 @@ jobs:
 
       - name: Cross-compile current-source Windows performance contracts
         run: |
+          python3 tools/test_capture_failures.py --compile-only \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/capture_failure_contract_test.exe \
+            --fixture-output out/capture_failure_fixture_test.exe
           python3 tools/test_procfs_thread_lookup.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/procfs_thread_lookup_test.exe
