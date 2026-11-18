@@ -48,10 +48,11 @@ public final class NsdContractTest {
         final String type;
         final String subtype;
         boolean stop;
+        int stopCalls;
         Request(String type, String subtype, WindowsNsd.Scope scope, WindowsNsd.Callback callback) {
             this.type = type; this.subtype = subtype; this.scope = scope; this.callback = callback;
         }
-        public void stop() { stop = true; }
+        public void stop() { stop = true; stopCalls++; }
     }
     private static final class Backend implements WindowsNsd.Factory {
         final List<Request> requests = new ArrayList<>();
@@ -155,14 +156,20 @@ public final class NsdContractTest {
         check(first.stop, "Stop reaches backend");
         service.drain(); app.drain();
         check(!listener.events.contains("stopped _gesher._tcp"), "Stop waits for native completion");
-        expect(IllegalArgumentException.class, () -> manager.stopServiceDiscovery(listener));
+        manager.stopServiceDiscovery(listener);
+        check(first.stopCalls == 1, "Pending repeated stop coalesces without restarting transport cleanup");
         expect(IllegalArgumentException.class, () -> start(manager, app, listener));
-        first.callback.stopped(); service.drain();
+        first.callback.stopped();
+        manager.stopServiceDiscovery(listener);
+        check(first.stopCalls == 1, "Stop coalesces while terminal dispatch is queued");
+        service.drain();
         check(!listener.events.contains("stopped _gesher._tcp"), "Terminal still uses application executor");
         // Android removes the listener on its handler before submitting terminal delivery.
         start(manager, app, listener);
         app.drain(); service.drain(); app.drain();
         check(listener.events.get(listener.events.size() - 1).startsWith("started"), "Reuse after terminal submission");
+        check(java.util.Collections.frequency(listener.events, "stopped _gesher._tcp") == 1,
+                "Repeated stops deliver exactly one terminal callback");
         first.callback.found("stale", "_gesher._tcp.", 7); service.drain(); app.drain();
         check(!"stale".equals(listener.found.getServiceName()), "Old handle cannot target reused listener");
         backend.last().callback.failed(0); service.drain(); app.drain();

@@ -366,7 +366,9 @@ public final class NsdManager {
         Objects.requireNonNull(listener, "listener cannot be null");
         synchronized (mDiscoveries) {
             Discovery discovery = mDiscoveries.get(listener);
-            if (discovery == null || discovery.stopPending) throw new IllegalArgumentException("listener not registered");
+            if (discovery == null) throw new IllegalArgumentException("listener not registered");
+            // Registration remains live until the terminal event is dispatched.
+            if (discovery.stopPending) return;
             discovery.stopPending = true;
             if (discovery.session != null) discovery.session.stop();
         }
