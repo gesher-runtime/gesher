@@ -39,6 +39,13 @@ final class SettingsStore {
 
     long id(String table, String name) { return mIds.get(table).get(name); }
 
+    void addDefault(String table, String name, String value) {
+        Map<String, String> values = mTables.get(table);
+        if (values.containsKey(name)) return;
+        values.put(name, value);
+        mIds.get(table).put(name, mNextId++);
+    }
+
     static boolean validKey(String name) {
         if (name == null || name.isEmpty()) return false;
         for (int i = 0; i < name.length(); i++) {

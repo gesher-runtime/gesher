@@ -147,6 +147,34 @@ Windows without them (no location service, no Media Foundation) gets clean
   TextureView (they get no native window on Gesher today; frames go to any
   surface that has one).
 
+## Speech recognition
+
+`SpeechRecognizer` delegates to an installed, enabled, exported Android
+`RecognitionService`. The provider declares the `android.speech.RecognitionService`
+action. Apps that discover providers should declare the corresponding package
+visibility query, as on Android. An app can select an explicit component with
+`SpeechRecognizer.createSpeechRecognizer(context, component)`.
+
+The default recognizer reads `Settings.Secure.VOICE_RECOGNITION_SERVICE`. To seed
+an unset default, install the provider APK and start the Gesher device with
+`GESHER_SPEECH_RECOGNIZER=package.name/.ProviderClass` in the host environment.
+This setting requires secure-settings write permission when changed by an Android
+caller. The selected provider must still be installed and enabled when bound.
+The on-device factory requires an on-device provider configured in the platform
+resources. An installed recognizer alone does not establish offline capability.
+
+The installed provider supplies audio handling, recognition, languages and model
+download behavior. Gesher forwards requests and preserves the calling app's audio
+attribution. A missing provider or timed-out bind produces an API error. If an
+active provider disconnects, the current operations fail and a new operation may
+reconnect. Destroying the recognizer or losing its app process releases the
+provider binding and cancels active listening.
+
+`tools/test_speech_recognition.py --help` describes the host fixtures. The Windows
+framework-fixes track also runs them under ART. The fixtures exercise the broker and
+public client with controlled providers. A packaged provider and physical audio
+workflow require separate qualification.
+
 ## Status and next steps
 
 - Surfaces continuation verified: ci 40307919084 attempt 2 at b1b59a6,

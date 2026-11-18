@@ -618,6 +618,13 @@ public final class ActivityManagerService extends IActivityManager.Default {
                 callingPackage);
     }
 
+    int bindSystemService(Intent service, IServiceConnection connection,
+            java.util.function.BooleanSupplier lifetime) {
+        if (!mCallers.isSystem()) throw new SecurityException("System binding requires host authority");
+        return mServices.bindService(null, service, null, connection,
+                android.content.Context.BIND_AUTO_CREATE, "android", lifetime);
+    }
+
     @Override
     public int bindServiceInstance(IApplicationThread caller, IBinder token, Intent service,
             String resolvedType, IServiceConnection connection, long flags,

@@ -137,6 +137,9 @@ final class SettingsProvider extends ContentProvider {
         global.put(Settings.Global.DEVICE_NAME, "Gesher");
 
         mStore = new SettingsStore(file, mTables);
+        String recognizer = SpeechRecognitionManagerService.configuredDefault(pm,
+                System.getenv("GESHER_SPEECH_RECOGNIZER"));
+        if (recognizer != null) mStore.addDefault(SECURE, Settings.Secure.VOICE_RECOGNITION_SERVICE, recognizer);
         ApplicationInfo ai = new ApplicationInfo();
         ai.packageName = "com.android.providers.settings";
         ai.processName = "system";
@@ -176,8 +179,10 @@ final class SettingsProvider extends ContentProvider {
         return i < 0 ? null : method.substring(i + 1);
     }
 
-    private void enforceWrite(String table) {
-        if (!GmsSignatureSpoofing.isEnabled()) return;
+    private void enforceWrite(String table, String name) {
+        // Selecting the recognizer controls which APK may receive other apps' audio.
+        boolean recognizer = SECURE.equals(table) && Settings.Secure.VOICE_RECOGNITION_SERVICE.equals(name);
+        if (!recognizer && !GmsSignatureSpoofing.isEnabled()) return;
         if (android.os.Binder.getCallingPid() == Process.myPid()) return;
         if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
         if (mCallers.isSystem()) return;
@@ -201,14 +206,14 @@ final class SettingsProvider extends ContentProvider {
             synchronized (this) { return valueBundle(mTables.get(table).get(arg)); }
         }
         if (method.equals("PUT_" + table)) {
-            enforceWrite(table);
+            enforceWrite(table, arg);
             put(table, arg, extras == null ? null : extras.getString("value"), false);
             // Retain the accepted-PUT diagnostic even when a durable value is unchanged.
             if (SettingsStore.validKey(arg)) SystemServer.log("settings: updated " + table + " key " + arg);
             return null;
         }
         if (method.equals("DELETE_" + table)) {
-            enforceWrite(table);
+            enforceWrite(table, arg);
             Bundle result = new Bundle();
             result.putInt("result_rows_deleted", remove(table, arg) ? 1 : 0);
             return result;
@@ -325,8 +330,8 @@ final class SettingsProvider extends ContentProvider {
     @Override
     public Uri insert(Uri uri, ContentValues values) {
         Arguments args = new Arguments(uri, null, null, true);
-        enforceWrite(args.table);
         String name = values.getAsString("name");
+        enforceWrite(args.table, name);
         return put(args.table, name, values.getAsString("value"), false)
                 ? Uri.withAppendedPath(Uri.parse("content://settings/" + args.table), name) : null;
     }
@@ -341,14 +346,14 @@ final class SettingsProvider extends ContentProvider {
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         Arguments args = new Arguments(uri, selection, selectionArgs, false);
-        enforceWrite(args.table);
+        enforceWrite(args.table, args.name);
         return remove(args.table, args.name) ? 1 : 0;
     }
 
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         Arguments args = new Arguments(uri, selection, selectionArgs, false);
-        enforceWrite(args.table);
+        enforceWrite(args.table, args.name);
         if (!SettingsStore.validKey(values.getAsString("name"))) return 0;
         return put(args.table, args.name, values.getAsString("value"), true) ? 1 : 0;
     }

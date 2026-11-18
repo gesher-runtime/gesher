@@ -168,6 +168,7 @@ public final class Services {
                 new DeviceServices.AppWidgetService()).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new DeviceServices.SearchService()).asBinder());
+        services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new ClipboardService()).asBinder());
         // Construct the network provider before jobs subscribe to its changes.
