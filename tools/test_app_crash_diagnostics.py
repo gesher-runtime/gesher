@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def host_test():
+    java_home = os.environ.get('JAVA_HOME_21_X64') or os.environ.get('JAVA_HOME')
+    javac = str(Path(java_home) / 'bin/javac') if java_home else 'javac'
+    java = str(Path(java_home) / 'bin/java') if java_home else 'java'
     stubs = {
         'android/app/ActivityThread.java': 'package android.app; public class ActivityThread { public static Application currentApplication() { return new Application(); } }',
         'android/app/Application.java': 'package android.app; public class Application { public String getPackageName() { return "test.pkg"; } }',
@@ -43,17 +46,17 @@ def host_test():
             sources.append(str(target))
         sources += [str(ROOT / 'app/java/com/gesher/app' / p) for p in ('AppCrash.java', 'CrashDiagnosis.java', 'CrashReport.java')]
         sources += [str(ROOT / 'tests/app-crash/CrashDiagnosisTest.java')]
-        subprocess.run(['javac', '--release', '11', '-encoding', 'UTF-8', '-d', str(work), *sources], check=True, timeout=60)
-        subprocess.run(['java', '-cp', str(work), 'CrashDiagnosisTest'], cwd=work,
+        subprocess.run([javac, '--release', '11', '-encoding', 'UTF-8', '-d', str(work), *sources], check=True, timeout=60)
+        subprocess.run([java, '-cp', str(work), 'CrashDiagnosisTest'], cwd=work,
                        env=dict(os.environ, GESHER_CRASH_DIALOGS='1'), check=True, timeout=20)
-        subprocess.run(['java', '-cp', str(work), 'CrashDiagnosisTest', 'disabled'],
+        subprocess.run([java, '-cp', str(work), 'CrashDiagnosisTest', 'disabled'],
                        cwd=work, env=dict(os.environ, GESHER_CRASH_DIALOGS='0'), check=True, timeout=20)
         cache = work / 'cache-test'
         cache.mkdir()
-        subprocess.run(['javac', '--release', '11', '-d', str(cache),
+        subprocess.run([javac, '--release', '11', '-d', str(cache),
                         str(ROOT / 'app/java/com/gesher/server/WindowsBluetooth.java'),
                         str(ROOT / 'tests/app-crash/BluetoothSnapshotTest.java')], check=True, timeout=60)
-        subprocess.run(['java', '-cp', str(cache), 'BluetoothSnapshotTest'], check=True, timeout=20)
+        subprocess.run([java, '-cp', str(cache), 'BluetoothSnapshotTest'], check=True, timeout=20)
 
 
 def native_test(launcher):
