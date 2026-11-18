@@ -18,7 +18,13 @@ using ULONGLONG = unsigned long long;
 static void SetEvent(HANDLE) {}
 static constexpr intptr_t INVALID_HANDLE_VALUE = -1;
 namespace gesher {
+struct EventFd;
+struct EventFdEdgeWatch;
+struct EpollWakeChannels { void Notify() {} };
 @EPOLL_STATE@
+// This fairness adapter registers no producer-backed sources. Edge publication
+// is qualified by test_epoll_eventfd_edges.py.
+static uint32_t EventFdEdgeReady(Entry&, bool) { return 0; }
 @EPOLL_CONVERSION@
 static std::mutex registry_lock;
 static std::map<int, std::shared_ptr<Epoll>> registry;
