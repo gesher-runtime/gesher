@@ -48,6 +48,16 @@ $parentProgram = '$child = Start-Process -PassThru -FilePath ''' + $pwsh.Replace
     '''); Write-Output (''CONTROL descendant='' + $child.Id); Start-Sleep -Seconds 30'
 $control = Run-Owned 'controller-timeout' 5000 $pwsh @('-NoProfile', '-Command', $parentProgram) 124 'CONTROL descendant=[0-9]+'
 if ($control -notmatch 'terminated=1 active_before_cleanup=[2-9]') { throw 'Actual descendant cleanup was not observed' }
+# A zero exit from the root cannot hide a descendant that remains alive after
+# the bounded natural-retirement interval. The owner must reject and reap it.
+$orphanProgram = '$child = Start-Process -PassThru -FilePath ''' + $pwsh.Replace("'", "''") +
+    ''' -ArgumentList @(''-NoProfile'', ''-EncodedCommand'', ''' + $encoded +
+    '''); Write-Output (''CONTROL live-descendant='' + $child.Id); exit 0'
+$orphanEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($orphanProgram))
+$orphanControl = Run-Owned 'controller-live-descendant' 10000 $pwsh @('-NoProfile', '-EncodedCommand', $orphanEncoded) 125 'CONTROL live-descendant=[0-9]+'
+if ($orphanControl -notmatch 'root_exit=0 result=125 empty=1 terminated=1 active_before_cleanup=[1-9]') {
+    throw 'Successful-root live descendant was not rejected and cleaned'
+}
 # Native component fixtures use ordinary relative POSIX paths. Give their
 # complete, job-owned process trees one isolated writable directory; bare
 # Windows runners do not necessarily have the product's drive-root /tmp.

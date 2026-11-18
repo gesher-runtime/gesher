@@ -11,11 +11,12 @@ namespace {
 class Handle {
  public:
   explicit Handle(HANDLE value = nullptr) : value_(value) {}
-  ~Handle() { if (Valid()) CloseHandle(value_); }
+  ~Handle() { Reset(); }
   Handle(const Handle&) = delete;
   Handle& operator=(const Handle&) = delete;
   bool Valid() const { return value_ && value_ != INVALID_HANDLE_VALUE; }
   HANDLE Get() const { return value_; }
+  void Reset() { if (Valid()) CloseHandle(value_); value_ = nullptr; }
  private:
   HANDLE value_;
 };
@@ -132,8 +133,26 @@ int Run(int argc, wchar_t** argv) {
   } else {
     Error("resume assigned root");
   }
+  // A signaled root and an empty job are distinct observations. Release our
+  // completed process/thread references before sampling job retirement, then
+  // allow a bounded accounting drain. A live descendant still fails the run.
+  bool root_exited = false;
+  auto reap_root = [&] {
+    if (!root_exited && WaitForSingleObject(root.Get(), 0) == WAIT_OBJECT_0) {
+      if (!GetExitCodeProcess(root.Get(), &root_code)) { Error("read final root exit"); result = 125; }
+      root_exited = true;
+      thread.Reset();
+      root.Reset();
+    }
+  };
+  reap_root();
   DWORD active = 0;
-  const bool counted = Active(job.Get(), &active);
+  bool counted = Active(job.Get(), &active);
+  const ULONGLONG retirement_start = GetTickCount64();
+  while (root_exited && counted && active && GetTickCount64() - retirement_start < 1000) {
+    Sleep(10);
+    counted = Active(job.Get(), &active);
+  }
   const DWORD before_cleanup = active;
   if (!counted) { Error("query owned processes"); result = 125; }
   if (counted && active && result == 0) {
@@ -148,12 +167,11 @@ int Run(int argc, wchar_t** argv) {
   const ULONGLONG cleanup_start = GetTickCount64();
   bool empty = false;
   do {
-    if (Active(job.Get(), &active) && active == 0 &&
-        WaitForSingleObject(root.Get(), 0) == WAIT_OBJECT_0) { empty = true; break; }
+    reap_root();
+    if (root_exited && Active(job.Get(), &active) && active == 0) { empty = true; break; }
     Sleep(10);
   } while (GetTickCount64() - cleanup_start < 5000);
   if (!empty) { fprintf(stderr, "COMPONENT_CONTROLLER_ERROR cleanup unproved\n"); result = 125; }
-  if (empty && !GetExitCodeProcess(root.Get(), &root_code)) { Error("read final root exit"); result = 125; }
   LARGE_INTEGER size{};
   if (!GetFileSizeEx(log.Get(), &size) || size.QuadPart > 4 * 1024 * 1024) result = 125;
   printf("COMPONENT_JOB pid=%lu root_exit=%lu result=%d empty=%d terminated=%d active_before_cleanup=%lu elapsed_ms=%llu bytes=%lld\n",
