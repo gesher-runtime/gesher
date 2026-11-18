@@ -178,21 +178,26 @@ struct AMediaExtractor {
   std::unique_ptr<gesher::media::extractor_abi::PsshInfo, decltype(&std::free)> pssh{
       nullptr, std::free};
 
-  Track* Current(int64_t seek = -1,
+  Track* Current(media_status_t* status = nullptr, int64_t seek = -1,
                  gesher::media::SeekMode mode = gesher::media::SeekMode::kPreviousSync) {
     Track* current = nullptr;
-    bool failed = false;
     for (Track& track : selected) {
       if (seek >= 0 || (!track.pending && track.result == AMEDIA_OK)) {
         track.result = track.reader->Read(&track.sample, seek, mode);
         track.pending = track.result == AMEDIA_OK;
       }
-      failed |= track.result < 0;
+      if (track.result < 0) {
+        if (status != nullptr) {
+          *status = translate_error(reverse_translate_error(static_cast<media_status_t>(track.result)));
+        }
+        return nullptr;
+      }
       if (track.pending && (current == nullptr || track.sample.time_us < current->sample.time_us)) {
         current = &track;
       }
     }
-    return failed ? nullptr : current;
+    if (status != nullptr) *status = current == nullptr ? AMEDIA_ERROR_END_OF_STREAM : AMEDIA_OK;
+    return current;
   }
 };
 
@@ -418,7 +423,7 @@ media_status_t Seek(AMediaExtractor* ex, int64_t time_us, int32_t mode) {
   const auto mode_abi = mode == 0 ? SeekMode::kPreviousSync :
       mode == 2 ? SeekMode::kClosestSync : SeekMode::kNextSync;
   std::lock_guard lock(ex->mutex);
-  return ex->Current(time_us, mode_abi) != nullptr ? AMEDIA_OK : AMEDIA_ERROR_END_OF_STREAM;
+  return ex->Current(nullptr, time_us, mode_abi) != nullptr ? AMEDIA_OK : AMEDIA_ERROR_END_OF_STREAM;
 }
 
 bool Vorbis(const AMediaExtractor::Track& t) { return t.mime == "audio/vorbis"; }
@@ -482,8 +487,9 @@ media_status_t GetSampleFormat(AMediaExtractor* ex, AMediaFormat* dest) {
   if (ex == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   if (dest == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::lock_guard lock(ex->mutex);
-  auto* track = ex->Current();
-  if (track == nullptr) return AMEDIA_ERROR_END_OF_STREAM;
+  media_status_t status;
+  auto* track = ex->Current(&status);
+  if (track == nullptr) return status;
   AMediaFormat_clear(dest);
   AMediaFormat_setString(dest, "mime", track->mime.c_str());
   AMediaFormat_setInt32(dest, "track-index", static_cast<int32_t>(track->index));

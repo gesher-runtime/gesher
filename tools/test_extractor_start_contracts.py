@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise actual extractor reader startup, selection and cleanup on a host.
+"""Exercise actual extractor startup, read errors and cleanup on a host.
 
 The plugin's start/stop/free, buffer group, AMediaFormat storage and error
 translator are declared seams. No container plugin, Windows or ART runs here.
@@ -54,6 +54,8 @@ def main() -> int:
             "@FORMAT_METHODS@": extractor[first:extractor.index("\nnamespace {", first)],
             "@TRACK_READER@": body(extractor, "class AospTrackReader : public TrackReader") + ";",
             "@SELECT@": body(ndk, "media_status_t Select("),
+            "@CURRENT@": body(ndk, "Track* Current("),
+            "@GET_SAMPLE_FORMAT@": body(ndk, "media_status_t GetSampleFormat("),
         }
         source = (ROOT / "tests/media/ndk-extractor/start_status_host.cc.in").read_text()
         for marker, value in replacements.items():
