@@ -326,6 +326,11 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
         if (same_file) {
           w.file = name;
           w.awaiting_rename = false;
+        } else if (file_id == 0 || w.index == 0) {
+          // The destination may already have moved or been deleted. Basic
+          // records cannot reconstruct that history by their current names.
+          // Tell the caller to rescan/rebuild instead of silently losing it.
+          Emit(-1, IN_Q_OVERFLOW, 0, "");
         }
       } else if (w.awaiting_rename
                      ? file_id != 0 && file_id == w.index
@@ -348,6 +353,10 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
           default:
             break;
         }
+      } else if (w.awaiting_rename && file_id == 0) {
+        // An unidentifiable basic record may belong to the renamed file.
+        // Do not invent a modification/deletion or imply a complete stream.
+        Emit(-1, IN_Q_OVERFLOW, 0, "");
       }
     } else {
       switch (action) {

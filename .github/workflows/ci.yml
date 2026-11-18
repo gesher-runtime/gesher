@@ -252,6 +252,7 @@ jobs:
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
           python3 tools/test_directory_rename_contracts.py --sanitize
+          python3 tools/test_inotify_records.py --sanitize
           python3 tools/test_sqlite_paths.py --fetch --sanitize --negative-control
           python3 tools/test_media_source_contracts.py --sanitize
           python3 tools/test_media_callback_state.py --sanitize
