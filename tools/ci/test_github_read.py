@@ -215,6 +215,29 @@ class ReceiptIntegrationTest(unittest.TestCase):
     def _receipt(self):
         runpy.run_path(str(ROOT / 'tools/ci/artifact_receipt.py'), run_name='__main__')
 
+    def test_rerun_selects_only_artifact_in_verified_producer_window(self):
+        current = self.inventory['artifacts'][0]
+        self.inventory['artifacts'].insert(0, dict(current, id=11, created_at='2026-11-08T02:50:35Z'))
+        self.inventory['total_count'] = 2
+        self.responses = [response(self.run_value), response(self.jobs), response(self.inventory)]
+        self._receipt()
+        self.assertEqual(self.downloads[0][3], '10')
+
+    def test_duplicate_current_attempt_artifacts_remain_ambiguous(self):
+        self.inventory['artifacts'].append(dict(self.inventory['artifacts'][0], id=11))
+        self.inventory['total_count'] = 2
+        self.responses = [response(self.run_value), response(self.jobs), response(self.inventory)]
+        with self.assertRaisesRegex(RuntimeError, 'Artifact missing or ambiguous'):
+            self._receipt()
+        self.assertEqual(self.downloads, [])
+
+    def test_old_attempt_alone_cannot_supply_artifact(self):
+        self.inventory['artifacts'][0]['created_at'] = '2026-11-08T02:50:35Z'
+        self.responses = [response(self.run_value), response(self.jobs), response(self.inventory)]
+        with self.assertRaisesRegex(RuntimeError, 'Artifact missing or ambiguous'):
+            self._receipt()
+        self.assertEqual(self.downloads, [])
+
     def test_actual_receipt_recovers_and_preserves_paths_and_verified_download(self):
         self.responses = [response(self.run_value), response(code=1, stderr='gh: Server Error (HTTP 502)'),
                           response(self.jobs), response(self.inventory)]
