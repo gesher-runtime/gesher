@@ -28,7 +28,7 @@ import java.io.OutputStream;
  * for it) and sends it.
  */
 final class NotificationStore {
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
 
     /** A notification as stored: its identity and its PendingIntents' records. */
     static final class Stored {
@@ -39,6 +39,7 @@ final class NotificationStore {
         int id;
         int flags;
         String channelId;
+        String opPkg;
         Intended content;
         Intended[] actions = new Intended[0];
     }
@@ -85,6 +86,11 @@ final class NotificationStore {
     /** Keeps the notification's PendingIntents (for clicks after the device stopped). */
     static void save(ActivityManagerService am, String key, String pkg, String tag, int id,
             Notification n) {
+        save(am, key, pkg, tag, id, n, pkg);
+    }
+
+    static void save(ActivityManagerService am, String key, String pkg, String tag, int id,
+            Notification n, String opPkg) {
         Stored s = new Stored();
         s.key = key;
         s.packageName = pkg;
@@ -94,6 +100,7 @@ final class NotificationStore {
         s.id = id;
         s.flags = n.flags;
         s.channelId = n.getChannelId() != null ? n.getChannelId() : "miscellaneous";
+        s.opPkg = opPkg;
         s.content = intended(am, n.contentIntent);
         int actions = n.actions != null ? n.actions.length : 0;
         s.actions = new Intended[actions];
@@ -110,6 +117,7 @@ final class NotificationStore {
             p.writeInt(s.id);
             p.writeInt(s.flags);
             p.writeString(s.channelId);
+            p.writeString(s.opPkg);
             write(p, s.content);
             p.writeInt(s.actions.length);
             for (Intended i : s.actions) write(p, i);
@@ -174,7 +182,8 @@ final class NotificationStore {
             p.unmarshall(data, 0, data.length);
             p.setDataPosition(0);
             int version = p.readInt();
-            if (version != VERSION && version != 2 && !(version == 1 && !GmsSignatureSpoofing.isEnabled())) return null;
+            if (version != VERSION && version != 3 && version != 2
+                    && !(version == 1 && !GmsSignatureSpoofing.isEnabled())) return null;
             Stored s = new Stored();
             s.key = p.readString();
             if (s.key == null || key != null && !key.equals(s.key)) return null;
@@ -188,6 +197,8 @@ final class NotificationStore {
             s.id = p.readInt();
             s.flags = p.readInt();
             if (version >= 3) s.channelId = p.readString();
+            s.opPkg = version >= 4 ? p.readString() : s.packageName;
+            if (s.opPkg == null || s.opPkg.isEmpty()) return null;
             s.content = read(p, version);
             int actions = p.readInt();
             if (actions < 0 || actions > 128) return null;

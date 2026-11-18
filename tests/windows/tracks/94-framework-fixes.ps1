@@ -265,6 +265,15 @@ Check 'services: durable notification groups, real channel policy and lifecycle 
   $groupsOut
 } @('NotificationChannelGroupsTest all passed:')
 
+# Delegation uses the real service and generated Binder parcels with controlled
+# fixture identities, plus durable restart/migration and ownership checks.
+$delegationOut = FixesRun ($dvmFixes + 'gesher.services.NotificationDelegationTest') 120
+$delegationCode = $LASTEXITCODE
+Check 'services: authenticated notification delegation, revocation and retained poster ownership' {
+  $global:LASTEXITCODE = $delegationCode
+  $delegationOut
+} @('NotificationDelegationTest all passed:')
+
 # Real JobService callbacks attach notifications to a running job. Exercise
 # shared ownership, replacement, completion and cancellation through generated
 # Binder transactions, including their retained-notification effects.

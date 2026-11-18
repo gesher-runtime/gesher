@@ -487,6 +487,18 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Notification delegation ownership and durable policy contracts
+        run: |
+          python3 tools/test_notification_delegation.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_notification_channel_groups.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+          "$JAVA_HOME/bin/javac" --release 11 -cp work/sdk-36/android.jar \
+            -d "$RUNNER_TEMP/notification-delegation-sdk" \
+            tests/notification-delegation/sdk/java/gesher/notificationdelegation/ControlReceiver.java
+
       - name: Activity finish, null binding and public media receiver contracts
         run: |
           args=(--java-home "$JAVA_HOME" --framework-classes out/framework/classes \

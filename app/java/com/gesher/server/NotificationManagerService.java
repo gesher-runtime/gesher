@@ -129,6 +129,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private final java.util.function.ToIntBiFunction<StatusBarNotification, Boolean> mTestToast;
     private final File mListenerFile = new File(Device.dataDir(), "system/notification-listeners");
     private final Properties mListenerGrants = new Properties();
+    private final NotificationDelegates mDelegates = new NotificationDelegates();
 
     /** The service Services.create made last (for the job scheduler's job notifications). */
     static volatile NotificationManagerService sLast;
@@ -199,6 +200,48 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     private ApkPackage packageFor(String pkg) { return pm() == null ? null : pm().get(pkg); }
+
+    private ApkPackage currentPackage(String name) {
+        ApkPackage pkg = packageFor(name);
+        return pkg != null && !pm().isRemovalPending(name) ? pkg : null;
+    }
+
+    /** Authenticate the attached Binder process before accepting a claimed package. */
+    private ApkPackage notificationCaller(String name) {
+        if (name == null) throw new SecurityException("Missing notification caller");
+        CallerIdentity identity = callers();
+        if (identity.isSystem()) {
+            own(name); // Existing server-local/host control plane, never a remote app exception.
+            return packageFor(name);
+        }
+        String actualName = identity.callerPackage();
+        ApkPackage actual = currentPackage(actualName), claimed = currentPackage(name);
+        if (claimed == null || actual == null || !actualName.equals(name)
+                && !(protectedMode() && actual.uid() == claimed.uid()
+                        && identity.callerUid() == claimed.uid())) {
+            // Legacy mode assigns every package UID10000. That is not Android's
+            // authenticated shared UID and must never authorize another package.
+            throw new SecurityException("Caller does not own notification package " + name);
+        }
+        return claimed;
+    }
+
+    /** Android resolveNotificationUid: ownership/shared UID, then an explicit delegate. */
+    private ApkPackage resolveNotificationOwner(String callingPkg, String targetPkg,
+            boolean allowMissing) {
+        ApkPackage caller = notificationCaller(callingPkg);
+        ApkPackage target = currentPackage(targetPkg);
+        if (target == null) {
+            if (callers().isSystem() && "android".equals(targetPkg)) return null;
+            if (allowMissing) return null;
+            throw new SecurityException("Cannot post for an unknown notification package " + targetPkg);
+        }
+        if (callers().isSystem() || callingPkg.equals(targetPkg)
+                || protectedMode() && caller != null && caller.uid() == target.uid()
+                        && callers().callerUid() == target.uid()
+                || mDelegates.allows(target, caller)) return target;
+        throw new SecurityException("Caller " + callingPkg + " cannot notify as " + targetPkg);
+    }
 
     private boolean mayPost(String pkg) {
         if (pm() != null && pm().isRemovalPending(pkg)) return false;
@@ -306,6 +349,11 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     void postFor(ApkPackage captured, String pkg, String tag, int id, Notification notification) {
+        postFor(captured, pkg, pkg, 0, tag, id, notification, false);
+    }
+
+    private void postFor(ApkPackage captured, String pkg, String opPkg, int callingPid,
+            String tag, int id, Notification notification, boolean authenticate) {
         if (notification == null) return;
         // Foreground-service state lives in ActiveServices; denied posting must not
         // expose its content through toasts, listeners or active-notification queries.
@@ -322,15 +370,16 @@ public final class NotificationManagerService extends INotificationManager.Defau
             }
             channel = capturedChannel;
         }
-        StatusBarNotification sbn = new StatusBarNotification(pkg, pkg, id, tag,
+        StatusBarNotification sbn = new StatusBarNotification(pkg, opPkg, id, tag,
                 packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
-                0, notification, UserHandle.SYSTEM, null,
+                callingPid, notification, UserHandle.SYSTEM, null,
                 System.currentTimeMillis());
         Record r = new Record(sbn, channel, notificationImportance(channel, notification,
                 captured != null && captured.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O));
         Runnable beforePublication = mBeforePostPublication;
         if (beforePublication != null) beforePublication.run();
         synchronized (mPublicationLock) {
+            if (authenticate && resolveNotificationOwner(opPkg, pkg, false) != captured) return;
             if (packageFor(pkg) != captured || captured == null && !"android".equals(pkg) || !mayPost(pkg)) return;
             boolean update;
             synchronized (this) {
@@ -350,7 +399,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
             } else {
                 // Its intents outlive this system server, as its toast does (ADR 0051).
                 if (WindowsHost.inSystemServer()) {
-                    NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification);
+                    NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification, opPkg);
                 }
                 int hr = mTestToast == null ? showToast(r, update) : mTestToast.applyAsInt(sbn, update);
                 shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
@@ -376,7 +425,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 record.n().flags &= ~Notification.FLAG_USER_INITIATED_JOB;
             }
             if (WindowsHost.inSystemServer()) {
-                NotificationStore.save(am(), record.sbn.getKey(), pkg, null, id, record.n());
+                NotificationStore.save(am(), record.sbn.getKey(), pkg, null, id, record.n(), record.sbn.getOpPkg());
             }
         }
         notifyListeners(record, true, 0);
@@ -412,31 +461,45 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     private void cancel(String pkg, String tag, int id, int reason) {
+        cancel(pkg, tag, id, reason, null);
+    }
+
+    private void cancel(String pkg, String tag, int id, int reason, String opPkg) {
         Record r;
-        synchronized (this) {
-            r = mPosted.remove(key(pkg, tag, id));
-        }
-        String sbnKey = new StatusBarNotification(pkg, pkg, id, tag,
-                packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
-                0, new Notification(), UserHandle.SYSTEM, null, 0).getKey();
-        if (r == null) {
-            // Posted by an earlier run of the device: its toast may still be in Windows'
-            // notification center.
-            if (NotificationStore.load(pkg, sbnKey) != null) {
+        synchronized (mPublicationLock) {
+            if (opPkg != null && resolveNotificationOwner(opPkg, pkg, true) == null
+                    && !"android".equals(pkg)) return;
+            String sbnKey = new StatusBarNotification(pkg, pkg, id, tag,
+                    packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
+                    0, new Notification(), UserHandle.SYSTEM, null, 0).getKey();
+            NotificationStore.Stored retained;
+            synchronized (this) {
+                r = mPosted.get(key(pkg, tag, id));
+                retained = r == null ? NotificationStore.load(pkg, sbnKey) : null;
+                String poster = r != null ? r.sbn.getOpPkg() : retained != null ? retained.opPkg : null;
+                if (opPkg != null && !pkg.equals(opPkg) && poster != null && !opPkg.equals(poster)) {
+                    throw new SecurityException("A delegate cannot cancel a notification it did not post");
+                }
+                // A concurrent replacement cannot change the poster between
+                // the authorization check and the removal.
+                mPosted.remove(key(pkg, tag, id));
+            }
+            if (r == null) {
+                if (retained == null) return;
                 NotificationStore.delete(pkg, sbnKey);
                 int hr = mTestToast == null ? WindowsHost.removeToast(AppShell.appUserModelId(pkg),
                         toastTag(tag, id), TOAST_GROUP) : 0;
                 SystemServer.log("notification " + id + " of " + pkg + " (an earlier run's)"
                         + " cancelled" + (hr == 0 ? ", its toast removed"
                                 : String.format(" (toast: 0x%08x)", hr)));
+                return;
             }
-            return;
+            NotificationStore.delete(pkg, r.sbn.getKey());
+            int hr = mTestToast == null ? WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg), toastTag(tag, id),
+                    TOAST_GROUP, id) : 0;
+            SystemServer.log("notification " + id + " of " + pkg + " cancelled"
+                    + (hr == 0 ? ", its toast removed" : String.format(" (toast: 0x%08x)", hr)));
         }
-        NotificationStore.delete(pkg, r.sbn.getKey());
-        int hr = mTestToast == null ? WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg), toastTag(tag, id),
-                TOAST_GROUP, id) : 0;
-        SystemServer.log("notification " + id + " of " + pkg + " cancelled"
-                + (hr == 0 ? ", its toast removed" : String.format(" (toast: 0x%08x)", hr)));
         notifyListeners(r, false, reason);
     }
 
@@ -902,17 +965,17 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id,
             Notification notification, int userId) {
-        ApkPackage captured = packageFor(pkg);
-        user(userId); own(pkg); own(opPkg);
-        if (!callers().isSystem() && !pkg.equals(opPkg)) throw new SecurityException("Invalid notification attribution");
-        postFor(captured, pkg, tag, id, notification);
+        user(userId);
+        if (pkg == null || notification == null) throw new IllegalArgumentException("Notification and owner are required");
+        ApkPackage captured = resolveNotificationOwner(opPkg, pkg, false);
+        postFor(captured, pkg, opPkg, Binder.getCallingPid(), tag, id, notification, true);
     }
 
     @Override
     public void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id,
             int userId) {
-        user(userId); own(pkg); own(opPkg);
-        cancel(pkg, tag, id);
+        user(userId); notificationCaller(opPkg);
+        cancel(pkg, tag, id, NotificationListenerService.REASON_APP_CANCEL, opPkg);
     }
 
     @Override
@@ -950,6 +1013,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         synchronized (mPublicationLock) { packageRemovedLocked(pkg); }
     }
     private void packageRemovedLocked(String pkg) {
+        mDelegates.remove(pkg);
         synchronized (this) {
             AtomicFile file = channelFile(pkg);
             file.delete();
@@ -978,8 +1042,21 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     @Override
     public ParceledListSlice getAppActiveNotifications(String callingPkg, int userId) {
-        user(userId); own(callingPkg);
-        return new ParceledListSlice<>(active(callingPkg));
+        user(userId); notificationCaller(callingPkg);
+        List<StatusBarNotification> result = new ArrayList<>();
+        synchronized (this) {
+            for (Record record : mPosted.values()) {
+                StatusBarNotification sbn = record.sbn;
+                if ((!callingPkg.equals(sbn.getPackageName()) && !callingPkg.equals(sbn.getOpPkg()))
+                        || !mayPost(sbn.getPackageName())) continue;
+                Notification notification = sbn.getNotification().clone();
+                notification.overrideAllowlistToken(null);
+                result.add(new StatusBarNotification(sbn.getPackageName(), sbn.getOpPkg(),
+                        sbn.getId(), sbn.getTag(), sbn.getUid(), sbn.getInitialPid(), notification,
+                        sbn.getUser(), sbn.getOverrideGroupKey(), sbn.getPostTime()));
+            }
+        }
+        return new ParceledListSlice<>(result);
     }
 
     @Override
@@ -1335,23 +1412,35 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public NotificationChannel getNotificationChannel(String callingPkg, int userId,
             String pkg, String channelId) {
-        user(userId); own(callingPkg); own(pkg);
-        synchronized (this) {
-            loadChannelsLocked(pkg);
-            NotificationChannel channel = mChannels.get(channelKey(pkg, channelId));
-            return channel == null || channel.isDeleted() ? null : copyChannel(channel);
+        user(userId); notificationCaller(callingPkg);
+        synchronized (mPublicationLock) {
+            if (!callers().isSystem() && !canNotifyAsPackage(callingPkg, pkg, userId)) {
+                throw new SecurityException("Caller cannot read notification channels for " + pkg);
+            }
+            if (currentPackage(pkg) == null && !"android".equals(pkg)) return null;
+            synchronized (this) {
+                loadChannelsLocked(pkg);
+                NotificationChannel channel = mChannels.get(channelKey(pkg, channelId));
+                return channel == null || channel.isDeleted() ? null : copyChannel(channel);
+            }
         }
     }
 
     @Override
     public ParceledListSlice getNotificationChannels(String callingPkg, String targetPkg,
             int userId) {
-        user(userId); own(callingPkg); own(targetPkg);
+        user(userId); notificationCaller(callingPkg);
         List<NotificationChannel> result = new ArrayList<>();
-        synchronized (this) {
-            loadChannelsLocked(targetPkg);
-            for (Map.Entry<String, NotificationChannel> e : mChannels.entrySet()) {
-                if (e.getKey().startsWith(targetPkg + "/") && !e.getValue().isDeleted()) result.add(copyChannel(e.getValue()));
+        synchronized (mPublicationLock) {
+            if (!callers().isSystem() && !canNotifyAsPackage(callingPkg, targetPkg, userId)) {
+                throw new SecurityException("Caller cannot read notification channels for " + targetPkg);
+            }
+            if (currentPackage(targetPkg) == null && !"android".equals(targetPkg)) return new ParceledListSlice<>(result);
+            synchronized (this) {
+                loadChannelsLocked(targetPkg);
+                for (Map.Entry<String, NotificationChannel> e : mChannels.entrySet()) {
+                    if (e.getKey().startsWith(targetPkg + "/") && !e.getValue().isDeleted()) result.add(copyChannel(e.getValue()));
+                }
             }
         }
         return new ParceledListSlice<>(result);
@@ -1677,9 +1766,34 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     @Override
+    public void setNotificationDelegate(String callingPkg, String delegate) {
+        ApkPackage captured = notificationCaller(callingPkg);
+        if (captured == null) throw new SecurityException("Notification delegation requires an installed owner");
+        synchronized (mPublicationLock) {
+            if (currentPackage(callingPkg) != captured) throw new SecurityException("Notification owner is retiring");
+            ApkPackage target = delegate == null ? null : currentPackage(delegate);
+            // AOSP leaves the existing preference unchanged for an unknown package.
+            if (delegate != null && target == null) return;
+            mDelegates.set(captured, target);
+        }
+        invalidateChannelCaches(true, false);
+    }
+
+    @Override
+    public String getNotificationDelegate(String callingPkg) {
+        ApkPackage owner = notificationCaller(callingPkg);
+        synchronized (mPublicationLock) { return mDelegates.get(owner); }
+    }
+
+    @Override
     public boolean canNotifyAsPackage(String callingPkg, String targetPkg, int userId) {
-        user(userId); own(callingPkg);
-        return callers().isSystem() || callingPkg.equals(targetPkg);
+        user(userId);
+        ApkPackage caller = notificationCaller(callingPkg);
+        if (callingPkg.equals(targetPkg)) return true;
+        synchronized (mPublicationLock) {
+            ApkPackage target = currentPackage(targetPkg);
+            return target != null && mDelegates.allows(target, caller);
+        }
     }
 
     @Override
