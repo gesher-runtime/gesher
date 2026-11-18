@@ -130,6 +130,91 @@ DWORD WINAPI ReadPending(void* raw) {
   state->ok = ReadFile(state->file, &state->byte, 1, &state->transferred, nullptr);
   return 0;
 }
+// Microsoft NT OS/2 Named Pipe Specification, sections 5.17.1.1 and
+// 5.17.1.5: local assignment uses {HANDLE, ULONG}; query uses the event HANDLE
+// as input on an NPFS root handle, returning FILE_PIPE_EVENT_BUFFER entries.
+// https://computernewb.com/~lily/files/Documents/NTDesignWorkbook/namepipe.pdf
+struct AssignEvent { HANDLE event; ULONG key; };
+struct PipeEvent { ULONG state, type, bytes, key, requests; };
+bool QueryEvent(HANDLE root, HANDLE assigned, const char* phase) {
+  constexpr DWORD query_event = 0x00110010;  // FSCTL_PIPE_QUERY_EVENT (WDK)
+  PipeEvent entries[8]{};
+  DWORD bytes = 0;
+  Handle event;
+  event.value = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!event.value) return false;
+  OVERLAPPED operation{};
+  operation.hEvent = event.value;
+  BOOL done = DeviceIoControl(root, query_event, &assigned, sizeof(assigned),
+      entries, sizeof(entries), &bytes, &operation);
+  DWORD error = done ? ERROR_SUCCESS : GetLastError();
+  if (!done && error == ERROR_IO_PENDING) {
+    const DWORD wait = WaitForSingleObject(event.value, 1000);
+    if (wait != WAIT_OBJECT_0) {
+      CancelIoEx(root, &operation);
+      GetOverlappedResult(root, &operation, &bytes, TRUE);
+      std::printf("EVENT_QUERY phase=%s timed_out=1 wait=%lu\n", phase, wait);
+      return false;
+    }
+    done = GetOverlappedResult(root, &operation, &bytes, FALSE);
+    error = done ? ERROR_SUCCESS : GetLastError();
+  }
+  std::printf("EVENT_QUERY phase=%s ok=%d error=%lu bytes=%lu\n", phase, done != FALSE, error, bytes);
+  if (!done || bytes > sizeof(entries) || bytes % sizeof(PipeEvent) != 0) return false;
+  for (DWORD i = 0; i != bytes / sizeof(PipeEvent); ++i) {
+    const auto& item = entries[i];
+    std::printf("EVENT_ENTRY phase=%s state=%lu type=%lu bytes=%lu key=%lu requests=%lu\n",
+        phase, item.state, item.type, item.bytes, item.key, item.requests);
+  }
+  return true;
+}
+int AssignedEventMetadata() {
+  Pair pipe;
+  if (!MakePair(&pipe, false, false)) {
+    std::printf("INFRA make_pair error=%lu\n", GetLastError()); return 2;
+  }
+  Handle assigned, root, worker;
+  assigned.value = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!assigned.value) return 2;
+  root.value = CreateFileW(L"\\\\.\\pipe\\", GENERIC_READ | SYNCHRONIZE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
+  std::printf("EVENT_ROOT opened=%d error=%lu\n", root.value != INVALID_HANDLE_VALUE,
+      root.value == INVALID_HANDLE_VALUE ? GetLastError() : 0);
+  if (root.value == INVALID_HANDLE_VALUE) return 0;
+  const HANDLE ends[] = {pipe.reader.value, pipe.writer.value};
+  constexpr DWORD assign_event = 0x00110000;  // FSCTL_PIPE_ASSIGN_EVENT (WDK)
+  for (ULONG i = 0; i != 2; ++i) {
+    AssignEvent request{assigned.value, i + 1};
+    DWORD bytes = 0;
+    const BOOL done = DeviceIoControl(ends[i], assign_event, &request, sizeof(request),
+        nullptr, 0, &bytes, nullptr);
+    std::printf("EVENT_ASSIGN endpoint=%lu ok=%d error=%lu\n", i, done != FALSE, done ? 0 : GetLastError());
+    if (!done) return 0;  // An unavailable primitive is an observation, not a pass.
+  }
+  if (!QueryEvent(root.value, assigned.value, "empty")) return 0;
+  Pending state{pipe.reader.value};
+  worker.value = CreateThread(nullptr, 0, ReadPending, &state, 0, nullptr);
+  if (!worker.value) return 2;
+  Sleep(20);
+  const bool queried = QueryEvent(root.value, assigned.value, "pending-sync-read");
+  char value[] = "data";
+  DWORD bytes = 0;
+  const BOOL written = WriteFile(pipe.writer.value, value, 4, &bytes, nullptr);
+  std::printf("EVENT_TRANSFER write_ok=%d bytes=%lu error=%lu\n", written != FALSE, bytes, written ? 0 : GetLastError());
+  if (WaitForSingleObject(worker.value, 1000) != WAIT_OBJECT_0) {
+    CancelSynchronousIo(worker.value);
+    WaitForSingleObject(worker.value, INFINITE);  // Controller still owns a 3 s deadline.
+  }
+  std::printf("EVENT_TRANSFER read_ok=%d bytes=%lu value=%u\n", state.ok != FALSE,
+      state.transferred, static_cast<unsigned>(static_cast<unsigned char>(state.byte)));
+  if (!queried) return 0;
+  QueryEvent(root.value, assigned.value, "buffered-three");
+  CloseHandle(pipe.writer.value);
+  pipe.writer.value = INVALID_HANDLE_VALUE;
+  QueryEvent(root.value, assigned.value, "last-writer-closed");
+  return 0;
+}
 int PendingMetadata(bool overlapped) {
   Pair pipe;
   if (!MakePair(&pipe, overlapped, false)) {
@@ -205,8 +290,10 @@ int main(int argc, char** argv) {
   if (argc == 5 && std::strcmp(argv[1], "reopen") == 0)
     return Reopen(std::atoi(argv[2]) != 0, std::atoi(argv[3]), static_cast<DWORD>(std::atoi(argv[4])));
   if (argc == 3 && std::strcmp(argv[1], "pending") == 0) return PendingMetadata(std::atoi(argv[2]) != 0);
+  if (argc == 2 && std::strcmp(argv[1], "assigned-event") == 0) return AssignedEventMetadata();
   std::puts("DIAGNOSTIC_ONLY runtime_approval=0 timeouts_are_observations=1");
   bool complete = true;
+  complete = Run(L"assigned-event") && complete;
   for (int asynchronous = 0; asynchronous != 2; ++asynchronous) {
     for (int endpoint = 0; endpoint != 2; ++endpoint) {
       for (unsigned access = 1; access <= 3; ++access) {
