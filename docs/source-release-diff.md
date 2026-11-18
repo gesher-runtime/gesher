@@ -29,9 +29,11 @@ SDK level, permissions, capabilities and application workflows are unchanged.
 | Files in selected core/java tree | 6,400 | 6,896 |
 | Java files parsed without errors / total | 4,358 / 4,358 | 4,638 / 4,638 |
 | Source AIDL files | 1,532 | 1,706 |
-| ChangeId field occurrences | 137 | 153 |
-| Distinct qualified declaring fields | 137 | 152 |
-| Distinct resolved change IDs | 137 | 152 |
+| Fields with a ChangeId-named annotation (raw candidates) | 137 | 153 |
+| Resolved platform ChangeId field occurrences | 59 | 68 |
+| Unresolved ChangeId field candidates | 78 | 85 |
+| Distinct qualified fields / IDs in the resolved subset | 59 / 59 | 67 / 67 |
+| Complete platform-field denominator | Unresolved | Unresolved |
 
 These are different denominators. The release manifest is not a downloaded
 source corpus. The project's selectors are not a list of built APEX modules.
@@ -139,10 +141,16 @@ Java UTF-16 code units; line and column values come from the compiler's line map
 Annotation names are resolved only from explicit platform-qualified spelling
 or an unambiguous explicit type import, with the resolution basis recorded.
 The reader conservatively preserves unresolved names if the file declares a
-matching type/type-parameter name. Wildcards, unbound same-package names, static
-annotation imports and unsupported relative qualification are not guessed.
-This is bounded lexical evidence, not full compiler attribution; inherited or
-external name resolution remains unmeasured.
+matching type/type-parameter name or an enclosing class has unattributed
+supertypes. Inherited member types can hide an imported annotation or even the
+first component of a qualified spelling. Extends/implements clauses and
+anonymous bodies therefore prevent those annotation identities from being
+guessed, including inside nested classes. Scope records retain the written
+supertypes and the reason for uncertainty. Wildcards, unbound same-package names,
+static annotation imports and unsupported relative qualification are also not
+guessed. This is bounded lexical evidence, not full compiler attribution.
+An unresolved ChangeId candidate has `platform_change_id: null`; it is retained
+without asserting either platform membership or non-membership.
 
 Source-spelled modifiers and Java-effective field modifiers are separate.
 For example, an interface field without written modifiers is implicitly public,
@@ -156,17 +164,21 @@ uses, including parameters, remain separate observations.
 The constant reader accepts AST integral literals, parenthesized forms,
 supported unary operations, and unambiguous references to constants in the
 same pinned Build.java source. It preserves Java integral unary overflow rules.
-Matching source-declared names prevent an imported constant from being guessed
-through shadowing. Other expressions remain visible with null values and
-reasons, even when a full Java compiler could evaluate them. There is no
-fallback to zero, current SDK values or constants from another artifact.
+Matching source-declared names and unattributed inherited scopes prevent an
+imported or qualified constant from being guessed through shadowing. Literal
+values remain independent of name binding. Other expressions remain visible
+with null values and reasons, even when a full Java compiler could evaluate them.
+There is no fallback to zero, current SDK values or constants from another artifact.
 
-All 290 actual change-ID initializers are direct int/long literals. All measured
-target-SDK references resolve through the selected Build.java constants or
-literal values. There are no unresolved identities, IDs or thresholds in these
-particular source-field observations. Other Build.VERSION_CODES_FULL expressions
-are retained as source metadata and can remain unevaluated without becoming
-claims about the selected build's runtime properties.
+All 290 ChangeId-named candidate field initializers are direct int/long literals.
+The bounded resolver identifies 59 and 68 platform field occurrences, with
+resolved IDs and target-SDK metadata in that subset. Another 78 and 85 field
+candidates remain unresolved because their annotation names occur in inherited
+scopes. Their original declarations, annotations, arguments and literals remain
+in the raw inventory. Both complete source-field denominators are null and
+complete-resolved-metadata flags are false. Other Build.VERSION_CODES_FULL
+expressions also remain source metadata and may be unevaluated; no runtime
+properties are inferred from unresolved expressions.
 
 ### Processor metadata and source alternatives
 
@@ -204,21 +216,20 @@ EnabledAfter threshold 36, in:
 - `android/os/CombinedDeliMessageQueue/MessageQueue.java`
 - `android/os/CombinedMessageQueue/MessageQueue.java`
 
-Both are retained. The report therefore distinguishes **153 source occurrences**
-from **152 qualified field identities and unique IDs**. It does not select which
-source enters a particular build. Duplicate groups are explicit arrays, never
-last-writer-wins dictionaries.
+Both are retained in the resolved subset. The Android17 report distinguishes
+**68 resolved field occurrences** from **67 qualified field identities and
+unique IDs**, alongside **85 unresolved field candidates**. It does not select
+which source enters a particular build. Duplicate groups are explicit arrays,
+never last-writer-wins dictionaries.
 
-Across the selected corpus there are 17 added field occurrences, one removed
-occurrence and one raw annotation-list change. There are 16 added unique IDs
-and one ID absent from the after corpus. No existing paired occurrence changes
-its measured compatibility-processor metadata. The raw annotation change adds
-TestApi and FlaggedApi to
-`ActivityInfo#OVERRIDE_EXCLUDE_CAPTION_INSETS_FROM_APP_BOUNDS`; its measured
-Disabled/Overridable compatibility annotations remain the same. The removed
-occurrence is
-`ActivityInfo#OVERRIDE_CAMERA_COMPAT_ENABLE_FREEFORM_WINDOWING_TREATMENT`.
-Absence here is not a claim that a runtime change ID was globally removed.
+Whole-corpus compatibility field additions/removals, metadata-change comparisons
+and resolved-ID deltas are withheld because complete platform identities are
+unavailable. The report sets both comparison completeness flags to false and
+ID additions/removals to null. A difference between partially resolved subsets
+must not be interpreted as an added or removed Android change ID. The 428
+reported delta rows describe the independently complete AIDL-byte and selected
+repository-reference comparisons; raw compatibility candidates remain available
+for further attributed analysis.
 
 Occurrence matching uses both source path and qualified declaring field, with
 lists retained for duplicates. Source moves can therefore appear as an
@@ -303,12 +314,14 @@ GESHER_SOURCE_DIFF_JAVA=/path/to/jdk-21.0.13/bin/java \
   python3 -m unittest discover -s tools/tests -p test_source_release_diff.py -v
 ```
 
-The thirteen tests include an independent javac Element/constant oracle for
+The sixteen tests include an independent javac Element/constant oracle for
 normal fixtures. It checks interface modifiers, constant values, qualified
 annotation identities and arguments through compiler attribution, separately
 from the production AST reader. Other fixtures cover comments/strings,
-parameters, local/anonymous scopes, shadowing, duplicate source alternatives,
-unsupported expressions, valid preview-source diagnostics and upstream policy
+parameters, local/anonymous scopes, inherited constants and annotation names
+from another file, outer-interface names hiding qualified annotations, duplicate
+source alternatives, unsupported expressions, valid preview-source diagnostics
+and upstream policy
 conflicts. Fixture application classes are never executed.
 
 The installed Git independently supplies expected tree IDs for ordinary source

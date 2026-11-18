@@ -200,8 +200,11 @@ class Plain { void f(@ChangeId long id) {
 class Local { @ChangeId static final long LOCAL=1L; }
 Object value=new Object() { @ChangeId static final long ANONYMOUS=2L; };
 } }"""})
-        self.assertEqual(len(fields), 2)
+        self.assertEqual([r["name"] for r in fields], ["LOCAL"])
         self.assertTrue(all(r["declaring_field_identity"] is None for r in fields))
+        anonymous = next(r for r in obs if r["name"] == "ANONYMOUS")
+        self.assertIsNone(anonymous["platform_change_id"])
+        self.assertTrue(anonymous["scope_path"][-1]["unattributed_inheritance"])
         self.assertFalse(s["complete_resolved_metadata"])
         self.assertEqual(len(s["non_field_changeid_occurrences"]), 1)
         self.assertFalse(next(r for r in obs if r["name"] == "id")["field"])
@@ -220,6 +223,77 @@ class Threshold {
         self.assertIsNone(rows[0]["processor_metadata"]["EnabledSince"]["value"])
         self.assertIn("shadowing", rows[0]["processor_metadata"]["EnabledSince"]["reason"])
         self.assertFalse(summary["complete_resolved_metadata"])
+
+    def test_inherited_constant_hides_import_and_remains_unresolved(self):
+        root, summary, observations, rows, records = self.observe({
+            "fixtures/Parent.java": "package fixtures; class Parent { public static final int BAKLAVA=99; }",
+            "fixtures/Child.java": """package fixtures;
+import android.compat.annotation.ChangeId;
+import android.compat.annotation.EnabledSince;
+import static android.os.Build.VERSION_CODES.BAKLAVA;
+class Child extends Parent {
+ @ChangeId @EnabledSince(targetSdkVersion=BAKLAVA) static final long CHANGE=5L;
+}"""})
+        self.assertIn("android.compat.annotation.EnabledSince(targetSdkVersion=99)",
+                      self.oracle(root)["fixtures.Child#CHANGE"]["annotations"])
+        record = next(r for r in observations if r.get("name") == "CHANGE")
+        self.assertEqual(record["initializer"]["value"], 5)
+        argument = next(a for a in record["annotations"] if a["written_name"] == "EnabledSince")["arguments"][0]["expression"]
+        file = next(r for r in records if r["record_type"] == "source_file" and r["path"] == "fixtures/Child.java")
+        target = diff.resolve_constant(argument, file, {})
+        self.assertEqual(argument["source"], "BAKLAVA")
+        self.assertIsNone(target["value"])
+        self.assertIn("inherited", target["reason"])
+        self.assertIsNone(record["platform_change_id"])
+        self.assertEqual(rows, [])
+        self.assertFalse(summary["complete_resolved_metadata"])
+        self.assertIsNone(summary["complete_source_field_denominator"])
+        profile = {"aidl_files": [], "source_references": {"references": []}, "java": summary}
+        _, comparison = diff.compare_sources(profile, profile, rows, rows)
+        self.assertFalse(comparison["compat_source_presence_comparable"])
+        self.assertFalse(comparison["complete_resolved_metadata_comparable"])
+        self.assertIsNone(comparison["resolved_id_additions"])
+        self.assertIsNone(comparison["resolved_id_removals"])
+
+    def test_inherited_annotation_hides_import_without_false_platform_count(self):
+        root, summary, observations, rows, _ = self.observe({
+            "fixtures/Parent.java": "package fixtures; class Parent { public @interface ChangeId {} }",
+            "fixtures/Child.java": """package fixtures;
+import android.compat.annotation.ChangeId;
+class Child extends Parent { @ChangeId static final long CHANGE=5L; }"""})
+        self.assertEqual(self.oracle(root)["fixtures.Child#CHANGE"]["annotations"], ["fixtures.Parent.ChangeId()"])
+        record = next(r for r in observations if r.get("name") == "CHANGE")
+        self.assertIsNone(record["platform_change_id"])
+        self.assertIsNone(record["annotations"][0]["resolved_name"])
+        self.assertEqual(record["annotations"][0]["written_name"], "ChangeId")
+        self.assertEqual(rows, [])
+        self.assertEqual(summary["observed_changeid_field_occurrences"], 0)
+        self.assertEqual(summary["unresolved_changeid_field_candidates"], 1)
+        self.assertFalse(summary["complete_resolved_metadata"])
+        self.assertIsNone(summary["complete_source_field_denominator"])
+
+    def test_outer_interface_member_can_hide_fully_qualified_annotation(self):
+        root, summary, observations, rows, _ = self.observe({
+            "fixtures/Parent.java": """package fixtures;
+interface Parent {
+ class android { public static class compat { public static class annotation {
+  public @interface ChangeId {}
+ } } }
+}""",
+            "fixtures/Child.java": """package fixtures;
+class Child implements Parent { static class Nested {
+ @android.compat.annotation.ChangeId static final long CHANGE=5L;
+} }"""})
+        actual = self.oracle(root)["fixtures.Child.Nested#CHANGE"]["annotations"]
+        self.assertEqual(actual, ["fixtures.Parent.android.compat.annotation.ChangeId()"])
+        record = next(r for r in observations if r.get("name") == "CHANGE")
+        self.assertIsNone(record["platform_change_id"])
+        self.assertEqual(record["scope_path"][0]["supertypes"], ["Parent"])
+        self.assertTrue(record["scope_path"][0]["unattributed_inheritance"])
+        self.assertFalse(record["scope_path"][1]["unattributed_inheritance"])
+        self.assertEqual(rows, [])
+        self.assertFalse(summary["complete_resolved_metadata"])
+        self.assertIsNone(summary["complete_source_field_denominator"])
 
     def test_unsupported_constant_expression_is_visible_despite_valid_compiler_constant(self):
         root, summary, _, rows, _ = self.observe({"Formula.java": """

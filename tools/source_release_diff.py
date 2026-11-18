@@ -360,6 +360,9 @@ def resolve_constant(expression, file, constants):
         return resolve_constant(expression["operand"], file, constants)
     if expression["kind"] not in ("IDENTIFIER", "MEMBER_SELECT"):
         return result
+    if expression.get("unattributed_inheritance"):
+        return {"status": "unresolved", "value": None,
+                "reason": "enclosing scope has unattributed supertypes; inherited constant binding is not guessed"}
     name = expression["name"]
     first = name.split(".")[0]
     if first in set(file["declared_type_names"]) | set(file["declared_variable_names"]):
@@ -422,7 +425,9 @@ def interpret_java(records, source_files, profile):
                 known[resolved.removeprefix(PREFIX)].append(annotation)
             elif resolved is None and leaf in ANNOTATIONS:
                 unresolved_annotation_identities.append({"path": record["path"], "location": annotation["location"], "annotation": annotation})
-        record["platform_change_id"] = bool(known["ChangeId"])
+        unknown_change_id = any(a is not None and a["resolved_name"] is None
+                                and a["written_name"].rsplit(".", 1)[-1] == "ChangeId" for a in annotations)
+        record["platform_change_id"] = True if known["ChangeId"] else None if unknown_change_id else False
         if known["ChangeId"] and record.get("field"):
             invalid, unresolved = [], []
             if record["primitive_type"] != "long":
@@ -484,6 +489,8 @@ def interpret_java(records, source_files, profile):
                    {"path": r["path"], "diagnostics": r["diagnostics"]} for r in file_rows if r["diagnostics"]],
                "file_parse_inventory_sha256": digest(file_rows), "parser": parsers[0],
                "observed_changeid_field_occurrences": len(occurrences),
+               "unresolved_changeid_field_candidates": sum(r.get("field", False) and r["platform_change_id"] is None
+                                                           for r in observations),
                "complete_source_field_denominator": len(occurrences) if complete else None,
                "canonical_field_identities": len(identities), "resolved_unique_change_ids": len(ids),
                "validity_counts": dict(sorted(Counter(r["validity"]["status"] for r in occurrences).items())),
@@ -665,16 +672,18 @@ def render(summary):
     lines = [f'# {before["tag"]} to {after["tag"]} selected source comparison', "",
              "A bounded A07 source evidence increment: release reference profiles, core/java compatibility annotations and complete source-AIDL file bytes.", "",
              "## Measured source profiles", "",
-             "| Profile | Selected platform SDK | Build ID | Java files parsed / total | ChangeId field occurrences | Unique resolved IDs | Source AIDL files |",
-             "| --- | --- | --- | ---: | ---: | ---: | ---: |"]
+             "| Profile | Selected platform SDK | Build ID | Java files parsed / total | Resolved ChangeId fields | Unresolved field candidates | Unique resolved IDs | Source AIDL files |",
+             "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |"]
     for p in summary["profiles"]:
-        lines.append(f'| {p["tag"]} | {p["sdk"]["full_spelling"]} | {p["build_id"]} | {p["parsed_java_files"]:,} / {p["java_files"]:,} | {p["changeid_occurrences"]} | {p["unique_ids"]} | {p["aidl_files"]:,} |')
+        lines.append(f'| {p["tag"]} | {p["sdk"]["full_spelling"]} | {p["build_id"]} | {p["parsed_java_files"]:,} / {p["java_files"]:,} | {p["changeid_occurrences"]} | {p["unresolved_field_candidates"]} | {p["unique_ids"]} | {p["aidl_files"]:,} |')
     lines += ["", "Counts are source occurrences and distinct resolved IDs, not compiled configuration membership or working runtime features.", "",
               "A parser error, unresolved annotation identity or unsupported value remains explicit. Observed counts are not a complete denominator when the corresponding JSON completeness field is null/false.", "",
               "## Changed observations", "", "| Category | Status | Rows |", "| --- | --- | ---: |"]
     for key, value in summary["comparison"]["categories"].items():
         category, status = key.split(":")
         lines.append(f"| {category} | {status} | {value} |")
+    if not summary["comparison"]["compat_source_presence_comparable"]:
+        lines += ["", "Whole-corpus compatibility field additions/removals and resolved-ID deltas are not computed: annotation identity or source-field completeness is unresolved. Raw candidates, inherited-scope reasons and the resolved subset remain in the inventory."]
     lines += ["", "The JSONL categories overlap; they are not additive API or defect counts. Duplicate declaring fields and IDs remain visible in profiles.json and compat-inventory.jsonl.", "",
               "The selected source configs are separate from the SDK36/SDK37 platform archives, NDK30 API slices, July API36.0 oracle and current CTS release. Earlier artifact properties are not rewritten.", "",
               "## Explicit limits", ""]
@@ -741,6 +750,7 @@ def run(manifest, input_dir, project_lock, java, output):
                              "complete_source_field_denominator": p["java"]["complete_source_field_denominator"],
                              "complete_resolved_metadata": p["java"]["complete_resolved_metadata"],
                              "changeid_occurrences": p["java"]["observed_changeid_field_occurrences"],
+                             "unresolved_field_candidates": p["java"]["unresolved_changeid_field_candidates"],
                              "canonical_field_identities": p["java"]["canonical_field_identities"],
                              "unique_ids": p["java"]["resolved_unique_change_ids"], "validity_counts": p["java"]["validity_counts"],
                              "duplicate_declaring_fields": p["java"]["duplicate_declaring_fields"],

@@ -4,54 +4,32 @@
       "aidl_source_file:added": 195,
       "aidl_source_file:bytes_changed": 95,
       "aidl_source_file:removed": 21,
-      "compat_source_field:annotation_syntax_or_order_changed": 1,
-      "compat_source_field:source_occurrence_added": 17,
-      "compat_source_field:source_occurrence_removed": 1,
       "selected_repository_reference:commit_changed": 117
     },
-    "compat_source_presence_comparable": true,
-    "complete_resolved_metadata_comparable": true,
+    "compat_source_presence_comparable": false,
+    "complete_resolved_metadata_comparable": false,
     "local_or_anonymous_occurrences_not_paired": 0,
-    "resolved_id_additions": [
-      333566037,
-      416031865,
-      417951523,
-      421623328,
-      430681066,
-      433336412,
-      447093535,
-      454307959,
-      454542168,
-      454795633,
-      458413887,
-      460405642,
-      460838111,
-      463899193,
-      464275874,
-      483802160
-    ],
-    "resolved_id_removals": [
-      314961188
-    ]
+    "resolved_id_additions": null,
+    "resolved_id_removals": null
   },
   "comparison_id": "aosp16r4-api36.1-to17r1-api37.0-core-source",
-  "compat_inventory_sha256": "7ff463d19598a8448696143d2916b0f503b1e2f1a6a8ed9c5491d32cc1ff7e8a",
-  "delta_records": 447,
-  "delta_sha256": "ea84f9771dd42f17005a5143f0622bed3f3fa30b2b7bb026aa137fcc680ed9b3",
+  "compat_inventory_sha256": "20573c808ea993ddcc4d6202d10bd233fe139c6dc53d94d609fdacc98af689be",
+  "delta_records": 428,
+  "delta_sha256": "18b26fbdcb860d05b945915542df88a2d151e69ee5562b513300c97c5f11482b",
   "generator_sha256": {
-    "SourceCompatInventory.java": "f59bfe830df8beca3fbfff69faeff1e49e1985f664399271fa5e5e1843e3e7fd",
-    "source_release_diff.py": "e4f7db42076ca81848f7478b165778792c20a1f792ce0155166aa669b89262f8"
+    "SourceCompatInventory.java": "c104111ccf73a71b3913f9fd9a405f1119d0016edceea0cfe48e08fd758dc655",
+    "source_release_diff.py": "114eee3d3ab6b2009fc73389402a47900db449cd846f9dd2fad2e0dbe6e1b843"
   },
   "manifest_sha256": "c89d839e21c50a67b14ac6008b4a3375da2cd09fbe02b51925df9074c0ff2d73",
-  "profile_data_sha256": "ddf311562f64fe1d00f02e591aaee0ef0cf89f596946fa74d9d447ea7e253764",
+  "profile_data_sha256": "72a0237082272ea3fbc002f53c39aa9574edf9dce96e31d05c4d1b4dc128515c",
   "profiles": [
     {
       "aidl_files": 1532,
       "build_id": "BP4A.251205.006",
-      "canonical_field_identities": 137,
-      "changeid_occurrences": 137,
-      "complete_resolved_metadata": true,
-      "complete_source_field_denominator": 137,
+      "canonical_field_identities": 59,
+      "changeid_occurrences": 59,
+      "complete_resolved_metadata": false,
+      "complete_source_field_denominator": null,
       "duplicate_change_ids": {},
       "duplicate_declaring_fields": {},
       "id": "android16r4",
@@ -66,18 +44,19 @@
       },
       "selectors": 123,
       "tag": "android-16.0.0_r4",
-      "unique_ids": 137,
+      "unique_ids": 59,
+      "unresolved_field_candidates": 78,
       "validity_counts": {
-        "valid_for_measured_source_rules": 137
+        "valid_for_measured_source_rules": 59
       }
     },
     {
       "aidl_files": 1706,
       "build_id": "CP2A.260605.016",
-      "canonical_field_identities": 152,
-      "changeid_occurrences": 153,
-      "complete_resolved_metadata": true,
-      "complete_source_field_denominator": 153,
+      "canonical_field_identities": 67,
+      "changeid_occurrences": 68,
+      "complete_resolved_metadata": false,
+      "complete_source_field_denominator": null,
       "duplicate_change_ids": {
         "421623328": [
           {
@@ -118,9 +97,10 @@
       },
       "selectors": 123,
       "tag": "android-17.0.0_r1",
-      "unique_ids": 152,
+      "unique_ids": 67,
+      "unresolved_field_candidates": 85,
       "validity_counts": {
-        "valid_for_measured_source_rules": 153
+        "valid_for_measured_source_rules": 68
       }
     }
   ],

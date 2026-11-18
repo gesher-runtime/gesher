@@ -128,6 +128,10 @@ public final class SourceCompatInventory {
                     "column", start < 0 ? null : unit.getLineMap().getColumnNumber(start));
         }
 
+        boolean hasUnattributedInheritance() {
+            return scopes.stream().anyMatch(scope -> Boolean.TRUE.equals(scope.get("unattributed_inheritance")));
+        }
+
         Map<String, Object> expression(ExpressionTree tree) {
             if (tree == null) return null;
             Map<String, Object> result = row("kind", tree.getKind().name(), "source", spelling(tree));
@@ -141,6 +145,7 @@ public final class SourceCompatInventory {
                 }
             } else if (tree instanceof IdentifierTree || tree instanceof MemberSelectTree) {
                 result.put("name", tree.toString());
+                result.put("unattributed_inheritance", hasUnattributedInheritance());
             } else if (tree instanceof ParenthesizedTree parenthesized) {
                 result.put("operand", expression(parenthesized.getExpression()));
             } else if (tree instanceof UnaryTree unary) {
@@ -153,7 +158,9 @@ public final class SourceCompatInventory {
             String written = tree.getAnnotationType().toString();
             String first = written.split("\\.")[0];
             String resolved = null, reason, status;
-            if (declaredTypeNames.contains(first)) {
+            if (hasUnattributedInheritance()) {
+                status = "unresolved"; reason = "enclosing scope has unattributed supertypes; inherited names may hide imports or qualification";
+            } else if (declaredTypeNames.contains(first)) {
                 status = "unresolved"; reason = "source declares a matching type/type-parameter name; no attribution";
             } else if (written.startsWith(PREFIX)) {
                 resolved = written; status = "qualified_spelling"; reason = "explicit platform annotation spelling";
@@ -198,8 +205,14 @@ public final class SourceCompatInventory {
                 else if (scopes.get(scopes.size() - 1).get("canonical_name") instanceof String outer)
                     canonical = outer + "." + simple;
             }
+            List<String> supertypes = new ArrayList<>();
+            if (tree.getExtendsClause() != null) supertypes.add(spelling(tree.getExtendsClause()));
+            for (Tree implemented : tree.getImplementsClause()) supertypes.add(spelling(implemented));
+            // Anonymous bodies inherit the type named by their enclosing new expression.
+            // No superclass/interface attribution is performed, including outer scopes.
             scopes.add(row("name", simple, "kind", tree.getKind().name(), "canonical_name", canonical,
                     "local", local, "anonymous", anonymous,
+                    "supertypes", supertypes, "unattributed_inheritance", anonymous || !supertypes.isEmpty(),
                     "parent_kind", parent == null ? null : parent.getKind().name(), "location", location(tree)));
             super.visitClass(tree, p);
             scopes.remove(scopes.size() - 1);

@@ -17,9 +17,9 @@ as data; their code is never loaded or executed.
 | `test_sdk_platform_diff.py` | All 7 tests | All 7 tests |
 | `test_ndk_platform_diff.py` | All 6 tests | All 6 tests |
 | `test_elf_symbol_inventory.py` | All 5 tests | 1 static ELF table test |
-| `test_source_compat_inventory.py` | All 7 tests | All 7 tests |
+| `test_source_compat_inventory.py` | All 10 tests | All 10 tests |
 | `test_source_release_diff.py` | All 6 tests | All 6 tests |
-| Total selected report tests | 31 | 27 |
+| Total selected report tests | 34 | 30 |
 
 The Windows selection explicitly excludes these four Linux ELF toolchain tests:
 

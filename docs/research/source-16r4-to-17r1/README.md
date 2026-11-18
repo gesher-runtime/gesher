@@ -4,10 +4,10 @@ A bounded A07 source evidence increment: release reference profiles, core/java c
 
 ## Measured source profiles
 
-| Profile | Selected platform SDK | Build ID | Java files parsed / total | ChangeId field occurrences | Unique resolved IDs | Source AIDL files |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| android-16.0.0_r4 | 36.1 | BP4A.251205.006 | 4,358 / 4,358 | 137 | 137 | 1,532 |
-| android-17.0.0_r1 | 37.0 | CP2A.260605.016 | 4,638 / 4,638 | 153 | 152 | 1,706 |
+| Profile | Selected platform SDK | Build ID | Java files parsed / total | Resolved ChangeId fields | Unresolved field candidates | Unique resolved IDs | Source AIDL files |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| android-16.0.0_r4 | 36.1 | BP4A.251205.006 | 4,358 / 4,358 | 59 | 78 | 59 | 1,532 |
+| android-17.0.0_r1 | 37.0 | CP2A.260605.016 | 4,638 / 4,638 | 68 | 85 | 67 | 1,706 |
 
 Counts are source occurrences and distinct resolved IDs, not compiled configuration membership or working runtime features.
 
@@ -20,10 +20,9 @@ A parser error, unresolved annotation identity or unsupported value remains expl
 | aidl_source_file | added | 195 |
 | aidl_source_file | bytes_changed | 95 |
 | aidl_source_file | removed | 21 |
-| compat_source_field | annotation_syntax_or_order_changed | 1 |
-| compat_source_field | source_occurrence_added | 17 |
-| compat_source_field | source_occurrence_removed | 1 |
 | selected_repository_reference | commit_changed | 117 |
+
+Whole-corpus compatibility field additions/removals and resolved-ID deltas are not computed: annotation identity or source-field completeness is unresolved. Raw candidates, inherited-scope reasons and the resolved subset remain in the inventory.
 
 The JSONL categories overlap; they are not additive API or defect counts. Duplicate declaring fields and IDs remain visible in profiles.json and compat-inventory.jsonl.
 
