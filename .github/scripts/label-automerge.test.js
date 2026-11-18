@@ -77,6 +77,74 @@ test('push cannot reuse receipt even if label remains', async () => {
   assert.equal(w.did('dismiss').length, 1);
   assert.equal(w.did('status').at(-1)[1].state, 'failure');
   assert.equal(w.did('nativeWait').length, 0);
+  assert.equal(w.did('removeLabel').length, 1);
+  assert.deepEqual(w.pr.labels, []);
+});
+
+test('a push removes an older label even before its approval job ran', async () => {
+  const w = world({approved: false}); w.pr.head.sha = OTHER; w.pr.updated_at = T(40);
+  await w.pushed();
+  assert.equal(w.did('removeLabel').length, 1);
+});
+
+test('force-push invalidation removes an old label even when the head returns', async () => {
+  const w = world();
+  w.events.push({id: 60, event: 'head_ref_force_pushed', created_at: T(40)});
+  await w.pushed();
+  assert.equal(w.did('removeLabel').length, 1);
+  assert.equal(w.did('nativeWait').length, 0);
+});
+
+test('a delayed push preserves a freshly applied label whose approval is pending', async () => {
+  const w = world({approved: false}); w.pr.head.sha = OTHER;
+  const push = structuredClone(w.pr); push.updated_at = T(40);
+  w.events[0].created_at = T(41);
+  await w.pushed(push);
+  assert.equal(w.did('removeLabel').length, 0);
+});
+
+test('a delayed push preserves a fresh exact-head approval', async () => {
+  const w = world(); w.pr.head.sha = OTHER; w.pr.updated_at = T(40);
+  const push = structuredClone(w.pr);
+  w.events.push({...w.events[0], id: 70, created_at: T(41)}); w.seedApproval();
+  await w.pushed(push);
+  assert.equal(w.did('removeLabel').length, 0);
+});
+
+for (const second of [39, 40, 41]) {
+  test('an unrecorded label near the push timestamp stays unapproved: second ' + second, async () => {
+    const w = world({approved: false}); w.pr.head.sha = OTHER;
+    const push = structuredClone(w.pr); push.updated_at = T(40);
+    w.events[0].created_at = T(second);
+    await w.pushed(push);
+    assert.equal(w.did('removeLabel').length, 0);
+    assert.equal(w.did('nativeWait').length, 0);
+    assert.equal(w.did('status').at(-1)[1].state, 'failure');
+  });
+}
+
+test('an old push delivery cannot remove a label for a later head', async () => {
+  const w = world({approved: false}); const push = structuredClone(w.pr);
+  push.updated_at = T(50); w.pr.head.sha = OTHER;
+  await w.pushed(push);
+  assert.equal(w.did('removeLabel').length, 0);
+});
+
+test('a relabel during stale-label cleanup is preserved by event identity', async () => {
+  const w = world(); w.pr.head.sha = OTHER;
+  let reads = 0;
+  w.hooks.events = () => {
+    if (++reads === 2) w.events.push({...w.events[0], id: 70, created_at: T(41)});
+  };
+  await w.pushed();
+  assert.equal(w.did('removeLabel').length, 0);
+});
+
+test('fork pushes remove stale labels using the target repository', async () => {
+  const w = world(); w.pr.head.repo.id = 20; w.pr.head.sha = OTHER;
+  await w.pushed();
+  assert.equal(w.did('removeLabel').length, 1);
+  assert.equal(w.did('removeLabel')[0][1].repo, 'r');
 });
 
 test('a head change during approval reads blocks authorization', async () => {

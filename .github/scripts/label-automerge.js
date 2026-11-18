@@ -131,7 +131,25 @@ module.exports = async ({github, context, core}) => {
     if (['labeled', 'unlabeled'].includes(payload.action) && payload.label?.name !== 'automerge') return;
     const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
     if (pr.state !== 'open') return;
-    if (payload.action === 'synchronize') await p.dismissStaleApprovals(github, owner, repo, pr);
+    if (payload.action === 'synchronize') {
+      await p.dismissStaleApprovals(github, owner, repo, pr);
+      // A delayed push must never remove a fresh opt-in for a newer head.
+      if (p.sameTarget(pr, payload.pull_request)) {
+        const event = await p.labelEvent(github, owner, repo, number);
+        if (event && p.hasLabel(pr)) {
+          const receipt = await p.approval(github, owner, repo, pr, event);
+          const applied = Date.parse(event.created_at);
+          const pushed = Date.parse(payload.pull_request.updated_at);
+          // Receipts bind a label to its approved head. Without a receipt,
+          // retain same/adjacent-second labels: webhook timestamps cannot prove
+          // that a newly reapplied label preceded the push in that interval.
+          const olderPendingLabel = receipt === null && Number.isFinite(applied) &&
+            Number.isFinite(pushed) && applied + 1000 < pushed;
+          if (event.invalidated || receipt === false || olderPendingLabel)
+            await p.removeLabel(github, owner, repo, pr, event, 'new push requires fresh approval', core);
+        }
+      }
+    }
     if (payload.action === 'labeled') {
       const event = await p.labelEvent(github, owner, repo, number, payload.pull_request.updated_at);
       if (event) {
