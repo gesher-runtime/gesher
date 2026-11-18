@@ -103,6 +103,14 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
 
+$schedulerConstraintsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'JobSchedulerConstraintContractTest') 90
+$schedulerConstraintsCode = $LASTEXITCODE
+Check 'services: observed job constraints, deadlines, callback ordering and bounded retirement' {
+  $global:LASTEXITCODE = $schedulerConstraintsCode
+  $schedulerConstraintsOut
+} @('JobSchedulerConstraintContractTest all passed:')
+
 $activityRestoreOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'ActivityRestoreContractTest') 90
 $activityRestoreCode = $LASTEXITCODE
