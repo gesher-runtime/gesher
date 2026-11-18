@@ -41,11 +41,19 @@ class QueueWorkflows(unittest.TestCase):
 
     def test_workflow_credential_is_separate_from_required_status_identity(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, controller = doc['jobs']['automerge']['steps']
+        checkout, token, controller = doc['jobs']['automerge']['steps']
         self.assertEqual(checkout['with']['ref'], '${{ github.event.repository.default_branch }}')
         self.assertFalse(checkout['with']['persist-credentials'])
+        self.assertEqual(token['if'], "vars.GESHER_BOT_APP_ID != ''")
+        self.assertEqual(token['with']['repositories'], '${{ github.event.repository.name }}')
+        self.assertEqual(token['with']['owner'], '${{ github.repository_owner }}')
+        self.assertEqual({key: value for key, value in token['with'].items()
+                          if key.startswith('permission-')},
+                         {'permission-contents': 'write', 'permission-pull-requests': 'write',
+                          'permission-workflows': 'write'})
+        self.assertNotIn('skip-token-revoke', token['with'])
         self.assertEqual(controller['env']['AUTOMERGE_WORKFLOWS_TOKEN'],
-                         '${{ secrets.AUTOMERGE_WORKFLOWS_TOKEN }}')
+                         '${{ steps.gesher-bot.outputs.token || secrets.AUTOMERGE_WORKFLOWS_TOKEN }}')
         # The main github client must remain GITHUB_TOKEN for app-bound statuses
         # and github-actions[bot] receipts. Only the native mutation client differs.
         self.assertNotIn('github-token', controller['with'])
