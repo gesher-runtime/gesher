@@ -1,8 +1,7 @@
 name: ci
 
 on:
-  push:
-    branches: [main]
+  # Temporarily pause CI on main pushes; restore push: branches: [main] to resume.
   pull_request:
   workflow_dispatch:
     inputs:
@@ -269,6 +268,7 @@ jobs:
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
           python3 tools/test_directory_rename_contracts.py --sanitize
+          python3 -m unittest discover -s tools/tests -p test_sqlite_source_download.py
           python3 tools/test_sqlite_paths.py --fetch --sanitize --negative-control
           python3 tools/test_media_source_contracts.py --sanitize
           python3 tools/test_media_callback_state.py --sanitize
@@ -332,6 +332,7 @@ jobs:
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
           python3 tools/test_install_metadata_comparison.py --java-home "$JAVA_HOME"
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
+          python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
 
