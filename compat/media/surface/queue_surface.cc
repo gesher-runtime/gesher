@@ -63,7 +63,7 @@ void QueueSurface::SetDefaultSize(int width, int height) {
 
 void QueueSurface::SetListener(std::function<void()> listener) {
   std::lock_guard<std::mutex> lock(mutex_);
-  listener_ = std::move(listener);
+  if (!abandoned_) listener_ = std::move(listener);
 }
 
 std::shared_ptr<const SurfaceFrame> QueueSurface::Latest() const {
@@ -80,6 +80,10 @@ void QueueSurface::Abandon() {
   std::lock_guard<std::mutex> lock(mutex_);
   abandoned_ = true;
   listener_ = nullptr;
+  latest_.reset();
+  // Dequeued producers own their buffers through dequeued_. A CPU lock has
+  // only a raw pixels pointer, so keep its buffer until unlockAndPost returns.
+  if (!locked_) buffer_ = nullptr;
 }
 
 void QueueSurface::Size(int* width, int* height) const {
@@ -107,7 +111,9 @@ void QueueSurface::EnsureBuffer() {
 
 int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (locked_ || abandoned_) return -EINVAL;
+  // Surface::lock rejects a second CPU lock before consulting the consumer.
+  if (locked_) return -ENOSYS;  // Android INVALID_OPERATION.
+  if (abandoned_) return -ENODEV;
   EnsureBuffer();
   locked_ = true;
   out->width = buffer_->width;
@@ -146,7 +152,10 @@ int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!locked_) return -EINVAL;
     locked_ = false;
-    if (abandoned_) return -ENODEV;
+    if (abandoned_) {
+      buffer_ = nullptr;
+      return -ENODEV;
+    }
     listener = PublishLocked(timestamp_ns);
   }
   if (listener) listener();
@@ -212,7 +221,7 @@ int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
       if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
-        buffer_ = *it;
+        if (!abandoned_) buffer_ = *it;
         dequeued_.erase(it);
         break;
       }

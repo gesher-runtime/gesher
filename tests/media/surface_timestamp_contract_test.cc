@@ -2,7 +2,9 @@
 #include "compat/media/surface/queue_surface.h"
 #include <cstdio>
 #include <cstdint>
+#include <cerrno>
 #include <system/window.h>
+#include "surface_release_assertions.h"
 
 namespace {
 int checks = 0, failures = 0;
@@ -66,9 +68,13 @@ int main() {
   Check(frame->timestamp_ns >= start && frame->timestamp_ns <= end,
         "auto sentinel is replaced, never emitted literally");
   Check(callbacks == 9 && surface->frames() == 9, "one callback and frame per publication");
-  surface->Abandon();
   ANativeWindow_Buffer abandoned = {};
-  Check(surface->lock(&abandoned, nullptr) != 0, "abandoned surface still rejects production");
+  Check(surface->lock(&abandoned, nullptr) == 0, "acquire producer before abandonment");
+  Check(surface->lock(&abandoned, nullptr) == -ENOSYS, "second CPU lock returns INVALID_OPERATION");
+  surface->Abandon();
+  Check(surface->lock(&abandoned, nullptr) == -ENOSYS, "CPU lock admission retains Surface's precedence after abandonment");
+  Check(surface->unlockAndPost() == -ENODEV, "pending producer observes NO_INIT when posting after abandonment");
+  Check(surface->lock(&abandoned, nullptr) == -ENODEV, "already abandoned consumer rejects a fresh lock with NO_INIT");
   std::printf("surface timestamp contracts: %d checks, %d failures\n", checks, failures);
-  return failures != 0;
+  return surface_release_contract::Run() != 0 || failures != 0;
 }

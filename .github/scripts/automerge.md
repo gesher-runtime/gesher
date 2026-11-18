@@ -1,119 +1,88 @@
-# Label-driven automerge
+# Label-approved native auto-merge
 
-A repository collaborator with write or admin access can apply the automerge label to opt in a specific PR head. Maintain access is reported as write by GitHub's permission API. Triage access does not authorize merging.
+Apply `automerge` after reviewing the current PR head. GitHub performs a native
+SQUASH auto-merge after the required PR CI and exact-head QA gate succeed.
+There is no merge queue and no second full merge-group CI run. The controller
+never calls the merge API, starts another CI build, or uses scheduled polling.
 
-A label supplied when the PR is opened cannot approve it. The label event must
-be strictly later than the PR's creation timestamp, including when the opener
-has write or admin access. GitHub timestamps have second precision, so a label
-added in that same second must also be removed and reapplied. Opening events,
-label events, CI completion and scheduled sweeps enforce this rule. The opened
-event also removes a label already present in its opening snapshot, even when
-the snapshot's update timestamp is later than creation. A delayed opening
-event preserves a later explicit replacement label.
+## Label authorization and QA
 
-The PR author can opt in by removing and reapplying an earlier label, with a
-strictly older application by the same stable account ID in the event history.
-An author's first application instead requires the separate exact-head QA
-review described below. Other collaborators can approve with their first
-application. Every route requires write or admin access, initialization and a
-recorded label approval. Missing author identity blocks approval. This is
-asynchronous label removal and approval enforcement, not a restriction on
-GitHub's label-assignment UI.
+A label must be strictly later than PR creation and applied by a collaborator
+with write/admin access. Creation-time labels, ambiguous events, changed heads,
+force pushes, reopening and retargeting cannot reuse an earlier approval.
+Review the updated diff and remove/reapply the label after changing a head.
 
-The controller first records an unedited bot opening receipt, bound to the
-repository, PR number, creation time and an approval boundary. A new unlabelled
-PR is initialized by its opened event. Scheduled sweeps also initialize open
-PRs without the automerge label, covering older PRs and missed opening events before review.
-If a label event arrives before initialization, initialization covers it and
-removes it. Apply the label once more after initialization. This one-time
-reapproval prevents webhook ordering from turning an initial label into an
-approval. The effective boundary includes the immutable bot receipt's creation
-time and the current PR update observed during initialization, so a label
-already added while initialization was pending cannot approve it. Same-second
-receipt and label timestamps require a later application. Concurrent receipts
-use their latest boundary; a late opening event cannot relax it. The boundary
-is checked again before merge.
+The existing author routes are unchanged: an author may deliberately reapply an
+earlier label, or precede their first label with an unedited exact-head COMMENT
+review. A different authorized collaborator may apply their first label. The bot
+records a native approval binding the repository, PR, head, base and label event.
+This receipt records authorization; it is not a code-review or scope verdict.
 
-GitHub CLI may add labels through a separate request after creating a PR.
-GitHub does not expose whether that later request came from the creation
-command or a new manual action, even when initialization has finished. An
-author's first label without the separate QA review is therefore rejected.
-Removing and reapplying it remains a valid opt-in after initialization.
-
-The label workflow records a small, unedited github-actions bot comment containing the repository, PR, head SHA, target branch, label event ID and actor ID. A later workflow completion or scheduled sweep can use only that recorded approval. It cannot infer approval from a label that predates installation, a missed label delivery, an edited comment or ambiguous history. Remove and reapply the label if no approval was recorded. The delivered update timestamp must be zero or one second after the label timestamp, with exactly one label event in that interval and the same sender. Ambiguous same- or adjacent-second relabels require a fresh application.
-
-Pushing a different head, force-pushing, reopening or retargeting requires a new approval. Delayed synchronize jobs re-read the current label event so they do not remove a newer approval.
-
-## Author's first-label QA review
-
-After the opening receipt is recorded, the author may submit a pull-request
-review with the `COMMENT` event and then apply the label. GitHub does not allow
-authors to approve their own PR; an `APPROVE` review is not this proof. The
-submitted review must have REST state `COMMENTED`, a positive review ID, the
-same stable account ID as the label actor, and the exact current head SHA in
-`commit_id`. Its submission must be strictly after the effective opening
-boundary and strictly before the label. Same-second timestamps fail either
-comparison. A review cannot initialize a legacy PR or replace a missing bot
-label-approval receipt.
-
-Include the concrete QA findings and exactly one standalone marker line. This
-example uses placeholder identities; replace all four values with the actual
-repository ID, PR number, full head SHA and target branch:
+An author first-label review states the reviewed commit, scope verdict, contract
+evidence, actionable findings, tests and validation limits required by
+CONTRIBUTING.md. Include exactly one standalone compact marker with actual values:
 
 ```text
-<!-- gesher-automerge-qa-v1 {"repository":10,"number":7,"head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","base":"main"} -->
+<!-- gesher-automerge-qa-v1 {"repository":1426153186,"number":115,"head":"FULL_40_CHARACTER_HEAD_SHA","base":"main"} -->
 ```
 
-The marker must contain exactly those four fields as compact JSON, with no
-duplicate keys, extra fields, indentation or text on its line. Field order
-does not matter. Prose alone never establishes approval. Missing, malformed,
-mismatched or multiple qualifying markers or reviews block the first-label
-route. Review history uses the same bounded pagination as the other listings.
+Edited, duplicate or mismatched proof fails closed. Legacy unedited receipts and
+opening boundaries retain their meaning. Maintainer approval cannot waive the
+Android-visible contract requirements in CONTRIBUTING.md.
 
-The review must be unedited. The controller reads its GraphQL node and checks
-the node ID, body, state, commit and submission time against the REST review,
-requiring `lastEditedAt` to be explicitly null. REST `submitted_at` alone
-cannot establish that the marker existed before labeling because editing a
-review does not change that submission timestamp. Any edit, missing metadata
-or failed API request blocks this proof; removing and reapplying the label
-remains available without a review query.
+## One PR CI run and final QA
 
-The proof is checked when recording approval and again during merge
-evaluation, including after asynchronous CI checks. That final proof read
-precedes the final approval-receipt and permission checks and the last PR and
-label reads, so changes during review queries remain visible to those checks.
-The controller uses its existing permissions and never executes review text.
+The label records approval and enables native SQUASH waiting pinned to that head.
+`qa/label-approval` remains pending while required CI runs. A small metadata-only
+workflow, triggered when ci or arm64-windows completes, verifies the registered
+workflow IDs/paths, pull_request event, exact head/branch, target/source repository
+IDs and successful aggregate check suites from GitHub Actions. Display-name
+collisions, manual runs, another repository or another check suite cannot supply
+that evidence. It then rechecks current label, permission, receipt and QA proof
+before turning the required gate green. GitHub applies all branch protections.
 
-## CI evidence
+`ci-required` covers every root production CI job, including Windows shards,
+packaging and e2e; failed, cancelled or skipped root jobs fail it. `arm64-required`
+covers source identity and the ARM64 build. The deployed configuration is
+`.github/automerge-ruleset.json`: PR review and resolved discussions are required,
+all three contexts are bound to GitHub Actions, force pushes/deletion are blocked,
+and there are no permanent bypass actors. Branch updates may need fresh CI;
+there is no automatic second full CI run simply for merging.
 
-The controller resolves required workflows by their registered repository IDs and file paths. The required ci workflow, plus arm64-windows for main and feature/arm64-windows, must have successful pull_request runs for the approved head and source repository. A manual run or another workflow with the same display name cannot substitute.
+## Fork pull requests
 
-Both required workflows call local reusable workflows. GitHub records the resolved source SHA and refs/pull/NUMBER/merge in referenced_workflows. The controller verifies that this immutable Git commit has a valid tested base and the exact approved head as its two parents. The tested base must equal the current target tip or be its ancestor, proven by GitHub's comparison API using both immutable commit SHAs. An advanced target must report ahead with the tested base as both base_commit and merge_base_commit. A target behind or diverged from the tested base, malformed comparison, or unavailable ancestry evidence blocks merging.
+Fork PRs follow the same label, QA and CI requirements. A maintainer applies the
+label in the target repository. The source fork's repository ID stays distinct
+from the target's ID throughout CI validation; a run from a different fork cannot
+supply approval evidence.
 
-Ordinary target-branch advancement does not invalidate successful CI for an unchanged approved head. The reviewer should require fresh combined testing when code overlap, a shared contract, or another concrete interaction warrants it; unrelated merges do not automatically require a full CI rerun. GitHub still enforces merge conflicts and repository merge requirements.
+The write-capable approval workflow checks out only the default branch's scripts,
+with credentials persistence disabled. It never checks out or executes fork code,
+review text or artifacts. Fork PR CI retains GitHub's normal read-only token and
+workflow approval policy. Fork pull_request_review events have read-only tokens
+and perform no privileged writes: the target repository's workflow_run event
+rechecks their proof after CI, while the required QA gate remains pending.
 
-The controller resolves the actual target through the Git reference API because PR base.sha may retain an earlier snapshot, and rereads that target after checking CI. A target change during those checks defers the merge to a later evaluation. The ARM64 source-identity call supplies immutable tested-source metadata without checking out or executing PR code in the privileged controller.
+A push to a new head needs fresh label authorization and CI. GitHub may also
+disable native waiting when a fork contributor without target write access
+pushes. A new label restores waiting only after the new head is reviewed.
 
-The pull_requests array in a workflow run is live association data and is empty for some fork runs. It is checked when available, but is never treated as historical proof of the tested base. Missing or mixed immutable source metadata blocks merging; legacy runs before the source-identity call was added need fresh CI.
+## Operations and validation
 
-All other workflows, check runs and commit-status contexts must finish without failure. Optional neutral/skipped checks are allowed, while the two required workflows must conclude success. Only this registered controller's trusted runs and their exact check-suite IDs are excluded, preventing the controller from waiting on itself.
+Enable Allow auto-merge and Allow GitHub Actions to create and approve pull
+requests. Use workflow_dispatch to recheck existing receipts; the optional
+pull_request_number input targets one PR. It never manufactures approval from a
+label snapshot. Old PR heads without aggregate checks need updated CI.
 
-## Execution and limits
+```text
+node --test .github/scripts/label-automerge.test.js
+python .github/scripts/test_automerge_workflows.py
+```
 
-The privileged job checks out only the default branch's scripts. It never downloads or executes PR code or artifacts. Permissions, approval, head, base, target, draft state and label identity are re-read before merging. GitHub's merge API pins the head and still applies repository merge rules; the controller does not bypass required reviews or branch protection. The API does not offer an atomic expected-base parameter, so repository protections or a merge queue remain the server-side control for concurrent base updates.
+Fixtures stub GitHub mutations. Live API reads validate the production CI reader
+against published runs separately; local fixtures do not prove native merging,
+fresh Windows/ART tests or a successful live fork merge.
 
-Workflow completion normally wakes the controller. A five-minute scheduled sweep also observes external checks and manually dispatched workflows that finish last; GitHub may delay scheduled jobs. Each API listing is bounded to 1000 items, and malformed, missing or excessive history blocks the PR for manual handling.
-
-A confirmed merge into the default branch explicitly dispatches ci.yml because the workflow's GITHUB_TOKEN does not trigger ordinary push workflows.
-
-The ci workflow cancels superseded runs for the same PR or branch. Its
-root-specific concurrency group stays distinct from reusable workflow groups,
-so a child cannot cancel its parent. ARM64 already cancels its superseded
-runs independently. The approval controller keeps cancel-in-progress disabled:
-new CI must not interrupt a pending approval capture or a merge operation.
-
-Run the deterministic REST and GraphQL fixture regression suite with:
-
-    node --test .github/scripts/automerge.test.js
-
-The suite stubs every write; it does not merge a PR, add a label or post a comment during tests.
+GitHub references:
+- https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request
+- https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target
