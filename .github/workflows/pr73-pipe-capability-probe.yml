@@ -1,0 +1,52 @@
+name: pr73-pipe-capability-probe
+on:
+  push:
+    branches: [palmoni5/qa-pr73-pipe-probe-20261118]
+    paths:
+      - tests/native/pr73_pipe_capability_probe.cc
+      - .github/workflows/pr73-pipe-capability-probe.yml
+permissions:
+  contents: read
+jobs:
+  observe:
+    if: github.repository == 'gesher-runtime/gesher'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native capability observer with MSVC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "PROBE_SOURCE=${{ github.sha }}"
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC installation not found' }
+          $setup = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          & cmd.exe /c "`"$setup`" && cl /nologo /EHsc /std:c++17 /W4 /O2 tests\native\pr73_pipe_capability_probe.cc /Fe:pr73_pipe_capability_probe.exe"
+          if ($LASTEXITCODE) { throw "MSVC failed: $LASTEXITCODE" }
+          Get-FileHash tests/native/pr73_pipe_capability_probe.cc, pr73_pipe_capability_probe.exe -Algorithm SHA256 | Format-List
+      - name: Observe only owned bounded child processes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probe = Start-Process -FilePath .\pr73_pipe_capability_probe.exe -PassThru -RedirectStandardOutput native-observations.log -RedirectStandardError native-errors.log
+          if (!$probe.WaitForExit(60000)) {
+            $probe.Kill($true)
+            $probe.WaitForExit()
+            throw 'Capability observer exceeded its own 60-second deadline'
+          }
+          Get-Content native-observations.log
+          Get-Content native-errors.log
+          if ($probe.ExitCode) { throw "Observer infrastructure failed: $($probe.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr73-pipe-observations-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            native-observations.log
+            native-errors.log
+          retention-days: 7
