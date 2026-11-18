@@ -369,6 +369,20 @@ public final class PackageInstallerSessionTest {
                 && Arrays.equals(reloaded.getInitiatingPackageSigningInfo().getSigningCertificateHistory(),
                         current.getInitiatingPackageSigningInfo().getSigningCertificateHistory()),
                 "Host reopen or durable registry reload lost installer attribution");
+
+        caller.set("android");
+        params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE);
+        id = service.createSession(params, "android", null, 0);
+        stage(service, id, rotated, "download.apk");
+        service.openSession(id).commit(receiver(result), false);
+        jobs.remove(0).run();
+        require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                == PackageInstaller.STATUS_SUCCESS, "Session without an app installer did not commit");
+        InstallSourceInfo categoryOnly = pm.getInstallSourceInfo(pkg, 0);
+        require(categoryOnly.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE
+                && categoryOnly.getInstallingPackageName() == null
+                && categoryOnly.getInitiatingPackageName() == null,
+                "Session lost its declared category or fabricated an app identity");
     }
 
     public static void main(String[] args) throws Exception {

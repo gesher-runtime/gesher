@@ -19,10 +19,16 @@ record PackageInstallSource(String installer, String installationOwner, int cate
     static final PackageInstallSource UNKNOWN = new PackageInstallSource(null, null,
             PackageInstaller.PACKAGE_SOURCE_UNSPECIFIED, null);
 
-    static PackageInstallSource fromSession(ApkPackage owner, int category) {
-        if (owner == null) return UNKNOWN;
+    static PackageInstallSource fromSession(ApkPackage owner, int requestedCategory) {
+        int category = category(requestedCategory);
+        if (owner == null) return withoutInstaller(category);
         return new PackageInstallSource(owner.packageName, owner.enabledStateOwner(),
-                category(category), owner.verifiedSigningDetails());
+                category, owner.verifiedSigningDetails());
+    }
+
+    private static PackageInstallSource withoutInstaller(int category) {
+        return category == PackageInstaller.PACKAGE_SOURCE_UNSPECIFIED
+                ? UNKNOWN : new PackageInstallSource(null, null, category, null);
     }
 
     static int category(int category) {
@@ -46,7 +52,9 @@ record PackageInstallSource(String installer, String installationOwner, int cate
 
     /** One optional tab-separated registry column; certificates contain only hexadecimal bytes. */
     String encode() {
-        if (installer == null) return "";
+        if (installer == null) {
+            return category == PackageInstaller.PACKAGE_SOURCE_UNSPECIFIED ? "" : ",," + category;
+        }
         String identity = installer + "," + installationOwner + "," + category;
         if (signingDetails == null) return identity;
         return identity + "," + signingDetails.getSignatureSchemeVersion()
@@ -68,13 +76,18 @@ record PackageInstallSource(String installer, String installationOwner, int cate
     static PackageInstallSource decode(String value) throws CertificateException {
         if (value.isEmpty()) return UNKNOWN;
         String[] fields = value.split(",", -1);
-        if ((fields.length != 3 && fields.length != 6)
-                || !fields[0].matches("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*")
-                || !UUID.fromString(fields[1]).toString().equals(fields[1])) {
+        if (fields.length != 3 && fields.length != 6) {
             throw new IllegalArgumentException("Invalid installer attribution");
         }
         int category = Integer.parseInt(fields[2]);
         if (category(category) != category) throw new IllegalArgumentException("Invalid package source");
+        if (fields.length == 3 && fields[0].isEmpty() && fields[1].isEmpty()) {
+            return withoutInstaller(category);
+        }
+        if (!fields[0].matches("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*")
+                || !UUID.fromString(fields[1]).toString().equals(fields[1])) {
+            throw new IllegalArgumentException("Invalid installer attribution");
+        }
         SigningDetails details = null;
         if (fields.length == 6) {
             int scheme = Integer.parseInt(fields[3]);

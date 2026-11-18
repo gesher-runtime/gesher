@@ -321,6 +321,18 @@ public final class PackageVisibilityContractTest {
         set(pm, "mPackages", Map.of(A, target, B, replacement, C, observerRecord));
         check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
                 "A same-name reinstall inherited attribution from an earlier generation");
+
+        var fromSession = type.getDeclaredMethod("fromSession", ApkPackage.class, int.class);
+        fromSession.setAccessible(true);
+        var encode = type.getDeclaredMethod("encode");
+        encode.setAccessible(true);
+        Object categoryOnly = fromSession.invoke(null, null, PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE);
+        set(target, "mInstallSource", decode.invoke(null, encode.invoke(categoryOnly)));
+        InstallSourceInfo categorySource = publicClient.getInstallSourceInfo(A);
+        check(categorySource.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE
+                && categorySource.getInitiatingPackageName() == null
+                && categorySource.getInstallingPackageName() == null,
+                "Durable source category required or manufactured an installer identity");
     }
 
     public static int run(boolean onArt) throws Exception {
