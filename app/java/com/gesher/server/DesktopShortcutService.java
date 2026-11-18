@@ -7,6 +7,7 @@ import android.content.IntentSender;
 import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
 import com.gesher.app.shell.AppShell;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -89,9 +90,12 @@ class DesktopShortcutService extends IShortcutService.Default {
     @Override public Intent createShortcutResultIntent(String pkg, ShortcutInfo info, int userId) {
         query(pkg,userId); Objects.requireNonNull(info,"shortcut"); return null;
     }
-    @Override public synchronized ParceledListSlice getShortcuts(String pkg, int flags, int userId) {
-        ApkPackage owner = query(pkg,userId);
-        return new ParceledListSlice<>((flags & 1) == 0 ? new ArrayList<ShortcutInfo>() : new ArrayList<>(load(owner).values()));
+    @Override public synchronized ParceledListSlice<ShortcutInfo> getShortcuts(String pkg, int matchFlags, int userId) {
+        ApkPackage owner = query(pkg, userId);
+        if ((matchFlags & ShortcutManager.FLAG_MATCH_DYNAMIC) == 0) {
+            return ParceledListSlice.emptyList();
+        }
+        return new ParceledListSlice<>(new ArrayList<>(load(owner).values()));
     }
     @Override public ParceledListSlice getShareTargets(String pkg, IntentFilter filter, int userId) {
         query(pkg,userId); Objects.requireNonNull(filter,"filter"); return ParceledListSlice.emptyList();

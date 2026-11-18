@@ -1,49 +1,73 @@
 name: automerge
 
-# Squash-merges a PR labelled `automerge` once CI is green on its current head.
-# Rules live in .github/scripts/automerge.js. This workflow only ever runs the
-# default branch's copy of that script; it never checks out PR code.
+# Records exact-head label approval, rechecks QA after CI and arms auto-merge.
+# Only default-branch scripts execute with this workflow's write permissions.
 
 on:
   pull_request_target:
-    types: [opened, labeled, synchronize, reopened, ready_for_review]
+    types: [opened, labeled, unlabeled, synchronize, reopened, ready_for_review, converted_to_draft, edited]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
   workflow_run:
     workflows: [ci, arm64-windows]
     types: [completed]
-  # External checks and manually dispatched workflows may finish after both
-  # watched workflows. Re-evaluate their recorded approvals without new labels.
-  schedule:
-    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: 'Recheck one existing approval; leave empty for all open PRs'
+        required: false
+        default: ''
+        type: string
 
 permissions:
-  contents: write       # merge
+  contents: write       # enable native waiting; never call the merge API
   pull-requests: write  # read PRs, submit/dismiss bot approval reviews
-  issues: write         # remove labels; read events and legacy opening receipts
-  actions: write        # read workflow runs, dispatch ci.yml after merge
+  issues: write         # remove labels, explain CI failures; read approval evidence
+  statuses: write
+  actions: read
   checks: read
-  statuses: read
 
 concurrency:
-  group: automerge-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+  group: merge-approval-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   automerge:
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_run' ||
-      github.event.action != 'labeled' ||
-      github.event.label.name == 'automerge'
+    # Fork review events have read-only tokens. Their QA proof is rechecked by
+    # the privileged workflow_run event before the required gate turns green.
+    if: github.event_name != 'pull_request_review' || github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: .github/scripts
+      - name: Create repository bot token
+        id: gesher-bot
+        if: vars.GESHER_BOT_APP_ID != ''
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.GESHER_BOT_APP_ID }}
+          private-key: ${{ secrets.GESHER_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
       - uses: actions/github-script@v7
+        env:
+          # Prefer the short-lived App token; a repository PAT is a fallback.
+          # Only native auto-merge mutations use this credential.
+          AUTOMERGE_WORKFLOWS_TOKEN: ${{ steps.gesher-bot.outputs.token || secrets.AUTOMERGE_WORKFLOWS_TOKEN }}
         with:
           script: |
-            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/automerge.js`);
-            await run({github, context, core});
+            const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/label-automerge.js`);
+            const token = process.env.AUTOMERGE_WORKFLOWS_TOKEN;
+            // A separate Octokit instance is essential: changing request headers
+            // on github.graphql would still run the original token's auth hook.
+            const mergeGithub = token ? new github.constructor({
+              auth: token, baseUrl: process.env.GITHUB_API_URL
+            }) : github;
+            await run({github, context, core, mergeGithub});

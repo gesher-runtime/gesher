@@ -50,7 +50,7 @@ def main() -> None:
     parser.add_argument("--core-classes", required=True, type=Path)
     parser.add_argument("--sdk-jar", required=True, type=Path)
     parser.add_argument("--source-ref")
-    parser.add_argument("--case", choices=("all", "public", "page", "ownership"), default="all")
+    parser.add_argument("--case", choices=("all", "public", "page", "ownership", "ingress"), default="all")
     args = parser.parse_args()
     java, javac = (str(args.java_home / "bin" / name) for name in ("java", "javac"))
     classpath = os.pathsep.join(str(p.resolve()) for p in (args.framework_classes, args.core_classes))
@@ -81,6 +81,9 @@ def main() -> None:
         destroy_start = provider.index("    public void destroy() {")
         destroy_end = provider.index("    @Override\n    public void setNetworkAvailable(", destroy_start)
         methods += provider[destroy_start:destroy_end]
+        ingress_start = provider.index("    private void webMessage(")
+        ingress_end = provider.index("\n    /**", ingress_start)
+        methods += provider[ingress_start:ingress_end]
         adapter = '''package com.gesher.app.webview;
 import android.webkit.WebMessage;
 import android.webkit.WebMessagePort;
@@ -97,7 +100,13 @@ final class WebView2Host {
     }
     void destroy() { destroyed = true; }
 }
-final class CleanupBoundary { void close() {} void pageGone() {} }
+final class CleanupBoundary {
+    void close() {} void pageGone() {} void onMessage(JSONObject message, String source) {}
+}
+final class SupportLib {
+    static void deliver(GesherWebViewProvider page, GesherWebViewProvider.MessageListener listener,
+                        WebMessage message, String source) {}
+}
 final class FileUrls { static String toWebView2(String url) { return url; } }
 final class GesherWebViewProvider {
     final java.util.Map<String,GesherWebMessagePort> mPagePorts = new java.util.LinkedHashMap<>();
@@ -105,11 +114,14 @@ final class GesherWebViewProvider {
     boolean mDestroyed;
     final CleanupBoundary mBridgeDispatcher = new CleanupBoundary();
     final CleanupBoundary mGeolocation = new CleanupBoundary();
+    static final class MessageListener {}
+    final java.util.Map<String,MessageListener> mMessageListeners = new java.util.HashMap<>();
     void removeListeners() {}
 ''' + methods + "\n}\n"
         path = package / "GesherWebViewProvider.java"; path.write_text(adapter); inputs.append(str(path))
         inputs.append(str(ROOT / "tests/webmessage/PagePortBoundaryTest.java"))
         inputs.append(str(ROOT / "tests/webmessage/UndeliveredPortOwnershipTest.java"))
+        inputs.append(str(ROOT / "tests/webmessage/PageOriginTransferTest.java"))
         subprocess.run([javac, "-encoding", "UTF-8", "-cp", classpath, "-d", str(classes), *inputs], check=True)
         runtime = os.pathsep.join((str(public), str(classes), classpath))
         if args.case in ("all", "public"):
@@ -118,6 +130,8 @@ final class GesherWebViewProvider {
             subprocess.run([java, "-cp", runtime, "com.gesher.app.webview.PagePortBoundaryTest"], check=True, timeout=30)
         if args.case in ("all", "ownership"):
             subprocess.run([java, "-cp", runtime, "com.gesher.app.webview.UndeliveredPortOwnershipTest"], check=True, timeout=30)
+        if args.case in ("all", "ingress"):
+            subprocess.run([java, "-cp", runtime, "com.gesher.app.webview.PageOriginTransferTest"], check=True, timeout=30)
 
 
 if __name__ == "__main__":

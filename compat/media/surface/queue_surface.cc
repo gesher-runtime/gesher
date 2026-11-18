@@ -63,7 +63,7 @@ void QueueSurface::SetDefaultSize(int width, int height) {
 
 void QueueSurface::SetListener(std::function<void()> listener) {
   std::lock_guard<std::mutex> lock(mutex_);
-  listener_ = std::move(listener);
+  if (!abandoned_) listener_ = std::move(listener);
 }
 
 std::shared_ptr<const SurfaceFrame> QueueSurface::Latest() const {
@@ -80,6 +80,10 @@ void QueueSurface::Abandon() {
   std::lock_guard<std::mutex> lock(mutex_);
   abandoned_ = true;
   listener_ = nullptr;
+  latest_.reset();
+  // Dequeued producers own their buffers through dequeued_. A CPU lock has
+  // only a raw pixels pointer, so keep its buffer until unlockAndPost returns.
+  if (!locked_) buffer_ = nullptr;
 }
 
 void QueueSurface::Size(int* width, int* height) const {
@@ -137,6 +141,10 @@ int QueueSurface::unlockAndPost() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!locked_) return -EINVAL;
     locked_ = false;
+    if (abandoned_) {
+      buffer_ = nullptr;
+      return -ENODEV;
+    }
   }
   Publish();
   return 0;
@@ -202,11 +210,12 @@ int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
       if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
-        buffer_ = *it;
+        if (!abandoned_) buffer_ = *it;
         dequeued_.erase(it);
         break;
       }
     }
+    if (abandoned_) return -ENODEV;
   }
   Publish();
   return 0;

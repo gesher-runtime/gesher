@@ -1241,6 +1241,73 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         for (GesherWebMessagePort port : ports) port.pageGone();
     }
 
+    /**
+     * Admit page-originated transfers atomically with document retirement. The
+     * parent must still belong to this page, and every newly offered transport
+     * id must be fresh. Route only after releasing the provider lock: the peer
+     * may now be owned by another WebView.
+     */
+    private void receivePagePortMessage(JSONObject message) {
+        GesherWebMessagePort parent;
+        WebMessage incoming;
+        synchronized (mPagePorts) {
+            JSONArray offered = message.optJSONArray("ports");
+            try {
+                if (message.has("ports") && offered == null) {
+                    throw new org.json.JSONException("Invalid message port transfer list");
+                }
+                String[] ids = new String[offered == null ? 0 : offered.length()];
+                java.util.HashSet<String> seen = new java.util.HashSet<>();
+                for (int i = 0; i < ids.length; i++) {
+                    Object value = offered.get(i);
+                    if (!(value instanceof String) || !pageTransferId((String) value)
+                            || !seen.add((String) value) || mPagePorts.containsKey(value)) {
+                        throw new org.json.JSONException("Invalid or reused message port id");
+                    }
+                    ids[i] = (String) value;
+                }
+                incoming = WebMessagePayload.read(message);
+                parent = mPagePorts.get(message.optString("gesherPort", ""));
+                if (mHost == null || mDestroyed || parent == null
+                        || !parent.isOwnedByPage(this)) {
+                    rejectPageTransfers(offered);
+                    return;
+                }
+                WebMessagePort[] received = new WebMessagePort[ids.length];
+                for (int i = 0; i < ids.length; i++) {
+                    GesherWebMessagePort[] pair = GesherWebMessagePort.pairFromPage(ids[i], this);
+                    received[i] = pair[0];
+                    mPagePorts.put(ids[i], pair[1]);
+                }
+                if (received.length != 0) incoming = WebMessagePayload.withPorts(incoming, received);
+            } catch (org.json.JSONException invalid) {
+                rejectPageTransfers(offered);
+                return;
+            }
+        }
+        // Navigation/close can win after admission. fromPage then retires the
+        // newly received endpoints through the ordinary undelivered-message path.
+        parent.fromPage(incoming);
+    }
+
+    private static boolean pageTransferId(String id) {
+        return id.matches("page:[0-9a-f]{32}:[1-9][0-9]{0,15}");
+    }
+
+    /** mPagePorts is held. Never let a rejected offer close an existing owner. */
+    private void rejectPageTransfers(JSONArray offered) {
+        if (offered == null || mHost == null || mDestroyed) return;
+        java.util.HashSet<String> closed = new java.util.HashSet<>();
+        for (int i = 0; i < offered.length(); i++) {
+            Object value = offered.opt(i);
+            if (!(value instanceof String)) continue;
+            String id = (String) value;
+            if (pageTransferId(id) && !mPagePorts.containsKey(id) && closed.add(id)) {
+                mHost.postWebMessage("{\"gesher\":\"close\",\"id\":" + JSONObject.quote(id) + "}");
+            }
+        }
+    }
+
     @Override
     public WebSettings getSettings() {
         return mSettings;
@@ -2223,9 +2290,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 if (l != null) SupportLib.deliver(this, l, WebMessagePayload.read(m), source);
                 return;
             }
-            String id = m.optString("gesherPort", null);
-            GesherWebMessagePort port = id != null ? mPagePorts.get(id) : null;
-            if (port != null) port.fromPage(WebMessagePayload.read(m));
+            receivePagePortMessage(m);
         } catch (Exception e) {
             // not a port's message
         }
