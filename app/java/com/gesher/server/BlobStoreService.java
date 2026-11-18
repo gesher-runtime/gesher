@@ -576,7 +576,7 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         // committed-blob slot. A changed install generation is a new owner and
         // must pass the admission limit independently.
         boolean newContribution = previous == null || !previous.owner.equals(stage.owner);
-        if (newContribution && committed >= MAX_COMMITTED) return false;
+        if (committedQuotaExceeded(newContribution, committed, MAX_COMMITTED)) return false;
         Map<String, Contribution> contributions = existing == null
                 ? new LinkedHashMap<>() : new LinkedHashMap<>(existing.contributions);
         long committedAt = previous != null && previous.owner.equals(stage.owner)
@@ -597,6 +597,15 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
     private boolean liveLease(Blob blob, Owner owner, long now) {
         Lease lease = blob.leases.get(owner.name);
         return lease != null && lease.owner.equals(owner) && lease.active(now);
+    }
+
+    static boolean leaseQuotaExceeded(boolean renewing, long live, long maximum,
+            long blobSize, long remainingBytes) {
+        return !renewing && (live >= maximum || blobSize > remainingBytes);
+    }
+
+    static boolean committedQuotaExceeded(boolean newContribution, long committed, long maximum) {
+        return newContribution && committed >= maximum;
     }
 
     private long quota(Owner owner, long now) {
@@ -651,7 +660,7 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
                 && previousLease.active(now);
         // Extending an active lease changes neither the leased-blob count nor
         // its byte charge. Only a genuinely new lease consumes quota.
-        if (!renewing && (live >= MAX_LEASED || blob.size > quota(owner, now))) {
+        if (leaseQuotaExceeded(renewing, live, MAX_LEASED, blob.size, quota(owner, now))) {
             throw limit("Blob lease quota exceeded");
         }
         String text = description == null ? null
