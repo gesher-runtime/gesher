@@ -142,6 +142,7 @@ jobs:
           python3 -m unittest discover -s tools/tests -p test_host_bp_srcs.py
           python3 -m unittest discover -s tools/tests -p test_framework_tree.py
           python3 -m unittest discover -s tools/tests -p test_soong_zip.py
+          python3 -m unittest discover -s tools/tests -p test_sdk_resource_attrs_diff.py
           python3 tools/fonts/test-standalone-link.py
 
       - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
