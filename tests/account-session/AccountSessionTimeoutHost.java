@@ -89,6 +89,7 @@ public final class AccountSessionTimeoutHost {
             h.uptime.set(end);
             task(h).run();
             h.result(new Bundle());
+            check(h.response.error.await(3,TimeUnit.SECONDS),"continued-session timeout callback missing");
             check(h.response.results==2 && h.response.errors==1 && h.response.code==AccountManager.ERROR_CODE_REMOTE_EXCEPTION,
                     "continued-session timeout did not report exactly one remote failure");
             retired(h);
@@ -109,6 +110,7 @@ public final class AccountSessionTimeoutHost {
             TrackedResponse r=new TrackedResponse(); replace(h,r);
             check(r.links==1,"initial response was not watched before binding");
             h.expire();
+            check(r.error.await(3,TimeUnit.SECONDS),"initial timeout callback missing");
             check(r.errors==1 && r.code==AccountManager.ERROR_CODE_REMOTE_EXCEPTION,"initial timeout did not reach the known response immediately");
             register(h,r); h.result(new Bundle());
             check(r.errors==1 && r.results==0 && r.unlinks==1,"initial timeout duplicated delivery or retained death registration");
@@ -243,6 +245,47 @@ public final class AccountSessionTimeoutHost {
         }
     }
 
+    static void independentDeadlines() throws Exception {
+        try (var h = new AccountSessionLifetimeHost.Harness()) {
+            CountDownLatch launching = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            h.response.onLogin = () -> {
+                launching.countDown();
+                try {
+                    if (!release.await(10, TimeUnit.SECONDS)) throw new AssertionError("chooser gate timed out");
+                } catch (InterruptedException e) {
+                    throw new AssertionError(e);
+                }
+            };
+            TrackedResponse second = new TrackedResponse();
+            Object secondAnswer = h.newAnswer(second);
+            Runnable firstExpiry = (Runnable) get(h.answer, "timeout");
+            Runnable secondExpiry = (Runnable) get(secondAnswer, "timeout");
+            FutureTask<Void> delivery = new FutureTask<>(() -> { h.start(); return null; });
+            start(delivery);
+            try {
+                check(launching.await(3, TimeUnit.SECONDS), "first session did not enter its login callback");
+                h.uptime.set((Long) get(secondAnswer, "deadline"));
+                // Make the real expiry tasks immediately runnable on their shared clock.
+                h.timer.remove(firstExpiry);
+                h.timer.remove(secondExpiry);
+                h.timer.execute(firstExpiry);
+                h.timer.execute(secondExpiry);
+                check(second.error.await(3, TimeUnit.SECONDS), "a blocked login callback stalled an unrelated deadline");
+                check(second.errors == 1 && second.code == AccountManager.ERROR_CODE_REMOTE_EXCEPTION
+                        && second.unlinks == 1, "unrelated deadline did not retire its own session");
+                check(h.response.errors == 0, "expiry overtook the first session's accepted login callback");
+            } finally {
+                release.countDown();
+            }
+            delivery.get(3, TimeUnit.SECONDS);
+            check(h.response.error.await(3, TimeUnit.SECONDS), "first timeout disappeared after the login callback");
+            check(h.response.errors == 1 && h.response.code == AccountManager.ERROR_CODE_REMOTE_EXCEPTION,
+                    "deferred expiry did not return exactly one remote error");
+            retired(h);
+        }
+    }
+
     static void races() throws Exception {
         for(boolean terminal:new boolean[]{false,true}) {
             try(var h=new AccountSessionLifetimeHost.Harness()) {
@@ -251,7 +294,7 @@ public final class AccountSessionTimeoutHost {
                 AtomicReference<Throwable> failed=new AtomicReference<>();
                 AccountSessionLifetimeHost.Response response=new AccountSessionLifetimeHost.Response(){
                     @Override public void onResult(Bundle b)throws RemoteException {super.onResult(b); events.add(b.containsKey(AccountManager.KEY_INTENT)?"intent":"success");}
-                    @Override public void onError(int c,String text) {super.onError(c,text); events.add("error:"+c);}
+                    @Override public void onError(int c,String text) {events.add("error:"+c); super.onError(c,text);}
                 };
                 Object check=Proxy.newProxyInstance(h.checkClass.getClassLoader(),new Class<?>[]{h.checkClass},(p,m,a)->{
                     Bundle b=(Bundle)a[0];
@@ -263,10 +306,12 @@ public final class AccountSessionTimeoutHost {
                 Thread result=start(()->{try{h.result(value);}catch(Throwable e){failed.set(e);}});
                 check(validating.await(3,TimeUnit.SECONDS),"validation gate was not reached");
                 h.uptime.set(deadline(h)); Runnable expiry=task(h);
+                h.timer.remove(expiry);
                 Thread timer=start(()->{expiring.countDown();try{expiry.run();}catch(Throwable e){failed.set(e);}});
                 try{check(expiring.await(3,TimeUnit.SECONDS),"timer race did not start");}finally{permit.countDown();}
                 join(result); join(timer);
                 check(failed.get()==null,"validation/expiry race failed: "+failed.get());
+                if (!terminal) check(response.error.await(3,TimeUnit.SECONDS),"deferred validation timeout missing");
                 check(events.equals(terminal?List.of("intent","success"):List.of("intent","intent","error:1")),"timeout overtook accepted delivery: "+events);
                 retired(h);
             }
@@ -274,10 +319,12 @@ public final class AccountSessionTimeoutHost {
         for(int iteration=0;iteration<16;iteration++) {
             try(var h=new AccountSessionLifetimeHost.Harness()) {
                 h.start(); h.uptime.set(deadline(h)); Runnable expiry=task(h);
+                h.timer.remove(expiry);
                 CountDownLatch start=new CountDownLatch(1); AtomicReference<Throwable> failed=new AtomicReference<>();
                 Thread error=start(()->{try{start.await();call(h.answer,"onError",new Class<?>[]{int.class,String.class},AccountManager.ERROR_CODE_BAD_ARGUMENTS,"authenticator error");}catch(Throwable e){failed.set(e);}});
                 Thread timeout=start(()->{try{start.await();expiry.run();}catch(Throwable e){failed.set(e);}});
                 start.countDown(); join(error); join(timeout);
+                check(h.response.error.await(3,TimeUnit.SECONDS),"racing terminal callback missing");
                 check(failed.get()==null && h.response.results==1 && h.response.errors==1,"racing terminal errors were lost/duplicated");
                 check(h.response.code==AccountManager.ERROR_CODE_BAD_ARGUMENTS || h.response.code==AccountManager.ERROR_CODE_REMOTE_EXCEPTION,"racing error was replaced by cancellation");
                 retired(h);
@@ -286,7 +333,7 @@ public final class AccountSessionTimeoutHost {
     }
     public static void main(String[] args) throws Exception {
         System.load(args[0]);
-        budgetAndInitial(); callerLifetime(); bindingCallbacks(); chooserWaits(); races();
+        budgetAndInitial(); callerLifetime(); bindingCallbacks(); chooserWaits(); independentDeadlines(); races();
         System.out.println("AccountSessionTimeoutHost passed: "+checks+" checks");
     }
 }

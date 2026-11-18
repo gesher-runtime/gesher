@@ -40,8 +40,9 @@ sleeping for fifteen minutes or replacing the timer callback. They check:
 - The actual chooser wait shares the Answer deadline, closes on success,
   cancellation or interruption, and preserves interrupt status.
 - Validation/delivery cannot be overtaken by timeout, and competing terminal
-  errors yield one callback. A response Binder proxy is an explicit host boundary
-  for death registration; no remote Binder death is claimed.
+  errors yield one callback. Two sessions sharing the same timer verify that a
+  blocked login callback defers only its own timeout. A response Binder proxy is
+  an explicit host boundary for death registration; no remote Binder death is claimed.
 
 The contract follows Android 16 r4
 [AccountManagerService.Session](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/accounts/AccountManagerService.java):

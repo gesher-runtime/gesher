@@ -68,7 +68,9 @@ public final class AccountSessionLifetimeHost {
         }
         void expire() throws Exception {
             if (hasClock) uptime.set((Long)get(answer,"deadline"));
-            ((Runnable)timer.getQueue().peek()).run();
+            Runnable expiry = (Runnable) timer.getQueue().peek();
+            timer.remove(expiry);
+            expiry.run();
         }
         void result(Bundle b) throws Exception { call(answer,"onResult",new Class<?>[]{Bundle.class},b); }
         void start() throws Exception {
@@ -103,7 +105,10 @@ public final class AccountSessionLifetimeHost {
                     case "success" -> { h.result(new Bundle()); h.result(new Bundle()); }
                     case "error" -> call(h.answer,"onError",new Class<?>[]{int.class,String.class},5,"fixture error");
                     case "removal" -> { call(h.answer,"cancelForRemoval",new Class<?>[0]); check(h.response.error.await(3,TimeUnit.SECONDS),"removal callback missing"); }
-                    case "timeout" -> h.expire();
+                    case "timeout" -> {
+                        h.expire();
+                        check(h.response.error.await(3,TimeUnit.SECONDS),"timeout callback missing");
+                    }
                     case "invalid" -> { Bundle invalid=new Bundle(); invalid.putBoolean("fixture.reject",true); h.result(invalid); }
                 }
                 h.released();
