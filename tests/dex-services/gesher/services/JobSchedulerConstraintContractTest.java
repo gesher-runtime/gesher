@@ -1233,6 +1233,11 @@ public final class JobSchedulerConstraintContractTest {
         invoke(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
         check(service.stops == 1 && service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW,
                 "Periodic host observation missed the low storage threshold");
+        List<PendingJobReasonsInfo> activeHistory = h.history(jobId);
+        check(!activeHistory.isEmpty() && Arrays.equals(
+                        activeHistory.get(activeHistory.size() - 1).getPendingJobReasons(),
+                        new int[]{JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW}),
+                "Active-run constraint loss was not recorded before stop acknowledgement");
         check(h.reason(jobId) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW,
                 "Retry lost its original storage requirement");
         check((Integer) get(run.job, "systemStops") == 1, "Storage loss was not recorded as a system stop");
@@ -1331,20 +1336,26 @@ public final class JobSchedulerConstraintContractTest {
         TestService service = new TestService();
         TestRunHandle handle = h.start(id, service);
         Class<?> updateType = type("JobSchedulerService$RunConstraintUpdate");
-        Class<?>[] signature = {h.runType, long.class, int.class, Network.class};
+        Class<?>[] signature = {h.runType, long.class, long.class, int.class, Network.class};
         long generation = (Long) get(h.scheduler, "mHostGeneration");
-        Object obsoleteStop = make(updateType, signature, handle.run, generation,
+        long observation = (Long) get(h.scheduler, "mConstraintObservation");
+        Object obsoleteStop = make(updateType, signature, handle.run, generation, observation,
                 JobParameters.STOP_REASON_CONSTRAINT_CONNECTIVITY, null);
-        Object obsoleteNetwork = make(updateType, signature, handle.run, generation,
+        Object obsoleteNetwork = make(updateType, signature, handle.run, generation, observation,
                 JobParameters.STOP_REASON_UNDEFINED, new Network(999));
         h.setNetworkSnapshot(snapshot(59, "wifi", false, false));
         check(handle.params.getNetwork() != null && handle.params.getNetwork().getNetId() == 159,
                 "New network assignment did not reach the job");
         invoke(h.scheduler, "applyConstraintUpdate", new Class<?>[]{updateType}, obsoleteStop);
         invoke(h.scheduler, "applyConstraintUpdate", new Class<?>[]{updateType}, obsoleteNetwork);
+        long currentGeneration = (Long) get(h.scheduler, "mHostGeneration");
+        long currentObservation = (Long) get(h.scheduler, "mConstraintObservation");
+        Object stalePoll = make(updateType, signature, handle.run, currentGeneration,
+                currentObservation - 1, JobParameters.STOP_REASON_CONSTRAINT_CONNECTIVITY, null);
+        invoke(h.scheduler, "applyConstraintUpdate", new Class<?>[]{updateType}, stalePoll);
         check(service.stops == 0 && service.networkChanges == 1
                         && handle.params.getNetwork().getNetId() == 159,
-                "A superseded host snapshot stopped or rebound an active job");
+                "A superseded host or same-revision polling snapshot stopped or rebound an active job");
         handle.params.getCallback().jobFinished(id, false);
     }
 
