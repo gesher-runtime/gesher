@@ -284,7 +284,7 @@ try {
   $env:ANDROID_DATA = NoDrive $formatData
   $env:GESHER_MICROG_SPOOF = '0'
   $formatBoot = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
-  $formatArgs = @("-Xbootclasspath:$formatBoot", '-Ximage:none', '-Xint', '-Xusejit:false',
+  $formatArgs = @("-Xbootclasspath:$formatBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
     'com.gesher.server.NotificationStoreFormatRunner')
   foreach ($formatPhase in @('write', 'read')) {
     $formatOut = FixesRun ($formatArgs + $formatPhase) 90

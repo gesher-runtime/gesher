@@ -80,6 +80,17 @@ function ToastTags {
   return $lines
 }
 
+function DevsvcToastTag([int] $Id, [string] $Tag = 'null') {
+  # The toast bridge hashes the Android id/tag tuple as big-endian UTF-16.
+  $hash = [Security.Cryptography.SHA256]::Create()
+  try {
+    $key = [Text.Encoding]::BigEndianUnicode.GetBytes("$Id/$Tag")
+    return [BitConverter]::ToString($hash.ComputeHash($key)).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $hash.Dispose()
+  }
+}
+
 # Gesher's toast activator (hwsvc2, ADR 0051) as the installer registers it: a local
 # server under HKCU whose command runs the launcher's toast-activated (here a script with
 # this run's environment and runtime, the installer's runs gesher-app.ps1). Registered
@@ -224,7 +235,7 @@ DevsvcCheck 'devsvc: accounts: addAccount goes to the app''s authenticator (getA
 
 # --- notifications -----------------------------------------------------------------
 # Two notifications are two toasts of the app's AppUserModelID in Windows' toast
-# history (tags 7 and 8|second); cancel removes one, cancelAll the other. The
+# history (Android ids 7 and 8, the second tagged); cancel removes one, cancelAll the other. The
 # app's notification listener is bound and told.
 $mark = (DevsvcText $devsvcLog).Length
 $t = DevsvcLaunch 'NotifyActivity'
@@ -242,8 +253,10 @@ $code = $LASTEXITCODE
 $log = DevsvcSince $mark
 $problems = @()
 if (-not ($posted -and $cancelled -and $all)) { $problems += 'the app did not post and cancel' }
-if (-not ($tags1.Contains('tag=7 group=android') -and $tags1.Contains('tag=8|second group=android'))) { $problems += "after posting the history has: $($tags1.Trim())" }
-if ($tags2.Contains('tag=7 group=android') -or -not $tags2.Contains('tag=8|second')) { $problems += "after cancel(7) the history has: $($tags2.Trim())" }
+$toast7 = "tag=$(DevsvcToastTag 7) group=android"
+$toast8 = "tag=$(DevsvcToastTag 8 'second') group=android"
+if (-not ($tags1.Contains($toast7) -and $tags1.Contains($toast8))) { $problems += "after posting the history has: $($tags1.Trim())" }
+if ($tags2.Contains($toast7) -or -not $tags2.Contains($toast8)) { $problems += "after cancel(7) the history has: $($tags2.Trim())" }
 if ($tags3.Contains('tag=')) { $problems += "after cancelAll the history has: $($tags3.Trim())" }
 if ($code -ne 0) { $problems += "launch exit $code" }
 DevsvcCheck "devsvc: notifications: posted notifications are toasts of $devsvcAppId in Windows' toast history (ToastNotificationManager.History), removed by cancel and cancelAll" $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'notification' | Out-String))
@@ -281,7 +294,7 @@ if ($server.Contains('Fatal signal')) { $problems += 'the system server took a f
 if ($serverBefore -and $serverAfter -and $serverBefore['system_server'] -ne $serverAfter['system_server']) {
   $problems += "the system server changed (pid $($serverBefore['system_server']) -> $($serverAfter['system_server']))"
 }
-if ($tags.Contains('tag=9 group=android') -or $tags.Contains('tag=10 group=android')) { $problems += "after the cancels the history has: $($tags.Trim())" }
+if ($tags.Contains("tag=$(DevsvcToastTag 9) group=android") -or $tags.Contains("tag=$(DevsvcToastTag 10) group=android")) { $problems += "after the cancels the history has: $($tags.Trim())" }
 if ($code -ne 0) { $problems += "launch exit $code" }
 DevsvcCheck 'devsvc: notifications: an ongoing progress notification with a Hebrew title, updated five times and cancelled at once, leaves the system server running and its toast removed' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + $server)
 
@@ -559,14 +572,15 @@ $posted = DevsvcWait $mark @('devsvc: click: posted 21') 300
 $out = WaitTimed $t 120
 Start-Sleep 2
 $customActivator = (Get-ItemProperty "HKCU:\Software\Classes\AppUserModelId\$devsvcAppId" -ErrorAction SilentlyContinue).CustomActivator
-$xml = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $xmlScript -AppId $devsvcAppId -Tag '21' 2>&1 | Out-String
+$clickToastTag = DevsvcToastTag 21
+$xml = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $xmlScript -AppId $devsvcAppId -Tag $clickToastTag 2>&1 | Out-String
 $launchArgs = if ($xml -match '<toast[^>]* launch="([^"]+)"') { [Net.WebUtility]::HtmlDecode($Matches[1]) } else { '' }
 $buttonArgs = if ($xml -match '<action[^>]* arguments="([^"]+)"') { [Net.WebUtility]::HtmlDecode($Matches[1]) } else { '' }
 $stateBefore = DeviceState
 $null = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'shutdown') 120
 Start-Sleep 2
 $stopped = $stateBefore -and -not (DeviceAlive $stateBefore)
-$kept = (ToastTags).Contains('tag=21 group=android')
+$kept = (ToastTags).Contains("tag=$clickToastTag group=android")
 $serverCommand = (Get-Item "$activatorKey\LocalServer32").GetValue('')
 $mark = (DevsvcText $devsvcLog).Length
 $r1 = [GesherToastActivation]::Activate($activatorClsid, $serverCommand, $devsvcAppId, $launchArgs, 120)
