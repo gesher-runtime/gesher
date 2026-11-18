@@ -334,7 +334,7 @@ try {
           ("$(& $readLog)" -split "`n" | Select-String -Pattern 'locale: |onConfigurationChanged') | Out-Host
           return $problems } `
         @('HandlesActivity onCreate', 'locale: Windows'' settings changed: ', 'LocaleApp onConfigurationChanged ',
-          'HandlesActivity onConfigurationChanged (it handles the change)', 'HandlesActivity onConfigurationChanged #2', 'gesher-app: done')
+          'HandlesActivity onConfigurationChanged #1', 'HandlesActivity onConfigurationChanged #2', 'gesher-app: done')
     } finally {
       LocaleSetFormat $win.format
     }
