@@ -358,7 +358,7 @@ public final class PackageInstallerSessionTest {
         callbacks(service, serviceClass);
         rejected(() -> create(service, "not.the.caller", pkg), SecurityException.class);
         PackageInstaller.SessionParams advanced = new PackageInstaller.SessionParams(-1);
-        rejected(() -> service.createSession(advanced, pkg, null, 0), UnsupportedOperationException.class);
+        rejected(() -> service.createSession(advanced, pkg, null, 0), IllegalArgumentException.class);
         PackageInstaller.SessionParams apex = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         apex.setInstallAsApex();
         rejected(() -> service.createSession(apex, pkg, null, 0), UnsupportedOperationException.class);
