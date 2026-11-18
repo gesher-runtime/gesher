@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
+#include <condition_variable>
 #include <thread>
 #include <vector>
 #include <sys/types.h>
@@ -19,6 +21,9 @@ constexpr int32_t kErrorInternal = -896;
 constexpr int32_t kErrorInvalidState = -895;
 constexpr int32_t kErrorNull = -886;
 constexpr int32_t kErrorTimeout = -885;
+constexpr int32_t kErrorDisconnected = -899;
+constexpr ssize_t kCaptureDeadObject = -32;
+constexpr int32_t kStateUninitialized = 0, kStateDisconnected = 13;
 constexpr int32_t kStateClosing = 11, kStateClosed = 12;
 
 int64_t clock_now = 123000000;
@@ -33,17 +38,20 @@ int64_t Now() {
 }
 
 struct Backend {
+  void NotifyStateWake() {}
   int calls = 0;
   int waits = 0;
   size_t max_transfer = 8;
   size_t position = 0;
   bool error = false;
+  bool dead = false;
   bool unavailable = false;
   bool invalid_request = false;
   std::vector<uint8_t> bytes;
   ssize_t Write(const void* data, size_t size, bool) {
     ++calls;
     if (data == nullptr || size > 64) { invalid_request = true; return 0; }
+    if (dead) return kCaptureDeadObject;
     if (error) return -1;
     if (unavailable) return 0;
     const size_t count = std::min(size, max_transfer);
@@ -54,6 +62,7 @@ struct Backend {
   ssize_t Read(void* data, size_t size, bool) {
     ++calls;
     if (data == nullptr || size > 64) { invalid_request = true; return 0; }
+    if (dead) return kCaptureDeadObject;
     if (error) return -1;
     if (unavailable) return 0;
     const size_t count = std::min({size, max_transfer, bytes.size() - position});
@@ -69,6 +78,11 @@ struct Backend {
 };
 
 struct AAudioStream {
+  std::mutex mu;
+  std::condition_variable cv;
+  bool quit = false;
+  std::atomic<bool> disconnected{false};
+  uint64_t generation = 0;
   struct { void* data_cb = nullptr; } b;
   Backend* track = nullptr;
   Backend* capture = nullptr;
@@ -143,6 +157,14 @@ int main() {
   Check(Write(&reader, pcm, 1, 0) == kErrorInvalidState, "input stream is not a writer");
   input.error = true;
   Check(Read(&reader, received, 1, 0) == kErrorInternal, "read engine error");
+
+  input.error = false; input.dead = true;
+  Check(Read(&reader, received, 1, 0) == kErrorDisconnected, "dead capture reports disconnect");
+  Check(GetState(&reader) == kStateDisconnected && reader.generation == 1,
+        "dead capture changes production state once");
+  Check(Read(&reader, received, 1, 0) == kErrorDisconnected && reader.generation == 1,
+        "later read retains disconnected state");
+  reader.disconnected = false; input.dead = false;
 
   int32_t next = -1;
   Check(WaitForStateChange(&reader, 4, &next, INT64_MAX) == kOk && next == 2,
