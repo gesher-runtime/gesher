@@ -102,7 +102,7 @@ public final class SpeechRecognitionContractTest {
         }
     }
 
-    private static final class Admission extends IRecognitionServiceManagerCallback.Stub {
+    private static class Admission extends IRecognitionServiceManagerCallback.Stub {
         final BlockingQueue<Object> events = new LinkedBlockingQueue<>();
         @Override public void onSuccess(IRecognitionService service) { events.add(service); }
         @Override public void onError(int code) { events.add(code); }
@@ -312,10 +312,17 @@ public final class SpeechRecognitionContractTest {
         check(take(callback.events).equals(SpeechRecognizer.ERROR_CLIENT)
                 && take(backend.unbindings) == take(backend.bindings), "initial bind failure unwinds");
         backend.rejectBinding = false;
-        manager.createSession(SERVICE, bindingToken, false, callback);
+        Admission timeout = new Admission() {
+            @Override public void onError(int code) {
+                events.add(bindingToken.detached() && backend.process.detached()
+                        ? code : "failed session still linked");
+            }
+        };
+        manager.createSession(SERVICE, bindingToken, false, timeout);
         IServiceConnection timed = take(backend.bindings);
-        check(take(callback.events).equals(SpeechRecognizer.ERROR_CLIENT)
-                && take(backend.unbindings) == timed && bindingToken.detached(), "bind timeout releases session");
+        check(take(timeout.events).equals(SpeechRecognizer.ERROR_CLIENT),
+                "failed admission releases its death links before reporting the error");
+        check(take(backend.unbindings) == timed, "bind timeout releases service binding");
         timed.connected(SERVICE, new Engine(), null, false);
 
         manager.createSession(SERVICE, bindingToken, false, callback);

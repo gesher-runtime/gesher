@@ -330,10 +330,11 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             binding = null;
             if (previous != null) previous.remove();
             if (!delivered) {
-                for (IRecognitionServiceManagerCallback callback : callbacks) {
+                List<IRecognitionServiceManagerCallback> failed = List.copyOf(callbacks);
+                close();
+                for (IRecognitionServiceManagerCallback callback : failed) {
                     call(() -> callback.onError(error));
                 }
-                close();
                 return;
             }
             if (previousRecognition != null) {

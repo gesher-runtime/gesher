@@ -4,6 +4,8 @@ Subject: [PATCH] Retire queued speech recognition commands on connection failure
 Keep the public app-side connection queue on the main looper. An admission
 failure completes each pending operation through its own callback. Late binds
 release their endpoint, and a canceled wait does not start a recording.
+Errors retain the listener selected for each command. After a session Binder
+dies, its queued operations fail and the next operation can reconnect.
 
 diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/android/speech/SpeechRecognizerImpl.java
 --- a/core/java/android/speech/SpeechRecognizerImpl.java
@@ -88,7 +90,7 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
          putMessage(Message.obtain(
                  mHandler, MSG_TRIGGER_MODEL_DOWNLOAD,
                  new ModelDownloadListenerArgs(recognizerIntent, executor, listener)));
-@@ -293,10 +282,39 @@
+@@ -293,10 +282,42 @@
      }
 
      private void putMessage(Message msg) {
@@ -103,6 +105,9 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
 +            handleDestroy();
 +            msg.recycle();
 +            return;
++        }
++        if (mService != null && !mService.asBinder().isBinderAlive()) {
++            mService = null;
 +        }
 +        if (mService != null) {
              mHandler.sendMessage(msg);
@@ -131,7 +136,99 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
          }
      }
 
-@@ -439,49 +457,90 @@
+@@ -310,7 +331,7 @@
+             if (DBG) Log.d(TAG, "service start listening command succeeded");
+         } catch (final Exception e) {
+             Log.e(TAG, "startListening() failed", e);
+-            mListener.onError(ERROR_CLIENT);
++            postConnectionError(ERROR_CLIENT);
+         }
+     }
+
+@@ -324,7 +345,7 @@
+             if (DBG) Log.d(TAG, "service stop listening command succeeded");
+         } catch (final Exception e) {
+             Log.e(TAG, "stopListening() failed", e);
+-            mListener.onError(ERROR_CLIENT);
++            postConnectionError(ERROR_CLIENT);
+         }
+     }
+
+@@ -338,7 +359,7 @@
+             if (DBG) Log.d(TAG, "service cancel command succeeded");
+         } catch (final Exception e) {
+             Log.e(TAG, "cancel() failed", e);
+-            mListener.onError(ERROR_CLIENT);
++            postConnectionError(ERROR_CLIENT);
+         }
+     }
+
+@@ -362,7 +383,8 @@
+             Intent recognizerIntent,
+             Executor callbackExecutor,
+             RecognitionSupportCallback recognitionSupportCallback) {
+-        if (!maybeInitializeManagerService() || !checkOpenConnection()) {
++        if (!hasOpenConnection()) {
++            callbackExecutor.execute(() -> recognitionSupportCallback.onError(ERROR_CLIENT));
+             return;
+         }
+         try {
+@@ -381,7 +403,12 @@
+             Intent recognizerIntent,
+             @Nullable Executor callbackExecutor,
+             @Nullable ModelDownloadListener modelDownloadListener) {
+-        if (!maybeInitializeManagerService() || !checkOpenConnection()) {
++        if (!hasOpenConnection()) {
++            if (modelDownloadListener == null) {
++                postConnectionError(ERROR_CLIENT);
++            } else {
++                callbackExecutor.execute(() -> modelDownloadListener.onError(ERROR_CLIENT));
++            }
+             return;
+         }
+
+@@ -393,7 +420,7 @@
+                 if (DBG) Log.d(TAG, "triggerModelDownload() without a listener");
+             } catch (final Exception e) {
+                 Log.e(TAG, "triggerModelDownload() without a listener failed", e);
+-                mListener.onError(ERROR_CLIENT);
++                postConnectionError(ERROR_CLIENT);
+             }
+         } else {
+             // Trigger model download with a listener.
+@@ -410,12 +437,30 @@
+     }
+
+     private boolean checkOpenConnection() {
++        if (hasOpenConnection()) {
++            return true;
++        }
++        postConnectionError(ERROR_CLIENT);
++        return false;
++    }
++
++    private boolean hasOpenConnection() {
+         if (mService != null && mService.asBinder().isBinderAlive()) {
+             return true;
+         }
+-        mListener.onError(ERROR_CLIENT);
++        mService = null;
+         Log.e(TAG, "not connected to the recognition service");
+         return false;
++    }
++
++    private void postConnectionError(int error) {
++        // A queued listener change must not redirect the previous command's error.
++        RecognitionListener target = mListener.mInternalListener;
++        if (target != null) {
++            mHandler.post(() -> {
++                if (mListener.mInternalListener != null) target.onError(error);
++            });
++        }
+     }
+
+     /** changes the listener */
+@@ -439,49 +484,90 @@
          }
 
          mService = null;
@@ -232,7 +329,7 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
 +        while ((message = failed.poll()) != null) {
 +            try {
 +                switch (message.what) {
-+                    case MSG_START -> mListener.onError(error);
++                    case MSG_START -> postConnectionError(error);
 +                    case MSG_CHANGE_LISTENER -> handleChangeListener((RecognitionListener) message.obj);
 +                    case MSG_CHECK_RECOGNITION_SUPPORT -> {
 +                        CheckRecognitionSupportArgs args = (CheckRecognitionSupportArgs) message.obj;
@@ -240,7 +337,7 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
 +                    }
 +                    case MSG_TRIGGER_MODEL_DOWNLOAD -> {
 +                        ModelDownloadListenerArgs args = (ModelDownloadListenerArgs) message.obj;
-+                        if (args.mModelDownloadListener == null) mListener.onError(error);
++                        if (args.mModelDownloadListener == null) postConnectionError(error);
 +                        else args.mExecutor.execute(() -> args.mModelDownloadListener.onError(error));
 +                    }
 +                    default -> { }
@@ -253,7 +350,16 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
          }
      }
 
-@@ -499,13 +558,7 @@
+@@ -489,7 +575,7 @@
+         if (DBG) {
+             Log.i(TAG, "#maybeInitializeManagerService found = " + mManagerService);
+         }
+-        if (mManagerService != null) {
++        if (mManagerService != null && mManagerService.asBinder().isBinderAlive()) {
+             return true;
+         }
+
+@@ -499,13 +585,7 @@
          }
          mManagerService = IRecognitionServiceManager.Stub.asInterface(service);
 
@@ -264,11 +370,11 @@ diff --git a/core/java/android/speech/SpeechRecognizerImpl.java b/core/java/andr
 -            return false;
 -        }
 -        return true;
-+        return mManagerService != null;
++        return mManagerService != null && mManagerService.asBinder().isBinderAlive();
      }
 
      /**
-@@ -536,6 +589,5 @@
+@@ -536,6 +616,5 @@
 
          if (TextUtils.isEmpty(serviceComponent)) {
              Log.e(TAG, "no selected voice recognition service");

@@ -63,6 +63,8 @@ public final class SpeechRecognizerConnectionTest {
     private static final class Engine extends IRecognitionService.Stub {
         int listening;
         int shutdowns;
+        boolean alive = true;
+        @Override public boolean isBinderAlive() { return alive; }
         @Override public void startListening(Intent intent, IRecognitionListener listener,
                 AttributionSource source) { listening++; }
         @Override public void stopListening(IRecognitionListener listener) {}
@@ -88,6 +90,55 @@ public final class SpeechRecognizerConnectionTest {
         @Override public void onEvent(int value, Bundle params) {}
     }
 
+    private static void queueRequests(SpeechRecognizer recognizer, Intent input,
+            List<Integer> support, List<Integer> model) {
+        recognizer.checkRecognitionSupport(input, Runnable::run, new RecognitionSupportCallback() {
+            @Override public void onSupportResult(RecognitionSupport result) { throw new AssertionError(); }
+            @Override public void onError(int error) { support.add(error); }
+        });
+        recognizer.triggerModelDownload(input, Runnable::run, new ModelDownloadListener() {
+            @Override public void onProgress(int value) { throw new AssertionError(); }
+            @Override public void onSuccess() { throw new AssertionError(); }
+            @Override public void onScheduled() { throw new AssertionError(); }
+            @Override public void onError(int error) { model.add(error); }
+        });
+    }
+
+    private static void sessionDeath(Handler main, Manager manager, Context context,
+            ComponentName component, Intent input) {
+        SpeechRecognizer disconnected = SpeechRecognizer.createSpeechRecognizer(context, component);
+        Listener unrelated = new Listener();
+        disconnected.setRecognitionListener(unrelated);
+        List<Integer> support = new ArrayList<>();
+        List<Integer> model = new ArrayList<>();
+        queueRequests(disconnected, input, support, model);
+        int slot = manager.admissions.size() - 1;
+        Engine dead = new Engine();
+        manager.answer(slot, dead);
+        main.post(() -> {
+            // Admission is accepted, but the endpoint dies before the queued commands run.
+            dead.alive = false;
+            main.post(() -> {
+                check(support.equals(List.of(FAILED)) && model.equals(List.of(FAILED))
+                        && unrelated.errors.isEmpty(),
+                        "commands fail on their own callbacks when a published session dies");
+                disconnected.startListening(input);
+                check(manager.admissions.size() == slot + 2,
+                        "a new operation reconnects after the session dies");
+                Engine live = new Engine();
+                manager.answer(slot + 1, live);
+                main.post(() -> main.post(() -> {
+                    check(live.listening == 1, "new connection handles the next operation");
+                    disconnected.destroy();
+                    main.post(() -> {
+                        check(live.shutdowns == 1, "new session is released on destroy");
+                        throw new EndLoop();
+                    });
+                }));
+            });
+        });
+    }
+
     public static void main(String[] args) {
         if (args.length == 0) System.loadLibrary("android_runtime");
         else for (String library : args) System.load(library);
@@ -103,25 +154,22 @@ public final class SpeechRecognizerConnectionTest {
         ComponentName component = new ComponentName("fixture.engine", "fixture.engine.Provider");
         Intent input = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         Listener listener = new Listener();
+        Listener replacement = new Listener();
         List<Integer> support = new ArrayList<>();
         List<Integer> model = new ArrayList<>();
         SpeechRecognizer recognizer = SpeechRecognizer.createSpeechRecognizer(context, component);
         recognizer.setRecognitionListener(listener);
         recognizer.startListening(input);
-        recognizer.checkRecognitionSupport(input, Runnable::run, new RecognitionSupportCallback() {
-            @Override public void onSupportResult(RecognitionSupport result) { throw new AssertionError(); }
-            @Override public void onError(int error) { support.add(error); }
-        });
-        recognizer.triggerModelDownload(input, Runnable::run, new ModelDownloadListener() {
-            @Override public void onProgress(int value) { throw new AssertionError(); }
-            @Override public void onSuccess() { throw new AssertionError(); }
-            @Override public void onScheduled() { throw new AssertionError(); }
-            @Override public void onError(int error) { model.add(error); }
-        });
+        recognizer.setRecognitionListener(replacement);
+        recognizer.startListening(input);
+        queueRequests(recognizer, input, support, model);
         check(manager.admissions.size() == 1, "queued operations share initial binding");
         manager.answer(0, null);
         main.post(() -> main.post(() -> {
-            check(listener.errors.equals(List.of(FAILED)) && support.equals(List.of(FAILED))
+            check(listener.errors.equals(List.of(FAILED))
+                    && replacement.errors.equals(List.of(FAILED)),
+                    "each start fails on the listener selected when it was queued");
+            check(support.equals(List.of(FAILED))
                     && model.equals(List.of(FAILED)), "each command receives its own admission error");
             recognizer.startListening(input);
             check(manager.admissions.size() == 2 && manager.tokens.get(1) != manager.tokens.get(0),
@@ -145,7 +193,7 @@ public final class SpeechRecognizerConnectionTest {
                         main.post(() -> {
                             check(late.shutdowns == 1 && late.listening == 0,
                                     "late bind after destroy shuts down without capturing");
-                            throw new EndLoop();
+                            sessionDeath(main, manager, context, component, input);
                         });
                     });
                 });
