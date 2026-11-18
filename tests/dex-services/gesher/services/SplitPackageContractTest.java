@@ -548,12 +548,18 @@ public final class SplitPackageContractTest {
             int initial = fixture.create(full, PACKAGE);
             stage(fixture.open(initial), "stream-base", inputs.get("base-signed"));
             stage(fixture.open(initial), "stream-base.dm", splitDexMetadata());
-            stage(fixture.open(initial), "stream-core", inputs.get("core-signed"));
             fixture.commit(initial, success);
+            ApkPackage baseOnly = fixture.pm.get(PACKAGE);
+            require(baseOnly.applicationInfo(0).splitSourceDirs == null,
+                    "Base-only fixture unexpectedly published split paths");
+            int addFirstSplit = fixture.create(inherit, PACKAGE);
+            stage(fixture.open(addFirstSplit), "stream-core", inputs.get("core-signed"));
+            fixture.commit(addFirstSplit, success);
             ApkPackage first = fixture.pm.get(PACKAGE);
             ApplicationInfo firstInfo = first.applicationInfo(0);
-            require(Arrays.equals(firstInfo.splitNames, new String[]{"feature.core"}),
-                    "Positive fixture did not install the signed starting cluster");
+            require(first.uid() == baseOnly.uid()
+                            && Arrays.equals(firstInfo.splitNames, new String[]{"feature.core"}),
+                    "First inherited split did not preserve the base-only package identity");
             File saved = new File(firstInfo.dataDir, "inherited-session-state");
             Files.writeString(saved.toPath(), "keep me");
 
@@ -561,8 +567,8 @@ public final class SplitPackageContractTest {
             PackageInstaller.Session addSession = fixture.open(add);
             require(fixture.service.getSessionInfo(add).getMode() == inherit,
                     "SessionInfo did not expose the requested inherit mode");
-            stage(addSession, "arbitrary-download", inputs.get("entry-signed"));
-            stage(addSession, "arbitrary-download.dm", splitDexMetadata());
+            stage(addSession, "apks", inputs.get("entry-signed"));
+            stage(addSession, "apks.dm", splitDexMetadata());
             require(fixture.service.openSession(add).fetchPackageNames().equals(Collections.singletonList(PACKAGE)),
                     "A staged split failed to resolve its manifest package without a staged base");
             fixture.commit(add, success);
@@ -603,6 +609,17 @@ public final class SplitPackageContractTest {
                         : incompatible.equals("core-foreign-abi-signed")
                                   ? PackageInstaller.STATUS_FAILURE_INCOMPATIBLE : invalid;
                 fixture.rejectUpdate(attempt, expected);
+            }
+            for (String inconsistent : new String[]{"foreign-signed", "core-major-signed",
+                    "core-foreign-signer-signed", "core"}) {
+                int mixed = fixture.create(inherit, PACKAGE);
+                PackageInstaller.Session mixedSession = fixture.open(mixed);
+                stage(mixedSession, "first", inputs.get("entry-revised-signed"));
+                stage(mixedSession, "second", inputs.get(inconsistent));
+                int beforePrompts = fixture.prompts;
+                fixture.rejectUpdate(mixed, invalid);
+                require(fixture.prompts == beforePrompts,
+                        "Mixed inherited APK set reached consent: " + inconsistent);
             }
             int duplicate = fixture.create(inherit, PACKAGE);
             stage(fixture.open(duplicate), "first", inputs.get("entry-revised-signed"));

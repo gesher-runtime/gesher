@@ -599,6 +599,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             File frozen = null;
             try {
                 frozen = Files.createTempDirectory(stage.toPath().getParent(), "commit-").toFile();
+                File snapshots = new File(frozen, "snapshots");
+                Files.createDirectory(snapshots.toPath());
                 File[] all = stage.listFiles();
                 Map<String, File> sidecars = new HashMap<>();
                 List<File> files = new ArrayList<>();
@@ -609,7 +611,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                                 source.getName().length() - REMOVED_SUFFIX.length()));
                         continue;
                     }
-                    File snapshot = new File(frozen, source.getName());
+                    File snapshot = new File(snapshots, source.getName());
                     Files.copy(source.toPath(), snapshot.toPath());
                     if (source.getName().equals(InstallSessionMetadata.APP_METADATA)) {
                         InstallSessionMetadata.validateMetadata(snapshot);
@@ -621,7 +623,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                     } else files.add(snapshot); // APK names are arbitrary; parse the actual bytes.
                 }
                 if (files.isEmpty() && (removals.isEmpty()
-                        || new File(frozen, InstallSessionMetadata.APP_METADATA).exists())) {
+                        || new File(snapshots, InstallSessionMetadata.APP_METADATA).exists())) {
                     throw new IllegalArgumentException("Empty APK set");
                 }
                 ApkLite first = null;
@@ -636,11 +638,17 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                     ApkLite lite = parsed.getResult();
                     parsedFiles.put(snapshot, lite);
                     Signature[] current = ApkPackage.verifySignatures(snapshot.getPath());
-                    if (current == null) throw new SecurityException("Store installs must be signed");
+                    if (current == null) {
+                        if (inheritsExisting()) throw InstalledSplitSet.invalid("Staged APK could not be verified");
+                        throw new SecurityException("Store installs must be signed");
+                    }
                     if (first == null) { first = lite; signers = current; }
                     else if (!first.getPackageName().equals(lite.getPackageName())
                             || first.getLongVersionCode() != lite.getLongVersionCode()
-                            || !Arrays.equals(signers, current)) throw new SecurityException("Mismatched APK set");
+                            || !Arrays.equals(signers, current)) {
+                        if (inheritsExisting()) throw InstalledSplitSet.invalid("Staged APKs are inconsistent");
+                        throw new SecurityException("Mismatched APK set");
+                    }
                     String split = lite.getSplitName();
                     if (!canonicalNames.add(InstalledSplitSet.apkName(split).toLowerCase(Locale.ROOT))) {
                         throw new IllegalArgumentException("Duplicate base or split name");
@@ -650,8 +658,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 if (!inheritsExisting() && !stagedSplits.containsKey(null)) {
                     throw new IllegalArgumentException("Missing base APK");
                 }
-                // A unique private canonical path bypasses the mutable-source cache. The
-                // client has no writable FD to either snapshot or final installer input.
+                // Keep canonical inputs outside the installer-named snapshot directory.
+                // The unique private path also bypasses the mutable-source cache.
                 File canonical = new File(frozen, "apks"); Files.createDirectory(canonical.toPath());
                 Set<String> consumedChecksums = new HashSet<>();
                 for (Map.Entry<File, ApkLite> entry : parsedFiles.entrySet()) {
@@ -673,7 +681,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 }
                 if (!sidecars.isEmpty()) throw new IllegalArgumentException("Dex metadata has no APK");
                 if (consumedChecksums.size() != checksums.size()) throw new IllegalArgumentException("Checksums have no APK");
-                File appMetadata = new File(frozen, InstallSessionMetadata.APP_METADATA);
+                File appMetadata = new File(snapshots, InstallSessionMetadata.APP_METADATA);
                 if (appMetadata.isFile()) Files.move(appMetadata.toPath(),
                         new File(canonical, InstallSessionMetadata.APP_METADATA).toPath());
                 if (first != null) pkg = first.getPackageName();

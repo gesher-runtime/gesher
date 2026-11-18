@@ -41,7 +41,9 @@ final class InstalledSplitSet {
         PackageInfo info = installed.packageInfo(0);
         directory = new File(installed.apkPath).toPath().getParent();
         apks.put(null, new Apk(installed.apkPath, info.baseRevisionCode));
-        if (info.splitNames != null) {
+        // PackageInfo may expose an empty name array while ApplicationInfo
+        // uses null for a base-only package's split paths.
+        if (info.splitNames != null && info.splitNames.length != 0) {
             String[] paths = info.applicationInfo.splitSourceDirs;
             int[] revisions = info.splitRevisionCodes;
             if (paths == null || revisions == null || info.splitNames.length != paths.length
