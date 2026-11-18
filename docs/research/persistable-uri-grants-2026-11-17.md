@@ -172,3 +172,20 @@ partial source checkout contain no usable `@ChangeId` fields. That gate was not
 bypassed. The full production-source type-check uses the previously generated
 Stub/CompatChangeTable dependency archive. A complete current-commit framework
 build and Windows/ART execution are still required CI evidence before merge.
+
+### Web3 regression fixture and runtime consent
+
+The Web3 geolocation fixture now requests coarse and fine location through
+`Activity.requestPermissions` before creating test providers or WebViews. The
+Windows test driver explicitly selects Allow or Deny on the production consent
+dialog, restricted to the fixture's process, package and exact permission pair.
+A fresh test data directory isolates the denial control; denial must finish
+without starting providers or WebViews. The existing positive coordinate,
+watch-position, disabled-geolocation and process-exit assertions remain required
+in both single-process and device runs. Runtime permission policy is unchanged.
+
+Local validation: the fixture compiles against SDK 36; the PowerShell scripts
+parse; seven synthetic offscreen native-dialog cases validate the UI driver's
+allow/deny behavior and rejection of mismatched or ambiguous requests. These
+driver checks do not execute ART or establish a passing full Web3 regression.
+Fresh Windows CI remains required for the production permission and WebView path.

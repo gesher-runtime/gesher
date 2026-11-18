@@ -16,6 +16,8 @@ $env:GESHER_LOCALES = 'en-US'
 $Web3RuntimeExe = (Resolve-Path -LiteralPath $Web3RuntimeExe -ErrorAction Stop).Path
 . "$PSScriptRoot/../webview/Runtime.ps1"
 . "$PSScriptRoot/../web3/Web3Servers.ps1"
+. "$PSScriptRoot/../web3/LocationConsent.ps1"
+& "$PSScriptRoot/../web3/LocationConsentChecks.ps1"
 if (-not ('GesherWeb3Win32' -as [type])) {
   Add-Type -TypeDefinition @'
 using System;
@@ -65,7 +67,8 @@ function Web3ProcessState([int] $LauncherId, [string] $Text) {
 
 function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [string] $Done,
                  [string] $Ready = '', [scriptblock] $During = $null, [int] $Seconds = 400,
-                 [string] $NativeLibrary = 'web3_network.so') {
+                 [string] $NativeLibrary = 'web3_network.so',
+                 [ValidateSet('', 'Allow', 'Deny')] [string] $LocationConsent = '') {
   if (-not (Test-Path "$Dir/web3app.apk")) {
     Write-Host "FAIL  web3: $Name (web3app.apk is missing)"
     $script:failed++
@@ -87,8 +90,29 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   $deadline = (Get-Date).AddSeconds($Seconds)
   $hwnd = [IntPtr]::Zero
   $ran = $false
+  $consentResponded = $false
+  $consentOwner = 0
   while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
     $text = & $read
+    if ($LocationConsent -and -not $consentResponded -and $text.Contains('Web3 geo requesting location permissions')) {
+      if ($Arguments -contains 'com.gesher.app.Launcher') {
+        # The dialog belongs to the system server of this isolated test device.
+        $consentReadyFile = Join-Path $root 'data-web3/system/gesher-device.ready'
+        if (Test-Path -LiteralPath $consentReadyFile) {
+          [void][int]::TryParse((Get-Content -LiteralPath $consentReadyFile -Raw).Trim(), [ref]$consentOwner)
+        }
+      } elseif ($consentOwner -eq 0) {
+        # Web3Run's cmd.exe redirects the VM's logs. Only its exact VM child
+        # may own the single-process permission dialog.
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" |
+          Where-Object { $_.ExecutablePath -eq $Web3RuntimeExe })
+        if ($children.Count -eq 1) { $consentOwner = [int]$children[0].ProcessId }
+      }
+      if ([Web3LocationConsent]::Respond($consentOwner, $LocationConsent -eq 'Allow')) {
+        $consentResponded = $true
+        Write-Host "INFO  web3: fixture location consent $LocationConsent, owner $consentOwner"
+      }
+    }
     if ($hwnd -eq [IntPtr]::Zero) {
       $m = [regex]::Match($text, 'first frame drawn \((\d+) presented\), \w+, hwnd 0x([0-9a-f]+)')
       if ($m.Success) { $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[2].Value, 16) }
@@ -202,15 +226,30 @@ CompatProxied 'the single process''s WebView' $before
 
 # --- navigator.geolocation ---------------------------------------------------------
 $geoExpect = @(
+  'Web3 geo location permissions granted',
   'Web3 geo test location set: 31.7683 35.2137',
   'Web3 geo onGeolocationPermissionsShowPrompt: file:///',
   'Web3 geo getCurrentPosition: "31.7683 35.2137 accuracy 7 altitude 754"',
   'Web3 geo watchPosition: [', '32.0853 34.7818 accuracy 7',
   'Web3 geo with geolocation disabled: "error 1',
   'Web3 geo done')
+$geoSavedData = $env:ANDROID_DATA
+$geoData = Join-Path $root ("data-web3-geo-" + [guid]::NewGuid().ToString('N'))
+$env:ANDROID_DATA = NoDrive $geoData
+New-Item -ItemType Directory -Path $geoData | Out-Null
+try {
+$geoArgs = @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
+  'com.gesher.web3app.GeoActivity', (NoDrive "$Dir/web3app.apk"))
+$denied = Web3Run 'geolocation fixture: denying runtime location consent finishes without starting providers or WebViews' `
+  $geoArgs @('Web3 geo location permissions denied', 'Web3 geo done', 'gesher-app: done') 'Web3 geo done' -LocationConsent Deny
+if ($denied.Contains('Web3 geo test location set:') -or $denied.Contains('Web3 geo onGeolocationPermissionsShowPrompt:')) {
+  Write-Host 'FAIL  web3: denied runtime consent started geolocation'
+  $failed++
+}
 $null = Web3Run 'web3app.apk''s GeoActivity: navigator.geolocation in a WebView answered from LocationManager (test providers): getCurrentPosition after onGeolocationPermissionsShowPrompt, watchPosition following the test location, error 1 with geolocation disabled (single process)' @(
   'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.GeoActivity',
-  (NoDrive "$Dir/web3app.apk")) ($geoExpect + 'gesher-app: done') 'Web3 geo done'
+  (NoDrive "$Dir/web3app.apk")) ($geoExpect + 'gesher-app: done') 'Web3 geo done' -LocationConsent Allow
+} finally { $env:ANDROID_DATA = $geoSavedData }
 
 # --- Accessibility -------------------------------------------------------------------
 # A UI Automation client, as Narrator: the app's window's tree has the Android views (and
@@ -346,7 +385,7 @@ try {
   $null = Web3Run "the Gesher device: $compatName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.CompatActivity') ($compatExpect + 'gesher-app: app process for com.gesher.web3app: pid ') 'Web3 compat done'
   CompatProxied 'the app process''s WebView' $before
 
-  $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
+  $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done' -LocationConsent Allow
   $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity', '--ez', 'arm64Native', 'true') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
 
   Web3ScreenReader $true
