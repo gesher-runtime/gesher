@@ -149,5 +149,10 @@ enum class Device { kZero, kRandom };
 bool DeviceFromFd(int fd, Device* device);
 // Takes over `fd`, which must be open on NUL.
 void RegisterDevice(int fd, Device device);
+// CRT stream close/reopen bypasses close(). Retire its device marker after
+// the real operation, while the descriptor guard still prevents fd reuse.
+// On failure the CRT may already have closed the descriptor (e.g. after a
+// flush error); a still-open descriptor keeps its marker.
+void ForgetStreamDevice(int fd, bool closed_or_replaced);
 
 }  // namespace gesher

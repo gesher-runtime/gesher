@@ -158,7 +158,7 @@ function world(over = {}) {
       commit: {oid: r.commit_id}, ...(bot ? w.approvalNodeOverride : w.reviewNodeOverride)} : null});
   };
   const core = {info: () => {}, warning: (s) => w.warnings.push(s)};
-  const fire = (eventName, payload) => run({github, core,
+  const fire = (eventName, payload) => run({github, core, mergeGithub: w.mergeGithub,
     context: {eventName, repo: {owner: 'o', repo: 'r'},
       payload: {repository: {default_branch: 'main'}, ...clone(payload)}}});
   w.labeled = (snapshot = w.pr) => fire('pull_request_target', {action: 'labeled',

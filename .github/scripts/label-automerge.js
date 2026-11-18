@@ -3,7 +3,9 @@
 // Only loaded from main. Approve the exact head and let native auto-merge finish.
 const p = require('./merge-approval.js');
 const STATUS = 'qa/label-approval';
-const FAILED_CI = new Set(['failure', 'timed_out', 'action_required', 'startup_failure']);
+// Fork CI awaiting maintainer approval can be completed/action_required without
+// executing a job. Keep approval pending until an actual CI result is available.
+const FAILED_CI = new Set(['failure', 'timed_out', 'startup_failure']);
 
 async function approved(github, owner, repo, pr) {
   if (pr.state !== 'open' || pr.draft || pr.base.ref !== 'main' || !p.hasLabel(pr) ||
@@ -28,13 +30,13 @@ async function status(github, owner, repo, sha, ok) {
       'Authorized exact-head label, QA and PR CI verified' : 'Fresh authorized automerge label/QA required'});
 }
 
-async function cancel(github, owner, repo, pr) {
+async function cancel(github, owner, repo, pr, mergeGithub = github) {
   const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
   if (current.state !== 'open' || current.head.sha !== pr.head.sha) return;
   const {node} = await github.graphql(`query($id: ID!) {
     node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } }
   }`, {id: pr.node_id});
-  if (node?.autoMergeRequest) await github.graphql(`mutation($id: ID!) {
+  if (node?.autoMergeRequest) await mergeGithub.graphql(`mutation($id: ID!) {
     disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId }
   }`, {id: pr.node_id});
 }
@@ -77,7 +79,7 @@ async function ciReady(github, owner, repo, pr) {
   return (await ciEvidence(github, owner, repo, pr)).ready;
 }
 
-async function failedCI(github, owner, repo, pr, event, run, core) {
+async function failedCI(github, owner, repo, pr, event, run, core, mergeGithub) {
   if (!event) return;
   // Recheck attempt state immediately before removing approval. An old failure
   // must not revoke a newer successful/pending rerun or a later label event.
@@ -88,7 +90,7 @@ async function failedCI(github, owner, repo, pr, event, run, core) {
   const removed = await p.removeLabel(github, owner, repo, pr, event, 'CI failed; fresh approval required', core);
   if (!removed) return;
   await status(github, owner, repo, pr.head.sha, false);
-  await cancel(github, owner, repo, pr);
+  await cancel(github, owner, repo, pr, mergeGithub);
   const marker = '<!-- gesher-automerge-ci-failed-v1 ' + JSON.stringify({
     repository: pr.base.repo.id, number: pr.number, head: pr.head.sha,
     label: event.id, run: run.id, attempt: run.run_attempt}) + ' -->';
@@ -99,19 +101,19 @@ async function failedCI(github, owner, repo, pr, event, run, core) {
     body: 'CI failed; removed `automerge`. Fix/rerun CI, then reapply the label. [Run](' + link + ').\n\n' + marker});
 }
 
-async function reconcile(github, owner, repo, number, core) {
+async function reconcile(github, owner, repo, number, core, mergeGithub) {
   const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
   if (pr.state !== 'open') return;
   let ok = false;
   try { ok = await approved(github, owner, repo, pr); }
   catch (error) {
     await status(github, owner, repo, pr.head.sha, false);
-    await cancel(github, owner, repo, pr);
+    await cancel(github, owner, repo, pr, mergeGithub);
     throw error;
   }
   if (!ok) {
     await status(github, owner, repo, pr.head.sha, false);
-    return cancel(github, owner, repo, pr);
+    return cancel(github, owner, repo, pr, mergeGithub);
   }
   // This gate stays pending until CI is done. In particular fork review events
   // have read-only tokens; the privileged CI-completion event rechecks QA then.
@@ -120,24 +122,26 @@ async function reconcile(github, owner, repo, number, core) {
     node(id: $id) { ... on PullRequest { autoMergeRequest { mergeMethod } } }
   }`, {id: pr.node_id});
   if (node?.autoMergeRequest?.mergeMethod !== 'SQUASH') {
-    if (node?.autoMergeRequest) await cancel(github, owner, repo, pr);
-    await github.graphql(`mutation($id: ID!, $head: GitObjectID!) {
+    if (node?.autoMergeRequest) await cancel(github, owner, repo, pr, mergeGithub);
+    await mergeGithub.graphql(`mutation($id: ID!, $head: GitObjectID!) {
       enablePullRequestAutoMerge(input: {pullRequestId: $id, expectedHeadOid: $head,
         mergeMethod: SQUASH}) { clientMutationId }
     }`, {id: pr.node_id, head: pr.head.sha});
   }
   const event = await p.labelEvent(github, owner, repo, number);
   const evidence = await ciEvidence(github, owner, repo, pr);
-  if (evidence.failed) return failedCI(github, owner, repo, pr, event, evidence.failed, core);
+  if (evidence.failed) return failedCI(github, owner, repo, pr, event, evidence.failed, core, mergeGithub);
   if (!evidence.ready) return;
   if (!await approved(github, owner, repo, pr)) {
     await status(github, owner, repo, pr.head.sha, false);
-    return cancel(github, owner, repo, pr);
+    return cancel(github, owner, repo, pr, mergeGithub);
   }
   await status(github, owner, repo, pr.head.sha, true);
 }
 
-module.exports = async ({github, context, core}) => {
+// Only native auto-merge mutations use the optional workflow-capable identity.
+// Receipts, permission checks and required statuses retain github-actions[bot].
+module.exports = async ({github, context, core, mergeGithub = github}) => {
   const {owner, repo} = context.repo;
   const payload = context.payload;
   if (context.eventName === 'workflow_run') {
@@ -145,7 +149,7 @@ module.exports = async ({github, context, core}) => {
     if (run.event !== 'pull_request' || !p.SHA.test(run.head_sha) || !run.head_repository?.id) return;
     const prs = await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
     for (const pr of prs.filter(x => x.head.sha === run.head_sha && x.head.repo?.id === run.head_repository.id)) {
-      await reconcile(github, owner, repo, pr.number, core);
+      await reconcile(github, owner, repo, pr.number, core, mergeGithub);
     }
     return;
   }
@@ -156,11 +160,11 @@ module.exports = async ({github, context, core}) => {
     if (requested) {
       if (!/^[1-9][0-9]*$/.test(requested) || !Number.isSafeInteger(Number(requested)))
         throw new Error('Invalid pull request number');
-      return reconcile(github, owner, repo, Number(requested), core);
+      return reconcile(github, owner, repo, Number(requested), core, mergeGithub);
     }
     const prs = await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
     for (const pr of prs) {
-      try { await reconcile(github, owner, repo, pr.number, core); }
+      try { await reconcile(github, owner, repo, pr.number, core, mergeGithub); }
       catch (error) { core.warning('#' + pr.number + ': ' + error.message); }
     }
     return;
@@ -208,7 +212,7 @@ module.exports = async ({github, context, core}) => {
       }
     }
   }
-  await reconcile(github, owner, repo, number, core);
+  await reconcile(github, owner, repo, number, core, mergeGithub);
 };
 module.exports.approved = approved;
 module.exports.ciReady = ciReady;
