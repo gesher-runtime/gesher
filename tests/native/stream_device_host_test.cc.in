@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int checks, failures;
@@ -83,6 +84,15 @@ static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
   std::string narrow_path(wide_path.begin(), wide_path.end());
   std::string narrow_mode(wide_mode.begin(), wide_mode.end());
   for (char& option : narrow_mode) if (option == 'N') option = 'e';
+  // glibc 2.39 closes the descriptor but leaves the FILE allocated after a
+  // failed freopen. Model _wfreopen's failure using the real path error and
+  // fclose to keep sanitizer findings attributable to the production wrapper.
+  struct stat metadata{};
+  if (stat(narrow_path.c_str(), &metadata) < 0 && errno == ENOTDIR) {
+    check("failed CRT reopen closes the original stream", std::fclose(stream) == 0);
+    errno = ENOTDIR;
+    return nullptr;
+  }
   return std::freopen(narrow_path.c_str(), narrow_mode.c_str(), stream);
 }
 namespace host {
