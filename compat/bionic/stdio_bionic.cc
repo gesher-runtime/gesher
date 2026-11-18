@@ -14,8 +14,8 @@
 // The formatter walks the format itself, takes each argument from the System
 // V va_list by its conversion, and formats one conversion at a time with the
 // CRT, mapping bionic's LP64 lengths (`%ld` is 64-bit there) and its
-// extensions (`%m`, `%p` as 0x...). The scanf family passes the pointers on to
-// the CRT's sscanf with the format's lengths mapped the same way.
+// extensions (`%m`, `%p` as 0x...). The scanf family builds a Windows va_list
+// of destination pointers and maps the format's lengths the same way.
 
 #include "shim_internal.h"
 #include <gesher/logging.h>
@@ -27,12 +27,14 @@
 #include <io.h>
 #include <unistd.h>
 
+#include <array>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -567,25 +569,53 @@ void BIONIC_SYSV Perror(const char* s) {
 
 // --- scanf -----------------------------------------------------------------
 
-constexpr int kMaxScanArgs = 24;
+// On the supported Windows targets va_list walks contiguous 8-byte slots
+// for pointer arguments. scanf destinations are all pointers.
+static_assert(std::is_same_v<va_list, char*> && sizeof(void*) == 8);
+
+// A NaN payload sscanf never produces: "not assigned".
+constexpr uint64_t kUnassigned = 0x7ff4dead5eed1234ULL;
 
 // A scanf call for the CRT: the format with bionic's LP64 lengths mapped,
 // the .so's pointers, and binary128 (%Lf) results read as doubles first.
 struct ScanCall {
   std::string fmt;
-  void* args[kMaxScanArgs] = {};
-  int nargs = 0;
+  std::array<void*, 16> inline_args;
+  std::vector<void*> overflow_args;
+  size_t nargs = 0;
   struct LongDouble {
+    size_t index;
     void* dst;
     double tmp;
-  } long_doubles[kMaxScanArgs];
-  int nlong = 0;
+  };
+  std::vector<LongDouble> long_doubles;
+
+  void AddArgument(void* arg, bool long_double) {
+    if (long_double) long_doubles.push_back({nargs, arg, 0});
+    if (nargs < inline_args.size()) {
+      inline_args[nargs] = arg;
+    } else {
+      if (overflow_args.empty()) {
+        overflow_args.reserve(2 * inline_args.size());
+        overflow_args.assign(inline_args.begin(), inline_args.end());
+      }
+      overflow_args.push_back(arg);
+    }
+    ++nargs;
+  }
+
+  va_list CrtArguments() {
+    void** args = overflow_args.empty() ? inline_args.data() : overflow_args.data();
+    // Take addresses only after parsing, when vector storage is stable.
+    for (auto& ld : long_doubles) {
+      std::memcpy(&ld.tmp, &kUnassigned, sizeof(ld.tmp));
+      args[ld.index] = &ld.tmp;
+    }
+    return reinterpret_cast<va_list>(args);
+  }
 };
 
-// A NaN payload sscanf never produces: "not assigned".
-constexpr uint64_t kUnassigned = 0x7ff4dead5eed1234ULL;
-
-bool PrepareScan(const char* fmt, SysvVaList* ap, ScanCall* c) {
+void PrepareScan(const char* fmt, SysvVaList* ap, ScanCall* c) {
   std::string& out = c->fmt;
   const char* p = fmt;
   while (*p != 0) {
@@ -627,45 +657,30 @@ bool PrepareScan(const char* fmt, SysvVaList* ap, ScanCall* c) {
       out += *p++;
     }
     if (!suppress) {
-      if (c->nargs == kMaxScanArgs) return false;
-      void* arg = reinterpret_cast<void*>(NextGp(ap));
-      if (long_double) {
-        auto& ld = c->long_doubles[c->nlong++];
-        ld.dst = arg;
-        std::memcpy(&ld.tmp, &kUnassigned, 8);
-        arg = &ld.tmp;
-      }
-      c->args[c->nargs++] = arg;
+      c->AddArgument(reinterpret_cast<void*>(NextGp(ap)), long_double);
     }
   }
-  return true;
 }
 
 int FinishScan(ScanCall* c, int rc) {
-  for (int i = 0; i < c->nlong; ++i) {
-    if (std::memcmp(&c->long_doubles[i].tmp, &kUnassigned, 8) != 0) {
-      DoubleToBinary128(c->long_doubles[i].tmp, c->long_doubles[i].dst);
+  for (const auto& ld : c->long_doubles) {
+    if (std::memcmp(&ld.tmp, &kUnassigned, sizeof(ld.tmp)) != 0) {
+      DoubleToBinary128(ld.tmp, ld.dst);
     }
   }
   return rc;
 }
 
-#define GESHER_SCAN_ARGS(c)                                                                \
-  c.args[0], c.args[1], c.args[2], c.args[3], c.args[4], c.args[5], c.args[6], c.args[7],  \
-      c.args[8], c.args[9], c.args[10], c.args[11], c.args[12], c.args[13], c.args[14],    \
-      c.args[15], c.args[16], c.args[17], c.args[18], c.args[19], c.args[20], c.args[21],  \
-      c.args[22], c.args[23]
-
 int VSscanfImpl(const char* str, const char* fmt, SysvVaList* ap) {
   ScanCall c;
-  if (!PrepareScan(fmt, ap, &c)) return -1;
-  return FinishScan(&c, std::sscanf(str, c.fmt.c_str(), GESHER_SCAN_ARGS(c)));
+  PrepareScan(fmt, ap, &c);
+  return FinishScan(&c, std::vsscanf(str, c.fmt.c_str(), c.CrtArguments()));
 }
 
 int VFscanfImpl(FILE* f, const char* fmt, SysvVaList* ap) {
   ScanCall c;
-  if (!PrepareScan(fmt, ap, &c)) return -1;
-  return FinishScan(&c, std::fscanf(f, c.fmt.c_str(), GESHER_SCAN_ARGS(c)));
+  PrepareScan(fmt, ap, &c);
+  return FinishScan(&c, std::vfscanf(f, c.fmt.c_str(), c.CrtArguments()));
 }
 
 // --- liblog ----------------------------------------------------------------

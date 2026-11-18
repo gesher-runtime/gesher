@@ -22,6 +22,7 @@
 #include <mntent.h>
 #include <pthread.h>
 #include <search.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,6 +75,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "freopen_mode_contract_test.inc"
 #include "statvfs_contract_test.inc"
 #include "sleep_contract_test.inc"
+#include "stream_device_contract_test.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -184,6 +186,108 @@ static void test_format(void) {
   check("sscanf", got == 4 && i == 12 && f == 34.5 && strcmp(word, "abc") == 0 &&
                       l == 7000000000L);
 }
+
+static int scan_stream(FILE* stream, const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+  int result = vfscanf(stream, format, args);
+  va_end(args);
+  return result;
+}
+
+#define SCAN_EIGHT "%d %d %d %d %d %d %d %d "
+#define SCAN_VALUES(a, i) \
+  &a[i], &a[(i) + 1], &a[(i) + 2], &a[(i) + 3], \
+  &a[(i) + 4], &a[(i) + 5], &a[(i) + 6], &a[(i) + 7]
+#define SCAN_MANY_ARGS(a) \
+  SCAN_VALUES(a, 0), SCAN_VALUES(a, 8), SCAN_VALUES(a, 16), SCAN_VALUES(a, 24)
+
+static void test_scan_many_arguments(void) {
+  check("sscanf accepts formats without destinations", sscanf("17%", "%*d%%") == 0);
+  const char input[] =
+      "1.25 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 "
+      "25 26 27 28 29 30 31 32 99 ab 7000000000 2.5!";
+  const char format[] = "%Lf " SCAN_EIGHT SCAN_EIGHT SCAN_EIGHT SCAN_EIGHT "%*d %2[ab] %ld %Lf%n";
+  int values[32] = {0};
+  char letters[3] = {0};
+  long wide = 0;
+  long double first = 0, last = 0;
+  int consumed = -1;
+  int count = sscanf(input, format, &first, SCAN_MANY_ARGS(values), letters, &wide, &last,
+                     &consumed);
+  int ordered = 1;
+  for (int i = 0; i < 32; ++i) ordered &= values[i] == i + 1;
+  if (count != 36 || !ordered || strcmp(letters, "ab") != 0 || wide != 7000000000L ||
+      first != 1.25L || last != 2.5L || consumed != (int)sizeof(input) - 2) {
+    printf("SCAN_MANY count=%d ordered=%d letters_ok=%d wide_ok=%d\n", count, ordered,
+           strcmp(letters, "ab") == 0, wide == 7000000000L);
+    printf("SCAN_MANY first_ok=%d last_ok=%d consumed=%d expected=%d\n",
+           first == 1.25L, last == 2.5L, consumed, (int)sizeof(input) - 2);
+  }
+  check("sscanf assigns more than 24 mixed destinations",
+        count == 36 && ordered && strcmp(letters, "ab") == 0 && wide == 7000000000L &&
+            first == 1.25L && last == 2.5L && consumed == (int)sizeof(input) - 2);
+
+  char path[] = "gesher-scan-XXXXXX";
+  int fd = mkstemp(path);
+  FILE* stream = fd >= 0 ? fdopen(fd, "w+") : NULL;
+  check("vfscanf fixture opens", stream != NULL);
+  if (stream == NULL) {
+    if (fd >= 0) {
+      close(fd);
+      unlink(path);
+    }
+    return;
+  }
+
+  // Only the first 25 integers match. The unread byte and later outputs
+  // distinguish a genuine matching failure from an argument-limit error.
+  const char partial[] =
+      "1.25 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 !";
+  int write_result = fputs(partial, stream);
+  int seek_result = fseek(stream, 0, SEEK_SET);
+  int wrote = write_result >= 0 && seek_result == 0;
+  memset(values, 0, sizeof(values));
+  first = 0;
+  last = 4.5L;
+  consumed = -1;
+  count = wrote ? scan_stream(stream, format, &first, SCAN_MANY_ARGS(values), letters, &wide,
+                              &last, &consumed)
+                : -1;
+  ordered = 1;
+  for (int i = 0; i < 32; ++i) ordered &= values[i] == (i < 25 ? i + 1 : 0);
+  int next = fgetc(stream);
+  if (count != 26 || !ordered || first != 1.25L || last != 4.5L || consumed != -1 ||
+      next != '!') {
+    printf("SCAN_PARTIAL write=%d seek=%d count=%d ordered=%d\n",
+           write_result, seek_result, count, ordered);
+    printf("SCAN_PARTIAL first_ok=%d last_ok=%d consumed=%d next=%d\n",
+           first == 1.25L, last == 4.5L, consumed, next);
+  }
+  check("vfscanf preserves partial assignments and the next unmatched byte",
+        count == 26 && ordered && first == 1.25L && last == 4.5L && consumed == -1 &&
+            next == '!');
+  // The translated direct fscanf entry has its own register/stack bridge.
+  rewind(stream);
+  memset(values, 0, sizeof(values));
+  first = 0;
+  last = 4.5L;
+  consumed = -1;
+  count = fscanf(stream, format, &first, SCAN_MANY_ARGS(values), letters, &wide, &last,
+                 &consumed);
+  ordered = 1;
+  for (int i = 0; i < 32; ++i) ordered &= values[i] == (i < 25 ? i + 1 : 0);
+  next = fgetc(stream);
+  check("fscanf preserves more than 24 direct destinations and matching failure",
+        count == 26 && ordered && first == 1.25L && last == 4.5L && consumed == -1 &&
+            next == '!');
+  fclose(stream);
+  unlink(path);
+}
+
+#undef SCAN_MANY_ARGS
+#undef SCAN_VALUES
+#undef SCAN_EIGHT
 
 // --- errno, files, time ---------------------------------------------------------
 
@@ -660,7 +764,9 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_strings();
   test_ctype_table();
   test_urandom_stdio();
+  test_stream_device_contracts();
   test_format();
+  test_scan_many_arguments();
   test_errno_files();
   test_statfs();
   test_system_cacerts();

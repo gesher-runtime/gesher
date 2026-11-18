@@ -54,6 +54,75 @@ the apps called that answer only a default. Everything (PNGs, the launcher's
 and the app's logs, `system_server.log`, `summary.txt`) is the run's
 `e2e-results` artifact.
 
+## Structured evidence and the coverage denominator
+
+The runner also writes `observations.json` before app installation and updates it
+after each scenario transition. The `e2e` job always runs `tests/e2e/coverage.py`
+afterwards, including after a failed runner step. The resulting `coverage.json`
+and `coverage.md` are uploaded with the logs; the Markdown is also in the job
+summary. A missing, malformed, stale or interrupted observation ledger fails
+the evidence gate instead of becoming an empty successful run.
+
+Each invocation owns its output directory through an exclusive file handle,
+acquired before clearing earlier reports and held through the final checkpoint.
+A concurrent writer is rejected before touching the active run's evidence.
+The handle is released on normal completion, exceptions or process death; the
+lock file stays in place so ownership cannot split across different files.
+Every run has a fresh invocation ID. CI supplies that ID to the runner and
+requires the same ID when reporting, in addition to checking run/attempt/checkout
+identity. A successful report from another invocation cannot satisfy this gate.
+
+The denominator is **every package/version entry in the supplied manifest**.
+`-Only` exclusions remain visible as `skipped`. A default launch and a requested
+`surface-trace` are separate scenarios, so a traced pass cannot replace a failed
+default result. The `.apk` association and shortcut checks have separate
+integration results. Checks not reached are `not_run` or `blocked`, and an
+interrupted active check remains `running`.
+
+`knownFailure` preserves the runner's existing CI waiver, but the report keeps
+the actual failed or blocked outcome. A diagnostic failure is not waived. If a
+known failure prevents launch altogether, its dependent trace is explicitly
+blocked. Unknown `-Only` packages are rejected rather than running nothing.
+
+All current real-app checks are classified as **visual/lifecycle smoke**.
+Drawing pixels, reacting to clicks or matching the existing log assertions
+does not establish a complete functional workflow or an Android differential
+oracle. Therefore this report explicitly shows zero demonstrated full
+functional results and a `not_tested` functional status for every app, even
+when all smoke checks pass. This is an evidence foundation for
+[#56 A01/T14](https://github.com/gesher-runtime/gesher/issues/56), not completion
+of those roadmap items or a percentage of all Android applications.
+
+Identity fields distinguish measured bytes from declared or unknown values:
+
+- The manifest and downloaded APK are hashed independently; a reported passing
+  scenario must have an observed APK hash matching the manifest's pin.
+- The installer is hashed when it is used. `-SkipInstall` records
+  `existing_install` and leaves the installer hash unknown.
+- Installed `dalvikvm.exe`, `gesher-app.jar`, `framework.jar` and `build.prop`
+  are hashed when present. These are component identities, not a complete SBOM.
+- SDK/version/ABI properties are recorded from installed `build.prop` and are
+  labelled **declared properties**, not measured Java APIs or hardware support.
+  `target_sdk` is taken from the actual successful package-parser log when
+  available. Neither metadata source is inferred from an app's display name.
+- The test checkout SHA is separate from the runtime source revision. The
+  latter, AOSP tag, selected app ABI, signer, modules, providers, hardware profile
+  and Android reference stay null until a future collector can verify them.
+
+To regenerate a report locally after a Windows run:
+
+```text
+python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results
+```
+
+The command exits nonzero on invalid evidence, incomplete selected scenarios,
+an incomplete run, or an unwaived failure/block. It does not turn known failures
+into passes, and it does not require full functional coverage from a smoke
+suite. The `e2e-evidence` workflow runs the report's Python contracts and the
+actual PowerShell writer's isolated fixture tests on Linux and Windows without
+downloading or executing APKs. Those fixture tests validate the evidence
+pipeline only; they are not runtime compatibility results.
+
 ## The apps
 
 | App | Version | License | Why | Status |

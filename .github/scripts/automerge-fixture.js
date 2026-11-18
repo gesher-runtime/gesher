@@ -1,0 +1,183 @@
+'use strict';
+// Deterministic REST fixtures exercise the production controller without writes.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const run = require('./label-automerge.js');
+const HEAD = 'a'.repeat(40);
+const OTHER = 'b'.repeat(40);
+const BASE = 'c'.repeat(40);
+const MERGE = 'd'.repeat(40);
+const T = (second) => '2026-11-16T10:00:' + String(second).padStart(2, '0') + 'Z';
+const clone = structuredClone;
+
+function world(over = {}) {
+  const w = {
+    pr: {node_id: 'PR_7', number: 7, state: 'open', draft: false, created_at: T(0), updated_at: T(30),
+      user: {id: 99, login: 'contributor'},
+      head: {sha: HEAD, ref: 'topic', repo: {id: 10}},
+      base: {sha: BASE, ref: 'main', repo: {id: 10}}, labels: [{name: 'automerge'}]},
+    events: [{id: 50, event: 'labeled', label: {name: 'automerge'}, created_at: T(30),
+      actor: {id: 42, login: 'maintainer'}}],
+    runs: [], checks: ['ci-required', 'arm64-required'].map((name, i) => ({id: 10 + i,
+      name, status: 'completed', conclusion: 'success', app: {id: 15368}, check_suite: {id: 1000 + i}})),
+    statuses: [], comments: [], reviews: [], permission: 'write', nativeAutoMethod: null,
+    mergeError: null, mergeResult: {merged: true}, calls: [], hooks: {}, warnings: [],
+    mergeProof: {sha: MERGE, parents: [{sha: BASE}, {sha: HEAD}]},
+    targetHead: BASE,
+    comparison: {status: 'diverged', base_commit: {sha: BASE}, merge_base_commit: {sha: OTHER}},
+    ...over,
+  };
+  if (!over.runs) w.runs = ['ci', 'arm64-windows'].map((name, i) => ({
+    id: 100 + i, workflow_id: 1 + i, check_suite_id: 1000 + i, name, path: '.github/workflows/' + name + '.yml',
+    event: 'pull_request', status: 'completed', conclusion: 'success', run_attempt: 1, created_at: T(10),
+    head_sha: HEAD, head_branch: 'topic', head_repository: {id: 10}, repository: {id: 10},
+    pull_requests: [{number: 7, head: clone(w.pr.head), base: clone(w.pr.base)}],
+    referenced_workflows: [{path: 'o/r/.github/workflows/source-identity.yml@' + MERGE,
+      ref: 'refs/pull/7/merge', sha: MERGE}],
+  }));
+  w.seedApproval = (patch = {}) => {
+    const event = w.events.filter((e) => e.event === 'labeled').at(-1);
+    const value = {repository: w.pr.base.repo.id, number: w.pr.number, head: w.pr.head.sha,
+      base: w.pr.base.ref, label: event.id, actor: event.actor.id, ...patch};
+    w.reviews.push({id: 200 + w.reviews.length, node_id: 'BOT_' + w.reviews.length,
+      user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED',
+      commit_id: value.head, submitted_at: T(Math.max(31, Number(event.created_at.slice(17,19)) + 1)),
+      body: '<!-- gesher-automerge-v1 ' + JSON.stringify(value) + ' -->'});
+  };
+  if (over.approved !== false) w.seedApproval();
+  w.seedOpening = (boundary = T(0), patch = {}) => {
+    const value = {repository: w.pr.base.repo.id, number: w.pr.number,
+      created: w.pr.created_at, boundary, ...patch};
+    w.comments.push({id: 200 + w.comments.length, user: {login: 'github-actions[bot]', type: 'Bot'},
+      created_at: T(1), updated_at: T(1),
+      body: '<!-- gesher-automerge-opening-v1 ' + JSON.stringify(value) + ' -->'});
+  };
+  if (over.initialized !== false) w.seedOpening();
+  w.seedQa = (patch = {}, marker = {}) => {
+    const value = {repository: w.pr.base.repo.id, number: w.pr.number,
+      head: w.pr.head.sha, base: w.pr.base.ref, ...marker};
+    const review = {id: 900 + w.reviews.length, node_id: 'PRR_' + (900 + w.reviews.length),
+      user: {id: 42, login: 'maintainer'}, state: 'COMMENTED',
+      commit_id: w.pr.head.sha, submitted_at: T(20),
+      body: 'QA completed for this exact head.\n\n<!-- gesher-automerge-qa-v1 ' +
+        JSON.stringify(value) + ' -->', ...patch};
+    w.reviews.push(review);
+    return review;
+  };
+  const rec = (name, fn) => async (args) => {
+    w.calls.push([name, clone(args)]);
+    if (w.hooks[name]) await w.hooks[name](args);
+    return {data: clone(await fn(args))};
+  };
+  const page = (name, values, field) => rec(name, (a) => {
+    const all = values(a);
+    const items = all.slice((a.page - 1) * a.per_page, a.page * a.per_page);
+    return field ? {[field]: items, total_count: all.length} : items;
+  });
+  const github = {rest: {
+    pulls: {
+      get: rec('getPR', () => w.pr),
+      createReview: rec('approve', (args) => {
+        if (w.approveError) throw w.approveError;
+        const r = {id: 400 + w.reviews.length, node_id: 'BOT_' + w.reviews.length,
+          user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED',
+          submitted_at: T(Math.max(31, Number(w.events.at(-1).created_at.slice(17,19)) + 1)), commit_id: args.commit_id, body: args.body};
+        w.reviews.push(r); return r;
+      }),
+      dismissReview: rec('dismiss', (args) => {
+        const r = w.reviews.find((r) => r.id === args.review_id);
+        r.state = 'DISMISSED'; return r;
+      }),
+      list: page('listPRs', () => [w.pr]),
+      listReviews: page('reviews', () => {
+        if (w.reviewError) throw w.reviewError;
+        return w.reviews;
+      }),
+      merge: rec('merge', (args) => {
+        if (w.mergeError) throw w.mergeError;
+        if (args.sha !== w.pr.head.sha) throw Object.assign(new Error('head changed'), {status: 409});
+        if (w.mergeResult.merged) w.pr.state = 'closed';
+        return w.mergeResult;
+      }),
+    },
+    issues: {
+      listEvents: page('events', () => w.events),
+      listComments: page('comments', () => w.comments),
+      removeLabel: rec('removeLabel', () => {w.pr.labels = []; return {};}),
+      createComment: rec('comment', (args) => {
+        const item = {id: 300 + w.comments.length, user: {login: 'github-actions[bot]', type: 'Bot'},
+          created_at: w.commentAt ?? T(31), updated_at: w.commentAt ?? T(31), body: args.body};
+        w.comments.push(item);
+        return item;
+      }),
+    },
+    actions: {
+      listWorkflowRunsForRepo: page('runs', (a) => w.runs.filter((r) => r.head_sha === a.head_sha), 'workflow_runs'),
+      getWorkflow: rec('workflow', (a) => ({id: {'ci.yml': 1, 'arm64-windows.yml': 2, 'automerge.yml': 3}[a.workflow_id],
+        state: 'active', path: '.github/workflows/' + a.workflow_id, ...w.workflowOverride})),
+      getWorkflowRun: rec('runDetails', (a) => ({...w.runs.find((r) => r.id === a.run_id),
+        ...w.runDetailsOverride})),
+      createWorkflowDispatch: rec('dispatch', () => ({})),
+    },
+    checks: {listForRef: page('checks', () => w.checks, 'check_runs')},
+    repos: {createCommitStatus: rec('status', () => ({})),
+      getCollaboratorPermissionLevel: rec('permission', () => {
+        if (w.permissionError) throw w.permissionError;
+        return {permission: w.permission, user: {id: w.permissionUserId ?? 42}};
+      }),
+      listCommitStatusesForRef: page('statuses', () => w.statuses),
+      compareCommits: rec('compare', (args) => {
+        if (w.comparisonError) throw w.comparisonError;
+        return w.comparisons?.[args.base] ?? w.comparison;
+      }),
+    },
+    git: {
+      getCommit: rec('gitCommit', (args) => w.mergeProofs?.[args.commit_sha] ?? w.mergeProof),
+      getRef: rec('gitRef', (args) => ({ref: 'refs/' + args.ref,
+        object: {type: 'commit', sha: w.targetHead}, ...w.targetRefOverride})),
+    },
+  }};
+  github.graphql = async (query, args) => {
+    if (query.includes('autoMergeRequest')) return {node: {autoMergeRequest: w.nativeAutoMethod ? {mergeMethod: w.nativeAutoMethod} : null}};
+    if (query.includes('enablePullRequestAutoMerge')) {
+      w.calls.push(['nativeWait', clone(args)]); w.nativeAutoMethod = 'SQUASH'; return {};
+    }
+    if (query.includes('dequeuePullRequest') || query.includes('disablePullRequestAutoMerge')) {
+      w.calls.push(['nativeCancel', clone(args)]); w.nativeAutoMethod = null; return {};
+    }
+    const bot = args.id.startsWith('BOT_');
+    const name = bot ? 'approvalNode' : 'reviewNode';
+    w.calls.push([name, clone(args)]);
+    assert.match(query, /on PullRequestReview/);
+    assert.match(query, /lastEditedAt/);
+    if (w.hooks[name]) await w.hooks[name](args);
+    if (!bot && w.reviewNodeError) throw w.reviewNodeError;
+    const r = w.reviews.find((review) => review.node_id === args.id);
+    return clone({node: r && (bot || !w.reviewNodeNull) ? {id: r.node_id, body: r.body,
+      state: r.state, submittedAt: r.submitted_at, lastEditedAt: null,
+      commit: {oid: r.commit_id}, ...(bot ? w.approvalNodeOverride : w.reviewNodeOverride)} : null});
+  };
+  const core = {info: () => {}, warning: (s) => w.warnings.push(s)};
+  const fire = (eventName, payload) => run({github, core, mergeGithub: w.mergeGithub,
+    context: {eventName, repo: {owner: 'o', repo: 'r'},
+      payload: {repository: {default_branch: 'main'}, ...clone(payload)}}});
+  w.labeled = (snapshot = w.pr) => fire('pull_request_target', {action: 'labeled',
+    label: {name: 'automerge'}, sender: {id: 42}, pull_request: snapshot});
+  w.pushed = (snapshot = w.pr) => fire('pull_request_target', {action: 'synchronize', pull_request: snapshot});
+  w.ciDone = (sha = HEAD, sourceRepo = w.pr.head.repo.id) => fire('workflow_run', {
+    workflow_run: {event: 'pull_request', head_sha: sha, head_repository: {id: sourceRepo}}});
+  w.sweep = () => fire('schedule', {});
+  w.fire = fire;
+  w.github = github;
+  w.did = (name) => w.calls.filter((c) => c[0] === name);
+  return w;
+}
+
+function authorWorld(over = {}) {
+  const w = world(over);
+  w.pr.user = {id: 42, login: 'maintainer'};
+  return w;
+}
+
+
+module.exports = {world, authorWorld, HEAD, OTHER, BASE, T};

@@ -166,6 +166,14 @@ void RegisterDevice(int fd, Device device) {
 
 bool DeviceFromFd(int fd, Device* device) { return LookupDevice(fd, device); }
 
+void ForgetStreamDevice(int fd, bool closed_or_replaced) {
+  Device device;
+  if (!LookupDevice(fd, &device)) return;
+  int saved = errno;
+  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) ForgetDevice(fd);
+  errno = saved;
+}
+
 }  // namespace gesher
 
 using gesher::Device;

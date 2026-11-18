@@ -636,12 +636,14 @@ FILE* fopen64(const char* path, const char* mode) { return fopen(path, mode); }
 int fclose(FILE* stream) {
   if (!stream) return errno = EINVAL, EOF;
   StreamLock stream_lock(stream);
-  gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
+  int fd = _fileno(stream);
+  gesher::record_locks::ClosingDescriptor transaction(fd);
   if (transaction.Error()) return errno = transaction.Error(), EOF;
   // Use the CRT's documented unlocked entry under its stream lock, avoiding
   // recursion through this public fclose symbol.
   int result = _fclose_nolock(stream);
   int saved = result == EOF ? gesher_errno_from_crt(errno) : errno;
+  gesher::ForgetStreamDevice(fd, result == 0);
   int error = transaction.Finish(result == 0);
   if (error) return errno = error, EOF;
   errno = saved;
@@ -653,13 +655,15 @@ int fclose(FILE* stream) {
 FILE* freopen(const char* path, const char* mode, FILE* stream) {
   if (!stream) return errno = EINVAL, nullptr;
   StreamLock stream_lock(stream);
-  gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
+  int fd = _fileno(stream);
+  gesher::record_locks::ClosingDescriptor transaction(fd);
   if (transaction.Error()) return errno = transaction.Error(), nullptr;
   auto fail_reopen = [&](int requested_error) -> FILE* {
     // Even a destination rejected before the CRT reopen still closes the
     // original stream. Use the already-held stream/descriptor transaction
     // exactly once, including when flushing/closing itself reports an error.
     int closed = _fclose_nolock(stream);
+    gesher::ForgetStreamDevice(fd, closed == 0);
     int metadata_error = transaction.Finish(closed == 0);
     errno = metadata_error ? metadata_error : requested_error;
     return nullptr;
@@ -690,6 +694,7 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
   if ((flags & O_CLOEXEC) != 0) wmode += L'N';
   FILE* result = _wfreopen(windows.c_str(), wmode.c_str(), stream);
   int saved = result == nullptr ? gesher_errno_from_crt(errno) : errno;
+  gesher::ForgetStreamDevice(fd, result != nullptr);
   if (result == nullptr && saved == ENOENT && HasNonDirectoryParent(windows)) saved = ENOTDIR;
   int error = transaction.Finish(result != nullptr);
   if (error) return errno = error, nullptr;
