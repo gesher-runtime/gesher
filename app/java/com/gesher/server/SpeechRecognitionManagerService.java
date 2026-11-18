@@ -43,8 +43,6 @@ import java.util.concurrent.TimeUnit;
 
 /** Binds the installed RecognitionService selected by the framework or the caller. */
 public final class SpeechRecognitionManagerService extends IRecognitionServiceManager.Stub {
-    private static final int MAX_SESSIONS_PER_PACKAGE = 10;
-    private static final int MAX_PENDING_QUERIES = 16;
     private static final int BIND_TIMEOUT_MS = 20_000;
     private static final int TEMPORARY_PROVIDER_MS = 60_000;
 
@@ -68,6 +66,8 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
     private final ScheduledThreadPoolExecutor mWorker;
     private final int mBindTimeoutMs;
     private final Map<IBinder, Session> mSessions = new HashMap<>();
+    private record ConnectionKey(int uid, ComponentName component) {}
+    private final Map<ConnectionKey, Binding> mBindings = new HashMap<>();
     private ComponentName mTemporaryComponent;
     private ScheduledFuture<?> mTemporaryExpiry;
 
@@ -131,14 +131,6 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             } else {
                 existing.callbacks.add(callback);
             }
-            return;
-        }
-        int count = 0;
-        for (Session other : mSessions.values()) {
-            if (other.owner.packageName().equals(owner.packageName())) count++;
-        }
-        if (count >= MAX_SESSIONS_PER_PACKAGE) {
-            call(() -> callback.onError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS));
             return;
         }
         Provider provider = mBackend.resolve(selected);
@@ -238,76 +230,29 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
                         : SpeechRecognizer.ERROR_CLIENT);
                 return;
             }
-            Binding next = new Binding(selected);
-            binding = next;
-            next.timeout = mWorker.schedule(() -> {
-                if (binding == next) disconnect(delivered ? SpeechRecognizer.ERROR_SERVER_DISCONNECTED
-                        : SpeechRecognizer.ERROR_CLIENT);
-            }, mBindTimeoutMs, TimeUnit.MILLISECONDS);
-            if (!mBackend.bind(selected, next.connection)) {
-                disconnect(delivered ? SpeechRecognizer.ERROR_SERVER_DISCONNECTED
-                        : SpeechRecognizer.ERROR_CLIENT);
-            }
+            attach(this, selected);
         }
 
-        final class Binding {
-            final Provider selected;
-            final IServiceConnection connection = new IServiceConnection.Stub() {
-                @Override public void connected(ComponentName name, IBinder binder,
-                        IBinderSession binderSession, boolean dead) {
-                    mWorker.execute(() -> publish(name, dead ? null : binder));
+        void deliver(Binding connected) {
+            if (binding != connected || !current()) return;
+            if (!delivered) {
+                for (IRecognitionServiceManagerCallback callback : callbacks) {
+                    delivered |= call(() -> callback.onSuccess(Session.this));
                 }
-            };
-            final IBinder.DeathRecipient death = () -> mWorker.execute(() -> {
-                if (binding == this) disconnect(SpeechRecognizer.ERROR_SERVER_DISCONNECTED);
-            });
-            ScheduledFuture<?> timeout;
-            IRecognitionService service;
-
-            Binding(Provider selected) { this.selected = selected; }
-
-            private void publish(ComponentName name, IBinder binder) {
-                if (binding != this || !current()) return;
-                if (binder == null || !component.equals(name) || !mBackend.isCurrent(selected)) {
-                    disconnect(delivered ? SpeechRecognizer.ERROR_SERVER_DISCONNECTED
-                            : SpeechRecognizer.ERROR_CLIENT);
-                    return;
-                }
-                if (service != null) return;
-                try {
-                    binder.linkToDeath(death, 0);
-                } catch (RemoteException failure) {
-                    disconnect(delivered ? SpeechRecognizer.ERROR_SERVER_DISCONNECTED
-                            : SpeechRecognizer.ERROR_CLIENT);
-                    return;
-                }
-                timeout.cancel(false);
-                service = IRecognitionService.Stub.asInterface(binder);
+                callbacks.clear();
                 if (!delivered) {
-                    for (IRecognitionServiceManagerCallback callback : callbacks) {
-                        delivered |= call(() -> callback.onSuccess(Session.this));
-                    }
-                    callbacks.clear();
-                    if (!delivered) {
-                        close();
-                        return;
-                    }
+                    close();
+                    return;
                 }
-                dispatch();
             }
-
-            void remove() {
-                timeout.cancel(false);
-                if (service != null) unlink(service.asBinder(), death);
-                mBackend.unbind(connection);
-            }
+            dispatch();
         }
 
         void dispatch() {
             Binding connected = binding;
             if (connected == null || connected.service == null) return;
             if (!mBackend.isCurrent(connected.selected)) {
-                disconnect(SpeechRecognizer.ERROR_SERVER_DISCONNECTED);
+                connected.failAll(SpeechRecognizer.ERROR_SERVER_DISCONNECTED);
                 return;
             }
             IRecognitionService provider = connected.service;
@@ -328,7 +273,7 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             cancelRecognition(true);
             Binding previous = binding;
             binding = null;
-            if (previous != null) previous.remove();
+            if (previous != null) previous.detach(this);
             if (!delivered) {
                 List<IRecognitionServiceManagerCallback> failed = List.copyOf(callbacks);
                 close();
@@ -433,10 +378,6 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
                 if (!current()) return;
                 if (request.intent == null) {
                     call(() -> request.error(SpeechRecognizer.ERROR_CLIENT));
-                    return;
-                }
-                if (requests.size() >= MAX_PENDING_QUERIES) {
-                    call(() -> request.error(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS));
                     return;
                 }
                 requests.add(request);
@@ -612,6 +553,101 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             @Override void error(int code) throws RemoteException {
                 if (target != null) target.onError(code);
             }
+        }
+    }
+
+    private void attach(Session session, Provider selected) {
+        ConnectionKey key = new ConnectionKey(session.owner.uid(), selected.component());
+        Binding binding = mBindings.get(key);
+        if (binding != null && !mBackend.isCurrent(binding.selected)) {
+            binding.failAll(SpeechRecognizer.ERROR_SERVER_DISCONNECTED);
+            binding = null;
+        }
+        if (binding == null) {
+            binding = new Binding(key, selected);
+            mBindings.put(key, binding);
+        }
+        binding.attach(session);
+    }
+
+    /** One remote provider connection per caller UID and provider component. */
+    private final class Binding {
+        final ConnectionKey key;
+        final Provider selected;
+        final Set<Session> sessions = new LinkedHashSet<>();
+        final IServiceConnection connection = new IServiceConnection.Stub() {
+            @Override public void connected(ComponentName name, IBinder binder,
+                    IBinderSession binderSession, boolean dead) {
+                mWorker.execute(() -> publish(name, dead ? null : binder));
+            }
+        };
+        final IBinder.DeathRecipient death = () -> mWorker.execute(() ->
+                failAll(SpeechRecognizer.ERROR_SERVER_DISCONNECTED));
+        ScheduledFuture<?> timeout;
+        IRecognitionService service;
+        boolean closed;
+
+        Binding(ConnectionKey key, Provider selected) {
+            this.key = key;
+            this.selected = selected;
+        }
+
+        void attach(Session session) {
+            if (closed) return;
+            sessions.add(session);
+            session.binding = this;
+            if (service != null) {
+                session.deliver(this);
+            } else if (sessions.size() == 1) {
+                timeout = mWorker.schedule(() -> failAll(SpeechRecognizer.ERROR_CLIENT),
+                        mBindTimeoutMs, TimeUnit.MILLISECONDS);
+                if (!mBackend.bind(selected, connection)) {
+                    failAll(SpeechRecognizer.ERROR_CLIENT);
+                }
+            }
+        }
+
+        private void publish(ComponentName name, IBinder binder) {
+            if (closed || mBindings.get(key) != this) return;
+            if (binder == null || !selected.component().equals(name) || !mBackend.isCurrent(selected)) {
+                failAll(SpeechRecognizer.ERROR_SERVER_DISCONNECTED);
+                return;
+            }
+            if (service != null) return;
+            try {
+                binder.linkToDeath(death, 0);
+            } catch (RemoteException failure) {
+                failAll(SpeechRecognizer.ERROR_SERVER_DISCONNECTED);
+                return;
+            }
+            if (timeout != null) timeout.cancel(false);
+            service = IRecognitionService.Stub.asInterface(binder);
+            for (Session session : List.copyOf(sessions)) session.deliver(this);
+        }
+
+        void detach(Session session) {
+            if (closed || !sessions.remove(session)) return;
+            if (sessions.isEmpty()) close();
+        }
+
+        void failAll(int error) {
+            if (closed) return;
+            List<Session> affected = List.copyOf(sessions);
+            close();
+            for (Session session : affected) {
+                if (session.binding == this) session.disconnect(error);
+            }
+        }
+
+        private void close() {
+            if (closed) return;
+            closed = true;
+            mBindings.remove(key, this);
+            if (timeout != null) timeout.cancel(false);
+            if (service != null) unlink(service.asBinder(), death);
+            mBackend.unbind(connection);
+            sessions.clear();
+            service = null;
         }
     }
 
