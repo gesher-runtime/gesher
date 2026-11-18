@@ -136,7 +136,8 @@ public final class JobSecurityTest {
             jobs.cancelAllInNamespace(ns);
             require(jobs.getPendingJob(ns,87314)==null,"Own namespace cancel failed");
             JobInfo persisted=new JobInfo.Builder(87315,ownJob.getService()).setMinimumLatency(3600000).setPersisted(true).build();
-            denied(()->jobs.schedule(ns,persisted));
+            try { jobs.schedule(ns,persisted); throw new AssertionError("Persisted job accepted without boot permission"); }
+            catch (IllegalArgumentException expected) { /* AOSP JobSchedulerService admission error. */ }
             System.out.println("JobSecurityTest: foreign scheduling/admin denied; own schedule/enqueue/cancel authorized");
 
             asApp(888899,uid); // Unattached remote PID with an otherwise real app UID.

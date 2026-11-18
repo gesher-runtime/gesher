@@ -52,6 +52,7 @@ static inline const wchar_t* GesherUiText(enum GesherUiLanguage lang, const char
   if (strcmp(key, "account_name") == 0) return lang == GESHER_UI_HE ? L"\n\u05d7\u05e9\u05d1\u05d5\u05df: " : L"\nAccount: ";
   if (strcmp(key, "account_token") == 0) return lang == GESHER_UI_HE ? L"\n\u05e1\u05d5\u05d2 \u05d0\u05e1\u05d9\u05de\u05d5\u05df: " : L"\nToken type: ";
   if (strcmp(key, "camera_name") == 0) return lang == GESHER_UI_HE ? L"\u05de\u05e6\u05dc\u05de\u05ea \u05d2\u05e9\u05e8" : L"Gesher Camera";
+  if (strcmp(key, "camera_selection_restart") == 0) return lang == GESHER_UI_HE ? L"\u05db\u05d3\u05d9 \u05dc\u05d4\u05d7\u05d9\u05dc \u05d0\u05ea \u05d1\u05d7\u05d9\u05e8\u05ea \u05d4\u05de\u05e6\u05dc\u05de\u05d4, \u05e1\u05d2\u05d5\u05e8 \u05d0\u05ea \u05d9\u05d9\u05e9\u05d5\u05de\u05d9 Android \u05d5\u05d4\u05e4\u05e2\u05dc gesher-app shutdown." : L"Close your Android apps and run gesher-app shutdown for the camera change to take effect.";
   if (strcmp(key, "camera_take") == 0) return lang == GESHER_UI_HE ? L"\u05e6\u05d9\u05dc\u05d5\u05dd \u05ea\u05de\u05d5\u05e0\u05d4" : L"Take photo";
   if (strcmp(key, "camera_cancel") == 0) return lang == GESHER_UI_HE ? L"\u05d1\u05d9\u05d8\u05d5\u05dc" : L"Cancel";
   if (strcmp(key, "no_device") == 0) return lang == GESHER_UI_HE ? L"\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 \u05d0\u05d9\u05e0\u05d4 \u05e4\u05d5\u05e2\u05dc\u05ea" : L"no Gesher device is running";

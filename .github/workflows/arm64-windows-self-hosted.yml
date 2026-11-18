@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   authorize:
-    if: vars.GESHER_SELF_HOSTED_TRIAL == 'true'
+    if: github.event_name == 'workflow_dispatch' || vars.GESHER_SELF_HOSTED_TRIAL == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -80,33 +80,52 @@ jobs:
             echo 'At least 60 GiB free is required for the trial' >&2
             exit 1
           }
-          for tool in git curl python3 cmake ninja ccache; do command -v "$tool"; done
-      # Separate cache namespaces: trial writes cannot poison hosted CI inputs.
-      - uses: actions/cache@v4
-        id: toolchain
+          for tool in git curl python3 cmake ninja ccache javac; do command -v "$tool"; done
+      - name: Initialize persistent local inputs
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        id: local
         with:
-          path: ~/toolchain
-          key: self-hosted-trial-${{ env.LLVM_MINGW_NAME }}
-      - name: Fetch llvm-mingw
-        if: steps.toolchain.outputs.cache-hit != 'true'
+          phase: initialize
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+      - name: Fetch llvm-mingw only when absent locally
+        if: steps.local.outputs.toolchain-hit != 'true'
         run: |
           mkdir -p ~/toolchain
           curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
             | tar -xJ -C ~/toolchain
-      - uses: actions/cache@v4
+      - name: Restore local AOSP inputs
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
+          phase: restore
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
           path: third_party/aosp
-          key: self-hosted-trial-aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
-          restore-keys: self-hosted-trial-aosp-
-      - name: Fetch AOSP sources
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+      - name: Fetch pinned AOSP sources
         run: bash tools/fetch-aosp.sh
-      - uses: actions/cache@v4
+      - name: Save local AOSP inputs immediately
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
         with:
-          path: ~/.cache/ccache
-          key: self-hosted-trial-ccache-arm64-windows-${{ needs.authorize.outputs.source }}
-          restore-keys: self-hosted-trial-ccache-arm64-windows-
+          phase: save
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+      - name: Restore local Android build tools
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: restore
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+          path: out-arm64/build-tools-36.1
+          key: android-build-tools-linux-36.1-${{ hashFiles('cmake/aosp/binder.cmake') }}
       - name: Build and verify ARM64 Windows targets
         run: bash tools/ci/build-arm64-windows.sh
+      - name: Save local Android build tools
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        with:
+          phase: save
+          namespace: refs/pull/${{ needs.authorize.outputs.pr }}/merge
+          path: out-arm64/build-tools-36.1
+          key: android-build-tools-linux-36.1-${{ hashFiles('cmake/aosp/binder.cmake') }}
       - uses: actions/upload-artifact@v4
         with:
           name: trial-arm64-windows-pr-${{ needs.authorize.outputs.pr }}-${{ needs.authorize.outputs.source }}

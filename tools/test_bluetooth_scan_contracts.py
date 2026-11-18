@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Run the production BLE scanner with a deterministic clock and callback queue.
+"""Run the production no-offload BLE scan contracts with a deterministic queue.
 
 The Android/Windows boundaries are stand-ins; the complete scanner class is
 compiled unchanged apart from its package, imports and public class visibility.
 Use --source-ref to verify that the regressions fail before the repair.
+Tests preserve immediate scans, reject unsupported settings before registration,
+and distinguish posted callback failures from synchronous PendingIntent errors.
 """
 from __future__ import annotations
 
