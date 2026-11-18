@@ -23,14 +23,20 @@ def main() -> None:
         parser.error("A C compiler is required for the existing host JNI boundary adapters")
     classpath = os.pathsep.join(str(path.resolve()) for path in
             (args.app_classes, args.framework_classes, args.core_classes, args.apksig))
+    run_searchable(java_home=args.java_home, classpath=classpath, cc=cc,
+                   old_visibility_control=args.old_visibility_control)
+
+
+def run_searchable(*, java_home: Path, classpath: str, cc: str,
+                   old_visibility_control: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="gesher-searchable-") as temporary:
         work = Path(temporary); classes = work / "classes"; classes.mkdir()
         library = work / "libsearchable_host.so"
         subprocess.run([cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
-                        "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
+                        "-I" + str(java_home / "include"), "-I" + str(java_home / "include/linux"),
                         str(ROOT / "tests/uri/framework_host.c"), "-o", str(library)], check=True)
         service = ROOT / "app/java/com/gesher/server/SearchManagerService.java"
-        if args.old_visibility_control:
+        if old_visibility_control:
             contents = service.read_text()
             needle = "        boolean system = mCallers.isSystem();"
             assert contents.count(needle) == 1
@@ -40,11 +46,11 @@ def main() -> None:
         sources = [service, ROOT / "app/java/com/gesher/server/PackageManagerService.java",
                    ROOT / "app/java/com/gesher/server/PackageVisibility.java",
                    ROOT / "tests/search/SearchableHost.java"]
-        subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
+        subprocess.run([str(java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), *map(str, sources)], check=True)
         environment = os.environ.copy()
         environment["ANDROID_DATA"] = str(work / "data")
-        java = [str(args.java_home / "bin/java"), "-cp", str(classes) + os.pathsep + classpath,
+        java = [str(java_home / "bin/java"), "-cp", str(classes) + os.pathsep + classpath,
                 "gesher.search.SearchableHost", str(library)]
         environment["GESHER_MICROG_SPOOF"] = "1"
         subprocess.run(java, env=environment, check=True, timeout=90)

@@ -42,6 +42,9 @@ restoration. A separate legacy process verifies that one compatibility UID
 keeps unrelated packages hidden while own and declared packages resolve. The
 negative-control option restores the original blanket foreign package denial
 and must fail the explicit `<queries>` case.
+The pinned framework CI runs these checks through the default
+`tools/test_package_enabled_state.py` suite. Both focused enabled-state groups
+and the standalone searchable runner remain available.
 
 The components and peer APK tests exercise the separate real XML/resource,
 cross-process Binder and `ContentResolver` paths on Windows. The peer declares
