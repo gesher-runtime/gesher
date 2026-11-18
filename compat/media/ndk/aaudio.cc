@@ -52,6 +52,7 @@ namespace {
 // aaudio/AAudio.h
 using aaudio_result_t = int32_t;
 constexpr aaudio_result_t kOk = 0;
+constexpr aaudio_result_t kErrorDisconnected = -899;
 constexpr aaudio_result_t kErrorIllegalArgument = -898;
 constexpr aaudio_result_t kErrorInternal = -896;
 constexpr aaudio_result_t kErrorInvalidState = -895;
@@ -69,7 +70,7 @@ enum : int32_t { kFormatUnspecified = 0, kFormatI16 = 1, kFormatFloat = 2, kForm
 enum : int32_t {
   kStateUninitialized = 0, kStateOpen = 2, kStateStarting = 3, kStateStarted = 4,
   kStatePausing = 5, kStatePaused = 6, kStateFlushing = 7, kStateFlushed = 8,
-  kStateStopping = 9, kStateStopped = 10, kStateClosing = 11, kStateClosed = 12,
+  kStateStopping = 9, kStateStopped = 10, kStateClosing = 11, kStateClosed = 12, kStateDisconnected = 13,
 };
 constexpr int32_t kCallbackContinue = 0;
 constexpr int32_t kSharingShared = 1;
@@ -121,6 +122,7 @@ struct AAudioStream {
   std::condition_variable cv;
   std::thread callback_thread;
   bool quit = false;
+  bool error_notified = false;
   uint64_t generation = 0;  // under mu; retires work admitted before a transition
 };
 
@@ -157,6 +159,23 @@ void TraceInput(AAudioStream* s, const char* operation, int32_t requested, int32
              static_cast<long long>(stats.timestamp_ns));
 }
 
+// Called only by this stream's callback/monitor worker, outside capture locks.
+void InputDisconnected(AAudioStream* s) {
+  ErrorCallback callback;
+  void* user;
+  {
+    std::lock_guard<std::mutex> lock(s->mu);
+    if (s->quit || s->error_notified) return;
+    s->error_notified = true;
+    ++s->generation;
+    s->state = kStateDisconnected;
+    callback = s->b.error_cb;
+    user = s->b.error_user;
+  }
+  s->cv.notify_all();
+  if (callback != nullptr) callback(s, user, kErrorDisconnected);
+}
+
 // An input stream's callback thread: each burst captured goes to the data callback.
 void InputCallbackLoop(AAudioStream* s) {
   gesher::bionic::EnterLoadedCode();
@@ -167,9 +186,18 @@ void InputCallbackLoop(AAudioStream* s) {
     uint64_t generation;
     {
       std::unique_lock<std::mutex> lock(s->mu);
-      s->cv.wait(lock, [s] { return s->quit || s->state == kStateStarted; });
+      s->cv.wait(lock, [s] { return s->quit || s->state == kStateStarted || s->state == kStateDisconnected; });
       if (s->quit) return;
       generation = s->generation;
+    }
+    if (s->capture->error() != 0 || s->state == kStateDisconnected) {
+      InputDisconnected(s);
+      return;
+    }
+    if (s->b.data_cb == nullptr) {
+      std::unique_lock<std::mutex> lock(s->mu);
+      s->cv.wait_for(lock, std::chrono::milliseconds(50), [s] { return s->quit || s->state != kStateStarted; });
+      continue;
     }
     if (!s->capture->WaitForData(static_cast<size_t>(callback_frames), 50)) continue;
     {
@@ -401,7 +429,7 @@ aaudio_result_t OpenInputStream(Builder* b, AAudioStream** out) {
   s->capture = OpenCapture(p, &error);
   if (s->capture == nullptr) {
     MEDIA_LOGE("AAudio: %s", error.c_str());
-    return kErrorInternal;
+    return kErrorUnavailable;
   }
   s->b.capacity = static_cast<int32_t>(s->capture->capacity_frames());
   const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
@@ -410,7 +438,7 @@ aaudio_result_t OpenInputStream(Builder* b, AAudioStream** out) {
                rate, b->capacity, s->b.capacity);
   }
   AAudioStream* raw = s.release();
-  if (raw->b.data_cb != nullptr) raw->callback_thread = std::thread([raw] { CallbackLoop(raw); });
+  raw->callback_thread = std::thread([raw] { CallbackLoop(raw); });
   *out = raw;
   return kOk;
 }
@@ -507,6 +535,7 @@ aaudio_result_t SYSV RequestStart(AAudioStream* s) {
   {
     std::lock_guard<std::mutex> lock(s->mu);
     switch (s->state.load()) {
+      case kStateDisconnected: return kErrorDisconnected;
       case kStateOpen: case kStatePausing: case kStatePaused:
       case kStateFlushing: case kStateFlushed: case kStateStopping: case kStateStopped:
         break;
@@ -514,7 +543,11 @@ aaudio_result_t SYSV RequestStart(AAudioStream* s) {
         return kErrorInvalidState;
     }
     const int result = s->capture != nullptr ? s->capture->Start() : s->track->Start();
-    if (result != 0) return kErrorInternal;
+    if (result != 0) {
+      if (s->capture != nullptr && result == kCaptureDeadObject) return kErrorDisconnected;
+      if (s->capture != nullptr && result == kCaptureUnavailable) return kErrorUnavailable;
+      return kErrorInternal;
+    }
     ++s->generation;
     s->state = kStateStarted;
   }
@@ -628,7 +661,7 @@ int32_t SYSV Read(AAudioStream* s, void* data, int32_t frames, int64_t timeout_n
   for (;;) {
     ssize_t n = s->capture->Read(p + static_cast<size_t>(done) * s->frame_size,
                                  static_cast<size_t>(frames - done) * s->frame_size, false);
-    if (n < 0) return kErrorInternal;
+    if (n < 0) return done > 0 ? done : (n == kCaptureDeadObject ? kErrorDisconnected : kErrorInternal);
     done += static_cast<int32_t>(static_cast<size_t>(n) / s->frame_size);
     if (done >= frames || timeout_ns <= 0) break;
     const int64_t left = end - Now();
@@ -728,6 +761,7 @@ aaudio_result_t SYSV GetTimestamp(AAudioStream* s, int32_t clockid, int64_t* fra
 const char* SYSV ResultToText(aaudio_result_t r) {
   switch (r) {
     case kOk: return "AAUDIO_OK";
+    case kErrorDisconnected: return "AAUDIO_ERROR_DISCONNECTED";
     case kErrorIllegalArgument: return "AAUDIO_ERROR_ILLEGAL_ARGUMENT";
     case kErrorInternal: return "AAUDIO_ERROR_INTERNAL";
     case kErrorInvalidState: return "AAUDIO_ERROR_INVALID_STATE";

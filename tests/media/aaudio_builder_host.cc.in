@@ -60,7 +60,10 @@ struct Track {
   void Stop() {}
   void Release() {}
 };
+constexpr int kCaptureDeadObject = -32;
+constexpr int kCaptureUnavailable = -19;
 struct CaptureStream {
+  int error() const { return 0; }
   size_t capacity = 0;
   size_t capacity_frames() const { return capacity; }
   uint32_t overrun_count() const { return 0; }

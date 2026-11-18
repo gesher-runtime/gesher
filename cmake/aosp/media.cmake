@@ -11,6 +11,11 @@
 
 set(_media "${CMAKE_SOURCE_DIR}/compat/media")
 
+# Synthetic inputs belong to separately named CI fixtures, never the package.
+option(GESHER_CAPTURE_TEST_SOURCES "Compile isolated synthetic audio capture fixtures" OFF)
+set_property(SOURCE ${_media}/audio/capture.cc APPEND PROPERTY COMPILE_DEFINITIONS
+  "$<$<BOOL:${GESHER_CAPTURE_TEST_SOURCES}>:GESHER_CAPTURE_TEST_SOURCES=1>")
+
 # AOSP's extractors and the open codecs (cmake/aosp/media_codecs.cmake).
 include(${CMAKE_CURRENT_LIST_DIR}/media_codecs.cmake)
 

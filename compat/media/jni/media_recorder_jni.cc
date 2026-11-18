@@ -209,9 +209,10 @@ void JNICALL MR_start(JNIEnv* env, jobject thiz) {
   auto r = Get(env, thiz);
   if (r == nullptr) return;
   std::string error;
-  if (!r->recorder->Start(&error)) {
+  bool invalid_state = false;
+  if (!r->recorder->Start(&error, &invalid_state)) {
     MEDIA_LOGE("MediaRecorder.start: %s", error.c_str());
-    jniThrow(env, "java/lang/IllegalStateException", error.c_str());
+    jniThrow(env, invalid_state ? "java/lang/IllegalStateException" : "java/lang/RuntimeException", error.c_str());
   }
 }
 

@@ -126,6 +126,7 @@ jobs:
           python3 -m unittest discover -s tools/ci -p test_workflow_actor_metadata.py
           python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
           python3 -m unittest discover -s tools/ci -p test_github_read.py
+          python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
           python3 tools/surface/test-verified-artifact.py
@@ -427,6 +428,10 @@ jobs:
 
       - name: Cross-compile current-source Windows performance contracts
         run: |
+          python3 tools/test_capture_failures.py --compile-only \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/capture_failure_contract_test.exe \
+            --fixture-output out/capture_failure_fixture_test.exe
           python3 tools/test_procfs_thread_lookup.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/procfs_thread_lookup_test.exe
@@ -447,9 +452,9 @@ jobs:
         run: |
           # Canonical suite/package/e2e always receive the production role.
           if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           else
             exit 1
           fi
@@ -515,7 +520,9 @@ jobs:
           ls -la dist
 
       - name: Freeze default-OFF production role and unchanged shared-code boundary
-        run: python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+        run: |
+          python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+          python3 tools/media_capture/host_roles.py production --build out --dist dist
 
       - name: Bind isolated ordinary Binder actor to exact production compiler and source
         run: |
@@ -573,6 +580,20 @@ jobs:
         with:
           name: native3-locks-host
           path: dist-native3-locks/
+          if-no-files-found: error
+
+      - name: Build isolated synthetic capture hosts after production package is sealed
+        run: |
+          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          ninja -C out dalvikvm media_probe
+          python3 tools/media_capture/host_roles.py fixture --build out --dist dist
+          # Restore the ordinary compilation boundary before the query-only role.
+          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=OFF -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          ninja -C out dalvikvm media_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-capture-test
+          path: dist-media-capture-test/
           if-no-files-found: error
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
@@ -1661,6 +1682,7 @@ jobs:
             tools/symbolize.py
             tools/boot-image
             tools/web3
+            tools/media_capture
             tools/package
             tools/windows4
             tools/net-udp
@@ -1820,6 +1842,17 @@ jobs:
         shell: pwsh
         run: |
           python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble isolated capture hosts for explicit synthetic media fixtures
+        if: matrix.shard == 'services'
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name media-capture-test --producer "build" --destination ci-suppliers/media_capture_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/media_capture_test --destination dist --ledger ci-owners.json --owner media_capture_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/media_capture/host_roles.py verify --dist dist --fixture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run offline identity and retirement regressions

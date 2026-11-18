@@ -100,7 +100,17 @@ struct Backend {
   CaptureStats stats() const { return {}; }
 };
 struct Track : Backend {};
-struct CaptureStream : Backend {};
+struct CaptureStream : Backend {
+  std::atomic<int> input_error{0}, reads_before_error{-1};
+  int error() const { return reads_before_error == 0 ? input_error.load() : 0; }
+  ssize_t Read(void* data, size_t size, bool blocking) {
+    if (reads_before_error == 0) return input_error;
+    if (reads_before_error > 0) { --reads_before_error; size = std::min(size, frame_size); }
+    return Backend::Read(data, size, blocking);
+  }
+};
+constexpr int kCaptureDeadObject = -32;
+constexpr int kCaptureUnavailable = -19;
 std::shared_ptr<Backend> last_backend;
 int factories = 0;
 std::shared_ptr<Track> CreateTrack(const TrackParams& p, std::string*) {
@@ -450,7 +460,41 @@ void OtherStreamLifecycle() {
   Close(stream);
 }
 
+void InputFailures() {
+  Builder builder; builder.direction = kDirectionInput;
+  AAudioStream* stream = nullptr;
+  Check(OpenStream(&builder, &stream) == 0 && stream, "input opens before controlled failure");
+  auto capture = stream->capture;
+  capture->start_result = -19;
+  Check(RequestStart(stream) == -889 && GetState(stream) == 2, "unavailable input start preserves open state");
+  capture->start_result = 0;
+  Check(RequestStart(stream) == 0, "input starts after transient start failure");
+  capture->input_error = -32; capture->reads_before_error = 1;
+  std::vector<uint8_t> data(stream->frame_size * 4);
+  Check(Read(stream, data.data(), 4, 10000000) == 1, "input returns copied partial frames before disconnect");
+  Check(Read(stream, data.data(), 4, 0) == -899, "next input read preserves disconnected result");
+  Check(Read(stream, data.data(), 0, 0) == 0, "empty input read remains zero after error");
+  Check(Await([&] { return GetState(stream) == 13; }), "error-only input monitor publishes disconnected state");
+  Close(stream);
+
+  struct ErrorResult { std::atomic<int> calls{0}, code{0}; std::atomic<bool> outside{false}; } result;
+  builder.error_user = &result;
+  builder.error_cb = [](AAudioStream* input, void* user, int32_t error) {
+    auto& out = *static_cast<ErrorResult*>(user);
+    const bool unlocked = input->mu.try_lock();
+    if (unlocked) input->mu.unlock();
+    out.outside = unlocked; out.code = error; ++out.calls;
+  };
+  Check(OpenStream(&builder, &stream) == 0 && RequestStart(stream) == 0, "input opens with error callback alone");
+  stream->capture->input_error = -32; stream->capture->reads_before_error = 0;
+  Check(Await([&] { return result.calls == 1; }) && result.code == -899 && result.outside,
+        "disconnection notifies error callback once outside stream mutex");
+  Close(stream);
+  Check(result.calls == 1, "close does not duplicate terminal error callback");
+}
+
 int main(int argc, char**) {
+  if (argc == 1) InputFailures();
   Masks();
   DeviceIds();
   Lifecycle();
