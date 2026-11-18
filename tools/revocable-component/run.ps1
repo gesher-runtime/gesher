@@ -37,8 +37,10 @@ function Run-Owned([string]$Name, [int]$Timeout, [string]$Executable, [string[]]
 }
 # Positive, nonzero, and real descendant timeout controls qualify cleanup
 # before it is relied on for the production fixtures.
-[void](Run-Owned 'controller-positive' 10000 $env:ComSpec @('/d', '/c', 'echo CONTROL positive') 0 'CONTROL positive')
-[void](Run-Owned 'controller-nonzero' 10000 $env:ComSpec @('/d', '/c', 'echo CONTROL nonzero & exit /b 23') 23 'CONTROL nonzero')
+$positiveProgram = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("Write-Output 'CONTROL positive'; exit 0"))
+$nonzeroProgram = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("Write-Output 'CONTROL nonzero'; exit 23"))
+[void](Run-Owned 'controller-positive' 10000 $pwsh @('-NoProfile', '-EncodedCommand', $positiveProgram) 0 'CONTROL positive')
+[void](Run-Owned 'controller-nonzero' 10000 $pwsh @('-NoProfile', '-EncodedCommand', $nonzeroProgram) 23 'CONTROL nonzero')
 $childProgram = 'Start-Sleep -Seconds 30'
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childProgram))
 $parentProgram = '$child = Start-Process -PassThru -FilePath ''' + $pwsh.Replace("'", "''") +
