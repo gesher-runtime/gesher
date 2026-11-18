@@ -20,7 +20,9 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -58,9 +60,10 @@ public final class SpeechRecognitionContractTest {
             recipients.clear();
         }
         synchronized boolean detached() { return recipients.isEmpty(); }
+        synchronized int links() { return recipients.size(); }
     }
 
-    private static final class Backend implements SpeechRecognitionManagerService.Backend {
+    private static class Backend implements SpeechRecognitionManagerService.Backend {
         final Lifetime process = new Lifetime();
         final SpeechRecognitionManagerService.Owner client = new SpeechRecognitionManagerService.Owner(
                 7210, 10134, "fixture.client", new Object(), process);
@@ -99,6 +102,37 @@ public final class SpeechRecognitionContractTest {
 
         AttributionSource attribution() {
             return new AttributionSource.Builder(client.uid()).setPackageName(client.packageName()).build();
+        }
+    }
+
+    private static final class QuotaBackend extends Backend {
+        final Lifetime otherProcess = new Lifetime();
+        final Lifetime sharedUidProcess = new Lifetime();
+        final SpeechRecognitionManagerService.Owner otherClient = new SpeechRecognitionManagerService.Owner(
+                7211, 10135, "fixture.second", new Object(), otherProcess);
+        final SpeechRecognitionManagerService.Owner sharedUidClient = new SpeechRecognitionManagerService.Owner(
+                7212, client.uid(), "fixture.shared", new Object(), sharedUidProcess);
+        final Map<ComponentName, SpeechRecognitionManagerService.Provider> providers = new HashMap<>();
+
+        QuotaBackend() {
+            for (int i = 0; i < 11; i++) {
+                ComponentName component = component(i);
+                providers.put(component, new SpeechRecognitionManagerService.Provider(component, new Object()));
+            }
+        }
+
+        ComponentName component(int index) {
+            return new ComponentName("fixture.speech" + index, "fixture.speech" + index + ".Engine");
+        }
+
+        @Override public boolean isCurrent(SpeechRecognitionManagerService.Owner owner) {
+            return client.equals(owner) || otherClient.equals(owner) || sharedUidClient.equals(owner);
+        }
+        @Override public SpeechRecognitionManagerService.Provider resolve(ComponentName component) {
+            return enabled ? providers.get(component) : null;
+        }
+        @Override public boolean isCurrent(SpeechRecognitionManagerService.Provider selected) {
+            return enabled && providers.get(selected.component()) == selected;
         }
     }
 
@@ -274,10 +308,10 @@ public final class SpeechRecognitionContractTest {
         IModelDownloadListener lostDownload = take(engine.downloads);
         link.connected(SERVICE, null, null, true);
         int disconnected = SpeechRecognizer.ERROR_SERVER_DISCONNECTED;
-        check(take(engine.cancels) == started.listener && take(backend.unbindings) == link,
-                "disconnect detaches provider and retires active listening");
+        check(take(backend.unbindings) == link, "disconnect detaches the lost provider");
         check(take(listener.events).equals(disconnected) && take(support.events).equals(disconnected)
                 && take(model.events).equals(disconnected), "disconnect reports each pending operation once");
+        check(engine.cancels.isEmpty(), "disconnected provider is not called while retiring active listening");
         lostSupport.onSupportResult(installed);
         lostDownload.onSuccess();
         started.listener.onBeginningOfSpeech();
@@ -397,10 +431,144 @@ public final class SpeechRecognitionContractTest {
         check(!SpeechRecognitionManagerService.isProvider(service), "disabled package cannot be an engine");
     }
 
+    private static void connectionQuota() throws Exception {
+        QuotaBackend backend = new QuotaBackend();
+        SpeechRecognitionManagerService manager = new SpeechRecognitionManagerService(backend, 2000);
+        List<Lifetime> tokens = new ArrayList<>();
+        List<IRecognitionService> clients = new ArrayList<>();
+        List<IServiceConnection> links = new ArrayList<>();
+        Admission pending = new Admission();
+        for (int i = 0; i < 10; i++) {
+            Lifetime token = new Lifetime();
+            Admission admission = i == 9 ? pending : new Admission();
+            tokens.add(token);
+            manager.createSession(backend.component(i), token, false, admission);
+            IServiceConnection link = take(backend.bindings);
+            links.add(link);
+            if (i == 9) clients.add(null);
+            else {
+                link.connected(backend.component(i), new Engine(), null, false);
+                clients.add((IRecognitionService) take(admission.events));
+            }
+        }
+        check(backend.process.links() == 10, "connected and pending providers consume the same UID quota");
+
+        Lifetime deniedToken = new Lifetime();
+        Admission denied = new Admission();
+        manager.createSession(backend.component(10), deniedToken, false, denied);
+        // An already admitted token is a worker barrier, without creating a
+        // connection or depending on an arbitrary delay to observe rejection.
+        Admission barrier = new Admission();
+        manager.createSession(backend.component(0), tokens.get(0), false, barrier);
+        check(take(barrier.events) == clients.get(0), "existing admission remains usable at the connection limit");
+        check(backend.bindings.isEmpty(), "eleventh distinct provider never starts a binding");
+        check(take(denied.events).equals(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+                && deniedToken.detached() && backend.process.links() == 10,
+                "quota rejection leaves no session or process death link");
+
+        Lifetime saturatedToken = new Lifetime();
+        manager.createSession(backend.component(0), saturatedToken, false, denied);
+        check(take(denied.events).equals(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+                && saturatedToken.detached() && backend.bindings.isEmpty(),
+                "Android checks saturated UID connections before new same-provider admission");
+
+        backend.caller = backend.sharedUidClient;
+        Lifetime sharedUidToken = new Lifetime();
+        manager.createSession(backend.component(10), sharedUidToken, false, denied);
+        check(take(denied.events).equals(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+                && sharedUidToken.detached() && backend.sharedUidProcess.detached(),
+                "another package and process with the same UID share its connection quota");
+
+        links.get(9).connected(backend.component(9), new Engine(), null, false);
+        clients.set(9, (IRecognitionService) take(pending.events));
+        backend.caller = backend.otherClient;
+        Lifetime otherToken = new Lifetime();
+        Admission otherAdmission = new Admission();
+        manager.createSession(backend.component(0), otherToken, false, otherAdmission);
+        IServiceConnection otherLink = take(backend.bindings);
+        otherLink.connected(backend.component(0), new Engine(), null, false);
+        IRecognitionService otherClient = (IRecognitionService) take(otherAdmission.events);
+        check(backend.otherProcess.links() == 1 && backend.process.links() == 10,
+                "another UID can bind while the first UID has ten providers");
+        otherClient.cancel(null, true);
+        check(take(backend.unbindings) == otherLink && otherToken.detached()
+                && backend.otherProcess.detached(), "other UID cleanup preserves the first UID's quota");
+        backend.caller = backend.client;
+
+        clients.get(0).cancel(null, true);
+        check(take(backend.unbindings) == links.get(0) && tokens.get(0).detached(),
+                "last session release frees one distinct connection");
+        manager.createSession(backend.component(10), deniedToken, false, denied);
+        IServiceConnection retry = take(backend.bindings);
+        retry.connected(backend.component(10), new Engine(), null, false);
+        clients.set(0, (IRecognitionService) take(denied.events));
+        check(!deniedToken.detached() && backend.process.links() == 10,
+                "same previously rejected token can retry after a connection is freed");
+
+        clients.get(1).cancel(null, true);
+        check(take(backend.unbindings) == links.get(1), "release opens a slot for bind-failure control");
+        Lifetime failedToken = new Lifetime();
+        Admission failed = new Admission();
+        backend.rejectBinding = true;
+        manager.createSession(backend.component(1), failedToken, false, failed);
+        IServiceConnection failedLink = take(backend.bindings);
+        check(take(failed.events).equals(SpeechRecognizer.ERROR_CLIENT)
+                && take(backend.unbindings) == failedLink && failedToken.detached()
+                && backend.process.links() == 9, "failed bind releases quota and death-link ownership");
+        backend.rejectBinding = false;
+        manager.createSession(backend.component(1), failedToken, false, failed);
+        IServiceConnection recovered = take(backend.bindings);
+        recovered.connected(backend.component(1), new Engine(), null, false);
+        clients.set(1, (IRecognitionService) take(failed.events));
+        check(backend.process.links() == 10, "bind failure permits a fresh attempt with the same token");
+
+        // The logical remote-service reservation survives a transient provider
+        // loss with its delivered endpoint, as in Android's per-UID service set.
+        links.get(2).connected(backend.component(2), null, null, true);
+        check(take(backend.unbindings) == links.get(2), "provider loss releases its dead binding");
+        Lifetime replacementToken = new Lifetime();
+        Admission replacementAdmission = new Admission();
+        manager.createSession(backend.component(0), replacementToken, false, replacementAdmission);
+        manager.createSession(backend.component(10), deniedToken, false, barrier);
+        check(take(barrier.events) == clients.get(0), "existing token synchronizes the disconnect admission check");
+        check(backend.bindings.isEmpty(), "provider loss retains the admitted endpoint's quota reservation");
+        check(take(replacementAdmission.events).equals(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS)
+                && replacementToken.detached() && backend.process.links() == 10,
+                "provider loss cannot admit an eleventh distinct service or leak rejected-token ownership");
+
+        Listener listening = new Listener();
+        clients.get(2).startListening(INTENT, listening, backend.attribution());
+        IServiceConnection reconnected = take(backend.bindings);
+        Engine engine = new Engine();
+        reconnected.connected(backend.component(2), engine, null, false);
+        Listening active = take(engine.starts);
+        active.listener.onReadyForSpeech(Bundle.EMPTY);
+        check(take(listening.events).equals("ready"), "admitted endpoint reconnects with all ten service slots reserved");
+
+        tokens.get(2).die();
+        check(take(engine.cancels) == active.listener && take(backend.unbindings) == reconnected
+                && tokens.get(2).detached() && backend.process.links() == 9,
+                "final owning token death releases the logical service reservation");
+        manager.createSession(backend.component(0), replacementToken, false, replacementAdmission);
+        IServiceConnection replacementLink = take(backend.bindings);
+        replacementLink.connected(backend.component(0), new Engine(), null, false);
+        clients.set(2, (IRecognitionService) take(replacementAdmission.events));
+        check(!replacementToken.detached() && backend.process.links() == 10,
+                "new distinct provider can retry only after the prior endpoint retires");
+
+        for (IRecognitionService client : clients) client.cancel(null, true);
+        for (int i = 0; i < 10; i++) take(backend.unbindings);
+        check(backend.process.detached() && deniedToken.detached() && failedToken.detached()
+                && replacementToken.detached()
+                && tokens.stream().allMatch(Lifetime::detached) && backend.unbindings.isEmpty(),
+                "all quota scenarios leave no bindings or process/session death links");
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length == 0) System.loadLibrary("android_runtime");
         else System.load(args[0]);
         manifestEligibility();
+        connectionQuota();
         lifecycle();
         supportAndDeath();
         unavailableAndShared();

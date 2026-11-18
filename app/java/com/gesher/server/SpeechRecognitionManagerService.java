@@ -45,6 +45,7 @@ import java.util.concurrent.TimeUnit;
 public final class SpeechRecognitionManagerService extends IRecognitionServiceManager.Stub {
     private static final int BIND_TIMEOUT_MS = 20_000;
     private static final int TEMPORARY_PROVIDER_MS = 60_000;
+    private static final int MAX_CONNECTIONS_PER_UID = 10;
 
     public record Owner(int pid, int uid, String packageName, Object code, IBinder process) {}
     public record Provider(ComponentName component, Object code) {}
@@ -132,7 +133,9 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             return;
         }
         Provider provider = mBackend.resolve(selected);
-        if (provider == null) {
+        // Android checks the UID's remote-connection limit before reusing a
+        // provider for a new session. Session tokens alone have no such cap.
+        if (provider == null || atConnectionLimit(owner.uid())) {
             call(() -> callback.onError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS));
             return;
         }
@@ -552,6 +555,17 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
                 if (target != null) target.onError(code);
             }
         }
+    }
+
+    private boolean atConnectionLimit(int uid) {
+        // A delivered endpoint retains its logical connection reservation
+        // across provider loss. Only final session retirement releases it.
+        Set<ComponentName> components = new LinkedHashSet<>();
+        for (Session session : mSessions.values()) {
+            if (session.owner.uid() == uid && components.add(session.component)
+                    && components.size() >= MAX_CONNECTIONS_PER_UID) return true;
+        }
+        return false;
     }
 
     private void attach(Session session, Provider selected) {
