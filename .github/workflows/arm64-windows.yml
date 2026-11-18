@@ -9,9 +9,6 @@ on:
     branches:
       - 'feature/arm64-windows'
       - 'main'
-  merge_group:
-    types: [checks_requested]
-    branches: [main]
   workflow_dispatch:
 
 permissions:

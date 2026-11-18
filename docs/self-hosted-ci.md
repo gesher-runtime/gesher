@@ -164,7 +164,7 @@ single-workflow group. It does not weaken repository or workflow restrictions.
 ```powershell
 python -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
 node --test .github/actions/runner-route/route.test.cjs
-python .github/scripts/test_merge_queue_workflows.py
+python .github/scripts/test_automerge_workflows.py
 ```
 
 Cache fixture tests cover real snapshot I/O, corruption, immutable keys,
