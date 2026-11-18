@@ -2,6 +2,10 @@
 
 ## Timer retention checks
 
+The binding fixture initializes the actual URI-grant registry used by service
+teardown and asserts that terminal syncs deliver the adapter's stop callback.
+Unrelated settings-provider startup remains isolated.
+
 The ordinary suite also checks the production timer factory with 10,000 canceled
 one-year timers, completion/cancellation of active watchdogs, and rejection of
 watchdog rearming after completion. Run just these checks with `--case retention`.

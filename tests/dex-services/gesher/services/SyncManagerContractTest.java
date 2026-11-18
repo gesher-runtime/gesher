@@ -165,7 +165,7 @@ public final class SyncManagerContractTest {
         final IActivityManager am;
         final Class<?> adapterType = type("SyncManager$Adapter");
         final List<Start> starts = new ArrayList<>();
-        int cancelled, unbound;
+        int cancelled, unbound, stoppedServices;
         IBinder suppliedAdapter;
         volatile CountDownLatch blockCreate, createEntered, blockStart, startEntered;
         Runnable duringCreate;
@@ -202,7 +202,7 @@ public final class SyncManagerContractTest {
                 catch (Exception failure) { throw new AssertionError(failure); }
             }
             @Override public void scheduleUnbindService(IBinder token, IBinder bindToken, Intent intent) { unbound++; }
-            @Override public void scheduleStopService(IBinder token) { }
+            @Override public void scheduleStopService(IBinder token) { stoppedServices++; }
         };
         @SuppressWarnings("unchecked") Harness(boolean parallel, boolean wire) throws Exception {
             this.wire = wire;
@@ -227,6 +227,11 @@ public final class SyncManagerContractTest {
             am = (IActivityManager) UNSAFE.allocateInstance(amType);
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Service teardown clears start-grant owners through AMS. Keep the
+            // actual UriGrants registry while isolating unrelated settings startup.
+            Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mUriGrants", make(type("UriGrants"), new Class<?>[]{pmType, atmType}, pm, atm));
+            set(am, "mProviders", providers);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions); invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
             Object catalog = get(permissions, "mCatalog"); set(catalog, "mLoaded", true); set(catalog, "mFrameworkRead", true);
@@ -626,6 +631,7 @@ public final class SyncManagerContractTest {
                 else h.finish(0, new SyncResult());
                 check(watchdog.isCancelled() && get(active, "watchdog") == null,
                         "Finished sync retained its watchdog and active object graph");
+                check(h.stoppedServices == 1, "Terminal sync did not finish the adapter service lifecycle");
                 int queued = h.timer.queue.size();
                 invoke(h.sync, "watch", new Class<?>[]{active.getClass()}, active);
                 check(h.timer.queue.size() == queued, "Stale watchdog rearmed a finished sync");
