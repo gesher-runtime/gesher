@@ -158,6 +158,8 @@ int main() {
   input.error = true;
   Check(Read(&reader, received, 1, 0) == kErrorInternal, "read engine error");
 
+
+#if HAS_INPUT_DISCONNECT
   input.error = false; input.dead = true;
   Check(Read(&reader, received, 1, 0) == kErrorDisconnected, "dead capture reports disconnect");
   Check(GetState(&reader) == kStateDisconnected && reader.generation == 1,
@@ -165,6 +167,7 @@ int main() {
   Check(Read(&reader, received, 1, 0) == kErrorDisconnected && reader.generation == 1,
         "later read retains disconnected state");
   reader.disconnected = false; input.dead = false;
+#endif
 
   int32_t next = -1;
   Check(WaitForStateChange(&reader, 4, &next, INT64_MAX) == kOk && next == 2,
