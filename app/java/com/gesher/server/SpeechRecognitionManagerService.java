@@ -43,6 +43,7 @@ import java.util.concurrent.TimeUnit;
 
 /** Binds the installed RecognitionService selected by the framework or the caller. */
 public final class SpeechRecognitionManagerService extends IRecognitionServiceManager.Stub {
+    private static final int MAX_PENDING_SESSION_CALLBACKS = 16;
     private static final int BIND_TIMEOUT_MS = 20_000;
     private static final int TEMPORARY_PROVIDER_MS = 60_000;
 
@@ -126,7 +127,7 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
                 call(() -> callback.onError(SpeechRecognizer.ERROR_CLIENT));
             } else if (existing.delivered) {
                 call(() -> callback.onSuccess(existing));
-            } else if (existing.callbacks.size() >= MAX_PENDING_QUERIES) {
+            } else if (existing.callbacks.size() >= MAX_PENDING_SESSION_CALLBACKS) {
                 call(() -> callback.onError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS));
             } else {
                 existing.callbacks.add(callback);
@@ -305,7 +306,7 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             if (binding != null) {
                 Binding previous = binding;
                 binding = null;
-                previous.remove();
+                previous.detach(this);
             }
         }
 
