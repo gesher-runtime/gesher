@@ -13,12 +13,16 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.client
 import os
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +32,40 @@ HASHES = {
     "sqlite3.c": "ab8a927dfac4e8a673e141b93105daabd807409cfe164b8f669bd42b4a13d14d",
     "sqlite3.h": "abd1514e0351f79393d1be882830afdb40a8099e8257f311f0bfdf8486f11bea",
 }
+DOWNLOAD_BACKOFF = (1, 2, 4)
+
+
+def download(url: str) -> bytes:
+    """Retry transport failures only; never reuse bytes from a partial response."""
+    for attempt in range(len(DOWNLOAD_BACKOFF) + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code not in (500, 502, 503, 504):
+                raise
+            failure = error
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as error:
+            failure = error
+        if attempt == len(DOWNLOAD_BACKOFF):
+            raise RuntimeError(f"SQLite source download failed after {attempt + 1} attempts: {url}") from failure
+        delay = DOWNLOAD_BACKOFF[attempt]
+        print(f"SQLITE_DOWNLOAD_RETRY attempt={attempt + 1}/4 delay={delay}s url={url} error={failure}",
+              file=sys.stderr, flush=True)
+        time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def source_bytes(name: str, expected: str, directory: Path | None = None) -> bytes:
+    if directory is not None:
+        data = (directory / name).read_bytes()
+    else:
+        url = f"https://android.googlesource.com/platform/external/sqlite/+/refs/tags/{PIN}/{DIST}/{name}?format=TEXT"
+        data = base64.b64decode(download(url), validate=True)
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError(f"pinned SQLite source hash mismatch: {name}")
+    return data
 
 
 def function(source: str, signature: str) -> str:
@@ -115,14 +153,7 @@ def main() -> None:
         dist = work / DIST
         dist.mkdir(parents=True)
         for name, expected in HASHES.items():
-            if args.sqlite_source:
-                data = (args.sqlite_source / name).read_bytes()
-            else:
-                url = f"https://android.googlesource.com/platform/external/sqlite/+/refs/tags/{PIN}/{DIST}/{name}?format=TEXT"
-                with urllib.request.urlopen(url, timeout=60) as response:
-                    data = base64.b64decode(response.read(), validate=True)
-            if hashlib.sha256(data).hexdigest() != expected:
-                raise ValueError(f"pinned SQLite source hash mismatch: {name}")
+            data = source_bytes(name, expected, args.sqlite_source)
             (dist / name).write_bytes(data)
         original = (dist / "sqlite3.c").read_text()
         patch = ROOT / "patches/external/sqlite/0001-win32-guest-paths.patch"

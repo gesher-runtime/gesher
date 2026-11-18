@@ -282,15 +282,159 @@ bool PacketOracle(const std::string& fixture, const std::string& output, bool sh
   return ok;
 }
 
+bool TimedMetadata(Extractor* extractor, size_t track) {
+  const std::array<Sample, 3> expected = {{
+      {{0x01, 0x00, 0xfe}, 215000},
+      {{0x02, 0x17}, 248333},
+      {{0x03, 0x42, 0xff, 0x00}, 312175},
+  }};
+  auto reader = extractor->OpenTrack(track);
+  if (!reader) return false;
+  Sample actual;
+  for (const auto& sample : expected) {
+    if (reader->Read(&actual) != 0 || actual.data != sample.data ||
+        std::llabs(actual.time_us - sample.time_us) > 11) {
+      return false;
+    }
+  }
+  return reader->Read(&actual) == 1;
+}
+
+bool ChildBox(const std::vector<uint8_t>& bytes, const Box& parent, const char* type, Box* out) {
+  std::vector<Box> children;
+  if (!Boxes(bytes, parent.payload, parent.end, &children)) return false;
+  for (const Box& child : children) {
+    if (child.type == type) { *out = child; return true; }
+  }
+  return false;
+}
+
+bool HeaderDuration(const std::vector<uint8_t>& bytes, const Box& box, size_t offset,
+                    uint8_t version, uint64_t expected) {
+  if (version == 1) offset += 8;
+  const size_t field_size = version == 1 ? 8 : 4;
+  return box.end - box.payload >= offset + field_size && bytes[box.payload] == version &&
+      Big(bytes, box.payload + offset, field_size) == expected;
+}
+
+bool MetadataBoundary(const std::string& path, const std::string& kind) {
+  std::string error;
+  auto source = OpenFileSource(path, &error);
+  auto extractor = source ? Extractor::Open(std::move(source), &error) : nullptr;
+  const bool long_offset = kind == "long-offset";
+  const bool long_trim = kind == "long-trim";
+  const bool offset = long_offset || kind == "offset";
+  const size_t tracks = offset ? 2 : 1;
+  if (!extractor || extractor->TrackCount() != tracks) return false;
+  for (size_t track = 0; track < tracks; ++track) {
+    Format format = extractor->TrackFormat(track);
+    if (format.Mime() != "application/gyro") return false;
+    std::vector<int64_t> times = {0, 33333, 97175};
+    if (kind == "long") times = {0, 30000000000LL};
+    if (kind == "negative") times = {-33000, 0, 33333};
+    if (long_trim) times = {-30000000000LL, 0, 33333};
+    if (offset) {
+      times = track == 0 ? std::vector<int64_t>{0, 1000000} : std::vector<int64_t>{215567, 248900, 312742};
+      if (long_offset && track == 1) {
+        for (int64_t& time : times) time += 430000000000LL;
+      }
+    }
+    auto reader = extractor->OpenTrack(track);
+    if (!reader) return false;
+    Sample sample;
+    for (int64_t time : times) {
+      if (reader->Read(&sample) != 0 || sample.data != std::vector<uint8_t>{0x12, 0x34, 0x56} ||
+          std::llabs(sample.time_us - time) > (offset ? 56 : 11)) return false;
+    }
+    if (reader->Read(&sample) != 1) return false;
+  }
+
+  // The reader above checks decoded times and payloads. Independently inspect
+  // duration and legacy MIME fields which a current extractor could overlook.
+  std::ifstream input(path, std::ios::binary);
+  const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  Box root{0, bytes.size(), ""}, moov;
+  if (!ChildBox(bytes, root, "moov", &moov)) return false;
+  constexpr uint64_t kWideOffset = 4300002156ULL;
+  constexpr uint64_t kOffsetSegment = 1610;
+  constexpr uint64_t kTrimSegment = 667;
+  if (long_offset || long_trim || kind == "negative") {
+    Box mvhd;
+    const uint64_t expected = long_offset ? kWideOffset + kOffsetSegment : kTrimSegment;
+    if (!ChildBox(bytes, moov, "mvhd", &mvhd) || !HeaderDuration(bytes, mvhd, 16, long_offset, expected)) {
+      return false;
+    }
+  }
+  std::vector<Box> children;
+  if (!Boxes(bytes, moov.payload, moov.end, &children)) return false;
+  size_t found = 0;
+  for (const Box& trak : children) {
+    if (trak.type != "trak") continue;
+    if ((long_offset && found == 1) || long_trim || kind == "negative") {
+      Box tkhd, edts, elst;
+      const uint64_t expected = long_offset ? kWideOffset + kOffsetSegment : kTrimSegment;
+      if (!ChildBox(bytes, trak, "tkhd", &tkhd) || !HeaderDuration(bytes, tkhd, 20, long_offset, expected) ||
+          !ChildBox(bytes, trak, "edts", &edts) || !ChildBox(bytes, edts, "elst", &elst)) return false;
+      const bool wide = long_offset || long_trim;
+      const size_t entries = long_offset ? 2 : 1;
+      const size_t field_size = wide ? 8 : 4;
+      const size_t entry_size = 2 * field_size + 4;
+      if (elst.end - elst.payload != 8 + entries * entry_size || bytes[elst.payload] != wide ||
+          Big(bytes, elst.payload + 4, 4) != entries) return false;
+      size_t entry = elst.payload + 8;
+      if (long_offset) {
+        if (Big(bytes, entry, 8) != kWideOffset || Big(bytes, entry + 8, 8) != UINT64_MAX) return false;
+        entry += entry_size;
+      }
+      const uint64_t media_start = long_offset ? 0 : long_trim ? 2700000000ULL : 2970;
+      if (Big(bytes, entry, field_size) != (long_offset ? kOffsetSegment : kTrimSegment) ||
+          Big(bytes, entry + field_size, field_size) != media_start) return false;
+    }
+    Box mdia, mdhd, minf, stbl, stsd, stts;
+    if (!ChildBox(bytes, trak, "mdia", &mdia) || !ChildBox(bytes, mdia, "mdhd", &mdhd) ||
+        !ChildBox(bytes, mdia, "minf", &minf) || !ChildBox(bytes, minf, "stbl", &stbl) ||
+        !ChildBox(bytes, stbl, "stsd", &stsd) || !ChildBox(bytes, stbl, "stts", &stts)) return false;
+    if (stsd.end - stsd.payload < 8) return false;
+    Box entries{stsd.payload + 8, stsd.end, ""}, mett;
+    if (!ChildBox(bytes, entries, "mett", &mett)) return false;
+    constexpr char mime[] = "application/gyro";
+    if (mett.end - mett.payload != 2 * sizeof(mime) ||
+        std::memcmp(bytes.data() + mett.payload, mime, sizeof(mime)) != 0 ||
+        std::memcmp(bytes.data() + mett.payload + sizeof(mime), mime, sizeof(mime)) != 0) return false;
+    if (mdhd.end - mdhd.payload < 24 || stts.end - stts.payload < 8) return false;
+    const unsigned version = bytes[mdhd.payload];
+    uint64_t duration = 0;
+    if (version == 1) {
+      if (mdhd.end - mdhd.payload < 36 || Big(bytes, mdhd.payload + 20, 4) != 90000) return false;
+      duration = Big(bytes, mdhd.payload + 24, 8);
+    } else if (version == 0 && Big(bytes, mdhd.payload + 12, 4) == 90000) {
+      duration = Big(bytes, mdhd.payload + 16, 4);
+    } else { return false; }
+    const uint64_t runs = Big(bytes, stts.payload + 4, 4);
+    if (runs > (stts.end - stts.payload - 8) / 8) return false;
+    uint64_t sum = 0, samples = 0;
+    for (size_t i = 0; i < runs; ++i) {
+      const uint64_t count = Big(bytes, stts.payload + 8 + 8 * i, 4);
+      samples += count;
+      sum += count * Big(bytes, stts.payload + 12 + 8 * i, 4);
+    }
+    if (sum != duration) return false;
+    if (kind == "eos" && (duration != 18000 || samples != 3)) return false;
+    if (kind == "long" && (duration != 5400000000ULL || version != 1 || samples != 2)) return false;
+    ++found;
+  }
+  return found == tracks;
+}
+
 void Verify(const std::string& path, const std::string& video_mime, const std::string& audio_mime,
             double frequency, bool mp4, bool short_audio = false) {
   std::string error;
   auto source = OpenFileSource(path, &error);
   auto extractor = source ? Extractor::Open(std::move(source), &error) : nullptr;
   if (!extractor) { Check(false, "extract " + path + ": " + error); return; }
-  const size_t expected = video_mime.empty() ? 1 : 2;
+  const size_t expected = (video_mime.empty() ? 1 : 2) + (mp4 ? 1 : 0);
   bool ok = extractor->TrackCount() == expected;
-  unsigned video = 0, audio = 0;
+  unsigned video = 0, audio = 0, metadata = 0;
   for (size_t i = 0; i < extractor->TrackCount(); ++i) {
     Format format = extractor->TrackFormat(i);
     const std::string mime = format.Mime();
@@ -300,12 +444,15 @@ void Verify(const std::string& path, const std::string& video_mime, const std::s
     } else if (mime == audio_mime) {
       ++audio;
       ok = Audio(extractor.get(), i, format, frequency, path, short_audio) && ok;
+    } else if (mp4 && mime == "application/gyro") {
+      ++metadata;
+      ok = TimedMetadata(extractor.get(), i) && ok;
     } else { ok = false; }
   }
   if (mp4) ok = Mp4Metadata(path) && ok;
-  ok = ok && audio == 1 && video == (video_mime.empty() ? 0u : 1u);
-  std::printf("media4 muxer container trace: %s; extractor %s; tracks %zu video %u audio %u; metadata %s\n",
-      path.c_str(), extractor->Name().c_str(), extractor->TrackCount(), video, audio,
+  ok = ok && audio == 1 && video == (video_mime.empty() ? 0u : 1u) && metadata == (mp4 ? 1u : 0u);
+  std::printf("media4 muxer container trace: %s; extractor %s; tracks %zu video %u audio %u timed metadata %u; %s\n",
+      path.c_str(), extractor->Name().c_str(), extractor->TrackCount(), video, audio, metadata,
       mp4 ? "90-degree matrix and exact ISO-6709 required" : "container codec metadata required");
   Check(ok, "actual-container-decode " + path);
 }
@@ -314,6 +461,12 @@ void Verify(const std::string& path, const std::string& video_mime, const std::s
 int main(int argc, char** argv) {
   if (argc != 3) return 2;
   const std::string root = argv[1];
+  for (const char* suffix : {".mp4", ".3gp"}) {
+    for (const char* kind : {"eos", "long", "negative", "offset", "long-offset", "long-trim"}) {
+      const std::string path = root + "/metadata-" + kind + suffix;
+      Check(MetadataBoundary(path, kind), "metadata-android-boundary " + path);
+    }
+  }
   struct Case { const char* stem; const char* extension; const char* video; const char* audio; double hz; bool mp4; };
   const Case cases[] = {{"h264-aac", "mp4", "video/avc", "audio/mp4a-latm", 1661, true},
     {"h264-aac", "3gp", "video/avc", "audio/mp4a-latm", 1661, true},
