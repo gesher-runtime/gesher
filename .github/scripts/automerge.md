@@ -10,7 +10,11 @@ never calls the merge API, starts another CI build, or uses scheduled polling.
 A label must be strictly later than PR creation and applied by a collaborator
 with write/admin access. Creation-time labels, ambiguous events, changed heads,
 force pushes, reopening and retargeting cannot reuse an earlier approval.
-Review the updated diff and remove/reapply the label after changing a head.
+Pushes remove stale approval labels automatically. Review the updated diff and
+apply the label again to approve the new head. Delayed push deliveries preserve
+a later label application. A pending label in the same/adjacent timestamp second
+is conservatively retained when GitHub supplies no proof that it predates the
+push; it cannot authorize a new head without a matching approval receipt.
 
 The existing author routes are unchanged: an author may deliberately reapply an
 earlier label, or precede their first label with an unedited exact-head COMMENT
@@ -40,6 +44,14 @@ IDs and successful aggregate check suites from GitHub Actions. Display-name
 collisions, manual runs, another repository or another check suite cannot supply
 that evidence. It then rechecks current label, permission, receipt and QA proof
 before turning the required gate green. GitHub applies all branch protections.
+
+When either registered PR workflow finishes with a failure, timeout or action
+required, the controller removes `automerge`, cancels native auto-merge and posts
+one short bot comment linking to the failed run. It reads the current run attempt
+before acting, so a delayed failure event cannot revoke a newer pending or
+successful rerun. Newer heads and label applications are preserved. Pending or
+cancelled runs cannot release the QA gate. After fixing or rerunning failed CI,
+review the result and reapply the label; success alone does not restore approval.
 
 `ci-required` covers every root production CI job, including Windows shards,
 packaging and e2e; failed, cancelled or skipped root jobs fail it. `arm64-required`
