@@ -87,6 +87,14 @@ Check 'services: concurrent clipboard callbacks and native Windows clipboard upd
   $clipboardCallbacksOut
 } @('ClipboardCallbackTest all passed:')
 
+$receiverExportOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ReceiverExportContractTest') 90
+$receiverExportCode = $LASTEXITCODE
+Check 'services: dynamic receiver exports, protected broadcasts and sticky-query exemptions' {
+  $global:LASTEXITCODE = $receiverExportCode
+  $receiverExportOut
+} @('ReceiverExportContractTest passed:', 'binder=true')
+
 $contentObserverOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'ContentObserverLifecycleTest') 90
 $contentObserverCode = $LASTEXITCODE
