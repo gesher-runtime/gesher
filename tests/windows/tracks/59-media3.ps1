@@ -5,10 +5,18 @@
 # (GESHER_AUDIO_SOURCE), a second of 750 Hz for 0.4 s, silence, 1250 Hz for 0.4 s,
 # silence, looped from its start each time recording starts; what is recorded is found
 # and measured (media_probe analyze, or the test app's own zero crossings). The real
-# WASAPI capture path is checked to open, or to give silence when there is no endpoint.
+# WASAPI capture path must either open real hardware or report unavailable.
+# Synthetic recordings below use separately named, default-OFF fixture builds.
 
 $m3Tmp = Join-Path $env:RUNNER_TEMP 'gesher-media3'
 New-Item -ItemType Directory -Force $m3Tmp | Out-Null
+$captureProbe = Join-Path $Dir 'media_probe-media-capture-test.exe'
+$captureRuntime = Join-Path $Dir 'dalvikvm-media-capture-test.exe'
+if (-not (Test-Path -LiteralPath $captureProbe) -or -not (Test-Path -LiteralPath $captureRuntime)) {
+  Write-Host 'FAIL  media3: isolated capture fixture binaries are missing'
+  $failed++
+  return
+}
 
 CheckTimed 'media3: actual ART GC CPU estimate preserves finite/unknown cases and guards zero CPU duration (pristine guard negative control)' `
   "$Dir/media_gc_estimate_test.exe" @() @(
@@ -62,17 +70,22 @@ $script:m3Printed = @{}
 Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
 $out = & "$Dir/media_probe.exe" capture 2>&1 | Out-String
 $code = $LASTEXITCODE
-if ($out -match 'capture: (WASAPI shared mode capture on [^\r\n]+)') {
+if ($code -eq 0 -and $out -match 'capture: (WASAPI shared mode capture on [^\r\n]+)') {
   Write-Host "PASS  media3: the capture engine records from the default capture endpoint ($($Matches[1].Trim()))"
-} elseif ($code -eq 0 -and $out -match 'read 88200 frames' -and $out -match 'capture: (none: [^\r\n]+)') {
-  Write-Host "PASS  media3: the capture engine without a capture endpoint records silence, paced by the clock ($($Matches[1].Trim()))"
+} elseif ($code -ne 0 -and $out -match 'capture unavailable:' -and $out -notmatch 'read 88200 frames') {
+  Write-Host 'PASS  media3: the production capture engine reports unavailable instead of inventing silence'
 } else {
   Write-Host "FAIL  media3: the capture engine without GESHER_AUDIO_SOURCE (exit $code)"
   Write-Host $out
   $failed++
 }
 $env:GESHER_AUDIO_SOURCE = $micWav
-$m3BufferOut = RunTimed "$Dir/media_probe.exe" @('capture-buffers') 15
+$rejectedSource = RunTimed "$Dir/media_probe.exe" @('capture') 15
+if ($LASTEXITCODE -eq 0 -or $rejectedSource -notmatch 'isolated capture-test build') {
+  Write-Host 'FAIL  media3: production capture accepted a synthetic microphone source'
+  $failed++
+} else { Write-Host 'PASS  media3: production capture rejects synthetic microphone configuration' }
+$m3BufferOut = RunTimed $captureProbe @('capture-buffers') 15
 $m3BufferCode = $LASTEXITCODE
 foreach ($trace in @($m3BufferOut -split "`n" | Where-Object { $_ -match '^capture buffers' })) {
   Write-Host "INFO  media3: $($trace.Trim())"
@@ -80,7 +93,7 @@ foreach ($trace in @($m3BufferOut -split "`n" | Where-Object { $_ -match '^captu
 LineCheck 'media3: a controlled unread capture stall loses frames in the 80ms ring while the configured one-second ring stays lossless' `
   $m3BufferOut @('capture buffers: bounded small-ring loss and configured-capacity zero loss passed') $m3BufferCode
 $probeRec = Join-Path $m3Tmp 'probe-capture.wav'
-$out = & "$Dir/media_probe.exe" capture $probeRec 2>&1 | Out-String
+$out = & $captureProbe capture $probeRec 2>&1 | Out-String
 $code = $LASTEXITCODE
 Check 'media3: the capture engine records GESHER_AUDIO_SOURCE''s file at 44100 Hz stereo (resampled from 48000 Hz mono), 2 s paced by the clock' {
   $global:LASTEXITCODE = $code
@@ -205,7 +218,7 @@ if (Test-Path "$Dir/recordapp.apk") {
   # standalone request-race regression above keeps its original VM options.
   $dvmRecTrace = $dvmRec + '-verbose:heap'
   # Single process.
-  $recOut = & "$Dir/dalvikvm.exe" @dvmRecTrace com.gesher.app.Main (NoDrive "$Dir/recordapp.apk") 2>&1 | Out-String
+  $recOut = & $captureRuntime @dvmRecTrace com.gesher.app.Main (NoDrive "$Dir/recordapp.apk") 2>&1 | Out-String
   $recCode = $LASTEXITCODE
   Write-Host "INFO  media3: $((($recOut -split "`n") | Where-Object { $_ -match 'GesherMedia.*(encoders:|capture:)|RecordTest codec list encoders' } | Select-Object -First 4 | ForEach-Object { $_.Trim() }) -join '; ')"
   RecordChecks 'single process' $recOut $recCode
@@ -215,14 +228,14 @@ if (Test-Path "$Dir/recordapp.apk") {
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-device'
   New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
   $launcherRec = $dvmRecTrace + 'com.gesher.app.Launcher'
-  $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+  $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
   $recordDeviceLog = Join-Path $root 'logs/com.gesher.recordapp.log'
   if (Test-Path -LiteralPath $recordDeviceLog) { Remove-Item -LiteralPath $recordDeviceLog -Force }
-  $devOut = & "$Dir/dalvikvm.exe" @($launcherRec + 'launch', (NoDrive "$Dir/recordapp.apk"), '--headless', '--keep-task') 2>&1 | Out-String
+  $devOut = & $captureRuntime @($launcherRec + 'launch', (NoDrive "$Dir/recordapp.apk"), '--headless', '--keep-task') 2>&1 | Out-String
   $devCode = $LASTEXITCODE
   $devOut += "`n" + (Get-Content -LiteralPath $recordDeviceLog -Raw -ErrorAction SilentlyContinue)
   RecordChecks 'Gesher device' $devOut $devCode
-  $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+  $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
   Remove-Item Env:GESHER_CAMERA_TEST, Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_RECORD -ErrorAction SilentlyContinue
 } else {
   Write-Host 'INFO  media3: recordapp.apk not in the build output; its checks skipped'
