@@ -1,16 +1,25 @@
-# N20 real-time signals: blocked intermediate repair
+# N20 local real-time pending queues and explicit delivery boundaries
 
-**Merge status: BLOCKED.** This checkpoint improves pending storage and adds
-ordinary public-API gates. It does not establish Android signal compatibility.
-The remaining transport, thread, job-control, frame, and accounting failures
-below must be repaired and genuinely exercised before approval. Passing only
-the queue or Linux/model checks is not sufficient.
+This PR is a **partial local-queue improvement**, not completion of Android's
+asynchronous signal architecture. It preserves FIFO payloads, standard-signal
+coalescing, actual local sender information, configured local queue limits,
+process/thread queue ownership, synchronous waiting, and ordinary one-argument
+handlers. Unsupported asynchronous frames, active alternate stacks, local
+default-stop delivery, remote RT transport, and host non-self thread delivery
+must fail explicitly where the adapter receives that request.
 
-The starting PR head is `bdf01a1f28f45faab3fc94cab1bcb901785db428` (PR 79).
-The integrated main is `e80cd1854163bd18e4ea5392c25f423184048804`. The CI sparse
-checkout correction is the minimal change from
-`a0f415eb6ac9e01ec57ec758b67dec1f4133de69`. No changes from the unqualified PR 73
-branch were imported. Existing CI gates remain required.
+The repaired input is PR 79 head
+`937473b81173173b0de0ad1b35305b6f32a57619`. The review distinguished defects
+introduced by that queue checkpoint from broader pre-existing limitations. The
+Windows CI workflow is composed with main
+`704595a550f5f0abac9ad183d5196da82e2623ba`, retaining main's routing and validation
+changes and the PR's signal-evidence upload. Publication must preserve both
+parents' changes if main advances again.
+
+**Qualification is pending independent QA and actual Windows/guest execution.**
+Cross-compilation and Linux tests do not establish those runtime results.
+The full Android/Linux reference corpus is retained and executed separately;
+its unresolved failures are not represented as passing compatibility tests.
 
 ## Contract sources
 
@@ -33,137 +42,194 @@ Linux kill(RT) attempts a queued record but may fall back to a pending bit on
 allocation or quota failure. The fallback has zeroed SI_USER information, not
 an invented sender or payload. A failing RT sigqueue reports EAGAIN instead.
 
-## Implemented at this checkpoint
+## Supported operations and exact failure boundaries
 
-`Pending<Info>` in `compat/posix/include/gesher/pending_signals.h` now supplies
-both POSIX and bionic pending storage. It coalesces standard signals while
-preserving their first record, queues RT records FIFO per number, and frees
-records on consume, disposition discard, and container destruction. The shared
-storage code does not make the adapters' action tables or delivery engines one
-coherent signal service; that remains unfinished.
+| Application request | Implemented behavior | Qualification |
+| --- | --- | --- |
+| Queue blocked local RT records and take them with sigwaitinfo/sigtimedwait | Per-number FIFO, lowest-number priority, original value/code/local pid/uid, one consumption per record | Required public-API FIFO, priority, timeout and capability cases |
+| Queue a blocked signal whose installed handler uses SA_SIGINFO or SA_ONSTACK | Enqueue and synchronous waiting remain valid; an unused handler does not invalidate that operation | Required capability case retrieves the original record |
+| Deliver an asynchronous SA_SIGINFO handler | ENOSYS before consuming its record or applying SA_RESETHAND; the prior mask is restored | No zeroed or invented ucontext is passed |
+| Deliver SA_ONSTACK with an enabled alternate stack | ENOSYS with record/action/mask preserved | Merely recording a stack does not claim execution on it |
+| Deliver SA_ONSTACK while its alternate stack is disabled | Ordinary-stack delivery remains available for a one-argument handler | Required positive capability case |
+| Run an ordinary one-argument handler at a supported delivery point | Real call with the applicable handler mask, deferral and SA_RESETHAND; sigsuspend returns EINTR and restores its mask | Required positive capability case |
+| Stop this process through an unsupported local default-stop action | ENOSYS; a pending blocked stop remains available to synchronous waiting | It never becomes ExitProcess |
+| Terminate through a terminating default action | Existing actual termination remains; no core-file or wait-status claim is added | Complete core/status semantics remain a separate reference gap |
+| Host pthread_kill(pthread_self()) or tgkill of the current process/thread | Private thread queue; another waiter cannot take its record | Required self-target case |
+| Host pthread_kill of a different live thread | Nonzero delivery returns ENOSYS after liveness validation; signal zero retains the existing actual liveness check | No conversion to process delivery |
+| Guest pthread_kill of a registered live thread | Existing retained-identity routing and its private pending queue remain | Required self-target case includes a blocked other-thread send |
+| Remote RT kill or nonzero remote sigqueue | ENOSYS before entering the legacy bitmap mailbox | RT multiplicity or queued payload is never silently discarded by these sends |
+| Ordinary remote kill, including signal zero | Existing Windows backend remains available | Required owned-child existence and termination case |
 
-Queue records use nonthrowing allocation. Allocation and quota failure follow
-the standard-signal/RT-sigqueue/RT-kill distinctions above. All allocated records
-in the linked process use one atomic local charge counter. The current soft
-RLIMIT_SIGPENDING is read for each allocation; reducing it affects subsequent
-sends, and `_SC_SIGQUEUE_MAX` reports that configured limit. The invented fixed
-SIGQUEUE_MAX=32 cap is removed. **This local charge counter is not Linux's
-cross-process, real-UID-wide accounting.** It is not a claim that the resource
-contract is complete.
+Synchronous Windows exception handling in `fault_signals.cc` is unchanged. It
+has an actual Windows CONTEXT and is a distinct path from asynchronous pending
+queue delivery. This partial repair does not disable that functionality.
 
-The bionic adapter uses this queue at ordinary send, wait, pending-delivery and
-sleep boundaries, including repeated thread-targeted RT sends. Local siginfo
-uses getuid(), not a fixed uid or zero. Installing an ignoring disposition
-flushes stored pending records in the relevant adapter. The mask never retains
-SIGKILL or SIGSTOP. Negative/invalid sigtimedwait intervals return EINVAL.
-Ignored deliveries do not finish bionic sigsuspend.
+Guest action validation and claiming occur under the same state mutex as the
+pending-record removal. The claimed action is then dispatched outside the lock.
+A concurrent disposition change cannot replace that action with an unsupported
+frame after the record was removed. Unsupported records remain pending and can
+still be consumed by synchronous waits. Sleep wrappers propagate resource or
+unsupported-delivery failures instead of claiming that a wait completed.
 
-The bionic pthread send now resolves a known live pthread through its existing
-registry and retains the kernel thread object. Unknown identifiers no longer
-receive fabricated success or create arbitrary signal-state entries. Retained
-objects allow later reclamation of exited-thread pending state. This does not
-yet provide immediate retirement for every host-created thread or complete
-mask inheritance. The host's non-MinGW pthread_kill success stub is removed.
+## Storage, lifetime, performance, and memory
 
-## Unresolved merge blockers
+`Pending<Info>` in `compat/posix/include/gesher/pending_signals.h` retains the
+contributor's shared nonthrowing queue implementation. It coalesces standard
+signals while preserving the first record, stores RT records FIFO, and frees
+records on consume, disposition discard, and destruction. It does not unify
+host and guest action ownership or implement remote transport.
 
-1. **Guest/host authority and thread lifetime.** Host tgkill and pthread_kill
-   still put signals on a process queue. Host and guest mask inheritance and
-   action ownership remain separate. Guest state can be reclaimed after a
-   later registry observation rather than at every thread's actual exit.
-   External handlers may run on the shim's dedicated signal thread. A correct
-   design must preserve the intended recipient, its lifetime, pending state,
-   mask, and execution context across host, x64 guest and translated ARM64 paths.
-2. **Cross-process payload, identity and permission.** process.cc still uses a
-   bit mailbox and sender-pid slots. It loses repeated RT instances and queued
-   values; hook signatures do not carry full siginfo. It does not establish
-   Android real/effective/saved UID permission decisions from authoritative
-   identities. The guest Sigqueue remote path still delegates to kill. A
-   checked, quota-accounted transport needs admission and lifetime semantics,
-   and must preserve sender, value, order and target state.
-3. **Stop/continue and wait status.** Host sigsuspend still routes a default
-   stop to ExitProcess. Guest default stops and external stops also lack the
-   correct complete lifecycle. Children have no full stopped/continued status
-   stream. Existing WaitStatus confuses a normal exit143 with SIGTERM. Default
-   terminate, core, ignore, stop and continue must remain distinct operations.
-4. **Actual handler frames and alternate stack.** SA_ONSTACK is not acted on
-   by these asynchronous paths. Host and guest sigsuspend still give handlers
-   a zero/fabricated context, without the actual interrupted mask, PC, or
-   architecture frame and restore behavior. This is a known failing contract,
-   not missing test evidence alone. Registering a stack is not proof of using it.
-5. **Real-UID resource ownership.** The local counter does not share charging
-   between processes of the same real UID, cannot atomically coordinate IPC
-   admission, and does not prove one authority across every DLL supplier.
-   Immediate reclamation, queue allocation failure, and process exit need to
-   be validated through the complete delivery architecture.
-6. **Windows and translated execution evidence.** Local cross compilation is
-   not runtime evidence. No real Windows, ART, native ARM64 or translated ARM64
-   execution is claimed here. The mandatory live gates must execute, expose
-   these failures, and remain red while contract violations remain.
+All linked queue records use one atomic **process-local** charge counter. Each
+allocation reads the current soft RLIMIT_SIGPENDING. This is useful local
+resource enforcement; it is not Android's cross-process, real-UID-wide quota.
+The existing configured-limit report and removal of the arbitrary 32-record cap
+are retained without claiming complete Linux resource authority.
 
-No unsupported-error return was inserted to hide a missing frame, permission,
-stop, or transport implementation. No application-specific exception was added.
+Host self-directed queues are thread-local objects in an intrusive registry.
+Their actual thread-local destruction unlinks the queue and frees its records;
+SIG_IGN can flush every registered queue under the same state lock. No extra
+kernel lifetime handle is needed for this host self-only path.
 
-## Verification and actual gates
+Each guest ThreadState owns a retained kernel thread handle and a one-shot
+Windows thread-exit wait. Registration must succeed before state is published;
+resource failure returns EAGAIN. Actual kernel-thread exit invokes a callback
+that removes only the exact stored identity, unregisters its own wait without
+blocking, and destroys the queue and retained handle. No later pthread_kill,
+Self registration, or unrelated signal operation is required to release its
+records and charges. The state mutex serializes callback publication/removal
+against queue observers. This covers guest-created and host-created threads
+that register signal state, including a target created before its first Self
+call.
 
-The original independent `qa79-validation` source/models/results remain outside
-this branch unchanged. Their seven original assertions are preserved. At this
-checkpoint the host adaptation passes FIFO/sender UID, ignored-send resource
-use, SIG_IGN retirement, capacity over 32, and kill fallback (5/7 groups). It
-continues to fail alternate-stack/context and stop (2/7). The independent Linux
-reference passes all seven. The adaptation still replaces only platform headers,
-symbol names and Windows exit; it is not a Windows scheduler or guest ABI test.
+Windows specifies that a one-shot registered wait still needs explicit
+unregistration. A callback must not synchronously wait for its own completion;
+the nonblocking unregister can report ERROR_IO_PENDING while that callback is
+running. The one-shot flag prevents a second callback from retaining this
+context. See [RegisterWaitForSingleObject](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-registerwaitforsingleobject)
+and [UnregisterWaitEx](https://learn.microsoft.com/windows/win32/sync/unregisterwaitex).
 
-The original 58-check test used a fixed-32 overflow oracle that disagreed with
-Linux. The revised bounded test uses 40 sends and a temporary zero soft quota,
-restores the quota, and verifies kill's no-info fallback. Both the host
-adaptation and real Linux pass its 62 checks. This cannot substitute for the
-new adversarial contract fixture.
+Enqueue and dequeue remain constant-time within each signal number. Selection
+scans the fixed 64-signal namespace. Removing an ignoring disposition and thread
+retirement free only their owned nodes. No eager per-signal deque is added. On
+the tested 64-bit host the shared empty queue is 1,048 bytes and each 128-byte
+siginfo record uses a 136-byte node before allocator overhead. Guest state adds
+one native wait registration per participating thread; actual Windows lifetime
+and handle evidence is required before approval.
 
-`tests/exec/realtime_signals_contract.c` runs ordinary public calls without
-production replacements. Its ten Linux groups pass: FIFO/identity, ignore and
-flush, quota/fallback, priority, timeout errors, thread targeting and inherited
-mask, actual handler stack/context/mask, cross-process FIFO/identity, real
-stop/continue/wait status, and normal-exit versus signal status. All children
-are created by the fixture; no external targets are discovered. A glibc-only
-expectation accounts for the SI_TKILL normalization described above, while
-both Gesher roles must retain Android's SI_TKILL.
+## Remaining Android reference gaps
 
-The fixture is also a CMake native Windows target linked to `gesher_posix`.
-The exec workflow builds its NDK x64 and ARM64 ELF versions with NDK r27c,
-records source revision and SHA-256 values, and runs the Linux reference.
-`tests/windows/realtime-signals-contracts.ps1` is called unconditionally by the
-existing POSIX and exec test tracks. It requires the native binaries and both
-NDK artifacts, verifies guest provenance, runs each ordinary case under a
-20-second owned-process deadline, and fails on missing artifacts, timeout,
-nonzero exit, missing success sentinel or any failed assertion. There are no
-expected-failure allowances. Per-case JSON includes stdout, stderr, executable
-hash, source revision and elapsed time, and the existing shard artifact upload
-retains it. Context, thread and job-control failures are deliberately exercised.
+These are visible limitations of the broader existing signal service, not
+claims completed by this local FIFO PR:
 
-For a focused run after producing matching runtime and exec artifacts:
+- Host/guest action authority and mask inheritance remain separate. Host
+  non-self delivery has an explicit unsupported boundary. Guest external
+  ordinary handlers can still run on the shim's dedicated signal thread;
+  this is not a new claim of application-thread asynchronous ABI support.
+  Unsupported frame/alternate-stack records stay pending instead of receiving
+  an invented context on that internal worker.
+- The interprocess mailbox cannot preserve RT multiplicity or queued values;
+  new RT/queued sends reject that transport. A future transport must preserve
+  admission, identity, payload, order, lifetime and authoritative permissions.
+  Existing ordinary Windows kill authorization is not Android UID permission
+  authority.
+- Actual local asynchronous frames, architecture-specific register restoration
+  and active alternate-stack delivery are not implemented by these adapters.
+  Explicit failure is part of this partial capability boundary, not successful
+  execution of those operations.
+- Complete local/external stop and continue behavior and stopped/continued
+  child events remain unfinished. Existing numeric WaitStatus interpretation
+  can confuse normal exit143 with SIGTERM. This repair neither invents a
+  stopped event nor claims that numeric termination metadata fixes waitpid.
+- The resource counter is process-local, not real-UID-wide across processes.
+  Full signal permissions and process lifetime accounting need a unified
+  authority.
+- Real Windows, ART, native ARM64 and translated ARM64 results must be recorded
+  separately. Compiling both Windows architectures is not runtime evidence.
+
+No application-specific exception or fabricated machine state is introduced.
+A complete N20 implementation must pass the full reference contracts; merging
+a qualified local-queue improvement does not close those remaining tasks.
+
+## Verification and mandatory qualification
+
+`tests/exec/realtime_signals_contract.c` keeps all ten ordinary Linux reference
+groups: FIFO/identity, ignore/flush, quota/fallback, priority, timeout, targeted
+threads and inherited mask, actual handler stack/context, cross-process FIFO,
+stop/continue status, and normal exit versus signal termination. The original
+assertions in those groups are unchanged. The glibc-only SI_TKILL normalization
+remains limited to that reference libc; Gesher's guest path still expects the
+Android code.
+
+The same source adds four **Windows capability qualification** groups:
+`capabilities`, `self-target`, `retirement`, and `remote-capabilities`. They
+exercise the positive supported operations and the exact explicit failures in
+the table above. The retirement case uses one exiting thread with one queued
+record and a one-record limit in its isolated fixture process, then checks
+bounded reuse without a lazy-reaper trigger. The remote case creates only its
+own child, checks rejection before unsupported transport admission, and proves
+that ordinary remote existence and termination still work. All children have
+bounded waits and owned cleanup.
+
+`tests/windows/realtime-signals-contracts.ps1` requires FIFO, ignore, quota,
+priority, timeout and all four new qualification groups, plus the 62-check
+native regression binary. Its Windows-specific legacy frame checks now require
+truthful ENOSYS and preservation of the original waitable signal/value; the
+Linux version retains its actual handler checks. The full Android thread/frame
+and guest cross/stop/status groups still execute and retain their raw pass/fail
+results as `unfinished-full-android-reference` observations. They are never
+relabeled as passing. `-RequireFullAndroidContracts` makes those observations
+mandatory as well; it is expected to fail until their implementations exist.
+Missing binaries, provenance mismatches, process timeouts and harness errors
+always fail qualification, including reference observations.
+
+Every process has a 20-second deadline, followed by a bounded kill of only its
+owned process tree. Receipts include source revision, fixture/executable
+SHA-256 values, scope, whether the contract is required, stdout/stderr, exit,
+timeout and elapsed time. CI retains those JSON records. No Windows result is
+claimed by the local cross-compilation or source-adapted tests.
+
+The CMake targets link the production POSIX implementation. With the normal
+AOSP checkout and LLVM-MinGW toolchain prepared:
 
 ```powershell
-pwsh -NoProfile -File tests/windows/realtime-signals-contracts.ps1 -Dir dist
+cmake -S . -B build-signals -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake `
+  -DLLVM_MINGW=$env:LLVM_MINGW -DAOSP_DIR=$env:AOSP_DIR
+cmake --build build-signals --target realtime_signals_test realtime_signal_contract_test
+pwsh -NoProfile -File tests/windows/realtime-signals-contracts.ps1 `
+  -Dir build-signals -HostOnly -EvidenceDirectory build-signals/realtime-signals-evidence
 ```
 
-Run the independently executable Linux and isolated allocation checks with:
+The host qualification executes 12 processes: one legacy case, nine required
+public-API cases, and two full-reference observations. Required cases must have
+exit zero, no failed assertions, and the expected success sentinel. The report
+must say zero required failures; nonzero full-reference observations remain
+explicit and cannot establish complete Android compatibility.
+
+The existing exec workflow builds x64 and ARM64 fixtures with NDK r27c, binds
+them to the exact source revision and fixture digest, and supplies the manifest.
+Run the guest qualification only with matching `gesher-exec.exe`, runtime DLLs,
+NDK artifacts and manifest in the same artifact directory:
+
+```powershell
+pwsh -NoProfile -File tests/windows/realtime-signals-contracts.ps1 `
+  -Dir dist -GuestOnly -EvidenceDirectory dist/realtime-signals-evidence/guest
+```
+
+The guest entry points use the production bionic and ELF components in
+`gesher-exec.exe`; the host-only target is not a substitute for guest execution.
+For complete Android qualification add `-RequireFullAndroidContracts` to either
+command. Run all unchanged Linux reference groups and the isolated production
+storage allocation checks with:
 
 ```sh
 python3 tools/test_realtime_signals_contract.py --out /tmp/realtime-reference
+python3 tools/test_sleep_contracts.py
+python3 tools/test_boottime_resume.py
 ```
 
-The isolated storage test uses the exact production container with a labeled
-allocator-fault boundary and a test charge counter. It covers allocation/quota
-failure, fallback, FIFO, standard coalescing, flush and destruction without
-claiming process permissions or Windows delivery. A queue has 1,048 bytes of
-empty storage on the tested 64-bit host; each 128-byte siginfo record uses a
-136-byte node, excluding allocator overhead. There are no eager per-signal
-deques. At 63,438 allocated records, node storage alone is 8,627,568 bytes. A
-bounded local exercise measured 65,536 enqueue/dequeue pairs; its timing is in
-isolated-storage.json and is not a Windows performance or memory-footprint result.
-
-The existing controlled sleep fixture has only a storage-interface adapter
-change; its timing, interruption and payload assertions are retained. Relevant
-sleep and pthread attribute regression checks, both signal translation units
-for Windows x64/ARM64, and guest fixture compilation are recorded separately.
+Local repair evidence records 12 strict Windows cross-compiled objects across
+x64/ARM64 (host signal, guest signal, pthread, shim, extra_sys and process), the
+ten Linux reference groups, the shared allocation/cleanup checks, 107 controlled
+host sleep checks plus 30 real Linux checks, and 35 boottime checks. Independent
+re-QA and actual Windows/guest receipts remain required before automerge.

@@ -13,6 +13,9 @@
 #include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 #if !defined(_WIN32)
 #include <spawn.h>
 #include <sys/wait.h>
@@ -257,6 +260,207 @@ static void handler(void) {
   pthread_sigmask(SIG_SETMASK, &old, NULL);
 }
 
+// Qualification for the currently supported Windows boundary. The full
+// Android/Linux contracts above remain separate reference observations.
+static volatile sig_atomic_t ordinary_calls, ordinary_mask;
+static void ordinary_handler(int sig) {
+  sigset_t active;
+  pthread_sigmask(SIG_BLOCK, NULL, &active);
+  ordinary_mask = sigismember(&active, sig) == 1 && sigismember(&active, SIGUSR2) == 1;
+  ordinary_calls += 1;
+}
+static void capabilities(void) {
+  const int sig = SIGRTMIN;
+  sigset_t blocked = one(sig), original;
+  sigaddset(&blocked, SIGUSR2);
+  check(pthread_sigmask(SIG_BLOCK, &blocked, &original) == 0, "block capability fixture signals");
+  struct sigaction saved, action = {0};
+  sigaction(sig, NULL, &saved);
+  stack_t stack = {0}, oldstack;
+  stack.ss_sp = alternate;
+  stack.ss_size = sizeof(alternate);
+  check(sigaltstack(&stack, &oldstack) == 0, "record alternate stack without inventing a handler frame");
+  sigset_t temporary;
+  sigfillset(&temporary);
+  sigdelset(&temporary, sig);
+  for (int mode = 0; mode < 2; ++mode) {
+    memset(&action, 0, sizeof(action));
+    if (mode == 0) action.sa_sigaction = inspect_handler;
+    else action.sa_handler = ordinary_handler;
+    action.sa_flags = (mode == 0 ? SA_SIGINFO : SA_ONSTACK) | SA_RESETHAND;
+    sigemptyset(&action.sa_mask);
+    check(sigaction(sig, &action, NULL) == 0, "install disposition for deferred capability test");
+    union sigval value = {.sival_int = 640 + mode};
+    check(sigqueue(getpid(), sig, value) == 0,
+          "blocked enqueue remains valid despite unused asynchronous handler flags");
+#if !defined(_WIN32)
+    sigset_t requested = one(sig);
+    check(pthread_sigmask(SIG_UNBLOCK, &requested, NULL) == ENOSYS,
+          "guest mask change rejects unsupported pending delivery before changing the mask");
+#endif
+    errno = 0;
+    check(sigsuspend(&temporary) == -1 && errno == ENOSYS,
+          "unsupported handler delivery reports ENOSYS before consuming the record");
+    sigset_t after;
+    pthread_sigmask(SIG_BLOCK, NULL, &after);
+    check(sigismember(&after, sig) == 1 && sigismember(&after, SIGUSR2) == 1,
+          "unsupported delivery restores the original mask");
+    struct sigaction after_action;
+    sigaction(sig, NULL, &after_action);
+    check((after_action.sa_flags & SA_RESETHAND) != 0 &&
+              after_action.sa_handler == action.sa_handler,
+          "unsupported delivery does not reset its disposition");
+    siginfo_t info = {0};
+    check(take(sig, &info, 0) == sig && info.si_value.sival_int == 640 + mode &&
+              info.si_code == SI_QUEUE && info.si_pid == getpid(),
+          "synchronous wait retrieves the original unsupported-delivery record");
+  }
+  check(ordinary_calls == 0 && handler_value == 0,
+        "unsupported delivery never invokes a handler with an invented context or stack");
+#if !defined(_WIN32)
+  sigset_t requested = one(sig);
+  check(pthread_sigmask(SIG_UNBLOCK, &requested, NULL) == 0,
+        "unused unsupported disposition does not prevent an empty mask change");
+  union sigval rejected = {.sival_int = 709};
+  check(sigqueue(getpid(), sig, rejected) == -1 && errno == ENOSYS,
+        "guest immediate unsupported handler request fails before admission");
+  siginfo_t absent;
+  check(take(sig, &absent, 0) == -1 && errno == EAGAIN,
+        "failed immediate guest send creates no pending record");
+  pthread_sigmask(SIG_BLOCK, &requested, NULL);
+#endif
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = ordinary_handler;
+  action.sa_flags = SA_RESETHAND;
+  sigemptyset(&action.sa_mask);
+  sigaction(sig, &action, NULL);
+  union sigval value = {.sival_int = 710};
+  check(sigqueue(getpid(), sig, value) == 0, "queue supported ordinary handler");
+  check(sigsuspend(&temporary) == -1 && errno == EINTR,
+        "ordinary handler executes and sigsuspend returns EINTR");
+  check(ordinary_calls == 1 && ordinary_mask, "ordinary handler observes deferral and the temporary mask");
+  sigaction(sig, NULL, &action);
+  check(action.sa_handler == SIG_DFL, "successful SA_RESETHAND delivery resets the action");
+  stack.ss_flags = SS_DISABLE;
+  check(sigaltstack(&stack, NULL) == 0, "disable alternate stack");
+  action.sa_handler = ordinary_handler;
+  action.sa_flags = SA_ONSTACK;
+  sigaction(sig, &action, NULL);
+  check(sigqueue(getpid(), sig, value) == 0 && sigsuspend(&temporary) == -1 && errno == EINTR &&
+            ordinary_calls == 2,
+        "SA_ONSTACK with a disabled alternate stack uses the supported ordinary stack");
+  errno = 0;
+  check(kill(getpid(), SIGSTOP) == -1 && errno == ENOSYS,
+        "local default SIGSTOP reports unsupported without terminating the process");
+  sigset_t stopset = one(SIGTSTP);
+  pthread_sigmask(SIG_BLOCK, &stopset, NULL);
+  struct sigaction stopaction = {0}, oldstop;
+  stopaction.sa_handler = SIG_DFL;
+  sigaction(SIGTSTP, &stopaction, &oldstop);
+  check(kill(getpid(), SIGTSTP) == 0, "blocked stop signal remains synchronously waitable");
+  sigfillset(&temporary);
+  sigdelset(&temporary, SIGTSTP);
+  check(sigsuspend(&temporary) == -1 && errno == ENOSYS,
+        "default-stop delivery cannot be converted to process exit");
+  siginfo_t stopinfo;
+  check(take(SIGTSTP, &stopinfo, 0) == SIGTSTP, "unsupported default stop retains its pending record");
+  sigaction(SIGTSTP, &oldstop, NULL);
+  sigaction(sig, &saved, NULL);
+  sigaltstack(&oldstack, NULL);
+  pthread_sigmask(SIG_SETMASK, &original, NULL);
+}
+
+static void* self_targeted(void* unused) {
+  (void)unused;
+  sigset_t set = one(SIGRTMIN);
+  int okay = pthread_sigmask(SIG_BLOCK, &set, NULL) == 0;
+  for (int i = 0; i < 3; ++i) okay &= pthread_kill(pthread_self(), SIGRTMIN) == 0;
+  atomic_store(&thread_ready, 1);
+  for (int i = 0; i < 300 && !atomic_load(&thread_go); ++i) step();
+#if defined(_WIN32)
+  const int expected = 3;
+#else
+  const int expected = 4;
+#endif
+  for (int i = 0; i < expected; ++i) {
+    siginfo_t info = {0};
+    okay &= take(SIGRTMIN, &info, 0) == SIGRTMIN && info.si_pid == getpid();
+  }
+  atomic_store(&thread_ok, okay);
+  return NULL;
+}
+static void self_target(void) {
+  sigset_t set = one(SIGRTMIN), old;
+  pthread_sigmask(SIG_BLOCK, &set, &old);
+  pthread_t thread;
+  int created = pthread_create(&thread, NULL, self_targeted, NULL);
+  check(created == 0, "create self-directed queue owner");
+  if (created != 0) return;
+  for (int i = 0; i < 300 && !atomic_load(&thread_ready); ++i) step();
+  check(atomic_load(&thread_ready), "owner queued its own RT records");
+  check(pthread_kill(thread, 0) == 0, "signal zero still validates a live other thread");
+#if defined(_WIN32)
+  check(pthread_kill(thread, SIGRTMIN) == ENOSYS,
+        "host non-self targeting reports unsupported instead of process delivery");
+#else
+  check(pthread_kill(thread, SIGRTMIN) == 0, "guest retained-identity target accepts a blocked RT record");
+#endif
+  siginfo_t info;
+  check(take(SIGRTMIN, &info, 0) == -1 && errno == EAGAIN,
+        "a competing waiter cannot consume another thread's own RT records");
+  atomic_store(&thread_go, 1);
+  check(pthread_join(thread, NULL) == 0 && atomic_load(&thread_ok),
+        "owner consumes its complete queue before actual thread exit");
+  pthread_sigmask(SIG_SETMASK, &old, NULL);
+}
+
+static void* leave_pending(void* unused) {
+  (void)unused;
+  sigset_t set = one(SIGRTMIN);
+  int okay = pthread_sigmask(SIG_BLOCK, &set, NULL) == 0 &&
+             pthread_kill(pthread_self(), SIGRTMIN) == 0;
+  atomic_store(&thread_ok, okay);
+  return NULL;
+}
+static void retirement(void) {
+  sigset_t set = one(SIGRTMIN), old;
+  pthread_sigmask(SIG_BLOCK, &set, &old);
+  struct rlimit limit;
+  int got = getrlimit(RLIMIT_SIGPENDING, &limit);
+  check(got == 0, "read queue limit for one-record lifetime check");
+  if (got != 0) return;
+  struct rlimit single = limit;
+  single.rlim_cur = 1;
+  int changed = setrlimit(RLIMIT_SIGPENDING, &single);
+  check(changed == 0, "set a one-record limit in this isolated fixture process");
+  if (changed != 0) return;
+  pthread_t thread;
+  int created = pthread_create(&thread, NULL, leave_pending, NULL);
+  check(created == 0, "create one exiting queue owner");
+  if (created == 0) {
+    check(pthread_join(thread, NULL) == 0 && atomic_load(&thread_ok),
+          "thread exits with exactly one queued RT record");
+    // Kernel-exit callbacks may be scheduled after join. Only ordinary
+    // process queue operations follow: no Self-registration or pthread_kill
+    // operation is allowed to act as a lazy-reaper trigger.
+    union sigval value = {.sival_int = 811};
+    int admitted = 0;
+    for (int i = 0; i < 200; ++i) {
+      if (sigqueue(getpid(), SIGRTMIN, value) == 0) { admitted = 1; break; }
+      if (errno != EAGAIN) break;
+      step();
+    }
+    check(admitted, "actual exit releases queued-record charge without unrelated reaping");
+    if (admitted) {
+      siginfo_t info = {0};
+      check(take(SIGRTMIN, &info, 0) == SIGRTMIN && info.si_value.sival_int == 811,
+            "remaining thread can use the released queue capacity");
+    }
+  }
+  check(setrlimit(RLIMIT_SIGPENDING, &limit) == 0, "restore queue limit after lifetime check");
+  pthread_sigmask(SIG_SETMASK, &old, NULL);
+}
+
 #if !defined(_WIN32)
 // All children are created by this fixture. No signal targets are discovered.
 static int collect(pid_t pid, int* status, int options) {
@@ -364,8 +568,72 @@ static void exit_status(const char* path) {
 }
 #endif
 
+static void remote_capabilities(const char* path) {
+#if defined(_WIN32)
+  (void)path;
+  char executable[MAX_PATH], command[MAX_PATH + 64];
+  DWORD length = GetModuleFileNameA(NULL, executable, sizeof(executable));
+  check(length != 0 && length < sizeof(executable), "resolve this fixture executable");
+  if (length == 0 || length >= sizeof(executable)) return;
+  snprintf(command, sizeof(command), "\"%s\" --child-remote-capability", executable);
+  STARTUPINFOA startup = {0};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process = {0};
+  int created = CreateProcessA(executable, command, NULL, NULL, FALSE, 0, NULL, NULL,
+                               &startup, &process) != 0;
+  check(created, "create owned Windows receiver");
+  if (!created) return;
+  CloseHandle(process.hThread);
+  pid_t pid = (pid_t)process.dwProcessId;
+#else
+  int ready = -1;
+  pid_t pid = spawn_child(path, "--child-remote-capability", &ready);
+  check(pid > 0, "create owned ELF receiver");
+  if (pid <= 0) return;
+  char byte = 0;
+  int initialized = read(ready, &byte, 1) == 1 && byte == 'R';
+  close(ready);
+  check(initialized, "owned ELF receiver announces readiness");
+  if (!initialized) { cleanup_child(pid); return; }
+#endif
+  check(kill(pid, 0) == 0, "ordinary remote signal zero preserves existence checking");
+  union sigval value = {.sival_int = 919};
+  errno = 0;
+  check(kill(pid, SIGRTMIN) == -1 && errno == ENOSYS,
+        "remote RT kill cannot claim multiplicity through a bitmap mailbox");
+  errno = 0;
+  check(sigqueue(pid, SIGRTMIN, value) == -1 && errno == ENOSYS,
+        "remote RT sigqueue rejects unsupported queued transport");
+  errno = 0;
+  check(sigqueue(pid, SIGUSR1, value) == -1 && errno == ENOSYS,
+        "remote standard sigqueue cannot silently discard its value");
+  check(kill(pid, SIGTERM) == 0, "ordinary remote termination remains supported");
+#if defined(_WIN32)
+  DWORD waited = WaitForSingleObject(process.hProcess, 2000);
+  check(waited == WAIT_OBJECT_0, "owned receiver actually terminates");
+  if (waited != WAIT_OBJECT_0) {
+    TerminateProcess(process.hProcess, 1);
+    WaitForSingleObject(process.hProcess, 2000);
+  }
+  CloseHandle(process.hProcess);
+#else
+  int status = 0;
+  int result = collect(pid, &status, 0);
+  check(result == pid, "owned receiver actually terminates and is collected");
+  if (result == 0) cleanup_child(pid);
+#endif
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) return 2;
+  if (strcmp(argv[1], "--child-remote-capability") == 0) {
+#if !defined(_WIN32)
+    if (write(3, "R", 1) != 1) return 4;
+    close(3);
+#endif
+    for (int i = 0; i < 500; ++i) step();
+    return 0;
+  }
 #if !defined(_WIN32)
   if (strcmp(argv[1], "--child-cross") == 0) return child_cross();
   if (strcmp(argv[1], "--child-stop") == 0) {
@@ -386,6 +654,10 @@ int main(int argc, char** argv) {
   else if (strcmp(argv[1], "timeout") == 0) timeout_errors();
   else if (strcmp(argv[1], "thread") == 0) thread_target();
   else if (strcmp(argv[1], "handler") == 0) handler();
+  else if (strcmp(argv[1], "capabilities") == 0) capabilities();
+  else if (strcmp(argv[1], "self-target") == 0) self_target();
+  else if (strcmp(argv[1], "retirement") == 0) retirement();
+  else if (strcmp(argv[1], "remote-capabilities") == 0) remote_capabilities(argc >= 3 ? argv[2] : argv[0]);
 #if !defined(_WIN32)
   else if (argc == 3 && strcmp(argv[1], "cross") == 0) cross_process(argv[2]);
   else if (argc == 3 && strcmp(argv[1], "stop") == 0) stop_continue(argv[2]);

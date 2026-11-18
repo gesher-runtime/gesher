@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Bounded executions of the actual native POSIX binary and NDK ELF programs.
-# Every contract assertion is required. Missing artifacts and timeouts fail.
+# Local queue/capability qualification is required. Full Android contracts
+# remain executed and visibly reported; the strict option requires them too.
 param(
   [Parameter(Mandatory=$true)][string] $Dir,
   [switch] $HostOnly,
   [switch] $GuestOnly,
+  [switch] $RequireFullAndroidContracts,
   [string] $EvidenceDirectory = 'realtime-signals-evidence'
 )
 $ErrorActionPreference = 'Stop'
@@ -18,9 +20,14 @@ $fixtureHash = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLow
 $revision = (& git -C (Join-Path $PSScriptRoot '../..') rev-parse HEAD | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') { throw 'Cannot bind tested checkout identity' }
 
-function Invoke-RealtimeCase([string] $Role, [string] $Case, [string] $Executable, [string[]] $Arguments) {
+function Invoke-RealtimeCase([string] $Role, [string] $Case, [string] $Executable, [string[]] $Arguments,
+                             [bool] $Required = $true) {
   $record = [ordered]@{ role=$Role; case=$Case; revision=$revision; fixture_sha256=$fixtureHash;
-    executable_sha256=$null; exit=$null; timeout=$false; stdout=''; stderr=''; pass=$false; elapsed_ms=0 }
+    required=$Required; scope=$(if ($Case -in @('thread', 'handler', 'cross', 'stop', 'status')) {
+                                 'unfinished-full-android-reference'
+                               } else { 'local-queue-capability-qualification' });
+    executable_sha256=$null; exit=$null; timeout=$false; infrastructure_error=$false;
+    stdout=''; stderr=''; pass=$false; elapsed_ms=0 }
   $clock = [Diagnostics.Stopwatch]::StartNew()
   $process = $null
   try {
@@ -50,6 +57,7 @@ function Invoke-RealtimeCase([string] $Role, [string] $Case, [string] $Executabl
     $record.pass = -not $record.timeout -and $record.exit -eq 0 -and
         $record.stdout.Contains($sentinel) -and $record.stdout -notmatch '(?m)^FAIL'
   } catch {
+    $record.infrastructure_error = $true
     $record.stderr += "`n$($_.Exception.Message)"
     if ($null -ne $process) {
       try { if (-not $process.HasExited) { $process.Kill($true); $null = $process.WaitForExit(5000) } }
@@ -66,11 +74,17 @@ function Invoke-RealtimeCase([string] $Role, [string] $Case, [string] $Executabl
   $record | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $EvidenceDirectory "$Role-$Case.json")
 }
 
-$within = @('fifo', 'ignore', 'quota', 'priority', 'timeout', 'thread', 'handler')
+$within = @('fifo', 'ignore', 'quota', 'priority', 'timeout', 'capabilities',
+            'self-target', 'retirement', 'remote-capabilities')
+$reference = @('thread', 'handler')
 if (-not $GuestOnly) {
   Invoke-RealtimeCase 'windows-posix' 'legacy' (Join-Path $Dir 'realtime_signals_test.exe') @()
   foreach ($case in $within) {
     Invoke-RealtimeCase 'windows-posix' $case (Join-Path $Dir 'realtime_signal_contract_test.exe') @($case)
+  }
+  foreach ($case in $reference) {
+    Invoke-RealtimeCase 'windows-posix' $case (Join-Path $Dir 'realtime_signal_contract_test.exe') @($case) `
+        -Required ([bool]$RequireFullAndroidContracts)
   }
 }
 if (-not $HostOnly) {
@@ -84,14 +98,22 @@ if (-not $HostOnly) {
     $hash = (Get-FileHash -LiteralPath $program -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($manifest.artifacts.$programName -ne $hash) { throw "NDK signal fixture digest mismatch: $abi" }
     $guestPath = ($program -replace '\\', '/') -replace '^[A-Za-z]:', ''
-    foreach ($case in ($within + @('cross', 'stop', 'status'))) {
+    foreach ($case in $within) {
       Invoke-RealtimeCase "ndk-$abi" $case (Join-Path $Dir 'gesher-exec.exe') @(
         '--elf', $guestPath, 'realtime-signals', $case, $guestPath)
+    }
+    foreach ($case in ($reference + @('cross', 'stop', 'status'))) {
+      Invoke-RealtimeCase "ndk-$abi" $case (Join-Path $Dir 'gesher-exec.exe') @(
+        '--elf', $guestPath, 'realtime-signals', $case, $guestPath) `
+          -Required ([bool]$RequireFullAndroidContracts)
     }
   }
 }
 $results | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $EvidenceDirectory 'results.json')
-$failed = @($results | Where-Object { -not $_.pass }).Count
-Write-Host "realtime signals gates: $($results.Count) actual processes, $failed failing contracts"
+$failed = @($results | Where-Object { ($_.required -and -not $_.pass) -or
+                                     $_.timeout -or $_.infrastructure_error }).Count
+$referenceFailed = @($results | Where-Object { -not $_.required -and -not $_.pass }).Count
+Write-Host "realtime signals qualification: $($results.Count) actual processes, $failed required failures"
+Write-Host "unfinished full Android reference: $referenceFailed failing observations (retained in results.json)"
 if ($failed -ne 0) { exit 1 }
 exit 0

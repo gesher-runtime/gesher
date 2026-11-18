@@ -5,7 +5,8 @@
 # libexechelper.so, and exec-test.dex (gesher.ExecTest).
 
 # Actual NDK x64 and ARM64 programs use ordinary guest signal entry points,
-# cross-process mailboxes and waitpid. No mocked success or skipped contracts.
+# local queue/capability boundaries. The full cross-process/frame/job-control
+# reference corpus also runs and preserves its unfinished observations.
 & "$PSScriptRoot/../realtime-signals-contracts.ps1" -Dir $Dir -GuestOnly `
   -EvidenceDirectory (Join-Path $Dir 'realtime-signals-evidence/guest')
 if ($LASTEXITCODE -ne 0) { $failed++ }

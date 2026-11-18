@@ -218,10 +218,19 @@ static void TestSigsuspend() {
   // runs handler, restores thread mask, and returns -1 with EINTR.
   int ret = sigsuspend(&suspend_mask);
   Check("sigsuspend returns -1", ret == -1);
+#if defined(_WIN32)
+  Check("unsupported asynchronous context reports ENOSYS", errno == ENOSYS);
+  Check("unsupported context does not run the handler", !g_handler_called.load());
+  siginfo_t waiting = {};
+  const struct timespec zero = {0, 0};
+  Check("unsupported delivery preserves SIGUSR1", sigtimedwait(&block_set, &waiting, &zero) == SIGUSR1);
+  Check("synchronous wait retains payload value 456", waiting.si_value.sival_int == 456);
+#else
   Check("sigsuspend errno is EINTR", errno == EINTR);
   Check("sigsuspend executed handler", g_handler_called.load());
   Check("handler received SIGUSR1", g_received_signo.load() == SIGUSR1);
   Check("handler received payload value 456", g_received_value.load() == 456);
+#endif
 
   sender.join();
 
@@ -266,10 +275,19 @@ static void TestSigsuspendRealtime() {
 
   int ret = sigsuspend(&suspend_mask);
   Check("sigsuspend RT returns -1", ret == -1);
+#if defined(_WIN32)
+  Check("unsupported asynchronous RT context reports ENOSYS", errno == ENOSYS);
+  Check("unsupported RT context does not run the handler", !g_handler_called.load());
+  siginfo_t waiting = {};
+  const struct timespec zero = {0, 0};
+  Check("unsupported delivery preserves SIGRTMIN", sigtimedwait(&block_set, &waiting, &zero) == SIGRTMIN);
+  Check("synchronous wait retains RT payload 789", waiting.si_value.sival_int == 789);
+#else
   Check("sigsuspend RT errno is EINTR", errno == EINTR);
   Check("sigsuspend RT executed handler", g_handler_called.load());
   Check("handler received SIGRTMIN", g_received_signo.load() == SIGRTMIN);
   Check("handler received RT payload 789", g_received_value.load() == 789);
+#endif
 
   sender.join();
 

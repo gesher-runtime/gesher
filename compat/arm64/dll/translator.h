@@ -22,6 +22,10 @@ void* BindHost(void* fn, int va_list_index = -2);
 // Marks a host function as taking a va_list at `index` (before it is bound).
 void AddVaListFunction(const void* fn, int index);
 
+// A variadic function whose variable arguments are all pointers (scanf).
+// Call its va_list form without copying a fixed guest-stack window.
+void AddPointerVariadicFunction(const void* fn, void* va_fn, int fixed_arguments);
+
 // Places AArch64 instructions in a guest code page (registered as guest code)
 // and returns their address: guest-side implementations (setjmp/longjmp).
 void* EmitGuestCode(const uint32_t* insns, size_t count);

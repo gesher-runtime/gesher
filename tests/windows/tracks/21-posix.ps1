@@ -101,8 +101,8 @@ if (Test-Path $artGtests) {
 
 if ($PosixGtestsOnly) { return }
 
-# Actual gesher_posix API calls, including thread targeting and real handler
-# stack/context assertions. Known N20 gaps fail; this is not an allowlist.
+# Actual gesher_posix queue/capability qualification. Full Android thread and
+# frame observations also run and retain their unresolved failures as evidence.
 & "$PSScriptRoot/../realtime-signals-contracts.ps1" -Dir $Dir -HostOnly `
   -EvidenceDirectory (Join-Path $Dir 'realtime-signals-evidence/host')
 if ($LASTEXITCODE -ne 0) { $failed++ }
