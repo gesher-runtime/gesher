@@ -187,7 +187,6 @@ jint WindowsHost_alarmWait(JNIEnv*, jclass, jlong utcMillis, jboolean wakeup, ji
 
 void WindowsHost_alarmKick(JNIEnv*, jclass) { dev::AlarmKick(); }
 
-jint WindowsHost_sessionDisplayState(JNIEnv*, jclass) { return gesher::devsvc::SessionDisplayState(); }
 jint WindowsHost_appsUseLightTheme(JNIEnv*, jclass) { return gesher::devsvc::AppsUseLightTheme(); }
 
 jintArray WindowsHost_powerStatus(JNIEnv* env, jclass) {
@@ -310,7 +309,6 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeClipboardSequence", "()I", GESHER_JNI(WindowsHost_clipboardSequence)},
     {"nativeAlarmWait", "(JZI)I", GESHER_JNI(WindowsHost_alarmWait)},
     {"nativeAlarmKick", "()V", GESHER_JNI(WindowsHost_alarmKick)},
-    {"nativeSessionDisplayState", "()I", GESHER_JNI(WindowsHost_sessionDisplayState)},
     {"nativeAppsUseLightTheme", "()I", GESHER_JNI(WindowsHost_appsUseLightTheme)},
     {"nativePowerStatus", "()[I", GESHER_JNI(WindowsHost_powerStatus)},
     {"nativeKeepAwake", "(" DEVSVC_STRING "ZZ)Z", GESHER_JNI(WindowsHost_keepAwake)},

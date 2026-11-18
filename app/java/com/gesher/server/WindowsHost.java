@@ -371,22 +371,9 @@ public final class WindowsHost {
         catch (UnsatisfiedLinkError unavailable) { return -1; }
     }
 
-    public static final int DISPLAY_STATE_UNKNOWN = -1;
-    public static final int DISPLAY_STATE_OFF = 0;
-    public static final int DISPLAY_STATE_ON = 1;
-    public static final int DISPLAY_STATE_DIMMED = 2;
-
-    /** Last observed GUID_SESSION_DISPLAY_STATUS, or UNKNOWN if unavailable. */
-    public static int sessionDisplayState() {
-        if (!available()) return DISPLAY_STATE_UNKNOWN;
-        try { return nativeSessionDisplayState(); }
-        catch (UnsatisfiedLinkError unavailable) { return DISPLAY_STATE_UNKNOWN; }
-    }
-
     public static void removeListener(Listener listener) { sListeners.remove(listener); }
 
     private static native int nativeAppsUseLightTheme();
-    private static native int nativeSessionDisplayState();
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();

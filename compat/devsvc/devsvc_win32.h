@@ -66,8 +66,6 @@ void AlarmKick();
 // (bits: 1 high, 2 low, 4 critical, 8 charging, 128 no battery; 255 unknown),
 // battery percent (255 unknown), system status flag (1: battery saver on).
 bool PowerStatus(int out[4]);
-// Observed session display state: -1 unknown, 0 off, 1 on, 2 dimmed.
-int SessionDisplayState();
 // HKCU AppsUseLightTheme: 0 dark, 1 light, -1 unknown/unreadable.
 int AppsUseLightTheme();
 // A power request for the process (PowerCreateRequest/PowerSetRequest, shown by
