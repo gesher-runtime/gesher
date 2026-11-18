@@ -572,7 +572,11 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             Contribution contribution = blob.contributions.get(stage.owner.name);
             return contribution != null && contribution.owner.equals(stage.owner);
         }).count();
-        if (committed >= MAX_COMMITTED) return false;
+        // Replacing this owner's existing contribution does not consume a new
+        // committed-blob slot. A changed install generation is a new owner and
+        // must pass the admission limit independently.
+        boolean newContribution = previous == null || !previous.owner.equals(stage.owner);
+        if (newContribution && committed >= MAX_COMMITTED) return false;
         Map<String, Contribution> contributions = existing == null
                 ? new LinkedHashMap<>() : new LinkedHashMap<>(existing.contributions);
         long committedAt = previous != null && previous.owner.equals(stage.owner)
@@ -642,7 +646,14 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         long now = System.currentTimeMillis();
         Blob blob = accessible(key, owner, now);
         long live = mIndex.blobs.values().stream().filter(item -> liveLease(item, owner, now)).count();
-        if (live >= MAX_LEASED || blob.size > quota(owner, now)) throw limit("Blob lease quota exceeded");
+        Lease previousLease = blob.leases.get(owner.name);
+        boolean renewing = previousLease != null && previousLease.owner.equals(owner)
+                && previousLease.active(now);
+        // Extending an active lease changes neither the leased-blob count nor
+        // its byte charge. Only a genuinely new lease consumes quota.
+        if (!renewing && (live >= MAX_LEASED || blob.size > quota(owner, now))) {
+            throw limit("Blob lease quota exceeded");
+        }
         String text = description == null ? null
                 : description.subSequence(0, Math.min(description.length(), 300)).toString();
         Lease lease = resource ? leaseResource(owner.name, resources -> new Lease(owner, expiry,
