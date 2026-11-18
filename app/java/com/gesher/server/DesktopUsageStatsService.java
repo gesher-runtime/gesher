@@ -5,6 +5,7 @@
 package com.gesher.server;
 
 import android.Manifest;
+import android.app.AppOpsManager;
 import android.app.PendingIntent;
 import android.app.usage.AppStandbyInfo;
 import android.app.usage.BroadcastResponseStatsList;
@@ -39,7 +40,7 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     private final boolean mManaged;
 
     DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file) {
-        this(packages, callers, file, System::currentTimeMillis, SystemClock::elapsedRealtime);
+        this(packages, callers, file, usageClock(), SystemClock::elapsedRealtime);
     }
 
     DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
@@ -47,7 +48,7 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
         this(packages, callers, file, clock, clock);
     }
 
-    private DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
+    DesktopUsageStatsService(PackageManagerService packages, CallerIdentity callers, Path file,
             java.util.function.LongSupplier wall, java.util.function.LongSupplier elapsed) {
         mPackages = packages;
         mCallers = callers;
@@ -56,6 +57,12 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
                 failure -> SystemServer.log("usage history I/O failed: "
                         + failure.getClass().getSimpleName()));
         if (mManaged) mPackages.onPackageRemoval(this::packageRemoved);
+    }
+
+    private static java.util.function.LongSupplier usageClock() {
+        // ActivityUsageHistory pairs this real wall clock with elapsedRealtime and
+        // rebases events, interval origins and saved statistics after RTC changes.
+        return System::currentTimeMillis;
     }
 
     void transition(Object token, String pkg, String cls, ActivityUsageHistory.State state) {
@@ -93,13 +100,30 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
 
     private boolean usageAccess(String caller) {
         mCallers.requirePackage(Objects.requireNonNull(caller, "callingPackage"));
-        // The permissive AppOps stand-in does not represent a user-granted Usage Access mode.
-        return mCallers.isSystem() || mPackages.permissions().checkPermission(caller,
-                Manifest.permission.PACKAGE_USAGE_STATS, null, 0) == PackageManager.PERMISSION_GRANTED;
+        if (mCallers.isSystem()) return true;
+        int uid = mCallers.callerUid(), pid = mCallers.callerPid();
+        ApkPackage owner = mPackages.get(caller);
+        if (owner == null || owner.uid() != uid || mPackages.isRemovalPending(caller)) return false;
+        int mode = mPackages.appOps().noteOperation(AppOpsManager.OP_GET_USAGE_STATS,
+                uid, caller, null, false, null, false).getOpMode();
+        // BinderService.hasQueryPermission calls AppOpsManager.noteOp: an errored
+        // operation throws, DEFAULT alone falls back to the calling permission.
+        if (mode == AppOpsManager.MODE_ERRORED) {
+            throw new SecurityException("Usage access operation denied for " + caller);
+        }
+        boolean allowed = mode == AppOpsManager.MODE_DEFAULT
+                ? mPackages.permissions().checkProcessPermission(Manifest.permission.PACKAGE_USAGE_STATS,
+                        pid, uid) == PackageManager.PERMISSION_GRANTED
+                : mode == AppOpsManager.MODE_ALLOWED;
+        if (!allowed) return false;
+        // Policy evaluation may run lifecycle callbacks. A stale process or
+        // replaced package generation cannot use the previous owner's decision.
+        mCallers.requirePackage(caller);
+        return mPackages.get(caller) == owner && !mPackages.isRemovalPending(caller);
     }
 
     private UsageEvents events(long begin, long end, Set<String> packages, int[] types) {
-        ActivityUsageHistory.Snapshot snapshot = mHistory.snapshot();
+        ActivityUsageHistory.Snapshot snapshot = mHistory.eventSnapshot();
         begin = Math.max(begin, snapshot.until() - ActivityUsageHistory.RETENTION);
         List<UsageEvents.Event> result = new ArrayList<>();
         TreeSet<String> strings = new TreeSet<>();
@@ -140,6 +164,19 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
         };
     }
 
+    private static long intervalWidth(int interval, long begin, long end) {
+        long day = ActivityUsageHistory.DAY;
+        return switch (interval) {
+            case UsageStatsManager.INTERVAL_DAILY -> day;
+            case UsageStatsManager.INTERVAL_WEEKLY -> 7 * day;
+            case UsageStatsManager.INTERVAL_MONTHLY -> 30 * day;
+            case UsageStatsManager.INTERVAL_YEARLY -> 365 * day;
+            // Fresh-store fallback only. The query resolves persisted origins first.
+            case UsageStatsManager.INTERVAL_BEST -> day;
+            default -> 0;
+        };
+    }
+
     private static SecurityException denied() {
         return new SecurityException("Gesher does not implement Android usage-limit or standby administration");
     }
@@ -148,11 +185,15 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
             String caller, int userId) {
         if (!usageAccess(caller)) return null;
         user(userId);
-        if (interval < UsageStatsManager.INTERVAL_DAILY
-                || interval > UsageStatsManager.INTERVAL_BEST || begin >= end) return null;
+        if (interval < UsageStatsManager.INTERVAL_DAILY || interval > UsageStatsManager.INTERVAL_BEST
+                || begin >= end) return null;
+        ActivityUsageHistory.Snapshot snapshot = mHistory.querySnapshot(interval, begin, end);
+        int selected = interval == UsageStatsManager.INTERVAL_BEST
+                ? ActivityUsageHistory.bestInterval(snapshot, begin) : interval;
+        long width = intervalWidth(selected, begin, end);
         List<UsageStats> stats = new ArrayList<>();
         for (ActivityUsageHistory.Total total :
-                mHistory.aggregate(interval, begin, end)) {
+                ActivityUsageHistory.aggregate(snapshot, width, begin, end)) {
             UsageStats result = new UsageStats();
             result.mPackageName = total.pkg;
             result.mBeginTimeStamp = total.begin;

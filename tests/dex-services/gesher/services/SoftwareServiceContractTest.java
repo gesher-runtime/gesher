@@ -74,11 +74,15 @@ public final class SoftwareServiceContractTest {
             Object callers, String packageName) throws Exception {
         Path directory = Files.createTempDirectory("gesher-usage-fixture");
         Path history = directory.resolve("activity-usage.bin");
+        AutoCloseable historyWriter = null;
         try {
             AtomicLong clock = new AtomicLong(100);
             Object managed = construct("DesktopUsageStatsService", new Class<?>[] {pmType,
                     callersType, Path.class, LongSupplier.class}, pm, callers, history,
                     (LongSupplier) clock::get);
+            var historyField = managed.getClass().getDeclaredField("mHistory");
+            historyField.setAccessible(true);
+            historyWriter = (AutoCloseable) historyField.get(managed);
             IUsageStatsManager usage = strict(IUsageStatsManager.class, managed);
             Class<? extends Enum> state = Class.forName("com.gesher.server.ActivityUsageHistory$State")
                     .asSubclass(Enum.class);
@@ -130,6 +134,7 @@ public final class SoftwareServiceContractTest {
             require(summary.getTotalTimeInForeground() == 30 && summary.getTotalTimeVisible() == 50,
                     "activity stats lost real lifecycle durations");
         } finally {
+            if (historyWriter != null) historyWriter.close();
             Files.deleteIfExists(history);
             Files.delete(directory);
         }

@@ -5,13 +5,17 @@ import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.ActivityThread;
 import android.app.IActivityManager;
+import android.app.IAppTask;
 import android.app.PendingIntent;
+import android.app.TaskStackListener;
 import android.app.TaskStackBuilder;
+import android.app.TaskWindowingLayerRequestHandler;
 import android.app.IActivityTaskManager;
 import android.app.IApplicationThread;
 import android.app.servertransaction.ClientTransaction;
 import android.app.servertransaction.ActivityTransactionItem;
 import android.app.servertransaction.LaunchActivityItem;
+import android.app.servertransaction.NewIntentItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
 import android.app.usage.IUsageStatsManager;
@@ -27,6 +31,7 @@ import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
+import android.os.IRemoteCallback;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.view.Display;
@@ -42,6 +47,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 import sun.misc.Unsafe;
 
@@ -87,6 +94,13 @@ public final class TaskStackContractTest {
     private static Object get(Object target, String name) throws Exception {
         return field(target.getClass(), name).get(target);
     }
+    private static int grantCount(Object grants) throws Exception {
+        int count = 0;
+        for (Object table : ((java.util.Map<?, ?>)get(grants, "mGrants")).values()) {
+            count += ((java.util.Map<?, ?>)table).size();
+        }
+        return count;
+    }
     private static void set(Object target, String name, Object value) throws Exception {
         field(target.getClass(), name).set(target, value);
     }
@@ -106,7 +120,8 @@ public final class TaskStackContractTest {
         PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(pkg, path);
         parsed.setEnabled(true);
         parsed.setTargetSdkVersion(36);
-        for (String name : List.of("Root", "Middle", "Top", "Other", "Private", "Guarded", "Single", "Doc")) {
+        for (String name : List.of("Root", "Middle", "Top", "Other", "Private", "Guarded", "Single",
+                "Instance", "Doc", "DocNever", "DocAlways")) {
             ParsedActivityImpl activity = new ParsedActivityImpl();
             activity.setPackageName(pkg);
             activity.setName(pkg + "." + name);
@@ -115,7 +130,10 @@ public final class TaskStackContractTest {
             activity.setExported(!name.equals("Private"));
             if (name.equals("Guarded")) activity.setPermission("fixture.permission.NOT_GRANTED");
             if (name.equals("Single")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_TASK);
+            if (name.equals("Instance")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_INSTANCE);
             if (name.equals("Doc")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_INTO_EXISTING);
+            if (name.equals("DocNever")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_NEVER);
+            if (name.equals("DocAlways")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_ALWAYS);
             parsed.addActivity(activity);
         }
         var provider = new com.android.internal.pm.pkg.component.ParsedProviderImpl();
@@ -238,6 +256,11 @@ public final class TaskStackContractTest {
             Method callback = tasks.getClass().getDeclaredMethod(method, record);
             callback.setAccessible(true);
             callback.invoke(tasks, activity);
+        }
+        void acknowledgeStopped(Object activity) throws Exception {
+            Method callback = tasks.getClass().getDeclaredMethod("activityStopped", record, Bundle.class);
+            callback.setAccessible(true);
+            callback.invoke(tasks, activity, new Bundle());
         }
         int start(Intent... intents) throws Exception {
             final int[] status = new int[1];
@@ -537,6 +560,7 @@ public final class TaskStackContractTest {
                 "Newly visible history should be created paused beneath the translucent top");
         Path directory = Files.createTempDirectory("task-usage");
         Path file = directory.resolve("activity-usage.bin");
+        AutoCloseable usageHistory = null;
         try {
             Method callers = h.am.getClass().getDeclaredMethod("callers");
             callers.setAccessible(true);
@@ -545,6 +569,7 @@ public final class TaskStackContractTest {
                     new Class<?>[]{h.packages.getClass(), callers.getReturnType(), Path.class,
                             LongSupplier.class},
                     h.packages, callers.invoke(h.am), file, (LongSupplier) () -> 100L);
+            usageHistory = (AutoCloseable) get(usage, "mHistory");
             Method setUsage = h.tasks.getClass().getDeclaredMethod("setUsageStats", usageType);
             setUsage.setAccessible(true);
             setUsage.invoke(h.tasks, usage);
@@ -557,6 +582,8 @@ public final class TaskStackContractTest {
                         "Pause-only launch did not record one real PAUSED event");
             });
         } finally {
+            set(h.tasks, "mUsageStats", null);
+            if (usageHistory != null) usageHistory.close();
             Files.deleteIfExists(file);
             Files.delete(directory);
         }
@@ -582,6 +609,481 @@ public final class TaskStackContractTest {
                     try { return (Boolean)get(record, "finishing"); }
                     catch (Exception failure) { throw new AssertionError(failure); }
                 }), "Task removal instantiated history during synchronous pause reentry");
+    }
+
+    private static IAppTask appTask(IBinder target) {
+        if (!realBinder) return IAppTask.Stub.asInterface(target);
+        IBinder transport = new Binder() {
+            @Override public IInterface queryLocalInterface(String descriptor) { return null; }
+            @Override protected boolean onTransact(int code, Parcel request, Parcel reply, int flags)
+                    throws RemoteException {
+                return target.transact(code, request, reply, flags);
+            }
+        };
+        return IAppTask.Stub.asInterface(transport);
+    }
+
+    private static boolean live(Harness h, Object activity) throws Exception {
+        return h.records().contains(activity) && !(Boolean)get(activity, "finishing")
+                && !"DESTROYED".equals(h.state(activity));
+    }
+
+    /** Android 16 ActivityStarter's complete explicit-inTask path, including flag precedence. */
+    private static void appTaskLaunchFlags() throws Exception {
+        int newTask = Intent.FLAG_ACTIVITY_NEW_TASK;
+        int document = Intent.FLAG_ACTIVITY_NEW_DOCUMENT;
+        int clearTop = Intent.FLAG_ACTIVITY_CLEAR_TOP;
+        int reorder = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT;
+        record LaunchCase(String name, Intent intent, int count, String top,
+                boolean rootSurvives, boolean middleSurvives) {}
+        List<LaunchCase> cases = List.of(
+                new LaunchCase("different NEW_TASK", launch("Other").addFlags(newTask), 3, "Other", true, true),
+                new LaunchCase("different document", launch("Other").addFlags(newTask | document), 3, "Other", true, true),
+                new LaunchCase("ordinary root", launch("Root"), 3, "Root", true, true),
+                new LaunchCase("ordinary reorder", launch("Root").addFlags(reorder), 3, "Root", true, true),
+                new LaunchCase("same top", launch("Middle").addFlags(newTask | Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                        2, "Middle", true, true),
+                new LaunchCase("root NEW_TASK", launch("Root").addFlags(newTask), 2, "Middle", true, true),
+                new LaunchCase("changed root intent", launch("Root").setAction(PKG + ".Changed").addFlags(newTask),
+                        2, "Middle", true, true),
+                new LaunchCase("clear task", launch("Root").addFlags(newTask | Intent.FLAG_ACTIVITY_CLEAR_TASK),
+                        1, "Root", false, false),
+                new LaunchCase("standard clear top", launch("Root").addFlags(clearTop), 1, "Root", false, false),
+                new LaunchCase("reorder existing", launch("Root").addFlags(newTask | reorder), 2, "Root", true, true),
+                new LaunchCase("document root", launch("Root").addFlags(document), 1, "Root", true, false),
+                new LaunchCase("single top clear", launch("Root").addFlags(clearTop | Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                        1, "Root", true, false));
+        for (LaunchCase test : cases) {
+            Harness h = new Harness();
+            h.start(launch("Root").addFlags(newTask).putExtra("taskBase", "original"), launch("Middle"));
+            Object root = h.record("Root"), middle = h.record("Middle");
+            h.acknowledge("activityResumed", middle);
+            h.asApp(() -> {
+                IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
+                ActivityManager.RecentTaskInfo before = task.getTaskInfo();
+                check(task.startActivity(h.thread.asBinder(), PKG, null, test.intent, null, null) >= 0,
+                        test.name + ": start rejected");
+                ActivityManager.RecentTaskInfo after = task.getTaskInfo();
+                check(after.numActivities == test.count
+                                && after.topActivity.equals(launch(test.top).getComponent()),
+                        test.name + ": wrong live stack");
+                check(after.taskId == before.taskId && after.token.equals(before.token),
+                        test.name + ": task identity changed");
+                check("original".equals(after.baseIntent.getStringExtra("taskBase")),
+                        test.name + ": original task identity was replaced");
+                check(live(h, root) == test.rootSurvives && live(h, middle) == test.middleSurvives,
+                        test.name + ": wrong existing activities retired");
+                if (!test.rootSurvives) {
+                    Object fresh = h.record("Root");
+                    check(fresh != root && h.thread.launches(fresh) == 0
+                                    && h.thread.items(PauseActivityItem.class, middle) == 1,
+                            test.name + ": replacement bypassed or duplicated finishing pause");
+                    h.acknowledge("activityPaused", middle);
+                    check(h.thread.launches(fresh) == 1, test.name + ": replacement never launched");
+                }
+                if (test.count == 2 && test.top.equals("Middle")) {
+                    check(h.thread.items(NewIntentItem.class, middle) == (test.name.equals("same top") ? 1 : 0),
+                            test.name + ": wrong new-intent delivery");
+                }
+            });
+        }
+
+        for (String target : List.of("Single", "Instance")) {
+            for (boolean sameRoot : new boolean[]{false, true}) {
+                Harness h = new Harness();
+                String rootName = sameRoot ? target : "Root";
+                h.start(launch(rootName).addFlags(newTask));
+                Object root = h.record(rootName);
+                h.asApp(() -> {
+                    IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
+                    rejects(IllegalArgumentException.class, () -> task.startActivity(h.thread.asBinder(),
+                            PKG, null, launch(target), null, null));
+                    check(task.getTaskInfo().numActivities == 1 && live(h, root)
+                                    && h.thread.launches(null) == 1,
+                            target + ": invalid explicit-task launch mutated its task");
+                });
+            }
+        }
+
+        Harness manifest = new Harness();
+        manifest.start(launch("Doc").addFlags(newTask), launch("Middle"));
+        Object doc = manifest.record("Doc"), middle = manifest.record("Middle");
+        manifest.acknowledge("activityResumed", middle);
+        manifest.asApp(() -> {
+            IAppTask task = appTask(manifest.api.getAppTasks(PKG).get(0));
+            task.startActivity(manifest.thread.asBinder(), PKG, null, launch("Doc"), null, null);
+            check(task.getTaskInfo().numActivities == 1 && live(manifest, doc) && !live(manifest, middle),
+                    "Manifest document mode did not retain its destination and clear above");
+        });
+        for (String name : List.of("DocNever", "DocAlways")) {
+            Harness h = new Harness();
+            h.start(launch("Root").addFlags(newTask));
+            h.asApp(() -> {
+                IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
+                task.startActivity(h.thread.asBinder(), PKG, null,
+                        launch(name).addFlags(document | Intent.FLAG_ACTIVITY_MULTIPLE_TASK), null, null);
+                int flags = ((Intent)get(h.record(name), "intent")).getFlags();
+                int expected = name.equals("DocNever") ? 0 : newTask | document | Intent.FLAG_ACTIVITY_MULTIPLE_TASK;
+                check(flags == expected && task.getTaskInfo().numActivities == 2,
+                        name + ": manifest document flags were not normalized in the explicit task");
+            });
+        }
+        Harness crossPackage = new Harness();
+        crossPackage.start(launch("Root").addFlags(newTask), launch("Middle"));
+        crossPackage.asApp(() -> {
+            IAppTask task = appTask(crossPackage.api.getAppTasks(PKG).get(0));
+            ActivityManager.RecentTaskInfo before = task.getTaskInfo();
+            task.startActivity(crossPackage.thread.asBinder(), PKG, null, launch(PKG + ".second", "Root")
+                    .addFlags(newTask | Intent.FLAG_ACTIVITY_CLEAR_TASK), null, null);
+            ActivityManager.RecentTaskInfo after = task.getTaskInfo();
+            check(after != null && after.numActivities == 1 && after.token.equals(before.token)
+                            && after.baseIntent.filterEquals(before.baseIntent)
+                            && crossPackage.api.getAppTasks(PKG).size() == 1,
+                    "Explicit-task replacement transferred the retained AppTask owner or capability");
+            task.finishAndRemoveTask();
+            check(task.getTaskInfo() == null, "Original AppTask capability could not remove its replacement activity");
+        });
+    }
+
+    /** Reusing an AppTask must restore its actual lifecycle, including an unfinished pause. */
+    private static void appTaskForeground() throws Exception {
+        for (boolean pendingPause : new boolean[]{false, true}) {
+            for (boolean singleTop : new boolean[]{false, true}) {
+                Harness h = new Harness();
+                h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launch("Middle"));
+                Object middle = h.record("Middle");
+                h.acknowledge("activityResumed", middle);
+                int resumes = h.thread.items(ResumeActivityItem.class, middle);
+                h.asApp(() -> {
+                    IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
+                    check(h.api.getActivityClientController().moveActivityTaskToBack((IBinder)get(middle, "token"), true),
+                            "AppTask foreground setup did not hide task");
+                    if (!pendingPause) {
+                        h.acknowledge("activityPaused", middle);
+                        h.acknowledgeStopped(middle);
+                        check("STOPPED".equals(h.state(middle)), "Background task did not stop");
+                    }
+                    Intent intent = launch(singleTop ? "Middle" : "Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    if (singleTop) intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    task.startActivity(h.thread.asBinder(), PKG, null, intent, null, null);
+                    if (pendingPause) {
+                        check("PAUSING".equals(h.state(middle)), "Restore skipped the pending pause acknowledgement");
+                        h.acknowledge("activityPaused", middle);
+                    }
+                    check("RESUMING".equals(h.state(middle)) && h.thread.items(ResumeActivityItem.class, middle) == resumes + 1,
+                            "AppTask reuse changed recency without resuming its stopped top");
+                    check(task.getTaskInfo().numActivities == 2 && h.thread.launches(null) == 1
+                                    && h.thread.items(NewIntentItem.class, middle) == (singleTop ? 1 : 0),
+                            "Foreground restore duplicated activities or delivered an unrelated Intent");
+                    h.acknowledge("activityResumed", middle);
+                    check(task.getTaskInfo().isVisible && task.getTaskInfo().isFocused,
+                            "Restored AppTask did not become visible and focused");
+                });
+            }
+        }
+
+        Harness h = new Harness();
+        h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        Object root = h.record("Root");
+        h.acknowledge("activityResumed", root);
+        h.asApp(() -> {
+            IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
+            task.startActivity(h.thread.asBinder(), PKG, null, launch("Root").addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP), null, null);
+            check(task.getTaskInfo().numActivities == 1 && h.thread.items(NewIntentItem.class, root) == 0,
+                    "Explicit matching-root reuse incorrectly delivered a new Intent");
+            task.startActivity(h.thread.asBinder(), PKG, null, launch("Middle"), null, null);
+            h.acknowledge("activityPaused", root);
+            Object middle = h.record("Middle");
+            h.acknowledge("activityResumed", middle);
+            h.acknowledgeStopped(root);
+            int resumes = h.thread.items(ResumeActivityItem.class, root);
+            task.startActivity(h.thread.asBinder(), PKG, null, launch("Root").addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT), null, null);
+            check("PAUSING".equals(h.state(middle)) && "STOPPED".equals(h.state(root))
+                            && h.thread.items(NewIntentItem.class, root) == 1 && h.thread.launches(root) == 1,
+                    "Reordered live activity skipped the in-task pause handoff or launched twice");
+            h.acknowledge("activityPaused", middle);
+            check("RESUMING".equals(h.state(root)) && h.thread.items(ResumeActivityItem.class, root) == resumes + 1,
+                    "Reordered activity did not resume after its predecessor paused");
+            h.acknowledge("activityResumed", root);
+            // The stable task identity survives even when its original root has finished.
+            check(h.api.getActivityClientController().finishActivity((IBinder)get(root, "token"), 0, null, 0),
+                    "Could not finish reordered root");
+            h.acknowledge("activityPaused", root);
+            int launches = h.thread.launches(null);
+            task.startActivity(h.thread.asBinder(), PKG, null, launch("Root").setAction(PKG + ".Changed")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null, null);
+            check(task.getTaskInfo().numActivities == 1 && task.getTaskInfo().topActivity.equals(launch("Middle").getComponent())
+                            && h.thread.launches(null) == launches,
+                    "Explicit-task matching used the current bottom instead of original task identity");
+        });
+    }
+
+    /** A delayed pause acknowledgement must not resume an obsolete reorder destination. */
+    private static void appTaskObsoleteForeground() throws Exception {
+        for (boolean hidden : new boolean[]{false, true}) {
+            Harness h = new Harness();
+            h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Object root = h.record("Root");
+            h.acknowledge("activityResumed", root);
+            h.asApp(() -> {
+                IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
+                task.startActivity(h.thread.asBinder(), PKG, null, launch("Middle"), null, null);
+                h.acknowledge("activityPaused", root);
+                Object middle = h.record("Middle");
+                h.acknowledge("activityResumed", middle);
+                h.acknowledgeStopped(root);
+                int resumes = h.thread.items(ResumeActivityItem.class, root);
+                task.startActivity(h.thread.asBinder(), PKG, null, launch("Root").addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT), null, null);
+                check("STOPPED".equals(h.state(root)) && "PAUSING".equals(h.state(middle))
+                                && get(root, "waitingFor") == middle && (Boolean)get(root, "resumeAfterPause"),
+                        "Obsolete-handoff setup did not wait for the previous top to pause");
+                Object other;
+                if (hidden) {
+                    other = null;
+                    check(h.api.getActivityClientController().moveActivityTaskToBack((IBinder)get(root, "token"), true),
+                            "Could not hide task during reorder handoff");
+                } else {
+                    task.startActivity(h.thread.asBinder(), PKG, null, launch("Other"), null, null);
+                    other = h.record("Other");
+                }
+                h.acknowledge("activityPaused", middle);
+                check(h.thread.items(ResumeActivityItem.class, root) == resumes
+                                && "STOPPED".equals(h.state(root)),
+                        "Delayed pause resumed a " + (hidden ? "hidden" : "covered") + " reorder destination");
+                check(get(root, "waitingFor") == null && !(Boolean)get(root, "resumeAfterPause"),
+                        "Obsolete handoff retained pending resume work");
+                h.acknowledge("activityPaused", middle);
+                check(h.thread.items(ResumeActivityItem.class, root) == resumes,
+                        "Duplicate acknowledgement revived an obsolete handoff");
+                if (hidden) {
+                    check(!task.getTaskInfo().isVisible, "Hidden task became visible on stale acknowledgement");
+                    task.moveToFront(h.thread, PKG);
+                } else {
+                    check(task.getTaskInfo().topActivity.equals(launch("Other").getComponent())
+                                    && h.thread.launches(other) == 1
+                                    && h.thread.items(ResumeActivityItem.class, other) == 1,
+                            "Discarding obsolete resume lost or duplicated the actual new top");
+                    h.acknowledge("activityResumed", other);
+                    h.finish(other);
+                }
+                check("RESUMING".equals(h.state(root))
+                                && h.thread.items(ResumeActivityItem.class, root) == resumes + 1,
+                        "Discarded handoff prevented a later legitimate foreground resume");
+            });
+        }
+    }
+
+    /** New explicit-task branches retain admission checks and grant ownership. */
+    private static void appTaskLaunchAdmission() throws Exception {
+        for (String retirement : List.of("task", "owner", "caller", "target")) {
+            Harness h = new Harness();
+            h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launch("Middle"));
+            Object root = h.record("Root"), middle = h.record("Middle");
+            IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
+            String target = retirement.equals("target") ? PKG + ".second" : PKG;
+            set(h.tasks, "mBeforeActivityPublication", (Runnable) () -> {
+                try {
+                    switch (retirement) {
+                        case "task" -> task.finishAndRemoveTask();
+                        case "owner" -> publishFixtureCode(h, PKG, code(PKG, UID));
+                        case "caller" -> set(h.process, "exiting", true);
+                        case "target" -> publishFixtureCode(h, target, code(target, UID + 1));
+                    }
+                } catch (Exception failure) { throw new AssertionError(failure); }
+            });
+            h.asApp(() -> check(task.startActivity(h.thread.asBinder(), PKG, null,
+                    launch(target, "Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null, null)
+                    == ActivityManager.START_CANCELED, retirement + " retirement did not cancel AppTask launch"));
+            check(h.thread.launches(null) == 1 && h.records().stream().allMatch(r -> r == root || r == middle),
+                    retirement + " retirement published replacement work");
+        }
+
+        Harness h = new Harness();
+        String creator = PKG + ".second";
+        android.net.Uri uri = android.net.Uri.parse("content://" + creator + ".grants/app-task");
+        startFromCreator(h, creator, () -> true, launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                launch("Middle").setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        Object root = h.record("Root"), middle = h.record("Middle");
+        h.acknowledge("activityResumed", middle);
+        Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
+        Object grants = service.invoke(h.tasks);
+        java.util.Map<?, ?> owned = (java.util.Map<?, ?>)get(grants, "mOwned");
+        h.asApp(() -> {
+            IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
+            rejects(SecurityException.class, () -> task.startActivity(new Binder(), PKG, null,
+                    launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null, null));
+            rejects(SecurityException.class, () -> task.startActivity(h.thread.asBinder(), creator, null,
+                    launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null, null));
+            for (String target : List.of("Private", "Guarded")) {
+                rejects(SecurityException.class, () -> task.startActivity(h.thread.asBinder(), PKG, null,
+                        launch(creator, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null, null));
+            }
+            Intent invalidUri = launch("Root").setData(android.net.Uri.parse("content://1@" + creator + ".grants/denied"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            rejects(SecurityException.class, () -> task.startActivity(h.thread.asBinder(), PKG, null, invalidUri, null, null));
+            check(task.getTaskInfo().numActivities == 2 && h.records().get(1) == middle
+                            && grantCount(grants) == 1 && owned.size() == 1
+                            && owned.containsKey(get(middle, "token")),
+                    "Rejected AppTask request changed history, order or grants");
+            task.startActivity(h.thread.asBinder(), PKG, null, launch("Root").setData(uri).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            | Intent.FLAG_GRANT_READ_URI_PERMISSION), null, null);
+            check(grantCount(grants) == 1 && owned.size() == 2
+                            && owned.containsKey(get(root, "token")) && owned.containsKey(get(middle, "token")),
+                    "AppTask reorder did not assign the grant to its reused activity");
+            h.acknowledge("activityPaused", middle);
+            h.acknowledge("activityResumed", root);
+            h.finish(root); h.acknowledge("activityDestroyed", root);
+            check(grantCount(grants) == 1 && owned.size() == 1 && owned.containsKey(get(middle, "token")),
+                    "AppTask reused owner leaked its grant or revoked another activity's grant");
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void appTaskRecents() throws Exception {
+        Harness h = new Harness();
+        CountDownLatch changed = new CountDownLatch(1);
+        TaskStackListener listener = new TaskStackListener() {
+            @Override public void onTaskStackChanged() { changed.countDown(); }
+        };
+        h.asApp(() -> rejects(SecurityException.class, () -> h.api.registerTaskStackListener(listener)));
+        h.api.registerTaskStackListener(listener);
+
+        Intent root = launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("base", "original");
+        check(h.start(root, launch("Middle")) == ActivityManager.START_SUCCESS, "first AppTask launch");
+        check(changed.await(5, TimeUnit.SECONDS), "task listener missed publication");
+        h.api.unregisterTaskStackListener(listener);
+        Object middle = h.record("Middle");
+        h.acknowledge("activityResumed", middle);
+        int rootId = (Integer) get(middle, "taskId");
+        check(h.start(launch("Other").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK))
+                == ActivityManager.START_SUCCESS, "second AppTask launch");
+
+        String second = PKG + ".second";
+        check(h.api.startActivity(null, second, null, launch(second, "Root"), null,
+                null, null, -1, 0, null, null) == ActivityManager.START_SUCCESS, "foreign task launched");
+        check(h.api.getRecentTasks(10, 0, 0).getList().size() == 3, "system Recents lost tasks");
+        IAppTask[] retained = new IAppTask[1];
+        h.asApp(() -> {
+            List<IBinder> owned = h.api.getAppTasks(PKG);
+            check(owned.size() == 2, "AppTasks leaked another package");
+            check(appTask(owned.get(0)).getTaskInfo().taskId != rootId, "most recent AppTask first");
+            IAppTask task = retained[0] = appTask(owned.get(1));
+            ActivityManager.RecentTaskInfo first = task.getTaskInfo();
+            check(first.id == rootId && first.persistentId == rootId && first.numActivities == 2,
+                    "AppTask snapshot has unsteady identity or incomplete members");
+            check(first.topActivity.getClassName().endsWith(".Middle")
+                            && "original".equals(first.baseIntent.getStringExtra("base")),
+                    "AppTask lost the original base Intent");
+            first.baseIntent.putExtra("base", "mutation");
+            check("original".equals(task.getTaskInfo().baseIntent.getStringExtra("base")),
+                    "AppTask snapshot aliases the server Intent");
+            List<ActivityManager.RecentTaskInfo> recent = h.api.getRecentTasks(10, 0, 0).getList();
+            check(recent.size() == 2 && recent.get(1).baseIntent.getExtras() == null,
+                    "public Recents leaks foreign tasks or Intent extras");
+            check(h.api.getRecentTasks(1, 0, 0).getList().size() == 1, "Recents limit not applied");
+            rejects(SecurityException.class, () -> h.api.getAppTasks(second));
+            rejects(SecurityException.class, () -> h.api.getRecentTasks(10, 0, 10));
+
+            check(h.api.getActivityClientController().moveActivityTaskToBack((IBinder)get(middle, "token"), true),
+                    "could not move AppTask to the back");
+            task.setExcludeFromRecents(true);
+            check(h.api.getRecentTasks(10, 0, 0).getList().size() == 1, "excluded background task visible");
+            check(h.api.getRecentTasks(10, ActivityManager.RECENT_WITH_EXCLUDED, 0).getList().size() == 2,
+                    "RECENT_WITH_EXCLUDED failed");
+            check(h.api.getAppTasks(PKG).size() == 2, "excluded task lost its AppTask capability");
+            task.setExcludeFromRecents(false);
+            check(h.api.getRecentTasks(10, 0, 0).getList().size() == 2, "un-excluding did not restore task");
+            task.moveToFront(h.thread, PKG);
+            check(appTask(h.api.getAppTasks(PKG).get(0)).getTaskInfo().taskId == rootId,
+                    "AppTask.moveToFront did not update recency");
+            check(task.startActivity(h.thread.asBinder(), PKG, null, launch(second, "Middle"), null, null)
+                    == ActivityManager.START_SUCCESS, "AppTask.startActivity rejected exported target");
+            ActivityManager.RecentTaskInfo mixed = task.getTaskInfo();
+            check(mixed.numActivities == 3 && mixed.topActivity.getPackageName().isEmpty()
+                            && mixed.topActivityInfo == null && mixed.token.equals(first.token),
+                    "mixed-package snapshot exposed another app or replaced the task token");
+            check(((Integer)get(h.record(second, "Middle"), "taskId")) == rootId,
+                    "AppTask.startActivity created an unrelated task");
+            Bundle[] result = new Bundle[1];
+            task.requestWindowingLayer(0, new IRemoteCallback.Stub() {
+                @Override public void sendResult(Bundle reply) { result[0] = reply; }
+            });
+            check(result[0].getInt(TaskWindowingLayerRequestHandler.REMOTE_CALLBACK_RESULT_KEY)
+                    == TaskWindowingLayerRequestHandler.RESULT_FAILED_BAD_STATE,
+                    "unavailable windowing-layer transition never completed");
+        });
+
+        Class<?> processType = h.process.getClass();
+        long previous = Binder.clearCallingIdentity();
+        try {
+            // An attached caller may not operate another package's AppTask
+            // through a passed binder.
+            int foreignPid = PID + 100;
+            Binder.restoreCallingIdentity(((long) (UID + 1) << 32) | foreignPid);
+            Object otherProcess = make(processType, new Class<?>[]{h.tasks.getClass(), int.class,
+                    IApplicationThread.class}, h.tasks, foreignPid, new AppThread());
+            set(otherProcess, "packageName", second);
+            set(otherProcess, "processName", second);
+            set(otherProcess, "ready", true);
+            ((List<Object>) get(h.tasks, "mProcesses")).add(otherProcess);
+            rejects(SecurityException.class, () -> retained[0].getTaskInfo());
+            rejects(SecurityException.class, () -> retained[0].finishAndRemoveTask());
+            check(h.api.getRecentTasks(10, 0, 0).getList().size() == 1, "foreign app sees unrelated Recents");
+        } finally { Binder.restoreCallingIdentity(previous); }
+
+        h.asApp(() -> {
+            IAppTask task = retained[0];
+            task.finishAndRemoveTask();
+            check(task.getTaskInfo() == null && h.api.getAppTasks(PKG).size() == 1,
+                    "removed task remains accessible through live or retained handle");
+            rejects(IllegalArgumentException.class, () -> task.setExcludeFromRecents(true));
+            rejects(IllegalArgumentException.class, () -> task.startActivity(h.thread.asBinder(), PKG,
+                    null, launch("Top"), null, null));
+        });
+
+        Harness died = new Harness();
+        died.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        Object record = died.record("Root");
+        set(record, "savedState", new Bundle());
+        IAppTask handle = appTask(died.api.getAppTasks(PKG).get(0));
+        ActivityManager.RecentTaskInfo beforeDeath = handle.getTaskInfo();
+        Method death = died.tasks.getClass().getDeclaredMethod("processDied", died.process.getClass());
+        death.setAccessible(true);
+        death.invoke(died.tasks, died.process);
+        ActivityManager.RecentTaskInfo afterDeath = handle.getTaskInfo();
+        check(afterDeath != null && afterDeath.taskId == beforeDeath.taskId
+                        && afterDeath.token.equals(beforeDeath.token) && !afterDeath.isVisible,
+                "process death retired the AppTask instead of preserving saved history");
+
+        Harness cleared = new Harness();
+        cleared.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launch("Middle"));
+        IAppTask clearedTask = appTask(cleared.api.getAppTasks(PKG).get(0));
+        ActivityManager.RecentTaskInfo original = clearedTask.getTaskInfo();
+        cleared.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                .putExtra("base", "replacement"));
+        ActivityManager.RecentTaskInfo renewed = clearedTask.getTaskInfo();
+        check(renewed != null && renewed.taskId == original.taskId && renewed.token.equals(original.token)
+                        && renewed.numActivities == 1 && "replacement".equals(renewed.baseIntent.getStringExtra("base")),
+                "CLEAR_TASK did not reset metadata while retaining the task identity");
+
+        Harness race = new Harness();
+        race.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        IAppTask racingHandle = appTask(race.api.getAppTasks(PKG).get(0));
+        set(race.tasks, "mBeforeActivityPublication", (Runnable) () -> {
+            try { racingHandle.finishAndRemoveTask(); }
+            catch (RemoteException e) { throw new AssertionError(e); }
+        });
+        race.asApp(() -> {
+            check(racingHandle.startActivity(race.thread.asBinder(), PKG, null,
+                    launch("Middle"), null, null) == ActivityManager.START_CANCELED,
+                    "a removed AppTask silently published a new task");
+            check(race.api.getAppTasks(PKG).isEmpty(), "task launch race published replacement work");
+        });
     }
 
     private static void attachAndReentry() throws Exception {
@@ -727,8 +1229,8 @@ public final class TaskStackContractTest {
                 && h.thread.launches(middle) == 0, "URI reorder broke lazy history or duplicated record");
         check((Boolean)access.invoke(grants, h.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, 0),
                 "Reused activity did not receive its requested URI grant");
-        List<?> owned = (List<?>)get(grants, "mGrants");
-        check(owned.size() == 1 && get(owned.get(0), "ownerToken") == get(root, "token"),
+        check(grantCount(grants) == 1
+                && ((java.util.Map<?, ?>)get(grants, "mOwned")).containsKey(get(root, "token")),
                 "URI grant is not owned by the reordered destination token");
         Intent denied = launch("Middle").setData(uri).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                 | Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -740,7 +1242,7 @@ public final class TaskStackContractTest {
         } catch (java.lang.reflect.InvocationTargetException failure) {
             check(failure.getCause() instanceof SecurityException, "Wrong invalid-URI launch outcome");
         }
-        check(h.records().size() == 2 && h.records().get(1) == root && owned.size() == 1,
+        check(h.records().size() == 2 && h.records().get(1) == root && grantCount(grants) == 1,
                 "Invalid URI changed task order or existing grants");
         h.acknowledge("activityResumed", root); h.finish(root); h.acknowledge("activityDestroyed", root);
         check(!(Boolean)access.invoke(grants, h.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, 0),
@@ -765,11 +1267,11 @@ public final class TaskStackContractTest {
             Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
             Object grants = service.invoke(h.tasks);
             if (!failedStart) {
-                check(((List<?>)get(grants, "mGrants")).size() == 1, "Missing pending-history owner grant");
+                check(grantCount(grants) == 1, "Missing pending-history owner grant");
                 Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
                 stop.setAccessible(true); stop.invoke(h.tasks, target);
             }
-            check(((List<?>)get(grants, "mGrants")).isEmpty(),
+            check(grantCount(grants) == 0,
                     "Abandoned activity leaked owner grant after " + (failedStart ? "start failure" : "force stop"));
             check(h.records().isEmpty(), "Abandoned activity history remained after cleanup");
         }
@@ -786,16 +1288,16 @@ public final class TaskStackContractTest {
             if (restore) set(root, "savedState", new Bundle());
             Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
             Object grants = service.invoke(h.tasks);
-            check(((List<?>)get(grants, "mGrants")).size() == 1, "Missing activity grant before process death");
+            check(grantCount(grants) == 1, "Missing activity grant before process death");
             Method died = h.tasks.getClass().getDeclaredMethod("processDied", h.process.getClass());
             died.setAccessible(true); died.invoke(h.tasks, h.process);
             check(h.records().contains(root) == restore, "Process death retained/discarded wrong activity record");
-            check(((List<?>)get(grants, "mGrants")).isEmpty() != restore,
+            check((grantCount(grants) == 0) != restore,
                     "URI owner lifetime followed process rather than retained activity record");
             if (restore) {
                 Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
                 stop.setAccessible(true); stop.invoke(h.tasks, PKG);
-                check(((List<?>)get(grants, "mGrants")).isEmpty(), "Force-stopped restorable record leaked grant");
+                check(grantCount(grants) == 0, "Force-stopped restorable record leaked grant");
             }
         }
     }
@@ -804,21 +1306,24 @@ public final class TaskStackContractTest {
         Harness h = new Harness();
         Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
         Object grants = service.invoke(h.tasks);
-        Method grant = grants.getClass().getDeclaredMethod("grant", String.class, android.net.Uri.class, int.class, int.class);
-        grant.setAccessible(true);
+        Method prepare = grants.getClass().getDeclaredMethod("prepareIntent", int.class, String.class, Intent.class);
+        Method publish = grants.getClass().getDeclaredMethod("publishChecked", IBinder.class, List.class);
+        prepare.setAccessible(true); publish.setAccessible(true);
         String second = PKG + ".second", third = PKG + ".third";
-        grant.invoke(grants, PKG, android.net.Uri.parse("content://" + second + ".grants/incoming"),
-                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
-        grant.invoke(grants, second, android.net.Uri.parse("content://" + PKG + ".grants/outgoing"),
-                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
-        grant.invoke(grants, third, android.net.Uri.parse("content://" + second + ".grants/unrelated"),
-                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
-        List<?> owned = (List<?>)get(grants, "mGrants");
-        check(owned.size() == 3, "Transient force-stop fixture did not publish three real grants");
+        // Global grants use the actual provider UID's validated preparation; the
+        // Android system UID cannot directly delegate an unrelated provider URI.
+        for (String[] item : new String[][]{{second, PKG, "incoming"},
+                {PKG, second, "outgoing"}, {second, third, "unrelated"}}) {
+            ApkPackage source = ((com.gesher.server.PackageManagerService)h.packages).get(item[0]);
+            Intent intent = new Intent().setData(android.net.Uri.parse("content://" + item[0]
+                    + ".grants/" + item[2])).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            publish.invoke(grants, null, prepare.invoke(grants, source.uid(), item[1], intent));
+        }
+        check(grantCount(grants) == 3, "Transient force-stop fixture did not publish three real grants");
         ((List<?>)get(h.tasks, "mProcesses")).clear(); // Already dead package still needs URI cleanup.
         Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
         stop.setAccessible(true); stop.invoke(h.tasks, PKG);
-        check(owned.size() == 1 && get(owned.get(0), "ownerToken") == null,
+        check(grantCount(grants) == 1 && ((java.util.Map<?, ?>)get(grants, "mOwned")).isEmpty(),
                 "Force stop leaked incoming/outgoing ownerless URI grants or removed unrelated grants");
     }
 
@@ -827,6 +1332,9 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("history")) { fullStack(); acceptedHistoryLifetimes(); disabledDeferredHistory(); }
         if (selected.equals("all") || selected.equals("validation")) invalidBatch();
         if (selected.equals("all") || selected.equals("tasks")) { taskFlags(); reorderedUriOwner(); abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris(); }
+        if (selected.equals("all") || selected.equals("recents")) {
+            appTaskRecents(); appTaskLaunchFlags(); appTaskForeground(); appTaskObsoleteForeground(); appTaskLaunchAdmission();
+        }
         if (selected.equals("all") || selected.equals("attach")) attachAndReentry();
         if (selected.equals("all") || selected.equals("visibility")) visibilityAndRemoval();
         if (selected.equals("all") || selected.equals("permissions")) permissions();
