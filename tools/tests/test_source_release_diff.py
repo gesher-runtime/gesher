@@ -1,12 +1,15 @@
 """Release configuration traces, genuine Git tree binding and offline replay."""
 
 import importlib.util
+import copy
 import gzip
+import io
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -85,6 +88,23 @@ def blob(directory, name, data):
     (directory / name).write_bytes(data)
     return {'filename': name, 'bytes': len(data), 'sha256': diff.sha256(data),
             'git_blob': diff.git_object('blob', data), 'url': 'fixture:blob'}
+
+
+def repack_archive(path, rewrite=None):
+    """Change only ordinary tar/gzip metadata unless a test rewrites a member."""
+    output = io.BytesIO()
+    with tarfile.open(fileobj=io.BytesIO(gzip.decompress(path.read_bytes())), mode='r:') as source:
+        with tarfile.open(fileobj=output, mode='w') as destination:
+            for member in source:
+                data = source.extractfile(member).read() if member.isfile() else None
+                member = copy.copy(member)
+                member.pax_headers = dict(member.pax_headers)
+                member.mtime += 1
+                member.uid, member.uname = 123, 'repacked'
+                if rewrite:
+                    member, data = rewrite(member, data)
+                destination.addfile(member, io.BytesIO(data) if data is not None else None)
+    path.write_bytes(gzip.compress(output.getvalue(), compresslevel=1, mtime=1234))
 
 
 class ReleaseConfigTests(unittest.TestCase):
@@ -174,9 +194,68 @@ class ArchiveAndReplayTests(unittest.TestCase):
             self.assertEqual(modes['a.java'], '100644')
             self.assertEqual(modes['a/Value.aidl'], '100644')
             self.assertEqual(actual['contents']['crlf.txt'], files['crlf.txt'])
-            altered_pin = dict(pin, sha256='0' * 64)
-            with self.assertRaisesRegex(diff.InputError, 'Pinned input differs'):
+            altered_pin = dict(pin, git_tree='0' * 40)
+            with self.assertRaisesRegex(diff.InputError, 'does not reproduce pinned Git tree'):
                 diff.read_archive(root, altered_pin)
+
+    def test_repacked_container_preserves_source_identity_and_records_received_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pin = git_archive(root, 'repacked', {'Value.java': 'class Value {}\n',
+                                               'run.sh': '# source only\n',
+                                               'reference': ('symlink', 'Value.java')})
+            captured = diff.read_archive(root, pin)
+            self.assertTrue(captured['transport_receipt']['matches_manifest_capture'])
+            archive = root / pin['filename']
+            repack_archive(archive)
+            received = archive.read_bytes()
+            self.assertNotEqual(diff.sha256(received), pin['sha256'])
+            actual = diff.read_archive(root, pin)
+            for key in ('git_tree', 'files', 'contents', 'file_inventory_sha256', 'uncompressed_bytes'):
+                self.assertEqual(actual[key], captured[key], key)
+            self.assertEqual(actual['transport_receipt'], {
+                'bytes': len(received), 'sha256': diff.sha256(received), 'matches_manifest_capture': False})
+
+    def test_changed_content_modes_and_count_still_fail_source_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pin = git_archive(root, 'changed', {'Value.java': 'class Value {}\n'})
+            archive = root / pin['filename']
+            original = archive.read_bytes()
+            for change in ('content', 'mode'):
+                with self.subTest(change=change):
+                    archive.write_bytes(original)
+
+                    def rewrite(member, data):
+                        if member.name == 'Value.java':
+                            if change == 'content':
+                                data += b'// changed source\n'
+                                member.size = len(data)
+                            else:
+                                member.mode ^= 0o111
+                        return member, data
+
+                    repack_archive(archive, rewrite)
+                    data = archive.read_bytes()
+                    # Even a matching container receipt cannot authorize different source.
+                    altered = dict(pin, bytes=len(data), sha256=diff.sha256(data))
+                    with self.assertRaisesRegex(diff.InputError, 'does not reproduce pinned Git tree'):
+                        diff.read_archive(root, altered)
+            archive.write_bytes(original)
+            with self.assertRaisesRegex(diff.InputError, 'does not reproduce pinned Git tree'):
+                diff.read_archive(root, dict(pin, files=pin['files'] + 1))
+
+    def test_decoded_blob_retains_strict_byte_and_git_object_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pin = blob(root, 'plain-source', b'BUILD_ID=FIXTURE\n')
+            self.assertEqual(diff.checked_bytes(root, pin), b'BUILD_ID=FIXTURE\n')
+            with self.assertRaisesRegex(diff.InputError, 'Pinned input differs'):
+                diff.checked_bytes(root, dict(pin, sha256='0' * 64))
+            changed = b'BUILD_ID=OTHER\n'
+            (root / pin['filename']).write_bytes(changed)
+            with self.assertRaisesRegex(diff.InputError, 'Pinned Git blob differs'):
+                diff.checked_bytes(root, dict(pin, bytes=len(changed), sha256=diff.sha256(changed)))
 
     def test_aidl_comments_are_byte_changes_without_semantic_claim(self):
         def record(path, content):
@@ -234,6 +313,9 @@ class ArchiveAndReplayTests(unittest.TestCase):
                         'sparse_selection': ['core/java/'], 'tag': tag, 'commit': str(index + 1) * 40,
                         'tag_object': str(index + 3) * 40, 'annotated_tag': True, 'receipt': {'url': 'fixture:ref'}}}})
             first = diff.run(manifest, root, lock, java, root / 'one')
+            for selected in manifest['profiles']:
+                for pin in selected['archives']:
+                    repack_archive(root / pin['filename'])
             diff.run(manifest, root, lock, java, root / 'different-directory')
             ordinary_open = Path.open
 
@@ -263,6 +345,14 @@ class ArchiveAndReplayTests(unittest.TestCase):
             self.assertEqual(first['comparison']['resolved_id_additions'], [2])
             self.assertEqual(first['comparison']['categories']['aidl_source_file:bytes_changed'], 1)
             self.assertEqual([p['sdk']['full_spelling'] for p in first['profiles']], ['36.1', '37.0'])
+            captured = json.loads((root / 'one' / 'input-receipts.json').read_text())
+            received = json.loads((root / 'different-directory' / 'input-receipts.json').read_text())
+            self.assertEqual(captured['manifest_sha256'], received['manifest_sha256'])
+            self.assertTrue(all(a['received']['matches_manifest_capture'] for a in captured['archives']))
+            self.assertTrue(all(not a['received']['matches_manifest_capture'] for a in received['archives']))
+            self.assertEqual((root / 'different-directory' / 'input-receipts.json').read_bytes(),
+                             (root / 'windows' / 'input-receipts.json').read_bytes())
+            self.assertNotIn(b'\r\n', (root / 'windows' / 'input-receipts.json').read_bytes())
 
 
 if __name__ == '__main__':

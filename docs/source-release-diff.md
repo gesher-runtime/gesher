@@ -41,7 +41,9 @@ The selected core/java tree is not all of frameworks/base, all Android modules
 or the build-selected source set.
 
 The [manifest](research/source-16r4-to-17r1/manifest.json) pins exact repository
-refs, input URLs, byte sizes, SHA-256 digests, Git blob/tree IDs and parser version.
+refs, input URLs, Git blob/tree IDs and parser version. Its source-archive byte
+sizes and SHA-256 digests retain the originally captured transport containers;
+decoded source/manifest blobs retain strict byte-size and SHA-256 pins.
 The frameworks/base commits are
 `45034f0663f960d9ee5fb0a101a4732b71f6e2f4` and
 `94b4c163b7dfe5ce3607f7bb8456f9573f7de57d`. Their selected core/java tree IDs are
@@ -57,6 +59,15 @@ hashed; every AIDL file and every observed compatibility field has explicit
 file-level provenance in the report. Source archives and binaries are not
 committed.
 
+Gitiles can regenerate tar/gzip metadata for the same pinned source tree. The
+tool therefore verifies archive file bytes, names, modes and count through the
+exact Git tree, rather than requiring the compressed container to match the
+historical capture. Existing archive/file/corpus bounds still apply. Each run
+writes `input-receipts.json` with the actual received container byte sizes and
+SHA-256 digests, whether they match the historical capture, and the verified
+source-tree and file-inventory digests. The manifest is never rewritten to make
+a new container pass. A changed file or mode still fails source verification.
+
 The pinned release-tag records cover every aosp.lock selector. The two media
 checkout aliases refer to the actual frameworks/av and frameworks/native
 repositories and are retained as aliases. They are not missing release modules.
@@ -66,10 +77,10 @@ are unchanged. Neither observation establishes built-module equivalence.
 The initial public Android17 superproject tag lookup was unavailable; no
 substitute superproject profile is inferred.
 
-The offline tool verifies the supplied bytes and their consistency with the
-pinned reference mapping. It does not reauthenticate historical tag responses
-over the network. A later moved tag or changed upstream snapshot must not
-silently replace the exact commits and trees in this manifest.
+The offline tool verifies decoded blob bytes and reconstructed archive source
+identity against the pinned reference mapping. It does not reauthenticate
+historical tag responses over the network. A later moved tag or changed upstream
+snapshot must not silently replace the exact commits and trees in this manifest.
 
 ## Why the source comparison is 36.1 to 37.0
 
@@ -287,18 +298,29 @@ for name in summary.json profiles.json compat-inventory.jsonl delta.jsonl README
 done
 ```
 
+The five source-report files above are reproducible from the same pinned trees,
+manifest and generator. `input-receipts.json` is a separate transport observation:
+compare its verified source identities, but do not expect its compressed byte
+receipts to equal a previous download. The committed receipt records the actual
+containers used for this report's regeneration.
+
 The project lock hash must match the pinned selector profile. The parser patch
 version must match the manifest. The tool compiles its own Java helper into a
 temporary directory and parses temporary copies of the verified Java source
 files. It never loads or executes Android source classes, stubs or libraries.
 
 `profiles.json` contains complete selected repository mappings, release-config
-graphs/traces, archive verification results, parser completeness/diagnostics,
-duplicate groups, Build constants, schema metadata and the full AIDL file
-inventory. `compat-inventory.jsonl` retains every observed candidate and its
+graphs/traces, historical manifest capture receipts and stable archive source
+verification results, parser completeness/diagnostics, duplicate groups, Build
+constants, schema metadata and the full AIDL file inventory.
+`compat-inventory.jsonl` retains every observed candidate and its
 measured/unresolved state. `delta.jsonl` contains all changed observations;
-`summary.json` and README summarize the same data. Input and generator hashes
-are retained. Canonical JSON digests use sorted keys, compact separators and
+`summary.json` and README summarize the same data. The flat archive `bytes` and
+`sha256` fields copied into `profiles.json` describe the manifest's historical
+capture; they are not assertions that a regenerated container matched it.
+Actual container receipts are retained separately in `input-receipts.json`.
+Source-input and generator hashes are retained in the semantic reports.
+Canonical JSON digests use sorted keys, compact separators and
 ASCII escapes; JSONL digests include trailing LF newlines. All text reports
 explicitly use UTF-8 and LF on every host, including Windows. Outputs contain no
 current timestamp or machine-local path.
@@ -314,7 +336,7 @@ GESHER_SOURCE_DIFF_JAVA=/path/to/jdk-21.0.13/bin/java \
   python3 -m unittest discover -s tools/tests -p test_source_release_diff.py -v
 ```
 
-The sixteen tests include an independent javac Element/constant oracle for
+The nineteen tests include an independent javac Element/constant oracle for
 normal fixtures. It checks interface modifiers, constant values, qualified
 annotation identities and arguments through compiler attribution, separately
 from the production AST reader. Other fixtures cover comments/strings,
@@ -326,10 +348,15 @@ conflicts. Fixture application classes are never executed.
 
 The installed Git independently supplies expected tree IDs for ordinary source
 archive fixtures, including executable modes, symlinks and directory ordering.
+Repacked archive fixtures retain the same source tree while changing tar/gzip
+metadata. Changed file content, executable modes, tree IDs and file counts fail;
+decoded blob bytes and Git object IDs remain strictly checked.
 Configuration tests exercise ordered conflicts, declaration defaults, absent
 preview metadata, non-inheriting flags and build-variant limitations. An offline
-fixture runs the complete tool twice with real Java AST parsing and Git-bound
-source inputs and compares all five output files byte for byte.
+fixture runs the complete tool with captured and repacked containers, real Java
+AST parsing and Git-bound source inputs. It compares all five source-report
+files byte for byte and verifies that the separate received-container receipts
+truthfully distinguish the two inputs.
 
 The actual artifact run reconstructs all sixteen source archive trees, checks
 the additional source blobs, parses every selected Java file and retains every

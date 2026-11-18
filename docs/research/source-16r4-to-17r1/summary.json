@@ -18,7 +18,7 @@
   "delta_sha256": "18b26fbdcb860d05b945915542df88a2d151e69ee5562b513300c97c5f11482b",
   "generator_sha256": {
     "SourceCompatInventory.java": "c104111ccf73a71b3913f9fd9a405f1119d0016edceea0cfe48e08fd758dc655",
-    "source_release_diff.py": "114eee3d3ab6b2009fc73389402a47900db449cd846f9dd2fad2e0dbe6e1b843"
+    "source_release_diff.py": "58711cd82e415334dfb5382c71db31a75c5823096d8d57f14540fc93a623b28d"
   },
   "manifest_sha256": "c89d839e21c50a67b14ac6008b4a3375da2cd09fbe02b51925df9074c0ff2d73",
   "profile_data_sha256": "72a0237082272ea3fbc002f53c39aa9574edf9dce96e31d05c4d1b4dc128515c",

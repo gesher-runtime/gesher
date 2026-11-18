@@ -48,11 +48,16 @@ def git_object(kind, data):
     return hashlib.sha1(kind.encode() + b" " + str(len(data)).encode() + b"\0" + data).hexdigest()
 
 
-def checked_bytes(input_dir, pin):
+def input_path(input_dir, pin):
     name = pin["filename"]
     if PurePosixPath(name).name != name:
         raise InputError("Input filename must be a basename: " + name)
-    data = (input_dir / name).read_bytes()
+    return input_dir / name
+
+
+def checked_bytes(input_dir, pin):
+    name = pin["filename"]
+    data = input_path(input_dir, pin).read_bytes()
     if len(data) != pin["bytes"] or sha256(data) != pin["sha256"]:
         raise InputError("Pinned input differs: " + name)
     if "git_blob" in pin and git_object("blob", data) != pin["git_blob"]:
@@ -61,7 +66,11 @@ def checked_bytes(input_dir, pin):
 
 
 def read_archive(input_dir, pin):
-    data = checked_bytes(input_dir, pin)
+    # Gitiles can regenerate gzip/tar metadata for an unchanged source tree.
+    # Container hashes are historical capture receipts; the reconstructed Git
+    # tree below binds file bytes, names and modes to the selected source pin.
+    with input_path(input_dir, pin).open("rb") as stream:
+        data = stream.read(MAX_ARCHIVE_BYTES + 1)
     if len(data) > MAX_ARCHIVE_BYTES:
         raise InputError("Source archive exceeds supported size")
     nodes, contents, files = {}, {}, []
@@ -112,8 +121,12 @@ def read_archive(input_dir, pin):
     if actual_tree != pin["git_tree"] or len(files) != pin["files"]:
         raise InputError("Source archive does not reproduce pinned Git tree: " + pin["filename"])
     files.sort(key=lambda f: f["path"])
+    received_sha256 = sha256(data)
     return {"files": files, "contents": contents, "git_tree": actual_tree,
-            "file_inventory_sha256": digest(files), "uncompressed_bytes": total}
+            "file_inventory_sha256": digest(files), "uncompressed_bytes": total,
+            "transport_receipt": {"bytes": len(data), "sha256": received_sha256,
+                                  "matches_manifest_capture": len(data) == pin["bytes"]
+                                  and received_sha256 == pin["sha256"]}}
 
 
 # A strict reader of the selected textproto forms, not a general Soong evaluator.
@@ -701,7 +714,7 @@ def run(manifest, input_dir, project_lock, java, output):
     lock_tag, selectors = project_selectors(lock_bytes)
     if lock_tag != manifest["profiles"][0]["tag"]:
         raise InputError("Project source tag differs from before profile")
-    profiles, inventory, occurrence_profiles = [], [], []
+    profiles, inventory, occurrence_profiles, archive_receipts = [], [], [], []
     with tempfile.TemporaryDirectory(prefix="gesher-source-diff-") as temporary:
         temp = Path(temporary); classes = temp / "classes"; classes.mkdir()
         subprocess.run([java, "-m", "jdk.compiler/com.sun.tools.javac.Main", "-encoding", "UTF-8", "-d", str(classes),
@@ -714,6 +727,13 @@ def run(manifest, input_dir, project_lock, java, output):
                 if "repository" in pin and commits[pin["repository"]] != {pin["commit"]}:
                     raise InputError("Source input commit differs from selected release reference: " + pin["filename"])
             archives = {pin["role"]: read_archive(input_dir, pin) for pin in selected["archives"]}
+            for pin in selected["archives"]:
+                archive = archives[pin["role"]]
+                archive_receipts.append({"profile": selected["id"], "role": pin["role"],
+                                         "filename": pin["filename"],
+                                         "received": archive["transport_receipt"],
+                                         "verified_git_tree": archive["git_tree"],
+                                         "verified_file_inventory_sha256": archive["file_inventory_sha256"]})
             blobs = {role: checked_bytes(input_dir, pin) for role, pin in selected["blobs"].items()}
             references = selected_references(selected, checked_bytes(input_dir, selected["release_manifest"]), selectors)
             core = archives["core_java"]
@@ -757,7 +777,12 @@ def run(manifest, input_dir, project_lock, java, output):
                              "duplicate_change_ids": p["java"]["duplicate_change_ids"], "aidl_files": len(p["aidl_files"])} for p in profiles],
                "unmeasured": UNMEASURED}
     output.mkdir(parents=True, exist_ok=True)
-    for name, data in [("summary.json", summary), ("profiles.json", profiles)]:
+    # Transport observations are truthful but do not change the source findings
+    # when an upstream archive is regenerated from the same pinned tree.
+    receipts = {"schema_version": 1, "manifest_sha256": digest(manifest),
+                "archives": archive_receipts}
+    for name, data in [("summary.json", summary), ("profiles.json", profiles),
+                       ("input-receipts.json", receipts)]:
         (output / name).write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
                                    encoding="utf-8", newline="\n")
     (output / "compat-inventory.jsonl").write_bytes(inventory_bytes)
