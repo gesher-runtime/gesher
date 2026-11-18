@@ -57,6 +57,18 @@ Primary contract references:
 and Gesher's internal `DataSource` contract in
 [`data_source.h`](../../compat/media/player/data_source.h).
 
+## Integration with pending extractor work
+
+This change is independent against the stated current-main baseline. Pending
+[PR #119](https://github.com/gesher-runtime/gesher/pull/119) and
+[PR #101](https://github.com/gesher-runtime/gesher/pull/101) add the same
+`read_end_`/`CachedBytes()` accounting to `HttpSource`. Their current implementation
+inspects only `chunks_`. Combining either with this PR requires accounting for
+the valid disk-spooled whole-response prefix and advancing `read_end_` after
+successful `ReadWhole()` results. That combined API behavior needs its own
+validation; clean semantic composition with those pending branches is not
+claimed. Their unrelated API additions are not included here.
+
 ## Reproducible comparison
 
 Run from this branch:
