@@ -89,7 +89,7 @@ HRESULT DefaultEndpoint(EDataFlow flow, IMMDevice** device) {
 class WasapiCapture : public CaptureSource {
  public:
   ~WasapiCapture() override {
-    if (client_ != nullptr) client_->Stop();
+    if (started_) Stop();
     SafeRelease(capture_);
     SafeRelease(client_);
     SafeRelease(device_);
@@ -149,8 +149,19 @@ class WasapiCapture : public CaptureSource {
            (is_float_ ? ", float" : "");
   }
   std::string DeviceName() const override { return name_; }
-  bool Start() override { return SUCCEEDED(client_->Start()); }
-  void Stop() override { client_->Stop(); }
+  bool Start() override {
+    if (started_) return true;
+    // WASAPI Stop preserves queued endpoint packets. A new capture activation
+    // must discard them before Start resumes the stopped stream. Reset is
+    // valid after initialization, including before the first Start.
+    if (FAILED(client_->Reset()) || FAILED(client_->Start())) return false;
+    started_ = true;
+    return true;
+  }
+  void Stop() override {
+    if (started_) client_->Stop();
+    started_ = false;
+  }
 
   bool Pull(std::vector<float>* out) override {
     for (int guard = 0; guard < 64; guard++) {
@@ -195,6 +206,7 @@ class WasapiCapture : public CaptureSource {
 
  private:
   bool loopback_ = false;
+  bool started_ = false;
   IMMDevice* device_ = nullptr;
   IAudioClient* client_ = nullptr;
   IAudioCaptureClient* capture_ = nullptr;

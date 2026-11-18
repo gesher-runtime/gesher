@@ -6,6 +6,14 @@ silence, a file or loopback as a replacement. A WASAPI packet explicitly marked
 `AUDCLNT_BUFFERFLAGS_SILENT` remains genuine captured silence. A recoverable
 `GetBuffer` `AUDCLNT_E_BUFFER_ERROR` waits for the next processing pass without
 creating samples ([Microsoft contract](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer)).
+When the shared source restarts after becoming idle, it resets the stopped
+WASAPI stream before starting, flushing queued packets from the previous
+activation. A failed Reset or Start reports unavailable instead of admitting
+capture. Starting an already running source does not reset it: another active
+recorder's input remains continuous. This follows Windows'
+[Stop/resume](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-stop)
+and [Reset/flush](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudioclient-reset)
+contracts.
 
 The engine opens and starts its COM-owned source on its worker. A synchronous
 command acknowledges initialization/start before the caller reports success.
@@ -58,9 +66,12 @@ Validation:
   and AudioRecord read translation. Unrelated object allocation, encoding,
   muxing and JNI receiver lookup remain declared fixture boundaries.
   The same driver compiles the entire WASAPI implementation with an injected
-  `IAudioCaptureClient` boundary and checks empty buffers, recoverable errors,
+  `IAudioCaptureClient`/`IAudioClient` boundaries and checks empty buffers, recoverable errors,
   device/service failure, genuine silent packets, exact float samples and
-  invalid null payloads. No COM audio device is opened by these fixtures.
+  invalid null payloads. A queued pre-stop packet must disappear on restart;
+  failed Reset never calls Start, successful Reset still propagates Start
+  failure, and repeated Start/Stop preserves the current source state. No COM
+  audio device is opened by these fixtures.
 - `tools/test_aaudio_lifecycle_contracts.py` compiles all AAudio functions and
   exports with controlled Track/Capture observers, including partial input reads
   and error-only callback delivery. Builder and existing PCM/callback/ring tests
