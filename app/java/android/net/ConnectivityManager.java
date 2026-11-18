@@ -582,6 +582,7 @@ public class ConnectivityManager {
     private static Listener retireLocked(CallbackRecord r) {
         sCallbacks.remove(r.callback);
         r.active = false;
+        r.cancelTimeoutLocked();
         if (!sCallbacks.isEmpty()) return null;
         Listener retiredListener = sListener;
         sListener = null;
@@ -651,11 +652,24 @@ public class ConnectivityManager {
                     CallbackRecord old = sCallbacks.remove(previous);
                     // Keep the shared listener while replacing the token. Its
                     // queued callbacks will observe this exact record's retirement.
-                    if (old != null) old.active = false;
+                    if (old != null) { old.active = false; old.cancelTimeoutLocked(); }
                 }
                 sCallbacks.put(cb, r);
                 cb.mWasRegistered = true;
                 first = sCurrent != null ? sCurrent : NO_NETWORK;
+                if (timeoutMs > 0) {
+                    r.timeout = () -> {
+                        Listener retiredListener;
+                        synchronized (sLock) {
+                            if (sCallbacks.get(cb) != r || !r.active
+                                    || !r.current.isEmpty() || r.everAvailable) return;
+                            retiredListener = retireLocked(r);
+                        }
+                        removeListener(retiredListener);
+                        cb.onUnavailable();
+                    };
+                    if (!r.handler.postDelayed(r.timeout, timeoutMs)) r.timeout = null;
+                }
                 // The PendingIntent owner is already visible before delivery can
                 // cancel/release it, and concurrent replacements cannot orphan it.
                 r.post(first);
@@ -667,18 +681,6 @@ public class ConnectivityManager {
             // Its removal may block/reenter and therefore stays outside sLock.
             removeListener(failedListener);
         }
-        if (timeoutMs > 0) {
-            r.handler.postDelayed(() -> {
-                Listener retiredListener;
-                synchronized (sLock) {
-                    if (sCallbacks.get(cb) != r || !r.active
-                            || !r.current.isEmpty() || r.everAvailable) return;
-                    retiredListener = retireLocked(r);
-                }
-                removeListener(retiredListener);
-                cb.onUnavailable();
-            }, timeoutMs);
-        }
     }
 
     /** A registered callback and the networks it was told of. */
@@ -689,6 +691,13 @@ public class ConnectivityManager {
         final Kind kind;
         volatile boolean active = true;
         boolean everAvailable;
+        Runnable timeout; // guarded by sLock
+
+        void cancelTimeoutLocked() {
+            if (timeout == null) return;
+            handler.removeCallbacks(timeout);
+            timeout = null;
+        }
         /** netId -> what the callback was last told of it. */
         final Map<Integer, NetworkCapabilities> current = new LinkedHashMap<>();
         final Map<Integer, LinkProperties> currentLp = new HashMap<>();
@@ -755,7 +764,11 @@ public class ConnectivityManager {
                 if (was == null) {
                     current.put(netId, nc);
                     currentLp.put(netId, lp);
-                    everAvailable = true;
+                    synchronized (sLock) {
+                        if (!active) return;
+                        everAvailable = true;
+                        cancelTimeoutLocked();
+                    }
                     callback.onAvailable(network, new NetworkCapabilities(nc),
                             new LinkProperties(lp), false);
                 } else {
