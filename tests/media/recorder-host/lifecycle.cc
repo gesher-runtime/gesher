@@ -48,6 +48,8 @@ static std::atomic<unsigned> encoded_batches = 0;
 static std::atomic<bool> capture_running = false;
 static std::atomic<bool> capture_released = false;
 static std::atomic<bool> fail_capture_restart = false;
+static std::atomic<bool> hold_video_limit = false;
+static std::atomic<bool> video_limit_waiting = false;
 static std::vector<std::vector<uint8_t>> access_units;
 static std::vector<uint8_t> avc_access_unit;
 static std::atomic<bool> surface_abandoned = false;
@@ -73,7 +75,12 @@ std::shared_ptr<CaptureStream> OpenCapture(const CaptureParams& p, std::string*)
 }
 int CaptureStream::Start() {
   std::lock_guard lock(mu_);
-  if (released_ || fail_capture_restart) return -32;
+  if (fail_capture_restart) {
+    hold_video_limit = false;
+    hold_video_limit.notify_all();
+    return -32;
+  }
+  if (released_) return -32;
   started_ = capture_running = true;
   read_ = written_;
   return 0;
@@ -133,6 +140,10 @@ class HostVideoEncoder : public VideoEncoder {
  public:
   std::string Name() const override { return "fixture-avc"; }
   bool Encode(const VideoFrame& frame, bool, std::vector<EncodedPacket>* out) override {
+    if (frame.time_us >= 120000 && hold_video_limit) {
+      video_limit_waiting = true;
+      hold_video_limit.wait(true);
+    }
     out->push_back({avc_access_unit, frame.time_us, true, false});
     return true;
   }
@@ -341,6 +352,44 @@ void MixedSources(const std::string& path) {
   assert(recorder.input_surface() == nullptr);
 }
 
+void ResumeFailureAtVideoLimit(const std::string& path) {
+  Events events;
+  Recorder recorder([&](int what, int extra) { events.Record(what, extra); });
+  std::string error;
+  Configure(recorder, path, 120, 0);
+  auto& config = recorder.config();
+  config.video_source = 2;
+  config.video_encoder = 2;
+  config.width = 32;
+  config.height = 32;
+  assert(recorder.Prepare(&error) && recorder.Start(&error));
+  auto* surface = static_cast<HostSurface*>(recorder.input_surface());
+  assert(surface != nullptr);
+  feed_audio(3);
+  WaitForEncodes(3);
+  timespec now {};
+  assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+  const int64_t ns = now.tv_sec * 1000000000LL + now.tv_nsec;
+
+  // The worker already owns a frame that reaches the duration limit when
+  // the paused recorder encounters a capture restart failure.
+  hold_video_limit = true;
+  video_limit_waiting = false;
+  surface->Submit(ns);
+  surface->Submit(ns + 150000000);
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (!video_limit_waiting && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(1ms);
+  }
+  assert(video_limit_waiting && recorder.Pause());
+  fail_capture_restart = true;
+  assert(!recorder.Resume(&error) && error == "audio capture restart failed");
+  fail_capture_restart = false;
+  assert(capture_released && surface_abandoned && recorder.InError());
+  assert(events.Wait());
+  events.Check(1, 1);
+}
+
 void WriteFailure(const std::string& path) {
   Events events;
   Recorder recorder([&](int what, int extra) { events.Record(what, extra); });
@@ -469,6 +518,7 @@ int main(int argc, char** argv) {
   DurationAndPause(output + "/duration.m4a");
   SizeLimit(output + "/size.m4a");
   MixedSources(output + "/mixed.mp4");
+  ResumeFailureAtVideoLimit(output + "/resume-limit.mp4");
   WriteFailure(output + "/write-failure.m4a");
   ErrorRecovery(output + "/error-recovery");
   std::cout << "Recorder worker lifecycle checks passed\n";
