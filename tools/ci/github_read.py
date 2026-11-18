@@ -9,6 +9,7 @@ import time
 
 _BACKOFF_SECONDS = (1, 2, 4)
 _HTTP_STATUS = re.compile(r'\(HTTP ([1-5][0-9]{2})\)')
+_GH_HTTP_STATUS = re.compile(r'^gh: HTTP ([1-5][0-9]{2})\r?$', re.MULTILINE)
 _STREAM_CANCEL = re.compile(
     r'(?:^|: )stream error: stream ID [1-9][0-9]*; CANCEL; received from peer$')
 
@@ -26,7 +27,7 @@ def _reject_json_constant(value):
 def _transient(stderr):
     # The status reported by gh takes precedence over transport-looking text in
     # an error message. In particular, never turn a 401/403/404 into a retry.
-    statuses = _HTTP_STATUS.findall(stderr)
+    statuses = _HTTP_STATUS.findall(stderr) + _GH_HTTP_STATUS.findall(stderr)
     if statuses:
         return all(status in ('502', '503', '504') for status in statuses)
     # This is the observed Go HTTP/2 stream cancellation, optionally prefixed by

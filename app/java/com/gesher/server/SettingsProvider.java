@@ -96,16 +96,19 @@ final class SettingsProvider extends ContentProvider {
                 || CHECKER_ENABLED.equals(name));
     }
 
+    private boolean checkerSubtypePredatesSelection() {
+        Map<String, String> rows = mTextTables.get(SECURE);
+        return rows.containsKey(CHECKER_SUBTYPE) && rows.containsKey(SELECTED_CHECKER)
+                && mTextStore.id(SECURE, CHECKER_SUBTYPE) < mTextStore.id(SECURE, SELECTED_CHECKER);
+    }
+
     private String visible(String table, String name, String value) {
         if (value == null || !SECURE.equals(table)) return value;
         if (SELECTED_CHECKER.equals(name)) {
             int delimiter = value.indexOf('\n');
             return delimiter < 0 ? value : value.substring(0, delimiter);
         }
-        if (CHECKER_SUBTYPE.equals(name) && mTextTables.get(SECURE).containsKey(SELECTED_CHECKER)
-                && mTextStore.id(SECURE, CHECKER_SUBTYPE) < mTextStore.id(SECURE, SELECTED_CHECKER)) {
-            return "0";
-        }
+        if (CHECKER_SUBTYPE.equals(name) && checkerSubtypePredatesSelection()) return "0";
         return value;
     }
 
@@ -334,7 +337,9 @@ final class SettingsProvider extends ContentProvider {
             if (SECURE.equals(table) && SELECTED_CHECKER.equals(name)) {
                 value = verifiedCheckerSelection(value);
             }
-            if (!store(table, name).put(table, name, value, existingOnly)) return false;
+            boolean newGeneration = SECURE.equals(table) && CHECKER_SUBTYPE.equals(name)
+                    && checkerSubtypePredatesSelection();
+            if (!store(table, name).put(table, name, value, existingOnly, newGeneration)) return false;
         }
         notifySetting(table, name); return true;
     }

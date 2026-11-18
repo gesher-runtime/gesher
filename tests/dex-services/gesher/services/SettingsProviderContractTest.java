@@ -14,6 +14,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.provider.Settings;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.PrintStream;
@@ -160,6 +161,25 @@ public final class SettingsProviderContractTest {
         check(old.equals(read(broken, "font_scale")), "Failed persistence rolls back update");
         rejects(IllegalStateException.class, () -> broken.call("DELETE_system", "font_scale", null));
         check(old.equals(read(broken, "font_scale")), "Failed persistence rolls back deletion");
+        checkerSubtypeGeneration(file, loaded);
+    }
+    private static void checkerSubtypeGeneration(File file, ContentProvider p) throws Exception {
+        String checker = Settings.Secure.SELECTED_SPELL_CHECKER;
+        String subtype = Settings.Secure.SELECTED_SPELL_CHECKER_SUBTYPE;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            p.call("PUT_secure", subtype, value("1002"));
+            p.call("PUT_secure", checker, value(""));
+            check("0".equals(p.call("GET_secure", subtype, null).getString("value")),
+                    "New spell-checker selection resets the previous subtype");
+            p.call("PUT_secure", subtype, value("1002"));
+            check("1002".equals(p.call("GET_secure", subtype, null).getString("value")),
+                    "Explicit same-ID subtype selection updates its generation");
+            check("1002".equals(provider(file).call("GET_secure", subtype, null).getString("value")),
+                    "Re-selected subtype survives settings reload");
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
     }
     private static void limits(ContentProvider p) throws Exception {
         p.call("PUT_system", "limit", value("x".repeat(32768)));

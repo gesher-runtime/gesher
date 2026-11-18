@@ -52,6 +52,15 @@ class GitHubReadTest(unittest.TestCase):
                                  [call(COMMAND, capture_output=True, timeout=60)] * 2)
                 self.sleep.assert_called_once_with(1)
 
+    def test_bare_gh_http_status_from_windows_retries_exact_get(self):
+        value = {'jobs': [], 'total_count': 0}
+        self.run.side_effect = [response(code=1, stderr='gh: HTTP 503\r\n'),
+                                response(value)]
+        self.assertEqual(get_json(ENDPOINT), value)
+        self.assertEqual(self.run.call_args_list,
+                         [call(COMMAND, capture_output=True, timeout=60)] * 2)
+        self.sleep.assert_called_once_with(1)
+
     def test_observed_http2_cancel_with_or_without_get_prefix_recovers(self):
         for prefix in ('', 'Get "https://api.github.com/' + ENDPOINT + '": ', 'gh: '):
             with self.subTest(prefix=prefix):
@@ -81,7 +90,9 @@ class GitHubReadTest(unittest.TestCase):
         self.assertEqual(self.sleep.call_args_list, [call(1), call(2), call(4)])
 
     def test_permanent_and_unobserved_errors_fail_without_retry(self):
-        errors = [f'gh: rejected (HTTP {status})' for status in (400, 401, 403, 404, 408, 429, 500, 501)]
+        permanent = (400, 401, 403, 404, 408, 429, 500, 501)
+        errors = [f'gh: rejected (HTTP {status})' for status in permanent]
+        errors += [f'gh: HTTP {status}\r\n' for status in permanent]
         errors += ['connection reset by peer', 'context deadline exceeded',
                    'HTTP/2 INTERNAL_ERROR', 'CANCEL',
                    'stream error: stream ID 1; INTERNAL_ERROR; received from peer',
@@ -89,7 +100,10 @@ class GitHubReadTest(unittest.TestCase):
                    'stream error: stream ID 0; CANCEL; received from peer',
                    'stream error: stream ID 1; CANCEL; unexpected trailing message',
                    'gh: rejected (HTTP 403)\nstream error: stream ID 1; CANCEL; received from peer',
-                   'gh: rejected (HTTP 401)\ngh: Server Error (HTTP 502)', '']
+                   'gh: rejected (HTTP 401)\ngh: Server Error (HTTP 502)',
+                   'gh: HTTP 403\r\ngh: Server Error (HTTP 503)',
+                   'diagnostic text mentioning gh: HTTP 503',
+                   'gh: HTTP 503 in a diagnostic message', '']
         for error in errors:
             with self.subTest(error=error):
                 self.run.reset_mock()
