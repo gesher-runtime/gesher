@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include <windows.h>
 
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -699,7 +700,53 @@ static bool WaitFor(int in, uint32_t want, const std::string& name, std::vector<
   return false;
 }
 
+struct RenameStep {
+  size_t destination;
+  bool write;
+};
+
+static void InotifyRenameBurst(const std::string& dir, std::initializer_list<RenameStep> steps,
+                               std::initializer_list<uint32_t> expected) {
+  const std::string paths[] = {dir + "/inotify-burst-a", dir + "/inotify-burst-b",
+                               dir + "/inotify-burst-c"};
+  CHECK(PutFile(paths[0], "original"));
+  int fd = open(paths[0].c_str(), O_WRONLY);
+  CHECK(fd >= 0);
+  int in = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+  CHECK(in >= 0);
+  int wd = inotify_add_watch(in, paths[0].c_str(), IN_MOVE_SELF | IN_MODIFY | IN_DELETE_SELF);
+  CHECK(wd > 0);
+  size_t at = 0;
+  for (RenameStep step : steps) {
+    CHECK(rename(paths[at].c_str(), paths[step.destination].c_str()) == 0);
+    at = step.destination;
+    // Keep this originally opened descriptor alive throughout the burst.
+    if (step.write) CHECK(pwrite(fd, "x", 1, 0) == 1);
+  }
+  std::vector<Event> seen;
+  size_t cursor = 0;
+  for (uint32_t mask : expected) CHECK(WaitFor(in, mask, "", &seen, wd, &cursor));
+  size_t i = 0;
+  for (uint32_t mask : expected) {
+    CHECK(i < seen.size() && seen[i].wd == wd && seen[i].mask == mask && seen[i].name.empty());
+    ++i;
+  }
+  CHECK(close(fd) == 0);
+  CHECK(unlink(paths[at].c_str()) == 0);
+  CHECK(WaitFor(in, IN_DELETE_SELF, "", &seen, wd, &cursor));
+  CHECK(WaitFor(in, IN_IGNORED, "", &seen, wd, &cursor));
+  CHECK(inotify_rm_watch(in, wd) == -1 && errno == EINVAL);
+  close(in);
+}
+
 static void InotifyFileRename(const std::string& dir) {
+  InotifyRenameBurst(dir, {{1, true}, {0, true}},
+                    {IN_MOVE_SELF, IN_MODIFY, IN_MOVE_SELF, IN_MODIFY});
+  InotifyRenameBurst(dir, {{1, true}, {2, true}, {1, true}},
+                    {IN_MOVE_SELF, IN_MODIFY, IN_MOVE_SELF, IN_MODIFY, IN_MOVE_SELF, IN_MODIFY});
+  // Two identical unread move notifications coalesce, but both precede the write.
+  InotifyRenameBurst(dir, {{1, false}, {0, true}}, {IN_MOVE_SELF, IN_MODIFY});
+
   // Run with and without requesting IN_MOVE_SELF. Masking it out must not
   // stop the watch or keep the old name as its notification source.
   for (uint32_t move_mask : {0u, static_cast<uint32_t>(IN_MOVE_SELF)}) {
