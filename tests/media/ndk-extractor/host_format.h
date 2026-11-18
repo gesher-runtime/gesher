@@ -11,7 +11,7 @@ struct AMediaFormat;
 AMediaFormat* AMediaFormat_new();
 media_status_t AMediaFormat_delete(AMediaFormat*);
 void AMediaFormat_clear(AMediaFormat*);
-media_status_t AMediaFormat_copy(AMediaFormat*, const AMediaFormat*);
+media_status_t AMediaFormat_copy(AMediaFormat*, AMediaFormat*);
 void AMediaFormat_setInt32(AMediaFormat*,const char*,int32_t);
 void AMediaFormat_setInt64(AMediaFormat*,const char*,int64_t);
 void AMediaFormat_setString(AMediaFormat*,const char*,const char*);

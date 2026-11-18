@@ -1,5 +1,5 @@
-// Actual AospTrackReader and NDK Select bodies; explicit buffer-group, metadata
-// storage, error-translation and plugin-operation seams. No demux plugin runs.
+// Actual AospTrackReader, Select, Current and GetSampleFormat bodies, with
+// explicit buffer-group, format storage, error translation and plugin seams.
 #include <media/NdkMediaFormat.h>
 #include <algorithm>
 #include <cstdlib>
@@ -20,7 +20,7 @@ struct AMediaFormat {
 AMediaFormat* AMediaFormat_new() { return new AMediaFormat; }
 media_status_t AMediaFormat_delete(AMediaFormat* f) { delete f; return 0; }
 void AMediaFormat_clear(AMediaFormat* f) { f->values.clear(); }
-media_status_t AMediaFormat_copy(AMediaFormat* to,const AMediaFormat* from) {
+media_status_t AMediaFormat_copy(AMediaFormat* to,AMediaFormat* from) {
   to->values=from->values; return 0;
 }
 void AMediaFormat_setInt32(AMediaFormat* f,const char* k,int32_t v) { f->values[k]=v; }
@@ -79,11 +79,13 @@ enum CMediaTrackReadOptions : uint32_t { SEEK = 8 };
 static int reverse_translate_error(media_status_t value) {
   if (value == AMEDIA_OK) return 0;
   if (value == AMEDIA_ERROR_IO) return -1004;
+  if (value == AMEDIA_ERROR_MALFORMED) return -1007;
   return INT32_MIN;
 }
 static media_status_t translate_error(int value) {
   if (value == 0) return AMEDIA_OK;
   if (value == -1004) return AMEDIA_ERROR_IO;
+  if (value == -1007) return AMEDIA_ERROR_MALFORMED;
   return AMEDIA_ERROR_UNKNOWN;
 }
 
@@ -94,24 +96,29 @@ using android::CMediaBuffer;
 @TRACK_READER@
 }
 
-// Only the selected members touched by the unchanged Select body are needed.
+// Only the extractor state touched by the extracted methods is needed.
 struct AMediaExtractor {
   struct Track {
     size_t index;
     std::unique_ptr<gesher::media::TrackReader> reader;
     std::string mime;
     gesher::media::Sample sample;
+    bool pending = false;
+    int result = AMEDIA_OK;
   };
   std::mutex mutex;
   std::unique_ptr<gesher::media::Extractor> extractor;
   std::vector<Track> selected;
+  @CURRENT@
 };
 namespace gesher::media {
 @SELECT@
+@GET_SAMPLE_FORMAT@
 }
 
 struct StartFixture {
   media_status_t status = AMEDIA_OK;
+  media_status_t read_status = AMEDIA_ERROR_END_OF_STREAM;
   int starts = 0, stops = 0, frees = 0, reads = 0;
   bool group_supplied = false;
 };
@@ -139,8 +146,9 @@ class FixtureExtractor final : public gesher::media::Extractor {
     track->stop = [](void* p) { ++static_cast<StartFixture*>(p)->stops; return AMEDIA_OK; };
     track->free = [](void* p) { ++static_cast<StartFixture*>(p)->frees; };
     track->read = [](void* p, android::CMediaBuffer**, uint32_t, int64_t) {
-      ++static_cast<StartFixture*>(p)->reads;
-      return AMEDIA_ERROR_END_OF_STREAM;
+      auto& state = *static_cast<StartFixture*>(p);
+      ++state.reads;
+      return state.read_status;
     };
     return std::make_unique<gesher::media::AospTrackReader>(track);
   }
@@ -171,6 +179,20 @@ int main() {
   Check("selecting an already selected track does not restart it", gesher::media::Select(&ex, 0) == 0 && state.starts == 3);
   ex.selected.clear();
   Check("successful reader stops and frees exactly once", state.stops == 1 && state.frees == 3 && state.reads == 0);
+  gesher::media::Format sample_format;
+  for (const auto& [backend, expected] :
+       {std::pair{AMEDIA_ERROR_IO, -10007}, std::pair{AMEDIA_ERROR_MALFORMED, -10001},
+        std::pair{AMEDIA_ERROR_UNSUPPORTED, -10000}, std::pair{AMEDIA_ERROR_END_OF_STREAM, -10006}}) {
+    state.read_status = backend;
+    Check("track can start before any sample error", gesher::media::Select(&ex, 0) == AMEDIA_OK);
+    AMediaFormat_setInt32(sample_format.get(), "sentinel", 42);
+    int32_t sentinel = 0;
+    Check("sample format reports Android-mapped backend status",
+          gesher::media::GetSampleFormat(&ex, sample_format.get()) == expected);
+    Check("failed sample query leaves its destination format intact",
+          sample_format.GetInt32("sentinel", &sentinel) && sentinel == 42);
+    ex.selected.clear();
+  }
   std::printf("Extractor start contracts: checks=%d failures=%d\n", checks, failures);
   return failures ? 1 : 0;
 }

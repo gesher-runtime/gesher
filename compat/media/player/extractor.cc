@@ -141,7 +141,8 @@ class AospTrackReader : public TrackReader {
     CMediaBuffer* buf = nullptr;
     media_status_t err = track_->read(track_->data, &buf, opts, seek_us >= 0 ? seek_us : 0);
     if (err == AMEDIA_ERROR_END_OF_STREAM) return 1;
-    if (err != AMEDIA_OK || buf == nullptr) return err == AMEDIA_OK ? 1 : -1;
+    if (err != AMEDIA_OK) return err;
+    if (buf == nullptr) return 1;
     const uint8_t* data = static_cast<const uint8_t*>(buf->data(buf->handle));
     size_t off = buf->range_offset(buf->handle), len = buf->range_length(buf->handle);
     out->data.assign(data + off, data + off + len);

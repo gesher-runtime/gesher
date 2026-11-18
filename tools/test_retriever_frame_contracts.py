@@ -45,8 +45,10 @@ def main():
                     "VideoDecoder* decoder, int64_t time_us, int option) {\n"
                     + body + "  return chosen;\n}\n")
     adapter = section(reader, "class AospTrackReader :", "class AospExtractor :")
+    format_ownership = section(reader, "Format::Format()", "bool Format::GetInt32(")
     template = (ROOT / "tests/media/retriever_frame_host.cc.in").read_text(encoding="utf-8")
-    for marker, body in (("@TRACK_READER@", adapter), ("@RETRIEVER_SELECTION@", selector)):
+    for marker, body in (("@FORMAT_OWNERSHIP@", format_ownership), ("@TRACK_READER@", adapter),
+                         ("@RETRIEVER_SELECTION@", selector)):
         if template.count(marker) != 1:
             raise ValueError("host fixture marker changed: " + marker)
         template = template.replace(marker, body)

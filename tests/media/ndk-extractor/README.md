@@ -51,18 +51,20 @@ Gesher loader. Building the ELF files alone does not execute the guest API,
 demuxers or Windows callback bridges. The same generated binary/media set can
 also be run on a matching Android device to check the public API oracle.
 
-## Host start-failure fixture
+## Host start and read error fixture
 
 ```sh
 python3 tools/test_extractor_start_contracts.py --sanitize
 ```
 
-This fixture inserts the current, unchanged `AospTrackReader` class, `Format`
-methods and NDK `Select` function into a host executable. It exercises a real
+This fixture inserts the current `AospTrackReader` class, `Format` methods and
+NDK selection and sample-format functions into a host executable. It exercises a real
 reader construction and destruction around controlled plugin start/stop/free
 operations. It verifies immediate I/O failure, unknown-status translation,
 cleanup after failure, retry, repeated selection and exactly one stop/free on
-successful selection release. `--out /path/to/evidence` retains the generated
+successful selection release. Sample-format queries distinguish backend read
+errors from end of stream and preserve the caller's format on failure.
+`--out /path/to/evidence` retains the generated
 source, compiler output and run output; the runner prints production hashes.
 
 The buffer group, format storage and selected error-translation cases are host
