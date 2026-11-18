@@ -60,6 +60,9 @@ enum class SeekMode : uint32_t { kPreviousSync = 0, kNextSync = 1, kClosestSync 
 class TrackReader {
  public:
   virtual ~TrackReader() = default;
+  // CMediaTrack's NDK status from starting this reader. Callers that expose
+  // selection must report a failed start before retaining the reader.
+  virtual int StartStatus() const { return 0; }
   // The next sample. Returns 0, 1 at the end, negative on error; with
   // seek_us >= 0, the first sample at or around that time (by mode).
   virtual int Read(Sample* out, int64_t seek_us = -1, SeekMode mode = SeekMode::kPreviousSync) = 0;

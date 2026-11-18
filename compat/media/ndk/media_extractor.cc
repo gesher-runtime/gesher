@@ -3,10 +3,13 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/inet.h>
+#include <media/NdkMediaErrorPriv.h>
 #include <media/NdkMediaFormat.h>
+#include <media/stagefright/MediaErrors.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -30,20 +33,28 @@ struct SourceCallbacks {
   abi::GetAvailableSize available = nullptr;
 };
 
-// Copies of the NDK descriptor share cancellation with the caller, but can
-// outlive the descriptor itself. A callback already running may overlap close
-// so a blocked read can be released by the application's callback.
+// Setters replace this configuration, so existing attachments keep the callbacks
+// and userdata they captured. Explicit descriptor close stops that configuration;
+// extractor teardown closes only its own attachment. Neither path holds a lock
+// across close: the application's close callback must be able to unblock readAt.
 struct SourceState {
   std::mutex mutex;
   SourceCallbacks callbacks;
   std::shared_ptr<DataSource> uri;
   bool closed = false;
-  bool attached = false;
+
+  std::shared_ptr<SourceState> Copy() {
+    std::lock_guard lock(mutex);
+    auto copy = std::make_shared<SourceState>();
+    copy->callbacks = callbacks;
+    copy->uri = uri;
+    copy->closed = closed;
+    return copy;
+  }
 
   bool Attach(SourceCallbacks* out, std::shared_ptr<DataSource>* backend) {
     std::lock_guard lock(mutex);
     if (closed) return false;
-    if (callbacks.read_at != nullptr || uri != nullptr) attached = true;
     *out = callbacks;
     *backend = uri;
     return true;
@@ -54,7 +65,6 @@ struct SourceState {
     std::shared_ptr<DataSource> backend;
     {
       std::lock_guard lock(mutex);
-      if (closed) return;
       closed = true;
       handlers = callbacks;
       backend = uri;
@@ -76,37 +86,52 @@ class NdkSource final : public DataSource {
     if (dst == nullptr || size > static_cast<size_t>(std::numeric_limits<ssize_t>::max())) {
       return -EINVAL;
     }
+    std::lock_guard lock(callback_mutex_);
     if (IsClosed()) return -ECANCELED;
-    if (handlers_.read_at == nullptr) return backend_->ReadAt(offset, dst, size);
-    const ssize_t result = handlers_.read_at(handlers_.userdata, offset, dst, size);
+    if (handlers_.read_at != nullptr && handlers_.userdata == nullptr) return 0;
+    const ssize_t result = handlers_.read_at != nullptr ?
+        handlers_.read_at(handlers_.userdata, offset, dst, size) :
+        backend_->ReadAt(offset, dst, size);
     if (IsClosed()) return -ECANCELED;
-    if (result > 0 && result <= INT64_MAX - offset) read_end_ = offset + result;
-    if (result == -1) return 0;  // NDK EOF to DataSource's EOF.
+    if (handlers_.read_at != nullptr && result == -1) return 0;  // NDK EOF.
     if (result > static_cast<ssize_t>(size)) return -EIO;
     return result;
   }
 
   int64_t Size() override {
+    std::lock_guard lock(callback_mutex_);
     if (IsClosed()) return -1;
-    if (handlers_.get_size != nullptr) return handlers_.get_size(handlers_.userdata);
-    return backend_ != nullptr ? backend_->Size() : -1;
+    if (handlers_.get_size != nullptr && handlers_.userdata == nullptr) return -1;
+    const int64_t result = handlers_.get_size != nullptr ?
+        handlers_.get_size(handlers_.userdata) : (backend_ != nullptr ? backend_->Size() : -1);
+    return IsClosed() ? -1 : result;
   }
 
-  void Cancel() override { state_->Close(); }
+  void Cancel() override {
+    if (cancelled_.exchange(true)) return;
+    if (backend_ != nullptr) backend_->Cancel();
+    if (handlers_.close != nullptr && handlers_.userdata != nullptr) {
+      handlers_.close(handlers_.userdata);
+    }
+  }
 
   std::string Uri() const override { return backend_ != nullptr ? backend_->Uri() : ""; }
   bool IsNetwork() const override { return backend_ != nullptr && backend_->IsNetwork(); }
 
   int64_t CachedBytes() override {
+    std::lock_guard lock(callback_mutex_);
     if (IsClosed()) return -1;
-    if (handlers_.available != nullptr && read_end_ >= 0) {
-      return handlers_.available(handlers_.userdata, read_end_);
-    }
-    return backend_ != nullptr ? backend_->CachedBytes() : -1;
+    if (handlers_.available != nullptr && handlers_.userdata == nullptr) return -1;
+    // NuMediaExtractor requests the current-read position with this sentinel.
+    const int64_t result = handlers_.available != nullptr ?
+        handlers_.available(handlers_.userdata, -1) :
+        (backend_ != nullptr ? backend_->CachedBytes() : -1);
+    return IsClosed() ? -1 : result;
   }
 
  private:
   bool IsClosed() const {
+    if (cancelled_.load()) return true;
     std::lock_guard lock(state_->mutex);
     return state_->closed;
   }
@@ -114,12 +139,14 @@ class NdkSource final : public DataSource {
   std::shared_ptr<SourceState> state_;
   SourceCallbacks handlers_;
   std::shared_ptr<DataSource> backend_;
-  int64_t read_end_ = -1;
+  std::mutex callback_mutex_;
+  std::atomic<bool> cancelled_{false};
 };
 
 }  // namespace gesher::media::ndk_extractor
 
 struct AMediaDataSource {
+  std::mutex mutex;
   std::shared_ptr<gesher::media::ndk_extractor::SourceState> state =
       std::make_shared<gesher::media::ndk_extractor::SourceState>();
 };
@@ -145,6 +172,8 @@ struct AMediaExtractor {
   std::shared_ptr<gesher::media::DataSource> source;
   std::unique_ptr<gesher::media::Extractor> extractor;
   std::vector<Track> selected;
+  int64_t total_bitrate = -1;
+  int64_t duration_us = -1;
   std::vector<uint8_t> pssh_data;
   std::unique_ptr<gesher::media::extractor_abi::PsshInfo, decltype(&std::free)> pssh{
       nullptr, std::free};
@@ -177,13 +206,22 @@ using ndk_extractor::SourceCallbacks;
 std::unique_ptr<DataSource> UriSource(const char* uri,
                                      const std::map<std::string, std::string>& headers) {
   if (uri == nullptr || *uri == '\0') return nullptr;
-  const std::string address(uri);
+  std::string address(uri);
+  const size_t scheme_end = address.find("://");
+  std::string scheme = address.substr(0, scheme_end);
+  for (char& c : scheme) {
+    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  }
   std::string error;
-  if (address.starts_with("http://") || address.starts_with("https://")) {
+  if (scheme_end != std::string::npos && (scheme == "http" || scheme == "https")) {
     if (!gesher_inet_allowed()) return nullptr;
+    address.replace(0, scheme_end, scheme);
     return OpenHttpSource(address, headers, &error);
   }
-  if (address.find("://") != std::string::npos && !address.starts_with("file://")) return nullptr;
+  if (scheme_end != std::string::npos) {
+    if (scheme != "file") return nullptr;
+    address.erase(0, scheme_end + 3);
+  }
   return OpenFileSource(address, &error);
 }
 
@@ -206,16 +244,25 @@ AMediaDataSource* NewUri(const char* uri, int count, const char* const* pairs) {
 void DeleteDataSource(AMediaDataSource* source) { delete source; }
 
 void CloseDataSource(AMediaDataSource* source) {
-  if (source != nullptr) source->state->Close();
+  if (source == nullptr) return;
+  std::shared_ptr<ndk_extractor::SourceState> state;
+  {
+    std::lock_guard lock(source->mutex);
+    state = source->state;
+  }
+  // Every explicit close is forwarded, including repeated close calls.
+  state->Close();
 }
 
 template <auto Field, class Value>
 void SetCallback(AMediaDataSource* source, Value value) {
   if (source == nullptr) return;
-  std::lock_guard lock(source->state->mutex);
-  if (!source->state->closed && !source->state->attached) {
-    source->state->callbacks.*Field = value;
-  }
+  std::lock_guard lock(source->mutex);
+  // Before attachment (and after failed setup) the descriptor owns the only
+  // reference, so ordinary setter calls need no new allocation.
+  if (source->state.use_count() != 1) source->state = source->state->Copy();
+  std::lock_guard state_lock(source->state->mutex);
+  source->state->callbacks.*Field = value;
 }
 
 AMediaExtractor* New() { return new (std::nothrow) AMediaExtractor; }
@@ -234,29 +281,46 @@ media_status_t Delete(AMediaExtractor* ex) {
 // All call sites hold ex.mutex; callbacks can cancel via the separate source
 // state without acquiring that mutex.
 media_status_t Open(AMediaExtractor& ex, std::shared_ptr<DataSource> source) {
-  if (source == nullptr) return AMEDIA_ERROR_IO;
+  if (source == nullptr) return AMEDIA_ERROR_UNKNOWN;
   std::string error;
   auto extractor = Extractor::Open(source, &error);
-  if (extractor == nullptr) return AMEDIA_ERROR_UNSUPPORTED;
+  if (extractor == nullptr) return translate_error(android::ERROR_UNSUPPORTED);
+  // Cache immutable metadata as NuMediaExtractor does, rather than allocate
+  // every track's format again for each cached-duration query.
+  const size_t tracks = extractor->TrackCount();
+  if (tracks > 16384) return translate_error(android::ERROR_UNSUPPORTED);
+  int64_t bitrate = 0, duration = -1;
+  for (size_t i = 0; i < tracks; ++i) {
+    const auto format = extractor->TrackFormat(i);
+    int32_t track_rate;
+    if (!format.GetInt32("bitrate", &track_rate)) bitrate = -1;
+    else if (bitrate >= 0) bitrate += track_rate;
+    int64_t track_duration;
+    if (format.GetInt64("durationUs", &track_duration)) {
+      duration = std::max(duration, track_duration);
+    }
+  }
   ex.source = std::move(source);
   ex.extractor = std::move(extractor);
+  ex.total_bitrate = bitrate;
+  ex.duration_us = duration;
   return AMEDIA_OK;
 }
 
 media_status_t SetFd(AMediaExtractor* ex, int fd, int64_t offset, int64_t length) {
   if (ex == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
-  if (fd < 0 || offset < 0 || length < 0) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (fd < 0 || offset < 0 || length < 0) return translate_error(android::BAD_VALUE);
   std::lock_guard lock(ex->mutex);
-  if (ex->extractor != nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (ex->extractor != nullptr) return translate_error(-EINVAL);
   std::string error;
   return Open(*ex, OpenFdSource(fd, offset, length, &error));
 }
 
 media_status_t SetUri(AMediaExtractor* ex, const char* uri) {
   if (ex == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
-  if (uri == nullptr || *uri == '\0') return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (uri == nullptr || *uri == '\0') return translate_error(-EINVAL);
   std::lock_guard lock(ex->mutex);
-  if (ex->extractor != nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (ex->extractor != nullptr) return translate_error(-EINVAL);
   return Open(*ex, UriSource(uri, {}));
 }
 
@@ -264,13 +328,17 @@ media_status_t SetCustom(AMediaExtractor* ex, AMediaDataSource* source) {
   if (ex == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   if (source == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::lock_guard lock(ex->mutex);
-  if (ex->extractor != nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (ex->extractor != nullptr) return translate_error(-EINVAL);
 
   SourceCallbacks handlers;
   std::shared_ptr<DataSource> backend;
-  auto state = source->state;
-  if (!state->Attach(&handlers, &backend)) return AMEDIA_ERROR_INVALID_OBJECT;
-  if (handlers.read_at == nullptr && backend == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  std::shared_ptr<ndk_extractor::SourceState> state;
+  {
+    std::lock_guard source_lock(source->mutex);
+    state = source->state;
+  }
+  if (!state->Attach(&handlers, &backend)) return AMEDIA_ERROR_UNKNOWN;
+  if (handlers.read_at == nullptr && backend == nullptr) return AMEDIA_ERROR_UNKNOWN;
   auto adapted = std::make_shared<NdkSource>(std::move(state), handlers, std::move(backend));
   return Open(*ex, std::move(adapted));
 }
@@ -307,13 +375,17 @@ media_status_t Select(AMediaExtractor* ex, size_t index) {
   if (ex == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   std::lock_guard lock(ex->mutex);
   if (ex->extractor == nullptr || index >= ex->extractor->TrackCount()) {
-    return AMEDIA_ERROR_INVALID_PARAMETER;
+    return translate_error(ex->extractor == nullptr ? -EINVAL : -ERANGE);
   }
   if (std::ranges::any_of(ex->selected, [=](const auto& track) { return track.index == index; })) {
     return AMEDIA_OK;
   }
   auto reader = ex->extractor->OpenTrack(index);
   if (reader == nullptr) return AMEDIA_ERROR_MALFORMED;
+  // CMediaTrack returns NDK statuses; AOSP unwraps them to native statuses and
+  // the public extractor wrapper translates them back (unlisted errors -> UNKNOWN).
+  const auto start_status = static_cast<media_status_t>(reader->StartStatus());
+  if (start_status != AMEDIA_OK) return translate_error(reverse_translate_error(start_status));
   reader->EnableSampleMetadata();
   std::string mime = ex->extractor->TrackFormat(index).Mime();
   if (mime.empty()) return AMEDIA_ERROR_MALFORMED;
@@ -325,7 +397,7 @@ media_status_t Unselect(AMediaExtractor* ex, size_t index) {
   if (ex == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   std::lock_guard lock(ex->mutex);
   if (ex->extractor == nullptr || index >= ex->extractor->TrackCount()) {
-    return AMEDIA_ERROR_INVALID_PARAMETER;
+    return translate_error(ex->extractor == nullptr ? -EINVAL : -ERANGE);
   }
   std::erase_if(ex->selected, [=](const auto& track) { return track.index == index; });
   return AMEDIA_OK;
@@ -583,29 +655,17 @@ media_status_t CryptoCopy(AMediaCodecCryptoInfo* info, Value* dest) {
 int64_t GetCachedDuration(AMediaExtractor* ex) {
   if (ex == nullptr) return -1;
   std::lock_guard lock(ex->mutex);
-  if (ex->source == nullptr || !ex->source->IsNetwork()) return -1;
+  if (ex->source == nullptr) return -1;
   const int64_t cached = ex->source->CachedBytes();
   if (cached < 0) return -1;
 
-  long double bitrate = 0;
-  int64_t duration = 0;
-  bool all_rates_known = true;
-  const size_t tracks = ex->extractor->TrackCount();
-  for (size_t i = 0; i < tracks; ++i) {
-    const auto format = ex->extractor->TrackFormat(i);
-    int32_t track_rate;
-    int64_t track_duration;
-    if (format.GetInt32("bitrate", &track_rate) && track_rate > 0) bitrate += track_rate;
-    else all_rates_known = false;
-    if (format.GetInt64("durationUs", &track_duration)) duration = std::max(duration, track_duration);
-  }
   long double estimate;
-  if (all_rates_known && bitrate > 0) {
-    estimate = static_cast<long double>(cached) * 8000000 / bitrate;
+  if (ex->total_bitrate > 0) {
+    estimate = static_cast<long double>(cached) * 8000000 / ex->total_bitrate;
   } else {
     const int64_t file_size = ex->source->Size();
-    if (file_size <= 0 || duration <= 0) return -1;
-    estimate = static_cast<long double>(cached) * duration / file_size;
+    if (file_size <= 0 || ex->duration_us <= 0) return -1;
+    estimate = static_cast<long double>(cached) * ex->duration_us / file_size;
   }
   return estimate >= static_cast<long double>(INT64_MAX) ? INT64_MAX :
       static_cast<int64_t>(estimate);

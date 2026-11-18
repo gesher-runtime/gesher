@@ -23,9 +23,10 @@ inline Format ExtractorTrackFormat(Extractor* ex, size_t index) {
   } else if (mime == "video/hevc" && f.GetBuffer("csd-hevc", &b) && !f.GetBuffer("csd-0", &have)) {
     std::vector<uint8_t> ps;
     if (HvccToAnnexB(b.data(), b.size(), &ps)) AMediaFormat_setBuffer(f.get(), "csd-0", ps.data(), ps.size());
-  } else if (mime == "video/mp4v-es") {
-    AddCsdFromEsds(f);  // MPEG-4 part 2's VOL header
   }
+  // ESDS carries AAC AudioSpecificConfig as well as MPEG-4 video's VOL header.
+  // Android converts it independently of MIME and keeps an existing csd-0.
+  AddCsdFromEsds(f);
   return f;
 }
 

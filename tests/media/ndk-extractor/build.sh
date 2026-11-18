@@ -9,7 +9,9 @@ ffmpeg -v error -f lavfi -i 'testsrc2=duration=1:size=48x32:rate=4' \
   -c:v libx264 -g 2 -bf 0 -sc_threshold 0 -c:a aac -y "$out/multitrack.mp4"
 python3 - "$out" <<'PY'
 import pathlib
+import json
 import struct
+import subprocess
 import sys
 import wave
 
@@ -34,8 +36,21 @@ while offset < len(data):
     offset += length
 else:
     raise SystemExit("No moov box found")
+
+# Pin the guest assertion to the configuration in this actual generated fixture.
+# FFprobe is an independent container reader; no expected CSD is made up by the
+# extractor implementation or copied from its output.
+streams = json.loads(subprocess.check_output([
+    'ffprobe', '-v', 'error', '-show_entries', 'stream=codec_name,extradata',
+    '-show_data', '-of', 'json', str(mp4)], text=True))['streams']
+dump = next(stream['extradata'] for stream in streams if stream['codec_name'] == 'aac')
+csd = bytes.fromhex(''.join(line.split(':', 1)[1].split('  ', 1)[0].replace(' ', '')
+                          for line in dump.splitlines() if ':' in line))
+assert csd
+(out / 'fixture_csd.h').write_text('#pragma once\nstatic const unsigned char kFixtureAacCsd[] = {' +
+                                 ','.join(str(value) for value in csd) + '};\n')
 PY
 for abi in x86_64 aarch64; do
   "$llvm/bin/$abi-linux-android29-clang" -std=c17 -D_GNU_SOURCE -O2 -Wall -Wextra -Werror \
-    -fPIE -pie "$here/extractor_test.c" -lmediandk -ldl -o "$out/ndk-extractor-$abi"
+    -fPIE -pie -I"$out" "$here/extractor_test.c" -lmediandk -ldl -o "$out/ndk-extractor-$abi"
 done

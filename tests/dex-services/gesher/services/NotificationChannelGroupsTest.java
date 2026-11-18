@@ -501,6 +501,7 @@ public final class NotificationChannelGroupsTest {
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setUserInitiated(true).build();
         Object job = make(jobType, new Class<?>[]{schedulerType, String.class, String.class, JobInfo.class}, scheduler, f.pkg, null, jobInfo);
         Object run = make(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
+        field(runType, "state").setInt(run, 2); // Constructed executing-job fixture.
         field(jobType, "run").set(job, run);
         ((List<Object>)field(schedulerType,"mJobs").get(scheduler)).add(job);
         field(schedulerType, "mRunning").setInt(scheduler, 1);

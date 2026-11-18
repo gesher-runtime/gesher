@@ -124,16 +124,18 @@ struct SourceAdapter {
 class AospTrackReader : public TrackReader {
  public:
   AospTrackReader(CMediaTrack* track) : track_(track) {
-    started_ = track_->start(track_->data, group_.wrap()) == AMEDIA_OK;
+    start_status_ = track_->start(track_->data, group_.wrap());
   }
   ~AospTrackReader() override {
-    if (started_) track_->stop(track_->data);
+    if (start_status_ == AMEDIA_OK) track_->stop(track_->data);
     track_->free(track_->data);
     free(track_);  // malloc'd by the plugin helper's wrap()
   }
 
+  int StartStatus() const override { return start_status_; }
+
   int Read(Sample* out, int64_t seek_us, SeekMode mode) override {
-    if (!started_) return -1;
+    if (start_status_ != AMEDIA_OK) return start_status_;
     uint32_t opts = 0;
     if (seek_us >= 0) opts = android::CMediaTrackReadOptions::SEEK | static_cast<uint32_t>(mode);
     CMediaBuffer* buf = nullptr;
@@ -169,7 +171,7 @@ class AospTrackReader : public TrackReader {
   CMediaTrack* track_;
   android::MediaBufferGroup group_;
   Format sample_metadata_{nullptr};
-  bool started_ = false;
+  media_status_t start_status_ = AMEDIA_ERROR_UNKNOWN;
 };
 
 class AospExtractor : public Extractor {

@@ -6,8 +6,11 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "fixture_csd.h"
 
 #define CHECK(condition) do { \
   if (!(condition)) { fprintf(stderr, "line %d: %s\n", __LINE__, #condition); return 1; } \
@@ -24,6 +27,7 @@ struct CallbackSource {
 static ssize_t ReadAt(void* opaque, off64_t pos, void* out, size_t size) {
   struct CallbackSource* state = opaque;
   atomic_fetch_add(&state->reads, 1);
+  if (atomic_load(&state->closed)) return -1;
   if (atomic_load(&state->block)) {
     atomic_store(&state->reading, true);
     while (!atomic_load(&state->closed)) usleep(1000);
@@ -71,7 +75,8 @@ static int CheckWave(AMediaExtractor* ex) {
   CHECK(AMediaFormat_getInt32(format, "sample-rate", &rate) && rate == 8000);
   CHECK(AMediaFormat_delete(format) == AMEDIA_OK);
   CHECK(AMediaExtractor_getSampleTrackIndex(ex) == -1);
-  CHECK(AMediaExtractor_selectTrack(ex, 1) != AMEDIA_OK);
+  CHECK(AMediaExtractor_selectTrack(ex, 1) == AMEDIA_ERROR_UNKNOWN);
+  CHECK(AMediaExtractor_unselectTrack(ex, 1) == AMEDIA_ERROR_UNKNOWN);
   CHECK(AMediaExtractor_selectTrack(ex, 0) == AMEDIA_OK);
   CHECK(AMediaExtractor_selectTrack(ex, 0) == AMEDIA_OK);
   CHECK(AMediaExtractor_getSampleTime(ex) == 0);
@@ -81,6 +86,7 @@ static int CheckWave(AMediaExtractor* ex) {
   CHECK(AMediaExtractor_getPsshInfo(ex) == NULL);
   CHECK(AMediaExtractor_getCachedDuration(ex) == -1);
   format = AMediaFormat_new();
+  CHECK(AMediaExtractor_getSampleFormat(ex, NULL) == AMEDIA_ERROR_INVALID_PARAMETER);
   AMediaFormat_setString(format, "stale", "old");
   CHECK(AMediaExtractor_getSampleFormat(ex, format) == AMEDIA_OK);
   CHECK(AMediaFormat_getInt32(format, "track-index", &rate) && rate == 0);
@@ -126,7 +132,7 @@ static int CheckMp4(const char* path) {
   CHECK(memcmp(pssh->entries[0].data, "xyz", 3) == 0);
   CHECK(AMediaExtractor_getPsshInfo(ex) == pssh);
 
-  size_t video = 2;
+  size_t video = 2, audio = 2;
   for (size_t i = 0; i < 2; ++i) {
     AMediaFormat* fmt = AMediaExtractor_getTrackFormat(ex, i);
     const char* mime = NULL;
@@ -138,11 +144,17 @@ static int CheckMp4(const char* path) {
       CHECK(AMediaFormat_getBuffer(fmt, "csd-0", &data, &length) &&
             length >= 5 && memcmp(data, "\x00\x00\x00\x01", 4) == 0);
       CHECK(AMediaFormat_getBuffer(fmt, "csd-1", &data, &length) && length >= 5);
+    } else if (strcmp(mime, "audio/mp4a-latm") == 0) {
+      audio = i;
+      void* data = NULL;
+      size_t length = 0;
+      CHECK(AMediaFormat_getBuffer(fmt, "csd-0", &data, &length));
+      CHECK(length == sizeof(kFixtureAacCsd) && memcmp(data, kFixtureAacCsd, length) == 0);
     }
     AMediaFormat_delete(fmt);
     CHECK(AMediaExtractor_selectTrack(ex, i) == AMEDIA_OK);
   }
-  CHECK(video < 2);
+  CHECK(video < 2 && audio < 2 && audio != video);
   unsigned samples[2] = {0};
   int64_t previous = INT64_MIN;
   do {
@@ -166,6 +178,45 @@ static int CheckMp4(const char* path) {
   return 0;
 }
 
+static int CheckDescriptorSnapshots(const char* path) {
+  struct CallbackSource a = {.fd = open(path, O_RDONLY), .bytes = kWaveHeader + kAudioSize};
+  struct CallbackSource b = {.fd = open(path, O_RDONLY), .bytes = kWaveHeader + kAudioSize};
+  CHECK(a.fd >= 0 && b.fd >= 0);
+  AMediaDataSource* source = CallbackDescriptor(&a);
+  AMediaExtractor* first = AMediaExtractor_new();
+  AMediaExtractor* second = AMediaExtractor_new();
+  CHECK(source != NULL && first != NULL && second != NULL);
+  CHECK(AMediaExtractor_setDataSourceCustom(first, source) == AMEDIA_OK);
+  CHECK(AMediaExtractor_setDataSourceCustom(first, source) == AMEDIA_ERROR_UNKNOWN);
+  const int reads_a = atomic_load(&a.reads);
+  AMediaDataSource_setUserdata(source, &b);
+  CHECK(AMediaExtractor_setDataSourceCustom(second, source) == AMEDIA_OK);
+  CHECK(atomic_load(&a.reads) == reads_a && atomic_load(&b.reads) > 0);
+  AMediaDataSource_delete(source);
+  AMediaExtractor_delete(first);
+  CHECK(atomic_load(&a.closes) == 1 && atomic_load(&b.closes) == 0);
+  CHECK(CheckWave(second) == 0);
+  AMediaExtractor_delete(second);
+  CHECK(atomic_load(&b.closes) == 1);
+
+  // A failed first setup must leave the descriptor configurable for a retry.
+  atomic_store(&a.closed, false);
+  atomic_store(&b.closed, false);
+  a.bytes = 0;
+  source = CallbackDescriptor(&a);
+  first = AMediaExtractor_new();
+  CHECK(source != NULL && first != NULL);
+  CHECK(AMediaExtractor_setDataSourceCustom(first, source) == AMEDIA_ERROR_UNKNOWN);
+  AMediaDataSource_setUserdata(source, &b);
+  CHECK(AMediaExtractor_setDataSourceCustom(first, source) == AMEDIA_OK);
+  AMediaDataSource_delete(source);
+  CHECK(CheckWave(first) == 0);
+  AMediaExtractor_delete(first);
+  close(a.fd);
+  close(b.fd);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   CHECK(argc == 4);
   void* handle = dlopen("libmediandk.so", RTLD_NOW);
@@ -179,12 +230,22 @@ int main(int argc, char** argv) {
   CHECK(AMediaExtractor_setDataSourceFd(ex, fd, kFileOffset, kWaveHeader + kAudioSize) == AMEDIA_OK);
   CHECK(lseek(fd, 0, SEEK_CUR) == 0);
   CHECK(close(fd) == 0);
-  CHECK(AMediaExtractor_setDataSource(ex, argv[2]) != AMEDIA_OK);
+  CHECK(AMediaExtractor_setDataSource(ex, argv[2]) == AMEDIA_ERROR_UNKNOWN);
   CHECK(CheckWave(ex) == 0);
   CHECK(AMediaExtractor_delete(ex) == AMEDIA_OK);
 
   ex = AMediaExtractor_new();
   CHECK(AMediaExtractor_setDataSource(ex, argv[2]) == AMEDIA_OK);
+  CHECK(CheckWave(ex) == 0);
+  AMediaExtractor_delete(ex);
+
+  const size_t uri_size = strlen(argv[2]) + sizeof("FiLe://");
+  char* mixed_uri = malloc(uri_size);
+  CHECK(mixed_uri != NULL);
+  snprintf(mixed_uri, uri_size, "FiLe://%s", argv[2]);
+  ex = AMediaExtractor_new();
+  CHECK(ex != NULL && AMediaExtractor_setDataSource(ex, mixed_uri) == AMEDIA_OK);
+  free(mixed_uri);
   CHECK(CheckWave(ex) == 0);
   AMediaExtractor_delete(ex);
 
@@ -225,10 +286,11 @@ int main(int argc, char** argv) {
   AMediaDataSource_close(source);
   AMediaExtractor_delete(ex);
   AMediaDataSource_delete(source);
-  CHECK(atomic_load(&state.closes) == 1);
+  CHECK(atomic_load(&state.closes) == 2);
   close(state.fd);
+  CHECK(CheckDescriptorSnapshots(argv[1]) == 0);
   CHECK(CheckMp4(argv[3]) == 0);
   dlclose(handle);
-  puts("NDK extractor: FD range, custom source, cancellation, seeks, PCM, AVC CSD and PSSH passed");
+  puts("NDK extractor: FD range, descriptor snapshots, cancellation, errors, seeks, PCM, AAC/AVC CSD and PSSH passed");
   return 0;
 }

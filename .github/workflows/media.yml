@@ -27,6 +27,8 @@ jobs:
             tests/media/opensl-contracts
             tests/media/ndk-muxer
             tests/media/ndk-extractor
+            compat/media/ndk
+            compat/media/player
             compat/media/sounds
 
       - name: Strict current framework-classes artifact
@@ -143,6 +145,12 @@ jobs:
 
       - name: Build NDK extractor contract fixtures
         run: bash tests/media/ndk-extractor/build.sh out android-ndk-r27c
+
+      - name: NDK extractor start failure contracts (host)
+        run: python3 tools/test_extractor_start_contracts.py --sanitize
+
+      - name: Interrupted build-tool download controls
+        run: python3 -m unittest discover -s tests/apps/lifecycle -p test_download.py -v
 
       - name: Build mediaapp.apk
         run: |
