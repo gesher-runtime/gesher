@@ -45,7 +45,17 @@ jobs:
           persist-credentials: false
           sparse-checkout: .github/scripts
       - uses: actions/github-script@v7
+        env:
+          # Repository-scoped PAT with Contents, Pull requests and Workflows
+          # write access. Only native auto-merge mutations use this credential.
+          AUTOMERGE_WORKFLOWS_TOKEN: ${{ secrets.AUTOMERGE_WORKFLOWS_TOKEN }}
         with:
           script: |
             const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/label-automerge.js`);
-            await run({github, context, core});
+            const token = process.env.AUTOMERGE_WORKFLOWS_TOKEN;
+            // A separate Octokit instance is essential: changing request headers
+            // on github.graphql would still run the original token's auth hook.
+            const mergeGithub = token ? new github.constructor({
+              auth: token, baseUrl: process.env.GITHUB_API_URL
+            }) : github;
+            await run({github, context, core, mergeGithub});

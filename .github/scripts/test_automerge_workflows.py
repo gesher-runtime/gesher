@@ -39,6 +39,20 @@ class QueueWorkflows(unittest.TestCase):
         rules = json.loads((ROOT / '.github/automerge-ruleset.json').read_text())
         self.assertNotIn('merge_queue', [rule['type'] for rule in rules['rules']])
 
+    def test_workflow_credential_is_separate_from_required_status_identity(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
+        checkout, controller = doc['jobs']['automerge']['steps']
+        self.assertEqual(checkout['with']['ref'], '${{ github.event.repository.default_branch }}')
+        self.assertFalse(checkout['with']['persist-credentials'])
+        self.assertEqual(controller['env']['AUTOMERGE_WORKFLOWS_TOKEN'],
+                         '${{ secrets.AUTOMERGE_WORKFLOWS_TOKEN }}')
+        # The main github client must remain GITHUB_TOKEN for app-bound statuses
+        # and github-actions[bot] receipts. Only the native mutation client differs.
+        self.assertNotIn('github-token', controller['with'])
+        self.assertIn('new github.constructor', controller['with']['script'])
+        self.assertIn('auth: token', controller['with']['script'])
+        self.assertIn('run({github, context, core, mergeGithub})', controller['with']['script'])
+
 
 if __name__ == '__main__':
     unittest.main()
