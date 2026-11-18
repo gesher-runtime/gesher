@@ -26,21 +26,33 @@ using NtOpen = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,
                               PIO_STATUS_BLOCK, ULONG, ULONG);
 
 bool PipeObservation(int topology, int method, int endpoint, DWORD data_access, unsigned serial) {
+  auto setup_failure = [&](const char* stage) {
+    const DWORD error = GetLastError();
+    std::printf("PIPE_SETUP_FAILURE serial=%u topology=%d method=%d endpoint=%d access=%lu stage=%s error=%lu\n",
+                serial, topology, method, endpoint, data_access, stage, error);
+    return false;
+  };
   wchar_t name[160];
   std::swprintf(name, 160, L"\\\\.\\pipe\\gesher-qa-reopen-%lu-%u", GetCurrentProcessId(), serial);
   Handle server(CreateNamedPipeW(name,
       (topology ? PIPE_ACCESS_DUPLEX : PIPE_ACCESS_INBOUND) | FILE_FLAG_FIRST_PIPE_INSTANCE,
-      (topology ? PIPE_TYPE_MESSAGE : PIPE_TYPE_BYTE) | PIPE_READMODE_BYTE |
+      (topology ? PIPE_TYPE_MESSAGE : PIPE_TYPE_BYTE | PIPE_NOWAIT) | PIPE_READMODE_BYTE |
       PIPE_REJECT_REMOTE_CLIENTS, 1, 65536, 65536, 0, nullptr));
-  if (!server.valid()) return false;
+  if (!server.valid()) return setup_failure("CreateNamedPipe");
   Handle client(CreateFileW(name,
       (topology ? GENERIC_READ | GENERIC_WRITE : GENERIC_WRITE) | FILE_WRITE_ATTRIBUTES,
       0, nullptr, OPEN_EXISTING, 0, nullptr));
-  if (!client.valid()) return false;
-  if (!ConnectNamedPipe(server.value, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) return false;
+  if (!client.valid()) return setup_failure("CreateFile-client");
+  if (!ConnectNamedPipe(server.value, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED)
+    return setup_failure("ConnectNamedPipe");
   DWORD nowait = PIPE_NOWAIT;
-  if (!SetNamedPipeHandleState(server.value, &nowait, nullptr, nullptr) ||
-      !SetNamedPipeHandleState(client.value, &nowait, nullptr, nullptr)) return false;
+  // PIPE_ACCESS_INBOUND does not grant the right needed to change the server's
+  // wait mode. Select that control's mode when creating it; leave PR73's exact
+  // duplex creation/transition sequence unchanged.
+  if (topology && !SetNamedPipeHandleState(server.value, &nowait, nullptr, nullptr))
+    return setup_failure("SetNamedPipeHandleState-server");
+  if (!SetNamedPipeHandleState(client.value, &nowait, nullptr, nullptr))
+    return setup_failure("SetNamedPipeHandleState-client");
   if (topology) {
     // Exact PR73 publication boundary: directional duplicates of the duplex
     // message pipe, with both full-access creator handles retired.
@@ -49,7 +61,7 @@ bool PipeObservation(int topology, int method, int endpoint, DWORD data_access, 
     if (!DuplicateHandle(GetCurrentProcess(), server.value, GetCurrentProcess(), &read_end.value,
                          FILE_READ_DATA | metadata, FALSE, 0) ||
         !DuplicateHandle(GetCurrentProcess(), client.value, GetCurrentProcess(), &write_end.value,
-                         FILE_WRITE_DATA | metadata, FALSE, 0)) return false;
+                         FILE_WRITE_DATA | metadata, FALSE, 0)) return setup_failure("DuplicateHandle-directional");
     server.Reset(read_end.Release());
     client.Reset(write_end.Release());
   }
@@ -64,7 +76,7 @@ bool PipeObservation(int topology, int method, int endpoint, DWORD data_access, 
   } else {
     auto open = reinterpret_cast<NtOpen>(reinterpret_cast<void*>(
         GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenFile")));
-    if (!open) return false;
+    if (!open) return setup_failure("Resolve-NtOpenFile");
     wchar_t empty[] = L"";
     UNICODE_STRING relative{};
     relative.Buffer = empty;
@@ -176,14 +188,21 @@ bool ObserveHistory(unsigned serial, int history, int stamp_mode) {
   unsigned batches = 0, records = 0;
   {
     const std::wstring first = directory + L"\\A";
+    DWORD count = 0;
+    {
+      // Retire the preparation writer before installing the watch so its
+      // deferred size/time update cannot contaminate the observed history.
+      Handle initial(CreateFileW(first.c_str(), GENERIC_WRITE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_NEW,
+          FILE_ATTRIBUTE_NORMAL, nullptr));
+      char original[4096]{};
+      okay = initial.valid() && WriteFile(initial.value, original, sizeof(original), &count, nullptr) &&
+          count == sizeof(original);
+    }
     Handle writer(CreateFileW(first.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_NEW,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL, nullptr));
     if (!writer.valid()) okay = false;
-    char original[4096]{};
-    DWORD count = 0;
-    if (okay) okay = WriteFile(writer.value, original, sizeof(original), &count, nullptr) &&
-                       count == sizeof(original);
     FILETIME fixed_time{};
     if (okay) okay = GetFileTime(writer.value, nullptr, nullptr, &fixed_time) != FALSE;
     DirectoryWatch watch(directory);

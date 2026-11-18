@@ -21,6 +21,15 @@ after them, exercising buffered notifications between reads. It records native
 write-only behavior, explicit current write-time updates, and an explicitly
 unchanged-timestamp negative control. The timestamp modes are experiments in
 isolated temporary files; no timestamp update is adopted by production code.
+The preparation writer is closed before the watch is installed; the history
+uses a new, still-open writer so deferred preparation metadata is excluded.
+
+The first diagnostic run, 44256210705, failed setup for the inbound-pipe control
+on both Windows images. Its PR73 topology rows remain valid negative reopen
+observations. This revision selects the inbound server's nonblocking mode at
+creation and reports the exact failing setup stage. It also excludes the
+preallocation metadata that contaminated the first directory-history controls.
+The original failure logs are retained; neither revision is production approval.
 
 Raw `FILE_ACTION_MODIFIED` order is printed separately from the extended
 metadata. Its interpretation as Android `IN_MODIFY` versus `IN_ATTRIB` remains
