@@ -361,9 +361,10 @@ def markdown(report):
 
 def write_report(output, report, rows):
     output.mkdir(parents=True, exist_ok=True)
-    (output / "summary.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    (output / "delta.jsonl").write_text("".join(canonical(row) + "\n" for row in rows), encoding="ascii")
-    (output / "README.md").write_text(markdown(report), encoding="utf-8")
+    # Report digests bind LF bytes on every host, including Windows.
+    (output / "summary.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8", newline="\n")
+    (output / "delta.jsonl").write_text("".join(canonical(row) + "\n" for row in rows), encoding="ascii", newline="\n")
+    (output / "README.md").write_text(markdown(report), encoding="utf-8", newline="\n")
 
 
 def main(argv=None):

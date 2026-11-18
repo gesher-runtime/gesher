@@ -1,11 +1,13 @@
 """Normal profile, alias, missing-input and deterministic offline NDK fixtures."""
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -135,8 +137,24 @@ class NdkPlatformDiffTests(unittest.TestCase):
             self.assertEqual((report, rows), (again, again_rows))
             diff.write_report(root / "one", report, rows)
             diff.write_report(root / "two", again, again_rows)
+            ordinary_open = Path.open
+
+            def windows_text_open(path, mode="r", buffering=-1, encoding=None,
+                                  errors=None, newline=None):
+                if "w" in mode and "b" not in mode and newline is None:
+                    newline = "\r\n"
+                return ordinary_open(path, mode, buffering, encoding, errors, newline)
+
+            with patch.object(Path, "open", windows_text_open):
+                diff.write_report(root / "windows", report, rows)
             for name in ("summary.json", "delta.jsonl", "README.md"):
-                self.assertEqual((root / "one" / name).read_bytes(), (root / "two" / name).read_bytes())
+                expected = (root / "one" / name).read_bytes()
+                self.assertEqual(expected, (root / "two" / name).read_bytes())
+                translated = (root / "windows" / name).read_bytes()
+                self.assertEqual(expected, translated)
+                self.assertNotIn(b"\r\n", translated)
+            self.assertEqual(hashlib.sha256((root / "windows" / "delta.jsonl").read_bytes()).hexdigest(),
+                             report["delta_rows_sha256"])
             self.assertNotIn(temporary, json.dumps(report))
             wrong = deepcopy(manifest)
             wrong["archive"]["sha256"] = "0" * 64

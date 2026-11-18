@@ -1,5 +1,6 @@
 """Normal SDK artifact fixtures test distinct evidence dimensions and replay."""
 from copy import deepcopy
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -7,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -205,8 +207,26 @@ class SdkPlatformDiffTest(unittest.TestCase):
             self.assertEqual((report, rows), (again, rows_again))
             diff.write_report(root / "one", report, rows)
             diff.write_report(root / "two", again, rows_again)
+            ordinary_open = Path.open
+
+            def windows_text_open(path, mode="r", buffering=-1, encoding=None,
+                                  errors=None, newline=None):
+                # Exercise the actual writer with Windows' default text-output
+                # translation, while honoring an explicitly selected newline.
+                if "w" in mode and "b" not in mode and newline is None:
+                    newline = "\r\n"
+                return ordinary_open(path, mode, buffering, encoding, errors, newline)
+
+            with patch.object(Path, "open", windows_text_open):
+                diff.write_report(root / "windows", report, rows)
             for filename in ("summary.json", "delta.jsonl", "README.md"):
-                self.assertEqual((root / "one" / filename).read_bytes(), (root / "two" / filename).read_bytes())
+                expected = (root / "one" / filename).read_bytes()
+                self.assertEqual(expected, (root / "two" / filename).read_bytes())
+                translated = (root / "windows" / filename).read_bytes()
+                self.assertEqual(expected, translated)
+                self.assertNotIn(b"\r\n", translated)
+            self.assertEqual(hashlib.sha256((root / "windows" / "delta.jsonl").read_bytes()).hexdigest(),
+                             report["delta_rows_sha256"])
             self.assertNotIn(temporary, json.dumps(report))
             wrong = deepcopy(manifest)
             wrong["after"]["archive"]["sha256"] = "0" * 64

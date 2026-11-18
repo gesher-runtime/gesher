@@ -203,7 +203,8 @@ hashed and can be reproduced from the pinned archive.
 Output contains no current timestamp or local input path. Canonical JSON uses
 sorted keys, ASCII escapes and compact separators. Manifest and per-library
 inventory digests hash that canonical form. The delta digest hashes exact JSONL
-bytes with trailing newlines. Generator hashes are recorded. The same inputs
+bytes with trailing LF newlines. Report files explicitly select their encoding
+and LF output on every host, including Windows. Generator hashes are recorded. The same inputs
 and generator produce byte-identical output in different directories.
 
 ## Validation and limits

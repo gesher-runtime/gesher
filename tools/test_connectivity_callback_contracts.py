@@ -21,9 +21,10 @@ def main() -> None:
     for option in ("framework-classes", "core-classes", "app-classes", "java-home"):
         parser.add_argument("--" + option, required=True, type=Path)
     parser.add_argument("--source-ref")
+    parser.add_argument("--cc", help="Host C compiler (llvm-mingw on Windows)")
     parser.add_argument("--case", default="all", choices=["all", "basic", "identity", "timeouts", "teardown", "subscriptions", "pending", "pending-cancel", "freshness"])
     args = parser.parse_args()
-    cc = shutil.which("cc")
+    cc = args.cc or shutil.which("cc")
     if not cc:
         parser.error("C compiler required for host native initialization boundaries")
     classpath = os.pathsep.join(str(path.resolve()) for path in
@@ -31,10 +32,12 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="gesher-connectivity-callback-") as temporary:
         work = Path(temporary)
         classes = work / "classes"; classes.mkdir()
-        native = work / "libconnectivity_callback_host.so"
-        subprocess.run([cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
-                        "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
-                        str(ROOT / "tests/connectivity-callback/framework_host.c"), "-o", str(native)], check=True)
+        windows = os.name == 'nt'
+        native = work / ('connectivity_callback_host.dll' if windows else 'libconnectivity_callback_host.so')
+        subprocess.run([cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", *([] if windows else ['-fPIC']),
+                        "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / 'include' / ('win32' if windows else 'linux')),
+                        str(ROOT / "tests/connectivity-callback/framework_host.c"), "-o", str(native),
+                        *(['-lwinpthread', '-static'] if windows else [])], check=True)
         sources = []
         for relative in ("app/java/android/net/ConnectivityManager.java",
                          "app/java/com/gesher/server/ConnectivityService.java"):
