@@ -81,3 +81,21 @@ jobs:
             out-arm64/*.exe
             out-arm64/*.a
           if-no-files-found: warn
+
+  arm64-required:
+    name: arm64-required
+    if: always()
+    needs: [source-identity, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every production CI job
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['JOB_RESULTS'])
+          failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
+          if not results or failed:
+              raise SystemExit(f"Required jobs did not succeed: {failed}")
+          PY

@@ -40,12 +40,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/workflows
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: automerge rules (label, push, CI-not-run, pending/failed checks)
-        run: node --test .github/scripts/automerge.test.js
+      - name: Label approval, fork and exact-head QA contracts
+        run: node --test .github/scripts/label-automerge.test.js
+      - name: Workflow coverage and failure propagation
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 .github/scripts/test_automerge_workflows.py
   update-contracts:
     needs: [source-identity]
     strategy:
@@ -120,6 +126,7 @@ jobs:
           python3 -m unittest discover -s tools/ci -p test_workflow_actor_metadata.py
           python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
           python3 -m unittest discover -s tools/ci -p test_github_read.py
+          python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
           python3 tools/surface/test-verified-artifact.py
@@ -277,6 +284,8 @@ jobs:
           python3 tools/test_audio_buffer_contracts.py
           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_receiver_lifetimes.py
+          python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
+          python3 tools/test_media_encoder_selection.py
 
       - name: Android HttpEngine requests over real HTTP sockets
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
@@ -339,6 +348,13 @@ jobs:
 
       - name: Fetch AOSP sources
         run: tools/fetch-aosp.sh
+
+      - name: Recorder lifecycle and complete-container size budgets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python3 tools/test_media_recorder_lifecycle.py
+          python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
 
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
@@ -421,6 +437,10 @@ jobs:
 
       - name: Cross-compile current-source Windows performance contracts
         run: |
+          python3 tools/test_capture_failures.py --compile-only \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/capture_failure_contract_test.exe \
+            --fixture-output out/capture_failure_fixture_test.exe
           python3 tools/test_procfs_thread_lookup.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/procfs_thread_lookup_test.exe
@@ -441,9 +461,9 @@ jobs:
         run: |
           # Canonical suite/package/e2e always receive the production role.
           if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           else
             exit 1
           fi
@@ -509,7 +529,9 @@ jobs:
           ls -la dist
 
       - name: Freeze default-OFF production role and unchanged shared-code boundary
-        run: python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+        run: |
+          python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+          python3 tools/media_capture/host_roles.py production --build out --dist dist
 
       - name: Bind isolated ordinary Binder actor to exact production compiler and source
         run: |
@@ -567,6 +589,20 @@ jobs:
         with:
           name: native3-locks-host
           path: dist-native3-locks/
+          if-no-files-found: error
+
+      - name: Build isolated synthetic capture hosts after production package is sealed
+        run: |
+          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          ninja -C out dalvikvm media_probe
+          python3 tools/media_capture/host_roles.py fixture --build out --dist dist
+          # Restore the ordinary compilation boundary before the query-only role.
+          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=OFF -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          ninja -C out dalvikvm media_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-capture-test
+          path: dist-media-capture-test/
           if-no-files-found: error
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
@@ -1655,6 +1691,7 @@ jobs:
             tools/symbolize.py
             tools/boot-image
             tools/web3
+            tools/media_capture
             tools/package
             tools/windows4
             tools/net-udp
@@ -1814,6 +1851,17 @@ jobs:
         shell: pwsh
         run: |
           python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble isolated capture hosts for explicit synthetic media fixtures
+        if: matrix.shard == 'services'
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name media-capture-test --producer "build" --destination ci-suppliers/media_capture_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/media_capture_test --destination dist --ledger ci-owners.json --owner media_capture_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/media_capture/host_roles.py verify --dist dist --fixture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run offline identity and retirement regressions
@@ -2302,3 +2350,21 @@ jobs:
       - name: Verify raw archive and exact producer, then run actual host and both ABI paths
         shell: pwsh
         run: tools/net-tcp-priority/run-component.ps1
+
+  ci-required:
+    name: ci-required
+    if: always()
+    needs: [source-identity, automerge-script, update-contracts, reader-ownership, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every production CI job
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['JOB_RESULTS'])
+          failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
+          if not results or failed:
+              raise SystemExit(f"Required jobs did not succeed: {failed}")
+          PY

@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -46,6 +47,7 @@ static std::atomic<unsigned> capture_reads = 0;
 static std::atomic<unsigned> encoded_batches = 0;
 static std::atomic<bool> capture_running = false;
 static std::atomic<bool> capture_released = false;
+static std::atomic<bool> fail_capture_restart = false;
 static std::vector<std::vector<uint8_t>> access_units;
 static std::vector<uint8_t> avc_access_unit;
 static std::atomic<bool> surface_abandoned = false;
@@ -71,10 +73,14 @@ std::shared_ptr<CaptureStream> OpenCapture(const CaptureParams& p, std::string*)
 }
 int CaptureStream::Start() {
   std::lock_guard lock(mu_);
-  if (released_) return -1;
+  if (released_ || fail_capture_restart) return -32;
   started_ = capture_running = true;
   read_ = written_;
   return 0;
+}
+bool CaptureStream::started() const {
+  std::lock_guard lock(mu_);
+  return started_;
 }
 void CaptureStream::Stop() {
   {
@@ -183,12 +189,28 @@ struct Events {
   }
   bool Wait() {
     std::unique_lock lock(mu);
-    return cv.wait_for(lock, 5s, [this] { return !values.empty(); });
+    return cv.wait_for(lock, 5s, [this] {
+      return std::any_of(values.begin(), values.end(), [](const auto& event) {
+        return event.first == 1 || (event.first == 2 && (event.second == 800 || event.second == 801));
+      });
+    });
   }
   void Check(int what, int extra) {
     std::lock_guard lock(mu);
-    assert(values.size() == 1);
-    assert(values[0] == std::make_pair(what, extra));
+    unsigned terminal = 0, approaching = 0;
+    for (const auto& event : values) {
+      if (event == std::make_pair(2, 802)) {
+        assert(((what == 2 && extra == 801) || what == 1) && terminal == 0);
+        ++approaching;
+      } else {
+        assert(event == std::make_pair(what, extra));
+        ++terminal;
+      }
+    }
+    assert(terminal == 1 && approaching <= 1);
+    // The bounded AAC packets in this fixture cross 90% before the terminal
+    // admission failure; a missing production 802 path must fail this gate.
+    if (what == 2 && extra == 801) assert(approaching == 1);
   }
 };
 
@@ -240,7 +262,8 @@ void DurationAndPause(const std::string& path) {
   feed_audio(40);
   assert(events.Wait());
   events.Check(2, 800);
-  assert(capture_released && !capture_running && !recorder.Resume());
+  assert(capture_released && !capture_running && recorder.Resume() && recorder.Pause() && recorder.Resume());
+  assert(!capture_running);  // public RECORDING state cannot reopen an automatic stop
   assert(Size(path) > 0);
   // Snapshot the finalized bytes before any explicit stop.
   std::ifstream in(path, std::ios::binary);
@@ -256,7 +279,10 @@ void DurationAndPause(const std::string& path) {
   assert(recorder.Prepare(&error) && recorder.Start(&error));
   assert(!recorder.Stop(&error));  // No accepted samples.
   assert(error.find("nothing was recorded") != std::string::npos);
-  assert(recorder.CanConfigure() && !recorder.Pause());
+  assert(!recorder.CanConfigure() && recorder.InError() && !recorder.Pause());
+  assert(!recorder.Prepare(&error));
+  recorder.Reset();
+  assert(recorder.CanConfigure() && !recorder.InError());
 
   Configure(recorder, path + ".unlimited", -1, -1);
   assert(recorder.Prepare(&error) && recorder.Start(&error));
@@ -270,12 +296,12 @@ void SizeLimit(const std::string& path) {
   Events events;
   Recorder recorder([&](int what, int extra) { events.Record(what, extra); });
   std::string error;
-  Configure(recorder, path, 0, 1000);
+  Configure(recorder, path, 0, 2048);
   assert(recorder.Prepare(&error) && recorder.Start(&error));
   feed_audio(50);
   assert(events.Wait());
   auto size = Size(path);
-  assert(size > 1000 && size < 2400);
+  assert(size > 587 && size <= 2048);
   assert(capture_released && !capture_running && capture_reads < 50);
   feed_audio(50);
   assert(recorder.Stop(&error) && Size(path) == size);
@@ -289,6 +315,7 @@ void MixedSources(const std::string& path) {
   Configure(recorder, path, 120, 0);
   auto& config = recorder.config();
   config.video_source = 2;
+  config.video_encoder = 2;
   config.width = 32;
   config.height = 32;
   assert(recorder.Prepare(&error) && recorder.Start(&error));
@@ -306,6 +333,7 @@ void MixedSources(const std::string& path) {
   assert(events.Wait());
   events.Check(2, 800);
   assert(capture_released && surface_abandoned);
+  assert(recorder.input_surface() == surface);
   surface->Submit(ns + 180000000);
   assert(surface->frames() == 3);
   auto size = Size(path);
@@ -332,6 +360,88 @@ void WriteFailure(const std::string& path) {
   assert(capture_released && !capture_running);
   assert(!recorder.Stop(&error) && error.find("MPEG-4 writer") != std::string::npos);
   events.Check(1, 1);
+  assert(recorder.InError() && !recorder.CanConfigure());
+  recorder.Reset();
+  assert(recorder.CanConfigure());
+}
+
+void ErrorRecovery(const std::string& path) {
+  std::string error;
+  bool invalid_state = false;
+  {
+    Recorder recorder({});
+    Configure(recorder, "/dev/full", 0, 0);
+    assert(recorder.Prepare(&error));
+    assert(!recorder.Start(&error, &invalid_state) && !invalid_state);
+    assert(recorder.InError() && !recorder.CanConfigure() && capture_released);
+    assert(!recorder.Prepare(&error, &invalid_state) && invalid_state);
+    recorder.Reset();
+    assert(recorder.CanConfigure());
+  }
+  {
+    Recorder recorder({});
+    Configure(recorder, path + ".prepare", 0, 0);
+    recorder.config().output_format = 11;  // Ogg/AAC is incompatible, both enum values valid.
+    assert(!recorder.Prepare(&error, &invalid_state) && !invalid_state);
+    assert(recorder.InError() && !recorder.CanConfigure());
+    assert(!recorder.Prepare(&error, &invalid_state) && invalid_state);
+    recorder.Reset();
+    assert(recorder.CanConfigure());
+  }
+  {
+    Events events;
+    Recorder recorder([&](int what, int extra) { events.Record(what, extra); });
+    Configure(recorder, path + ".resume", 0, 0);
+    assert(recorder.Prepare(&error) && recorder.Start(&error));
+    feed_audio(3);
+    WaitForEncodes(3);
+    assert(recorder.Pause());
+    fail_capture_restart = true;
+    assert(!recorder.Resume(&error, &invalid_state) && !invalid_state);
+    fail_capture_restart = false;
+    assert(capture_released && !capture_running && recorder.InError());
+    assert(events.Wait());
+    events.Check(1, 1);
+    assert(!recorder.Stop(&error, &invalid_state) && invalid_state);
+    assert(!recorder.CanConfigure());
+    recorder.Reset();
+    assert(recorder.CanConfigure() && !recorder.InError());
+  }
+  {
+    Events events;
+    Recorder recorder([&](int what, int extra) { events.Record(what, extra); });
+    Configure(recorder, path + ".missing-track", 0, 2048);
+    auto& config = recorder.config();
+    config.video_source = 2; config.video_encoder = 2;
+    config.width = 32; config.height = 32;
+    assert(recorder.Prepare(&error) && recorder.Start(&error));
+    feed_audio(50);  // Exhaust the budget before the Surface supplies video.
+    assert(events.Wait());
+    events.Check(1, 1);
+    assert(capture_released && surface_abandoned && Size(path + ".missing-track") <= 2048);
+    assert(!recorder.Stop(&error, &invalid_state) && !invalid_state && recorder.InError());
+    assert(error.find("configured track") != std::string::npos);
+  }
+  for (int encoder : {0, 1, 2, 4, 5, 6, 77}) {
+    Recorder recorder({});
+    Configure(recorder, path + ".codec", 0, 0);
+    recorder.config().audio_encoder = encoder;
+    assert(!recorder.Prepare(&error, &invalid_state) && !invalid_state);
+    assert(recorder.InError() && !recorder.CanConfigure());
+  }
+  {
+    Recorder recorder({});
+    assert(recorder.CanSetSource(true) && recorder.CanSetSource(false));
+    assert(!recorder.CanSetOutputFormat() && !recorder.CanSetEncoder(true));
+    Configure(recorder, path + ".missing-encoder", 0, 0);
+    recorder.config().audio_encoder = -1;
+    assert(!recorder.Prepare(&error, &invalid_state) && invalid_state);
+    assert(!recorder.InError() && recorder.CanSetEncoder(true));
+    recorder.config().audio_encoder = 3;
+    assert(!recorder.CanSetSource(true) && !recorder.CanSetOutputFormat());
+    assert(!recorder.CanSetEncoder(true) && !recorder.CanSetEncoder(false));
+    assert(recorder.Prepare(&error));
+  }
 }
 
 void ReadAccessUnits(const char* path) {
@@ -360,5 +470,6 @@ int main(int argc, char** argv) {
   SizeLimit(output + "/size.m4a");
   MixedSources(output + "/mixed.mp4");
   WriteFailure(output + "/write-failure.m4a");
+  ErrorRecovery(output + "/error-recovery");
   std::cout << "Recorder worker lifecycle checks passed\n";
 }
