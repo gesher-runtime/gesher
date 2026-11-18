@@ -225,6 +225,13 @@ final class IntentChooser {
         // sender UID. This metadata-only context never participates in camera or
         // content-provider conversion: only the two SEND actions enter here.
         if (Intent.ACTION_SEND.equals(launch.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(launch.getAction())) {
+            // Migration normally happens before Binder transport. The framework
+            // skips parcelled extras, so decode our private snapshot first.
+            Bundle extras = launch.getExtras();
+            if (extras != null) {
+                extras.size();
+                launch.replaceExtras(extras);
+            }
             ApplicationInfo origin = new ApplicationInfo(callerInfo);
             launch.migrateExtraStreamToClipData(new android.content.ContextWrapper(null) {
                 @Override public ApplicationInfo getApplicationInfo() { return origin; }

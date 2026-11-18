@@ -308,6 +308,9 @@ public final class ChooserContractTest {
         Intent received = (Intent)get(launched, "intent");
         check("text/plain".equals(received.getType()) && uri.equals(received.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class)),
                 "Queued share changed after the caller mutated its original intent");
+        check(received.getClipData() != null && received.getClipData().getItemCount() == 1
+                && uri.equals(received.getClipData().getItemAt(0).getUri()),
+                "Binder-delivered share stream was not migrated to ClipData");
         check(h.access(h.target2, uri, 1) && !h.access(h.target2, uri, 2) && !h.access(h.target1, uri, 1),
                 "Selected-target URI grant was absent, broadened, or given to an unselected app");
         long identity = Binder.clearCallingIdentity();
@@ -850,6 +853,12 @@ public final class ChooserContractTest {
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
         android.content.res.AssetManager.createSystemAssetsInZygoteLocked(false, System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
+        android.system.Os.setenv("ANDROID_DATA",
+                java.nio.file.Files.createTempDirectory("gesher-chooser-").toString(), true);
+        // Match system_server's writable nonce region before package retirement
+        // invalidates Android's real package-info cache.
+        com.android.internal.os.ApplicationSharedMemory.setInstance(
+                com.android.internal.os.ApplicationSharedMemory.create());
         System.out.println("ChooserContractTest all passed: " + run(true) + " checks (actual AIDL/Parcel, production launches and grants; scripted user-input boundary)");
     }
 }

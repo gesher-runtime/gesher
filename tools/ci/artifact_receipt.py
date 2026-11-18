@@ -71,7 +71,14 @@ identity_record('artifact_inventory', {'name': a.name, 'run_id': run_id, 'source
                 'names': [item.get('name') for item in inventory.get('artifacts', [])]}, 'observed')
 if inventory['total_count'] > 100:
     raise RuntimeError('Incomplete artifact inventory')
-rows = [x for x in inventory['artifacts'] if x['name'] == a.name]
+def timestamp(s):
+    return datetime.datetime.fromisoformat(s.replace('Z', '+00:00'))
+
+# Reruns retain artifacts from earlier attempts under the same name. Bind
+# selection to the already verified producer's execution window before checking
+# uniqueness; never guess by newest ID or relax the remaining identity checks.
+rows = [x for x in inventory['artifacts'] if x['name'] == a.name
+        and timestamp(job['started_at']) <= timestamp(x['created_at']) <= timestamp(job['completed_at'])]
 if len(rows) != 1:
     raise RuntimeError('Artifact missing or ambiguous')
 item = rows[0]
@@ -86,8 +93,6 @@ identity_record('artifact', {'name': a.name, 'run_id': run_id, 'attempt': attemp
 import re
 if item['expired'] or item['size_in_bytes'] <= 0 or not re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('digest') or '') or str(item['workflow_run']['id']) != run_id or item['workflow_run']['head_sha'] != head or str(item['workflow_run']['repository_id']) != repo_id or str(item['workflow_run']['head_repository_id']) != head_repo:
     raise RuntimeError('Artifact identity or digest mismatch')
-def timestamp(s):
-    return datetime.datetime.fromisoformat(s.replace('Z', '+00:00'))
 if not timestamp(job['started_at']) <= timestamp(item['created_at']) <= timestamp(job['completed_at']):
     raise RuntimeError('Artifact outside producer attempt')
 subprocess.run([sys.executable, 'tools/surface/download-verified-artifact.py', '--id', str(item['id']), '--digest', item['digest'], '--destination', a.destination], check=True)
