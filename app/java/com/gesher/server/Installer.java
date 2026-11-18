@@ -197,7 +197,7 @@ final class Installer {
     synchronized void persistInstallSource(ApkPackage target, PackageInstallSource source)
             throws IOException {
         if (!Thread.holdsLock(mPm)) throw new IllegalStateException("Package publication lock required");
-        if (mPm.get(target.packageName) != target || mPm.isRemovalPending(target.packageName)) {
+        if (target == null || mPm.get(target.packageName) != target || mPm.isRemovalPending(target.packageName)) {
             throw new SecurityException("Package changed during installer reassignment");
         }
         if (target.installSource().equals(source)) return;

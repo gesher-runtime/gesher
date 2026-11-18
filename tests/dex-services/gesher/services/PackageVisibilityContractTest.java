@@ -27,7 +27,6 @@ import com.android.internal.pm.pkg.component.ParsedProviderImpl;
 import com.android.internal.pm.pkg.component.ParsedServiceImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import com.gesher.server.ApkPackage;
-import com.gesher.server.GmsSignatureSpoofing;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.PackageUids;
 import com.gesher.server.StandIn;
@@ -154,7 +153,7 @@ public final class PackageVisibilityContractTest {
         // inherited Binder implementation returns null and the wrapper indexes [0].
         check(client.canPackageQuery(A, A), "Public self-package query failed");
         boolean shared = a.uid() == b.uid();
-        check(shared != GmsSignatureSpoofing.isEnabled(), "Fixture did not use actual runtime UID mode");
+        check(!shared, "Admitted unrelated packages must have distinct UIDs in every profile");
         check(client.canPackageQuery(A, B) == shared, "Unrelated distinct UID became visible");
         check(Arrays.equals(client.canPackageQuery(A, new String[]{B, A, "android", B}),
                 new boolean[]{shared, true, true, shared}), "Bulk query lost order, duplicate or false values");
@@ -313,6 +312,35 @@ public final class PackageVisibilityContractTest {
             as(installer.uid(), () -> expect(PackageManager.NameNotFoundException.class,
                     () -> publicClient.getInstallSourceInfo(A), "Installer visibility was made bidirectional"));
         }
+        // AOSP grants separate visibility edges to the still-installed initiator and
+        // the reassigned installer. Third-party callers filter those two roles independently.
+        String d = "fixture.visibility.d", e = "fixture.visibility.e";
+        ApkPackage nextInstaller = record(parsed(d));
+        set(nextInstaller, "mEnabledOwner", "932c12b3-57c3-40eb-9d6e-d0913c506914");
+        PackageImpl seesNext = parsed(C); seesNext.addQueriesPackage(A); seesNext.addQueriesPackage(d);
+        observerRecord = record(seesNext);
+        PackageImpl seesInitiator = parsed(e); seesInitiator.addQueriesPackage(A); seesInitiator.addQueriesPackage(B);
+        ApkPackage initiatingObserver = record(seesInitiator);
+        var replace = type.getDeclaredMethod("withInstaller", ApkPackage.class); replace.setAccessible(true);
+        set(target, "mInstallSource", replace.invoke(attribution, nextInstaller));
+        set(pm, "mPackages", Map.of(A, target, B, installer, C, observerRecord, d, nextInstaller, e, initiatingObserver));
+        as(target.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(B.equals(source.getInitiatingPackageName()) && d.equals(source.getInstallingPackageName()),
+                    "Reassignment replaced the historical initiator");
+            check(publicClient.canPackageQuery(A, B) && publicClient.canPackageQuery(A, d),
+                    "Installed initiator lost its visibility edge after reassignment");
+        });
+        as(observerRecord.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(source.getInitiatingPackageName() == null && d.equals(source.getInstallingPackageName()),
+                    "Current installer visibility leaked the independent initiator");
+        });
+        as(initiatingObserver.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(B.equals(source.getInitiatingPackageName()) && source.getInstallingPackageName() == null,
+                    "Initiator visibility depended on visibility of the current installer");
+        });
         set(pm, "mPackages", Map.of(A, target, C, observerRecord));
         check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
                 "Removed installer remained installer of record");
@@ -337,7 +365,7 @@ public final class PackageVisibilityContractTest {
 
     public static int run(boolean onArt) throws Exception {
         art = onArt; checks = 0; shapesAndCallers(); installSourceVisibility();
-        if (GmsSignatureSpoofing.isEnabled()) { declarations(); components(); }
+        declarations(); components();
         return checks;
     }
     public static void main(String[] args) throws Exception {

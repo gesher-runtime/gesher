@@ -131,6 +131,9 @@ record PackageInstallSource(String initiator, String initiatingOwner, String ins
             return withoutInstaller(category);
         }
         checkIdentity(fields[0], fields[1]);
+        if (fields.length == 6 && fields[3].isEmpty()) {
+            throw new IllegalArgumentException("Invalid installer signing details");
+        }
         return new PackageInstallSource(fields[0], fields[1], category, fields.length == 6
                 ? readSigning(fields[3], fields[4], fields[5]) : null);
     }
