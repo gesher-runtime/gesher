@@ -1,0 +1,52 @@
+// Complete production WASAPI implementation. Only class visibility permits
+// injecting the documented IAudioCaptureClient COM boundary; no device opens.
+#include <cstdlib>
+@WASAPI@
+class CaptureBoundary final : public IAudioCaptureClient {
+ public:
+  HRESULT next = S_OK, result = S_OK;
+  UINT32 frames = 2;
+  DWORD flags = 0;
+  BYTE* data = nullptr;
+  float samples[2]{.25f, -.5f};
+  bool consumed = false;
+  int releases = 0;
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override { return E_NOINTERFACE; }
+  ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+  ULONG STDMETHODCALLTYPE Release() override { return 1; }
+  HRESULT STDMETHODCALLTYPE GetNextPacketSize(UINT32* count) override {
+    *count = consumed ? 0 : frames > 0 ? frames : 1;
+    return next;
+  }
+  HRESULT STDMETHODCALLTYPE GetBuffer(BYTE** pointer, UINT32* count, DWORD* output_flags, UINT64*, UINT64*) override {
+    *pointer = data; *count = frames; *output_flags = flags; return result;
+  }
+  HRESULT STDMETHODCALLTYPE ReleaseBuffer(UINT32) override { ++releases; consumed = true; return S_OK; }
+};
+int checks = 0;
+void Check(bool ok, const char* message) {
+  ++checks;
+  if (!ok) { std::fprintf(stderr, "FAIL WASAPI capture: %s\n", message); std::exit(1); }
+}
+int main() {
+  for (int kind = 0; kind < 7; ++kind) {
+    CaptureBoundary boundary;
+    if (kind == 0) { boundary.result = AUDCLNT_S_BUFFER_EMPTY; boundary.frames = 0; }
+    if (kind == 1) boundary.result = AUDCLNT_E_BUFFER_ERROR;
+    if (kind == 2) boundary.result = AUDCLNT_E_SERVICE_NOT_RUNNING;
+    if (kind == 3) boundary.next = AUDCLNT_E_DEVICE_INVALIDATED;
+    if (kind == 4) boundary.flags = AUDCLNT_BUFFERFLAGS_SILENT;
+    if (kind == 5) boundary.data = reinterpret_cast<BYTE*>(boundary.samples);
+    gesher::media::WasapiCapture source;
+    source.capture_ = &boundary;
+    source.channels_ = 1; source.rate_ = 48000; source.bits_ = 32; source.is_float_ = true;
+    std::vector<float> output{.75f};
+    const bool result = source.Pull(&output);
+    Check(result == (kind == 0 || kind == 1 || kind == 4 || kind == 5), "COM result classification");
+    if (kind == 4) Check(output == std::vector<float>({.75f, 0, 0}), "genuine hardware silent flag preserves captured silence");
+    else if (kind == 5) Check(output == std::vector<float>({.75f, .25f, -.5f}), "genuine float packet copied exactly");
+    else Check(output == std::vector<float>({.75f}), "empty/error/null payload cannot create samples");
+    Check(boundary.releases == (kind >= 4 ? 1 : 0), "successful packets released exactly once");
+  }
+  std::printf("WASAPI capture contracts: %d checks PASS\n", checks);
+}

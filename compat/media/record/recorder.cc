@@ -164,12 +164,21 @@ bool Recorder::Prepare(std::string* error) {
   return true;
 }
 
-bool Recorder::Start(std::string* error) {
+bool Recorder::Start(std::string* error, bool* invalid_state) {
+  if (invalid_state != nullptr) *invalid_state = false;
   if (!prepared_ || started_) {
+    if (invalid_state != nullptr) *invalid_state = true;
     *error = "start() in the wrong state";
     return false;
   }
-  if (!muxer_->Start(error)) return false;
+  if (capture_ != nullptr && capture_->Start() != kOk) {
+    *error = "audio capture is unavailable";
+    return false;
+  }
+  if (!muxer_->Start(error)) {
+    if (capture_ != nullptr) capture_->Stop();
+    return false;
+  }
   {
     std::lock_guard<std::mutex> lock(mu_);
     running_ = true;
@@ -177,7 +186,6 @@ bool Recorder::Start(std::string* error) {
   }
   started_ = true;
   if (capture_ != nullptr) {
-    capture_->Start();
     audio_thread_ = std::thread([this] { AudioLoop(); });
   }
   if (video_enc_ != nullptr) video_thread_ = std::thread([this] { VideoLoop(); });
@@ -246,7 +254,19 @@ void Recorder::AudioLoop() {
       if (!running_) break;
     }
     ssize_t n = capture_->Read(pcm.data(), pcm.size() * sizeof(int16_t), true);
-    if (n <= 0) continue;
+    if (n < 0) {
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        capture_failed_ = true;
+        running_ = false;
+        finished_ = true;
+      }
+      cv_.notify_all();
+      MEDIA_LOGE("MediaRecorder: audio capture was disconnected");
+      if (listener_) listener_(1, 1); // MEDIA_RECORDER_EVENT_ERROR / ERROR_UNKNOWN
+      break;
+    }
+    if (n == 0) continue;
     const size_t got = static_cast<size_t>(n) / (sizeof(int16_t) * ch);
     bool skip;
     {
@@ -386,6 +406,10 @@ bool Recorder::Stop(std::string* error) {
                static_cast<long long>(video_first_pts_us_), static_cast<long long>(video_last_encode_input_us_),
                static_cast<long long>(start_us_), static_cast<long long>(stop_requested_us), static_cast<long long>(NowUs()));
   }
+  if (capture_failed_) {
+    *error = "stop failed: audio capture was disconnected";
+    return false;
+  }
   if (ok && samples_written_ == 0) {
     *error = "stop failed: nothing was recorded";
     return false;
@@ -408,6 +432,7 @@ void Recorder::Reset() {
   if (config_.fd >= 0) close(config_.fd);
   config_ = RecorderConfig();
   prepared_ = started_ = false;
+  capture_failed_ = false;
   running_ = paused_ = stopping_ = finished_ = false;
   frames_.clear();
   audio_track_ = video_track_ = -1;

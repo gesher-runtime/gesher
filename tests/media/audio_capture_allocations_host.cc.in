@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -43,9 +44,14 @@ namespace gesher::media {
 }
 @HEADER@
 namespace gesher::media {
-class CaptureEngine { public: void Wake() { ++wakes; } size_t wakes = 0; };
+class CaptureEngine { public: int StartStream(CaptureStream*, uint64_t); void Wake() { ++wakes; } size_t wakes = 0; };
 @BYTES@
 @MEMBERS@
+template<class Stream> int ActivateHostStream(Stream* stream, uint64_t generation) {
+  if constexpr (requires { stream->Activate(generation); }) return stream->Activate(generation);
+  else return kOk; // Older-source controls start directly and never call this boundary.
+}
+int CaptureEngine::StartStream(CaptureStream* stream, uint64_t generation) { ++wakes; return ActivateHostStream(stream, generation); }
 @PCM@
 }
 

@@ -50,7 +50,7 @@ class Recorder {
   bool Prepare(std::string* error);
   // The input Surface (video source SURFACE), after Prepare.
   InputSurface* input_surface() const { return input_surface_.get(); }
-  bool Start(std::string* error);
+  bool Start(std::string* error, bool* invalid_state = nullptr);
   // False (and `error`) when nothing was recorded.
   bool Stop(std::string* error);
   void Pause();
@@ -87,6 +87,7 @@ class Recorder {
   std::deque<std::shared_ptr<VideoFrame>> frames_;
   bool running_ = false, paused_ = false, stopping_ = false, finished_ = false;
   bool prepared_ = false, started_ = false;
+  bool capture_failed_ = false;
   int64_t start_us_ = 0;        // the recording's time 0 (CLOCK_MONOTONIC)
   int64_t paused_total_us_ = 0;  // time spent paused
   int64_t pause_at_us_ = 0;
