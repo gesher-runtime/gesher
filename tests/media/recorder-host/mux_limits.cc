@@ -98,11 +98,51 @@ Result Run(const std::string& path, const Case& c, int64_t limit, size_t maximum
   std::cout << c.name << " limit=" << limit << " bytes=" << info.st_size << " packets=" << written << '\n';
   return {static_cast<uint64_t>(info.st_size), written};
 }
+
+uint64_t MetadataSize(const std::string& path, int64_t limit, bool eos_rejected,
+                      const std::vector<uint8_t>& avc) {
+  int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600); assert(fd >= 0);
+  std::string error;
+  auto mux = Muxer::Create(fd, MuxerFormat::kMpeg4, &error); assert(mux);
+  Format video, metadata, late;
+  video.get()->mime = "video/avc";
+  video.get()->integers = {{"width", 32}, {"height", 32}};
+  metadata.get()->mime = "application/fixture";
+  late.get()->mime = "application/late-fixture";
+  const int vt = mux->AddTrack(video, &error);
+  const int mt = mux->AddTrack(metadata, &error);
+  const int lt = mux->AddTrack(late, &error);
+  assert(vt == 0 && mt == 1 && lt == 2);
+  assert(mux->SetFileSizeLimit(limit) && mux->Start(&error));
+  const uint8_t bytes[] = {1, 2, 3};
+  // Negative preroll, a duration requiring wide mdhd, and an offset
+  // requiring a wide edit list and movie/track headers.
+  assert(mux->WriteSample(vt, avc.data(), avc.size(), 0, 1, &error));
+  assert(mux->WriteSample(mt, bytes, sizeof(bytes), -1000000, 0, &error));
+  assert(mux->WriteSample(mt, bytes, sizeof(bytes), 30000000000, 0, &error));
+  assert(mux->WriteSample(mt, bytes, sizeof(bytes), 50000000000, 0, &error));
+  assert(mux->WriteSample(lt, bytes, sizeof(bytes), 500000000000, 0, &error));
+  assert(!mux->FileSizeLimitReached());
+  // Explicit EOS replaces the last metadata interval with a new stts run.
+  assert(mux->WriteSample(mt, nullptr, 0, 50001000000, 4, &error));
+  assert(mux->FileSizeLimitReached() == eos_rejected);
+  assert(mux->Stop(&error));
+  struct stat info {}; assert(fstat(fd, &info) == 0);
+  assert(mux->BytesWritten() == info.st_size);
+  assert(limit <= 0 || info.st_size < limit);
+  close(fd);
+  return static_cast<uint64_t>(info.st_size);
+}
+
 int main(int argc, char** argv) {
   assert(argc == 2);
   std::string work = argv[1];
   const auto aac = Units(work + "/aac.units"), opus = Units(work + "/opus.units");
   const auto head = Read(work + "/opus.head"), avc = Read(work + "/frame.h264");
+  const uint64_t metadata_size = MetadataSize(work + "/metadata-baseline.mp4", 0, false, avc);
+  assert(MetadataSize(work + "/metadata-exact.mp4", metadata_size + 1, false, avc) == metadata_size);
+  assert(Read(work + "/metadata-exact.mp4") == Read(work + "/metadata-baseline.mp4"));
+  assert(MetadataSize(work + "/metadata-limited.mp4", metadata_size, true, avc) + 8 == metadata_size);
   const Case cases[] = {
     {"aac.mp4", MuxerFormat::kMpeg4},
     {"irregular.mp4", MuxerFormat::kMpeg4, false, false, false, true, false, true},
