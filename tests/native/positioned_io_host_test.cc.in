@@ -29,7 +29,8 @@ using HANDLE = HostHandle*;
 #define INVALID_HANDLE_VALUE reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1))
 constexpr BOOL TRUE = 1, FALSE = 0;
 constexpr DWORD ERROR_SUCCESS = 0, ERROR_HANDLE_EOF = 38, ERROR_IO_PENDING = 997,
-    ERROR_NOACCESS = 998, ERROR_INVALID_USER_BUFFER = 1784, ERROR_ACCESS_DENIED = 5;
+    ERROR_NOACCESS = 998, ERROR_INVALID_USER_BUFFER = 1784, ERROR_ACCESS_DENIED = 5,
+    ERROR_BROKEN_PIPE = 109;
 constexpr DWORD FILE_TYPE_DISK = 1, FILE_TYPE_CHAR = 2, FILE_TYPE_PIPE = 3, FILE_TYPE_UNKNOWN = 0;
 constexpr DWORD FILE_READ_DATA = 1, FILE_WRITE_DATA = 2, FILE_APPEND_DATA = 4;
 constexpr DWORD FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4;
@@ -38,6 +39,8 @@ constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16, FILE_WRITE_THROUGH = 2,
 constexpr DWORD FILE_FLAG_OVERLAPPED = 0x40000000, FILE_FLAG_WRITE_THROUGH = 0x80000000,
     FILE_FLAG_NO_BUFFERING = 0x20000000, FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000;
 constexpr DWORD DUPLICATE_SAME_ACCESS = 2;
+constexpr DWORD MAXDWORD = UINT32_MAX;
+constexpr DWORD FILE_BEGIN = 0;
 constexpr DWORD FILE_DEVICE_NULL = 0x15;
 struct IO_STATUS_BLOCK { uintptr_t unused[2]; };
 using PIO_STATUS_BLOCK = IO_STATUS_BLOCK*;
@@ -63,6 +66,8 @@ static DWORD test_mode, last_reopen_access, last_reopen_flags;
 static unsigned waits, notifications;
 static ino_t notified_inode;
 static std::function<void()> after_pin;
+static std::function<void()> before_file_io;
+static std::function<void()> before_status;
 
 [[maybe_unused]] static void SetLastError(DWORD error) { last_error = error; }
 static DWORD GetLastError() { return last_error; }
@@ -103,6 +108,13 @@ static BOOL GetFileSizeEx(HANDLE handle, LARGE_INTEGER* size) {
   if (fstat(handle->fd, &info)) { SetLastError(errno); return FALSE; }
   size->QuadPart = info.st_size; return TRUE;
 }
+static BOOL SetFilePointerEx(HANDLE handle, LARGE_INTEGER distance, LARGE_INTEGER* result, DWORD origin) {
+  if (guard_depth) std::abort();
+  off_t offset = static_cast<off_t>(syscall(SYS_lseek, handle->fd, distance.QuadPart, origin));
+  if (offset < 0) { SetLastError(errno); return FALSE; }
+  result->QuadPart = offset;
+  return TRUE;
+}
 static LONG QueryMode(HANDLE, PIO_STATUS_BLOCK, void* output, ULONG size, FILE_INFORMATION_CLASS kind) {
   if (size != sizeof(FILE_MODE_INFORMATION) || kind != FileModeInformation) std::abort();
   if (query_error) return -query_error;
@@ -140,11 +152,25 @@ static HANDLE CreateEventW(void*, BOOL manual, BOOL initial, const wchar_t*) {
 }
 static BOOL FileIo(HANDLE handle, void* bytes, DWORD count, DWORD* transferred, OVERLAPPED* ov, bool write_op) {
   if (io_error) { SetLastError(io_error); return FALSE; }
+  if (before_file_io) { auto hook = std::move(before_file_io); before_file_io = {}; hook(); }
+  if (!ov) {
+    ssize_t actual = write_op ? write(handle->fd, bytes, count) : read(handle->fd, bytes, count);
+    if (actual < 0) { SetLastError(errno); return FALSE; }
+    *transferred = static_cast<DWORD>(actual);
+    return TRUE;
+  }
   off_t offset = static_cast<off_t>((static_cast<uint64_t>(ov->OffsetHigh) << 32) | ov->Offset);
   ssize_t actual;
   if (GetFileType(handle) == FILE_TYPE_CHAR || GetFileType(handle) == FILE_TYPE_PIPE) {
     // Windows ignores OVERLAPPED offsets on nonseekable handles.
     actual = write_op ? write(handle->fd, bytes, count) : read(handle->fd, bytes, count);
+  } else if (write_op && ov->Offset == MAXDWORD && ov->OffsetHigh == MAXDWORD) {
+    // The documented Win32 EOF sentinel is modeled by Linux's actual atomic
+    // append operation, not a userspace seek followed by a positional write.
+    int flags = fcntl(handle->fd, F_GETFL);
+    if (flags < 0 || fcntl(handle->fd, F_SETFL, flags | O_APPEND) < 0) actual = -1;
+    else actual = handle->async ? syscall(SYS_pwrite64, handle->fd, bytes, count, 0)
+                                : write(handle->fd, bytes, count);
   } else if (handle->async) {
     actual = syscall(write_op ? SYS_pwrite64 : SYS_pread64, handle->fd, bytes, count, offset);
   } else {
@@ -187,10 +213,50 @@ static int ErrnoFromWin32(DWORD error) {
   return error == ERROR_ACCESS_DENIED ? EACCES : error == ERROR_SUCCESS ? EINVAL : static_cast<int>(error);
 }
 static int FailWithLastError() { errno = ErrnoFromWin32(GetLastError()); return -1; }
+static int GetFileStatusFlags(int fd) { return fcntl(fd, F_GETFL); }
 static HANDLE HandleFromFd(int fd) {
   if (fcntl(fd, F_GETFD) < 0) return INVALID_HANDLE_VALUE;
   std::lock_guard<std::mutex> lock(handles_mutex);
   return &handles.try_emplace(fd, HostHandle{fd, false, false, false}).first->second;
+}
+// Real Linux duplicate handles model snapshot lifetime at this OS boundary.
+// The complete executable-owned registry is tested by the OFD transfer corpus.
+enum class DescriptorKind { kFile, kZero, kRandom, kUnshareable };
+struct DescriptorSnapshot {
+  HANDLE handle = nullptr;
+  DescriptorKind kind = DescriptorKind::kFile;
+  int revocation_error = 0;
+  ~DescriptorSnapshot() { if (handle) CloseHandle(handle); }
+};
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+// This preexisting OS-boundary fixture models ordinary descriptions. The
+// complete revocation implementation and real shared group objects are run by
+// test_revocable_file_contracts.py; an injected error also checks I/O routing.
+class FileOperationLease {
+ public:
+  explicit FileOperationLease(const DescriptorSnapshotPtr& value)
+      : error_(value ? value->revocation_error : EBADF) { if (guard_depth) std::abort(); }
+  int Error() const { return error_; }
+ private:
+  int error_;
+};
+static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
+  auto value = std::make_shared<DescriptorSnapshot>();
+  if (!DuplicateHandle(GetCurrentProcess(), HandleFromFd(fd), GetCurrentProcess(), &value->handle,
+                       0, FALSE, DUPLICATE_SAME_ACCESS)) {
+    FailWithLastError();
+    return {};
+  }
+  return value;
+}
+static int FileDescriptionFlags(const DescriptorSnapshotPtr& value) {
+  if (guard_depth) std::abort();
+  if (before_status) before_status();
+  return value ? ::fcntl(value->handle->fd, F_GETFL) : (errno = EBADF, -1);
+}
+static int FileDescriptionIoFlags(const DescriptorSnapshotPtr& value) {
+  // Linux exposes native access/status without a synchronous-pipe query.
+  return FileDescriptionFlags(value);
 }
 static bool IsBinderFd(int) { return false; }
 static bool LookupEventFd(int) { return false; }
@@ -220,9 +286,15 @@ static int gesher_is_device_fd(int fd) {
   gesher::Device device; return gesher::DeviceFromFd(fd, &device);
 }
 #define pread tested_pread
+namespace gesher {
+static int ReadFileDescription(const DescriptorSnapshotPtr& value, void* bytes, unsigned count) {
+  return static_cast<int>(::read(value->handle->fd, bytes, count));
+}
+}
 #define pwrite tested_pwrite
 #define pread64 tested_pread64
 #define pwrite64 tested_pwrite64
+#define lseek tested_lseek
 @POSITIONED_IO_IMPLEMENTATION@
 
 static int failures;
@@ -243,8 +315,8 @@ static void faults() {
   for (int* control : controls) {
     *control = control == &access_error ? EACCES : ERROR_ACCESS_DENIED; pending = control == &completion_error;
     check("positioned faults: return actual failing boundary", pread(fd, &byte, 1, 0) == -1 && errno == EACCES);
-    check("positioned faults: no cursor change or handle leak", lseek(fd, 0, SEEK_CUR) == 3 && live_handles == 0);
     *control = 0; pending = false;
+    check("positioned faults: no cursor change or handle leak", lseek(fd, 0, SEEK_CUR) == 3 && live_handles == 0);
   }
   pending = true; waits = 0;
   check("positioned pending: wait for read completion", pread(fd, &byte, 1, 0) == 1 && byte == 'o' && waits == 1);

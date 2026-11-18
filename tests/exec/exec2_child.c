@@ -1,5 +1,5 @@
 // libexec2child.so: the program the exec2 driver (exec2_test.c) starts through
-// fork+exec, system, popen and posix_spawn, and signals. Built by
+// exec, system, popen and posix_spawn, and signals. Built by
 // .github/workflows/exec.yml with the NDK; run on Windows through gesher-exec
 // (docs/exec.md, ADR 0055).
 //
@@ -11,6 +11,9 @@
 //   libexec2child.so sigloop          install SIGTERM/SIGUSR1 handlers, print
 //                                     "child-ready", then wait; SIGTERM exits
 //                                     42 if a SIGUSR1 arrived first, else 43
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1  // pwritev in the shared OFD process corpus
+#endif
 #include <dlfcn.h>
 #include <android/log.h>
 #include <signal.h>
@@ -22,6 +25,8 @@
 #include <sys/system_properties.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "ofd_process_contract.inc"
 
 static volatile sig_atomic_t g_usr1;
 
@@ -186,6 +191,8 @@ static int log_abi(const char* tag) {
 }
 
 int main(int argc, char** argv) {
+  int ofd_result = ofd_process_child(argc, argv);
+  if (ofd_result >= 0) return ofd_result;
   const char* mode = argc > 1 ? argv[1] : "echo";
   if (strcmp(mode, "log-abi") == 0 && argc > 2) return log_abi(argv[2]);
   if (strcmp(mode, "log-write") == 0 && argc > 4) {

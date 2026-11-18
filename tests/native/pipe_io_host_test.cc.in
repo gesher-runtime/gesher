@@ -1,0 +1,380 @@
+// Linux OS boundary for the exact production pipe operations. The thread-pool
+// wait API is modeled by a watcher thread; only the Windows component proves
+// Windows callback delivery and resource use. Bytes and blocking are real pipes.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <poll.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <thread>
+#include <time.h>
+#include <unistd.h>
+#include <vector>
+
+#define WINAPI
+#define CALLBACK
+using DWORD = uint32_t;
+using ULONG = uint32_t;
+using LONG = int32_t;
+using BOOL = int;
+using HMODULE = void*;
+constexpr BOOL TRUE = 1, FALSE = 0;
+enum class Kind { File, Mutex, Event, Thread };
+struct Handle {
+  Kind kind = Kind::File;
+  int fd = -1;
+  bool allocated = false;
+  pthread_t thread{};
+  std::recursive_mutex mutex;
+  std::atomic<bool> signaled{false}, active{false};
+};
+using HANDLE = Handle*;
+struct OVERLAPPED { HANDLE hEvent = nullptr; };
+struct IO_STATUS_BLOCK {};
+using PIO_STATUS_BLOCK = IO_STATUS_BLOCK*;
+enum FILE_INFORMATION_CLASS { FilePipeLocalInformation };
+struct FILE_PIPE_LOCAL_INFORMATION { ULONG NamedPipeState, ReadDataAvailable, WriteQuotaAvailable; };
+constexpr DWORD ERROR_SUCCESS = 0, ERROR_BROKEN_PIPE = 109, ERROR_PIPE_BUSY = 231,
+    ERROR_PIPE_NOT_CONNECTED = 233, ERROR_NO_DATA = 232, ERROR_OPERATION_ABORTED = 995,
+    ERROR_MORE_DATA = 234, ERROR_NOACCESS = 998, ERROR_INVALID_USER_BUFFER = 1784,
+    ERROR_IO_PENDING = 997;
+constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_ABANDONED = 128, WAIT_TIMEOUT = 258,
+    THREAD_TERMINATE = 1;
+constexpr DWORD PIPE_READMODE_BYTE = 0, PIPE_WAIT = 0, PIPE_NOWAIT = 1;
+static thread_local DWORD last_error;
+static std::atomic<int> live_handles{0}, live_waits{0}, created_waits{0}, cancel_calls{0}, queries{0};
+static void (*before_io)(HANDLE, bool);
+static DWORD GetLastError() { return last_error; }
+static void Sleep(DWORD milliseconds) {
+  std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+}
+static DWORD MapError(int error, bool writing) {
+  return error == EAGAIN ? writing ? ERROR_SUCCESS : ERROR_NO_DATA :
+      error == EPIPE ? ERROR_BROKEN_PIPE : error == EINTR ? ERROR_OPERATION_ABORTED : error;
+}
+static BOOL ReadFile(HANDLE file, void* bytes, DWORD count, DWORD* done, OVERLAPPED*) {
+  if (before_io) { auto hook = before_io; before_io = nullptr; hook(file, false); }
+  file->active.store(true);
+  const ssize_t result = read(file->fd, bytes, count);
+  file->active.store(false);
+  if (result < 0) { last_error = MapError(errno, false); return 0; }
+  *done = static_cast<DWORD>(result);
+  return 1;
+}
+static BOOL WriteFile(HANDLE file, const void* bytes, DWORD count, DWORD* done, OVERLAPPED*) {
+  if (before_io) { auto hook = before_io; before_io = nullptr; hook(file, true); }
+  file->active.store(true);
+  const ssize_t result = write(file->fd, bytes, count);
+  file->active.store(false);
+  if (result < 0) {
+    last_error = MapError(errno, true); *done = 0;
+    // Message-type Windows NOWAIT reports successful zero-byte admission.
+    return errno == EAGAIN;
+  }
+  *done = static_cast<DWORD>(result);
+  return 1;
+}
+static LONG Query(HANDLE file, PIO_STATUS_BLOCK, void* output, ULONG size, FILE_INFORMATION_CLASS kind) {
+  ++queries;
+  // This boundary is deliberately stricter than Linux: production must never
+  // issue a metadata query behind an admitted synchronous call on this endpoint.
+  if (kind != FilePipeLocalInformation || file->active.load() ||
+      size != sizeof(FILE_PIPE_LOCAL_INFORMATION)) std::abort();
+  int used = 0;
+  const int capacity = fcntl(file->fd, F_GETPIPE_SZ);
+  if (capacity < 0 || ioctl(file->fd, FIONREAD, &used) < 0) return -errno;
+  pollfd descriptor{file->fd, POLLIN | POLLOUT, 0};
+  if (poll(&descriptor, 1, 0) < 0) return -errno;
+  *static_cast<FILE_PIPE_LOCAL_INFORMATION*>(output) = {
+      (descriptor.revents & (POLLERR | POLLHUP)) != 0 ? 4u : 3u,
+      static_cast<ULONG>(used), static_cast<ULONG>(capacity - used)};
+  return 0;
+}
+static ULONG Convert(LONG error) { return static_cast<ULONG>(-error); }
+static HMODULE GetModuleHandleW(const wchar_t*) { return reinterpret_cast<void*>(1); }
+static void* GetProcAddress(HMODULE, const char* name) {
+  return std::strcmp(name, "NtQueryInformationFile") == 0 ? reinterpret_cast<void*>(Query) : reinterpret_cast<void*>(Convert);
+}
+static BOOL SetNamedPipeHandleState(HANDLE file, DWORD* mode, void*, void*) {
+  const int flags = fcntl(file->fd, F_GETFL);
+  if (flags < 0 || fcntl(file->fd, F_SETFL, (*mode & PIPE_NOWAIT) ? flags | O_NONBLOCK : flags & ~O_NONBLOCK) < 0) {
+    last_error = errno; return 0;
+  }
+  return 1;
+}
+static DWORD WaitForSingleObject(HANDLE handle, DWORD milliseconds) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+  for (;;) {
+    if (handle->kind == Kind::Mutex) {
+      if (handle->mutex.try_lock()) return WAIT_OBJECT_0;
+    } else if (handle->kind == Kind::Event) {
+      if (handle->signaled.load()) return WAIT_OBJECT_0;
+    } else std::abort();
+    if (std::chrono::steady_clock::now() >= deadline) return WAIT_TIMEOUT;
+    Sleep(1);
+  }
+}
+static BOOL ReleaseMutex(HANDLE handle) { handle->mutex.unlock(); return TRUE; }
+static HANDLE GetCurrentProcess() { return nullptr; }
+static HANDLE GetCurrentThread() {
+  static thread_local Handle current;
+  current.kind = Kind::Thread; current.thread = pthread_self(); return &current;
+}
+static HANDLE CreateEventW(void*, BOOL manual, BOOL initial, const wchar_t*) {
+  if (!manual) std::abort();
+  auto* event = new Handle; event->kind = Kind::Event; event->allocated = true;
+  event->signaled.store(initial); ++live_handles; return event;
+}
+static BOOL DuplicateHandle(HANDLE, HANDLE source, HANDLE, HANDLE* result, DWORD access, BOOL inherit, DWORD flags) {
+  if (source->kind != Kind::Thread || access != THREAD_TERMINATE || inherit || flags) std::abort();
+  auto* copy = new Handle; copy->kind = Kind::Thread; copy->thread = source->thread;
+  copy->allocated = true; *result = copy; ++live_handles; return TRUE;
+}
+static BOOL CloseHandle(HANDLE handle) {
+  if (handle->kind == Kind::File) return close(handle->fd) == 0;
+  if (!handle->allocated) std::abort();
+  --live_handles; delete handle; return TRUE;
+}
+static BOOL GetOverlappedResult(HANDLE, OVERLAPPED*, DWORD*, BOOL) { std::abort(); }
+static BOOL CancelIoEx(HANDLE, OVERLAPPED*) { return FALSE; } // This boundary models synchronous Linux calls.
+static BOOL CancelSynchronousIo(HANDLE thread) {
+  ++cancel_calls; return pthread_kill(thread->thread, SIGUSR1) == 0;
+}
+using PTP_CALLBACK_INSTANCE = void*;
+using TP_WAIT_RESULT = DWORD;
+struct ThreadpoolWait;
+using PTP_WAIT = ThreadpoolWait*;
+using WaitCallback = void(*)(PTP_CALLBACK_INSTANCE, void*, PTP_WAIT, TP_WAIT_RESULT);
+struct ThreadpoolWait {
+  WaitCallback callback;
+  void* context;
+  std::atomic<bool> stop{false};
+  std::thread watcher;
+};
+static PTP_WAIT CreateThreadpoolWait(WaitCallback callback, void* context, void*) {
+  auto* wait = new ThreadpoolWait{callback, context, {}, {}};
+  ++live_waits; ++created_waits; return wait;
+}
+static void SetThreadpoolWait(PTP_WAIT wait, HANDLE event, void*) {
+  if (!event) { wait->stop.store(true); return; }
+  wait->watcher = std::thread([wait, event] {
+    while (!wait->stop.load()) {
+      if (event->signaled.load()) { wait->callback(nullptr, wait->context, wait, WAIT_OBJECT_0); return; }
+      Sleep(1);
+    }
+  });
+}
+static void WaitForThreadpoolWaitCallbacks(PTP_WAIT wait, BOOL) {
+  if (wait->watcher.joinable()) wait->watcher.join();
+}
+static void CloseThreadpoolWait(PTP_WAIT wait) {
+  if (wait->watcher.joinable()) std::abort();
+  --live_waits; delete wait;
+}
+// winpthreads owns a manual-reset per-thread cancellation event. Emulate that
+// public extension separately from Linux's actual deferred pthread cancellation.
+static std::mutex cancellation_mutex;
+static std::map<pthread_t, std::weak_ptr<Handle>> cancellation_events;
+static HANDLE pthread_getevent() {
+  static thread_local std::shared_ptr<Handle> event;
+  if (!event) { event = std::make_shared<Handle>(); event->kind = Kind::Event; }
+  std::lock_guard<std::mutex> lock(cancellation_mutex);
+  cancellation_events[pthread_self()] = event;
+  return event.get();
+}
+static int CancelCaller(pthread_t caller) {
+  std::lock_guard<std::mutex> lock(cancellation_mutex);
+  const int result = pthread_cancel(caller);
+  auto found = cancellation_events.find(caller);
+  if (!result && found != cancellation_events.end()) {
+    if (auto event = found->second.lock()) event->signaled.store(true);
+  }
+  return result;
+}
+static int gesher_errno_from_crt(int error) { return error; }
+namespace gesher {
+struct OpenFileDescription {
+  Handle admission;
+  HANDLE pipe_mutex = &admission;
+  int flags;
+  bool known = true, owned = true;
+  explicit OpenFileDescription(int value) : flags(value) { admission.kind = Kind::Mutex; }
+  bool OwnedPipe() const { return owned; }
+  bool KnownPipeStatus() const { return known; }
+  int Flags() const { return flags; }
+};
+struct DescriptorSnapshot { HANDLE handle; std::shared_ptr<OpenFileDescription> description; };
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+static int ErrnoFromWin32(DWORD error) { return static_cast<int>(error); }
+static int FailWithLastError() { return errno = static_cast<int>(GetLastError()), -1; }
+}
+
+@PIPE_IMPLEMENTATION@
+
+static int checks, failures;
+static void Check(const char* name, bool ok) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL pipe: %s errno=%d\n", name, errno); }
+}
+static void Require(const char* name, bool ok) { Check(name, ok); if (!ok) std::abort(); }
+static void Await(const char* name, const std::function<bool()>& predicate) {
+  for (int i = 0; i != 2000 && !predicate(); ++i) Sleep(1);
+  Require(name, predicate());
+}
+static void EmptyBeforeRead(HANDLE file, bool writing) {
+  if (writing) std::abort();
+  char byte;
+  if (read(file->fd, &byte, 1) != 1) std::abort();
+}
+static std::atomic<bool> entering{false}, release_entry{false};
+static void DelayEntry(HANDLE, bool writing) {
+  if (writing) std::abort();
+  entering.store(true);
+  while (!release_entry.load()) Sleep(1);
+}
+struct ReaderTask {
+  gesher::DescriptorSnapshotPtr snapshot;
+  bool disabled = false;
+  char byte = 0;
+  int result = -99;
+  std::atomic<bool> returned{false};
+};
+static void* BlockedRead(void* raw) {
+  auto* task = static_cast<ReaderTask*>(raw);
+  int previous = PTHREAD_CANCEL_ENABLE;
+  if (task->disabled) pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous);
+  task->result = gesher::TransferPipe(task->snapshot, &task->byte, 1, false);
+  task->returned.store(true);
+  if (task->disabled) { pthread_setcancelstate(previous, nullptr); pthread_testcancel(); }
+  return reinterpret_cast<void*>(static_cast<intptr_t>(task->result));
+}
+static gesher::DescriptorSnapshotPtr Snapshot(Handle& handle, int flags) {
+  return std::make_shared<gesher::DescriptorSnapshot>(gesher::DescriptorSnapshot{
+      &handle, std::make_shared<gesher::OpenFileDescription>(flags)});
+}
+static int Mode(const gesher::DescriptorSnapshotPtr& snapshot, bool nonblocking) {
+  if (gesher::SetPipeNonBlocking(snapshot->handle, nonblocking) < 0) return -1;
+  auto& flags = snapshot->description->flags;
+  flags = nonblocking ? flags | O_NONBLOCK : flags & ~O_NONBLOCK;
+  return 0;
+}
+int main() {
+  struct sigaction action{}; action.sa_handler = +[](int) {}; sigemptyset(&action.sa_mask);
+  sigaction(SIGUSR1, &action, nullptr);
+  signal(SIGPIPE, SIG_IGN);
+  int descriptors[2];
+  Require("real blocking pipe created", pipe(descriptors) == 0);
+  Handle reader, writer; reader.fd = descriptors[0]; writer.fd = descriptors[1];
+  auto r = Snapshot(reader, O_RDONLY), w = Snapshot(writer, O_WRONLY);
+  Check("native endpoints start blocking", (fcntl(reader.fd, F_GETFL) & O_NONBLOCK) == 0);
+  Check("production setter changes kernel mode", Mode(r, true) == 0 && Mode(w, true) == 0);
+  Handle alias; alias.fd = dup(reader.fd);
+  Require("real alias created", alias.fd >= 0);
+  auto a = std::make_shared<gesher::DescriptorSnapshot>(gesher::DescriptorSnapshot{&alias, r->description});
+  Check("duplicate observes real kernel mode", (fcntl(alias.fd, F_GETFL) & O_NONBLOCK) != 0);
+  Check("alias setter changes original", Mode(a, false) == 0 && (fcntl(reader.fd, F_GETFL) & O_NONBLOCK) == 0);
+  Check("restore nonblocking mode", Mode(r, true) == 0);
+  char byte = 0;
+  Check("empty read returns EAGAIN", gesher::TransferPipe(r, &byte, 1, false) == -1 && errno == EAGAIN);
+  Check("write enters real pipe", gesher::TransferPipe(w, const_cast<char*>("q"), 1, true) == 1);
+  before_io = EmptyBeforeRead;
+  Check("competing reader cannot turn nonblocking read into wait", gesher::TransferPipe(r, &byte, 1, false) == -1 && errno == EAGAIN);
+  const int capacity = fcntl(writer.fd, F_GETPIPE_SZ);
+  std::vector<char> payload(static_cast<size_t>(capacity), 'p');
+  Check("fill actual kernel capacity", write(writer.fd, payload.data(), payload.size()) == capacity);
+  Check("full pipe write returns EAGAIN without reader progress", gesher::TransferPipe(w, payload.data(), 1, true) == -1 && errno == EAGAIN);
+  short ready = -1;
+  Check("full pipe is not writable", gesher::PollPipeHandle(w, POLLOUT, &ready) == 0 && ready == 0);
+  Check("partial page drain", read(reader.fd, payload.data(), 1024) == 1024);
+  Check("PIPE_BUF transfer remains all-or-none", gesher::TransferPipe(w, payload.data(), 4096, true) == -1 && errno == EAGAIN);
+  int buffered = -1;
+  Check("failed atomic write changed no bytes", gesher::PipeBytesAvailable(r, &buffered) == 0 && buffered == capacity - 1024);
+  buffered = 73;
+  Check("writer FIONREAD fails without fabricated count", gesher::PipeBytesAvailable(w, &buffered) == -1 && errno == EOPNOTSUPP && buffered == 73);
+  Check("drain remaining contents", read(reader.fd, payload.data(), payload.size()) == capacity - 1024);
+  Check("zero length read does not wait", gesher::TransferPipe(r, nullptr, 0, false) == 0);
+  Check("immediate operations allocate no cancellation wait or handles", created_waits.load() == 0 && live_handles.load() == 0);
+
+  std::atomic<bool> held{false}, release{false};
+  std::thread holder([&] {
+    w->description->admission.mutex.lock(); held.store(true);
+    while (!release.load()) Sleep(1);
+    w->description->admission.mutex.unlock();
+  });
+  Await("another thread owns endpoint admission", [&] { return held.load(); });
+  const int old_queries = queries.load();
+  Check("contended nonblocking write returns EAGAIN", gesher::TransferPipe(w, &byte, 1, true) == -1 && errno == EAGAIN);
+  ready = -1;
+  Check("contended control fails without ready or invalid bits", gesher::PollPipeHandle(w, POLLOUT, &ready) == -1 && errno == EOPNOTSUPP && ready == 0);
+  Check("busy endpoint was never queried", queries.load() == old_queries);
+  release.store(true); holder.join();
+
+  Check("blocking mode restored for cancellation", Mode(r, false) == 0);
+  for (int iteration = 0; iteration != 32; ++iteration) {
+    ReaderTask task{r}; pthread_t caller;
+    Require("blocking caller starts", pthread_create(&caller, nullptr, BlockedRead, &task) == 0);
+    Await("blocking caller is in actual read", [&] { return reader.active.load(); });
+    if (!iteration) {
+      const int before = queries.load(); ready = -1; buffered = 91;
+      Check("active endpoint poll fails promptly", gesher::PollPipeHandle(r, POLLIN, &ready) == -1 && errno == EOPNOTSUPP && ready == 0);
+      Check("active endpoint FIONREAD leaves output untouched", gesher::PipeBytesAvailable(r, &buffered) == -1 && errno == EOPNOTSUPP && buffered == 91);
+      Check("active endpoint issued no native metadata call", queries.load() == before);
+    }
+    Check("caller cancellation submitted", CancelCaller(caller) == 0);
+    void* result = nullptr;
+    Check("cancellation retires callback, handles and caller", pthread_join(caller, &result) == 0 && result == PTHREAD_CANCELED && live_waits.load() == 0 && live_handles.load() == 0);
+  }
+  {
+    ReaderTask task{r}; pthread_t caller; before_io = DelayEntry;
+    Require("entry-race caller starts", pthread_create(&caller, nullptr, BlockedRead, &task) == 0);
+    Await("caller paused before actual kernel entry", [] { return entering.load(); });
+    const int before = cancel_calls.load();
+    Check("entry-race cancellation submitted", CancelCaller(caller) == 0);
+    Await("callback retries before kernel entry", [&] { return cancel_calls.load() >= before + 3; });
+    release_entry.store(true);
+    void* result = nullptr;
+    Check("entry race retires after actual read begins", pthread_join(caller, &result) == 0 && result == PTHREAD_CANCELED && live_waits.load() == 0 && live_handles.load() == 0);
+  }
+  {
+    ReaderTask task{r}; task.disabled = true; pthread_t caller;
+    Require("disabled-cancellation caller starts", pthread_create(&caller, nullptr, BlockedRead, &task) == 0);
+    Await("disabled caller is in actual read", [&] { return reader.active.load(); });
+    const int before = created_waits.load();
+    Check("disabled caller cancellation request retained", CancelCaller(caller) == 0);
+    Sleep(10);
+    Check("disabled cancellation does not interrupt read", !task.returned.load() && live_waits.load() == 0 && created_waits.load() == before);
+    Check("real peer supplies disabled caller byte", write(writer.fd, "d", 1) == 1);
+    void* result = nullptr;
+    Check("pending cancellation delivered after completed read and reenable", pthread_join(caller, &result) == 0 && result == PTHREAD_CANCELED && task.result == 1 && task.byte == 'd' && live_handles.load() == 0);
+  }
+  r->description->known = false;
+  const int before_unknown = queries.load(); ready = -1;
+  Check("unmediated owned endpoint reports unsupported readiness", gesher::PollPipeHandle(r, POLLIN, &ready) == -1 && errno == EOPNOTSUPP && ready == 0);
+  Check("unmediated endpoint was not queried", queries.load() == before_unknown);
+  Check("real unmediated peer byte queued", write(writer.fd, "u", 1) == 1);
+  Check("unmediated endpoint still transfers actual data", gesher::TransferPipe(r, &byte, 1, false) == 1 && byte == 'u');
+  r->description->owned = false;
+  Check("real external peer byte queued", write(writer.fd, "x", 1) == 1);
+  Check("external endpoint still transfers actual data", gesher::TransferPipe(r, &byte, 1, false) == 1 && byte == 'x');
+  r->description->owned = true; r->description->known = true;
+  CloseHandle(&writer);
+  Check("real last writer closure produces EOF", gesher::TransferPipe(r, &byte, 1, false) == 0);
+  ready = -1;
+  Check("empty closed read pipe reports HUP only", gesher::PollPipeHandle(r, POLLIN, &ready) == 0 && ready == POLLHUP);
+  Check("all per-operation resources retired", live_waits.load() == 0 && live_handles.load() == 0);
+  CloseHandle(&alias); CloseHandle(&reader);
+  std::printf("Production pipe I/O: %d checks, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

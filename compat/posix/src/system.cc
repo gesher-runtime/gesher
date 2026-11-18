@@ -26,7 +26,11 @@
 #include <unistd.h>
 #include <windows.h>
 #include <psapi.h>
+#include <gesher/file_description.h>
 
+#include <array>
+#include <memory>
+#include <new>
 #include <string>
 #include <limits>
 #include <vector>
@@ -34,6 +38,8 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "pipe_io.h"
+#include "revocable_internal.h"
 #include "linux_socket.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_duplicate.h"
@@ -331,6 +337,7 @@ int ioctl(int fd, unsigned long request, ...) {
   if (gesher::BinderIoctl(fd, request, argp, &binder_result)) return binder_result;
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
+    if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
     if (request == FIONREAD) return gesher::ws::Available(state.socket, argp);
     int result;
     if (gesher::sock::InterfaceIoctl(request, argp, &result)) return result;
@@ -347,15 +354,21 @@ int ioctl(int fd, unsigned long request, ...) {
     }
     return errno = ENOTTY, -1;
   }
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  HANDLE h = snapshot->handle;
+  if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
+  if (request == FIONBIO && GetFileType(h) == FILE_TYPE_PIPE) {
+    int flags = gesher::FileDescriptionFlags(snapshot);
+    if (flags < 0) return -1;
+    return gesher::SetFileDescriptionFlags(snapshot, *argp ? flags | O_NONBLOCK : flags & ~O_NONBLOCK);
+  }
   if (request != FIONREAD) return errno = ENOTTY, -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
   switch (GetFileType(h)) {
     case FILE_TYPE_PIPE: {
-      DWORD avail = 0;
-      if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) avail = 0;  // writer gone
-      *argp = static_cast<int>(avail > 0x7FFFFFFF ? 0x7FFFFFFF : avail);
-      return 0;
+      return gesher::PipeBytesAvailable(snapshot, argp);
     }
     case FILE_TYPE_DISK: {
       // Bytes from the current position to the end, as Linux reports.
@@ -391,8 +404,6 @@ int fcntl(int fd, int cmd, ...) {
     va_end(pointers);
     return gesher::record_locks::DescriptorFcntl(fd, cmd, argument);
   }
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   int arg = 0;
   // Getter commands have no third argument; other supported commands take an int.
   if (cmd == F_SETFD || cmd == F_SETFL || cmd == F_DUPFD ||
@@ -402,66 +413,77 @@ int fcntl(int fd, int cmd, ...) {
     arg = va_arg(args, int);
     va_end(args);
   }
-  gesher::SocketFd state;
-  if (gesher::LookupSocket(fd, &state)) {
-    switch (cmd) {
-      case F_GETFL:
-        return O_RDWR | (state.description->nonblocking.load() ? O_NONBLOCK : 0);
-      case F_SETFL:
-        {
-          gesher::record_locks::DescriptorGuard descriptor_guard;
-          gesher::SocketFd current;
-          if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
-          std::lock_guard<std::mutex> lock(state.description->status_mutex);
-          const bool on = (arg & O_NONBLOCK) != 0;
-          if (on != state.description->nonblocking.load()) {
-            if (!state.description->native_nonblocking_datagram &&
-                gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
-            state.description->nonblocking.store(on);
+  gesher::DescriptorSnapshotPtr status_snapshot;
+  {
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    HANDLE h = gesher::HandleFromFd(fd);
+    if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+    gesher::SocketFd state;
+    if (gesher::LookupSocket(fd, &state)) {
+      switch (cmd) {
+        case F_GETFL:
+          return O_RDWR | (state.description->nonblocking.load() ? O_NONBLOCK : 0);
+        case F_SETFL:
+          {
+            gesher::record_locks::DescriptorGuard descriptor_guard;
+            gesher::SocketFd current;
+            if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+            std::lock_guard<std::mutex> lock(state.description->status_mutex);
+            const bool on = (arg & O_NONBLOCK) != 0;
+            if (on != state.description->nonblocking.load()) {
+              if (!state.description->native_nonblocking_datagram &&
+                  gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
+              state.description->nonblocking.store(on);
+            }
           }
+          return 0;
+        case F_GETFD:
+          return FD_CLOEXEC;  // sockets are never inherited (winsock.cc)
+        case F_SETFD:
+          return 0;
+        default:
+          break;  // F_DUPFD and the rest below
+      }
+    }
+    if (std::shared_ptr<gesher::EventFd> e = gesher::LookupEventFd(fd)) {
+      if (cmd == F_GETFL) return O_RDWR | (gesher::IsNonBlocking(*e) ? O_NONBLOCK : 0);
+      if (cmd == F_SETFL) {
+        gesher::SetNonBlocking(*e, (arg & O_NONBLOCK) != 0);
+        return 0;
+      }
+    }
+    switch (cmd) {
+      case F_GETFD: {
+        DWORD flags = 0;
+        if (!GetHandleInformation(h, &flags)) return gesher::FailWithLastError();
+        return (flags & HANDLE_FLAG_INHERIT) != 0 ? 0 : FD_CLOEXEC;
+      }
+      case F_SETFD:
+        if (!SetHandleInformation(h, HANDLE_FLAG_INHERIT,
+                                  (arg & FD_CLOEXEC) != 0 ? 0 : HANDLE_FLAG_INHERIT)) {
+          return gesher::FailWithLastError();
         }
         return 0;
-      case F_GETFD:
-        return FD_CLOEXEC;  // sockets are never inherited (winsock.cc)
-      case F_SETFD:
-        return 0;
-      default:
-        break;  // F_DUPFD and the rest below
-    }
-  }
-  if (std::shared_ptr<gesher::EventFd> e = gesher::LookupEventFd(fd)) {
-    if (cmd == F_GETFL) return O_RDWR | (gesher::IsNonBlocking(*e) ? O_NONBLOCK : 0);
-    if (cmd == F_SETFL) {
-      gesher::SetNonBlocking(*e, (arg & O_NONBLOCK) != 0);
-      return 0;
-    }
-  }
-  switch (cmd) {
-    case F_GETFD: {
-      DWORD flags = 0;
-      if (!GetHandleInformation(h, &flags)) return gesher::FailWithLastError();
-      return (flags & HANDLE_FLAG_INHERIT) != 0 ? 0 : FD_CLOEXEC;
-    }
-    case F_SETFD:
-      if (!SetHandleInformation(h, HANDLE_FLAG_INHERIT,
-                                (arg & FD_CLOEXEC) != 0 ? 0 : HANDLE_FLAG_INHERIT)) {
-        return gesher::FailWithLastError();
+      case F_GETFL:
+      case F_SETFL:
+        status_snapshot = gesher::CaptureDescriptor(fd);
+        if (!status_snapshot) return -1;
+        break;
+      case F_DUPFD:
+      case F_DUPFD_CLOEXEC: {
+        return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
       }
-      return 0;
-    case F_GETFL:
-      return O_RDWR;
-    case F_SETFL:
-      return 0;
-    case F_DUPFD:
-    case F_DUPFD_CLOEXEC: {
-      return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
+      case F_ADD_SEALS:
+      case F_GET_SEALS:
+        return 0;  // seals are advisory here
+      default:
+        return errno = EINVAL, -1;
     }
-    case F_ADD_SEALS:
-    case F_GET_SEALS:
-      return 0;  // seals are advisory here
-    default:
-      return errno = EINVAL, -1;
   }
+  // The snapshot retains the selected object and description across concurrent
+  // close/dup2. Native mode operations must not hold the publication lock.
+  return cmd == F_GETFL ? gesher::FileDescriptionFlags(status_snapshot)
+                       : gesher::SetFileDescriptionFlags(status_snapshot, arg);
 }
 
 // flock: a lock on one byte far beyond any file's data (LockFileEx locks
@@ -543,8 +565,27 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
     if (len > std::numeric_limits<off_t>::max() - offset) return EFBIG;
     const off_t end = offset + len;
 
-    // Keep the descriptor's actual file object stable through inspection and
-    // growth. F_GETFL's generic fallback is not evidence of write access.
+    // Revocable files serialize growth with all writes in the same session.
+    // Do not hold the process descriptor lock while entering that barrier.
+    auto snapshot = gesher::CaptureDescriptor(fd);
+    if (!snapshot) return errno;
+    gesher::FileOperationLease operation(snapshot);
+    if (operation.Error()) return operation.Error();
+    if (gesher::FileDescriptionIsRevocable(snapshot)) {
+      const int flags = gesher::FileDescriptionFlags(snapshot);
+      if (flags < 0) return errno;
+      if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_RDONLY) return EBADF;
+      LARGE_INTEGER size{};
+      if (!GetFileSizeEx(snapshot->handle, &size)) return gesher::ErrnoFromWin32(GetLastError());
+      if (end > size.QuadPart) {
+        FILE_END_OF_FILE_INFO info{};
+        info.EndOfFile.QuadPart = end;
+        if (!SetFileInformationByHandle(snapshot->handle, FileEndOfFileInfo, &info, sizeof(info)))
+          return gesher::ErrnoFromWin32(GetLastError());
+      }
+      return 0;
+    }
+    // Preserve the ordinary CRT growth path for unrelated descriptors.
     gesher::record_locks::DescriptorGuard descriptor_guard;
     HANDLE handle = gesher::HandleFromFd(fd);
     if (handle == INVALID_HANDLE_VALUE) return EBADF;
@@ -613,6 +654,72 @@ bool BadVector(int fd, int iovcnt) {
   return false;
 }
 
+struct FileVectorTransfer {
+  gesher::DescriptorSnapshotPtr snapshot;
+  std::unique_ptr<unsigned char[]> allocated;
+  unsigned char small[4096];
+};
+void ReleaseCanceledFileVector(void* raw) {
+  auto* state = static_cast<FileVectorTransfer*>(raw);
+  state->snapshot.reset();
+  state->allocated.reset();
+}
+
+bool FileWriteVector(int fd, const iovec* iov, int iovcnt, bool positioned,
+                     off_t offset, ssize_t* result) {
+  pthread_testcancel();
+  FileVectorTransfer state;
+  {
+    gesher::record_locks::DescriptorGuard guard;
+    HANDLE handle = gesher::HandleFromFd(fd);
+    if (handle == INVALID_HANDLE_VALUE) { *result = -1; errno = EBADF; return true; }
+    const DWORD type = GetFileType(handle);
+    if (type != FILE_TYPE_DISK && type != FILE_TYPE_PIPE) return false;
+    state.snapshot = gesher::CaptureDescriptor(fd);
+  }
+  if (!state.snapshot) { *result = -1; return true; }
+  std::array<iovec, IOV_MAX> copied{};
+  if (!gesher::ws::CopyFromUser(copied.data(), iov, static_cast<size_t>(iovcnt) * sizeof(iovec))) {
+    *result = -1; errno = EFAULT; return true;
+  }
+  // A file or pipe writev is one write, including append placement and the
+  // PIPE_BUF guarantee. The native ordinary-file API accepts one span, so
+  // gather multiple nonempty spans before submitting the single operation.
+  // A single span has no copy or allocation; small vectors use stack storage.
+  constexpr size_t maximum = 0x7ffff000;
+  size_t total = 0, requested = 0, spans = 0;
+  const void* single = nullptr;
+  for (int i = 0; i < iovcnt; ++i) {
+    if (copied[i].iov_len > static_cast<size_t>(std::numeric_limits<ssize_t>::max()) - requested) {
+      *result = -1; errno = EINVAL; return true;
+    }
+    requested += copied[i].iov_len;
+    copied[i].iov_len = std::min(copied[i].iov_len, maximum - total);
+    total += copied[i].iov_len;
+    if (copied[i].iov_len) { ++spans; single = copied[i].iov_base; }
+  }
+  const void* data = single;
+  if (spans > 1) {
+    if (total > sizeof(state.small)) {
+      state.allocated.reset(new (std::nothrow) unsigned char[total]);
+      if (!state.allocated) { *result = -1; errno = ENOMEM; return true; }
+    }
+    unsigned char* to = state.allocated ? state.allocated.get() : state.small;
+    data = to;
+    for (int i = 0; i < iovcnt; ++i) {
+      if (!gesher::ws::CopyFromUser(to, copied[i].iov_base, copied[i].iov_len)) {
+        *result = -1; errno = EFAULT; return true;
+      }
+      to += copied[i].iov_len;
+    }
+  }
+  pthread_cleanup_push(ReleaseCanceledFileVector, &state);
+  *result = positioned ? gesher::WriteFileDescriptionAt(state.snapshot, data, static_cast<unsigned>(total), offset)
+                       : gesher::WriteFileDescription(state.snapshot, data, static_cast<unsigned>(total));
+  pthread_cleanup_pop(0);
+  return true;
+}
+
 }  // namespace
 
 ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
@@ -631,6 +738,8 @@ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
 ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
   if (BadVector(fd, iovcnt)) return -1;
   if (int error = gesher::EventObjectWriteError(fd)) return errno = error, -1;
+  ssize_t transferred = 0;
+  if (FileWriteVector(fd, iov, iovcnt, false, 0, &transferred)) return transferred;
   // A zero-total vector performs no device operation (eventfd rejects a
   // zero-byte scalar write). Preserve each vector boundary otherwise: Linux's
   // legacy .write fallback, including eventfd, writes one element at a time.
@@ -682,6 +791,7 @@ ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
 ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
   if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
+  if (FileWriteVector(fd, iov, iovcnt, true, offset, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
     ssize_t n = pwrite(fd, iov[i].iov_base, iov[i].iov_len, offset + total);
     if (n < 0) return total > 0 ? total : -1;
@@ -769,6 +879,11 @@ int memfd_create(const char* name, unsigned int flags) {
   int fd = gesher::CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h),
                            _O_RDWR | _O_BINARY | ((flags & MFD_CLOEXEC) != 0 ? _O_NOINHERIT : 0)));
   if (fd < 0) CloseHandle(h);
+  else if (gesher::RegisterOfd(fd, O_RDWR | O_LARGEFILE) < 0) {
+    int saved = errno;
+    _close(fd);
+    return errno = saved, -1;
+  }
   return fd;
 }
 

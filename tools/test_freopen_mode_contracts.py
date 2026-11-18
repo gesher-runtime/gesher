@@ -49,8 +49,8 @@ def main() -> int:
         raise ValueError("guest native reopen boundary changed")
     sections = {
         "@HOST_PARSE_MODE@": section(host, "bool ParseMode(", "// Random characters"),
+        "@HOST_FCLOSE@": section(host, "int fclose(", "// The stream is reopened"),
         "@HOST_FREOPEN@": section(host, "FILE* freopen(", "char* mkdtemp("),
-        "@GUEST_CRT_MODE@": section(guest, "std::string CrtMode(", "}  // namespace\n\n// /dev/zero"),
         "@GUEST_FREOPEN@": guest_reopen,
     }
     template = (ROOT / "tests/native/freopen_mode_host_test.cc.in").read_text(encoding="utf-8")

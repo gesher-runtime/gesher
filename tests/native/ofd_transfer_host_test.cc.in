@@ -1,0 +1,774 @@
+// Exact production OFD/launch code follows a declared OS boundary. Linux
+// kernel files, shared sections and spawned children remain real resources.
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cerrno>
+#include <climits>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <charconv>
+#include <cwchar>
+#include <fcntl.h>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <pthread.h>
+#include <set>
+#include <spawn.h>
+#include <string>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+#include "@PE_EXPORTS_HEADER@"
+
+static thread_local int allocation_failure = -1;
+void* operator new(size_t count) {
+  if (allocation_failure >= 0 && allocation_failure-- == 0) throw std::bad_alloc();
+  void* result = std::malloc(count ? count : 1);
+  if (!result) throw std::bad_alloc();
+  return result;
+}
+void operator delete(void* value) noexcept { std::free(value); }
+void operator delete(void* value, size_t) noexcept { std::free(value); }
+
+#define WINAPI
+#define CALLBACK
+#define __declspec(x)
+using BOOL = int;
+using BYTE = unsigned char;
+using WORD = uint16_t;
+using DWORD = uint32_t;
+using ULONG = uint32_t;
+using LONG = int32_t;
+using SIZE_T = size_t;
+using HANDLE = void*;
+using HMODULE = void*;
+using LPCWSTR = const wchar_t*;
+using FARPROC = void (*)();
+constexpr BOOL TRUE = 1, FALSE = 0;
+#define INVALID_HANDLE_VALUE reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1))
+constexpr DWORD ERROR_SUCCESS = 0, ERROR_NOT_ENOUGH_MEMORY = 8, ERROR_INVALID_HANDLE = 6,
+    ERROR_INVALID_PARAMETER = 87, ERROR_ACCESS_DENIED = 5, ERROR_NOT_SUPPORTED = 50,
+    ERROR_GEN_FAILURE = 31;
+constexpr DWORD ERROR_ALREADY_EXISTS = 183, WAIT_OBJECT_0 = 0, WAIT_ABANDONED = 128,
+    WAIT_TIMEOUT = 258, WAIT_FAILED = 0xffffffffu, SYNCHRONIZE = 0x100000, MUTEX_MODIFY_STATE = 1;
+constexpr DWORD BCRYPT_USE_SYSTEM_PREFERRED_RNG = 2;
+#define BCRYPT_SUCCESS(value) ((value) >= 0)
+constexpr DWORD FILE_TYPE_DISK = 1, FILE_TYPE_CHAR = 2, FILE_TYPE_PIPE = 3;
+constexpr DWORD FILE_READ_DATA = 1, FILE_WRITE_DATA = 2, FILE_APPEND_DATA = 4;
+constexpr DWORD FILE_WRITE_THROUGH = 2, FILE_NO_INTERMEDIATE_BUFFERING = 8;
+constexpr DWORD PAGE_READWRITE = 4, FILE_MAP_READ = 4, FILE_MAP_WRITE = 2;
+constexpr DWORD HANDLE_FLAG_INHERIT = 1, DUPLICATE_SAME_ACCESS = 2, HEAP_ZERO_MEMORY = 8;
+constexpr DWORD GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS = 4,
+    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT = 2;
+constexpr DWORD STD_INPUT_HANDLE = static_cast<DWORD>(-10),
+    STD_OUTPUT_HANDLE = static_cast<DWORD>(-11), STD_ERROR_HANDLE = static_cast<DWORD>(-12);
+constexpr DWORD GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000,
+    FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, OPEN_EXISTING = 3;
+constexpr DWORD PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x20002, STARTF_USESTDHANDLES = 0x100;
+constexpr DWORD CREATE_UNICODE_ENVIRONMENT = 0x400, EXTENDED_STARTUPINFO_PRESENT = 0x80000,
+    CREATE_NO_WINDOW = 0x8000000;
+constexpr int _O_BINARY = 0x8000;
+constexpr int _O_NOINHERIT = 0x0080;
+struct SECURITY_ATTRIBUTES { DWORD length; void* security; BOOL inherit; };
+struct IO_STATUS_BLOCK { uintptr_t unused[2]; };
+using PIO_STATUS_BLOCK = IO_STATUS_BLOCK*;
+struct FILE_MODE_INFORMATION { ULONG Mode; };
+enum FILE_INFORMATION_CLASS { FileModeInformation = 16 };
+struct INIT_ONCE { std::once_flag flag; BOOL result = FALSE; };
+using PINIT_ONCE = INIT_ONCE*;
+#define INIT_ONCE_STATIC_INIT {}
+struct STARTUPINFOW {
+  DWORD cb = 0, dwFlags = 0;
+  HANDLE hStdInput = nullptr, hStdOutput = nullptr, hStdError = nullptr;
+  WORD cbReserved2 = 0;
+  BYTE* lpReserved2 = nullptr;
+};
+struct AttributeList { HANDLE* handles; size_t count; };
+using LPPROC_THREAD_ATTRIBUTE_LIST = AttributeList*;
+struct STARTUPINFOEXW { STARTUPINFOW StartupInfo; AttributeList* lpAttributeList; };
+struct PROCESS_INFORMATION { HANDLE hProcess = nullptr, hThread = nullptr; DWORD dwProcessId = 0; };
+
+namespace host {
+constexpr int kFirstNative = 10000;
+static std::array<int, 8192> crt = [] { std::array<int, 8192> out{}; out.fill(-1); return out; }();
+static std::set<int> owned;
+static std::map<const void*, size_t> views;
+static std::map<int, pthread_mutex_t*> mutexes;
+static std::set<std::string> mutex_names;
+static std::map<int, uint64_t> identities;
+static std::recursive_mutex descriptors;
+static uint64_t next_identity = 1;
+static thread_local DWORD error;
+static int duplicate_fail_after = -1, map_error, handle_information_error;
+static int create_process_error;
+static bool image_transport = true;
+static size_t last_inherited_handles;
+static WORD last_startup_bytes;
+static bool last_closed_stdio;
+static std::vector<unsigned char> startup;
+static std::array<HANDLE, 3> std_handles{};
+static HANDLE Handle(int fd) { return reinterpret_cast<HANDLE>(static_cast<intptr_t>(fd) + 1); }
+static int Native(HANDLE handle) { return static_cast<int>(reinterpret_cast<intptr_t>(handle) - 1); }
+static int Own(int fd, uint64_t identity = 0) {
+  if (fd < 0) { error = errno; return -1; }
+  int high = fcntl(fd, F_DUPFD_CLOEXEC, kFirstNative);
+  int saved = errno;
+  close(fd);
+  if (high < 0) { error = saved; return -1; }
+  owned.insert(high);
+  identities[high] = identity ? identity : next_identity++;
+  return high;
+}
+static std::string Narrow(const wchar_t* value) {
+  std::string out;
+  while (value && *value) out += static_cast<char>(*value++);
+  return out;
+}
+static void Require(bool condition) { if (!condition) std::abort(); }
+}
+static DWORD GetLastError() { return host::error; }
+static void SetLastError(DWORD value) { host::error = value; }
+static LONG InterlockedExchange(volatile LONG* value, LONG desired) {
+  return __atomic_exchange_n(value, desired, __ATOMIC_SEQ_CST);
+}
+static LONG InterlockedCompareExchange(volatile LONG* value, LONG desired, LONG expected) {
+  __atomic_compare_exchange_n(value, &expected, desired, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+  return expected;
+}
+static void* GetProcessHeap() { return nullptr; }
+static void* HeapAlloc(void*, DWORD flags, SIZE_T size) {
+  host::Require(flags == HEAP_ZERO_MEMORY);
+  return std::calloc(1, size);
+}
+static BOOL InitOnceExecuteOnce(PINIT_ONCE once, BOOL (*callback)(PINIT_ONCE, void*, void**),
+                                void* parameter, void** context) {
+  std::call_once(once->flag, [&] { once->result = callback(once, parameter, context); });
+  return once->result;
+}
+static HANDLE GetCurrentProcess() { return reinterpret_cast<HANDLE>(static_cast<intptr_t>(-3)); }
+static BOOL CloseHandle(HANDLE handle) {
+  int fd = host::Native(handle);
+  auto mutex = host::mutexes.find(fd);
+  if (mutex != host::mutexes.end()) {
+    munmap(mutex->second, sizeof(pthread_mutex_t));
+    host::mutexes.erase(mutex);
+  }
+  host::owned.erase(fd);
+  host::identities.erase(fd);
+  if (close(fd) < 0) { SetLastError(errno); return FALSE; }
+  return TRUE;
+}
+// Declared kernel boundary: named, process-shared, robust recursive mutexes.
+// Metadata and admission are real cross-process resources in this fixture.
+static std::string MutexName(const wchar_t* name) {
+  std::string result = "/gesher-ofd-" + host::Narrow(name);
+  std::replace(result.begin(), result.end(), '\\', '_');
+  return result;
+}
+static HANDLE MapMutex(int fd, bool initialize) {
+  if (fd < 0) { SetLastError(errno); return nullptr; }
+  fd = host::Own(fd);
+  if (fd < 0) return nullptr;
+  if (initialize && ftruncate(fd, sizeof(pthread_mutex_t)) < 0) {
+    DWORD error = errno; CloseHandle(host::Handle(fd)); SetLastError(error); return nullptr;
+  }
+  auto* value = static_cast<pthread_mutex_t*>(mmap(nullptr, sizeof(pthread_mutex_t),
+      PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+  if (value == MAP_FAILED) {
+    DWORD error = errno; CloseHandle(host::Handle(fd)); SetLastError(error); return nullptr;
+  }
+  if (initialize) {
+    pthread_mutexattr_t attributes;
+    host::Require(pthread_mutexattr_init(&attributes) == 0 &&
+        pthread_mutexattr_setpshared(&attributes, PTHREAD_PROCESS_SHARED) == 0 &&
+        pthread_mutexattr_setrobust(&attributes, PTHREAD_MUTEX_ROBUST) == 0 &&
+        pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE) == 0 &&
+        pthread_mutex_init(value, &attributes) == 0);
+    pthread_mutexattr_destroy(&attributes);
+  }
+  host::mutexes.emplace(fd, value);
+  SetLastError(ERROR_SUCCESS);
+  return host::Handle(fd);
+}
+static HANDLE CreateMutexW(void*, BOOL owned, const wchar_t* name) {
+  host::Require(!owned);
+  const std::string path = MutexName(name);
+  int fd = shm_open(path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  if (fd < 0) { SetLastError(errno == EEXIST ? ERROR_ALREADY_EXISTS : errno); return nullptr; }
+  host::mutex_names.insert(path);
+  return MapMutex(fd, true);
+}
+static HANDLE OpenMutexW(DWORD access, BOOL inherit, const wchar_t* name) {
+  host::Require(access == (SYNCHRONIZE | MUTEX_MODIFY_STATE) && !inherit);
+  return MapMutex(shm_open(MutexName(name).c_str(), O_RDWR | O_CLOEXEC, 0), false);
+}
+static DWORD WaitForSingleObject(HANDLE handle, DWORD milliseconds) {
+  host::Require(milliseconds == 0);
+  auto found = host::mutexes.find(host::Native(handle));
+  host::Require(found != host::mutexes.end());
+  int result = pthread_mutex_trylock(found->second);
+  if (result == EOWNERDEAD) { pthread_mutex_consistent(found->second); return WAIT_ABANDONED; }
+  if (!result) return WAIT_OBJECT_0;
+  if (result == EBUSY) return WAIT_TIMEOUT;
+  SetLastError(result); return WAIT_FAILED;
+}
+static BOOL ReleaseMutex(HANDLE handle) {
+  auto found = host::mutexes.find(host::Native(handle));
+  host::Require(found != host::mutexes.end());
+  return pthread_mutex_unlock(found->second) == 0;
+}
+static LONG BCryptGenRandom(void*, unsigned char* bytes, ULONG size, DWORD flags) {
+  host::Require(flags == BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+  return syscall(SYS_getrandom, bytes, size, 0) == size ? 0 : -1;
+}
+static BOOL SetHandleInformation(HANDLE handle, DWORD mask, DWORD flags) {
+  host::Require(mask == HANDLE_FLAG_INHERIT);
+  if (host::handle_information_error) { SetLastError(host::handle_information_error); return FALSE; }
+  int fd = host::Native(handle), old = fcntl(fd, F_GETFD);
+  if (old < 0 || fcntl(fd, F_SETFD, flags & HANDLE_FLAG_INHERIT ? old & ~FD_CLOEXEC : old | FD_CLOEXEC) < 0) {
+    SetLastError(errno); return FALSE;
+  }
+  return TRUE;
+}
+static BOOL GetHandleInformation(HANDLE handle, DWORD* flags) {
+  if (host::handle_information_error) { SetLastError(host::handle_information_error); return FALSE; }
+  int value = fcntl(host::Native(handle), F_GETFD);
+  if (value < 0) { SetLastError(errno); return FALSE; }
+  *flags = (value & FD_CLOEXEC) == 0 ? HANDLE_FLAG_INHERIT : 0;
+  return TRUE;
+}
+static BOOL DuplicateHandle(HANDLE, HANDLE source, HANDLE, HANDLE* result, DWORD access,
+                            BOOL inherit, DWORD options) {
+  host::Require(access == 0 && options == DUPLICATE_SAME_ACCESS);
+  if (host::duplicate_fail_after == 0) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
+  if (host::duplicate_fail_after > 0) --host::duplicate_fail_after;
+  int original = host::Native(source);
+  int fd = fcntl(original, inherit ? F_DUPFD : F_DUPFD_CLOEXEC, host::kFirstNative);
+  if (fd < 0) { SetLastError(errno); return FALSE; }
+  host::owned.insert(fd);
+  host::identities[fd] = host::identities[original];
+  *result = host::Handle(fd);
+  return TRUE;
+}
+static HANDLE CreateFileMappingW(HANDLE file, SECURITY_ATTRIBUTES* attributes, DWORD protection,
+                                 DWORD high, DWORD low, const wchar_t* name) {
+  host::Require(file == INVALID_HANDLE_VALUE && protection == PAGE_READWRITE && high == 0 && !name);
+  if (host::map_error) { SetLastError(host::map_error); return nullptr; }
+  int fd = host::Own(static_cast<int>(syscall(SYS_memfd_create, "gesher-ofd-test", MFD_CLOEXEC)));
+  if (fd < 0) return nullptr;
+  if (ftruncate(fd, low) < 0 || !SetHandleInformation(host::Handle(fd), HANDLE_FLAG_INHERIT,
+      attributes && attributes->inherit ? HANDLE_FLAG_INHERIT : 0)) {
+    DWORD error = GetLastError(); CloseHandle(host::Handle(fd)); SetLastError(error); return nullptr;
+  }
+  return host::Handle(fd);
+}
+static void* MapViewOfFile(HANDLE handle, DWORD access, DWORD high, DWORD low, SIZE_T size) {
+  host::Require(high == 0 && low == 0 && (access & ~(FILE_MAP_READ | FILE_MAP_WRITE)) == 0);
+  if (host::map_error) { SetLastError(host::map_error); return nullptr; }
+  void* view = mmap(nullptr, size, PROT_READ | (access & FILE_MAP_WRITE ? PROT_WRITE : 0),
+                    MAP_SHARED, host::Native(handle), 0);
+  if (view == MAP_FAILED) { SetLastError(errno); return nullptr; }
+  host::views[view] = size;
+  return view;
+}
+static BOOL UnmapViewOfFile(const void* view) {
+  auto found = host::views.find(view);
+  host::Require(found != host::views.end());
+  munmap(const_cast<void*>(view), found->second);
+  host::views.erase(found);
+  return TRUE;
+}
+static DWORD GetFileType(HANDLE handle) {
+  struct stat info{};
+  if (fstat(host::Native(handle), &info) < 0) { SetLastError(errno); return 0; }
+  return S_ISFIFO(info.st_mode) ? FILE_TYPE_PIPE : S_ISCHR(info.st_mode) ? FILE_TYPE_CHAR : FILE_TYPE_DISK;
+}
+static LONG QueryMode(HANDLE handle, PIO_STATUS_BLOCK, void* out, ULONG size, FILE_INFORMATION_CLASS kind) {
+  host::Require(size == sizeof(FILE_MODE_INFORMATION) && kind == FileModeInformation);
+  int flags = fcntl(host::Native(handle), F_GETFL);
+  if (flags < 0) return -errno;
+  static_cast<FILE_MODE_INFORMATION*>(out)->Mode =
+      ((flags & O_SYNC) == O_SYNC ? FILE_WRITE_THROUGH : 0) |
+      ((flags & O_DIRECT) ? FILE_NO_INTERMEDIATE_BUFFERING : 0);
+  return 0;
+}
+static ULONG StatusError(LONG value) { return static_cast<ULONG>(-value); }
+static HMODULE GetModuleHandleW(const wchar_t* name) { return reinterpret_cast<HMODULE>(name ? 2 : 1); }
+static BOOL GetModuleHandleExW(DWORD, LPCWSTR, HMODULE* module) { *module = GetModuleHandleW(nullptr); return TRUE; }
+static FARPROC GetProcAddress(HMODULE, const char*);
+static intptr_t _get_osfhandle(int fd) {
+  if (fd < 0 || static_cast<size_t>(fd) >= host::crt.size() || host::crt[fd] < 0) return -1;
+  return reinterpret_cast<intptr_t>(host::Handle(host::crt[fd]));
+}
+static int _open_osfhandle(intptr_t value, int) {
+  for (size_t fd = 0; fd < host::crt.size(); ++fd) if (host::crt[fd] < 0) {
+    host::crt[fd] = host::Native(reinterpret_cast<HANDLE>(value)); return static_cast<int>(fd);
+  }
+  return errno = EMFILE, -1;
+}
+static int _close(int fd) {
+  intptr_t handle = _get_osfhandle(fd);
+  if (handle == -1) return errno = EBADF, -1;
+  host::crt[fd] = -1;
+  return CloseHandle(reinterpret_cast<HANDLE>(handle)) ? 0 : (errno = GetLastError(), -1);
+}
+static int _dup2(int from, int to) {
+  if (to < 0 || static_cast<size_t>(to) >= host::crt.size()) return errno = EBADF, -1;
+  HANDLE source = reinterpret_cast<HANDLE>(_get_osfhandle(from)), duplicate = nullptr;
+  if (source == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  if (from == to) return 0;
+  if (!DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &duplicate, 0, FALSE,
+                       DUPLICATE_SAME_ACCESS)) return errno = GetLastError(), -1;
+  if (host::crt[to] >= 0) _close(to);
+  host::crt[to] = host::Native(duplicate);
+  return 0;
+}
+static int gesher_errno_from_crt(int value) { return value; }
+static void GetStartupInfoW(STARTUPINFOW* startup) {
+  static bool prepared = false;
+  if (!prepared) {
+    prepared = true;
+    if (const char* exported = std::getenv("GESHER_TEST_STARTUP_FD")) {
+      int fd = std::atoi(exported);
+      struct stat info{};
+      host::Require(fstat(fd, &info) == 0 && info.st_size > 0 && info.st_size < 65536);
+      host::startup.resize(static_cast<size_t>(info.st_size));
+      host::Require(pread(fd, host::startup.data(), host::startup.size(), 0) == info.st_size);
+      close(fd);
+      unsetenv("GESHER_TEST_STARTUP_FD");
+      int count = 0;
+      std::memcpy(&count, host::startup.data(), sizeof(count));
+      host::Require(count >= 0 && count <= 8192);
+      for (int slot = 0; slot < count; ++slot) {
+        if (!(host::startup[sizeof(int) + slot] & 1)) continue;
+        intptr_t value;
+        std::memcpy(&value, host::startup.data() + sizeof(int) + count + slot * sizeof(intptr_t), sizeof(value));
+        int native = host::Native(reinterpret_cast<HANDLE>(value));
+        host::Require(fcntl(native, F_GETFD) >= 0);
+        host::crt[slot] = native;
+        host::owned.insert(native);
+        host::identities[native] = host::next_identity++;
+      }
+    }
+  }
+  startup->cbReserved2 = static_cast<WORD>(host::startup.size());
+  startup->lpReserved2 = host::startup.empty() ? nullptr : host::startup.data();
+}
+static HANDLE GetStdHandle(DWORD id) {
+  int slot = id == STD_INPUT_HANDLE ? 0 : id == STD_OUTPUT_HANDLE ? 1 : 2;
+  return host::std_handles[slot] ? host::std_handles[slot] : host::Handle(slot);
+}
+static BOOL SetStdHandle(DWORD id, HANDLE value) {
+  host::std_handles[id == STD_INPUT_HANDLE ? 0 : id == STD_OUTPUT_HANDLE ? 1 : 2] = value;
+  return TRUE;
+}
+static BOOL WriteFile(HANDLE file, const void* bytes, DWORD count, DWORD* written, void*) {
+  ssize_t result = write(host::Native(file), bytes, count);
+  if (result < 0) { SetLastError(errno); return FALSE; }
+  *written = static_cast<DWORD>(result); return TRUE;
+}
+[[noreturn]] static void ExitProcess(DWORD status) { _exit(static_cast<int>(status)); }
+static HANDLE CreateFileW(const wchar_t* path, DWORD, DWORD, SECURITY_ATTRIBUTES* attributes, DWORD,
+                           DWORD, HANDLE) {
+  host::Require(std::wcscmp(path, L"NUL") == 0);
+  int fd = host::Own(open("/dev/null", O_RDWR | O_CLOEXEC));
+  if (fd < 0) return INVALID_HANDLE_VALUE;
+  if (attributes && attributes->inherit) SetHandleInformation(host::Handle(fd), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+  return host::Handle(fd);
+}
+static BOOL InitializeProcThreadAttributeList(AttributeList* attributes, DWORD count, DWORD flags, SIZE_T* bytes) {
+  host::Require(count == 1 && flags == 0);
+  *bytes = sizeof(AttributeList);
+  return attributes ? TRUE : FALSE;
+}
+static BOOL UpdateProcThreadAttribute(AttributeList* attributes, DWORD, DWORD kind, void* data,
+                                      SIZE_T size, void*, void*) {
+  host::Require(kind == PROC_THREAD_ATTRIBUTE_HANDLE_LIST && size % sizeof(HANDLE) == 0);
+  attributes->handles = static_cast<HANDLE*>(data);
+  attributes->count = size / sizeof(HANDLE);
+  return TRUE;
+}
+static void DeleteProcThreadAttributeList(AttributeList*) {}
+static BOOL CreateProcessW(const wchar_t*, wchar_t*, void*, void*, BOOL, DWORD, void*, const wchar_t*,
+                           STARTUPINFOW*, PROCESS_INFORMATION*);
+
+namespace gesher {
+int PipeStatusFlags(HANDLE handle, int flags) {
+  const int native = fcntl(host::Native(handle), F_GETFL);
+  return native < 0 ? -1 : (flags & ~O_NONBLOCK) | (native & O_NONBLOCK);
+}
+int SetPipeNonBlocking(HANDLE handle, bool nonblocking) {
+  const int fd = host::Native(handle), flags = fcntl(fd, F_GETFL);
+  return flags < 0 ? -1 : fcntl(fd, F_SETFL, nonblocking ? flags | O_NONBLOCK : flags & ~O_NONBLOCK);
+}
+static int ErrnoFromWin32(DWORD error) {
+  switch (error) {
+    case ERROR_NOT_ENOUGH_MEMORY: return ENOMEM;
+    case ERROR_INVALID_HANDLE: return EBADF;
+    case ERROR_INVALID_PARAMETER: return EINVAL;
+    case ERROR_ACCESS_DENIED: return EACCES;
+    case ERROR_NOT_SUPPORTED: return EOPNOTSUPP;
+    default: return error ? static_cast<int>(error) : EIO;
+  }
+}
+static int FailWithLastError() { return errno = ErrnoFromWin32(GetLastError()), -1; }
+static HANDLE HandleFromFd(int fd) { return reinterpret_cast<HANDLE>(_get_osfhandle(fd)); }
+namespace record_locks {
+struct DescriptorGuard {
+  DescriptorGuard() { host::descriptors.lock(); }
+  ~DescriptorGuard() { host::descriptors.unlock(); }
+};
+static int HandleAccess(HANDLE handle, uint32_t* access) {
+  int flags = fcntl(host::Native(handle), F_GETFL);
+  if (flags < 0) return errno;
+  *access = flags & O_PATH ? 0 : (flags & O_ACCMODE) == O_RDONLY ? FILE_READ_DATA :
+      (flags & O_ACCMODE) == O_WRONLY ? FILE_WRITE_DATA : FILE_READ_DATA | FILE_WRITE_DATA;
+  return 0;
+}
+static int SameDescription(HANDLE left, HANDLE right, bool* same) {
+  // Declared boundary: CompareObjectHandles identifies FILE_OBJECT identity.
+  // Separate Linux opens are assigned distinct IDs; every native dup keeps it.
+  *same = host::identities[host::Native(left)] == host::identities[host::Native(right)];
+  return 0;
+}
+}
+}
+
+@OFD_DECLARATIONS@
+@OFD_IMPLEMENTATION@
+
+static FARPROC GetProcAddress(HMODULE module, const char* name) {
+  if (module == GetModuleHandleW(nullptr) && std::strcmp(name, "gesher_ofd_owner_v1") == 0)
+    return reinterpret_cast<FARPROC>(gesher::gesher_ofd_owner_v1);
+  if (std::strcmp(name, "NtQueryInformationFile") == 0) return reinterpret_cast<FARPROC>(QueryMode);
+  if (std::strcmp(name, "RtlNtStatusToDosError") == 0) return reinterpret_cast<FARPROC>(StatusError);
+  return nullptr;
+}
+
+namespace gesher::exec {
+struct Launch { std::wstring application, command_line; };
+struct ChildFd { int fd; HANDLE handle; gesher::DescriptorSnapshotPtr snapshot{}; };
+static DWORD DescriptorTransportSupport(const std::wstring& path, bool* supported, HANDLE* image) {
+  int fd = host::Own(open(host::Narrow(path.c_str()).c_str(), O_RDONLY | O_CLOEXEC));
+  if (fd < 0) return GetLastError();
+  *image = host::Handle(fd);
+  *supported = host::image_transport;  // PE export decoding is tested separately below.
+  return 0;
+}
+DWORD SpawnWithFds(const Launch&, const wchar_t*, const std::wstring&,
+                   const std::vector<ChildFd>&, PROCESS_INFORMATION*, DWORD extra_flags = 0);
+@SPAWN_IMPLEMENTATION@
+}
+
+static BOOL CreateProcessW(const wchar_t* app, wchar_t* command, void*, void*, BOOL inherit,
+                           DWORD flags, void* environment, const wchar_t* cwd,
+                           STARTUPINFOW* raw_startup, PROCESS_INFORMATION* info) {
+  host::Require(!environment && !cwd &&
+      (flags & ~EXTENDED_STARTUPINFO_PRESENT) == (CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW));
+  auto* startup = reinterpret_cast<STARTUPINFOEXW*>(raw_startup);
+  const bool extended = (flags & EXTENDED_STARTUPINFO_PRESENT) != 0;
+  host::Require(inherit == extended && raw_startup->cb == (extended ? sizeof(*startup) : sizeof(*raw_startup)) &&
+      raw_startup->dwFlags == STARTF_USESTDHANDLES && extended == (startup->lpAttributeList != nullptr));
+  host::last_inherited_handles = extended ? startup->lpAttributeList->count : 0;
+  host::last_startup_bytes = raw_startup->cbReserved2;
+  host::last_closed_stdio = raw_startup->hStdInput == INVALID_HANDLE_VALUE &&
+      raw_startup->hStdOutput == INVALID_HANDLE_VALUE && raw_startup->hStdError == INVALID_HANDLE_VALUE;
+  if (host::create_process_error) { SetLastError(host::create_process_error); return FALSE; }
+  int transport = host::Own(static_cast<int>(syscall(SYS_memfd_create, "gesher-startup-test", MFD_CLOEXEC)));
+  host::Require(transport >= 0 && write(transport, raw_startup->lpReserved2, raw_startup->cbReserved2) == raw_startup->cbReserved2);
+  std::set<int> child_handles{transport};
+  for (size_t index = 0; index < host::last_inherited_handles; ++index) {
+    int fd = host::Native(startup->lpAttributeList->handles[index]);
+    host::Require(fcntl(fd, F_GETFD) >= 0 && child_handles.insert(fd).second);
+  }
+  posix_spawn_file_actions_t actions;
+  host::Require(posix_spawn_file_actions_init(&actions) == 0);
+  for (int fd : host::owned) {
+    int result = child_handles.contains(fd) ? posix_spawn_file_actions_adddup2(&actions, fd, fd)
+                                           : posix_spawn_file_actions_addclose(&actions, fd);
+    host::Require(result == 0);
+  }
+  std::vector<std::string> strings;
+  strings.push_back(host::Narrow(app));
+  std::string arguments = host::Narrow(command);
+  for (size_t from = 0; from < arguments.size();) {
+    size_t to = arguments.find(' ', from);
+    strings.push_back(arguments.substr(from, to == std::string::npos ? to : to - from));
+    if (to == std::string::npos) break;
+    from = to + 1;
+  }
+  std::vector<char*> argv;
+  for (std::string& value : strings) argv.push_back(value.data());
+  argv.push_back(nullptr);
+  extern char** environ;
+  std::vector<char*> child_environment;
+  for (char** item = environ; *item; ++item) child_environment.push_back(*item);
+  std::string bootstrap = "GESHER_TEST_STARTUP_FD=" + std::to_string(transport);
+  child_environment.push_back(bootstrap.data()); child_environment.push_back(nullptr);
+  pid_t pid = 0;
+  int result = posix_spawn(&pid, strings[0].c_str(), &actions, nullptr, argv.data(), child_environment.data());
+  posix_spawn_file_actions_destroy(&actions);
+  CloseHandle(host::Handle(transport));
+  if (result) { SetLastError(result); return FALSE; }
+  info->dwProcessId = static_cast<DWORD>(pid);
+  return TRUE;
+}
+
+static int checks, failures;
+static void Check(const char* message, bool ok) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL %s (errno=%d)\n", message, errno); }
+}
+static int OpenFixture(const char* path, int slot, int flags = O_RDWR | O_CREAT | O_TRUNC) {
+  int native = host::Own(open(path, flags | O_CLOEXEC, 0600));
+  if (native < 0) return -1;
+  if (host::crt[slot] >= 0) { _close(slot); gesher::ForgetOfd(slot); }
+  host::crt[slot] = native;
+  if (gesher::RegisterOfd(slot, flags | O_LARGEFILE) < 0) { _close(slot); return -1; }
+  return slot;
+}
+static int CloseFixture(int slot) { int result = _close(slot); gesher::ForgetOfd(slot); return result; }
+static int Alias(int from, int to) { return _dup2(from, to) == 0 ? gesher::DupOfd(from, to) : -1; }
+static int NativeFd(int slot) { return host::Native(gesher::HandleFromFd(slot)); }
+static bool Byte(int slot, bool writing, char value = 0) {
+  char actual = value;
+  ssize_t result = writing ? write(NativeFd(slot), &actual, 1) : read(NativeFd(slot), &actual, 1);
+  return result == 1 && (writing || actual == value);
+}
+static bool Child(int mode) {
+  if (mode == 2 || mode == 3) {
+    if (_get_osfhandle(0) != -1 || _get_osfhandle(1) != -1 || _get_osfhandle(2) != -1) return false;
+    return mode == 3 ? _get_osfhandle(37) == -1 : gesher::GetFileStatusFlags(37) == (O_RDWR | O_LARGEFILE);
+  }
+  if (mode == 1) {
+    // These are all imported by exact production ImportStartup, not by test
+    // assignments. The 7100 slot lies beyond the ordinary UCRT startup block.
+    if (gesher::GetFileStatusFlags(37) != gesher::GetFileStatusFlags(7100) ||
+        gesher::GetDescriptorKind(42) != gesher::DescriptorKind::kZero ||
+        _get_osfhandle(0) != -1 || _get_osfhandle(1) != -1 || _get_osfhandle(2) != -1 ||
+        _get_osfhandle(50) != -1) return false;
+    if (gesher::SetFileStatusFlags(7100, O_APPEND | O_NONBLOCK) < 0 ||
+        (gesher::GetFileStatusFlags(38) & (O_APPEND | O_NONBLOCK)) != (O_APPEND | O_NONBLOCK) ||
+        (gesher::GetFileStatusFlags(39) & (O_APPEND | O_NONBLOCK)) != 0) return false;
+    if (!Byte(41, true, 'a') || !Byte(40, false, 'b')) return false;
+    if ((gesher::GetFileStatusFlags(37) & (O_APPEND | O_NONBLOCK)) != 0 ||
+        lseek(NativeFd(37), 0, SEEK_CUR) != 2 || !Byte(37, true, 'c') || !Byte(41, true, 'd')) return false;
+    if (!Byte(40, false, 'e') || lseek(NativeFd(38), 0, SEEK_CUR) != 3 || !Byte(38, true, 'f')) return false;
+    return Byte(41, true, 'g');
+  }
+  return false;
+}
+
+static void PeCapabilities() {
+  // Ordinary PE32+/PE32 export layouts: the marker must be an actual export
+  // of this executable, not a forwarding export from another image.
+  std::vector<unsigned char> image(1536);
+  auto put = [&](size_t offset, uint32_t value, size_t bytes = 4) {
+    std::memcpy(image.data() + offset, &value, bytes);
+  };
+  put(0, 0x5a4d, 2); put(60, 128); put(128, 0x4550);
+  put(134, 1, 2); put(148, 240, 2); put(152, 0x20b, 2);
+  put(212, 512); put(260, 16); put(264, 0x1000); put(268, 256);
+  put(404, 0x1000); put(408, 1024); put(412, 512);
+  put(532, 1); put(536, 1); put(540, 0x1040); put(544, 0x1044); put(548, 0x1048);
+  put(576, 0x1200); put(580, 0x1080); put(584, 0, 2);
+  constexpr char marker[] = "gesher_ofd_owner_v1";
+  std::memcpy(image.data() + 640, marker, sizeof(marker));
+  Check("PE32+ executable advertises its importer", gesher::exec::HasFileDescriptionImporter(image.data(), image.size()));
+  image[640] = 'x';
+  Check("ordinary PE without the importer stays native", !gesher::exec::HasFileDescriptionImporter(image.data(), image.size()));
+  image[640] = marker[0]; put(576, 0x1098);
+  Check("forwarding export does not install an importer", !gesher::exec::HasFileDescriptionImporter(image.data(), image.size()));
+  put(576, 0x1200); put(152, 0x10b, 2); put(244, 16); put(248, 0x1000); put(252, 256);
+  Check("PE32 export layout is recognized", gesher::exec::HasFileDescriptionImporter(image.data(), image.size()));
+  put(248, 0);
+  Check("PE with no exports has no importer", !gesher::exec::HasFileDescriptionImporter(image.data(), image.size()));
+}
+
+int main(int argc, char** argv) {
+  if (argc == 3 && std::strcmp(argv[1], "--child") == 0) return Child(std::atoi(argv[2])) ? 0 : 29;
+  PeCapabilities();
+  Check("open source fixture", OpenFixture("source", 37) == 37);
+  Check("ordinary source bytes and offset", write(NativeFd(37), "seed", 4) == 4 && lseek(NativeFd(37), 2, SEEK_SET) == 2);
+  Check("open independent description", OpenFixture("source", 39, O_RDWR) == 39);
+  Check("same-process aliases", Alias(37, 38) == 0 && Alias(37, 7100) == 0);
+  Check("alias mutable status", gesher::SetFileStatusFlags(38, O_APPEND | O_NONBLOCK) == 0 &&
+      (gesher::GetFileStatusFlags(37) & (O_APPEND | O_NONBLOCK)) == (O_APPEND | O_NONBLOCK));
+  Check("independent description unchanged", (gesher::GetFileStatusFlags(39) & (O_APPEND | O_NONBLOCK)) == 0);
+  Check("reset shared flags", gesher::SetFileStatusFlags(37, 0) == 0);
+  auto snapshot = gesher::CaptureDescriptor(37);
+  Check("snapshot owns exact object with descriptor flags", snapshot && snapshot->descriptor_flags == FD_CLOEXEC);
+  auto alias = gesher::CaptureDescriptor(38);
+  Check("snapshot aliases share one description", snapshot && alias && snapshot->description == alias->description);
+  if (!snapshot || !alias) return 1;
+  const size_t allocation_handles = host::owned.size();
+  allocation_failure = 0;
+  const int registered = gesher::RegisterOfd(37, O_RDONLY);
+  const int register_error = errno;
+  allocation_failure = -1;
+  Check("OFD allocation reports ENOMEM and retains old description", registered == -1 && register_error == ENOMEM &&
+      gesher::CaptureDescriptor(37)->description == snapshot->description);
+  allocation_failure = 0;
+  auto failed_snapshot = gesher::CaptureDescriptor(37);
+  const int snapshot_error = errno;
+  allocation_failure = -1;
+  Check("snapshot allocation reports ENOMEM without leaking a kernel pin", !failed_snapshot && snapshot_error == ENOMEM &&
+      host::owned.size() == allocation_handles);
+  std::vector<std::pair<int, gesher::DescriptorSnapshotPtr>> failed_capture;
+  allocation_failure = 0;
+  const int captured = gesher::CaptureDescriptors(&failed_capture, true);
+  const int capture_error = errno;
+  allocation_failure = -1;
+  Check("descriptor enumeration allocation returns an empty failure snapshot", captured == -1 && capture_error == ENOMEM &&
+      failed_capture.empty() && host::owned.size() == allocation_handles);
+  DWORD native_flags = 9;
+  Check("snapshot handle is private", GetHandleInformation(snapshot->handle, &native_flags) && native_flags == 0);
+  auto raw = gesher::CaptureFileHandle(snapshot->handle);
+  Check("raw duplicate resolves same registered description", raw && raw->description == snapshot->description);
+  raw.reset();
+  int attached = gesher::AttachFileDescription(snapshot, false);
+  Check("raw snapshot attaches as a new descriptor", attached >= 0 && attached != 37);
+  auto attached_snapshot = gesher::CaptureDescriptor(attached);
+  Check("attached descriptor retains shared status and independent descriptor flags",
+      attached_snapshot && attached_snapshot->description == snapshot->description && attached_snapshot->descriptor_flags == 0);
+  Check("attached alias can change the original status", gesher::SetFileStatusFlags(attached, O_NONBLOCK) == 0 &&
+      (gesher::GetFileStatusFlags(37) & O_NONBLOCK) != 0);
+  Check("attached alias closes without retiring its source", CloseFixture(attached) == 0 &&
+      gesher::SetFileStatusFlags(37, 0) == 0);
+  attached_snapshot.reset();
+  host::map_error = ERROR_NOT_ENOUGH_MEMORY;
+  Check("promotion failure preserves local status", !gesher::ShareFileDescription(snapshot) && errno == ENOMEM &&
+      gesher::GetFileStatusFlags(37) == (O_RDWR | O_LARGEFILE));
+  host::map_error = 0;
+  HANDLE shared = gesher::ShareFileDescription(snapshot);
+  Check("promotion uses one actual shared section", shared && gesher::ShareFileDescription(alias) == shared);
+  Check("post-promotion mutation still shared", gesher::SetFileStatusFlags(38, O_NONBLOCK) == 0 &&
+      (snapshot->description->Flags() & O_NONBLOCK));
+  Check("reset promoted flags", gesher::SetFileStatusFlags(38, 0) == 0);
+  int parent_to_child[2], child_to_parent[2];
+  Check("real control pipes", pipe2(parent_to_child, O_CLOEXEC) == 0 && pipe2(child_to_parent, O_CLOEXEC) == 0);
+  host::crt[40] = host::Own(parent_to_child[0]);
+  host::crt[41] = host::Own(child_to_parent[1]);
+  Check("unmediated pipe status is not guessed", gesher::GetFileStatusFlags(40) == -1 && errno == EOPNOTSUPP);
+  Check("fresh pipe creator supplies known access and wait mode",
+      gesher::InitializePipeDescription(gesher::CaptureDescriptor(40), O_RDONLY) == 0 &&
+      gesher::InitializePipeDescription(gesher::CaptureDescriptor(41), O_WRONLY) == 0);
+  Check("pipe read permission discovered", gesher::GetFileStatusFlags(40) == O_RDONLY);
+  Check("pipe write permission discovered", gesher::GetFileStatusFlags(41) == O_WRONLY);
+  Check("stateless device kind fixture", OpenFixture("/dev/null", 42, O_RDWR) == 42 &&
+      gesher::SetDescriptorKind(42, gesher::DescriptorKind::kZero) == 0);
+  Check("private resource fixture", OpenFixture("private", 50) == 50 &&
+      gesher::SetDescriptorKind(50, gesher::DescriptorKind::kUnshareable) == 0);
+  std::vector<gesher::exec::ChildFd> fds;
+  for (int fd : {37, 38, 39, 40, 41, 42, 7100}) {
+    auto value = gesher::CaptureDescriptor(fd);
+    Check("capture published child descriptor", static_cast<bool>(value));
+    if (value) fds.push_back({fd, value->handle, std::move(value)});
+  }
+  std::string self = argv[0];
+  gesher::exec::Launch launch{std::wstring(self.begin(), self.end()), L"--child 1"};
+  PROCESS_INFORMATION info{};
+  // Warm up lazy mappings, then ensure native duplicate/launch failures return
+  // all transient handles. The original descriptors and status remain live.
+  for (const auto& file : fds) Check("promote child description", gesher::ShareFileDescription(file.snapshot) != nullptr);
+  const size_t before_failure = host::owned.size();
+  host::duplicate_fail_after = 3;
+  Check("partial duplicate failure is propagated", gesher::exec::SpawnWithFds(launch, nullptr, L"", fds, &info, 0) == ERROR_NOT_ENOUGH_MEMORY);
+  host::duplicate_fail_after = -1;
+  Check("partial duplicate failure releases temporary handles", host::owned.size() == before_failure);
+  host::create_process_error = ERROR_ACCESS_DENIED;
+  Check("native launch failure is propagated", gesher::exec::SpawnWithFds(launch, nullptr, L"", fds, &info, 0) == ERROR_ACCESS_DENIED);
+  host::create_process_error = 0;
+  Check("native launch failure releases temporary handles and views", host::owned.size() == before_failure &&
+      host::views.size() == 5);
+  auto private_resource = gesher::CaptureDescriptor(50);
+  std::vector<gesher::exec::ChildFd> bad{{50, private_resource->handle, private_resource}};
+  Check("unshareable resource is never exported as NUL", gesher::exec::SpawnWithFds(launch, nullptr, L"", bad, &info, 0) == ERROR_NOT_SUPPORTED);
+  bad.clear(); private_resource.reset();
+  host::image_transport = false;
+  auto zero = gesher::CaptureDescriptor(42);
+  bad = {{42, zero->handle, zero}};
+  Check("native PE cannot inherit a logical zero device as NUL",
+      gesher::exec::SpawnWithFds(launch, nullptr, L"", bad, &info, 0) == ERROR_NOT_SUPPORTED);
+  zero.reset();
+  bad = {{7100, snapshot->handle, snapshot}};
+  Check("native PE rejects an unrepresentable high descriptor",
+      gesher::exec::SpawnWithFds(launch, nullptr, L"", bad, &info, 0) == ERROR_NOT_SUPPORTED);
+  bad = {{37, snapshot->handle, snapshot}};
+  Check("native PE rejects emulated append",
+      gesher::SetFileStatusFlags(37, O_APPEND) == 0 &&
+      gesher::exec::SpawnWithFds(launch, nullptr, L"", bad, &info, 0) == ERROR_NOT_SUPPORTED);
+  Check("native rejection preserves mutable status", (gesher::GetFileStatusFlags(38) & O_APPEND) != 0 &&
+      gesher::SetFileStatusFlags(37, 0) == 0);
+  auto nonblocking = gesher::CaptureDescriptor(40);
+  bad = {{40, nonblocking->handle, nonblocking}};
+  Check("native PE rejects emulated nonblocking pipe status",
+      gesher::SetFileStatusFlags(40, O_NONBLOCK) == 0 &&
+      gesher::exec::SpawnWithFds(launch, nullptr, L"", bad, &info, 0) == ERROR_NOT_SUPPORTED);
+  Check("restore pipe status after native refusal", gesher::SetFileStatusFlags(40, 0) == 0);
+  host::create_process_error = ERROR_ACCESS_DENIED;
+  Check("failed native launch rolls back pipe exposure", gesher::exec::SpawnWithFds(launch, nullptr, L"", bad, &info, 0) ==
+      ERROR_ACCESS_DENIED && gesher::GetFileStatusFlags(40) == O_RDONLY);
+  host::create_process_error = 0;
+  bad = {{37, snapshot->handle, snapshot}};
+  nonblocking.reset();
+  gesher::exec::Launch native_launch{launch.application, L"--child 2"};
+  Check("native PE receives ordinary file handles", gesher::exec::SpawnWithFds(native_launch, nullptr, L"", bad, &info, 0) == 0);
+  Check("native PE receives no private mappings or NUL placeholders",
+      host::last_inherited_handles == 1 && host::last_closed_stdio &&
+      host::last_startup_bytes == sizeof(int) + 38 * (1 + sizeof(intptr_t)));
+  int native_status = -1;
+  Check("native file child observes the requested descriptor table",
+      waitpid(static_cast<pid_t>(info.dwProcessId), &native_status, 0) == static_cast<pid_t>(info.dwProcessId) &&
+      WIFEXITED(native_status) && WEXITSTATUS(native_status) == 0);
+  bad.clear(); native_launch.command_line = L"--child 3";
+  Check("native PE with no descriptors starts without inheriting handles",
+      gesher::exec::SpawnWithFds(native_launch, nullptr, L"", bad, &info, 0) == 0 &&
+      host::last_inherited_handles == 0 && host::last_closed_stdio);
+  Check("native child sees standard descriptors closed",
+      waitpid(static_cast<pid_t>(info.dwProcessId), &native_status, 0) == static_cast<pid_t>(info.dwProcessId) &&
+      WIFEXITED(native_status) && WEXITSTATUS(native_status) == 0);
+  Check("native spawn paths release temporary handles", host::owned.size() == before_failure);
+  host::image_transport = true;
+  Check("launch real child through production transport", gesher::exec::SpawnWithFds(launch, nullptr, L"", fds, &info, 0) == 0);
+  // 7 file handles + 5 descriptions + 3 closed stdio placeholders + manifest.
+  Check("alias mapping handles are deduplicated", host::last_inherited_handles == 16);
+  fds.clear();
+  CloseFixture(40); CloseFixture(41);
+  char value = 0;
+  Check("child imported high alias and changed shared flags", read(child_to_parent[0], &value, 1) == 1 && value == 'a' &&
+      (gesher::GetFileStatusFlags(37) & (O_APPEND | O_NONBLOCK)) == (O_APPEND | O_NONBLOCK));
+  Check("parent flag mutation visible to child", gesher::SetFileStatusFlags(38, 0) == 0 && write(parent_to_child[1], "b", 1) == 1 &&
+      read(child_to_parent[0], &value, 1) == 1 && value == 'd');
+  Check("real shared kernel cursor advanced by child", lseek(NativeFd(37), 0, SEEK_CUR) == 3 &&
+      lseek(NativeFd(38), 0, SEEK_CUR) == 3 && lseek(NativeFd(39), 0, SEEK_CUR) == 0);
+  Check("close and reuse source slot", CloseFixture(37) == 0 && OpenFixture("replacement", 37) == 37);
+  Check("reused fd has separate description", gesher::SetFileStatusFlags(37, O_NONBLOCK) == 0 &&
+      (gesher::GetFileStatusFlags(38) & O_NONBLOCK) == 0);
+  Check("surviving child alias outlives source fd", write(parent_to_child[1], "e", 1) == 1 &&
+      read(child_to_parent[0], &value, 1) == 1 && value == 'g');
+  int status = 0;
+  Check("child completes supported process contract", waitpid(static_cast<pid_t>(info.dwProcessId), &status, 0) ==
+      static_cast<pid_t>(info.dwProcessId) && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+  char bytes[4]{};
+  Check("old pinned object retained real contents", pread(host::Native(snapshot->handle), bytes, 4, 0) == 4 &&
+      std::memcmp(bytes, "secf", 4) == 0);
+  Check("replacement file is untouched", lseek(NativeFd(37), 0, SEEK_END) == 0);
+  close(parent_to_child[1]); close(child_to_parent[0]);
+  for (int fd : {37, 38, 39, 42, 50, 7100}) CloseFixture(fd);
+  snapshot.reset(); alias.reset();
+  Check("last alias releases mappings and native snapshots", host::owned.empty() && host::views.empty() && host::mutexes.empty());
+  for (const auto& name : host::mutex_names) shm_unlink(name.c_str());
+  std::printf("Production OFD/exec transfer: %d assertions, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

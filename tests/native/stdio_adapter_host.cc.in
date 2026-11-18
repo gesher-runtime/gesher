@@ -1,0 +1,268 @@
+// Production stdio adapter with explicit Linux replacements for Win32 owner
+// lookup and the native FILE-token allocator. I/O and test files are real.
+// Native MinGW parser/formatter linkage still requires the Windows CI target.
+#define _GNU_SOURCE 1
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <climits>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <fcntl.h>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <pthread.h>
+#include <string>
+#include <unistd.h>
+#include <vector>
+
+#include "@STDIO_INTERNAL_HEADER@"
+#include "@STREAM_BUFFER_HEADER@"
+
+static int checks;
+static int failures;
+static void check(const char* name, int ok) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s (errno=%d)\n", name, errno); }
+}
+static bool fail_fdopen;
+static std::atomic<int> allocation_failure{-1};
+void* operator new(size_t count) {
+  int remaining = allocation_failure.load();
+  if (remaining >= 0 && allocation_failure.fetch_sub(1) == 0) throw std::bad_alloc();
+  void* result = std::malloc(count ? count : 1);
+  if (!result) throw std::bad_alloc();
+  return result;
+}
+void operator delete(void* value) noexcept { std::free(value); }
+void operator delete(void* value, size_t) noexcept { std::free(value); }
+
+static FILE* HostFdopen(int fd, const char* mode) {
+  if (fail_fdopen) { fail_fdopen = false; return errno = EMFILE, nullptr; }
+  return ::fdopen(fd, mode);
+}
+static int HostFclose(FILE* stream) { return ::fclose(stream); }
+static int HostVasprintf(char** text, const char* format, va_list ap) { return ::vasprintf(text, format, ap); }
+static int HostVfscanf(FILE* stream, const char* format, va_list ap) { return ::vfscanf(stream, format, ap); }
+static int HostVfwprintf(FILE* stream, const wchar_t* format, va_list ap) { return ::vfwprintf(stream, format, ap); }
+static int HostSetvbuf(FILE* stream, char* bytes, int mode, size_t count) { return ::setvbuf(stream, bytes, mode, count); }
+static int _fileno(FILE* stream) { return ::fileno(stream); }
+static int _fclose_nolock(FILE* stream) { return HostFclose(stream); }
+static FILE* _fdopen(int fd, const char* mode) { return HostFdopen(fd, mode); }
+
+using HANDLE = void*;
+using HMODULE = HANDLE;
+using LPCWSTR = const wchar_t*;
+static const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t{-1});
+using BOOL = int;
+struct INIT_ONCE { std::mutex mutex; bool ready = false; };
+using PINIT_ONCE = INIT_ONCE*;
+#define INIT_ONCE_STATIC_INIT {}
+#define CALLBACK
+#define TRUE 1
+#define FALSE 0
+#define __declspec(x)
+static constexpr int ERROR_NOT_ENOUGH_MEMORY = 8;
+static constexpr unsigned DUPLICATE_SAME_ACCESS = 2;
+static constexpr unsigned HANDLE_FLAG_INHERIT = 1;
+static constexpr int _O_BINARY = 0;
+static constexpr int _O_NOINHERIT = 0;
+static thread_local int last_error;
+static void SetLastError(int value) { last_error = value; }
+static int InitOnceExecuteOnce(PINIT_ONCE once, int (*callback)(PINIT_ONCE, void*, void**), void*, void**) {
+  std::lock_guard<std::mutex> lock(once->mutex);
+  if (once->ready) return TRUE;
+  once->ready = callback(once, nullptr, nullptr) != FALSE;
+  return once->ready;
+}
+static HANDLE GetModuleHandleW(const wchar_t*) { return reinterpret_cast<HANDLE>(1); }
+static constexpr unsigned GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS = 4;
+static constexpr unsigned GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT = 2;
+static int GetModuleHandleExW(unsigned, LPCWSTR, HMODULE* module) { *module = GetModuleHandleW(nullptr); return TRUE; }
+static void* GetProcAddress(HANDLE, const char*);
+static HANDLE GetCurrentProcess() { return reinterpret_cast<HANDLE>(1); }
+static HANDLE FileHandle(int fd) { return reinterpret_cast<HANDLE>(static_cast<intptr_t>(fd) + 1); }
+static int HandleFd(HANDLE handle) { return static_cast<int>(reinterpret_cast<intptr_t>(handle) - 1); }
+static int DuplicateHandle(HANDLE, HANDLE handle, HANDLE, HANDLE* result, unsigned, bool inherit, unsigned) {
+  int fd = fcntl(HandleFd(handle), inherit ? F_DUPFD : F_DUPFD_CLOEXEC, 0);
+  if (fd < 0) return FALSE;
+  *result = FileHandle(fd);
+  return TRUE;
+}
+static int CloseHandle(HANDLE handle) { return close(HandleFd(handle)) == 0; }
+static int _open_osfhandle(intptr_t handle, int) { return HandleFd(reinterpret_cast<HANDLE>(handle)); }
+static int _dup2(int from, int to) { return dup2(from, to) < 0 ? -1 : 0; }
+static int _close(int fd) { return close(fd); }
+static int SetHandleInformation(HANDLE handle, unsigned, unsigned bits) {
+  return fcntl(HandleFd(handle), F_SETFD, (bits & HANDLE_FLAG_INHERIT) ? 0 : FD_CLOEXEC) == 0;
+}
+static int gesher_errno_from_crt(int error) { return error; }
+namespace gesher {
+// Device/OFD identity is exercised by test_stream_device_lifetime.py and the complete OFD corpus.
+void ForgetStreamDevice(int, bool) {}
+int GetFileStatusFlags(int fd) { return fcntl(fd, F_GETFL); }
+int SetFileStatusFlags(int fd, int flags) { return fcntl(fd, F_SETFL, flags); }
+int FailWithLastError() { return errno = last_error == ERROR_NOT_ENOUGH_MEMORY ? ENOMEM : EIO, -1; }
+HANDLE HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? FileHandle(fd) : INVALID_HANDLE_VALUE; }
+// This FILE envelope treats snapshot registry identity as a declared boundary;
+// actual capture/reuse and global-lock behavior use the complete OFD corpus.
+struct DescriptorSnapshot {
+  HANDLE handle = nullptr;
+  uintptr_t description = 0;
+  ~DescriptorSnapshot() { if (handle) CloseHandle(handle); }
+};
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+DescriptorSnapshotPtr CaptureDescriptor(int fd) try {
+  if (HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, DescriptorSnapshotPtr{};
+  auto value = std::make_shared<DescriptorSnapshot>();
+  if (!DuplicateHandle(GetCurrentProcess(), FileHandle(fd), GetCurrentProcess(), &value->handle,
+                       0, false, DUPLICATE_SAME_ACCESS)) return {};
+  value->description = static_cast<uintptr_t>(fd) + 1;
+  return value;
+} catch (const std::bad_alloc&) {
+  return errno = ENOMEM, DescriptorSnapshotPtr{};
+}
+int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
+  return fcntl(HandleFd(snapshot->handle), F_GETFL);
+}
+int FileDescriptionIoFlags(const DescriptorSnapshotPtr& snapshot) {
+  return FileDescriptionFlags(snapshot);
+}
+int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int flags) {
+  return fcntl(HandleFd(snapshot->handle), F_SETFL, flags);
+}
+void ForgetOfd(int) {}
+// This envelope tests FILE ownership. The Windows virtual-resource corpus in
+// stdio_virtual_contract.inc exercises the real resource registries.
+struct RetiredDescriptor {
+  void Retire(int fd) { ForgetOfd(fd); }
+  int Finish() { return 0; }
+};
+namespace record_locks {
+class DescriptorGuard { public: DescriptorGuard() {} ~DescriptorGuard() {} };
+class ClosingDescriptor {
+ public:
+  explicit ClosingDescriptor(int) {}
+  int Error() const { return 0; }
+  int Finish(bool) { return 0; }
+};
+}
+}
+
+@RENAME_PUBLIC_SYMBOLS@
+// The Windows fpos_t ABI is one signed 64-bit file position.
+#define fpos_t int64_t
+int adapter_fprintf(FILE*, const char*, ...);
+FILE* adapter_fdopen(int, const char*);
+
+@STDIO_ADAPTER@
+
+static void* GetProcAddress(HANDLE, const char* name) {
+  if (strcmp(name, "gesher_stdio_output_owner_v1") != 0) std::abort();
+  return reinterpret_cast<void*>(&gesher::stdio::gesher_stdio_output_owner_v1);
+}
+using StreamLock = gesher::stdio::StreamGuard;
+@PARSE_MODE@
+@OPEN_CLOSE@
+
+// The envelope's formatting backend uses the host formatter, then the exact
+// fputc/fputwc callbacks used by MinGW's formatter in production.
+extern "C" int __mingw_pformat(int, void* destination, int, const char* format, va_list ap) {
+  char* text = nullptr;
+  int length = HostVasprintf(&text, format, ap);
+  if (length < 0) return length;
+  // The real stream callback can block and cancel this caller. Retain the
+  // formatter's allocation through unwinding, not only the normal return.
+  std::unique_ptr<char, decltype(&std::free)> allocation(text, std::free);
+  for (int i = 0; i < length; ++i) adapter_fputc(static_cast<unsigned char>(text[i]), static_cast<FILE*>(destination));
+  return length;
+}
+extern "C" int __mingw_wpformat(int, void* destination, int, const wchar_t* format, va_list ap) {
+  wchar_t* text = nullptr;
+  gesher::CancellationCleanup allocation([](void* raw) {
+    std::free(*static_cast<wchar_t**>(raw));
+  }, &text);
+  size_t count = 0;
+  std::unique_ptr<FILE, decltype(&HostFclose)> memory(open_wmemstream(&text, &count), HostFclose);
+  if (!memory) return -1;
+  int result = HostVfwprintf(memory.get(), format, ap);
+  memory.reset();  // Finalize text before transferring it or freeing it.
+  if (result >= 0) for (size_t i = 0; i < count; ++i) adapter_fputwc(text[i], static_cast<FILE*>(destination));
+  return result;
+}
+static ssize_t HostScanRead(void* cookie, char* bytes, size_t count) {
+  if (!count) return 0;
+  int value = adapter_fgetc(static_cast<FILE*>(cookie));
+  if (value == EOF) return adapter_ferror(static_cast<FILE*>(cookie)) ? -1 : 0;
+  bytes[0] = static_cast<char>(value);
+  return 1;
+}
+extern "C" int __real___mingw_vfscanf(FILE* stream, const char* format, va_list ap) {
+  cookie_io_functions_t io{};
+  io.read = HostScanRead;
+  std::unique_ptr<FILE, decltype(&HostFclose)> proxy(fopencookie(stream, "r", io), HostFclose);
+  if (!proxy) return EOF;
+  HostSetvbuf(proxy.get(), nullptr, _IONBF, 0);
+  int result = HostVfscanf(proxy.get(), format, ap);
+  const int saved = errno;
+  // This is an explicitly glibc-only envelope. Preserve scanner look-ahead
+  // held by its proxy stream before the native allocation is released.
+  while (proxy->_IO_read_ptr < proxy->_IO_read_end) {
+    adapter_ungetc(static_cast<unsigned char>(*--proxy->_IO_read_end), stream);
+  }
+  proxy.reset();
+  errno = saved;
+  return result;
+}
+extern "C" int __real___mingw_vfwscanf(FILE*, const wchar_t*, va_list) { return errno = ENOSYS, EOF; }
+
+#define GESHER_STDIO_HOST_ENVELOPE 1
+#include "stdio_ofd_contract.inc"
+#include "stdio_cancel_contract.inc"
+
+static void TestAllocationOwnership() {
+  char path[] = "stdio-allocation-XXXXXX";
+  int fd = mkstemp(path);
+  check("stdio ownership fixture opens", fd >= 0);
+  if (fd < 0) return;
+  fail_fdopen = true;
+  check("native fdopen failure retains descriptor", adapter_fdopen(fd, "r+") == nullptr && errno == EMFILE && fcntl(fd, F_GETFD) >= 0);
+  // The two snapshot allocations now precede the existing State and registry
+  // node allocations. Keep fault coverage of every pre-ownership allocation.
+  for (int allocation = 0; allocation != 4; ++allocation) {
+    allocation_failure = allocation;
+    FILE* stream = adapter_fdopen(fd, "r+");
+    allocation_failure = -1;
+    check("metadata allocation fails before descriptor ownership transfer", stream == nullptr && errno == ENOMEM && fcntl(fd, F_GETFD) >= 0);
+    if (stream) { adapter_fclose(stream); fd = open(path, O_RDWR); }
+  }
+  check("descriptor remains usable after every failed fdopen", write(fd, "ok", 2) == 2);
+  close(fd);
+  unlink(path);
+}
+
+static FILE* exit_stream;
+static void ExitOutput() { adapter_fputs("late", exit_stream); }
+int main(int argc, char** argv) {
+  if (argc == 3 && std::strcmp(argv[1], "--exit-output") == 0) {
+    // This is deliberately registered before the first application stdio use.
+    std::atexit(ExitOutput);
+    exit_stream = adapter_fopen(argv[2], "w");
+    if (!exit_stream || adapter_fputs("early", exit_stream) < 0) return 2;
+    return 0;
+  }
+  test_stdio_ofd_contracts();
+  TestAllocationOwnership();
+  test_stdio_cancel_contracts();
+  char summary[128];
+  int count = snprintf(summary, sizeof(summary), "stdio production adapter: %d checks, %d failures\n", checks, failures);
+  if (count < 0 || static_cast<size_t>(count) >= sizeof(summary) ||
+      write(STDOUT_FILENO, summary, static_cast<size_t>(count)) != count) return 2;
+  return failures ? 1 : 0;
+}

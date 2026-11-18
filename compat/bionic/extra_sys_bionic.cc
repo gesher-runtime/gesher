@@ -576,11 +576,7 @@ int BIONIC_SYSV Mincore(void*, size_t len, unsigned char* vec) {
 }
 int BIONIC_SYSV PosixMadvise(void*, size_t, int) { return 0; }
 int BIONIC_SYSV Dup3(int oldfd, int newfd, int flags) {
-  if (oldfd == newfd) return errno = kEINVAL, -1;
-  if ((flags & ~O_CLOEXEC) != 0) return errno = kEINVAL, -1;
-  int r = dup2(oldfd, newfd);
-  if (r >= 0 && (flags & O_CLOEXEC) != 0) fcntl(r, F_SETFD, FD_CLOEXEC);
-  return r;
+  return dup3(oldfd, newfd, flags);
 }
 int BIONIC_SYSV Tgkill(int, int tid, int sig) {
   if (tid != static_cast<int>(GetCurrentThreadId())) return errno = kESRCH, -1;

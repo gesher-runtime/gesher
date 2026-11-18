@@ -20,6 +20,7 @@
 #include "search_bionic.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/stdio.h>
 #include <gesher/system_properties.h>
 
 #include <windows.h>
@@ -73,6 +74,7 @@ Fn Shim(const char* name) {
 }
 
 using wchar32 = uint32_t;
+FILE* F(void* f);
 
 // --- libm ----------------------------------------------------------------------
 
@@ -1052,6 +1054,9 @@ std::string Utf8(const wchar32* s, size_t n = SIZE_MAX) {
 // Wide formatted output: the narrow formatter (stdio_bionic.cc) on the
 // format converted to UTF-8, which handles %ls and %lc itself.
 extern "C" int BIONIC_SYSV gesher_extra_vfwprintf(void* f, const wchar32* fmt, SysvVaList* ap) {
+  gesher::stdio::StreamGuard lock(F(f));
+  if (!lock) return -1;
+  gesher::stdio::Orient(F(f), 1);
   std::string narrow = Utf8(fmt);
   return gesher_bionic_vfprintf(f, narrow.c_str(), ap);
 }
@@ -1064,6 +1069,9 @@ namespace {
 wchar32* BIONIC_SYSV Fgetws(wchar32* buf, int n, void* f) {
   static auto fgetwc = Shim<uint32_t(BIONIC_SYSV*)(void*)>("fgetwc");
   if (n <= 0 || fgetwc == nullptr) return nullptr;
+  gesher::stdio::StreamGuard lock(F(f));
+  if (!lock) return nullptr;
+  gesher::stdio::Orient(F(f), 1);
   int i = 0;
   while (i < n - 1) {
     uint32_t c = fgetwc(f);
@@ -1071,7 +1079,7 @@ wchar32* BIONIC_SYSV Fgetws(wchar32* buf, int n, void* f) {
     buf[i++] = c;
     if (c == '\n') break;
   }
-  if (i == 0) return nullptr;
+  if (i == 0 && n != 1) return nullptr;
   buf[i] = 0;
   return buf;
 }
@@ -1091,28 +1099,28 @@ FILE* F(void* f) {
   }
   return static_cast<FILE*>(f);
 }
-void BIONIC_SYSV Flockfile(void* f) { _lock_file(F(f)); }
-void BIONIC_SYSV Funlockfile(void* f) { _unlock_file(F(f)); }
-int BIONIC_SYSV Ftrylockfile(void* f) {
-  _lock_file(F(f));  // the CRT has no try form
-  return 0;
-}
-int BIONIC_SYSV GetcUnlocked(void* f) { return _getc_nolock(F(f)); }
-int BIONIC_SYSV GetcharUnlocked() { return _getc_nolock(stdin); }
-int BIONIC_SYSV PutcUnlocked(int c, void* f) { return _putc_nolock(c, F(f)); }
-int BIONIC_SYSV PutcharUnlocked(int c) { return _putc_nolock(c, stdout); }
+void BIONIC_SYSV Flockfile(void* f) { gesher::stdio::Lock(F(f)); }
+void BIONIC_SYSV Funlockfile(void* f) { gesher::stdio::Unlock(F(f)); }
+int BIONIC_SYSV Ftrylockfile(void* f) { return gesher::stdio::TryLock(F(f)); }
+int BIONIC_SYSV GetcUnlocked(void* f) { return gesher::stdio::Get(F(f), true); }
+int BIONIC_SYSV GetcharUnlocked() { return gesher::stdio::Get(stdin, true); }
+int BIONIC_SYSV PutcUnlocked(int c, void* f) { return gesher::stdio::Put(c, F(f), true); }
+int BIONIC_SYSV PutcharUnlocked(int c) { return gesher::stdio::Put(c, stdout, true); }
 size_t BIONIC_SYSV FreadUnlocked(void* b, size_t s, size_t n, void* f) {
   return ReadStream(b, s, n, F(f), true);
 }
 size_t BIONIC_SYSV FwriteUnlocked(const void* b, size_t s, size_t n, void* f) {
-  return _fwrite_nolock(b, s, n, F(f));
+  return gesher::stdio::Write(b, s, n, F(f), true);
 }
-int BIONIC_SYSV FputsUnlocked(const char* s, void* f) { return std::fputs(s, F(f)); }
-char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) { return std::fgets(s, n, F(f)); }
-int BIONIC_SYSV FflushUnlocked(void* f) { return _fflush_nolock(f == nullptr ? nullptr : F(f)); }
-int BIONIC_SYSV FeofUnlocked(void* f) { return std::feof(F(f)); }
-int BIONIC_SYSV FerrorUnlocked(void* f) { return std::ferror(F(f)); }
-void BIONIC_SYSV ClearerrUnlocked(void* f) { std::clearerr(F(f)); }
+int BIONIC_SYSV FputsUnlocked(const char* s, void* f) {
+  const size_t length = std::strlen(s);
+  return gesher::stdio::Write(s, 1, length, F(f), true) == length ? 0 : EOF;
+}
+char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) { return gesher::stdio::ReadLine(s, n, F(f), true); }
+int BIONIC_SYSV FflushUnlocked(void* f) { return gesher::stdio::Flush(f == nullptr ? nullptr : F(f), true); }
+int BIONIC_SYSV FeofUnlocked(void* f) { return gesher::stdio::Eof(F(f), true); }
+int BIONIC_SYSV FerrorUnlocked(void* f) { return gesher::stdio::Error(F(f), true); }
+void BIONIC_SYSV ClearerrUnlocked(void* f) { gesher::stdio::Clear(F(f), true); }
 int BIONIC_SYSV FilenoUnlocked(void* f) { return _fileno(F(f)); }
 int BIONIC_SYSV Fsetlocking(void*, int) { return 1; }  // FSETLOCKING_INTERNAL
 void BIONIC_SYSV Setlinebuf(void* f) { std::setvbuf(F(f), nullptr, _IOLBF, BUFSIZ); }

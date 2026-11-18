@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -23,6 +24,21 @@ static DWORD GetLastError() { return last_error; }
 static int length_error, growth_error, access_error;
 static unsigned growth_calls;
 static bool unbound_standard_input;
+struct LARGE_INTEGER { int64_t QuadPart; };
+struct FILE_END_OF_FILE_INFO { LARGE_INTEGER EndOfFile; };
+enum FILE_INFO_BY_HANDLE_CLASS { FileEndOfFileInfo };
+static bool GetFileSizeEx(HANDLE fd, LARGE_INTEGER* size) {
+  struct stat info{};
+  if (fstat(fd, &info)) { SetLastError(errno); return false; }
+  size->QuadPart = info.st_size;
+  return true;
+}
+static bool SetFileInformationByHandle(HANDLE fd, FILE_INFO_BY_HANDLE_CLASS kind, void* raw, size_t bytes) {
+  if (kind != FileEndOfFileInfo || bytes != sizeof(FILE_END_OF_FILE_INFO)) std::abort();
+  if (ftruncate(fd, static_cast<FILE_END_OF_FILE_INFO*>(raw)->EndOfFile.QuadPart) == 0) return true;
+  SetLastError(errno);
+  return false;
+}
 [[maybe_unused]] static DWORD GetFileType(HANDLE handle) {
   struct stat info{};
   if (fstat(handle, &info) < 0) {
@@ -38,6 +54,21 @@ static int ErrnoFromWin32(DWORD error) { return static_cast<int>(error); }
   if (unbound_standard_input && fd == STDIN_FILENO) return -2;
   return fcntl(fd, F_GETFD) < 0 ? -1 : fd;
 }
+// Ordinary-file boundary for this corpus; exact shared-group behavior has its
+// own production-code fixture. A capture still pins a real Linux duplicate.
+struct DescriptorSnapshot { int handle; ~DescriptorSnapshot() { close(handle); } };
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
+  if (HandleFromFd(fd) < 0) { errno = EBADF; return nullptr; }
+  int pinned = dup(fd);
+  return pinned < 0 ? nullptr : DescriptorSnapshotPtr(new DescriptorSnapshot{pinned});
+}
+struct FileOperationLease {
+  explicit FileOperationLease(const DescriptorSnapshotPtr&) {}
+  int Error() const { return 0; }
+};
+static bool FileDescriptionIsRevocable(const DescriptorSnapshotPtr&) { return false; }
+static int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) { return fcntl(snapshot->handle, F_GETFL); }
 namespace record_locks {
 struct DescriptorGuard {};
 [[maybe_unused]] static int HandleAccess(HANDLE handle, uint32_t* access) {

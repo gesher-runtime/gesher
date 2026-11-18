@@ -1,0 +1,291 @@
+@OFD_BOUNDARY@
+
+#include <chrono>
+#include <charconv>
+#include <condition_variable>
+#include <functional>
+#include <pthread.h>
+#include <sys/random.h>
+#include <thread>
+
+constexpr DWORD INFINITE = UINT32_MAX;
+constexpr DWORD FILE_READ_ATTRIBUTES = 0x80,
+    FILE_SHARE_DELETE = 4, FILE_FLAG_WRITE_THROUGH = 0x80000000;
+struct LARGE_INTEGER { int64_t QuadPart; };
+struct FILE_END_OF_FILE_INFO { LARGE_INTEGER EndOfFile; };
+enum FILE_INFO_BY_HANDLE_CLASS { FileEndOfFileInfo };
+static std::vector<std::string> named_objects;
+struct RemoveNamedObjects {
+  ~RemoveNamedObjects() { for (const auto& object : named_objects) shm_unlink(object.c_str()); }
+} remove_named_objects;
+static std::map<int, pthread_mutex_t*> mutex_views;
+static int random_error;
+
+static std::string ObjectName(const wchar_t* value) {
+  std::string result = "/gesher-revocable-host-" + host::Narrow(value);
+  std::replace(result.begin() + 1, result.end(), '\\', '-');
+  return result;
+}
+static BOOL CloseHandle(HANDLE handle) {
+  auto found = mutex_views.find(host::Native(handle));
+  if (found != mutex_views.end()) {
+    munmap(found->second, sizeof(pthread_mutex_t));
+    mutex_views.erase(found);
+  }
+  return HostCloseHandle(handle);
+}
+static HANDLE CreateFileMappingW(HANDLE file, SECURITY_ATTRIBUTES* attributes, DWORD protection,
+                                 DWORD high, DWORD low, const wchar_t* name) {
+  if (!name) return HostCreateFileMappingW(file, attributes, protection, high, low, name);
+  host::Require(file == INVALID_HANDLE_VALUE && protection == PAGE_READWRITE && high == 0);
+  if (host::map_error) { SetLastError(host::map_error); return nullptr; }
+  const std::string object = ObjectName(name);
+  int fd = shm_open(object.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+  if (fd < 0) { SetLastError(errno == EEXIST ? ERROR_ALREADY_EXISTS : errno); return nullptr; }
+  named_objects.push_back(object);
+  if (ftruncate(fd, low)) { int error = errno; close(fd); SetLastError(error); return nullptr; }
+  fd = host::Own(fd);
+  if (fd < 0) return nullptr;
+  SetLastError(ERROR_SUCCESS);
+  return host::Handle(fd);
+}
+static HANDLE OpenFileMappingW(DWORD access, BOOL inherit, const wchar_t* name) {
+  host::Require(access == FILE_MAP_READ && !inherit);
+  int fd = host::Own(shm_open(ObjectName(name).c_str(), O_RDONLY | O_CLOEXEC, 0));
+  return fd < 0 ? nullptr : host::Handle(fd);
+}
+static HANDLE MutexHandle(const wchar_t* name, bool create) {
+  const std::string object = ObjectName(name);
+  int fd = shm_open(object.c_str(), O_RDWR | O_CLOEXEC | (create ? O_CREAT | O_EXCL : 0), 0600);
+  if (fd < 0) { SetLastError(errno == EEXIST ? ERROR_ALREADY_EXISTS : errno); return nullptr; }
+  if (create) {
+    named_objects.push_back(object);
+    host::Require(ftruncate(fd, sizeof(pthread_mutex_t)) == 0);
+  }
+  auto* view = static_cast<pthread_mutex_t*>(mmap(nullptr, sizeof(pthread_mutex_t),
+      PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+  host::Require(view != MAP_FAILED);
+  if (create) {
+    pthread_mutexattr_t attributes;
+    host::Require(pthread_mutexattr_init(&attributes) == 0);
+    host::Require(pthread_mutexattr_setpshared(&attributes, PTHREAD_PROCESS_SHARED) == 0);
+    host::Require(pthread_mutexattr_setrobust(&attributes, PTHREAD_MUTEX_ROBUST) == 0);
+    host::Require(pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE) == 0);
+    host::Require(pthread_mutex_init(view, &attributes) == 0);
+    pthread_mutexattr_destroy(&attributes);
+  }
+  fd = host::Own(fd);
+  host::Require(fd >= 0);
+  mutex_views.emplace(fd, view);
+  SetLastError(ERROR_SUCCESS);
+  return host::Handle(fd);
+}
+static HANDLE CreateMutexW(void*, BOOL owner, const wchar_t* name) {
+  host::Require(!owner);
+  return MutexHandle(name, true);
+}
+static HANDLE OpenMutexW(DWORD access, BOOL inherit, const wchar_t* name) {
+  host::Require(access == (SYNCHRONIZE | MUTEX_MODIFY_STATE) && !inherit);
+  return MutexHandle(name, false);
+}
+static DWORD WaitForSingleObject(HANDLE handle, DWORD timeout) {
+  host::Require(timeout == INFINITE || timeout == 0);
+  auto found = mutex_views.find(host::Native(handle));
+  host::Require(found != mutex_views.end());
+  int result = timeout == 0 ? pthread_mutex_trylock(found->second) : pthread_mutex_lock(found->second);
+  if (result == EOWNERDEAD) { pthread_mutex_consistent(found->second); return WAIT_ABANDONED; }
+  if (result == EBUSY) return WAIT_TIMEOUT;
+  if (result) { SetLastError(result); return WAIT_FAILED; }
+  return WAIT_OBJECT_0;
+}
+static BOOL ReleaseMutex(HANDLE handle) {
+  auto found = mutex_views.find(host::Native(handle));
+  host::Require(found != mutex_views.end());
+  return pthread_mutex_unlock(found->second) == 0;
+}
+static int BCryptGenRandom(void*, unsigned char* bytes, unsigned count, DWORD flags) {
+  host::Require(flags == BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+  if (random_error) return random_error;
+  return getrandom(bytes, count, 0) == static_cast<ssize_t>(count) ? 0 : -1;
+}
+static HANDLE ReOpenFile(HANDLE source, DWORD access, DWORD sharing, DWORD flags) {
+  host::Require(sharing == (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE));
+  const bool read = (access & GENERIC_READ) != 0, write = (access & GENERIC_WRITE) != 0;
+  int mode = read && write ? O_RDWR : write ? O_WRONLY : O_RDONLY;
+  if (flags & FILE_FLAG_WRITE_THROUGH) mode |= O_SYNC;
+  const std::string path = "/proc/self/fd/" + std::to_string(host::Native(source));
+  int fd = host::Own(open(path.c_str(), mode | O_CLOEXEC));
+  return fd < 0 ? INVALID_HANDLE_VALUE : host::Handle(fd);
+}
+static BOOL SetFileInformationByHandle(HANDLE file, FILE_INFO_BY_HANDLE_CLASS kind, void* raw, DWORD bytes) {
+  host::Require(kind == FileEndOfFileInfo && bytes == sizeof(FILE_END_OF_FILE_INFO));
+  if (ftruncate(host::Native(file), static_cast<FILE_END_OF_FILE_INFO*>(raw)->EndOfFile.QuadPart)) {
+    SetLastError(errno); return FALSE;
+  }
+  return TRUE;
+}
+
+@DECLARATIONS@
+@OFD_IMPLEMENTATION@
+@RESOLVER@
+@REVOCABLE_IMPLEMENTATION@
+
+constexpr DWORD MAXDWORD = UINT32_MAX, ERROR_IO_PENDING = 997, ERROR_NOACCESS = 998,
+    ERROR_INVALID_USER_BUFFER = 1784, ERROR_HANDLE_EOF = 38, ERROR_BROKEN_PIPE = 109,
+    FILE_ATTRIBUTE_DIRECTORY = 16;
+struct OVERLAPPED { DWORD Offset = 0, OffsetHigh = 0; HANDLE hEvent = nullptr; };
+struct BY_HANDLE_FILE_INFORMATION { DWORD dwFileAttributes; };
+static thread_local bool hold_this_io;
+static std::function<void()> before_write;
+static HANDLE CreateEventW(void*, BOOL, BOOL, const wchar_t*) {
+  return host::Handle(host::Own(static_cast<int>(syscall(SYS_memfd_create, "event", MFD_CLOEXEC))));
+}
+static BOOL ReadFile(HANDLE file, void* data, DWORD count, DWORD* transferred, OVERLAPPED*) {
+  ssize_t result = read(host::Native(file), data, count);
+  if (result < 0) { SetLastError(errno); return FALSE; }
+  *transferred = static_cast<DWORD>(result); return TRUE;
+}
+static BOOL WriteFile(HANDLE file, const void* data, DWORD count, DWORD* transferred, OVERLAPPED* at) {
+  if (hold_this_io && before_write) before_write();
+  int fd = host::Native(file), original = fcntl(fd, F_GETFL);
+  if (at) fcntl(fd, F_SETFL, original | O_APPEND);
+  ssize_t result = write(fd, data, count);
+  if (at) fcntl(fd, F_SETFL, original);
+  if (result < 0) { SetLastError(errno); return FALSE; }
+  *transferred = static_cast<DWORD>(result); return TRUE;
+}
+static BOOL GetOverlappedResult(HANDLE, OVERLAPPED*, DWORD*, BOOL) { return FALSE; }
+static BOOL GetFileInformationByHandle(HANDLE file, BY_HANDLE_FILE_INFORMATION* info) {
+  struct stat value{};
+  if (fstat(host::Native(file), &value)) { SetLastError(errno); return FALSE; }
+  info->dwFileAttributes = S_ISDIR(value.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : 0;
+  return TRUE;
+}
+namespace gesher { static void InotifyNoteWrite(HANDLE) {} }
+@NATIVE_FILE_IO@
+
+static unsigned checks;
+static void Check(bool ok, const char* text) {
+  ++checks;
+  if (!ok) { std::fprintf(stderr, "FAIL %s (errno %d)\n", text, errno); std::exit(1); }
+}
+static int NewFile(const char* path) {
+  int native = host::Own(open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0600));
+  if (native < 0) return -1;
+  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(host::Handle(native)), _O_BINARY);
+  if (fd >= 0 && gesher::RegisterOfd(fd, O_RDWR) < 0) { _close(fd); return -1; }
+  return fd;
+}
+static void CloseFd(int fd) { gesher::ForgetOfd(fd); Check(_close(fd) == 0, "close owned descriptor"); }
+static int Write(int fd, const char* text, unsigned count) {
+  int result = -2;
+  Check(NativeFileIo(fd, const_cast<char*>(text), count, true, &result), "regular I/O route selected");
+  return result;
+}
+static int Adopt(const gesher::DescriptorSnapshotPtr& source) {
+  HANDLE file = nullptr, shared = nullptr;
+  Check(DuplicateHandle(GetCurrentProcess(), source->handle, GetCurrentProcess(), &file,
+      0, FALSE, DUPLICATE_SAME_ACCESS), "duplicate transported file");
+  Check(DuplicateHandle(GetCurrentProcess(), gesher::ShareFileDescription(source), GetCurrentProcess(),
+      &shared, 0, FALSE, DUPLICATE_SAME_ACCESS), "duplicate transported OFD");
+  return gesher::AdoptFileDescription(file, shared, gesher::DescriptorKind::kFile, true);
+}
+
+// Contract cases are below the declared OS boundary and exact production code.
+int main() {
+  const size_t initial_handles = host::owned.size(), initial_views = host::views.size();
+  random_error = -1;
+  Check(gesher::CreateRevocableFileGroup() == 0 && errno == EIO, "random failure is reported");
+  random_error = 0;
+  host::map_error = ERROR_NOT_ENOUGH_MEMORY;
+  Check(gesher::CreateRevocableFileGroup() == 0 && errno == ENOMEM, "section failure is reported");
+  host::map_error = 0;
+  uint64_t group = gesher::CreateRevocableFileGroup();
+  Check(group != 0, "create real shared group");
+  int fd = NewFile("stage"), unrelated = NewFile("unrelated");
+  Check(fd >= 0 && unrelated >= 0, "create backing files");
+  Check(gesher::AttachRevocableFileGroup(group, -1) == -1 && errno == EBADF, "invalid fd is rejected");
+  Check(gesher::AttachRevocableFileGroup(group, fd) == 0, "attach fresh file");
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  int alias = gesher::AttachFileDescription(snapshot, true);
+  int adopted = Adopt(snapshot);
+  int reopened = gesher::ReopenRevocableFileDescription(snapshot, O_RDONLY);
+  Check(alias >= 0 && adopted >= 0 && reopened >= 0, "dup/adopt/proc-fd aliases open");
+  Check(Write(fd, "first", 5) == 5 && Write(alias, " dup", 4) == 4 && Write(adopted, " adopted", 8) == 8,
+        "all write aliases reach actual backing bytes before revoke");
+  auto reader = gesher::CaptureDescriptor(reopened);
+  Check(lseek(host::Native(reader->handle), 0, SEEK_CUR) == 0, "proc reopen has independent cursor");
+  Check(gesher::ReopenRevocableFileDescription(reader, O_RDWR) == -1 && errno == EACCES,
+        "proc reopen cannot upgrade read-only capability");
+  Check(gesher::ValidateNativeFileDescription(snapshot) == -1 && errno == EOPNOTSUPP,
+        "native process cannot receive unenforceable revocable fd");
+  int ready[2], proceed[2];
+  Check(pipe(ready) == 0 && pipe(proceed) == 0, "cross-process control pipes");
+  pid_t child = fork();
+  Check(child >= 0, "fork actual process boundary");
+  if (child == 0) {
+    close(ready[0]); close(proceed[1]);
+    int received = Adopt(snapshot);
+    if (received < 0 || Write(received, " child", 6) != 6) _exit(2);
+    write(ready[1], "r", 1);
+    char byte;
+    if (read(proceed[0], &byte, 1) != 1) _exit(3);
+    int result = Write(received, "late", 4);
+    _exit(result == -1 && errno == EPERM ? 0 : 4);
+  }
+  close(ready[1]); close(proceed[0]);
+  char signal;
+  Check(read(ready[0], &signal, 1) == 1, "child adopted and wrote before revoke");
+  std::mutex barrier;
+  std::condition_variable condition;
+  bool entered = false, finish = false;
+  std::atomic<bool> revoked{false};
+  int written = -2, revoke_result = -2;
+  before_write = [&] {
+    std::unique_lock<std::mutex> lock(barrier);
+    entered = true; condition.notify_all();
+    condition.wait(lock, [&] { return finish; });
+  };
+  std::thread writer([&] { hold_this_io = true; written = Write(fd, " active", 7); });
+  {
+    std::unique_lock<std::mutex> lock(barrier);
+    Check(condition.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }), "actual I/O admitted");
+  }
+  std::thread revoker([&] { revoke_result = gesher::RevokeFileGroup(group); revoked = true; });
+  auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!snapshot->description->revocation->Revoked() && std::chrono::steady_clock::now() < until)
+    std::this_thread::yield();
+  Check(snapshot->description->revocation->Revoked(), "revocation stops new admission before draining");
+  Check(!revoked.load(), "revoke waits for admitted actual write");
+  Check(Write(alias, "late", 4) == -1 && errno == EPERM, "new write rejected while prior I/O drains");
+  Check(Write(unrelated, "ok", 2) == 2, "unrelated descriptor works while revoke waits");
+  { std::lock_guard<std::mutex> lock(barrier); finish = true; }
+  condition.notify_all(); writer.join(); revoker.join(); before_write = {};
+  Check(written == 7 && revoke_result == 0 && revoked, "admitted write finishes before revoke returns");
+  for (int value : {fd, alias, adopted, reopened}) {
+    int result = -2; char byte;
+    Check(NativeFileIo(value, &byte, 1, false, &result) && result == -1 && errno == EPERM,
+          "all descriptor aliases reject reads after revoke");
+  }
+  Check(Write(adopted, "late", 4) == -1 && errno == EPERM, "adopted writer rejects after revoke");
+  Check(gesher::ReopenRevocableFileDescription(snapshot, O_RDWR) == -1 && errno == EPERM,
+        "new proc reopen rejected after revoke");
+  Check(gesher::AttachRevocableFileGroup(group, unrelated) == -1 && errno == EPERM,
+        "no new descriptor attaches after revoke");
+  Check(write(proceed[1], "r", 1) == 1, "release child after revoke");
+  int status;
+  Check(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+        "other process sees revocation through transported OFD");
+  close(ready[0]); close(proceed[1]);
+  gesher::ReleaseRevocableFileGroup(group);
+  Check(gesher::RevokeFileGroup(group) == -1 && errno == EINVAL, "retired controller token is not reused");
+  for (int value : {fd, alias, adopted, reopened, unrelated}) CloseFd(value);
+  reader.reset(); snapshot.reset();
+  int reused = NewFile("unrelated");
+  Check(reused == fd && Write(reused, "reused", 6) == 6, "numeric fd reuse does not inherit revocation");
+  CloseFd(reused);
+  Check(host::owned.size() == initial_handles && host::views.size() == initial_views && mutex_views.empty(),
+        "all owned native handles and section views are released");
+  for (const auto& object : named_objects) shm_unlink(object.c_str());
+  std::printf("revocable file contracts: %u checks, 0 failures; Linux boundary only\n", checks);
+}

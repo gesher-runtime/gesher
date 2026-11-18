@@ -11,6 +11,7 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Parcel;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteCallback;
 import android.os.ServiceManager;
@@ -31,6 +32,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /** Exercises public Android BlobStore contracts with the managed runtime's real disk backend. */
@@ -65,6 +68,17 @@ public final class BlobStoreContractTest {
     private static void write(ParcelFileDescriptor descriptor, byte[] bytes) throws IOException {
         try (var stream = new ParcelFileDescriptor.AutoCloseOutputStream(descriptor)) {
             stream.write(bytes);
+        }
+    }
+
+    private static ParcelFileDescriptor parcelAlias(ParcelFileDescriptor descriptor) {
+        Parcel parcel = Parcel.obtain();
+        try {
+            descriptor.writeToParcel(parcel, 0);
+            parcel.setDataPosition(0);
+            return ParcelFileDescriptor.CREATOR.createFromParcel(parcel);
+        } finally {
+            parcel.recycle();
         }
     }
 
@@ -160,7 +174,12 @@ public final class BlobStoreContractTest {
         check(initial.getSize() == prefix, "partial length is reported");
         check(Arrays.equals(Arrays.copyOf(bytes, prefix), read(initial.openRead())),
                 "session read sees the current bytes");
-        initial.close();
+        try (var staleWriter = new ParcelFileDescriptor.AutoCloseOutputStream(initial.openWrite(0, -1));
+                var staleReader = new ParcelFileDescriptor.AutoCloseInputStream(initial.openRead())) {
+            initial.close();
+            expect(IOException.class, () -> staleWriter.write(corrupt), "close revokes outstanding writers");
+            expect(IOException.class, staleReader::read, "close revokes outstanding readers");
+        }
         expect(IllegalStateException.class, initial::openRead, "closed Binder cannot reopen a descriptor");
 
         try (BlobStoreManager.Session resumed = manager.openSession(id)) {
@@ -177,9 +196,38 @@ public final class BlobStoreContractTest {
                     "allocation preserves the initial write offset");
             write(allocated, Arrays.copyOfRange(bytes, prefix, bytes.length));
             check(Arrays.equals(bytes, read(resumed.openRead())), "offset write preserves the prefix");
-            try (var stale = new ParcelFileDescriptor.AutoCloseOutputStream(resumed.openWrite(0, -1))) {
-                check(commit(resumed) == BlobStoreManager.COMMIT_RESULT_SUCCESS, "verified commit succeeds");
-                try { stale.write(corrupt); } catch (IOException revoked) { }
+            ParcelFileDescriptor writer = resumed.openWrite(0, -1);
+            try (var stale = new ParcelFileDescriptor.AutoCloseOutputStream(writer);
+                    var duplicate = new ParcelFileDescriptor.AutoCloseOutputStream(
+                            ParcelFileDescriptor.dup(writer.getFileDescriptor()));
+                    var parcelled = new ParcelFileDescriptor.AutoCloseOutputStream(parcelAlias(writer))) {
+                // Hold the actual worker so no hash/snapshot can accidentally
+                // make this pass before commit's synchronous barrier is tested.
+                Field workerField = binder.getClass().getDeclaredField("mWorker");
+                workerField.setAccessible(true);
+                var worker = (ScheduledThreadPoolExecutor) workerField.get(binder);
+                CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+                worker.execute(() -> {
+                    entered.countDown();
+                    try { release.await(CALLBACK_SECONDS, TimeUnit.SECONDS); }
+                    catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                });
+                check(entered.await(CALLBACK_SECONDS, TimeUnit.SECONDS), "commit worker is held by the fixture");
+                CompletableFuture<Integer> result = new CompletableFuture<>();
+                try {
+                    resumed.commit(Runnable::run, result::complete);
+                    check(!result.isDone(), "commit callback still waits for the worker");
+                    expect(IOException.class, () -> stale.write(corrupt), "commit revokes before returning");
+                    expect(IOException.class, () -> duplicate.write(corrupt), "commit revokes dup aliases");
+                    expect(IOException.class, () -> parcelled.write(corrupt), "commit revokes Parcel aliases");
+                    resumed.close();
+                    expect(SecurityException.class, () -> manager.openSession(id),
+                            "close after commit cannot reopen the stage while hashing is pending");
+                } finally {
+                    release.countDown();
+                }
+                check(result.get(CALLBACK_SECONDS, TimeUnit.SECONDS) == BlobStoreManager.COMMIT_RESULT_SUCCESS,
+                        "verified commit succeeds after synchronous revocation");
                 check(Arrays.equals(bytes, read(manager.openBlob(handle))), "committed data is immutable");
             }
         }
@@ -218,8 +266,18 @@ public final class BlobStoreContractTest {
         expect(SecurityException.class, () -> manager.openBlob(mismatch), "bad digest publishes no blob");
         expect(SecurityException.class, () -> manager.openSession(mismatchId), "failed commit consumes session");
         long abandoned = manager.createSession(mismatch);
-        manager.abandonSession(abandoned);
+        try (BlobStoreManager.Session session = manager.openSession(abandoned);
+                var stale = new ParcelFileDescriptor.AutoCloseOutputStream(session.openWrite(0, -1))) {
+            manager.abandonSession(abandoned);
+            expect(IOException.class, () -> stale.write(corrupt), "manager abandon revokes outstanding writers");
+        }
         expect(SecurityException.class, () -> manager.openSession(abandoned), "abandon deletes the session");
+        long abandonedDirect = manager.createSession(mismatch);
+        try (BlobStoreManager.Session session = manager.openSession(abandonedDirect);
+                var stale = new ParcelFileDescriptor.AutoCloseOutputStream(session.openWrite(0, -1))) {
+            session.abandon();
+            expect(IOException.class, () -> stale.write(corrupt), "session abandon revokes outstanding writers");
+        }
 
         expect(IllegalArgumentException.class, () -> manager.acquireLease(handle, "too long", expiry + 1),
                 "lease cannot outlive the blob");

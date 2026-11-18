@@ -149,5 +149,19 @@ enum class Device { kZero, kRandom };
 bool DeviceFromFd(int fd, Device* device);
 // Takes over `fd`, which must be open on NUL.
 void RegisterDevice(int fd, Device device);
+// CRT stream close/reopen bypasses close(). Retire its device OFD slot after
+// the real operation, while the descriptor guard still prevents fd reuse.
+// On failure the CRT may already have closed the descriptor (e.g. after a
+// flush error); a still-open descriptor keeps its marker.
+void ForgetStreamDevice(int fd, bool closed_or_replaced);
+
+// Open file description management and file status flags (ofd.cc).
+int RegisterOfd(int fd, int flags);
+int DupOfd(int old_fd, int new_fd);
+void ForgetOfd(int fd);
+int GetFileStatusFlags(int fd);
+int SetFileStatusFlags(int fd, int flags);
+bool IsAppendMode(int fd);
+bool IsNonBlockingMode(int fd);
 
 }  // namespace gesher

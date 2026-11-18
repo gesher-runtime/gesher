@@ -1,0 +1,227 @@
+// Production sections are inserted with only the declared fgetc backend rename.
+// OFD registry, shared stdio, device data, CRT paths and locks are host boundaries.
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <fcntl.h>
+#include <unistd.h>
+
+static int checks, failures;
+static void check(const char* name, int ok) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s\n", name); }
+}
+static int stream_depth, descriptor_depth, transaction_error, close_mode, crt_calls;
+struct StreamLock {
+  explicit StreamLock(FILE*) { ++stream_depth; }
+  ~StreamLock() { --stream_depth; }
+  explicit operator bool() const { return true; }
+};
+using HANDLE = intptr_t;
+constexpr HANDLE INVALID_HANDLE_VALUE = -1;
+enum class PathKind { kFile, kNull, kMissing };
+namespace gesher {
+enum class Device { kZero, kRandom };
+enum class DescriptorKind { kFile, kZero, kRandom };
+// The complete executable-owned OFD implementation is exercised by the OFD
+// corpus. This boundary supplies the same slot/description distinction here.
+static std::unordered_map<int, std::shared_ptr<DescriptorKind>> ofd_entries;
+static DescriptorKind GetDescriptorKind(int fd) {
+  auto found = ofd_entries.find(fd);
+  return found == ofd_entries.end() ? DescriptorKind::kFile : *found->second;
+}
+static int SetDescriptorKind(int fd, DescriptorKind kind) {
+  ofd_entries[fd] = std::make_shared<DescriptorKind>(kind);
+  return 0;
+}
+static void ForgetOfd(int fd) {
+  check("OFD retirement stays inside descriptor guard", descriptor_depth == 1);
+  ofd_entries.erase(fd);
+}
+static int RegisterOfd(int fd, int flags) {
+  check("replacement OFD published inside descriptor guard", descriptor_depth == 1);
+  check("replacement OFD preserves actual access", (fcntl(fd, F_GETFL) & O_ACCMODE) == (flags & O_ACCMODE));
+  return SetDescriptorKind(fd, DescriptorKind::kFile);
+}
+static HANDLE HandleFromFd(int fd) {
+  check("device failure inspection stays under the descriptor guard", descriptor_depth == 1);
+  return fcntl(fd, F_GETFD) < 0 ? INVALID_HANDLE_VALUE : fd + 1;
+}
+namespace {
+@DEVICE_MAP@
+}
+@DEVICE_REGISTRATION@
+// Other virtual resource owners are outside this device corpus. Keep the
+// actual composite retirement body, with these unrelated owners empty.
+struct SocketDescription { std::mutex error_mutex; bool native_closing = false; };
+struct SocketFd { HANDLE socket = 0; std::shared_ptr<SocketDescription> description; };
+static bool Remove(int, SocketFd*, bool*) { return false; }
+static void ForgetEpollEntries(int) {}
+static void ForgetEventObject(int) {}
+static void ForgetBinder(int) {}
+static bool HasPollWaiters() { return false; }
+static void WakePollers() {}
+struct RetiredDescriptor {
+  void Retire(int fd);
+  int Finish() { return 0; }
+  HANDLE socket_ = 0;
+  std::shared_ptr<SocketDescription> description_;
+};
+@RETIRE_DESCRIPTOR@
+namespace stdio {
+static int FlushOutput(FILE*) { return 0; }
+static void Forget(FILE*) {}
+static int PrepareReopenedStream(FILE*, int) { return 0; }
+static size_t Read(void* bytes, size_t size, size_t count, FILE* stream, bool) {
+  if (!size || !count) return 0;
+  Device device;
+  if (DeviceFromFd(fileno(stream), &device)) {
+    std::memset(bytes, device == Device::kZero ? 0 : 0xa5, size * count);
+    return count;
+  }
+  return std::fread(bytes, size, count, stream);
+}
+}
+PathKind MapPath(const char* path, std::wstring* out) {
+  *out = std::wstring(path, path + std::strlen(path));
+  return PathKind::kFile;
+}
+namespace record_locks {
+class ClosingDescriptor {
+ public:
+  explicit ClosingDescriptor(int) : error_(transaction_error), calls_(crt_calls) {
+    check("stream locks precede descriptor guards", stream_depth == 1 && descriptor_depth == 0);
+    ++descriptor_depth;
+  }
+  ~ClosingDescriptor() {
+    check("descriptor transaction completes or rejects before mutation",
+          error_ || finished_ || calls_ == crt_calls);
+    --descriptor_depth;
+  }
+  int Error() const { return error_; }
+  int Finish(bool) {
+    check("descriptor transaction completes once", !finished_ && descriptor_depth == 1);
+    finished_ = true;
+    return 0;
+  }
+ private:
+  int error_;
+  int calls_;
+  bool finished_ = false;
+};
+}
+}
+static int _fileno(FILE* stream) { return fileno(stream); }
+static int gesher_errno_from_crt(int error) { return error; }
+static bool HasNonDirectoryParent(const std::wstring&) { return false; }
+static int _fclose_nolock(FILE* stream) {
+  ++crt_calls;
+  check("CRT close stays under stream and descriptor guards", stream_depth == 1 && descriptor_depth == 1);
+  if (close_mode == 2) return errno = EIO, EOF;  // Native close leaves fd live.
+  int result = std::fclose(stream);
+  return close_mode == 1 ? (errno = EIO, EOF) : result;  // A flush error can still close fd.
+}
+static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
+  ++crt_calls;
+  check("CRT reopen stays under stream and descriptor guards", stream_depth == 1 && descriptor_depth == 1);
+  std::wstring wide_path(path), wide_mode(mode);
+  std::string narrow_path(wide_path.begin(), wide_path.end());
+  std::string narrow_mode(wide_mode.begin(), wide_mode.end());
+  for (char& option : narrow_mode) if (option == 'N') option = 'e';
+  return std::freopen(narrow_path.c_str(), narrow_mode.c_str(), stream);
+}
+namespace host {
+@PARSE_MODE@
+@FCLOSE@
+@FREOPEN@
+}
+static int gesher_is_device_fd(int fd) {
+  gesher::Device device;
+  return gesher::DeviceFromFd(fd, &device);
+}
+namespace shim {
+#define BIONIC_SYSV
+static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
+static int StreamGet(FILE* stream) {
+  unsigned char byte;
+  return gesher::stdio::Read(&byte, 1, 1, stream, false) == 1 ? byte : EOF;
+}
+size_t ReadStream(void*, size_t, size_t, FILE*, bool = false);
+@READ_STREAM@
+@FGETC@
+@FREAD@
+}
+static FILE* DeviceOpen(const char* path, const char* mode) {
+  FILE* stream = std::fopen(path, mode);
+  if (stream && std::strcmp(path, "/dev/zero") == 0)
+    gesher::RegisterDevice(fileno(stream), gesher::Device::kZero);
+  if (stream && std::strcmp(path, "/dev/urandom") == 0)
+    gesher::RegisterDevice(fileno(stream), gesher::Device::kRandom);
+  return stream;
+}
+#define STREAM_DEVICE_FOPEN DeviceOpen
+#define STREAM_DEVICE_FCLOSE host::fclose
+#define STREAM_DEVICE_FREOPEN host::freopen
+#define STREAM_DEVICE_FGETC shim::Fgetc
+#define STREAM_DEVICE_FREAD shim::Fread
+#include "stream_device_contract_test.inc"
+
+static void test_failed_closes(void) {
+  for (int mode : {1, 2}) {
+    FILE* stream = DeviceOpen("/dev/zero", "rb");
+    check("close error fixture opens", stream != nullptr);
+    if (!stream) continue;
+    int fd = fileno(stream);
+    close_mode = mode;
+    errno = 0;
+    int result = host::fclose(stream);
+    check("failed close preserves the CRT error", result == EOF && errno == EIO);
+    check("device marker follows actual descriptor closure", gesher_is_device_fd(fd) == (mode == 2));
+    close_mode = 0;
+    if (mode == 2) host::fclose(stream);
+  }
+  FILE* stream = DeviceOpen("/dev/zero", "rb");
+  check("rejected close fixture opens", stream != nullptr);
+  if (!stream) return;
+  int fd = fileno(stream);
+  transaction_error = EBUSY;
+  check("rejected close keeps its error and live device",
+        host::fclose(stream) == EOF && errno == EBUSY && gesher_is_device_fd(fd));
+  transaction_error = 0;
+  check("unsupported null-path reopen closes and retires its actual device",
+        host::freopen(nullptr, "rb", stream) == nullptr && errno == EOPNOTSUPP && !gesher_is_device_fd(fd));
+  stream = DeviceOpen("/dev/zero", "rb");
+  check("early rejected reopen fixture opens", stream != nullptr);
+  if (!stream) return;
+  fd = fileno(stream);
+  check("early rejected reopen closes and forgets the old device",
+        host::freopen("unused", "", stream) == nullptr && errno == EINVAL && !gesher_is_device_fd(fd));
+
+  stream = DeviceOpen("/dev/zero", "rb");
+  check("device alias fixture opens", stream != nullptr);
+  if (!stream) return;
+  int alias = dup(fileno(stream));
+  check("device alias fixture duplicates", alias >= 0);
+  if (alias >= 0) gesher::RegisterDevice(alias, gesher::Device::kZero);
+  host::fclose(stream);
+  if (alias >= 0) {
+    check("closing one device does not forget its live alias", gesher_is_device_fd(alias));
+    FILE* aliased = fdopen(alias, "rb");
+    check("device alias wraps in a stream", aliased != nullptr);
+    if (aliased) host::fclose(aliased);
+  }
+}
+int main() {
+  test_stream_device_contracts();
+  test_failed_closes();
+  check("all OFD markers and guards retire", gesher::ofd_entries.empty() && stream_depth == 0 && descriptor_depth == 0);
+  std::printf("stream devices production adapters: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}

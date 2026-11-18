@@ -117,9 +117,9 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
       'com.gesher.app.Main', (NoDrive "$Dir/exec3.apk")) -Trace
     $global:LASTEXITCODE = $result.Code
     $result.Text
-  } @('exec2: SUMMARY pass=9 fail=0',
+  } @('exec2: SUMMARY pass=8 fail=0',
       'Exec4DeviceTest PASS host environment changes reach native environ and spawned children',
-      'Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app',
+      'Exec3DeviceTest PASS native exec, spawn, popen, system, signals and waitpid in an app',
       'Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device',
       'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear')
   $exec3SavedEnvironment = @{}
@@ -141,10 +141,10 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
     if ($exec3Target.Code -ne 0) { throw "exec3 target install failed: $($exec3Target.Text)" }
     $exec3App = InvokeExec3Timed -Arguments ($exec3DeviceVm + 'com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless', '--ez', 'exec3.commands', 'true') -Trace
     $exec3Wanted = @(
-      'exec2: SUMMARY pass=9 fail=0',
+      'exec2: SUMMARY pass=8 fail=0',
       'Exec4DeviceTest PASS host environment changes reach native environ and spawned children',
       'gesher-app: app process for com.gesher.exec3',
-      'Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app',
+      'Exec3DeviceTest PASS native exec, spawn, popen, system, signals and waitpid in an app',
       'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear',
       'Exec3CommandsTest PASS pm list packages and path query the actual device package manager',
       'Exec3CommandsTest PASS am start resumes a separate app and broadcast reaches its real receiver',

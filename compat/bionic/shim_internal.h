@@ -149,8 +149,7 @@ void RegisterSyscall(SymbolTable& table);  // syscall_bionic.cc
 // handler for `syscall` instructions in loaded code (ADR 0084), and
 // syscall(2)'s for numbers it has no special case for. syscall_bionic.cc.
 int64_t RawSyscallX64(int64_t nr, const int64_t args[6]);
-// Last: fork/exec/spawn/wait, and the vfork-style child's view of fds, the
-// environment and the working directory over the entries already there.
+// Last: exec/spawn/wait and unsupported fork/vfork entry points.
 void RegisterProcess(SymbolTable& table);  // process_bionic.cc
 
 // kill() of another pid: the shim's own children (also those that exited

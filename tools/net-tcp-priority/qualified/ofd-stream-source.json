@@ -1,0 +1,33 @@
+{
+  "baseline": "704595a550f5f0abac9ad183d5196da82e2623ba",
+  "paths": [
+    "compat/posix/src/fd.cc",
+    "compat/posix/src/system.cc"
+  ],
+  "patch_sha256": "199f8dc9aac910cf19bbfd7fbd505fa0897e88c0bab5e585ef954f34d1db3fd9",
+  "source_sha256": {
+    "compat/posix/src/ofd.cc": "7a38d8e2212b53041928cbc397276237fcc4565e96ded5439296c3d265917ca9",
+    "compat/posix/src/ofd_internal.h": "a2b8ef220d16d4c3c287f22a724f0617e8de24ea03b7fdabc90213ce8b02e8e1",
+    "compat/posix/include/gesher/file_description.h": "31697755981cf934def335038a981493fdd8024768c53ce2f34ca8f6f9290a67",
+    "compat/posix/src/pipe_io.cc": "346fd7489bdad75a2adabee3d8d31ea8b4556efb58b4b50b0eae703f4b86a8be",
+    "compat/posix/src/pipe_io.h": "60cc9802b04fc60c80a90ffcc3628b3ba510404df8b2fe4ce222c95915d426d3",
+    "compat/posix/src/descriptor_resources.h": "ee7f5c8027576c9126f144f335a9c76a38bc4734d5cdecd3219a292493f48025",
+    "compat/posix/src/stdio_output.cc": "3f1e68b2ffcb6c5126868dd2ad0c2c683993c646c5736bccee2a54f1dcad87dc",
+    "compat/posix/src/stdio_internal.h": "90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17",
+    "compat/posix/src/stdio_stream_buffer.h": "f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d",
+    "compat/posix/src/stdio_output_buffer.h": "1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542",
+    "compat/posix/src/fsops.cc": "bec030cfd1bf769da726222dd6a078d2b472fad93d2c3cfe81fcf341ba6e53e6",
+    "compat/posix/src/unistd.cc": "bbc200f4d5954ac1c61ebace04f1173b7f1f8fafab49bef7212c414515302bdd",
+    "compat/posix/posix.cmake": "11502c21b4292af2c01eb41f984997aec1deef9fc9161a6313ecb175747a0da5",
+    "compat/posix/include/wchar.h": "b4ab6d86bfcffc534eb1a74abdfb13164cc7c51200eacece3f96310873120817",
+    "compat/posix/include/gesher/stdio.h": "0e9b1fc4c6def5e6de3abbf2317dc3f5007f1318bf34eb89072bd7c4146ea249",
+    "compat/posix/include/gesher/cancellation.h": "5f56f27a916daf62c5cbd99332cc09cf10d6078f181f2edcffb5ba9a56dd5e02",
+    "compat/posix/src/procfs.cc": "593f297fde98b2c1e1a7c1fbbc9b7bd908a19160b0a7856ddf7cef58e60a630d",
+    "compat/elf/exec/exec_spawn.cc": "3adc390a0a6aa7bba8c7876db7d811e9e72d3c3217c0b0b01fc33edfe7724d5a",
+    "compat/libcore/process.cc": "24dfb56149ca4c8bd694bb019c5f1f7c5ddfe3341256d8cd652ee89163e60d8b",
+    "compat/bionic/stdio_bionic.cc": "04fe6f204779574623b1a34d30f0b305152c036c6ab9c27e47ba9878b51dcf84",
+    "compat/posix/src/internal.h": "e86aa52fa4a69b425bbab37189ae0865439f53ae974a6ebc05681cfab3fd5039"
+  },
+  "contract_evidence": "docs/pipe-status-capabilities.md",
+  "native_runtime_approval": false
+}

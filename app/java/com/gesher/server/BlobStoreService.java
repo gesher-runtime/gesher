@@ -242,7 +242,7 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         Stage stage = index().sessions.get(id);
         Session open = mOpen.get(id);
         if (stage == null || !stage.owner.equals(owner) || mConsumed.contains(id)
-                || (open != null && open.committing)
+                || (open != null && open.finalizing)
                 || !validFile(stage.fileName)) {
             throw new SecurityException("No accessible blob session");
         }
@@ -254,8 +254,13 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         return mOpen.computeIfAbsent(id, key -> new Session(key, stage.owner));
     }
 
-    @Override public synchronized void abandonSession(long id, String packageName) {
-        abandon(ownedStage(id, requireOwner(packageName)));
+    @Override public void abandonSession(long id, String packageName) {
+        Session session;
+        synchronized (this) {
+            Stage stage = ownedStage(id, requireOwner(packageName));
+            session = mOpen.computeIfAbsent(id, key -> new Session(key, stage.owner));
+        }
+        session.abandon();
     }
 
     private void abandon(Stage stage) {
@@ -335,8 +340,12 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
     private final class Session extends IBlobStoreSession.Stub {
         private final long id;
         private final Owner owner;
-        private boolean issuedWriter;
-        private boolean committing;
+        private final Object finishLock = new Object();
+        // State is guarded by the service monitor; descriptor operations and
+        // the native barrier run outside it so one slow session cannot block
+        // unrelated BlobStore users.
+        private RevocableFileDescriptors descriptors;
+        private boolean finalizing;
 
         Session(long id, Owner owner) {
             this.id = id;
@@ -352,7 +361,7 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         private Stage opened() {
             authenticate();
             Stage stage = mIndex.sessions.get(id);
-            if (stage == null || mOpen.get(id) != this || committing) {
+            if (stage == null || mOpen.get(id) != this || finalizing) {
                 throw new IllegalStateException("Blob session is closed or finalized");
             }
             return stage;
@@ -362,27 +371,38 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
             if (offset < 0 || length < -1) {
                 throw new IllegalArgumentException("Invalid blob write offset or length");
             }
-            synchronized (BlobStoreService.this) {
-                File file = dataFile(opened().fileName);
-                ParcelFileDescriptor descriptor = null;
-                try {
-                    descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_WRITE);
-                    descriptor.seekTo(offset);
-                    if (length > 0) allocateWriteLength(descriptor, length);
-                    issuedWriter = true;
-                    return descriptor;
-                } catch (IOException | RuntimeException error) {
-                    if (descriptor != null) {
-                        try { descriptor.close(); } catch (IOException close) { error.addSuppressed(close); }
-                    }
-                    if (error instanceof IOException io) throw failure(io);
-                    throw (RuntimeException) error;
-                }
-            }
+            return openDescriptor(ParcelFileDescriptor.MODE_READ_WRITE, offset, length);
         }
 
         @Override public ParcelFileDescriptor openRead() {
-            synchronized (BlobStoreService.this) { return openReadOnly(opened().fileName); }
+            return openDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, 0, -1);
+        }
+
+        private ParcelFileDescriptor openDescriptor(int mode, long offset, long length) {
+            ParcelFileDescriptor descriptor = null;
+            try {
+                final File file;
+                final RevocableFileDescriptors group;
+                synchronized (BlobStoreService.this) {
+                    file = dataFile(opened().fileName);
+                    if (descriptors == null) descriptors = new RevocableFileDescriptors();
+                    group = descriptors;
+                }
+                descriptor = ParcelFileDescriptor.open(file, mode);
+                // Attach before seek/allocation: a concurrent finalizer must
+                // cover these operations too, not just later client writes.
+                group.attach(descriptor);
+                descriptor.seekTo(offset);
+                if (length > 0) allocateWriteLength(descriptor, length);
+                synchronized (BlobStoreService.this) { opened(); }
+                return descriptor;
+            } catch (IOException | RuntimeException error) {
+                if (descriptor != null) {
+                    try { descriptor.close(); } catch (IOException close) { error.addSuppressed(close); }
+                }
+                if (error instanceof IOException io) throw failure(io);
+                throw (RuntimeException) error;
+            }
         }
 
         @Override public long getSize() {
@@ -438,43 +458,81 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         }
 
         @Override public void close() {
-            synchronized (BlobStoreService.this) {
-                authenticate();
-                if (mOpen.get(id) != this || committing) return;
-                Stage stage = opened();
-                if (issuedWriter) {
-                    // A Windows Binder FD is a duplicated HANDLE. A stale guest write
-                    // handle may still exist after close, so reopen a detached copy.
-                    File replacement = null;
-                    try {
-                        replacement = BlobStoreFiles.snapshot(dataFile(stage.fileName), mRoot, null);
-                        Index next = new Index(mIndex);
-                        next.sessions.put(id, new Stage(id, owner, stage.handle,
-                                replacement.getName(), stage.access));
-                        update(next);
-                    } catch (IOException error) {
-                        throw failure(error);
-                    } catch (RuntimeException error) {
-                        BlobStoreFiles.discard(replacement);
-                        throw error;
-                    }
-                    BlobStoreFiles.discard(dataFile(stage.fileName));
+            synchronized (finishLock) {
+                synchronized (BlobStoreService.this) {
+                    authenticate();
+                    // A successful commit already crossed the barrier. Keep
+                    // its reservation until the asynchronous worker consumes
+                    // the stage; close must not let another session reopen it.
+                    if (finalizing && mOpen.get(id) == this) return;
+                    finalizing = true;
                 }
-                mOpen.remove(id);
+                revokeDescriptors();
+                synchronized (BlobStoreService.this) { mOpen.remove(id, this); }
             }
         }
 
         @Override public void abandon() {
-            synchronized (BlobStoreService.this) { BlobStoreService.this.abandon(opened()); }
+            synchronized (finishLock) {
+                final Stage stage;
+                synchronized (BlobStoreService.this) {
+                    stage = opened();
+                    finalizing = true;
+                }
+                revokeDescriptors();
+                try {
+                    synchronized (BlobStoreService.this) {
+                        if (mIndex.sessions.get(id) == stage) BlobStoreService.this.abandon(stage);
+                    }
+                } catch (RuntimeException error) {
+                    resumeAfterFailure();
+                    throw error;
+                }
+            }
         }
 
         @Override public void commit(IBlobCommitCallback callback) {
             Objects.requireNonNull(callback, "callback");
-            synchronized (BlobStoreService.this) {
-                Stage stage = opened();
-                committing = true;
-                mWorker.execute(() -> finishCommit(stage, callback));
+            synchronized (finishLock) {
+                final Stage stage;
+                synchronized (BlobStoreService.this) {
+                    stage = opened();
+                    finalizing = true;
+                }
+                // This is the commit boundary. The callback/hash can remain
+                // asynchronous, but all writes must finish or be rejected
+                // before commit() returns to the application.
+                revokeDescriptors();
+                try {
+                    mWorker.execute(() -> finishCommit(stage, callback));
+                } catch (RuntimeException error) {
+                    resumeAfterFailure();
+                    throw error;
+                }
             }
+        }
+
+        private void resumeAfterFailure() {
+            synchronized (BlobStoreService.this) {
+                if (mOpen.get(id) == this) finalizing = false;
+            }
+        }
+
+        // Called with finishLock held; never while holding the service monitor.
+        private void revokeDescriptors() {
+            final RevocableFileDescriptors group;
+            synchronized (BlobStoreService.this) { group = descriptors; }
+            try {
+                if (group != null) group.close();
+                synchronized (BlobStoreService.this) { descriptors = null; }
+            } catch (IOException error) {
+                resumeAfterFailure();
+                throw failure(error);
+            }
+        }
+
+        private void invalidate() {
+            synchronized (finishLock) { revokeDescriptors(); }
         }
     }
 
@@ -793,16 +851,27 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         }
     }
 
-    private synchronized void maintain() {
-        if (mIndex == null) return;
+    private void maintain() {
+        List<Session> retired = new ArrayList<>();
         try {
-            prune();
+            synchronized (this) {
+                if (mIndex == null) return;
+                prune(retired);
+            }
         } catch (IOException | RuntimeException error) {
             SystemServer.log("BlobStore maintenance unavailable: " + error.getClass().getSimpleName());
+        } finally {
+            for (Session session : retired) {
+                try { session.invalidate(); }
+                catch (RuntimeException error) {
+                    SystemServer.log("BlobStore descriptor retirement unavailable: "
+                            + error.getClass().getSimpleName());
+                }
+            }
         }
     }
 
-    private void prune() throws IOException {
+    private void prune(List<Session> retired) throws IOException {
         long now = System.currentTimeMillis();
         Index next = new Index(mIndex);
         List<Stage> expiredStages = new ArrayList<>();
@@ -840,7 +909,11 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
         if (!next.sessions.equals(mIndex.sessions) || !next.blobs.equals(mIndex.blobs)) {
             update(next);
             for (Stage stage : expiredStages) {
-                mOpen.remove(stage.id);
+                Session session = mOpen.remove(stage.id);
+                if (session != null) {
+                    session.finalizing = true;
+                    retired.add(session);
+                }
                 mConsumed.remove(stage.id);
             }
         }

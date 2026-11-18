@@ -1,33 +1,19 @@
 // gesher bionic shim: creating processes from native code (docs/exec.md,
 // docs/decisions/0055-exec2-native-processes.md).
 //
-// Windows has no fork(), and an address space cannot be copied faithfully for
-// ART's heap and threads (ADR 0035). What apps' native code really does is
-// start another program: system(), popen(), posix_spawn(), or fork()+exec*().
-// This file provides them over the launcher's program finder (exec_spawn.h) and
-// CreateProcessW:
+// Native programs are launched with CreateProcessW. system(), popen() and
+// posix_spawn() do not require an address-space clone. exec*() retains the
+// launcher's documented process-id limitation, while preserving inherited
+// descriptors and their shared open file descriptions.
 //
-//  - system(), popen()/pclose(): a child running the launcher's shell (sh -c);
-//    posix_spawn()/posix_spawnp(): the program with the file actions and the
-//    attributes applied. None of these needs fork.
-//  - fork()/vfork(): a vfork-style child that runs inline on the calling
-//    thread (fork returns 0). The fd, environment and working-directory calls
-//    it makes are recorded, not applied to this process -- open, close, dup,
-//    dup2/dup3, fcntl's F_DUPFD/F_DUPFD_CLOEXEC/F_GETFD/F_SETFD, close_range
-//    and closefrom act on the child's own fd table only, so a child that closes
-//    every fd above 2 before exec (as Java's childproc and root checkers do)
-//    leaves this process's fds open; its exec*() spawns the
-//    real program with them and fork() returns the child's pid to the "parent";
-//    an exec*() that fails returns -1 to the child, which goes on (usually to
-//    _exit), as on Linux; its exit()/_exit() ends the child without spawning
-//    (a zombie with that status for waitpid). Anything else the
-//    child does between fork and exec (real work, touching the parent's memory)
-//    is not supported, as vfork never allowed it.
-//  - wait()/waitpid()/wait4(): over the shim's own children, with Linux's
-//    status word (WIFEXITED/WIFSIGNALED). A child's exit raises SIGCHLD.
-//  - execv*(): outside a fork child, where Linux replaces the image, the shim
-//    spawns the program inheriting this process's fds, environment and working
-//    directory, waits, and exits with its status (the pid changes; documented).
+// Windows cannot provide fork() or vfork() through an inline callback: that
+// would expose the parent's memory, thread state and descriptor table to a
+// purported child. Both calls fail with ENOSYS until a real implementation is
+// available. Reads and writes always transfer the actual bytes supplied by
+// their peers; there are no application-specific process or pipe exceptions.
+//
+// wait()/waitpid()/wait4() collect actual spawned children and report Linux
+// status words. A child's exit raises SIGCHLD.
 //
 // exec_spawn.h finds the program and decides how it runs (an ELF executable in
 // gesher-exec, a PE as itself, sh/scripts/tools in the launcher).
@@ -41,9 +27,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <unistd.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -75,12 +61,7 @@ struct Child {
   bool exited = false;
   int status = 0;  // Linux waitpid status word, once reaped by the watcher
   HANDLE wait = nullptr;
-  // The pipe whose byte the fork child read ahead of its parent's write (ChildReadsParentByte):
-  // until the parent writes it, the child is not waited for. On Linux it cannot have exited
-  // before then; Dart's Process.start registers the pid between fork and that write, and a
-  // child its exit-code thread reaped before that left the thread counting one child too many
-  // ("Wait for process exit failed: 10", Otzaria aborted).
-  uint64_t gate = 0;
+
 };
 
 std::mutex g_children_mutex;
@@ -146,83 +127,12 @@ std::vector<std::string> FromList(char* const list[]) {
   return out;
 }
 
-// --- the vfork-style child -----------------------------------------------------
-//
-// A fork child records fd, environment and directory changes without touching
-// this process; exec materialises them. fd numbers are handed out from a shadow
-// set that starts as the parent's open fds.
-
-struct FdAction {
-  enum Kind { kDup2, kClose, kOpen } kind;
-  int a = -1, b = -1;        // dup2(a->b); close(a)
-  std::string path;          // open
-  int flags = 0, mode = 0;
-};
-
-// vfork semantics on one stack (gesher_fork, below): fork() saves its caller's
-// register context and returns 0; the child runs deeper on the same stack and
-// its exec*()/exit returns a second time -- straight to fork's caller, not into
-// fork's own frame (which the child's deeper calls overwrite). caller_ctx holds
-// rbx, rbp, rsi, rdi, r12-r15, the caller's rsp and its return address.
-struct ForkChild {
-  uint64_t caller_ctx[16];
-  std::map<int, bool> present;          // fd -> open, the shadow table
-  std::map<int, bool> cloexec;          // fd -> FD_CLOEXEC: not passed to the program
-  std::vector<FdAction> fd_actions;
-  std::vector<std::string> env;         // the child's environment, editable
-  std::string dir;                      // the child's working directory
-  int pid = 0;                          // the spawned pid, for fork()'s return
-  bool exited = false;                  // the child called _exit without exec
-  int exit_status = 0;                  // its status word
-  uint64_t gate = 0;                    // the pipe it read its parent's byte from (Child::gate)
-  char*** environ_slot = nullptr;       // where loaded code's environ is (TakeEnviron)
-  char** parent_environ = nullptr;      // the process's environ when it forked
-};
-
-thread_local ForkChild* t_fork = nullptr;
-
-constexpr int kLinuxOCloexec = 02000000;  // O_CLOEXEC, open's and dup3's flag
-
-int LowestFreeFd(ForkChild* c, int from = 0) {
-  int fd = from < 0 ? 0 : from;
-  while (c->present.count(fd) && c->present[fd]) ++fd;
-  return fd;
-}
-
-bool ChildHasFd(ForkChild* c, int fd) {
-  auto it = c->present.find(fd);
-  return it != c->present.end() && it->second;
-}
-
-// --- the originals RegisterProcess wraps --------------------------------------
-
-using OpenFn = int (BIONIC_SYSV*)(const char*, int, int);
-using OpenatFn = int (BIONIC_SYSV*)(int, const char*, int, int);
+// The existing descriptor entries remain authoritative. close_range uses
+// their guest ABI adapters without replacing ordinary fd or I/O operations.
 using CloseFn = int (BIONIC_SYSV*)(int);
-using Dup2Fn = int (BIONIC_SYSV*)(int, int);
-using DupFn = int (BIONIC_SYSV*)(int);
 using FcntlFn = int (BIONIC_SYSV*)(int, int, uint64_t);
-using ChdirFn = int (BIONIC_SYSV*)(const char*);
-using SetenvFn = int (BIONIC_SYSV*)(const char*, const char*, int);
-using UnsetenvFn = int (BIONIC_SYSV*)(const char*);
-using ReadFn = int64_t (BIONIC_SYSV*)(int, void*, size_t);
-using WriteFn = int64_t (BIONIC_SYSV*)(int, const void*, size_t);
-using ReadChkFn = int64_t (BIONIC_SYSV*)(int, void*, size_t, size_t);
-using WriteChkFn = int64_t (BIONIC_SYSV*)(int, const void*, size_t, size_t);
-
-OpenFn g_open = nullptr;
-OpenatFn g_openat = nullptr;
 CloseFn g_close = nullptr;
-Dup2Fn g_dup2 = nullptr;
-DupFn g_dup = nullptr;
 FcntlFn g_fcntl = nullptr;
-ChdirFn g_chdir = nullptr;
-SetenvFn g_setenv = nullptr;
-UnsetenvFn g_unsetenv = nullptr;
-ReadFn g_read = nullptr;
-WriteFn g_write = nullptr;
-ReadChkFn g_read_chk = nullptr;
-WriteChkFn g_write_chk = nullptr;
 
 // --- spawning ------------------------------------------------------------------
 
@@ -251,259 +161,31 @@ int SpawnProgram(const std::string& program, const std::vector<std::string>& arg
   return SpawnPrepared(launch, env, dir, fds);
 }
 
-// The parent's currently open fds and their handles.
-std::vector<ex::ChildFd> InheritedFds() {
-  std::vector<ex::ChildFd> out;
-  for (int fd = 0; fd < 2048; ++fd) {
-    intptr_t value = _get_osfhandle(fd);
-    // UCRT uses -2 for unbound standard streams in a no-console process.
-    if (value != -1 && value != -2 && value != 0) {
-      out.push_back({fd, reinterpret_cast<HANDLE>(value)});
-    }
+// Pin descriptors and their shared status before releasing the descriptor
+// transaction. A concurrent close/reuse cannot change what the child inherits.
+// posix_spawn includes CLOEXEC entries while applying file actions; the child
+// closes the remaining CLOEXEC entries immediately before executing its program.
+bool InheritedFds(std::vector<ex::ChildFd>* out, bool include_close_on_exec = false) {
+  std::vector<std::pair<int, DescriptorSnapshotPtr>> captured;
+  if (CaptureDescriptors(&captured, include_close_on_exec) != 0) return false;
+  out->reserve(captured.size());
+  for (auto& [fd, snapshot] : captured) {
+    out->push_back({fd, snapshot->handle, std::move(snapshot)});
   }
-  return out;
+  return true;
 }
 
-// --- fork / vfork --------------------------------------------------------------
-//
-// gesher_fork (asm) saves its caller's register context into the ForkChild that
-// ForkPrepare builds, then returns 0 (the child). The child's exec*()/exit calls
-// gesher_fork_return(ctx, pid), which restores that context and returns to
-// fork's caller a second time with `pid` -- the parent return. This never
-// re-enters fork's own frame, which the child's deeper calls overwrite.
-
-extern "C" void* gesher_fork_prepare();  // builds the child; returns &caller_ctx
-extern "C" int gesher_fork();            // the fork()/vfork() entry (asm)
-extern "C" [[noreturn]] void gesher_fork_return(const void* ctx, long value);
-
-// Saves the caller context (filled by gesher_fork).
-#if defined(__x86_64__)
-asm(".text\n"
-    ".globl gesher_fork\n"
-    ".p2align 4\n"
-    "gesher_fork:\n"
-    "  movq (%rsp), %r11\n"       // return address
-    "  leaq 8(%rsp), %r10\n"      // the caller's rsp after the call returns
-    "  pushq %r11\n"              // [9] ret addr
-    "  pushq %r10\n"              // [8] caller rsp
-    "  pushq %r15\n"              // [7]
-    "  pushq %r14\n"              // [6]
-    "  pushq %r13\n"              // [5]
-    "  pushq %r12\n"              // [4]
-    "  pushq %rdi\n"              // [3]
-    "  pushq %rsi\n"              // [2]
-    "  pushq %rbp\n"              // [1]
-    "  pushq %rbx\n"              // [0]  (rsp%16 == 8 here)
-    "  subq $40, %rsp\n"          // shadow space + align to 16
-    "  call gesher_fork_prepare\n"  // rax = &child->caller_ctx[0]
-    "  addq $40, %rsp\n"
-    "  movq 0(%rsp), %rcx\n"  "  movq %rcx, 0(%rax)\n"
-    "  movq 8(%rsp), %rcx\n"  "  movq %rcx, 8(%rax)\n"
-    "  movq 16(%rsp), %rcx\n" "  movq %rcx, 16(%rax)\n"
-    "  movq 24(%rsp), %rcx\n" "  movq %rcx, 24(%rax)\n"
-    "  movq 32(%rsp), %rcx\n" "  movq %rcx, 32(%rax)\n"
-    "  movq 40(%rsp), %rcx\n" "  movq %rcx, 40(%rax)\n"
-    "  movq 48(%rsp), %rcx\n" "  movq %rcx, 48(%rax)\n"
-    "  movq 56(%rsp), %rcx\n" "  movq %rcx, 56(%rax)\n"
-    "  movq 64(%rsp), %rcx\n" "  movq %rcx, 64(%rax)\n"
-    "  movq 72(%rsp), %rcx\n" "  movq %rcx, 72(%rax)\n"
-    "  addq $80, %rsp\n"          // discard the saved block; rsp -> ret addr
-    "  xorl %eax, %eax\n"         // fork() returns 0 (the child)
-    "  ret\n");
-
-// Returns to fork's caller with `value` in rax, the saved context restored.
-asm(".text\n"
-    ".globl gesher_fork_return\n"
-    ".p2align 4\n"
-    "gesher_fork_return:\n"       // rcx = ctx, rdx = value
-    "  movq 0(%rcx), %rbx\n"
-    "  movq 8(%rcx), %rbp\n"
-    "  movq 16(%rcx), %rsi\n"
-    "  movq 24(%rcx), %rdi\n"
-    "  movq 32(%rcx), %r12\n"
-    "  movq 40(%rcx), %r13\n"
-    "  movq 48(%rcx), %r14\n"
-    "  movq 56(%rcx), %r15\n"
-    "  movq 64(%rcx), %r10\n"     // caller rsp
-    "  movq 72(%rcx), %r11\n"     // ret addr
-    "  movq %rdx, %rax\n"         // the parent's fork() return value
-    "  movq %r10, %rsp\n"
-    "  jmpq *%r11\n");
-#elif defined(__aarch64__)
-asm(".text\n"
-    ".globl gesher_fork\n"
-    ".p2align 2\n"
-    "gesher_fork:\n"
-    "  stp x29, x30, [sp, #-112]!\n"
-    "  mov x29, sp\n"
-    "  stp x19, x20, [sp, #16]\n"
-    "  stp x21, x22, [sp, #32]\n"
-    "  stp x23, x24, [sp, #48]\n"
-    "  stp x25, x26, [sp, #64]\n"
-    "  stp x27, x28, [sp, #80]\n"
-    "  add x0, x29, #112\n"
-    "  str x0, [sp, #96]\n"
-    "  bl gesher_fork_prepare\n"
-    "  ldp x2, x3, [sp, #16]\n"
-    "  stp x2, x3, [x0, #0]\n"
-    "  ldp x2, x3, [sp, #32]\n"
-    "  stp x2, x3, [x0, #16]\n"
-    "  ldp x2, x3, [sp, #48]\n"
-    "  stp x2, x3, [x0, #32]\n"
-    "  ldp x2, x3, [sp, #64]\n"
-    "  stp x2, x3, [x0, #48]\n"
-    "  ldp x2, x3, [sp, #80]\n"
-    "  stp x2, x3, [x0, #64]\n"
-    "  ldp x2, x3, [sp]\n"
-    "  stp x2, x3, [x0, #80]\n"
-    "  ldr x2, [sp, #96]\n"
-    "  str x2, [x0, #96]\n"
-    "  ldp x19, x20, [sp, #16]\n"
-    "  ldp x21, x22, [sp, #32]\n"
-    "  ldp x23, x24, [sp, #48]\n"
-    "  ldp x25, x26, [sp, #64]\n"
-    "  ldp x27, x28, [sp, #80]\n"
-    "  ldp x29, x30, [sp], #112\n"
-    "  mov x0, #0\n"
-    "  ret\n");
-
-asm(".text\n"
-    ".globl gesher_fork_return\n"
-    ".p2align 2\n"
-    "gesher_fork_return:\n"
-    "  ldp x19, x20, [x0, #0]\n"
-    "  ldp x21, x22, [x0, #16]\n"
-    "  ldp x23, x24, [x0, #32]\n"
-    "  ldp x25, x26, [x0, #48]\n"
-    "  ldp x27, x28, [x0, #64]\n"
-    "  ldp x29, x30, [x0, #80]\n"
-    "  ldr x2, [x0, #96]\n"
-    "  mov sp, x2\n"
-    "  mov x0, x1\n"
-    "  ret\n");
-#endif
-
-std::atomic<int> g_synthetic_pid{1};
-
-extern "C" void* gesher_fork_prepare() {
-  auto* child = new ForkChild();
-  // The variable loaded code's environ is: the CRT's in an app, gesher-exec's own in a
-  // program it runs.
-  child->environ_slot = static_cast<char***>(LookupBionicSymbol("environ"));
-  if (child->environ_slot == nullptr) child->environ_slot = &_environ;
-  child->parent_environ = *child->environ_slot;
-  child->env = CurrentEnv();
-  child->dir = CurrentDir();
-  for (const ex::ChildFd& f : InheritedFds()) {
-    child->present[f.fd] = true;
-    // FD_CLOEXEC is the handle's inherit flag (fcntl F_SETFD, pipe2/open O_CLOEXEC).
-    // The standard streams are passed whatever their handles' flag.
-    DWORD flags = 0;
-    child->cloexec[f.fd] = f.fd > 2 && GetHandleInformation(f.handle, &flags) &&
-                           (flags & HANDLE_FLAG_INHERIT) == 0;
-  }
-  t_fork = child;
-  return child->caller_ctx;
-}
-
-// A child that sets environ (dart:io's Process.start does, to the environment it was
-// given, before execvp) sets this process's: on Linux only the child's. The array is the
-// parent's, which frees it once the program started, and environ was left pointing there:
-// getenv on any thread then read freed memory (Otzaria crashed in HWUI's render thread).
-// The child's environ becomes the program's environment; the process's is put back.
-void TakeEnviron(ForkChild* child) {
-  if (*child->environ_slot == child->parent_environ) return;
-  child->env = FromList(*child->environ_slot);
-  *child->environ_slot = child->parent_environ;
-}
-
-// Returns to fork's caller with `result`, after copying the context off the
-// child (which is freed here) onto the stack, so the jump reads valid memory.
-[[noreturn]] void FinishChild(ForkChild* child, int result) {
-  TakeEnviron(child);
-  uint64_t ctx[16];
-  std::memcpy(ctx, child->caller_ctx, sizeof(ctx));
-  t_fork = nullptr;
-  delete child;
-  gesher_fork_return(ctx, result);
-}
-
-// Materialises the child's recorded fd/env/dir changes and spawns the program;
-// its locals are destroyed before the longjmp in ChildExec. Returns the pid, or
-// -1 (errno set).
-int MaterializeAndSpawn(ForkChild* child, const std::string& program,
-                        const std::vector<std::string>& argv, bool search) {
-  std::map<int, HANDLE> handles;
-  for (const ex::ChildFd& f : InheritedFds()) handles[f.fd] = f.handle;
-  std::vector<int> opened;  // real parent fds opened to materialise, closed after
-  for (const FdAction& a : child->fd_actions) {
-    switch (a.kind) {
-      case FdAction::kClose:
-        handles.erase(a.a);
-        break;
-      case FdAction::kDup2: {
-        auto it = handles.find(a.a);
-        if (it != handles.end()) handles[a.b] = it->second;
-        break;
-      }
-      case FdAction::kOpen: {
-        int fd = g_open != nullptr ? g_open(a.path.c_str(), a.flags, a.mode) : -1;
-        if (fd >= 0) {
-          opened.push_back(fd);
-          handles[a.a] = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-        } else {
-          handles.erase(a.a);
-        }
-        break;
-      }
-    }
-  }
-  std::vector<ex::ChildFd> fds;
-  for (auto& kv : handles) {
-    // exec closes the close-on-exec fds (Dart's ProcessStarter reads its exec-status
-    // pipe until the program's end of it closes: it must not reach the program).
-    auto cloexec = child->cloexec.find(kv.first);
-    if (cloexec != child->cloexec.end() && cloexec->second) continue;
-    if (kv.second != INVALID_HANDLE_VALUE && kv.second != nullptr) fds.push_back({kv.first, kv.second});
-  }
-  int pid = SpawnProgram(program, argv, child->env, child->dir, search, fds);
-  int error = errno;  // the spawn's, for a failed exec in the child
-  for (int fd : opened) {
-    if (g_close != nullptr) g_close(fd);
-  }
-  errno = error;
-  return pid;
-}
-
-// The child's exec*(): spawn with its recorded state, then return to fork's
-// caller with the pid. If the program cannot be started, exec fails in the
-// child as on Linux: -1 with errno set is returned to the child, which is still
-// the child (its fd table and environment unchanged) and goes on -- usually to
-// report errno and _exit(127), which fork's caller then sees through waitpid.
-int ChildExec(const std::string& program, const std::vector<std::string>& argv, bool search) {
-  ForkChild* child = t_fork;
-  t_fork = nullptr;
-  TakeEnviron(child);
-  int pid = MaterializeAndSpawn(child, program, argv, search);
-  if (pid > 0) {
-    std::lock_guard<std::mutex> lock(g_children_mutex);
-    auto it = g_children.find(pid);
-    if (it != g_children.end()) it->second.gate = child->gate;
-  }
-  if (pid > 0) FinishChild(child, pid);  // does not return
-  int error = errno;
-  t_fork = child;
-  return errno = error, -1;
-}
+int BIONIC_SYSV ForkUnsupported() { return errno = ENOSYS, -1; }
 
 // --- execve / execvp and friends ----------------------------------------------
 
 // Returns only on failure (errno set); on success it exits the process.
 void ExecReplace(const std::string& program, const std::vector<std::string>& argv,
                  const std::vector<std::string>& env, bool search) {
-  // No fork child: Linux would replace this image. The shim spawns the program
-  // inheriting this process's fds/env/cwd, waits, and exits with its status.
-  int pid = SpawnProgram(program, argv, env, CurrentDir(), search, InheritedFds());
+  std::vector<ex::ChildFd> fds;
+  if (!InheritedFds(&fds)) return;
+  int pid = SpawnProgram(program, argv, env, CurrentDir(), search, fds);
+  fds.clear();  // snapshots must not keep child pipe endpoints open while waiting
   if (pid < 0) return;
   HANDLE h = nullptr;
   {
@@ -525,11 +207,6 @@ int DoExec(const char* path, char* const argv[], char* const envp[], bool search
   if (path == nullptr || argv == nullptr) return errno = EFAULT, -1;
   std::vector<std::string> args = FromList(argv);
   if (args.empty()) args.push_back(path);
-  if (t_fork != nullptr) {
-    TakeEnviron(t_fork);
-    if (envp != nullptr) t_fork->env = FromList(envp);
-    return ChildExec(path, args, search);  // returns only on failure
-  }
   std::vector<std::string> env = envp != nullptr ? FromList(envp) : CurrentEnv();
   ExecReplace(path, args, env, search);  // returns only on failure
   return -1;
@@ -562,7 +239,7 @@ int CollectOne(int pid, int* status, int options) {
       for (auto& kv : g_children) {
         if (pid > 0 && kv.first != pid) continue;
         found = true;
-        if (kv.second.exited && kv.second.gate == 0) {
+        if (kv.second.exited) {
           if (status != nullptr) *status = kv.second.status;
           int got = kv.first;
           if (kv.second.wait != nullptr) UnregisterWaitEx(kv.second.wait, nullptr);
@@ -572,7 +249,7 @@ int CollectOne(int pid, int* status, int options) {
         }
         if (pid > 0) break;
       }
-      // None exited (or none the parent let go of yet): wait below, the lock released.
+      // None exited: wait below with the lock released.
       if (!found) return errno = 10 /*ECHILD*/, -1;  // no such child
     }
     if ((options & kWNOHANG) != 0) return 0;
@@ -592,7 +269,10 @@ int BIONIC_SYSV Wait4(int pid, int* status, int options, void* /*rusage*/) {
 int BIONIC_SYSV System(const char* command) {
   if (command == nullptr) return 1;  // a shell is available
   std::vector<std::string> argv{"/system/bin/sh", "-c", command};
-  int pid = SpawnProgram("/system/bin/sh", argv, CurrentEnv(), CurrentDir(), false, InheritedFds());
+  std::vector<ex::ChildFd> fds;
+  if (!InheritedFds(&fds)) return -1;
+  int pid = SpawnProgram("/system/bin/sh", argv, CurrentEnv(), CurrentDir(), false, fds);
+  fds.clear();
   if (pid < 0) return -1;
   int status = 0;
   if (CollectOne(pid, &status, 0) < 0) return -1;
@@ -613,18 +293,30 @@ void* BIONIC_SYSV Popen(const char* command, const char* mode) {
   if (!CreatePipe(read ? &parent_end : &child_end, read ? &child_end : &parent_end, &sa, 256 * 1024)) {
     return errno = EMFILE, nullptr;
   }
-  SetHandleInformation(parent_end, HANDLE_FLAG_INHERIT, 0);
-  std::vector<ex::ChildFd> fds = InheritedFds();
+  if (!SetHandleInformation(parent_end, HANDLE_FLAG_INHERIT, 0)) {
+    int error = ex::ErrnoFromWin32(GetLastError());
+    CloseHandle(child_end);
+    CloseHandle(parent_end);
+    return errno = error, nullptr;
+  }
+  std::vector<ex::ChildFd> fds;
+  if (!InheritedFds(&fds)) {
+    int error = errno;
+    CloseHandle(child_end);
+    CloseHandle(parent_end);
+    return errno = error, nullptr;
+  }
   // Replace the child's stdout (read) or stdin (write) with the pipe.
   int target = read ? 1 : 0;
   for (auto& f : fds) {
-    if (f.fd == target) f.handle = child_end;
+    if (f.fd == target) f = {target, child_end};
   }
   bool found = false;
   for (auto& f : fds) found = found || f.fd == target;
   if (!found) fds.push_back({target, child_end});
   std::vector<std::string> argv{"/system/bin/sh", "-c", command};
   int pid = SpawnProgram("/system/bin/sh", argv, CurrentEnv(), CurrentDir(), false, fds);
+  fds.clear();
   CloseHandle(child_end);
   if (pid < 0) {
     CloseHandle(parent_end);
@@ -777,16 +469,29 @@ int DoPosixSpawn(int* pid_out, const char* path, const BionicFileActions* const*
   if (search_path != nullptr) request.search_path = ex::Narrow(search_path);
   request.argv = FromList(argv);
   if (request.argv.empty()) request.argv.push_back(path);
-  std::vector<ex::ChildFd> fds = InheritedFds();
-  for (const ex::ChildFd& f : fds) {
-    DWORD flags = 0;
-    if (!GetHandleInformation(f.handle, &flags)) return ex::ErrnoFromWin32(GetLastError());
-    request.fd_flags.emplace_back(f.fd, (flags & HANDLE_FLAG_INHERIT) != 0 ? 0 : 1);
-  }
+  std::vector<ex::ChildFd> fds;
+  if (!InheritedFds(&fds, true)) return errno;
   if (actions_in != nullptr && *actions_in != nullptr) {
     for (const BionicFileAction* a = (*actions_in)->head; a != nullptr; a = a->next) {
       request.actions.push_back({a->what, a->fd, a->new_fd, a->flags, a->mode, a->path});
     }
+  }
+  // A private CLOEXEC event/socket/binder descriptor does not need transport
+  // unless an ordered file action actually uses its original resource. This
+  // avoids exporting NUL placeholders while keeping ordinary spawn available
+  // to processes that hold private runtime resources.
+  fds.erase(std::remove_if(fds.begin(), fds.end(), [&](const ex::ChildFd& file) {
+    if (file.snapshot->kind != DescriptorKind::kUnshareable ||
+        (file.snapshot->descriptor_flags & FD_CLOEXEC) == 0) return false;
+    for (const ex::SpawnAction& action : request.actions) {
+      if ((action.what == 2 || action.what == 4) && action.fd == file.fd) return false;
+      if ((action.what == 1 && action.fd == file.fd) ||
+          ((action.what == 0 || action.what == 2) && action.new_fd == file.fd)) return true;
+    }
+    return true;
+  }), fds.end());
+  for (const ex::ChildFd& file : fds) {
+    request.fd_flags.emplace_back(file.fd, file.snapshot->descriptor_flags);
   }
   ex::Launch launch;
   launch.application = ex::LauncherPath();
@@ -813,124 +518,8 @@ int BIONIC_SYSV PosixSpawnp(int* pid, const char* file, const BionicFileActions*
   return DoPosixSpawn(pid, file, fa, attr, argv, envp, true);
 }
 
-// --- fd / env / dir calls, child-aware -----------------------------------------
-
-int BIONIC_SYSV Open(const char* path, int flags, int mode) {
-  if (t_fork != nullptr) {
-    ForkChild* c = t_fork;
-    int fd = LowestFreeFd(c);
-    c->present[fd] = true;
-    c->cloexec[fd] = (flags & kLinuxOCloexec) != 0;
-    FdAction a;
-    a.kind = FdAction::kOpen;
-    a.a = fd;
-    a.path = path != nullptr ? path : "";
-    a.flags = flags;
-    a.mode = mode;
-    c->fd_actions.push_back(a);
-    return fd;
-  }
-  return g_open != nullptr ? g_open(path, flags, mode) : (errno = ENOSYS, -1);
-}
-int BIONIC_SYSV Openat(int dirfd, const char* path, int flags, int mode) {
-  if (t_fork != nullptr && path != nullptr && (path[0] == '/' || path[0] == '\\' || (path[0] != 0 && path[1] == ':'))) {
-    return Open(path, flags, mode);  // an absolute path: the dirfd is moot
-  }
-  return g_openat != nullptr ? g_openat(dirfd, path, flags, mode) : (errno = ENOSYS, -1);
-}
-int BIONIC_SYSV Close(int fd) {
-  if (t_fork != nullptr) {
-    ForkChild* c = t_fork;
-    c->present[fd] = false;
-    c->cloexec.erase(fd);
-    FdAction a;
-    a.kind = FdAction::kClose;
-    a.a = fd;
-    c->fd_actions.push_back(a);
-    return 0;
-  }
-  return g_close != nullptr ? g_close(fd) : (errno = EBADF, -1);
-}
-int BIONIC_SYSV Dup2(int old_fd, int new_fd) {
-  if (t_fork != nullptr) {
-    ForkChild* c = t_fork;
-    if (!c->present.count(old_fd) || !c->present[old_fd]) return errno = EBADF, -1;
-    if (old_fd == new_fd) return new_fd;  // Linux: nothing changes, FD_CLOEXEC included
-    c->present[new_fd] = true;
-    c->cloexec[new_fd] = false;  // dup2's new fd is inherited across exec
-    FdAction a;
-    a.kind = FdAction::kDup2;
-    a.a = old_fd;
-    a.b = new_fd;
-    c->fd_actions.push_back(a);
-    return new_fd;
-  }
-  return g_dup2 != nullptr ? g_dup2(old_fd, new_fd) : (errno = EBADF, -1);
-}
-int BIONIC_SYSV Dup3(int old_fd, int new_fd, int flags) {
-  int r = Dup2(old_fd, new_fd);
-  if (r >= 0 && t_fork != nullptr && (flags & kLinuxOCloexec) != 0) t_fork->cloexec[r] = true;
-  return r;
-}
-
-constexpr int kFdLimit = 2048;  // getdtablesize(), InheritedFds()
-
-// A fork child's new fd `new_fd` as a copy of `old_fd` (dup, F_DUPFD): recorded
-// as a dup2 in the child's table only.
-int ChildDupTo(ForkChild* c, int old_fd, int new_fd, bool cloexec) {
-  c->present[new_fd] = true;
-  c->cloexec[new_fd] = cloexec;
-  FdAction a;
-  a.kind = FdAction::kDup2;
-  a.a = old_fd;
-  a.b = new_fd;
-  c->fd_actions.push_back(a);
-  return new_fd;
-}
-
-int BIONIC_SYSV Dup(int fd) {
-  if (t_fork != nullptr) {
-    ForkChild* c = t_fork;
-    if (!ChildHasFd(c, fd)) return errno = EBADF, -1;
-    return ChildDupTo(c, fd, LowestFreeFd(c), false);
-  }
-  return g_dup != nullptr ? g_dup(fd) : (errno = EBADF, -1);
-}
-
-// fcntl in a fork child: the fd-table commands act on the child's table (a
-// child's F_SETFD must not change this process's fd: on Windows FD_CLOEXEC is
-// the handle's inherit flag, shared with the parent); the others (F_GETFL,
-// F_SETFL, locks) concern the open file, which parent and child share on Linux
-// too, and go through.
-int BIONIC_SYSV Fcntl(int fd, int cmd, uint64_t arg) {
-  constexpr int kFDupfd = 0, kFGetfd = 1, kFSetfd = 2, kFDupfdCloexec = 1030;
-  constexpr int kFdCloexec = 1;
-  if (t_fork != nullptr &&
-      (cmd == kFDupfd || cmd == kFDupfdCloexec || cmd == kFGetfd || cmd == kFSetfd)) {
-    ForkChild* c = t_fork;
-    if (!ChildHasFd(c, fd)) return errno = EBADF, -1;
-    switch (cmd) {
-      case kFGetfd: {
-        auto it = c->cloexec.find(fd);
-        return it != c->cloexec.end() && it->second ? kFdCloexec : 0;
-      }
-      case kFSetfd:
-        c->cloexec[fd] = (arg & kFdCloexec) != 0;
-        return 0;
-      default: {
-        // An int argument: only the low 32 bits of the register are defined.
-        int from = static_cast<int>(static_cast<uint32_t>(arg));
-        if (from < 0 || from >= kFdLimit) return errno = EINVAL, -1;
-        return ChildDupTo(c, fd, LowestFreeFd(c, from), cmd == kFDupfdCloexec);
-      }
-    }
-  }
-  return g_fcntl != nullptr ? g_fcntl(fd, cmd, arg) : (errno = ENOSYS, -1);
-}
-
-// close_range(2) and closefrom(3) (bionic, API 34). In a fork child they close
-// (or mark close-on-exec) the child's fds only. Elsewhere they close this
-// process's fds in the range, as Linux does.
+// close_range(2) and closefrom(3), over the process's actual descriptor table.
+constexpr unsigned kFdLimit = ofd_transfer::kDescriptorLimit;
 constexpr unsigned kCloseRangeUnshare = 1u << 1, kCloseRangeCloexec = 1u << 2;
 
 int BIONIC_SYSV CloseRange(unsigned first, unsigned last, int flags) {
@@ -940,24 +529,9 @@ int BIONIC_SYSV CloseRange(unsigned first, unsigned last, int flags) {
   }
   bool cloexec = (f & kCloseRangeCloexec) != 0;
   unsigned end = std::min<unsigned>(last, kFdLimit - 1);
-  if (t_fork != nullptr) {
-    ForkChild* c = t_fork;
-    std::vector<int> open_fds;
-    for (const auto& kv : c->present) {
-      if (kv.second && kv.first >= 0 && static_cast<unsigned>(kv.first) >= first &&
-          static_cast<unsigned>(kv.first) <= end) {
-        open_fds.push_back(kv.first);
-      }
-    }
-    for (int fd : open_fds) {
-      if (cloexec) {
-        c->cloexec[fd] = true;
-      } else {
-        Close(fd);  // t_fork is set: recorded in the child's table only
-      }
-    }
-    return 0;
-  }
+  // The CRT descriptor table is shared by all threads. It cannot be detached
+  // for just this caller, so do not report CLOSE_RANGE_UNSHARE as implemented.
+  if ((f & kCloseRangeUnshare) != 0) return errno = ENOSYS, -1;
   // Every fd in the range: one that is not open just fails with EBADF.
   for (unsigned fd = first; fd <= end; ++fd) {
     int i = static_cast<int>(fd);
@@ -973,161 +547,6 @@ int BIONIC_SYSV CloseRange(unsigned first, unsigned last, int flags) {
 void BIONIC_SYSV Closefrom(int lowest) {
   if (lowest < 0) lowest = 0;
   CloseRange(static_cast<unsigned>(lowest), ~0u, 0);
-}
-
-// --- a child waiting for its parent ----------------------------------------------
-//
-// The vfork-style child runs before its parent: the parent goes on only once the child
-// execs or exits. A child that first waits for its parent through a pipe -- Dart's
-// ProcessStarter (dart:io Process.start/run): the child reads one byte from a pipe the
-// parent writes once it has registered the pid, then execs -- would wait forever, the
-// parent's thread being its own (a Flutter app's UI thread hangs). So a fork child's read
-// from an empty pipe this process created (which only this process writes) does not wait:
-// it reads one byte (0), the one the parent is about to write, and the parent's next
-// write to that pipe leaves that byte out, so nobody else reads it.
-
-std::mutex g_parent_bytes_mutex;
-std::map<uint64_t, size_t> g_parent_bytes;  // pipe -> bytes its fork child took
-std::atomic<int> g_parent_bytes_pending{0};
-
-HANDLE FdHandle(int fd) {
-  intptr_t value = _get_osfhandle(fd);
-  return value == -1 || value == -2 ? INVALID_HANDLE_VALUE : reinterpret_cast<HANDLE>(value);
-}
-
-// The pipe `h` is an end of, the same for both its ends; 0 if `h` is not a pipe.
-uint64_t PipeId(HANDLE h) {
-  BY_HANDLE_FILE_INFORMATION info;
-  if (h == INVALID_HANDLE_VALUE || GetFileType(h) != FILE_TYPE_PIPE ||
-      !GetFileInformationByHandle(h, &info)) {
-    return 0;
-  }
-  return (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
-}
-
-// A fork child's read of `fd`: the parent's byte if it is an empty pipe of this process's,
-// else -1 (read it).
-int64_t ChildReadsParentByte(int fd, void* buf, size_t n) {
-  HANDLE h = FdHandle(fd);
-  DWORD available = 0;
-  ULONG server = 0;
-  if (n == 0 || h == INVALID_HANDLE_VALUE || GetFileType(h) != FILE_TYPE_PIPE ||
-      !PeekNamedPipe(h, nullptr, 0, nullptr, &available, nullptr) || available != 0 ||
-      !GetNamedPipeServerProcessId(h, &server) || server != GetCurrentProcessId()) {
-    return -1;
-  }
-  uint64_t pipe = PipeId(h);
-  if (pipe == 0) return -1;
-  {
-    std::lock_guard<std::mutex> lock(g_parent_bytes_mutex);
-    ++g_parent_bytes[pipe];
-  }
-  g_parent_bytes_pending.fetch_add(1);
-  t_fork->gate = pipe;
-  static_cast<char*>(buf)[0] = 0;
-  return 1;
-}
-
-// The parent's write of `n` bytes to `fd`: how many of them its fork child already took
-// (left out, counted as written).
-size_t ParentBytesTaken(int fd, size_t n) {
-  if (n == 0 || t_fork != nullptr || g_parent_bytes_pending.load(std::memory_order_relaxed) == 0) {
-    return 0;
-  }
-  uint64_t pipe = PipeId(FdHandle(fd));
-  if (pipe == 0) return 0;
-  std::lock_guard<std::mutex> lock(g_parent_bytes_mutex);
-  auto it = g_parent_bytes.find(pipe);
-  if (it == g_parent_bytes.end()) return 0;
-  size_t taken = std::min(n, it->second);
-  it->second -= taken;
-  if (it->second == 0) {
-    g_parent_bytes.erase(it);
-    std::lock_guard<std::mutex> children(g_children_mutex);
-    for (auto& kv : g_children) {
-      if (kv.second.gate == pipe) kv.second.gate = 0;
-    }
-  }
-  g_parent_bytes_pending.fetch_sub(static_cast<int>(taken));
-  return taken;
-}
-
-int64_t BIONIC_SYSV ForkRead(int fd, void* buf, size_t n) {
-  if (t_fork != nullptr) {
-    int64_t r = ChildReadsParentByte(fd, buf, n);
-    if (r >= 0) return r;
-  }
-  return g_read != nullptr ? g_read(fd, buf, n) : (errno = EBADF, -1);
-}
-int64_t BIONIC_SYSV ForkReadChk(int fd, void* buf, size_t n, size_t buf_size) {
-  if (t_fork != nullptr && n <= buf_size) {
-    int64_t r = ChildReadsParentByte(fd, buf, n);
-    if (r >= 0) return r;
-  }
-  return g_read_chk != nullptr ? g_read_chk(fd, buf, n, buf_size) : (errno = EBADF, -1);
-}
-int64_t BIONIC_SYSV ForkWrite(int fd, const void* buf, size_t n) {
-  size_t taken = ParentBytesTaken(fd, n);
-  if (taken > 0 && taken == n) return static_cast<int64_t>(n);
-  if (g_write == nullptr) return errno = EBADF, -1;
-  int64_t r = g_write(fd, static_cast<const char*>(buf) + taken, n - taken);
-  return r < 0 ? (taken > 0 ? static_cast<int64_t>(taken) : r) : r + static_cast<int64_t>(taken);
-}
-int64_t BIONIC_SYSV ForkWriteChk(int fd, const void* buf, size_t n, size_t buf_size) {
-  size_t taken = n <= buf_size ? ParentBytesTaken(fd, n) : 0;
-  if (taken > 0 && taken == n) return static_cast<int64_t>(n);
-  if (g_write_chk == nullptr) return errno = EBADF, -1;
-  int64_t r = g_write_chk(fd, static_cast<const char*>(buf) + taken, n - taken, buf_size - taken);
-  return r < 0 ? (taken > 0 ? static_cast<int64_t>(taken) : r) : r + static_cast<int64_t>(taken);
-}
-
-int BIONIC_SYSV Chdir(const char* path) {
-  if (t_fork != nullptr) {
-    t_fork->dir = path != nullptr ? path : "";
-    return 0;
-  }
-  return g_chdir != nullptr ? g_chdir(path) : (errno = ENOSYS, -1);
-}
-
-void EditEnv(std::vector<std::string>* env, const std::string& name, const char* value) {
-  for (auto it = env->begin(); it != env->end(); ++it) {
-    if (it->size() > name.size() && (*it)[name.size()] == '=' && it->compare(0, name.size(), name) == 0) {
-      if (value == nullptr) {
-        env->erase(it);
-      } else {
-        *it = name + "=" + value;
-      }
-      return;
-    }
-  }
-  if (value != nullptr) env->push_back(name + "=" + value);
-}
-int BIONIC_SYSV Setenv(const char* name, const char* value, int overwrite) {
-  if (name == nullptr || value == nullptr) return errno = EINVAL, -1;
-  if (t_fork != nullptr) {
-    std::string n = name;
-    bool exists = false;
-    for (const std::string& e : t_fork->env) {
-      if (e.size() > n.size() && e[n.size()] == '=' && e.compare(0, n.size(), n) == 0) exists = true;
-    }
-    if (overwrite || !exists) EditEnv(&t_fork->env, n, value);
-    return 0;
-  }
-  return g_setenv != nullptr ? g_setenv(name, value, overwrite) : (errno = ENOSYS, -1);
-}
-int BIONIC_SYSV Unsetenv(const char* name) {
-  if (name == nullptr) return errno = EINVAL, -1;
-  if (t_fork != nullptr) {
-    EditEnv(&t_fork->env, name, nullptr);
-    return 0;
-  }
-  return g_unsetenv != nullptr ? g_unsetenv(name) : (errno = ENOSYS, -1);
-}
-int BIONIC_SYSV Putenv(char* assignment) {
-  if (assignment == nullptr) return errno = EINVAL, -1;
-  const char* eq = strchr(assignment, '=');
-  if (eq == nullptr) return Unsetenv(assignment);
-  return Setenv(std::string(assignment, eq - assignment).c_str(), eq + 1, 1);
 }
 
 }  // namespace
@@ -1146,51 +565,17 @@ int KillOtherProcess(int pid, int sig) {
   return gesher_kill_other(pid, sig);
 }
 
-void ExitIfVforkChild(int status) {
-  if (t_fork == nullptr) return;
-  ForkChild* child = t_fork;
-  // The child exited without exec: register a synthetic zombie so waitpid can
-  // collect it, then return that pid to fork's caller.
-  int pid = 0x40000000 | (g_synthetic_pid.fetch_add(1) & 0x3fffffff);
-  {
-    std::lock_guard<std::mutex> lock(g_children_mutex);
-    Child& c = g_children[pid];
-    c.process = nullptr;
-    c.exited = true;
-    c.status = (status & 0xff) << 8;  // WIFEXITED
-    c.gate = child->gate;
-  }
-  DeliverExternalSignal(kSigchld, 0, kCldExited, (status & 0xff) << 8, false);
-  FinishChild(child, pid);
-}
-
 void RegisterProcess(SymbolTable& t) {
-  // The originals the child-aware wrappers below delegate to, taken from the
-  // table the earlier Register* filled (RegisterProcess runs last). Looked up in
-  // `t` directly, not through LookupBionicSymbol, which would re-enter the
-  // table's own initialization.
+  // Resolve directly from the table to avoid re-entering its initialization.
   auto original = [&t](const char* name) -> void* {
     auto it = t.find(name);
     return it != t.end() ? it->second : nullptr;
   };
-#define GET(var, name, type) var = reinterpret_cast<type>(original(name))
-  GET(g_open, "open", OpenFn);
-  GET(g_openat, "openat", OpenatFn);
-  GET(g_close, "close", CloseFn);
-  GET(g_dup2, "dup2", Dup2Fn);
-  GET(g_dup, "dup", DupFn);
-  GET(g_fcntl, "fcntl", FcntlFn);
-  GET(g_chdir, "chdir", ChdirFn);
-  GET(g_setenv, "setenv", SetenvFn);
-  GET(g_unsetenv, "unsetenv", UnsetenvFn);
-  GET(g_read, "read", ReadFn);
-  GET(g_write, "write", WriteFn);
-  GET(g_read_chk, "__read_chk", ReadChkFn);
-  GET(g_write_chk, "__write_chk", WriteChkFn);
-#undef GET
+  g_close = reinterpret_cast<CloseFn>(original("close"));
+  g_fcntl = reinterpret_cast<FcntlFn>(original("fcntl"));
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
-  E("fork", gesher_fork);
-  E("vfork", gesher_fork);
+  E("fork", ForkUnsupported);
+  E("vfork", ForkUnsupported);
   E("execve", Execve);
   E("execv", Execv);
   E("execvp", Execvp);
@@ -1221,32 +606,10 @@ void RegisterProcess(SymbolTable& t) {
   E("posix_spawnattr_setsigdefault64", AttrStubPtrArg);
   E("posix_spawnattr_setschedparam", AttrStubPtrArg);
   E("posix_spawnattr_setschedpolicy", AttrStubIntArg);
-  // fd/env/dir calls, child-aware; they delegate to the originals above.
-  E("open", Open);
-  E("open64", Open);
-  E("__open_2", Open);
-  E("openat", Openat);
-  E("openat64", Openat);
-  E("__openat_2", Openat);
-  E("close", Close);
-  E("dup2", Dup2);
-  E("dup3", Dup3);
-  E("dup", Dup);
-  E("fcntl", Fcntl);
   E("close_range", CloseRange);
   E("closefrom", Closefrom);
-  E("chdir", Chdir);
-  E("setenv", Setenv);
-  E("unsetenv", Unsetenv);
-  E("putenv", Putenv);
-  // A fork child reading the byte its parent is about to write (above).
-  E("read", ForkRead);
-  E("__read_chk", ForkReadChk);
-  E("write", ForkWrite);
-  E("__write_chk", ForkWriteChk);
 #undef E
-  // Last of all: Android's CA directory names over every path-taking entry,
-  // these child-aware ones included (system_cacerts.h).
+  // Android's CA directory names over every path-taking entry.
   WrapSystemCacerts(t);
 }
 

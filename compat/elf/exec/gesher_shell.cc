@@ -31,12 +31,15 @@
 #include <gesher/reserved_names.h>
 
 #include <io.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <windows.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -89,14 +92,15 @@ bool IsNumber(const std::string& s) {
 // Writes all of `s` to `h`; false if the handle is closed or broken (EPIPE).
 bool WriteAll(HANDLE h, const std::string& s) {
   if (h == nullptr || h == INVALID_HANDLE_VALUE) return false;
+  auto description = gesher::CaptureFileHandle(h);
+  if (!description) return false;
   size_t done = 0;
   while (done < s.size()) {
-    DWORD wrote = 0;
-    DWORD chunk =
-        static_cast<DWORD>(std::min<size_t>(s.size() - done, 1u << 20));
-    if (!WriteFile(h, s.data() + done, chunk, &wrote, nullptr) || wrote == 0)
-      return false;
-    done += wrote;
+    unsigned chunk = static_cast<unsigned>(std::min<size_t>(s.size() - done, 0x7ffff000u));
+    int wrote = gesher::WriteFileDescription(description, s.data() + done, chunk);
+    if (wrote < 0 && errno == EINTR) continue;
+    if (wrote <= 0) return false;
+    done += static_cast<unsigned>(wrote);
   }
   return true;
 }
@@ -199,9 +203,23 @@ using NodeP = std::shared_ptr<Node>;
 // last user lets go.
 struct OwnedHandle {
   HANDLE h = nullptr;
-  explicit OwnedHandle(HANDLE handle) : h(handle) {}
+  int descriptor = -1;
+  explicit OwnedHandle(HANDLE handle, int adopted_descriptor = -1) : h(handle), descriptor(adopted_descriptor) {
+    if (descriptor >= 0 || !h || h == INVALID_HANDLE_VALUE) return;
+    // Process job handles keep their native ownership. File/pipe handles
+    // enter the canonical fd table, so repeated launches and shell aliases
+    // retain one description rather than rediscovering unrelated flag copies.
+    if (GetFileType(h) == FILE_TYPE_UNKNOWN) return;
+    auto snapshot = gesher::CaptureFileHandle(h);
+    descriptor = snapshot ? gesher::AttachFileDescription(snapshot, true) : -1;
+    int error = errno;
+    CloseHandle(h);
+    h = descriptor >= 0 ? reinterpret_cast<HANDLE>(_get_osfhandle(descriptor)) : INVALID_HANDLE_VALUE;
+    errno = error;
+  }
   ~OwnedHandle() {
-    if (h != nullptr && h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (descriptor >= 0) ::close(descriptor);
+    else if (h != nullptr && h != INVALID_HANDLE_VALUE) CloseHandle(h);
   }
   OwnedHandle(const OwnedHandle&) = delete;
   OwnedHandle& operator=(const OwnedHandle&) = delete;

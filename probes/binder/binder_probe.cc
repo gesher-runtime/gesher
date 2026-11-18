@@ -30,6 +30,7 @@
 #include <vector>
 
 #include <linux/android/binder.h>
+#include <gesher/revocable_file.h>
 
 namespace {
 
@@ -63,6 +64,9 @@ constexpr uint64_t kDeathCookie = 0xDEAD0000;
 constexpr uint32_t kCodeHello = 1;
 constexpr uint32_t kCodePing = 2;
 constexpr uint32_t kCodeExit = 3;
+constexpr uint32_t kCodeRevocableFd = 4;
+constexpr uint32_t kCodeCheckRevoked = 5;
+constexpr uint64_t kFdCookie = 0x4644434f4f4b4945ull;
 
 // One returned command, its argument copied.
 struct Command {
@@ -170,6 +174,15 @@ std::vector<uint8_t> Payload(const char* text) {
 struct Data {
   std::vector<uint8_t> bytes;
   std::vector<binder_size_t> offsets;
+  void File(int fd) {
+    binder_fd_object object{};
+    object.hdr.type = BINDER_TYPE_FD;
+    object.fd = fd;
+    object.cookie = kFdCookie;
+    offsets.push_back(bytes.size());
+    const auto* begin = reinterpret_cast<const uint8_t*>(&object);
+    bytes.insert(bytes.end(), begin, begin + sizeof(object));
+  }
   void Object(uint32_t type, uint64_t binder_or_handle, uint64_t cookie) {
     flat_binder_object obj = {};
     obj.hdr.type = type;
@@ -214,6 +227,7 @@ int Server() {
   SetEvent(ReadyEvent());
   b.Put32(BC_ENTER_LOOPER);
   bool exiting = false;
+  std::vector<int> retained_files;
   for (;;) {
     std::vector<Command> cmds = b.Talk();
     for (const Command& c : cmds) {
@@ -262,6 +276,33 @@ int Server() {
         b.Put32(client);
         b.Put32(BC_DECREFS);
         b.Put32(client);
+      } else if (tr.code == kCodeRevocableFd) {
+        REQUIRE(tr.offsets_size == sizeof(binder_size_t));
+        const auto object = ObjectAt(tr, 0);
+        REQUIRE(object.hdr.type == BINDER_TYPE_FD);
+        EXPECT(object.cookie == kFdCookie);  // transport does not steal cookie bits
+        int fd = static_cast<int>(object.handle);
+        EXPECT((fcntl(fd, F_GETFD) & FD_CLOEXEC) != 0);
+        EXPECT(write(fd, "binder", 6) == 6);
+        retained_files.push_back(fd);
+        retained_files.push_back(dup(fd));
+        std::string path = "/proc/self/fd/" + std::to_string(fd);
+        retained_files.push_back(open(path.c_str(), O_RDWR));
+        REQUIRE(retained_files.back() >= 0 && retained_files[1] >= 0);
+        b.FreeBuffer(tr);
+        b.Transaction(BC_REPLY, 0, 0, 0, Payload("fd retained"), {});
+      } else if (tr.code == kCodeCheckRevoked) {
+        REQUIRE(retained_files.size() == 3);
+        for (int fd : retained_files) {
+          char byte;
+          EXPECT(write(fd, "x", 1) == -1 && errno == EPERM);
+          EXPECT(pread(fd, &byte, 1, 0) == -1 && errno == EPERM);
+          EXPECT(fsync(fd) == -1 && errno == EPERM);
+          EXPECT(close(fd) == 0);
+        }
+        retained_files.clear();
+        b.FreeBuffer(tr);
+        b.Transaction(BC_REPLY, 0, 0, 0, Payload("fd revoked"), {});
       } else if (tr.code == kCodeExit) {
         b.FreeBuffer(tr);
         b.Transaction(BC_REPLY, 0, 0, 0, Payload("bye"), {});
@@ -342,6 +383,42 @@ int Client() {
   binder_handle_cookie hc = {handle, kDeathCookie};
   b.Write(&hc, sizeof(hc));
   b.Talk(false);
+
+  // Transfer the real OFD metadata through the broker. The receiver keeps
+  // distinct dup/proc-fd aliases after releasing the Binder transaction buffer.
+  char temporary[] = "gesher-revocable-binder-XXXXXX";
+  int writable = mkstemp(temporary);
+  REQUIRE(writable >= 0);
+  unlink(temporary);
+  uint64_t controller = gesher::CreateRevocableFileGroup();
+  REQUIRE(controller != 0 && gesher::AttachRevocableFileGroup(controller, writable) == 0);
+  Data file_data;
+  file_data.File(writable);
+  b.Transaction(BC_TRANSACTION, 0, kCodeRevocableFd, 0, file_data.bytes, file_data.offsets);
+  bool file_received = false;
+  while (!file_received) {
+    for (const Command& c : b.Talk()) {
+      if (b.Refcount(c) || c.cmd == BR_TRANSACTION_COMPLETE) continue;
+      REQUIRE(c.cmd == BR_REPLY);
+      EXPECT(strcmp(reinterpret_cast<const char*>(c.tr.data.ptr.buffer), "fd retained") == 0);
+      b.FreeBuffer(c.tr);
+      file_received = true;
+    }
+  }
+  EXPECT(close(writable) == 0);
+  REQUIRE(gesher::RevokeFileGroup(controller) == 0);
+  gesher::ReleaseRevocableFileGroup(controller);
+  b.Transaction(BC_TRANSACTION, 0, kCodeCheckRevoked, 0, Payload("check"), {});
+  file_received = false;
+  while (!file_received) {
+    for (const Command& c : b.Talk()) {
+      if (b.Refcount(c) || c.cmd == BR_TRANSACTION_COMPLETE) continue;
+      REQUIRE(c.cmd == BR_REPLY);
+      EXPECT(strcmp(reinterpret_cast<const char*>(c.tr.data.ptr.buffer), "fd revoked") == 0);
+      b.FreeBuffer(c.tr);
+      file_received = true;
+    }
+  }
 
   // exit: the server replies and exits.
   b.Transaction(BC_TRANSACTION, 0, kCodeExit, 0, Payload("exit"), {});

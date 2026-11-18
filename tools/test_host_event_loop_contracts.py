@@ -53,7 +53,10 @@ def main():
         'vector': {
             '@VECTOR_HELPERS@': between(system, '// readv/writev on a socket fd:', '}  // namespace\n\nssize_t readv('),
             '@WRITEV@': between(system, 'ssize_t writev(', '\nssize_t preadv('),
-            '@SCALAR_WRITE@': between(fd, 'int write(int fd,', '\nint dup('),
+            '@PWRITEV@': between(system, 'ssize_t pwritev(', '\nssize_t process_vm_readv('),
+            '@SCALAR_WRITE@': (
+                between(fd, 'void ReleaseCanceledSnapshot(', '// The caller owns an exact native object')
+                if 'void ReleaseCanceledSnapshot(' in fd else '') + between(fd, 'int write(int fd,', '\nint dup('),
             '@VIRTUAL_WRITE@': between(epoll, 'bool WriteEventObject(', '\nbool ForgetEventObject('),
         },
         'select': {'@SELECT_SOURCE@': re.sub(r'^#include[^\n]*\n', '', select, flags=re.M)},
