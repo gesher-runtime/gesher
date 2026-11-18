@@ -63,6 +63,37 @@ rejected('duplicate reviewed fcntl preamble even with a new full-file hash',
          original + b'\n' + policy.FCNTL_REPLACEMENTS[1][1], True)
 print('vector/fcntl source policy: positive source and nine negative controls passed')
 
+fd_path = ROOT / 'compat/posix/src/fd.cc'
+fd_source = fd_path.read_bytes()
+stream_retirement = policy.FD_STREAM_DEVICE_RETIREMENT
+fd_controls = (
+    ('unrelated descriptor bytes',
+     fd_source + b'\n// unrelated descriptor change\n'),
+    ('stream retirement condition changed',
+     fd_source.replace(stream_retirement,
+                       stream_retirement.replace(b'closed_or_replaced ||',
+                                                 b'closed_or_replaced &&', 1), 1)),
+    ('stream retirement errno preservation removed',
+     fd_source.replace(stream_retirement,
+                       stream_retirement.replace(b'  errno = saved;\n',
+                                                 b'  errno = 0;\n', 1), 1)),
+    ('stream retirement helper missing',
+     fd_source.replace(stream_retirement, b'', 1)),
+    ('stream retirement helper duplicated',
+     fd_source + stream_retirement),
+    ('stream retirement helper moved',
+     fd_source.replace(policy.FD_DEVICE_LOOKUP + stream_retirement,
+                       stream_retirement + policy.FD_DEVICE_LOOKUP, 1)),
+    ('existing device lookup changed',
+     fd_source.replace(policy.FD_DEVICE_LOOKUP,
+                       policy.FD_DEVICE_LOOKUP.replace(b'return LookupDevice(fd, device);',
+                                                       b'return false;', 1), 1)),
+)
+for label, replacement in fd_controls:
+    rejected(label + ' even with a new full-file hash', replacement, True,
+             target=fd_path, pin_name='FD_SHA256')
+print('stream-device source policy: positive source and seven negative controls passed')
+
 fixture_path = ROOT / 'tests/net-tcp-priority/contract.cc'
 fixture = fixture_path.read_bytes()
 rejected('unrelated TCP fixture bytes',
