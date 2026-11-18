@@ -27,6 +27,7 @@ final class CodecControlsTest {
 
     static void run() throws Exception {
         testBuffersAndMetrics();
+        testLowVideoMetrics();
         testSurfaceAndReuse();
         testAudioMetrics();
         testDecoderMetrics();
@@ -52,6 +53,9 @@ final class CodecControlsTest {
             PersistableBundle fresh = codec.getMetrics();
             require(codec.getName().equals(fresh.getString(CODEC))
                     && MODE_VIDEO.equals(fresh.getString(MODE))
+                    && fresh.getInt(SECURE, -1) == 0
+                    && fresh.getInt("android.media.mediacodec.hardware", -1)
+                            == (codec.getCodecInfo().isHardwareAccelerated() ? 1 : 0)
                     && !fresh.containsKey(BITRATE)
                     && !fresh.containsKey(MediaCodec.MetricsConstants.WIDTH),
                     "fresh codec does not expose identity without session data: " + fresh);
@@ -168,11 +172,32 @@ final class CodecControlsTest {
         }
     }
 
+    private static void testLowVideoMetrics() throws Exception {
+        MediaCodec codec = MediaCodec.createEncoderByType("video/avc");
+        try {
+            codec.configure(videoFormat(MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar,
+                    1_000, 0), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            videoMetrics(codec, 0, 64_000);
+            codec.start();
+            require(codec.getOutputFormat().getInteger(MediaFormat.KEY_BIT_RATE) == 64_000,
+                    "output bitrate does not match the backend's initial target");
+            codec.stop();
+        } finally {
+            codec.release();
+        }
+    }
+
     private static void testAudioMetrics() throws Exception {
+        checkAudioMetrics(96_000, 96_000);
+        checkAudioMetrics(1_000, 6_000);
+        checkAudioMetrics(600_000, 300_000);  // libopus caps mono targets at 300 kb/s.
+    }
+
+    private static void checkAudioMetrics(int requestedBitrate, int configuredBitrate) throws Exception {
         MediaCodec codec = MediaCodec.createEncoderByType("audio/opus");
         try {
             MediaFormat format = MediaFormat.createAudioFormat("audio/opus", 48_000, 1);
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 96_000);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, requestedBitrate);
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             codec.start();
             setParameters(codec, HIGH, true);
@@ -184,8 +209,8 @@ final class CodecControlsTest {
                     && metrics.getInt(SECURE, -1) == 0
                     && metrics.getInt("android.media.mediacodec.sampleRate") == 48_000
                     && metrics.getInt("android.media.mediacodec.channelCount") == 1
-                    && metrics.getInt(BITRATE, -1) == 96_000
-                    && codec.getOutputFormat().getInteger(MediaFormat.KEY_BIT_RATE) == 96_000
+                    && metrics.getInt(BITRATE, -1) == configuredBitrate
+                    && codec.getOutputFormat().getInteger(MediaFormat.KEY_BIT_RATE) == configuredBitrate
                     && !metrics.containsKey(MediaCodec.MetricsConstants.WIDTH),
                     "unexpected audio encoder metrics: " + metrics);
             codec.stop();

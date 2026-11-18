@@ -125,6 +125,10 @@ struct Track {
   std::vector<int64_t> times;  // us
   std::vector<uint32_t> keys;  // 1-based
   uint32_t timescale = 90000;
+  // Incremental counterparts of stts and stsd. Never traverse accumulated
+  // samples while deciding whether another packet fits a recorder limit.
+  uint64_t duration_runs = 0, sample_entry_bytes = 0;
+  uint32_t last_duration = 0;
 };
 
 std::vector<uint8_t> StripStartCode(const std::vector<uint8_t>& nal) {
@@ -167,6 +171,7 @@ class Mp4Muxer : public Muxer {
       if (f.GetBuffer(key, &b) && !b.empty()) t.csd.push_back(b);
     }
     t.timescale = t.video ? 90000 : (t.mime == "audio/opus" ? 48000 : std::max<uint32_t>(t.rate, 8000));
+    UpdateSampleEntrySize(t);
     tracks_.push_back(std::move(t));
     return static_cast<int>(tracks_.size() - 1);
   }
@@ -189,6 +194,10 @@ class Mp4Muxer : public Muxer {
     ftyp.End();
     // mdat with a 64-bit size, filled in at the end.
     static const uint8_t kMdat[16] = {0, 0, 0, 1, 'm', 'd', 'a', 't', 0, 0, 0, 0, 0, 0, 0, 0};
+    if (!AdmitFinalSize(ftyp.bytes().size() + sizeof(kMdat) + MoovSize())) {
+      *error = "MPEG-4: file-size limit is too small for container metadata";
+      return false;
+    }
     if (!WriteAll(fd_, ftyp.bytes().data(), ftyp.bytes().size())) return Fail(error);
     mdat_at_ = ftyp.bytes().size();
     if (!WriteAll(fd_, kMdat, sizeof(kMdat))) return Fail(error);
@@ -214,10 +223,18 @@ class Mp4Muxer : public Muxer {
         } else {
           t.csd.emplace_back(data, data + size);
         }
+        const uint64_t old_entry_size = t.sample_entry_bytes;
+        UpdateSampleEntrySize(t);
+        if (!AdmitFinalSize(pos_ + MoovSize(), true)) {
+          t.csd.clear();
+          t.sample_entry_bytes = old_entry_size;
+        }
       }
       return true;
     }
     std::vector<uint8_t> converted;
+    const size_t old_csd_count = t.csd.size();
+    const uint64_t old_entry_size = t.sample_entry_bytes;
     const uint8_t* p = data;
     size_t n = size;
     if (t.mime == "video/avc" && StartsWithStartCode(data, size)) {
@@ -238,7 +255,20 @@ class Mp4Muxer : public Muxer {
       p = converted.data();
       n = converted.size();
     }
+    if (t.csd.size() != old_csd_count) UpdateSampleEntrySize(t);
+    const uint64_t metadata = MoovSize(index, time_us, (flags & 1) != 0);
+    if (n > UINT64_MAX - pos_ || metadata > UINT64_MAX - pos_ - n) {
+      *error = "MPEG-4: completed file size is not representable";
+      return false;
+    }
+    if (!AdmitFinalSize(pos_ + n + metadata, true)) {
+      t.csd.resize(old_csd_count);
+      t.sample_entry_bytes = old_entry_size;
+      return true;
+    }
     if (!WriteAll(fd_, p, n)) return Fail(error);
+    t.duration_runs = ProspectiveRuns(t, time_us);
+    if (!t.times.empty()) t.last_duration = DurationBetween(t, t.times.back(), time_us);
     t.offsets.push_back(pos_);
     t.sizes.push_back(static_cast<uint32_t>(n));
     t.times.push_back(time_us);
@@ -276,6 +306,56 @@ class Mp4Muxer : public Muxer {
   int64_t BytesWritten() const override { return static_cast<int64_t>(pos_); }
 
  private:
+  bool SupportsFileSizeLimit() const override { return true; }
+
+  static uint32_t DurationBetween(const Track& t, int64_t before, int64_t after) {
+    const int64_t delta = after - before;
+    const uint32_t duration = delta > 0 ? static_cast<uint32_t>(delta * t.timescale / 1000000) : 1;
+    return std::max<uint32_t>(duration, 1);
+  }
+
+  static uint64_t ProspectiveRuns(const Track& t, int64_t time_us) {
+    // With one sample the writer uses its fallback duration; the second
+    // replaces that fallback for both samples, so it still has one run.
+    if (t.times.size() < 2) return 1;
+    return t.duration_runs + (DurationBetween(t, t.times.back(), time_us) != t.last_duration);
+  }
+
+  void UpdateSampleEntrySize(Track& t) const {
+    Box entry;
+    SampleEntry(&entry, t);
+    t.sample_entry_bytes = entry.bytes().size();
+  }
+
+  uint64_t MoovSize(int added_track = -1, int64_t time_us = 0, bool key = false) const {
+    int64_t first = INT64_MAX;
+    for (size_t i = 0; i < tracks_.size(); ++i) {
+      const Track& t = tracks_[i];
+      if (!t.times.empty()) first = std::min(first, t.times.front());
+      else if (static_cast<int>(i) == added_track) first = std::min(first, time_us);
+    }
+    // moov(8) + mvhd(108); the optional ISO6709 udta is always 38 bytes.
+    uint64_t bytes = 116 + (has_location_ ? 38 : 0);
+    for (size_t i = 0; i < tracks_.size(); ++i) {
+      const Track& t = tracks_[i];
+      const bool added = static_cast<int>(i) == added_track;
+      const uint64_t count = t.times.size() + static_cast<unsigned>(added);
+      const uint64_t runs = added ? ProspectiveRuns(t, time_us) : t.duration_runs;
+      const uint64_t keys = t.keys.size() + static_cast<unsigned>(added && key);
+      // Fixed trak/tkhd/mdia/mdhd/hdlr/minf/dinf/stbl/table headers;
+      // stsz and co64 add 12 bytes per sample, stts adds 8 per duration run,
+      // and a nonempty stsc has one 12-byte entry. Video adds stss.
+      bytes += (t.video ? 356 : 336) + t.sample_entry_bytes + count * 12 + runs * 8;
+      if (count != 0) {
+        bytes += 12;
+        const int64_t track_first = t.times.empty() ? time_us : t.times.front();
+        if (track_first > first) bytes += 48;  // edts/elst for a delayed track
+      }
+      if (t.video) bytes += keys * 4;
+    }
+    return bytes;
+  }
+
   bool Fail(std::string* error) {
     *error = std::string("MPEG-4 writer: ") + strerror(errno);
     return false;
@@ -287,9 +367,7 @@ class Mp4Muxer : public Muxer {
     const size_t n = t.times.size();
     uint32_t fallback = t.video ? t.timescale / 30 : (t.mime == "audio/opus" ? 960 : 1024);
     for (size_t i = 0; i + 1 < n; i++) {
-      int64_t delta = t.times[i + 1] - t.times[i];
-      uint32_t v = delta > 0 ? static_cast<uint32_t>(delta * t.timescale / 1000000) : 1;
-      d.push_back(std::max<uint32_t>(v, 1));
+      d.push_back(DurationBetween(t, t.times[i], t.times[i + 1]));
     }
     if (n > 0) d.push_back(d.empty() ? fallback : d.back());
     return d;

@@ -63,7 +63,7 @@ void QueueSurface::SetDefaultSize(int width, int height) {
 
 void QueueSurface::SetListener(std::function<void()> listener) {
   std::lock_guard<std::mutex> lock(mutex_);
-  listener_ = std::move(listener);
+  if (!abandoned_) listener_ = std::move(listener);
 }
 
 std::shared_ptr<const SurfaceFrame> QueueSurface::Latest() const {
@@ -80,6 +80,10 @@ void QueueSurface::Abandon() {
   std::lock_guard<std::mutex> lock(mutex_);
   abandoned_ = true;
   listener_ = nullptr;
+  latest_.reset();
+  // Dequeued producers own their buffers through dequeued_. A CPU lock has
+  // only a raw pixels pointer, so keep its buffer until unlockAndPost returns.
+  if (!locked_) buffer_ = nullptr;
 }
 
 void QueueSurface::Size(int* width, int* height) const {
@@ -107,7 +111,9 @@ void QueueSurface::EnsureBuffer() {
 
 int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (locked_ || abandoned_) return -EINVAL;
+  // Surface::lock rejects a second CPU lock before consulting the consumer.
+  if (locked_) return -ENOSYS;  // Android INVALID_OPERATION.
+  if (abandoned_) return -ENODEV;
   EnsureBuffer();
   locked_ = true;
   out->width = buffer_->width;
@@ -133,47 +139,59 @@ int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
 }
 
 int QueueSurface::unlockAndPost() {
+  return UnlockAndPost(std::nullopt);
+}
+
+int QueueSurface::UnlockAndPostWithTimestamp(int64_t timestamp_ns) {
+  return UnlockAndPost(timestamp_ns);
+}
+
+int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns) {
+  std::function<void()> listener;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!locked_) return -EINVAL;
     locked_ = false;
+    if (abandoned_) {
+      buffer_ = nullptr;
+      return -ENODEV;
+    }
+    listener = PublishLocked(timestamp_ns);
   }
-  Publish();
+  if (listener) listener();
   return 0;
 }
 
-void QueueSurface::Publish() {
-  std::function<void()> listener;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (buffer_ == nullptr || abandoned_) return;
-    buffer_contents_valid_ = true;
-    auto f = std::make_shared<SurfaceFrame>();
-    f->width = buffer_->width;
-    f->height = buffer_->height;
-    const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
-    const bool bgra = buffer_->format == HAL_PIXEL_FORMAT_BGRA_8888;
-    f->pixels.resize(static_cast<size_t>(f->width) * f->height);
-    for (int y = 0; y < f->height; y++) {
-      const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y) * buffer_->stride];
-      uint32_t* d = &f->pixels[static_cast<size_t>(y) * f->width];
-      if (!opaque && !bgra) {
-        memcpy(d, s, static_cast<size_t>(f->width) * 4);
-        continue;
-      }
-      for (int x = 0; x < f->width; x++) {
-        uint32_t p = s[x];
-        if (bgra) p = (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu);
-        d[x] = opaque ? (p | 0xff000000u) : p;
-      }
+std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timestamp_ns) {
+  if (buffer_ == nullptr) return {};
+  buffer_contents_valid_ = true;
+  auto f = std::make_shared<SurfaceFrame>();
+  f->width = buffer_->width;
+  f->height = buffer_->height;
+  const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
+  const bool bgra = buffer_->format == HAL_PIXEL_FORMAT_BGRA_8888;
+  f->pixels.resize(static_cast<size_t>(f->width) * f->height);
+  for (int y = 0; y < f->height; y++) {
+    const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y) * buffer_->stride];
+    uint32_t* d = &f->pixels[static_cast<size_t>(y) * f->width];
+    if (!opaque && !bgra) {
+      memcpy(d, s, static_cast<size_t>(f->width) * 4);
+      continue;
     }
-    f->timestamp_ns = timestamp_ns_ == NATIVE_WINDOW_TIMESTAMP_AUTO
-                          ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns_;
-    f->number = ++frames_;
-    latest_ = std::move(f);
-    listener = listener_;
+    for (int x = 0; x < f->width; x++) {
+      uint32_t p = s[x];
+      if (bgra) p = (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu);
+      d[x] = opaque ? (p | 0xff000000u) : p;
+    }
   }
-  if (listener) listener();
+  // A per-frame codec timestamp is data, including INT64_MIN. Only the native
+  // producer's persistent setting gives that value its AUTO sentinel meaning.
+  f->timestamp_ns = timestamp_ns.has_value() ? *timestamp_ns
+      : timestamp_ns_ == NATIVE_WINDOW_TIMESTAMP_AUTO
+          ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns_;
+  f->number = ++frames_;
+  latest_ = std::move(f);
+  return listener_;
 }
 
 int QueueSurface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
@@ -198,17 +216,20 @@ int QueueSurface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
 }
 
 int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
+  std::function<void()> listener;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
       if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
-        buffer_ = *it;
+        if (!abandoned_) buffer_ = *it;
         dequeued_.erase(it);
         break;
       }
     }
+    if (abandoned_) return -ENODEV;
+    listener = PublishLocked(std::nullopt);
   }
-  Publish();
+  if (listener) listener();
   return 0;
 }
 

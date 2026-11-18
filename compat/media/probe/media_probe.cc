@@ -496,12 +496,15 @@ int Capture(const char* out_path) {
   std::string error;
   auto s = OpenCapture(p, &error);
   if (s == nullptr) {
-    printf("capture: open failed: %s\n", error.c_str());
+    printf("capture unavailable: %s\n", error.c_str());
     return 1;
   }
   std::vector<int16_t> pcm(static_cast<size_t>(2 * 44100) * 2);
   auto t0 = std::chrono::steady_clock::now();
-  s->Start();
+  if (s->Start() != kOk) {
+    printf("capture unavailable: input could not start\n");
+    return 1;
+  }
   ssize_t n = s->Read(pcm.data(), pcm.size() * sizeof(int16_t), true);
   auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
   s->Stop();

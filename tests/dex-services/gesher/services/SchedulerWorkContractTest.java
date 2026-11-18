@@ -262,6 +262,9 @@ public final class SchedulerWorkContractTest {
             set(run, "params", parameters);
             invoke(scheduler, "bind", new Class<?>[]{runType}, run);
             check(bindings() == 1, "Run did not create its real system service binding");
+            // This work-queue fixture manually dispatches the execution boundary.
+            // Constraint/start acknowledgement contracts use Run.started separately.
+            set(run, "state", 2);
             return new Handle(job, run, callback, parameters);
         }
         PendingIntent operation(int request) throws Exception {

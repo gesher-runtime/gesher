@@ -388,8 +388,13 @@ class MfAacEncoder : public AudioEncoder {
   }
 
   std::string Name() const override { return "mf aac encoder"; }
+  int ConfiguredBitrate() const override { return p_.bitrate; }
 
   bool Init(const AudioEncoderParams& p, std::string* error) {
+    if (p.aac_profile != 2) {
+      *error = "Media Foundation AAC encoder implements LC only";
+      return false;
+    }
     p_ = p;
     if (p.sample_rate != 44100 && p.sample_rate != 48000) {
       *error = "Media Foundation's AAC encoder takes 44100 or 48000 Hz, not " + std::to_string(p.sample_rate);
@@ -437,6 +442,7 @@ class MfAacEncoder : public AudioEncoder {
       *error = "AAC encoder: SetOutputType " + Hex(hr);
       return false;
     }
+    p_.bitrate = static_cast<int>(bytes * 8);
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
     return true;
