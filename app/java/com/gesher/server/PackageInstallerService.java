@@ -137,9 +137,12 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         ApkPackage ownerCode = mPm.get(pkg);
         String owner = owner(pkg, user);
         if (mInstaller == null) throw new UnsupportedOperationException("No persistent package installer");
-        if (p == null || (p.mode != PackageInstaller.SessionParams.MODE_FULL_INSTALL
-                && p.mode != PackageInstaller.SessionParams.MODE_INHERIT_EXISTING) || p.isMultiPackage
-                || p.isStaged || p.dataLoaderParams != null || p.abiOverride != null
+        if (p == null) throw new IllegalArgumentException("Missing installation parameters");
+        if (p.mode != PackageInstaller.SessionParams.MODE_FULL_INSTALL
+                && p.mode != PackageInstaller.SessionParams.MODE_INHERIT_EXISTING) {
+            throw new IllegalArgumentException("Invalid installation mode");
+        }
+        if (p.isMultiPackage || p.isStaged || p.dataLoaderParams != null || p.abiOverride != null
                 || p.volumeUuid != null || p.getEnableRollback()
                 || (p.installFlags & 0x00020000) != 0) { // AOSP INSTALL_APEX, hidden in framework export.
             throw new UnsupportedOperationException("Only ordinary APK installs are supported");
