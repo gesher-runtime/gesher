@@ -2,6 +2,7 @@
 // see devsvc_win32.h. Toasts (WinRT) are devsvc_toast.c's.
 
 #include "devsvc_win32.h"
+#include "toast_identity.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -545,6 +546,14 @@ long ClearToasts(const std::u16string& app_id) {
   HRESULT hr = EnsureCom();
   if (FAILED(hr)) return hr;
   return gesher_toast_clear(W(app_id));
+}
+
+long RemoveToastIfLaunch(const std::u16string& app_id, const std::u16string& tag,
+                         const std::u16string& group, const std::u16string& launch) {
+  if (!ValidToastIdentityArguments(app_id, tag, group, launch)) return E_INVALIDARG;
+  HRESULT hr = EnsureCom();
+  if (FAILED(hr)) return hr;
+  return gesher_toast_remove_if_launch(W(app_id), W(tag), W(group), W(launch));
 }
 
 const char16_t kToastActivatorClsid[] = u"{C18D9445-A7F0-472E-985F-AC354EBEB660}";

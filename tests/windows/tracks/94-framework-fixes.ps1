@@ -274,6 +274,33 @@ Check 'services: authenticated notification delegation, revocation and retained 
   $delegationOut
 } @('NotificationDelegationTest all passed:')
 
+# The format fixture calls package-private production storage methods. Put this
+# test DEX on this VM's boot path, using a fresh profile and no application UI.
+$formatData = Join-Path $root 'notification-format-data'
+New-Item -ItemType Directory -Path $formatData -Force | Out-Null
+$formatSavedData = $env:ANDROID_DATA
+$formatSavedSpoof = $env:GESHER_MICROG_SPOOF
+try {
+  $env:ANDROID_DATA = NoDrive $formatData
+  $env:GESHER_MICROG_SPOOF = '0'
+  $formatBoot = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
+  $formatArgs = @("-Xbootclasspath:$formatBoot", '-Ximage:none', '-Xint', '-Xusejit:false',
+    'com.gesher.server.NotificationStoreFormatRunner')
+  foreach ($formatPhase in @('write', 'read')) {
+    $formatOut = FixesRun ($formatArgs + $formatPhase) 90
+    $formatCode = $LASTEXITCODE
+    Check "services: native Parcel notification formats and restart migration ($formatPhase)" {
+      $global:LASTEXITCODE = $formatCode
+      $formatOut
+    } @("NotificationStoreFormatDevice $formatPhase passed:")
+  }
+} finally {
+  if ($null -eq $formatSavedData) { Remove-Item Env:ANDROID_DATA -ErrorAction SilentlyContinue }
+  else { $env:ANDROID_DATA = $formatSavedData }
+  if ($null -eq $formatSavedSpoof) { Remove-Item Env:GESHER_MICROG_SPOOF -ErrorAction SilentlyContinue }
+  else { $env:GESHER_MICROG_SPOOF = $formatSavedSpoof }
+}
+
 # Real JobService callbacks attach notifications to a running job. Exercise
 # shared ownership, replacement, completion and cancellation through generated
 # Binder transactions, including their retained-notification effects.

@@ -54,6 +54,7 @@ public final class NotificationDelegationTest {
     private static final Unsafe UNSAFE;
     private static int checks;
     private static boolean parcel;
+    private static boolean storage;
     static {
         try { Field f = Unsafe.class.getDeclaredField("theUnsafe"); f.setAccessible(true); UNSAFE = (Unsafe)f.get(null); }
         catch (Exception failure) { throw new ExceptionInInitializerError(failure); }
@@ -364,7 +365,7 @@ public final class NotificationDelegationTest {
 
     /** Real Parcel storage migration and original-poster authorization after server restart. */
     private static void retained(Harness h) throws Exception {
-        if (!parcel) return;
+        if (!storage) return;
         Field last = field(type("Services"), "sLast"); Object before = last.get(null);
         last.set(null, make(type("Services$Created"),
                 new Class<?>[]{PackageManagerService.class, ActivityTaskManagerService.class, ActivityManagerService.class},
@@ -378,7 +379,7 @@ public final class NotificationDelegationTest {
             invoke(store, null, "save", new Class<?>[]{ActivityManagerService.class, String.class, String.class,
                     String.class, int.class, Notification.class, String.class}, null, key, OWNER, null, 80, notification, DELEGATE);
             Object stored = invoke(store, null, "load", new Class<?>[]{String.class, String.class}, OWNER, key);
-            check(stored != null && DELEGATE.equals(get(stored, "opPkg")), "Retained v4 state lost actual poster");
+            check(stored != null && DELEGATE.equals(get(stored, "opPkg")), "Retained current state lost actual poster");
             h.restart(); h.grant(OTHER);
             rejects(SecurityException.class, () -> h.cancel(OTHER, OWNER, 80), "New delegate cancelled prior delegate's retained post");
             h.grant(DELEGATE); h.cancel(DELEGATE, OWNER, 80);
@@ -401,11 +402,62 @@ public final class NotificationDelegationTest {
             h.cancel(OWNER, OWNER, 80);
             check(invoke(store, null, "load", new Class<?>[]{String.class, String.class}, OWNER, key) == null,
                     "Owner cannot remove its migrated retained state");
+            // The independently published v4 formats have different attribution.
+            // Decode their original bytes, restart, and enforce actual cancellation
+            // policy before the Windows removal boundary sees any identity.
+            for (boolean delegatedLayout : new boolean[]{true, false}) {
+                String current = (String) invoke(NotificationManagerService.class, null, "toastTag",
+                        new Class<?>[]{String.class, int.class}, null, 80);
+                Parcel historical = Parcel.obtain();
+                try {
+                    historical.writeInt(4); historical.writeString(key); historical.writeString(OWNER);
+                    historical.writeString(h.packages.get(OWNER).codeIdentity()); historical.writeString(null);
+                    historical.writeInt(80); historical.writeInt(0); historical.writeString("delegation");
+                    if (delegatedLayout) historical.writeString(DELEGATE);
+                    else { historical.writeString(current); historical.writeString("80"); }
+                    historical.writeInt(0); historical.writeInt(0);
+                    File directory = new File(System.getenv("ANDROID_DATA"), "system/notifications/" + OWNER);
+                    Files.createDirectories(directory.toPath());
+                    Files.write(new File(directory, Integer.toHexString(key.hashCode()) + ".n").toPath(), historical.marshall());
+                } finally { historical.recycle(); }
+                h.restart();
+                stored = invoke(store, null, "load", new Class<?>[]{String.class, String.class}, OWNER, key);
+                check(stored != null && (delegatedLayout ? DELEGATE : OWNER).equals(get(stored, "opPkg")),
+                        "Historical v4 layout changed original poster");
+                Map<String, String> history = new LinkedHashMap<>();
+                history.put(current, key); history.put("80", "different-retained-owner");
+                AtomicInteger removals = new AtomicInteger();
+                set(h.service, "mTestToastRemoval", (ToIntBiFunction<String, String>) (tag, expected) -> {
+                    removals.incrementAndGet();
+                    if (expected != null && history.containsKey(tag) && !expected.equals(history.get(tag))) return 1;
+                    history.remove(tag); return 0;
+                });
+                h.grant(OTHER);
+                rejects(SecurityException.class, () -> h.cancel(OTHER, OWNER, 80),
+                        "New delegate cancelled historical v4 state it did not post");
+                check(removals.get() == 0 && history.size() == 2, "Unauthorized cancellation reached toast removal");
+                h.grant(DELEGATE);
+                if (delegatedLayout) h.cancel(DELEGATE, OWNER, 80);
+                else {
+                    rejects(SecurityException.class, () -> h.cancel(DELEGATE, OWNER, 80),
+                            "Toast-only v4 invented delegated ownership");
+                    check(removals.get() == 0, "Owner-only record leaked into delegated Windows removal");
+                    h.cancel(OWNER, OWNER, 80);
+                }
+                check(!history.containsKey(current) && "different-retained-owner".equals(history.get("80")),
+                        "Authenticated migration cancellation removed a colliding legacy owner");
+                check(invoke(store, null, "load", new Class<?>[]{String.class, String.class}, OWNER, key) == null,
+                        "Authorized historical v4 cancellation retained its record");
+            }
         } finally { last.set(null, before); }
     }
 
     public static int run(boolean useParcel, String signedApk) throws Exception {
-        parcel = useParcel; checks = 0;
+        return run(useParcel, useParcel, signedApk);
+    }
+
+    public static int run(boolean useParcel, boolean useStorage, String signedApk) throws Exception {
+        parcel = useParcel; storage = useStorage; checks = 0;
         PropertyInvalidatedCache.setTestMode(true);
         Harness h = new Harness();
         ownership(h); posting(h); retained(h); lifecycle(h, signedApk);

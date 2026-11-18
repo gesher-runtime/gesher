@@ -27,6 +27,9 @@ typedef __x_ABI_CWindows_CUI_CNotifications_CIToastNotificationFactory IToastFac
 typedef __x_ABI_CWindows_CUI_CNotifications_CIToastNotificationManagerStatics IToastStatics;
 typedef __x_ABI_CWindows_CUI_CNotifications_CIToastNotificationManagerStatics2 IToastStatics2;
 typedef __x_ABI_CWindows_CUI_CNotifications_CIToastNotificationHistory IToastHistory;
+typedef __x_ABI_CWindows_CUI_CNotifications_CIToastNotificationHistory2 IToastHistory2;
+typedef __FIVectorView_1_Windows__CUI__CNotifications__CToastNotification IToastList;
+typedef __x_ABI_CWindows_CData_CXml_CDom_CIXmlElement IXmlElement;
 typedef __x_ABI_CWindows_CUI_CNotifications_CIToastNotifier IToastNotifier;
 typedef __x_ABI_CWindows_CUI_CNotifications_CIToastActivatedEventArgs IToastActivatedArgs;
 typedef __x_ABI_CWindows_CData_CXml_CDom_CIXmlDocument IXmlDoc;
@@ -50,6 +53,8 @@ static CreateStringFn g_create_string;
 static DeleteStringFn g_delete_string;
 static RawBufferFn g_raw_buffer;
 static INIT_ONCE g_rt_once = INIT_ONCE_STATIC_INIT;
+/* Serialize this process's show/remove/query+remove operations. */
+static SRWLOCK g_toast_operation_lock = SRWLOCK_INIT;
 
 static BOOL CALLBACK LoadCombase(PINIT_ONCE once, void* param, void** context) {
   (void)once;
@@ -74,6 +79,11 @@ static HSTRING Hs(const wchar_t* s) {
   HSTRING h = NULL;
   g_create_string(s, (UINT32)wcslen(s), &h);
   return h;
+}
+
+static HRESULT HsChecked(const wchar_t* s, HSTRING* out) {
+  *out = NULL;
+  return g_create_string(s, (UINT32)wcslen(s), out);
 }
 
 static void HsFree(HSTRING h) {
@@ -279,8 +289,9 @@ static HRESULT Notifier(const wchar_t* app_id, IToastNotifier** out) {
   IToastStatics* statics = NULL;
   HRESULT hr = Statics(&statics);
   if (FAILED(hr)) return hr;
-  HSTRING id = Hs(app_id);
-  hr = statics->lpVtbl->CreateToastNotifierWithId(statics, id, out);
+  HSTRING id = NULL;
+  hr = HsChecked(app_id, &id);
+  if (SUCCEEDED(hr)) hr = statics->lpVtbl->CreateToastNotifierWithId(statics, id, out);
   HsFree(id);
   RELEASE(statics);
   return hr;
@@ -307,7 +318,7 @@ static void Hide(const wchar_t* app_id, IToast* toast) {
   }
 }
 
-long gesher_toast_show(const wchar_t* app_id, const wchar_t* tag, const wchar_t* group,
+static long ShowUnlocked(const wchar_t* app_id, const wchar_t* tag, const wchar_t* group,
                        const wchar_t* xml, int suppress_popup, int high) {
   if (!RtOk()) return E_NOTIMPL;
   IInspectable* doc_object = NULL;
@@ -345,13 +356,13 @@ long gesher_toast_show(const wchar_t* app_id, const wchar_t* tag, const wchar_t*
     hr = QUERY(toast, IID___x_ABI_CWindows_CUI_CNotifications_CIToastNotification2, &toast2);
   }
   if (SUCCEEDED(hr)) {
-    h = Hs(tag);
-    hr = toast2->lpVtbl->put_Tag(toast2, h);
+    hr = HsChecked(tag, &h);
+    if (SUCCEEDED(hr)) hr = toast2->lpVtbl->put_Tag(toast2, h);
     HsFree(h);
   }
   if (SUCCEEDED(hr)) {
-    h = Hs(group);
-    hr = toast2->lpVtbl->put_Group(toast2, h);
+    hr = HsChecked(group, &h);
+    if (SUCCEEDED(hr)) hr = toast2->lpVtbl->put_Group(toast2, h);
     HsFree(h);
   }
   if (SUCCEEDED(hr) && suppress_popup) toast2->lpVtbl->put_SuppressPopup(toast2, TRUE);
@@ -387,8 +398,16 @@ long gesher_toast_show(const wchar_t* app_id, const wchar_t* tag, const wchar_t*
   return hr;
 }
 
-long gesher_toast_remove(const wchar_t* app_id, const wchar_t* tag, const wchar_t* group) {
+static long RemoveUnlocked(const wchar_t* app_id, const wchar_t* tag, const wchar_t* group) {
   if (!RtOk()) return E_NOTIMPL;
+  HSTRING t = NULL, g = NULL, id = NULL;
+  HRESULT hr = HsChecked(tag, &t);
+  if (SUCCEEDED(hr)) hr = HsChecked(group, &g);
+  if (SUCCEEDED(hr)) hr = HsChecked(app_id, &id);
+  if (FAILED(hr)) {
+    HsFree(t); HsFree(g); HsFree(id);
+    return hr;
+  }
   wchar_t* key = Key(app_id, tag, group);
   IToast* kept[1];
   size_t n = key != NULL ? TakeKept(key, 1, kept, 1) : 0;
@@ -398,19 +417,16 @@ long gesher_toast_remove(const wchar_t* app_id, const wchar_t* tag, const wchar_
     RELEASE(kept[i]);
   }
   IToastHistory* history = NULL;
-  HRESULT hr = History(&history);
+  hr = History(&history);
   if (SUCCEEDED(hr)) {
-    HSTRING t = Hs(tag), g = Hs(group), id = Hs(app_id);
     hr = history->lpVtbl->RemoveGroupedTagWithId(history, t, g, id);
-    HsFree(t);
-    HsFree(g);
-    HsFree(id);
   }
+  HsFree(t); HsFree(g); HsFree(id);
   RELEASE(history);
   return hr;
 }
 
-long gesher_toast_clear(const wchar_t* app_id) {
+static long ClearUnlocked(const wchar_t* app_id) {
   if (!RtOk()) return E_NOTIMPL;
   size_t len = wcslen(app_id);
   wchar_t* prefix = (wchar_t*)malloc((len + 2) * sizeof(wchar_t));
@@ -429,10 +445,104 @@ long gesher_toast_clear(const wchar_t* app_id) {
   IToastHistory* history = NULL;
   HRESULT hr = History(&history);
   if (SUCCEEDED(hr)) {
-    HSTRING id = Hs(app_id);
-    hr = history->lpVtbl->ClearWithId(history, id);
+    HSTRING id = NULL;
+    hr = HsChecked(app_id, &id);
+    if (SUCCEEDED(hr)) hr = history->lpVtbl->ClearWithId(history, id);
     HsFree(id);
   }
   RELEASE(history);
+  return hr;
+}
+
+static int StringEquals(HSTRING value, const wchar_t* expected) {
+  UINT32 length = 0;
+  const wchar_t* chars = g_raw_buffer(value, &length);
+  return wcslen(expected) == length && (length == 0 || !wmemcmp(chars, expected, length));
+}
+
+/* S_OK: absent, or matching owner's toast removed. S_FALSE: another owner;
+ * failures and owner mismatches must never become an unconditional remove. */
+static long RemoveHistoryChecked(IToastHistory* history, const wchar_t* app_id,
+                                  const wchar_t* tag, const wchar_t* group,
+                                  const wchar_t* launch,
+                                  long (*remove_toast)(const wchar_t*, const wchar_t*, const wchar_t*)) {
+  IToastHistory2* history2 = NULL;
+  IToastList* list = NULL;
+  HRESULT hr = QUERY(history, IID___x_ABI_CWindows_CUI_CNotifications_CIToastNotificationHistory2, &history2);
+  if (SUCCEEDED(hr) && history2 == NULL) hr = E_UNEXPECTED;
+  HSTRING id = Hs(app_id);
+  if (SUCCEEDED(hr) && id == NULL) hr = E_OUTOFMEMORY;
+  if (SUCCEEDED(hr)) hr = history2->lpVtbl->GetHistoryWithId(history2, id, &list);
+  HsFree(id);
+  UINT32 count = 0;
+  if (SUCCEEDED(hr) && list == NULL) hr = E_UNEXPECTED;
+  if (SUCCEEDED(hr)) hr = list->lpVtbl->get_Size(list, &count);
+  int matches = 0;
+  for (UINT32 at = 0; SUCCEEDED(hr) && at < count; ++at) {
+    IToast* toast = NULL;
+    IToast2* toast2 = NULL;
+    IXmlDoc* content = NULL;
+    IXmlElement* root = NULL;
+    HSTRING actual_tag = NULL, actual_group = NULL, actual_launch = NULL, name = NULL;
+    hr = list->lpVtbl->GetAt(list, at, &toast);
+    if (SUCCEEDED(hr) && toast == NULL) hr = E_UNEXPECTED;
+    if (SUCCEEDED(hr)) hr = QUERY(toast, IID___x_ABI_CWindows_CUI_CNotifications_CIToastNotification2, &toast2);
+    if (SUCCEEDED(hr) && toast2 == NULL) hr = E_UNEXPECTED;
+    if (SUCCEEDED(hr)) hr = toast2->lpVtbl->get_Tag(toast2, &actual_tag);
+    if (SUCCEEDED(hr)) hr = toast2->lpVtbl->get_Group(toast2, &actual_group);
+    int candidate = SUCCEEDED(hr) && StringEquals(actual_tag, tag) && StringEquals(actual_group, group);
+    if (candidate) {
+      hr = toast->lpVtbl->get_Content(toast, &content);
+      if (SUCCEEDED(hr) && content == NULL) hr = E_UNEXPECTED;
+      if (SUCCEEDED(hr)) hr = content->lpVtbl->get_DocumentElement(content, &root);
+      if (SUCCEEDED(hr) && root == NULL) hr = E_UNEXPECTED;
+      name = Hs(L"launch");
+      if (SUCCEEDED(hr) && name == NULL) hr = E_OUTOFMEMORY;
+      if (SUCCEEDED(hr)) hr = root->lpVtbl->GetAttribute(root, name, &actual_launch);
+      if (SUCCEEDED(hr)) {
+        matches = StringEquals(actual_launch, launch);
+        if (!matches) hr = S_FALSE;
+      }
+    }
+    HsFree(name); HsFree(actual_launch); HsFree(actual_group); HsFree(actual_tag);
+    RELEASE(root); RELEASE(content); RELEASE(toast2); RELEASE(toast);
+    if (candidate) break;
+  }
+  RELEASE(list); RELEASE(history2);
+  if (hr == S_OK && matches) return remove_toast(app_id, tag, group);
+  return hr;
+}
+
+long gesher_toast_show(const wchar_t* app_id, const wchar_t* tag, const wchar_t* group,
+                       const wchar_t* xml, int suppress_popup, int high) {
+  AcquireSRWLockExclusive(&g_toast_operation_lock);
+  long hr = ShowUnlocked(app_id, tag, group, xml, suppress_popup, high);
+  ReleaseSRWLockExclusive(&g_toast_operation_lock);
+  return hr;
+}
+
+long gesher_toast_remove(const wchar_t* app_id, const wchar_t* tag, const wchar_t* group) {
+  AcquireSRWLockExclusive(&g_toast_operation_lock);
+  long hr = RemoveUnlocked(app_id, tag, group);
+  ReleaseSRWLockExclusive(&g_toast_operation_lock);
+  return hr;
+}
+
+long gesher_toast_remove_if_launch(const wchar_t* app_id, const wchar_t* tag,
+                                  const wchar_t* group, const wchar_t* launch) {
+  if (!RtOk()) return E_NOTIMPL;
+  AcquireSRWLockExclusive(&g_toast_operation_lock);
+  IToastHistory* history = NULL;
+  HRESULT hr = History(&history);
+  if (SUCCEEDED(hr)) hr = RemoveHistoryChecked(history, app_id, tag, group, launch, RemoveUnlocked);
+  RELEASE(history);
+  ReleaseSRWLockExclusive(&g_toast_operation_lock);
+  return hr;
+}
+
+long gesher_toast_clear(const wchar_t* app_id) {
+  AcquireSRWLockExclusive(&g_toast_operation_lock);
+  long hr = ClearUnlocked(app_id);
+  ReleaseSRWLockExclusive(&g_toast_operation_lock);
   return hr;
 }

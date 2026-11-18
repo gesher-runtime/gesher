@@ -489,7 +489,7 @@ jobs:
 
       - name: Notification delegation ownership and durable policy contracts
         run: |
-          python3 tools/test_notification_delegation.py --java-home "$JAVA_HOME" \
+          python3 tools/test_notification_delegation.py --with-storage --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar --apksig "$RUNNER_TEMP/gesher-apksig.jar"
           python3 tools/test_notification_channel_groups.py --java-home "$JAVA_HOME" \
@@ -523,6 +523,12 @@ jobs:
           python3 tools/test_cookie_callbacks.py --java-home "$JAVA_HOME" \
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: Notification storage identity and legacy migration contracts
+        run: |
+          python3 tools/test_notification_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
 
       - name: Audio effect capability and constructor contracts
         run: |

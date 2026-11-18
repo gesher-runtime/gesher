@@ -21,9 +21,11 @@ public final class NotificationDelegationHost {
                 throw new AssertionError("Fixture must have a separate runtime package");
             }
             try {
-                int count = (int)fixture.getMethod("run", boolean.class, String.class).invoke(null, false, args.length > 1 ? args[1] : null);
+                boolean storage = Boolean.getBoolean("gesher.fixture.notification.storage");
+                int count = (int)fixture.getMethod("run", boolean.class, boolean.class, String.class)
+                        .invoke(null, false, storage, args.length > 1 ? args[1] : null);
                 System.out.println("Notification delegation host passed: " + count + " checks; protected="
-                        + com.gesher.server.GmsSignatureSpoofing.isEnabled());
+                        + com.gesher.server.GmsSignatureSpoofing.isEnabled() + "; hostStorage=" + storage);
             } catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
         }
         System.out.println("Production Java/CallerIdentity/PermissionPolicy/AtomicFile; constructed metadata/native identity boundaries. No ART, Binder transport or Windows delivery claim.");

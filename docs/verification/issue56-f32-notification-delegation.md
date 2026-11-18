@@ -62,8 +62,11 @@ code has no verified update continuity, so its exact code digest additionally
 gates an incoming grant. A changed unsigned APK cannot retain that authority
 merely because its package's installation marker survived an update.
 
-`NotificationStore` version 4 retains `opPkg` so original-poster authorization
-also applies to Windows-retained notifications after a server restart. Versions
+The original delegation branch's `NotificationStore` version4 retains `opPkg` so original-poster authorization
+also applies to Windows-retained notifications after a server restart. The combined
+delegation/toast writer now uses marked version5 and reads both historical v4
+layouts without guessing attribution; see [the integration verification](notification-persistence-integration-2026-11-18.md).
+Versions
 2 and 3 remain readable, and version 1 retains its existing legacy-only read
 rule. These earlier formats represent owner-origin notifications and receive
 the owner as their posting identity. This prevents a newly granted delegate

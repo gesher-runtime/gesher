@@ -17,6 +17,8 @@ def main() -> None:
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--signed-apk", type=Path, help="Real signed APK for verified continuity check")
     parser.add_argument("--service-source-ref", help="Prior notification service as a negative control")
+    parser.add_argument("--with-storage", action="store_true",
+                        help="Also execute retained attribution using the explicit host Parcel serialization seam")
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc: parser.error("A C compiler is required")
@@ -41,11 +43,16 @@ def main() -> None:
                     str(ROOT / "tests/notification-delegation/NotificationDelegationHost.java")]
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), *sources], check=True)
+        if args.with_storage:
+            subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
+                            "-d", str(classes), str(ROOT / "tests/notification-identity/Parcel.java")], check=True)
         for protected in (True, False):
             env = os.environ.copy(); env["ANDROID_DATA"] = str(work / ("protected" if protected else "legacy"))
             env["GESHER_MICROG_SPOOF"] = "1" if protected else "0"
             env.pop("GESHER_BINDER_UID", None)
-            command = [str(args.java_home / "bin/java"), "-cp", str(classes) + os.pathsep + classpath,
+            options = (["-XX:+UnlockDiagnosticVMOptions", "-XX:-BytecodeVerificationRemote",
+                        "-Dgesher.fixture.notification.storage=true"] if args.with_storage else [])
+            command = [str(args.java_home / "bin/java"), *options, "-cp", str(classes) + os.pathsep + classpath,
                        "NotificationDelegationHost", str(library)]
             if args.signed_apk: command.append(str(args.signed_apk.resolve()))
             subprocess.run(command, env=env, check=True, timeout=90)

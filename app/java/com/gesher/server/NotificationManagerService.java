@@ -127,6 +127,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private final PackageManagerService mPackageManager;
     private final ActivityManagerService mActivityManager;
     private final java.util.function.ToIntBiFunction<StatusBarNotification, Boolean> mTestToast;
+    // Server-local removal boundary for migration tests; never a Binder option.
+    private java.util.function.ToIntBiFunction<String, String> mTestToastRemoval;
     private final File mListenerFile = new File(Device.dataDir(), "system/notification-listeners");
     private final Properties mListenerGrants = new Properties();
     private final NotificationDelegates mDelegates = new NotificationDelegates();
@@ -153,11 +155,64 @@ public final class NotificationManagerService extends INotificationManager.Defau
         return pkg + "/" + tag + "/" + id;
     }
 
-    /** The toast's tag (Windows allows 64 characters): the id, and the tag if there is one. */
+    /** Windows allows 64 characters. Hex digests cannot alias legacy id|tag names. */
     static String toastTag(String tag, int id) {
+        // Match StatusBarNotification's and this service's existing key equivalence.
+        return NotificationIdentity.digest(id + "/" + String.valueOf(tag));
+    }
+
+    static String legacyToastTag(String tag, int id) {
         String t = tag == null ? String.valueOf(id) : id + "|" + tag;
         if (t.length() > 64) t = id + "|" + Integer.toHexString(tag.hashCode());
         return t;
+    }
+
+    static boolean legacyToastTagMatches(String value, String tag, int id) {
+        return legacyToastTag(tag, id).equals(value)
+                || "null".equals(String.valueOf(tag))
+                    && (legacyToastTag(null, id).equals(value) || legacyToastTag("null", id).equals(value));
+    }
+
+    private int removeWindowsToast(String pkg, String windowsTag, int id, String expectedKey, boolean bridge) {
+        if (mTestToastRemoval != null) return mTestToastRemoval.applyAsInt(windowsTag, expectedKey);
+        if (mTestToast != null) return 0;
+        String appId = AppShell.appUserModelId(pkg);
+        if (expectedKey != null) return WindowsHost.removeToastIfLaunch(appId, windowsTag, TOAST_GROUP, "n|" + expectedKey);
+        return bridge ? WindowsHost.cancelNotificationBridge(appId, windowsTag, TOAST_GROUP, id)
+                : WindowsHost.removeToast(appId, windowsTag, TOAST_GROUP);
+    }
+
+    private int removeStoredToast(NotificationStore.Stored stored, boolean bridge) {
+        String current = toastTag(stored.tag, stored.id);
+        int hr = removeWindowsToast(stored.packageName, current, stored.id, null, bridge);
+        for (String legacy : legacyWindowsTags(stored)) {
+            int old = removeWindowsToast(stored.packageName, legacy, stored.id, stored.key, false);
+            if (hr == 0) hr = old;
+        }
+        return hr;
+    }
+
+    private static String[] legacyWindowsTags(NotificationStore.Stored stored) {
+        String legacy = stored.legacyWindowsTag != null ? stored.legacyWindowsTag
+                : !stored.windowsTag.equals(toastTag(stored.tag, stored.id)) ? stored.windowsTag : null;
+        if (legacy == null) return new String[0];
+        // Older builds could show both Windows spellings for one Android key.
+        // Each alias still requires its own native XML owner check.
+        return "null".equals(String.valueOf(stored.tag))
+                ? new String[]{legacyToastTag(null, stored.id), legacyToastTag("null", stored.id)}
+                : new String[]{legacy};
+    }
+
+    private void retireLegacyToast(String pkg, String key) {
+        NotificationStore.Stored stored = NotificationStore.load(pkg, key);
+        if (stored == null) return;
+        boolean removed = true;
+        for (String legacy : legacyWindowsTags(stored)) {
+            if (removeWindowsToast(pkg, legacy, stored.id, key, false) != 0) removed = false;
+        }
+        if (removed && stored.legacyWindowsTag != null) {
+            NotificationStore.legacyRemoved(pkg, key, stored.legacyWindowsTag);
+        }
     }
 
     private ActivityManagerService am() {
@@ -402,6 +457,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
                     NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification, opPkg);
                 }
                 int hr = mTestToast == null ? showToast(r, update) : mTestToast.applyAsInt(sbn, update);
+                if (hr == 0) retireLegacyToast(pkg, sbn.getKey());
                 shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
                         : String.format("no toast (0x%08x)", hr);
             }
@@ -487,16 +543,16 @@ public final class NotificationManagerService extends INotificationManager.Defau
             if (r == null) {
                 if (retained == null) return;
                 NotificationStore.delete(pkg, sbnKey);
-                int hr = mTestToast == null ? WindowsHost.removeToast(AppShell.appUserModelId(pkg),
-                        toastTag(tag, id), TOAST_GROUP) : 0;
+                int hr = removeStoredToast(retained, false);
                 SystemServer.log("notification " + id + " of " + pkg + " (an earlier run's)"
                         + " cancelled" + (hr == 0 ? ", its toast removed"
                                 : String.format(" (toast: 0x%08x)", hr)));
                 return;
             }
+            NotificationStore.Stored stored = NotificationStore.load(pkg, r.sbn.getKey());
             NotificationStore.delete(pkg, r.sbn.getKey());
-            int hr = mTestToast == null ? WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg), toastTag(tag, id),
-                    TOAST_GROUP, id) : 0;
+            int hr = stored != null ? removeStoredToast(stored, true)
+                    : removeWindowsToast(pkg, toastTag(tag, id), id, null, true);
             SystemServer.log("notification " + id + " of " + pkg + " cancelled"
                     + (hr == 0 ? ", its toast removed" : String.format(" (toast: 0x%08x)", hr)));
         }
@@ -784,8 +840,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         }
         if (action < 0 && (s.flags & Notification.FLAG_AUTO_CANCEL) != 0) {
             NotificationStore.delete(s.packageName, key);
-            WindowsHost.removeToast(AppShell.appUserModelId(s.packageName),
-                    toastTag(s.tag, s.id), TOAST_GROUP);
+            removeStoredToast(s, false);
         }
     }
 
@@ -993,10 +1048,11 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 return true;
             });
         }
-        String appId = AppShell.appUserModelId(pkg);
         for (Record r : removed) {
+            NotificationStore.Stored stored = NotificationStore.load(pkg, r.sbn.getKey());
             NotificationStore.delete(pkg, r.sbn.getKey());
-            if (mTestToast == null) WindowsHost.removeToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()), TOAST_GROUP);
+            if (stored != null) removeStoredToast(stored, false);
+            else removeWindowsToast(pkg, toastTag(r.sbn.getTag(), r.sbn.getId()), r.sbn.getId(), null, false);
         }
         SystemServer.log("notification: all of " + pkg + " cancelled (" + removed.size() + ")");
         for (Record r : removed) {
@@ -1607,16 +1663,16 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private void removeChannelToasts(List<Record> removed) {
         for (Record record : removed) {
             String pkg = record.sbn.getPackageName();
+            NotificationStore.Stored stored = NotificationStore.load(pkg, record.sbn.getKey());
             NotificationStore.delete(pkg, record.sbn.getKey());
-            if (mTestToast == null) WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg),
-                    toastTag(record.sbn.getTag(), record.sbn.getId()), TOAST_GROUP, record.sbn.getId());
+            if (stored != null) removeStoredToast(stored, true);
+            else removeWindowsToast(pkg, toastTag(record.sbn.getTag(), record.sbn.getId()), record.sbn.getId(), null, true);
         }
     }
 
     private void removeRetainedChannelToasts(String pkg, Set<String> channelIds) {
         for (NotificationStore.Stored stored : NotificationStore.deleteChannels(pkg, channelIds)) {
-            if (mTestToast == null) WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg),
-                    toastTag(stored.tag, stored.id), TOAST_GROUP, stored.id);
+            removeStoredToast(stored, true);
         }
     }
 
