@@ -102,6 +102,21 @@ struct Backend {
 struct Track : Backend {};
 struct CaptureStream : Backend {
   std::atomic<int> input_error{0}, reads_before_error{-1};
+  std::atomic<uint64_t> state_wake_sequence{0};
+  mutable std::atomic<uint64_t> observed_wait{UINT64_MAX};
+  uint64_t StateWakeSequence() const { return state_wake_sequence.load(); }
+  void WaitForStateWake(uint64_t observed) const {
+    observed_wait = observed;
+    state_wake_sequence.wait(observed);
+  }
+  void NotifyStateWake() { ++state_wake_sequence; state_wake_sequence.notify_all(); }
+  void Stop() { Backend::Stop(); NotifyStateWake(); }
+  void Release() { Backend::Release(); NotifyStateWake(); }
+  void FailForTest(int code) {
+    input_error = code;
+    reads_before_error = 0;
+    NotifyStateWake();
+  }
   int error() const { return reads_before_error == 0 ? input_error.load() : 0; }
   ssize_t Read(void* data, size_t size, bool blocking) {
     if (reads_before_error == 0) return input_error;
@@ -467,6 +482,9 @@ void InputFailures() {
   auto capture = stream->capture;
   capture->start_result = -19;
   Check(RequestStart(stream) == -889 && GetState(stream) == 2, "unavailable input start preserves open state");
+  capture->start_result = -32;
+  Check(RequestStart(stream) == -899 && GetState(stream) == 2,
+        "start discovering backend DEAD_OBJECT preserves the original lifecycle");
   capture->start_result = 0;
   Check(RequestStart(stream) == 0, "input starts after transient start failure");
   capture->input_error = -32; capture->reads_before_error = 1;
@@ -486,15 +504,143 @@ void InputFailures() {
     out.outside = unlocked; out.code = error; ++out.calls;
   };
   Check(OpenStream(&builder, &stream) == 0 && RequestStart(stream) == 0, "input opens with error callback alone");
-  stream->capture->input_error = -32; stream->capture->reads_before_error = 0;
+  stream->capture->FailForTest(-32);
   Check(Await([&] { return result.calls == 1; }) && result.code == -899 && result.outside,
         "disconnection notifies error callback once outside stream mutex");
+  Check(RequestStart(stream) == -895, "known disconnected stream cannot be restarted");
+  Check(RequestStop(stream) == 0 && GetState(stream) == 13,
+        "stop after asynchronous disconnect preserves the terminal external state");
+  Check(RequestStop(stream) == 0 && GetState(stream) == 13,
+        "redundant disconnected stop retains the stopped lifecycle");
+  int32_t next = 0;
+  Check(WaitForStateChange(stream, 13, &next, 0) == -885 && next == 13,
+        "state wait observes disconnection rather than the internal stopped state");
+  Check(Release(stream) == 0 && GetState(stream) == 13,
+        "release does not erase the disconnected external state");
   Close(stream);
   Check(result.calls == 1, "close does not duplicate terminal error callback");
 }
 
+void InputStopDisconnect() {
+  // Hold an actual AAudio data callback while the device boundary becomes
+  // terminal. AOSP's explicit and callback-return stops both acknowledge the
+  // pending disconnect without delivering an error callback after the stop.
+  for (bool explicit_stop : {true, false}) {
+    CallbackGate gate;
+    gate.first_result = explicit_stop ? 0 : 1;
+    std::atomic<int> errors{0};
+    Builder builder;
+    SetDirection(&builder, 1);
+    SetDataCallback(&builder, GatedCallback, &gate);
+    SetErrorCallback(&builder, [](AAudioStream*, void* opaque, int32_t) {
+      ++*static_cast<std::atomic<int>*>(opaque);
+    }, &errors);
+    AAudioStream* stream = nullptr;
+    Check(OpenStream(&builder, &stream) == 0 && stream != nullptr,
+          "stop/disconnect input opens");
+    if (stream == nullptr) continue;
+    Check(RequestStart(stream) == 0 && WaitCalls(gate, 1),
+          "data callback is held before device disconnection");
+    stream->capture->FailForTest(-32);
+    if (explicit_stop) {
+      Check(RequestStop(stream) == -899 && GetState(stream) == 13,
+            "active stop consumes pending DEAD_OBJECT before callback returns");
+    }
+    Permit(gate, true);
+    Check(Await([&] { return GetState(stream) == 13; }),
+          "callback-return STOP cannot hide pending device disconnection");
+    int32_t next = 0;
+    Check(WaitForStateChange(stream, 10, &next, 0) == 0 && next == 13,
+          "wait exposes terminal disconnection after internal stop");
+    Check(RequestStart(stream) == -895, "terminal stream cannot admit another start");
+    Check(RequestStop(stream) == 0 && GetState(stream) == 13,
+          "repeated stop succeeds without clearing disconnection");
+    Check(Close(stream) == 0, "terminal callback stream joins and closes");
+    Check(errors == 0, "stopping consumes pending disconnection without error callback");
+  }
+
+  // A stopped monitor cannot supply this result: the actual synchronous Read
+  // path must publish the terminal flag before returning the error.
+  Builder builder;
+  SetDirection(&builder, 1);
+  std::atomic<int> errors{0};
+  SetErrorCallback(&builder, [](AAudioStream*, void* opaque, int32_t) {
+    ++*static_cast<std::atomic<int>*>(opaque);
+  }, &errors);
+  AAudioStream* stream = nullptr;
+  Check(OpenStream(&builder, &stream) == 0 && stream != nullptr,
+        "synchronous terminal-read input opens");
+  if (stream == nullptr) return;
+  Check(RequestStart(stream) == 0 && RequestStop(stream) == 0 && GetState(stream) == 10,
+        "input is normally stopped before terminal read");
+  Check(Await([&] {
+    return stream->capture->observed_wait == stream->capture->StateWakeSequence();
+  }), "stopped monitor is parked before synchronous read discovers failure");
+  stream->capture->input_error = -32;
+  stream->capture->reads_before_error = 0;
+  std::vector<uint8_t> data(stream->frame_size);
+  Check(Read(stream, data.data(), 1, 0) == -899 && GetState(stream) == 13,
+        "synchronous DEAD_OBJECT publishes disconnection before returning");
+  Check(Read(stream, data.data(), 1, 0) == -899,
+        "later read retains the disconnected result");
+  Check(Read(stream, data.data(), 0, 0) == 0,
+        "zero-length read retains its original precedence");
+  Check(RequestStart(stream) == -895 && RequestStop(stream) == 0,
+        "synchronous disconnect preserves start and redundant-stop results");
+  Check(Close(stream) == 0 && errors == 0,
+        "synchronous error consumption does not invoke an error callback");
+}
+
+void InputLateDisconnect() {
+  // A device update delivered after Stop's error check remains terminal. Unlike
+  // the already-pending error consumed above, AOSP's inactive callback path
+  // still delivers this asynchronous notification (AudioStreamLegacy).
+  for (bool data_callback : {true, false}) {
+    CallbackGate gate;
+    struct Result { std::atomic<int> calls{0}, error{0}; } result;
+    Builder builder;
+    SetDirection(&builder, 1);
+    if (data_callback) SetDataCallback(&builder, GatedCallback, &gate);
+    SetErrorCallback(&builder, [](AAudioStream*, void* opaque, int32_t error) {
+      auto& out = *static_cast<Result*>(opaque);
+      out.error = error;
+      ++out.calls;
+    }, &result);
+    AAudioStream* stream = nullptr;
+    Check(OpenStream(&builder, &stream) == 0 && stream != nullptr,
+          "late-disconnect input opens");
+    if (stream == nullptr) continue;
+    Check(RequestStart(stream) == 0, "late-disconnect input starts");
+    if (data_callback) {
+      Check(WaitCalls(gate, 1), "data callback is held before normal stop");
+    }
+    Check(RequestStop(stream) == 0 && GetState(stream) == 10 && stream->capture->error() == 0,
+          "normal stop completes before the device error arrives");
+    if (!data_callback) {
+      Check(Await([&] {
+        return stream->capture->observed_wait == stream->capture->StateWakeSequence();
+      }), "error-only monitor is parked before late failure delivery");
+    }
+    stream->capture->FailForTest(-32);
+    if (data_callback) Permit(gate, true);
+    int32_t next = 0;
+    Check(WaitForStateChange(stream, 10, &next, 2000000000) == 0 && next == 13,
+          "late device error wakes stopped input and publishes disconnected state");
+    Check(Await([&] { return result.calls == 1; }) && result.error == -899,
+          "late error not consumed by stop invokes one error callback");
+    Check(RequestStart(stream) == -895 && RequestStop(stream) == 0 && GetState(stream) == 13,
+          "late disconnection preserves start rejection and redundant stop");
+    Check(Close(stream) == 0 && result.calls == 1,
+          "late-disconnect worker joins without duplicate notification");
+  }
+}
+
 int main(int argc, char**) {
-  if (argc == 1) InputFailures();
+  if (argc == 1) {
+    InputFailures();
+    InputStopDisconnect();
+    InputLateDisconnect();
+  }
   Masks();
   DeviceIds();
   Lifecycle();

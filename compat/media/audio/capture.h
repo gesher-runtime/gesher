@@ -17,6 +17,7 @@
 
 #include <sys/types.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <array>
 #include <cstddef>
@@ -74,6 +75,14 @@ class CaptureStream {
   bool started() const;
   int error() const;
 
+  // Lifecycle/error observers snapshot this sequence before checking their
+  // predicates, then wait without holding either the API or capture mutex.
+  // A change between the check and wait cannot lose its notification. API
+  // lifecycle changes can use the same wake without a callback into the API.
+  uint64_t StateWakeSequence() const;
+  void WaitForStateWake(uint64_t observed) const;
+  void NotifyStateWake();
+
   // Copies up to `bytes` (whole frames) of what was captured; with `blocking`,
   // waits until that much is there or the stream stops. Returns the bytes
   // read (0 when stopped and empty) or an error.
@@ -122,6 +131,7 @@ class CaptureStream {
 
   mutable std::mutex mu_;
   std::condition_variable cv_;
+  std::atomic<uint64_t> state_wake_sequence_{0};
   bool started_ = false, released_ = false;
   int error_ = kOk;
   uint64_t generation_ = 0;
