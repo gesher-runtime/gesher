@@ -37,6 +37,12 @@ std::atomic<int64_t> fail_write_after{-1};
 std::mutex blocked_mu;
 std::condition_variable blocked_cv;
 bool read_blocked = false, release_read = false;
+std::atomic<bool> switch_to_whole{false};
+std::mutex transition_mu;
+std::condition_variable transition_cv;
+int transition_arrived = 0;
+bool transition_release_second = false;
+std::atomic<int> transition_returned{0};
 thread_local DWORD last_error = 1234;
 constexpr int64_t kLargeLength = 128 * 1024 * 1024 + 13;
 bool Check(bool ok, const char* reason) {
@@ -177,6 +183,26 @@ BOOL WinHttpSendRequest(HINTERNET req, const wchar_t* raw, DWORD, void*, DWORD, 
     base = std::wcstoll(headers.c_str() + range + 13, &end, 10);
     Check(end != nullptr && *end == L'-', "range syntax");
     last_range_end = std::wcstoll(end + 1, nullptr, 10);
+  }
+  if (req->path == L"/concurrent-transition" && switch_to_whole) {
+    std::unique_lock<std::mutex> lock(transition_mu);
+    const int ordinal = ++transition_arrived;
+    transition_cv.notify_all();
+    if (ordinal == 1) {
+      Check(transition_cv.wait_for(lock, std::chrono::seconds(5), [] {return transition_arrived >= 2;}),
+            "two ordinary cache misses reach response boundary");
+    } else {
+      Check(transition_cv.wait_for(lock, std::chrono::seconds(5), [] {return transition_release_second;}),
+            "second response released after prefix observation");
+    }
+    req->status = 200;
+    req->generated_length = kFixtureLength;
+    return true;
+  }
+  if (req->path == L"/range-then-whole" && switch_to_whole) {
+    req->status = 200;
+    req->generated_length = kFixtureLength;
+    return true;
   }
   if (req->path.starts_with(L"/stream")) {
     req->status = 200;
@@ -471,11 +497,72 @@ void StreamingContracts() {
 }
 }  // namespace
 
+void RangeToWholeTransition(bool concurrent) {
+  // Evict range zero using ordinary public reads, then make the transport
+  // return a legal whole response when that range is requested again.
+  {
+    auto source = Open(concurrent ? "concurrent-transition" : "range-then-whole");
+    uint8_t byte = 0xed;
+    Check(source->ReadAt(0, &byte, 1) == 1 && byte == ByteAt(0),
+          "initial 206 serves byte zero");
+    for (int i = 1; i <= 17; ++i) {
+      const int64_t at = i * kFixtureChunk;
+      Check(source->ReadAt(at, &byte, 1) == 1 && byte == ByteAt(at),
+            "ordinary range reads evict chunk zero");
+    }
+    switch_to_whole = true;
+    if (concurrent) {
+      ssize_t result1 = -99, result2 = -99;
+      uint8_t first_byte = 0xed, second_byte = 0xed;
+      std::thread first([&] {
+        result1 = source->ReadAt(0, &first_byte, 1);
+        ++transition_returned;
+        transition_cv.notify_all();
+      });
+      std::thread second([&] {
+        result2 = source->ReadAt(0, &second_byte, 1);
+        ++transition_returned;
+        transition_cv.notify_all();
+      });
+      {
+        std::unique_lock<std::mutex> lock(transition_mu);
+        Check(transition_cv.wait_for(lock, std::chrono::seconds(5), [] {
+                return transition_returned.load() > 0;
+              }), "first transition reader completes before second response");
+      }
+      Check(source->ReadAt(0, &byte, 1) == 1 && byte == ByteAt(0),
+            "first adopted response establishes prefix");
+      {
+        std::lock_guard<std::mutex> lock(transition_mu);
+        transition_release_second = true;
+      }
+      transition_cv.notify_all();
+      first.join();
+      second.join();
+      Check(result1 == 1 && result2 == 1 && first_byte == ByteAt(0) && second_byte == ByteAt(0),
+            "both concurrent transitions return requested bytes");
+      byte = 0xed;
+      Check(source->ReadAt(65536, &byte, 1) == 1 && byte == ByteAt(65536),
+            "late response never restarts already-spooled prefix");
+    } else {
+      byte = 0xed;
+      Check(source->ReadAt(0, &byte, 1) == 1 && byte == ByteAt(0),
+            "later legal 200 at zero must not report false EOF");
+      Check(source->ReadAt(0, &byte, 1) == 1 && byte == ByteAt(0),
+            "subsequent same read succeeds");
+    }
+  }
+  Check(handles == 0 && file_handles == 0, "transition releases every handle");
+  switch_to_whole = false;
+}
+
 int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "measure") == 0) {
     Measurements(false);
     return failures != 0;
   }
+  RangeToWholeTransition(false);
+  RangeToWholeTransition(true);
   {
     auto source = Open("range");
     Check(source->Size() == kFixtureLength, "206 resource length");

@@ -131,6 +131,11 @@ class HttpSource : public DataSource {
         return done > 0 ? static_cast<ssize_t>(done) : -EOVERFLOW;
       }
       int64_t pos = offset + static_cast<int64_t>(done);
+      if (whole_) {
+        const ssize_t tail = ReadWhole(pos, out + done, size - done);
+        if (tail < 0) return tail == -EINTR || done == 0 ? tail : static_cast<ssize_t>(done);
+        return static_cast<ssize_t>(done) + tail;
+      }
       if (size_ >= 0 && pos >= size_) break;
       int64_t base = pos - pos % static_cast<int64_t>(kChunk);
       Chunk chunk;
@@ -141,7 +146,12 @@ class HttpSource : public DataSource {
       if (chunk == nullptr) {
         std::vector<uint8_t> bytes;
         std::string error;
-        if (!Fetch(base, &bytes, &error)) {
+        const bool fetched = Fetch(base, &bytes, &error);
+        // This request (or a concurrent miss) can discover a full response
+        // after the initial 206. Its bytes belong to the spool, not an empty
+        // range-cache entry. Continue the same public read in that mode.
+        if (whole_) continue;
+        if (!fetched) {
           MEDIA_LOGE("http: %s", error.c_str());
           return done > 0 ? static_cast<ssize_t>(done) : -EIO;
         }
@@ -251,14 +261,23 @@ class HttpSource : public DataSource {
       if (WinHttpQueryHeaders(req.h, WINHTTP_QUERY_CONTENT_RANGE, WINHTTP_HEADER_NAME_BY_INDEX, range,
                               &rlen, WINHTTP_NO_HEADER_INDEX)) {
         const wchar_t* slash = wcschr(range, L'/');
-        if (slash != nullptr && slash[1] != L'*') size_ = _wtoi64(slash + 1);
+        if (slash != nullptr && slash[1] != L'*') {
+          // A range already in flight must not overwrite the length belonging
+          // to the one full response adopted by another reader.
+          std::lock_guard<std::mutex> lock(whole_mu_);
+          if (!whole_) size_ = _wtoi64(slash + 1);
+        }
       }
     } else {
-      // The initial 200 response is the complete resource, not a range. Keep
+      // A 200 response is the complete resource, not a range. Keep
       // its one request alive and consume it only when a caller needs bytes.
       std::lock_guard<std::mutex> lock(whole_mu_);
       if (cancelled_) { *error = "cancelled"; return false; }
-      whole_ = true;
+      // Concurrent range-zero misses may both receive 200. Adopt only the
+      // first response; replacing its handle would leak it and splice a new
+      // response prefix onto the existing spool. req closes any losing reply.
+      if (whole_) { out->clear(); return true; }
+      whole_length_ = -1;
       wchar_t clen[32];
       DWORD clen_size = sizeof(clen);
       if (WinHttpQueryHeaders(req.h, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, clen,
@@ -270,11 +289,13 @@ class HttpSource : public DataSource {
               length > (std::numeric_limits<int64_t>::max() - (*c - L'0')) / 10) valid = false;
           else length = length * 10 + (*c - L'0');
         }
-        if (valid) size_ = whole_length_ = length;
+        if (valid) whole_length_ = length;
       }
+      size_ = whole_length_;
       whole_request_.h = req.h;
       req.h = nullptr;
       if (whole_length_ == 0) whole_request_.Reset();
+      whole_ = true;
       out->clear();
       return true;
     }
