@@ -1,0 +1,29 @@
+name: Select a trusted PR build runner
+description: Route only the owner's current internal PR merge to the restricted runner group
+inputs:
+  requested:
+    description: The caller explicitly enables local PR execution
+    default: 'false'
+  enabled:
+    description: Repository rollout switch
+    default: 'false'
+outputs:
+  runner:
+    description: JSON runs-on value
+    value: ${{ steps.route.outputs.runner }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v7
+      id: route
+      env:
+        POLICY_ACTION: ${{ github.action_path }}
+        REQUEST_LOCAL: ${{ inputs.requested }}
+        ENABLE_LOCAL: ${{ inputs.enabled }}
+      with:
+        script: |
+          const route = require(process.env.POLICY_ACTION + '/route.cjs');
+          const result = await route({github, context,
+            requested: process.env.REQUEST_LOCAL, enabled: process.env.ENABLE_LOCAL});
+          core.setOutput('runner', JSON.stringify(result));
+          core.info('BUILD_RUNNER_ROUTE ' + JSON.stringify(result));
