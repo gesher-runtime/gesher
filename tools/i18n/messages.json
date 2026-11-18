@@ -79,6 +79,10 @@
       "en": "Gesher Camera",
       "he": "מצלמת גשר"
     },
+    "camera_selection_restart": {
+      "en": "Close your Android apps and run gesher-app shutdown for the camera change to take effect.",
+      "he": "כדי להחיל את בחירת המצלמה, סגור את יישומי Android והפעל gesher-app shutdown."
+    },
     "camera_take": {
       "en": "Take photo",
       "he": "צילום תמונה"
