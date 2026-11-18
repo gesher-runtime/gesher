@@ -16,6 +16,10 @@ def context(env,job,event=None,checkout_parents=None):
     ref = env['GITHUB_REF']
     if env['GITHUB_EVENT_NAME'] == 'pull_request':
         assert env['GITHUB_BASE_REF'] == 'main'
+    elif env['GITHUB_EVENT_NAME'] == 'merge_group':
+        # source_identity has already bound the event's exact head/ref and main
+        # target. Retain all workflow, source, run, repository and role gates.
+        assert ref.startswith('refs/heads/gh-readonly-queue/main/')
     else:
         assert ref in ('refs/heads/'+BRANCH, 'refs/heads/main')
     assert env.get('GITHUB_WORKFLOW_REF') == REPOSITORY+'/'+PATH+'@'+ref

@@ -54,8 +54,9 @@ int gesher_pthread_getname_np(pthread_t thread, char* name, size_t len);
 #define pthread_setname_np gesher_pthread_setname_np
 #define pthread_getname_np gesher_pthread_getname_np
 
-// A signal sent to a thread is pending for the process, where sigwait takes
-// it (see signal.cc); winpthreads' pthread_kill only checks the thread.
+// Signal zero checks the actual thread. Self-directed signals have a private
+// pending queue; unsupported other-thread delivery fails instead of routing
+// the request to an unrelated process waiter (see signal.cc).
 int gesher_pthread_kill(pthread_t thread, int sig);
 #undef pthread_kill
 #define pthread_kill gesher_pthread_kill

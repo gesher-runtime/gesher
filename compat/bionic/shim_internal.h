@@ -165,12 +165,13 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
 
 // Sleeps `ms`, or less if a signal this thread does not block arrives (its
 // handler has run then); returns true if interrupted, with what was left.
-bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms);
+// A nonzero error reports unavailable delivery/registration, never completion.
+bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
 
 // As above, observing an interruption before delivering its handlers. The
 // observer is an internal host callback, never loaded application code; it
 // runs without the signal-state lock and must only record the wake instant.
-bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context);
+bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context, int* error);
 // Absolute Android BOOTTIME deadline. Resume notification wakes the signal
 // transport to recheck it; returns 0, EINTR, or a registration error number.
 int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context);

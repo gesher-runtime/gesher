@@ -456,10 +456,14 @@ int BIONIC_SYSV ClockNanosleep(int clock, int flags, const LinuxTimespec* req, L
       auto& sample = *static_cast<Observation*>(value);
       sample.at = sample.clock == 7 ? gesher::BoottimeNanos() : NowMonotonicNs();
     };
-    const int error = clock == 7
-        ? InterruptibleBoottimeSleepObserved(static_cast<int64_t>(deadline), observe, &observed)
-        : (InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe, &observed)
-               ? kEINTR : 0);
+    int error = 0;
+    if (clock == 7) {
+      error = InterruptibleBoottimeSleepObserved(static_cast<int64_t>(deadline), observe, &observed);
+    } else {
+      bool interrupted = InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe,
+                                                    &observed, &error);
+      if (error == 0 && interrupted) error = kEINTR;
+    }
     if (error != 0) {
       if (error == kEINTR && !absolute && rem != nullptr) {
         // Relative waits report the interval left when the signal interrupted

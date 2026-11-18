@@ -86,10 +86,13 @@ bool TestSleep(uint32_t ms, uint32_t* left, void (*observe)(void*), void* contex
   errno = ERANGE;  // Windows/backend calls must not leak into success errno.
   return action.interrupt;
 }
-bool InterruptibleSleep(uint32_t ms, uint32_t* left) {
+bool InterruptibleSleep(uint32_t ms, uint32_t* left, int* error = nullptr) {
+  if (error != nullptr) *error = 0;
   return TestSleep(ms, left, nullptr, nullptr);
 }
-bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context) {
+bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context,
+                                int* error = nullptr) {
+  if (error != nullptr) *error = 0;
   return TestSleep(ms, nullptr, observe, context);
 }
 void DeliverPendingSignals() {
@@ -305,6 +308,8 @@ struct Condition {
   }
 };
 struct ActionState { uintptr_t handler = 2; };
+using BionicSigaction = ActionState;
+constexpr int kEAGAIN = EAGAIN, kENOSYS = ENOSYS;
 struct State {
   std::mutex mutex;
   FixturePending process_pending;
@@ -314,6 +319,10 @@ struct State {
 } state;
 static ThreadState* Self() { return &thread; }
 static State& S() { return state; }
+static bool ClaimActionLocked(ThreadState*, int sig, BionicSigaction* action) {
+  *action = S().actions[sig];
+  return true;  // controlled ordinary-handler delivery seam
+}
 static void Pop(FixturePending& pending, int sig, BionicSiginfo* info) {
   if (info != nullptr) {
     *info = &pending == &thread.pending ? thread.info[sig] : S().process_info[sig];
@@ -327,7 +336,9 @@ static void Run(ThreadState*, int sig, const BionicSiginfo& info) {
   delivered_info.push_back(info.value);
   if (use_signal_boundary) fake_ns += handler_elapsed_ns;
 }
-static void DeliverAll(ThreadState* value) {
+static void Dispatch(ThreadState* value, int sig, const BionicSiginfo& info,
+                     const BionicSigaction&) { Run(value, sig, info); }
+static int DeliverAll(ThreadState* value) {
   for (int sig = 1; sig < kNsig; ++sig) {
     if ((value->mask & Bit(sig)) != 0) continue;
     if ((value->pending & Bit(sig)) != 0) {
@@ -339,6 +350,7 @@ static void DeliverAll(ThreadState* value) {
       Run(value, sig, S().process_info[sig]);
     }
   }
+  return 0;
 }
 @SIGNAL_WAIT_IMPLEMENTATION@
 struct Observation {

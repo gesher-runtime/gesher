@@ -1,8 +1,10 @@
 // gesher-base: Linux signal API on Windows.
 //
 // Pending storage and synchronous waits are implemented here. sigsuspend
-// dispatches registered handlers, but its frame/alternate-stack and job-control
-// contracts are incomplete; see docs/research/realtime-signals-2026-11-17.md.
+// supports ordinary one-argument handlers. Delivery needing an asynchronous
+// machine frame/alternate stack or local job-control stop fails with ENOSYS,
+// without consuming the pending record. See the capability notes in
+// docs/research/realtime-signals-2026-11-17.md.
 // Synchronous Windows exceptions are handled separately in fault_signals.cc.
 
 #include <signal.h>
@@ -44,11 +46,13 @@ namespace {
 
 constexpr int kMaxSignal = NSIG - 1;
 std::atomic<size_t> queue_count{0};
+struct LocalPending;
 
 struct State {
   std::mutex lock;
   struct sigaction actions[NSIG] = {};
   gesher::signals::Pending<siginfo_t> pending;
+  LocalPending* local_pending = nullptr;
   std::condition_variable sent;
 };
 
@@ -60,6 +64,26 @@ State& state() {
 thread_local sigset_t thread_mask = 0;
 thread_local stack_t alt_stack = {nullptr, SS_DISABLE, 0};
 
+// Self-directed pthread signals belong to this thread, not to the process's
+// arbitrary waiter. The intrusive registry permits SIG_IGN to flush all of
+// the actual thread queues without a second allocation or a lifetime handle.
+struct LocalPending {
+  gesher::signals::Pending<siginfo_t> pending;
+  LocalPending* next = nullptr;
+  LocalPending() {
+    std::lock_guard<std::mutex> guard(state().lock);
+    next = state().local_pending;
+    state().local_pending = this;
+  }
+  ~LocalPending() {
+    std::lock_guard<std::mutex> guard(state().lock);
+    auto** entry = &state().local_pending;
+    while (*entry != this) entry = &(*entry)->next;
+    *entry = next;
+  }
+};
+thread_local LocalPending local_pending;
+
 bool Valid(int signum) { return signum >= 1 && signum <= kMaxSignal; }
 sigset_t Bit(int signum) { return static_cast<sigset_t>(1) << (signum - 1); }
 
@@ -67,36 +91,49 @@ bool DefaultIgnores(int sig) {
   return sig == SIGCHLD || sig == SIGCONT || sig == SIGURG || sig == SIGWINCH;
 }
 
+bool DefaultStops(int sig) {
+  // The host CRT retains SIGBREAK/SIGABRT at 21/22. Those are not relabeled
+  // here; the bionic adapter has Android's complete separate signal ABI.
+  return sig == SIGSTOP || sig == SIGTSTP;
+}
+
 bool Ignored(const struct sigaction& action, int sig) {
   return action.sa_handler == SIG_IGN ||
          (action.sa_handler == SIG_DFL && DefaultIgnores(sig));
 }
 
-void PopSignalLocked(State& s, int signum, siginfo_t* info) {
-  if (!s.pending.Pop(signum, info) && info != nullptr) info->si_signo = signum;
+void PopSignalLocked(gesher::signals::Pending<siginfo_t>& queue, int signum, siginfo_t* info) {
+  if (!queue.Pop(signum, info) && info != nullptr) info->si_signo = signum;
 }
 
 // Makes `signum` pending for the process. Signal 0 only checks the target.
-int Send(pid_t pid, int signum, int code, const union sigval* value) {
+int Send(pid_t pid, int signum, int code, const union sigval* value, bool to_thread = false) {
   if (signum != 0 && !Valid(signum)) return errno = EINVAL, -1;
   if (pid != getpid() && pid != 0) {
+    // The existing interprocess mailbox is a standard-signal bitmap. It
+    // cannot carry queued values or RT multiplicity, and must not accept
+    // those requests as an ordinary kill that silently changes their input.
+    if (signum != 0 && (signum >= 32 || code == SI_QUEUE)) return errno = ENOSYS, -1;
     // Another process: through its mailbox (process.cc).
     return gesher_kill_other(pid, signum);
   }
   if (signum == 0) return 0;
+  auto* directed = to_thread ? &local_pending.pending : nullptr;
   State& s = state();
   {
     std::lock_guard<std::mutex> guard(s.lock);
     // A blocked ignored signal remains waitable; installing SIG_IGN below
     // flushes pending instances irrespective of the mask.
     if ((thread_mask & Bit(signum)) == 0 && Ignored(s.actions[signum], signum)) return 0;
+    if ((thread_mask & Bit(signum)) == 0 && s.actions[signum].sa_handler == SIG_DFL &&
+        DefaultStops(signum)) return errno = ENOSYS, -1;
     siginfo_t info = {};
     info.si_signo = signum;
     info.si_code = code;
     info.si_pid = getpid();
     info.si_uid = getuid();
     if (value != nullptr) info.si_value = *value;
-    if (!s.pending.Push(signum, code, info)) return errno = EAGAIN, -1;
+    if (!(directed != nullptr ? *directed : s.pending).Push(signum, code, info)) return errno = EAGAIN, -1;
   }
   s.sent.notify_all();
   return 0;
@@ -107,16 +144,17 @@ int Send(pid_t pid, int signum, int code, const union sigval* value) {
 int Take(const sigset_t* set, siginfo_t* info,
          const std::chrono::steady_clock::time_point* deadline) {
   State& s = state();
+  auto& own = local_pending.pending;
   std::unique_lock<std::mutex> guard(s.lock);
-  auto ready = [&] { return (s.pending.Mask() & *set) != 0; };
+  auto ready = [&] { return ((own.Mask() | s.pending.Mask()) & *set) != 0; };
   if (deadline == nullptr) {
     s.sent.wait(guard, ready);
   } else if (!s.sent.wait_until(guard, *deadline, ready)) {
     return errno = EAGAIN, -1;
   }
   for (int signum = 1; signum <= kMaxSignal; ++signum) {
-    if ((s.pending.Mask() & *set & Bit(signum)) != 0) {
-      PopSignalLocked(s, signum, info);
+    if (((own.Mask() | s.pending.Mask()) & *set & Bit(signum)) != 0) {
+      PopSignalLocked((own.Mask() & Bit(signum)) != 0 ? own : s.pending, signum, info);
       return signum;
     }
   }
@@ -185,7 +223,11 @@ int gesher_sigaction_raw(int signum, const struct sigaction* act, struct sigacti
   if (act != nullptr) {
     s.actions[signum] = *act;
     s.actions[signum].sa_mask &= ~(Bit(SIGKILL) | Bit(SIGSTOP));
-    if (Ignored(*act, signum)) s.pending.Discard(signum);
+    if (Ignored(*act, signum)) {
+      s.pending.Discard(signum);
+      for (auto* thread = s.local_pending; thread != nullptr; thread = thread->next)
+        thread->pending.Discard(signum);
+    }
   }
   return 0;
 }
@@ -230,22 +272,29 @@ int sigaltstack(const stack_t* ss, stack_t* old_ss) {
 
 int sigpending(sigset_t* set) {
   State& s = state();
+  auto& own = local_pending.pending;
   std::lock_guard<std::mutex> guard(s.lock);
-  *set = s.pending.Mask() & thread_mask;
+  *set = (own.Mask() | s.pending.Mask()) & thread_mask;
   return 0;
 }
 
 int kill(pid_t pid, int sig) { return Send(pid, sig, SI_USER, nullptr); }
 
-// The thread is not singled out: a signal sent to one of this process's
-// threads is pending for the process, which is what sigwait sees.
-int tgkill(pid_t tgid, pid_t, int sig) { return Send(tgid, sig, SI_TKILL, nullptr); }
+int tgkill(pid_t tgid, pid_t tid, int sig) {
+  if (sig != 0 && !Valid(sig)) return errno = EINVAL, -1;
+  if (tgid <= 0 || tid <= 0) return errno = EINVAL, -1;
+  if (tgid != getpid() || tid != static_cast<pid_t>(GetCurrentThreadId()))
+    return errno = ENOSYS, -1;
+  return Send(tgid, sig, SI_TKILL, nullptr, true);
+}
 
 int gesher_pthread_kill(pthread_t thread, int sig) {
   // winpthreads checks that the thread exists (and handles signal 0).
   int rc = pthread_kill(thread, 0);
   if (rc != 0 || sig == 0) return rc;
-  return Send(getpid(), sig, SI_TKILL, nullptr) == 0 ? 0 : errno;
+  if (!Valid(sig)) return EINVAL;
+  if (!pthread_equal(thread, pthread_self())) return ENOSYS;
+  return Send(getpid(), sig, SI_TKILL, nullptr, true) == 0 ? 0 : errno;
 }
 
 int sigqueue(pid_t pid, int sig, const union sigval value) {
@@ -279,6 +328,7 @@ int sigsuspend(const sigset_t* mask) {
   sigset_t unmasked = ~temp_mask;
 
   State& s = state();
+  auto& own = local_pending.pending;
   std::unique_lock<std::mutex> guard(s.lock);
 
   siginfo_t delivered_info = {};
@@ -288,7 +338,7 @@ int sigsuspend(const sigset_t* mask) {
   for (;;) {
     int candidate = 0;
     for (int signum = 1; signum <= kMaxSignal; ++signum) {
-      if ((s.pending.Mask() & unmasked & Bit(signum)) != 0) {
+      if (((own.Mask() | s.pending.Mask()) & unmasked & Bit(signum)) != 0) {
         candidate = signum;
         break;
       }
@@ -296,26 +346,36 @@ int sigsuspend(const sigset_t* mask) {
 
     if (candidate != 0) {
       struct sigaction act = s.actions[candidate];
+      auto& queue = (own.Mask() & Bit(candidate)) != 0 ? own : s.pending;
       // Check if signal action is to ignore
       if (act.sa_handler == SIG_IGN ||
           (act.sa_handler == SIG_DFL &&
            (candidate == SIGCHLD || candidate == SIGURG ||
             candidate == SIGWINCH || candidate == SIGCONT))) {
         // Discard ignored signal
-        PopSignalLocked(s, candidate, nullptr);
+        PopSignalLocked(queue, candidate, nullptr);
         continue;
       }
 
       // Check if signal action is default terminate
       if (act.sa_handler == SIG_DFL) {
-        PopSignalLocked(s, candidate, &delivered_info);
+        if (DefaultStops(candidate)) {
+          thread_mask = old_mask;
+          return errno = ENOSYS, -1;
+        }
+        PopSignalLocked(queue, candidate, &delivered_info);
         guard.unlock();
         thread_mask = old_mask;
         ExitProcess(128 + static_cast<UINT>(candidate));
       }
 
       // Action is a user-defined handler
-      PopSignalLocked(s, candidate, &delivered_info);
+      if ((act.sa_flags & SA_SIGINFO) != 0 ||
+          ((act.sa_flags & SA_ONSTACK) != 0 && (alt_stack.ss_flags & SS_DISABLE) == 0)) {
+        thread_mask = old_mask;
+        return errno = ENOSYS, -1;
+      }
+      PopSignalLocked(queue, candidate, &delivered_info);
       delivered_act = act;
       delivered_sig = candidate;
       if ((delivered_act.sa_flags & SA_RESETHAND) != 0) {
@@ -335,17 +395,10 @@ int sigsuspend(const sigset_t* mask) {
   }
   thread_mask = handler_mask;
 
-  if ((delivered_act.sa_flags & SA_SIGINFO) != 0) {
-    if (delivered_act.sa_sigaction != nullptr) {
-      ucontext_t ucontext = {};
-      delivered_act.sa_sigaction(delivered_sig, &delivered_info, &ucontext);
-    }
-  } else {
-    if (delivered_act.sa_handler != nullptr &&
-        delivered_act.sa_handler != SIG_DFL &&
-        delivered_act.sa_handler != SIG_IGN) {
-      delivered_act.sa_handler(delivered_sig);
-    }
+  if (delivered_act.sa_handler != nullptr &&
+      delivered_act.sa_handler != SIG_DFL &&
+      delivered_act.sa_handler != SIG_IGN) {
+    delivered_act.sa_handler(delivered_sig);
   }
 
   thread_mask = old_mask;
