@@ -58,7 +58,7 @@ static void Check(const char* name, bool ok) {
   if (!ok) { ++failures; std::printf("FAIL clock domains: %s\n", name); }
 }
 static int64_t Nanos(timespec value) { return value.tv_sec * 1000000000 + value.tv_nsec; }
-struct Action { int64_t awake_ns, suspend_ns, wall_step_ns, handler_ns; bool interrupted; };
+struct Action { int64_t awake_ns, suspend_ns, wall_step_ns, handler_ns; bool interrupted; int error = 0; };
 static std::vector<Action> actions;
 static std::vector<uint32_t> waits;
 
@@ -70,12 +70,18 @@ static int64_t ThreadCpuNanos() { return 200; }
 static int64_t ProcessCpuNanos() { return 300; }
 static int ReadPthreadCpuClock(int, int64_t*) { return EINVAL; }
 static void DeliverPendingSignals() {}
-static bool InterruptibleSleepObserved(uint32_t milliseconds, void (*observe)(void*), void* context) {
+static bool InterruptibleSleepObserved(uint32_t milliseconds, void (*observe)(void*), void* context,
+                                       int* error = nullptr) {
+  if (error != nullptr) *error = 0;
   const size_t index = waits.size();
   if (index > 10) { std::fputs("unbounded sleep in clock fixture\n", stderr); std::abort(); }
   waits.push_back(milliseconds);
   const Action action = index < actions.size() ? actions[index] :
       Action{static_cast<int64_t>(milliseconds) * 1000000, 0, 0, 0, false};
+  if (action.error != 0) {
+    if (error != nullptr) *error = action.error;
+    return false;
+  }
   awake += action.awake_ns; suspended += action.suspend_ns;
   wall += action.awake_ns + action.suspend_ns + action.wall_step_ns;
   if (action.interrupted && observe) observe(context);
@@ -86,8 +92,10 @@ static bool InterruptibleSleepObserved(uint32_t milliseconds, void (*observe)(vo
 static int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context) {
   const int64_t left = deadline - gesher::BoottimeNanos();
   if (left <= 0) return 0;
-  return InterruptibleSleepObserved(static_cast<uint32_t>(std::min<int64_t>(
-      left / 1000000 + (left % 1000000 != 0), 0x7ffffffe)), observe, context) ? EINTR : 0;
+  int error = 0;
+  const bool interrupted = InterruptibleSleepObserved(static_cast<uint32_t>(std::min<int64_t>(
+      left / 1000000 + (left % 1000000 != 0), 0x7ffffffe)), observe, context, &error);
+  return error != 0 ? error : interrupted ? EINTR : 0;
 }
 @BIONIC_READER@
 @BIONIC_DEADLINE@
@@ -241,6 +249,14 @@ static void Deadlines() {
   Check("absolute realtime deadlines preserve wall origin", Nanos(expected) == wall + 3000000);
 }
 static void Sleeps() {
+  for (int clock : {0, 1, 7}) {
+    Reset();
+    guest::LinuxTimespec request{1, 0}, remain{99, 99};
+    actions = {{0, 0, 0, 0, false, ENOMEM}};
+    Check("wait registration failure preserves error, errno and remainder",
+          guest::ClockNanosleep(clock, 0, &request, &remain) == ENOMEM && errno == EDOM &&
+          remain.tv_sec == 99 && remain.tv_nsec == 99 && waits.size() == 1);
+  }
   for (int clock : {0, 1, 7}) {
     Reset();
     guest::LinuxTimespec request{3, 0}, remain{99, 99};
