@@ -354,7 +354,10 @@ placeholders for them (they need framework types): `android.net.TrafficStats`
 (`handleBindApplication` calls `init`; no traffic accounting),
 `android.app.role.RoleManager` and `OnRoleHoldersChangedListener` (registered
 as `role` by `RoleFrameworkInitializer`: no roles are available or held, and
-`createRequestRoleIntent` returns the request-role `Intent`),
+`createRequestRoleIntent` returns the request-role `Intent`; privileged APIs
+enforce their Context permissions and cross-user admission, result-bearing
+mutations report failure, and unsupported void mutations throw
+`UnsupportedOperationException` without creating role state),
 `android.app.sdksandbox.sandboxactivity.SdkSandboxActivityAuthority` and
 `ActivityContextInfo` (no intent starts an SDK sandbox activity),
 `android.app.sdksandbox.SdkSandboxManager` (only the static capability query:

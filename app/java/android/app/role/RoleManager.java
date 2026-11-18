@@ -4,9 +4,15 @@
  */
 package android.app.role;
 
+import android.Manifest;
+import android.app.compat.CompatChanges;
+import android.compat.annotation.ChangeId;
+import android.compat.annotation.EnabledSince;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.os.Binder;
+import android.os.Process;
 import android.os.UserHandle;
 import com.android.internal.util.Preconditions;
 
@@ -22,9 +28,11 @@ import java.util.function.Consumer;
  * {@code RoleManager} (e.g. caller-ID / dialer / browser role checks) failed with
  * {@link NoClassDefFoundError}.
  *
- * <p>No Android roles are available or held on Gesher. Queries return {@code false},
- * {@code null}, or empty lists, and {@link #createRequestRoleIntent(String)} builds
- * the documented request-role {@link Intent}. Registered as {@code role} by
+ * <p>No Android roles are available or held on Gesher. After argument and permission
+ * checks, queries return {@code false}, {@code null}, or empty lists. Mutations with
+ * a result report failure; void mutations throw {@link UnsupportedOperationException}.
+ * {@link #createRequestRoleIntent(String)} builds the documented request-role
+ * {@link Intent}. Registered as {@code role} by
  * {@link RoleFrameworkInitializer}.
  */
 public final class RoleManager {
@@ -62,17 +70,22 @@ public final class RoleManager {
     public static final String ROLE_SYSTEM_WELLBEING = "android.app.role.SYSTEM_WELLBEING";
 
     private static final String ACTION_REQUEST_ROLE = "android.app.role.action.REQUEST_ROLE";
+    private static final String MANAGE_ROLES_FROM_CONTROLLER =
+            "com.android.permissioncontroller.permission.MANAGE_ROLES_FROM_CONTROLLER";
+    @ChangeId
+    @EnabledSince(targetSdkVersion = 35)
+    private static final long ROLE_MANAGER_USER_HANDLE_AWARE = 303742236L;
 
     private final Context mContext;
 
     RoleManager(Context context) {
-        mContext = context;
+        mContext = Objects.requireNonNull(context, "context cannot be null");
     }
 
     public Intent createRequestRoleIntent(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Intent intent = new Intent(ACTION_REQUEST_ROLE);
-        PackageManager pm = mContext != null ? mContext.getPackageManager() : null;
+        PackageManager pm = mContext.getPackageManager();
         if (pm != null) {
             String permissionController = pm.getPermissionControllerPackageName();
             if (permissionController != null) {
@@ -85,11 +98,13 @@ public final class RoleManager {
 
     public boolean isRoleAvailable(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforceUser(getContextUserIdIfAppropriate(), false);
         return false;
     }
 
     public boolean isRoleHeld(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforceUser(getContextUserIdIfAppropriate(), false);
         return false;
     }
 
@@ -99,6 +114,8 @@ public final class RoleManager {
         Objects.requireNonNull(executor, "executor cannot be null");
         Objects.requireNonNull(listener, "listener cannot be null");
         Objects.requireNonNull(user, "user cannot be null");
+        enforceUser(user.getIdentifier(), true);
+        enforcePermission(Manifest.permission.OBSERVE_ROLE_HOLDERS);
     }
 
     /** @hide */
@@ -106,6 +123,8 @@ public final class RoleManager {
             OnRoleHoldersChangedListener listener, UserHandle user) {
         Objects.requireNonNull(listener, "listener cannot be null");
         Objects.requireNonNull(user, "user cannot be null");
+        enforceUser(user.getIdentifier(), true);
+        enforcePermission(Manifest.permission.OBSERVE_ROLE_HOLDERS);
     }
 
     /** @hide */
@@ -114,6 +133,9 @@ public final class RoleManager {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Preconditions.checkStringNotEmpty(packageName, "packageName cannot be null or empty");
         Objects.requireNonNull(user, "user cannot be null");
+        checkCallback(executor, callback);
+        enforceUser(user.getIdentifier(), false);
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
         reportFalse(executor, callback);
     }
 
@@ -121,6 +143,7 @@ public final class RoleManager {
     public boolean addRoleHolderFromController(String roleName, String packageName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Preconditions.checkStringNotEmpty(packageName, "packageName cannot be null or empty");
+        enforceController();
         return false;
     }
 
@@ -129,43 +152,55 @@ public final class RoleManager {
             Executor executor, Consumer<Boolean> callback) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Objects.requireNonNull(user, "user cannot be null");
+        checkCallback(executor, callback);
+        enforceUser(user.getIdentifier(), false);
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
         reportFalse(executor, callback);
     }
 
     /** @hide */
     public UserHandle getActiveUserForRole(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforceActiveUserPermissions();
         return null;
     }
 
     /** @hide */
     public String getDefaultApplication(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforceUser(mContext.getUserId(), false);
+        enforcePermission(Manifest.permission.MANAGE_DEFAULT_APPLICATIONS);
+        checkDefaultRole(roleName);
         return null;
     }
 
     /** @hide */
     public List<String> getDefaultHoldersForTest(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
+        checkTestRole(roleName);
         return List.of();
     }
 
     /** @hide */
     public List<String> getHeldRolesFromController(String packageName) {
         Preconditions.checkStringNotEmpty(packageName, "packageName cannot be null or empty");
+        enforceController();
         return List.of();
     }
 
     /** @hide */
     public List<String> getRoleHolders(String roleName) {
-        Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
-        return List.of();
+        return getRoleHoldersAsUser(roleName, UserHandle.of(getContextUserIdIfAppropriate()));
     }
 
     /** @hide */
     public List<String> getRoleHoldersAsUser(String roleName, UserHandle user) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Objects.requireNonNull(user, "user cannot be null");
+        enforceUser(user.getIdentifier(), false);
+        enforceAnyPermission(Manifest.permission.MANAGE_ROLE_HOLDERS,
+                Manifest.permission.GET_ROLE_HOLDERS);
         return List.of();
     }
 
@@ -174,31 +209,40 @@ public final class RoleManager {
             Executor executor, Consumer<Boolean> callback) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Preconditions.checkStringNotEmpty(packageName, "packageName cannot be null or empty");
-        Objects.requireNonNull(callback, "callback cannot be null");
+        checkCallback(executor, callback);
+        enforceUser(getContextUserIdIfAppropriate(), false);
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
         reportFalse(executor, callback);
     }
 
     /** @hide */
     public boolean isBypassingRoleQualification() {
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
         return false;
     }
 
     /** @hide */
     public boolean isRoleFallbackEnabled(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforceUser(mContext.getUserId(), false);
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
         return false;
     }
 
     /** @hide */
     public void isRoleVisible(String roleName, Executor executor, Consumer<Boolean> callback) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
-        Objects.requireNonNull(callback, "callback cannot be null");
+        checkCallback(executor, callback);
+        enforceUser(getContextUserIdIfAppropriate(), false);
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
         reportFalse(executor, callback);
     }
 
     /** @hide */
     public boolean isRoleVisibleForTest(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
+        checkTestRole(roleName);
         return false;
     }
 
@@ -208,6 +252,9 @@ public final class RoleManager {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Preconditions.checkStringNotEmpty(packageName, "packageName cannot be null or empty");
         Objects.requireNonNull(user, "user cannot be null");
+        checkCallback(executor, callback);
+        enforceUser(user.getIdentifier(), false);
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
         reportFalse(executor, callback);
     }
 
@@ -215,6 +262,7 @@ public final class RoleManager {
     public boolean removeRoleHolderFromController(String roleName, String packageName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Preconditions.checkStringNotEmpty(packageName, "packageName cannot be null or empty");
+        enforceController();
         return false;
     }
 
@@ -222,16 +270,24 @@ public final class RoleManager {
     public void setActiveUserForRole(String roleName, UserHandle user, int flags) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Objects.requireNonNull(user, "user cannot be null");
+        enforceActiveUserPermissions();
+        throw unavailable();
     }
 
     /** @hide */
     public void setBypassingRoleQualification(boolean bypassing) {
+        enforcePermission(Manifest.permission.BYPASS_ROLE_QUALIFICATION);
+        throw unavailable();
     }
 
     /** @hide */
     public void setDefaultApplication(String roleName, String packageName, int flags,
             Executor executor, Consumer<Boolean> callback) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        checkCallback(executor, callback);
+        enforceUser(mContext.getUserId(), false);
+        enforcePermission(Manifest.permission.MANAGE_DEFAULT_APPLICATIONS);
+        checkDefaultRole(roleName);
         reportFalse(executor, callback);
     }
 
@@ -239,47 +295,142 @@ public final class RoleManager {
     public void setDefaultHoldersForTest(String roleName, List<String> packageNames) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Objects.requireNonNull(packageNames, "packageNames cannot be null");
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
+        checkTestRole(roleName);
+        throw unavailable();
     }
 
     /** @hide */
     public void setRoleFallbackEnabled(String roleName, boolean fallbackEnabled) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforceUser(mContext.getUserId(), false);
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
+        throw unavailable();
     }
 
     /** @hide */
     public void setRoleNamesFromController(List<String> roleNames) {
         Objects.requireNonNull(roleNames, "roleNames cannot be null");
+        enforceController();
+        throw unavailable();
     }
 
     /** @hide */
     public void setRoleVisibleForTest(String roleName, boolean visible) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
+        enforcePermission(Manifest.permission.MANAGE_ROLE_HOLDERS);
+        checkTestRole(roleName);
+        throw unavailable();
     }
 
     /** @hide */
     public String getBrowserRoleHolder(int userId) {
+        enforceUser(userId, false);
         return null;
     }
 
     /** @hide */
     public String getEmergencyRoleHolder(int userId) {
+        enforceUser(userId, false);
+        enforcePermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE);
         return null;
     }
 
     /** @hide */
     public String getSmsRoleHolder(int userId) {
+        enforceUser(userId, false);
         return null;
     }
 
     /** @hide */
     public boolean setBrowserRoleHolder(String packageName, int userId) {
+        enforcePermission(Manifest.permission.SET_PREFERRED_APPLICATIONS);
+        enforceUser(userId, false);
         return false;
     }
 
-    private static void reportFalse(Executor executor, Consumer<Boolean> callback) {
-        Objects.requireNonNull(executor, "executor cannot be null");
-        if (callback != null) {
-            executor.execute(() -> callback.accept(Boolean.FALSE));
+    private int getContextUserIdIfAppropriate() {
+        return CompatChanges.isChangeEnabled(ROLE_MANAGER_USER_HANDLE_AWARE)
+                ? mContext.getUserId() : Process.myUserHandle().getIdentifier();
+    }
+
+    // This wrapper replaces an outgoing RoleService transaction, whose sender
+    // would be this process. An unrelated incoming Binder caller must neither
+    // grant this application privileges nor deny its own authorized requests.
+    private void enforcePermission(String permission) {
+        if (mContext.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("RoleManager requires " + permission);
         }
+    }
+
+    private void enforceAnyPermission(String first, String second) {
+        if (mContext.checkSelfPermission(first) != PackageManager.PERMISSION_GRANTED
+                && mContext.checkSelfPermission(second)
+                        != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("RoleManager requires " + first + " or " + second);
+        }
+    }
+
+    private void enforceUser(int userId, boolean allowAll) {
+        Preconditions.checkArgument(userId >= 0 || (allowAll && userId == UserHandle.USER_ALL),
+                "Invalid user " + userId);
+        if (userId != Process.myUserHandle().getIdentifier()) {
+            enforcePermission(Manifest.permission.INTERACT_ACROSS_USERS_FULL);
+        }
+    }
+
+    private void enforceActiveUserPermissions() {
+        enforceUser(mContext.getUserId(), false);
+        // Profile-group operations require this even when the context user is the caller.
+        enforcePermission(Manifest.permission.INTERACT_ACROSS_USERS_FULL);
+        enforceAnyPermission(Manifest.permission.MANAGE_ROLE_HOLDERS,
+                Manifest.permission.MANAGE_DEFAULT_APPLICATIONS);
+    }
+
+    private void enforceController() {
+        enforceUser(getContextUserIdIfAppropriate(), false);
+        enforcePermission(MANAGE_ROLES_FROM_CONTROLLER);
+    }
+
+    private static void checkDefaultRole(String roleName) {
+        switch (roleName) {
+            case ROLE_ASSISTANT:
+            case ROLE_BROWSER:
+            case ROLE_CALL_REDIRECTION:
+            case ROLE_CALL_SCREENING:
+            case ROLE_DIALER:
+            case ROLE_HOME:
+            case ROLE_SMS:
+            case ROLE_WALLET:
+                return;
+            default:
+                throw new IllegalArgumentException("Not a default application role: " + roleName);
+        }
+    }
+
+    private static void checkTestRole(String roleName) {
+        Preconditions.checkArgument(
+                ROLE_RESERVED_FOR_TESTING_PROFILE_GROUP_EXCLUSIVITY.equals(roleName),
+                "Not a test role: " + roleName);
+    }
+
+    private static UnsupportedOperationException unavailable() {
+        return new UnsupportedOperationException("Role management is unavailable on this runtime");
+    }
+
+    private static void checkCallback(Executor executor, Consumer<Boolean> callback) {
+        Objects.requireNonNull(executor, "executor cannot be null");
+        Objects.requireNonNull(callback, "callback cannot be null");
+    }
+
+    private static void reportFalse(Executor executor, Consumer<Boolean> callback) {
+        executor.execute(() -> {
+            long identity = Binder.clearCallingIdentity();
+            try {
+                callback.accept(Boolean.FALSE);
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        });
     }
 }

@@ -848,7 +848,7 @@ try {
     @{ Class = 'NsdContractTest'; Count = 37; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
     @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
     @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' },
-    @{ Class = 'RoleManagerUnsupportedTest'; Count = 22; Name = 'optional RoleManager surface resolves without role controller' }
+    @{ Class = 'RoleManagerUnsupportedTest'; Count = 134; Name = 'RoleManager absence, permission, callback and mutation contracts' }
   )
   foreach ($contract in $canonicalChecks) {
     CheckTimed "services: $($contract.Name)" "$Dir/dalvikvm.exe" `
