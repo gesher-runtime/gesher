@@ -29,9 +29,14 @@ def main() -> int:
     parser.add_argument("--cxx", default=os.environ.get("CXX", "g++"))
     parser.add_argument("--cc", default=os.environ.get("CC", "gcc"))
     parser.add_argument("--sanitize", action="store_true")
+    parser.add_argument("--source-ref", help="Run the unchanged current fixture against exact historical adapter/fsops/header sources")
     args = parser.parse_args()
-    adapter = (ROOT / "compat/posix/src/stdio_output.cc").read_text()
-    fsops = (ROOT / "compat/posix/src/fsops.cc").read_text()
+    def read_source(path: str) -> bytes:
+        if args.source_ref:
+            return subprocess.check_output(["git", "show", args.source_ref + ":" + path], cwd=ROOT)
+        return (ROOT / path).read_bytes()
+    adapter = read_source("compat/posix/src/stdio_output.cc").decode()
+    fsops = read_source("compat/posix/src/fsops.cc").decode()
     adapter = adapter[adapter.index('extern "C" int __mingw_pformat'):]
     # These are symbol-name changes for the host envelope, not altered bodies.
     for name in ("fseeko64", "ftello64"):
@@ -70,8 +75,8 @@ def main() -> int:
         folder = Path(temporary)
         include = folder / "include/gesher"
         include.mkdir(parents=True)
-        (include / "stdio.h").write_bytes((ROOT / "compat/posix/include/gesher/stdio.h").read_bytes())
-        (include / "cancellation.h").write_bytes((ROOT / "compat/posix/include/gesher/cancellation.h").read_bytes())
+        (include / "stdio.h").write_bytes(read_source("compat/posix/include/gesher/stdio.h"))
+        (include / "cancellation.h").write_bytes(read_source("compat/posix/include/gesher/cancellation.h"))
         generated = folder / "adapter.cc"
         generated.write_text(template)
         cxx = shlex.split(args.cxx) + ["-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fno-builtin", "-pthread"]

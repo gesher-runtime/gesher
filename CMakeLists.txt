@@ -218,6 +218,11 @@ add_executable(bionic_ftruncate_test tests/native/bionic_ftruncate_test.cc)
 target_compile_options(bionic_ftruncate_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(bionic_ftruncate_test PRIVATE gesher_bionic gesher_elf)
 
+# Real Bionic stream locks and wide I/O through the exported FILE APIs.
+add_executable(bionic_stdio_contract_test tests/native/bionic_stdio_contract_test.cc)
+target_compile_options(bionic_stdio_contract_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(bionic_stdio_contract_test PRIVATE gesher_bionic gesher_elf)
+
 # Raw system calls and code made at run time (ADR 0084), on hand-assembled
 # code through the loader's rewriter; no NDK library needed.
 add_executable(elf_deferred_code_test tests/native/elf_deferred_code_test.cc)

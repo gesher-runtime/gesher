@@ -1,16 +1,21 @@
-// Production sections are inserted with only the declared fgetc backend rename.
+// Production sections are inserted with their actual shared-stdio calls.
 // OFD registry, shared stdio, device data, CRT paths and locks are host boundaries.
 #include <atomic>
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <cwchar>
 #include <memory>
 #include <mutex>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int checks, failures;
@@ -76,6 +81,7 @@ struct RetiredDescriptor {
 };
 @RETIRE_DESCRIPTOR@
 namespace stdio {
+static int Orient(FILE* stream, int mode, bool) { return std::fwide(stream, mode); }
 static int FlushOutput(FILE*) { return 0; }
 static void Forget(FILE*) {}
 static int PrepareReopenedStream(FILE*, int) { return 0; }
@@ -87,6 +93,10 @@ static size_t Read(void* bytes, size_t size, size_t count, FILE* stream, bool) {
     return count;
   }
   return std::fread(bytes, size, count, stream);
+}
+static int Get(FILE* stream, bool unlocked) {
+  unsigned char byte;
+  return Read(&byte, 1, 1, stream, unlocked) == 1 ? byte : EOF;
 }
 }
 PathKind MapPath(const char* path, std::wstring* out) {
@@ -135,6 +145,15 @@ static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
   std::string narrow_path(wide_path.begin(), wide_path.end());
   std::string narrow_mode(wide_mode.begin(), wide_mode.end());
   for (char& option : narrow_mode) if (option == 'N') option = 'e';
+  // glibc 2.39 closes the descriptor but leaves the FILE allocated after a
+  // failed freopen. Model _wfreopen's failure using the real path error and
+  // fclose to keep sanitizer findings attributable to the production wrapper.
+  struct stat metadata{};
+  if (stat(narrow_path.c_str(), &metadata) < 0 && errno == ENOTDIR) {
+    check("failed CRT reopen closes the original stream", std::fclose(stream) == 0);
+    errno = ENOTDIR;
+    return nullptr;
+  }
   return std::freopen(narrow_path.c_str(), narrow_mode.c_str(), stream);
 }
 namespace host {
@@ -148,13 +167,12 @@ static int gesher_is_device_fd(int fd) {
 }
 namespace shim {
 #define BIONIC_SYSV
+constexpr int kENOMEM = ENOMEM;
 static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
-static int StreamGet(FILE* stream) {
-  unsigned char byte;
-  return gesher::stdio::Read(&byte, 1, 1, stream, false) == 1 ? byte : EOF;
-}
-size_t ReadStream(void*, size_t, size_t, FILE*, bool = false);
+@STREAM_STATE@
 @READ_STREAM@
+@GETC_UNLOCKED@
+@FREAD_UNLOCKED@
 @FGETC@
 @FREAD@
 }

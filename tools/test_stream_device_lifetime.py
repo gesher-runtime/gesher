@@ -38,19 +38,19 @@ def main() -> int:
         "@DEVICE_REGISTRATION@": section(devices, "void RegisterDevice(", "}  // namespace gesher"),
         "@RETIRE_DESCRIPTOR@": section(devices, "void RetiredDescriptor::Retire(", "int RetiredDescriptor::Finish("),
         "@PARSE_MODE@": section(host, "bool ParseMode(", "// Random characters"),
-        "@FCLOSE@": section(host, "int fclose(FILE* stream)", "// The stream is reopened"),
-        "@FREOPEN@": section(host, "FILE* freopen(", "char* mkdtemp("),
-        "@READ_STREAM@": section(shim, "size_t ReadStream(", "namespace {"),
+        "@FCLOSE@": section(host, "int gesher_fclose_state(", "// The stream is reopened"),
+        "@FREOPEN@": section(host, "FILE* gesher_freopen_state(", "char* mkdtemp("),
+        "@STREAM_STATE@": section(shim, "constexpr uint32_t kWeof", "class StreamLock"),
+        "@READ_STREAM@": section(shim, "size_t ReadStream(", "// fopen through"),
+        "@GETC_UNLOCKED@": section(shim, "int BIONIC_SYSV GetcUnlocked(", "int BIONIC_SYSV PutcUnlocked("),
+        "@FREAD_UNLOCKED@": section(shim, "size_t BIONIC_SYSV FreadUnlocked(", "size_t BIONIC_SYSV FwriteUnlocked("),
         "@FGETC@": section(shim, "int BIONIC_SYSV Fgetc(", "int BIONIC_SYSV Getchar("),
         "@FREAD@": section(shim, "size_t BIONIC_SYSV Fread(", "size_t BIONIC_SYSV Fwrite("),
     }
     sections["@FREOPEN@"] = sections["@FREOPEN@"].replace(
         "return freopen(path, mode, stream);", "return host::freopen(path, mode, stream);")
-    # Public fgetc is now the shared Gesher stdio owner. Rename that single
-    # backend call at this Linux boundary; retain the production wrapper body.
-    if sections["@FGETC@"].count("std::fgetc(F(f))") != 1:
-        raise ValueError("Bionic public stdio boundary changed")
-    sections["@FGETC@"] = sections["@FGETC@"].replace("std::fgetc(F(f))", "StreamGet(F(f))")
+    # Both public and unlocked guest readers now call the declared shared-stdio
+    # boundary directly. Keep their production bodies unchanged.
     template = (ROOT / "tests/native/stream_device_host_test.cc.in").read_text()
     for marker, contents in sections.items():
         if template.count(marker) != 1:

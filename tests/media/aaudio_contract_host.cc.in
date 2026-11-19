@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <thread>
 #include <vector>
 #include <sys/types.h>
@@ -14,12 +16,14 @@
 #define SYSV
 using aaudio_result_t = int32_t;
 constexpr int32_t kOk = 0;
+constexpr int32_t kErrorDisconnected = -899;
 constexpr int32_t kErrorIllegalArgument = -898;
 constexpr int32_t kErrorInternal = -896;
 constexpr int32_t kErrorInvalidState = -895;
 constexpr int32_t kErrorNull = -886;
 constexpr int32_t kErrorTimeout = -885;
-constexpr int32_t kStateClosing = 11, kStateClosed = 12;
+constexpr int32_t kStateUninitialized = 0, kStateClosing = 11, kStateClosed = 12, kStateDisconnected = 13;
+constexpr int32_t kCaptureDeadObject = -32;
 
 int64_t clock_now = 123000000;
 int clock_calls = 0;
@@ -35,8 +39,10 @@ int64_t Now() {
 struct Backend {
   int calls = 0;
   int waits = 0;
+  int state_wakeups = 0;
   size_t max_transfer = 8;
   size_t position = 0;
+  size_t disconnect_at = std::numeric_limits<size_t>::max();
   bool error = false;
   bool unavailable = false;
   bool invalid_request = false;
@@ -55,6 +61,7 @@ struct Backend {
     ++calls;
     if (data == nullptr || size > 64) { invalid_request = true; return 0; }
     if (error) return -1;
+    if (position >= disconnect_at) return kCaptureDeadObject;
     if (unavailable) return 0;
     const size_t count = std::min({size, max_transfer, bytes.size() - position});
     if (count != 0) memcpy(data, bytes.data() + position, count);
@@ -66,6 +73,7 @@ struct Backend {
     clock_now += int64_t{milliseconds} * 1000000;
     return true;
   }
+  void NotifyStateWake() { ++state_wakeups; }
 };
 
 struct AAudioStream {
@@ -75,7 +83,12 @@ struct AAudioStream {
   size_t frame_size = 4;
   int32_t burst = 2;
   std::atomic<int32_t> state{2};
+  std::atomic<bool> disconnected{false};
   std::atomic<int64_t> written{0};
+  std::mutex mu;
+  std::condition_variable cv;
+  bool quit = false;
+  uint64_t generation = 0;
 };
 void TraceInput(AAudioStream*, const char*, int32_t, int32_t) {}
 
@@ -156,6 +169,31 @@ int main() {
         "large state-change timeout waits for transition");
   state_to_change = nullptr;
   Check(WaitForStateChange(nullptr, 2, &next, 0) == kErrorNull, "null state-change stream");
+
+  Backend disconnected;
+  disconnected.disconnect_at = 0;
+  AAudioStream disconnected_reader;
+  disconnected_reader.capture = &disconnected;
+  Check(Read(&disconnected_reader, received, 1, 0) == kErrorDisconnected,
+        "initial source loss is a public disconnect");
+  Check(WaitForStateChange(&disconnected_reader, 2, &next, 0) == kOk && next == kStateDisconnected,
+        "state wait observes the actual disconnect transition");
+  Check(Read(&disconnected_reader, received, 1, 0) == kErrorDisconnected &&
+            disconnected.calls == 1 && disconnected.state_wakeups == 1,
+        "later reads observe the terminal state without a backend read or duplicate wakeup");
+
+  Backend partial;
+  partial.bytes.assign(pcm, pcm + 16);
+  partial.disconnect_at = 8;
+  AAudioStream partial_reader;
+  partial_reader.capture = &partial;
+  Check(Read(&partial_reader, received, 4, INT64_MAX) == 2 &&
+            std::memcmp(received, pcm, 8) == 0 && partial.calls == 2,
+        "a source loss after transfer still returns the delivered frames");
+  Check(GetState(&partial_reader) == kStateDisconnected && partial.state_wakeups == 1,
+        "a source loss after partial transfer still publishes the terminal state");
+  Check(GetState(nullptr) == kStateUninitialized, "null state query");
+
   std::printf("AAudio contracts: %d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }

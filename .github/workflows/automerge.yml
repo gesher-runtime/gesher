@@ -36,7 +36,9 @@ jobs:
     # Fork review events have read-only tokens. Their QA proof is rechecked by
     # the privileged workflow_run event before the required gate turns green.
     if: github.event_name != 'pull_request_review' || github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
-    runs-on: ubuntu-24.04
+    # Only the trusted main workflow can use the privileged controller pool.
+    # Review-event YAML from a PR remains hosted; the group also pins main.
+    runs-on: ${{ fromJSON(vars.GESHER_AUTOMERGE_LOCAL == 'true' && github.workflow_ref == 'gesher-runtime/gesher/.github/workflows/automerge.yml@refs/heads/main' && '{"group":"gesher-automerge","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

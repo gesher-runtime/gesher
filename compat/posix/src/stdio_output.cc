@@ -1,5 +1,6 @@
 // Shared host/guest C stdio. UCRT allocates and closes the opaque FILE token;
-// all stream I/O, buffering and locking belong here and reach read/write/lseek.
+// stream I/O and buffering belong here and reach read/write/lseek. The CRT's
+// FILE lock remains the outer lock for host, guest and native CRT callers.
 // CRT read-ahead and its private append flag must not bypass OFD status.
 #ifdef __USE_MINGW_ANSI_STDIO
 #undef __USE_MINGW_ANSI_STDIO
@@ -13,6 +14,7 @@
 #include "stdio_stream_buffer.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
+#include "../../bionic/stdio_windows_lock.h"
 #include <gesher/file_description.h>
 
 #include <windows.h>
@@ -151,6 +153,7 @@ StatePtr Find(FILE* stream, bool create) {
   // policy. An inherited native pipe can perform I/O even when F_GETFL cannot
   // truthfully report its externally controlled blocking mode.
   auto snapshot = CaptureDescriptor(fd);
+  if (!snapshot) return {};  // Preserve ENOMEM or the actual descriptor error.
   int flags = FileDescriptionIoFlags(snapshot);
   if (flags < 0) return {};
   try {
@@ -166,7 +169,11 @@ StatePtr Find(FILE* stream, bool create) {
 class AccessStream {
  public:
   AccessStream(FILE* stream, bool unlocked, bool create = true)
-      : state_(Find(stream, create)), cleanup_(Release, this) {
+      : locked_stream_(unlocked ? nullptr : stream), cleanup_(Release, this) {
+    // Native callers can own the CRT lock directly. Take it before consulting
+    // the registry or the descriptor table, including for close/reopen.
+    if (locked_stream_) _lock_file(locked_stream_);
+    state_ = Find(stream, create);
     if (state_ && !unlocked) lock_ = std::unique_lock<std::recursive_mutex>(state_->mutex);
     live_ = state_ && state_->live;
     if (state_ && !live_) errno = EBADF;
@@ -182,37 +189,41 @@ class AccessStream {
     access.live_ = false;
     if (access.lock_.owns_lock()) access.lock_.unlock();
     access.state_.reset();
+    if (access.locked_stream_) _unlock_file(access.locked_stream_);
+    access.locked_stream_ = nullptr;
   }
   StatePtr state_;
+  FILE* locked_stream_ = nullptr;
   std::unique_lock<std::recursive_mutex> lock_;
   bool live_ = false;
   CancellationCleanup cleanup_;
 };
 std::shared_ptr<void> AcquireLocal(FILE* stream) {
+  _lock_file(stream);
   auto state = Find(stream, true);
-  if (!state) return {};
+  if (!state) { _unlock_file(stream); return {}; }
   state->mutex.lock();
-  if (!state->live) { state->mutex.unlock(); errno = EBADF; return {}; }
+  if (!state->live) {
+    state->mutex.unlock(); _unlock_file(stream); errno = EBADF; return {};
+  }
   return state;
 }
 void ReleaseLocal(const std::shared_ptr<void>& token) {
-  if (token) static_cast<State*>(token.get())->mutex.unlock();
+  if (token) {
+    auto* state = static_cast<State*>(token.get());
+    state->mutex.unlock();
+    _unlock_file(state->stream);
+  }
 }
-void LockLocal(FILE* stream) {
-  auto state = Find(stream, true);
-  if (!state) return;
-  state->mutex.lock();
-  if (!state->live) { state->mutex.unlock(); errno = EBADF; }
-}
-void UnlockLocal(FILE* stream) {
-  auto state = Find(stream, false);
-  if (state) state->mutex.unlock();
-}
+void LockLocal(FILE* stream) { _lock_file(stream); }
+void UnlockLocal(FILE* stream) { _unlock_file(stream); }
 int TryLockLocal(FILE* stream) {
-  auto state = Find(stream, true);
-  if (!state || !state->mutex.try_lock()) return EBUSY;
-  if (!state->live) { state->mutex.unlock(); errno = EBADF; return EBUSY; }
-  return 0;
+  switch (bionic::stdio_windows::TryLock(stream)) {
+    case bionic::stdio_windows::TryLockResult::kAcquired: return 0;
+    case bionic::stdio_windows::TryLockResult::kBusy: return EBUSY;
+    case bionic::stdio_windows::TryLockResult::kUnsupported: return EOPNOTSUPP;
+  }
+  return EOPNOTSUPP;
 }
 void ForgetLocal(FILE* stream) {
   auto state = Find(stream, false);
@@ -320,6 +331,10 @@ int WalkFlush(bool line_only, State* skip) {
   int result = 0;
   for (const auto& state : streams) {
     if (state.get() == skip || (line_only && !state->line_output.load(std::memory_order_acquire))) continue;
+    _lock_file(state->stream);
+    CancellationCleanup unlock_crt([](void* raw) {
+      _unlock_file(static_cast<FILE*>(raw));
+    }, state->stream);
     std::unique_lock<std::recursive_mutex> lock(state->mutex);
     CancellationCleanup unlock([](void* raw) {
       auto& held = *static_cast<std::unique_lock<std::recursive_mutex>*>(raw);
@@ -333,11 +348,13 @@ int WalkFlush(bool line_only, State* skip) {
 }
 int FlushAllLocal() { return WalkFlush(false); }
 int FlagLocal(FILE* stream, bool error, bool unlocked) {
-  AccessStream state(stream, unlocked);
-  return state ? (error ? state->buffer.Error() : state->buffer.Eof()) : error;
+  // A stream with no shared I/O state has no recorded EOF or error. Queries
+  // must not create metadata or invent an error when allocation is exhausted.
+  AccessStream state(stream, unlocked, false);
+  return state ? (error ? state->buffer.Error() : state->buffer.Eof()) : 0;
 }
 void ClearLocal(FILE* stream, bool unlocked) {
-  AccessStream state(stream, unlocked);
+  AccessStream state(stream, unlocked, false);
   if (state) state->buffer.Clear();
 }
 void ErrorLocal(FILE* stream, int error) {
@@ -367,8 +384,8 @@ int64_t TellLocal(FILE* stream) {
   AccessStream state(stream, false);
   return state ? state->buffer.Tell(Writer(state->fd), Seeker(state->fd)) : -1;
 }
-int OrientLocal(FILE* stream, int mode) {
-  AccessStream state(stream, false);
+int OrientLocal(FILE* stream, int mode, bool unlocked) {
+  AccessStream state(stream, unlocked, mode != 0);
   return state ? state->buffer.Orient(mode) : 0;
 }
 wint_t PutWideLocal(wchar_t value, FILE* stream) {
@@ -469,7 +486,7 @@ struct Api {
   int (*buffer)(FILE*, char*, int, size_t);
   int64_t (*seek)(FILE*, int64_t, int);
   int64_t (*tell)(FILE*);
-  int (*orient)(FILE*, int);
+  int (*orient)(FILE*, int, bool);
   wint_t (*put_wide)(wchar_t, FILE*);
   wint_t (*get_wide)(FILE*);
   wint_t (*unget_wide)(wint_t, FILE*);
@@ -521,7 +538,7 @@ void Forget(FILE* stream) { Owner()->forget(stream); }
 int FlushOutput(FILE* stream) { return Owner()->flush(stream); }
 int64_t Seek(FILE* stream, int64_t offset, int whence) { return Owner()->seek(stream, offset, whence); }
 int64_t Tell(FILE* stream) { return Owner()->tell(stream); }
-int Orient(FILE* stream, int mode) { return Owner()->orient(stream, mode); }
+int Orient(FILE* stream, int mode, bool unlocked) { return Owner()->orient(stream, mode, unlocked); }
 void SetError(FILE* stream, int error) { Owner()->error(stream, error); }
 size_t Read(void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
   return Owner()->read(bytes, size, count, stream, unlocked);

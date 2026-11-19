@@ -30,7 +30,7 @@ int Error(FILE* stream, bool unlocked = false);
 int Eof(FILE* stream, bool unlocked = false);
 void Clear(FILE* stream, bool unlocked = false);
 void SetError(FILE* stream, int error);
-int Orient(FILE* stream, int mode);
+int Orient(FILE* stream, int mode, bool unlocked = false);
 int64_t Seek(FILE* stream, int64_t offset, int whence);
 int64_t Tell(FILE* stream);
 }

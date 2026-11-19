@@ -55,7 +55,8 @@ def main() -> int:
     replacements = {
         "RESUME_CORE": re.sub(r"^#include[^\n]*\n", "", resume_source, flags=re.M),
         "HAS_ANDROID_CLOCKS": str(int("#include <gesher/clocks.h>" in core)),
-        "EVENT_FD": section(epoll, "struct EventFd {", "namespace {\n\nstruct Epoll;"),
+        "EVENT_FD": section(epoll, "struct EpollWakeChannels {" if "struct EpollWakeChannels {" in epoll
+                            else "struct EventFd {", "namespace {\n\nstruct Epoll;"),
         "OBJECT_REGISTRY": section(epoll, "struct Object {", "// Every live epoll"),
         "OBJECT_LOOKUP": section(epoll, "bool Lookup(int fd, Object* object)", "std::shared_ptr<Epoll> LookupEpoll("),
         "OBJECT_INSERT": section(epoll, "void Insert(int fd, Object object)", "int ReadEventFd("),

@@ -44,8 +44,9 @@ def main() -> int:
     audio = read("compat/media/ndk/aaudio.cc")
     extractor = read("compat/media/jni/media_extractor_jni.cc")
     yuv = read("compat/hwui/surfaces/yuv_image.cc")
-    audio_start = ("int64_t StreamDeadline(" if "int64_t StreamDeadline(" in audio
-                   else "aaudio_result_t SYSV WaitForStateChange(")
+    audio_disconnect = ("bool SetInputDisconnectedLocked(", "aaudio_result_t CheckInputDisconnectLocked(")
+    audio_disconnect_implementation = (section(audio, *audio_disconnect)
+                                       if audio_disconnect[0] in audio else "")
     extractor_start = ("ReceiverLease<JniExtractor> GetForDataSource(" if
                        "ReceiverLease<JniExtractor> GetForDataSource(" in extractor else
                        "JniExtractor* GetForDataSource(" if "JniExtractor* GetForDataSource(" in extractor
@@ -55,7 +56,8 @@ def main() -> int:
     yuv_rows_start = ("size_t JpegRowBytes(" if "size_t JpegRowBytes(" in yuv
                       else "void Nv21Rows(")
     sources = {
-        "aaudio": section(audio, audio_start, "aaudio_result_t SYSV SetBufferSizeInFrames("),
+        "aaudio": audio_disconnect_implementation
+        + section(audio, "int32_t SYSV GetState(", "aaudio_result_t SYSV SetBufferSizeInFrames("),
         "extractor": section(extractor, extractor_start, "void JNICALL ME_setDataSourcePath("),
         "yuv": section(yuv, yuv_start, "jboolean JNICALL YuvImage_compressToJpegR("),
         "yuv_rows": section(yuv, yuv_rows_start, "bool Encode("),

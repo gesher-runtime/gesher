@@ -670,7 +670,8 @@ FILE* fdopen(int fd, const char* mode) {
 
 FILE* fopen64(const char* path, const char* mode) { return fopen(path, mode); }
 
-int fclose(FILE* stream) {
+int gesher_fclose_state(FILE* stream, int* retired_out) {
+  if (retired_out) *retired_out = 0;
   if (!stream) return errno = EINVAL, EOF;
   StreamLock stream_lock(stream);
   if (!stream_lock) return EOF;
@@ -686,6 +687,7 @@ int fclose(FILE* stream) {
     // retiring the token before native close can release its allocation. This
     // also prevents a concurrent flush-all from dereferencing a retired FILE.
     gesher::stdio::Forget(stream);
+    if (retired_out) *retired_out = 1;
     // The native entry avoids recursion through this public fclose symbol.
     result = _fclose_nolock(stream);
     saved = result == EOF ? gesher_errno_from_crt(errno) : flushed < 0 ? flush_error : errno;
@@ -703,9 +705,12 @@ int fclose(FILE* stream) {
   return result == EOF || flushed < 0 ? EOF : 0;
 }
 
+int fclose(FILE* stream) { return gesher_fclose_state(stream, nullptr); }
+
 // The stream is reopened by the CRT on the Windows name (NUL for /dev/null),
 // keeping its FILE.
-FILE* freopen(const char* path, const char* mode, FILE* stream) {
+FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int* retired_out) {
+  if (retired_out) *retired_out = 0;
   if (!stream) return errno = EINVAL, nullptr;
   StreamLock stream_lock(stream);
   if (!stream_lock) return nullptr;
@@ -722,6 +727,7 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
       // original stream. Use the already-held stream/descriptor transaction
       // exactly once, including when flushing/closing itself reports an error.
       gesher::stdio::Forget(stream);
+      if (retired_out) *retired_out = 1;
       int closed = _fclose_nolock(stream);
       gesher::ForgetStreamDevice(old_fd, closed == 0);
       if (closed == 0 || gesher::HandleFromFd(old_fd) == INVALID_HANDLE_VALUE) {
@@ -755,6 +761,7 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
     // existence check before reopening would still race another creator.
     if (mode[0] == 'w' && (flags & O_EXCL) != 0) wmode += L'x';
     if ((flags & O_CLOEXEC) != 0) wmode += L'N';
+    if (retired_out) *retired_out = 1;
     FILE* result = _wfreopen(windows.c_str(), wmode.c_str(), stream);
     int saved = result == nullptr ? gesher_errno_from_crt(errno) : errno;
     gesher::ForgetStreamDevice(old_fd, result != nullptr);
@@ -780,6 +787,10 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
     return result;
   };
   return reopen();
+}
+
+FILE* freopen(const char* path, const char* mode, FILE* stream) {
+  return gesher_freopen_state(path, mode, stream, nullptr);
 }
 
 FILE* freopen64(const char* path, const char* mode, FILE* stream) {

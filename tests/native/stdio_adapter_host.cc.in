@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cerrno>
 #include <climits>
+#include <chrono>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -19,6 +20,7 @@
 #include <new>
 #include <pthread.h>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -55,6 +57,35 @@ static int HostSetvbuf(FILE* stream, char* bytes, int mode, size_t count) { retu
 static int _fileno(FILE* stream) { return ::fileno(stream); }
 static int _fclose_nolock(FILE* stream) { return HostFclose(stream); }
 static FILE* _fdopen(int fd, const char* mode) { return HostFdopen(fd, mode); }
+
+// The Windows CRT retains FILE lock storage after fclose. glibc frees FILE,
+// so model that documented lock lifetime separately from the real Linux I/O.
+// Production locking/retirement code below is unchanged by this boundary.
+static std::atomic<unsigned> crt_lock_attempts{0};
+static std::shared_ptr<std::recursive_mutex> CrtLock(FILE* stream) {
+  struct Locks {
+    std::mutex mutex;
+    std::map<FILE*, std::shared_ptr<std::recursive_mutex>> streams;
+  };
+  // As with the production CRT, lock storage outlives application atexit I/O.
+  static auto* registry = new Locks;
+  std::lock_guard<std::mutex> guard(registry->mutex);
+  auto& lock = registry->streams[stream];
+  if (!lock) lock = std::make_shared<std::recursive_mutex>();
+  return lock;
+}
+static void _lock_file(FILE* stream) {
+  auto lock = CrtLock(stream);
+  ++crt_lock_attempts;
+  lock->lock();
+}
+static void _unlock_file(FILE* stream) { CrtLock(stream)->unlock(); }
+namespace gesher::bionic::stdio_windows {
+enum class TryLockResult { kAcquired, kBusy, kUnsupported };
+inline TryLockResult TryLock(FILE* stream) {
+  return CrtLock(stream)->try_lock() ? TryLockResult::kAcquired : TryLockResult::kBusy;
+}
+}
 
 using HANDLE = void*;
 using HMODULE = HANDLE;
@@ -129,6 +160,7 @@ DescriptorSnapshotPtr CaptureDescriptor(int fd) try {
   return errno = ENOMEM, DescriptorSnapshotPtr{};
 }
 int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
+  if (!snapshot) return errno = EBADF, -1;
   return fcntl(HandleFd(snapshot->handle), F_GETFL);
 }
 int FileDescriptionIoFlags(const DescriptorSnapshotPtr& snapshot) {
@@ -243,12 +275,71 @@ static void TestAllocationOwnership() {
     if (stream) { adapter_fclose(stream); fd = open(path, O_RDWR); }
   }
   check("descriptor remains usable after every failed fdopen", write(fd, "ok", 2) == 2);
-  close(fd);
+  FILE* raw = HostFdopen(fd, "r+");
+  check("unregistered native stream opens for status queries", raw != nullptr);
+  if (raw) {
+    // Preparing only the declared CRT lock boundary is allocation-free in
+    // production. The actual shared registry has no record for this FILE.
+    CrtLock(raw);
+    allocation_failure = 0;
+    int error = adapter_ferror(raw);
+    bool error_no_allocation = allocation_failure == 0;
+    allocation_failure = 0;
+    int eof = adapter_feof(raw);
+    bool eof_no_allocation = allocation_failure == 0;
+    allocation_failure = 0;
+    adapter_clearerr(raw);
+    bool clear_no_allocation = allocation_failure == 0;
+    allocation_failure = 0;
+    errno = 0;
+    int value = adapter_fgetc(raw);
+    bool capture_error_preserved = value == EOF && errno == ENOMEM;
+    allocation_failure = -1;
+    check("fresh-stream error query does not allocate or invent an error", error == 0 && error_no_allocation);
+    check("fresh-stream EOF query does not allocate", eof == 0 && eof_no_allocation);
+    check("fresh-stream clearerr does not allocate", clear_no_allocation);
+    check("first-I/O snapshot allocation failure retains ENOMEM", capture_error_preserved);
+    check("native stream remains usable after allocation-free queries", HostFclose(raw) == 0);
+  } else close(fd);
   unlink(path);
 }
 
 static FILE* exit_stream;
 static void ExitOutput() { adapter_fputs("late", exit_stream); }
+static void TestCrtLockComposition() {
+  char path[] = "stdio-crt-lock-XXXXXX";
+  int fd = mkstemp(path);
+  check("CRT composition fixture opens", fd >= 0);
+  if (fd < 0) return;
+  FILE* stream = adapter_fdopen(fd, "w+");
+  check("CRT composition stream opens", stream != nullptr);
+  if (!stream) { close(fd); unlink(path); return; }
+  _lock_file(stream);
+  std::atomic<int> try_result{-1};
+  std::thread try_guest([&] {
+    int result = adapter_ftrylockfile(stream);
+    try_result = result;
+    if (result == 0) adapter_funlockfile(stream);
+  });
+  try_guest.join();
+  check("public trylock observes the native CRT owner", try_result == EBUSY);
+  check("public trylock is recursive for the native CRT owner", adapter_ftrylockfile(stream) == 0);
+  adapter_funlockfile(stream);
+  const unsigned attempts = crt_lock_attempts.load();
+  std::atomic<bool> done{false};
+  int result = EOF;
+  std::thread closer([&] { result = adapter_fclose(stream); done = true; });
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (crt_lock_attempts.load() == attempts && !done && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  check("descriptor-backed fclose waits for the native CRT owner",
+        crt_lock_attempts.load() > attempts && !done && fcntl(fd, F_GETFD) >= 0);
+  _unlock_file(stream);
+  closer.join();
+  check("descriptor-backed fclose completes after native CRT unlock",
+        done && result == 0 && fcntl(fd, F_GETFD) == -1);
+  unlink(path);
+}
 int main(int argc, char** argv) {
   if (argc == 3 && std::strcmp(argv[1], "--exit-output") == 0) {
     // This is deliberately registered before the first application stdio use.
@@ -260,6 +351,7 @@ int main(int argc, char** argv) {
   test_stdio_ofd_contracts();
   TestAllocationOwnership();
   test_stdio_cancel_contracts();
+  TestCrtLockComposition();
   char summary[128];
   int count = snprintf(summary, sizeof(summary), "stdio production adapter: %d checks, %d failures\n", checks, failures);
   if (count < 0 || static_cast<size_t>(count) >= sizeof(summary) ||

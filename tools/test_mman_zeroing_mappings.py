@@ -42,6 +42,7 @@ def main():
         functions.append(block(source, "size_t RoundUp(size_t x, size_t n)"))
     # Older source remains runnable as a negative control for the same fixture.
     for signature in (
+        "template <typename Fn>\nbool ForEachWorkingSetBatch(uintptr_t begin, size_t length, size_t page, Fn fn)",
         "bool AdviceRange(uintptr_t begin, size_t length, size_t page, size_t* rounded)",
         "bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page)",
         "bool PreflightAdvice(State& s, uintptr_t begin, size_t length, int advice)",

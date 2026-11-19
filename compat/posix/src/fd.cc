@@ -21,6 +21,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -31,14 +32,28 @@
 #include "internal.h"
 #include "revocable_internal.h"
 #include "pipe_io.h"
+#include "poll_scratch.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
 
 namespace gesher {
 namespace {
 
-std::mutex table_mutex;
-std::unordered_map<int, SocketFd> table;
+// Descriptor-backed stdio flushes after application atexit handlers and static
+// destructors, and still dispatches through LookupSocket. Keep this registry
+// alive until process teardown: destroying it first loses live socket owners
+// and makes that final flush enter an already-destroyed mutex. Native handles
+// and any deliberately quarantined owners remain process-owned until exit.
+struct SocketRegistry {
+  std::mutex mutex;
+  std::unordered_map<int, SocketFd> entries;
+};
+// Static storage preserves startup construction without a fallible allocation
+// or a registered destructor. Map entries still use the ordinary allocator.
+alignas(SocketRegistry) unsigned char socket_registry_storage[sizeof(SocketRegistry)];
+SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;
+std::mutex& table_mutex = socket_registry.mutex;
+std::unordered_map<int, SocketFd>& table = socket_registry.entries;
 // Lets the common case, a process without sockets, skip the lock.
 std::atomic<size_t> socket_count{0};
 
@@ -615,6 +630,22 @@ namespace {
 constexpr short kIn = POLLIN | POLLRDNORM;
 constexpr short kOut = POLLOUT | POLLWRNORM;
 
+struct FdPollScratch {
+  std::vector<gesher::ws::PollEntry> sockets;
+  std::vector<nfds_t> socket_index;
+  std::vector<std::shared_ptr<gesher::EventFd>> eventfds;
+  std::vector<nfds_t> eventfd_index;
+  std::vector<HANDLE> handles;
+
+  void Reset() {
+    gesher::ClearPollScratch(handles);
+    gesher::ClearPollScratch(eventfd_index);
+    gesher::ClearPollScratch(eventfds);
+    gesher::ClearPollScratch(socket_index);
+    gesher::ClearPollScratch(sockets);
+  }
+};
+
 // Readiness of a non-socket fd: pipes are readable when data is buffered or
 // the writer is gone; files and other devices are always ready. Returns false
 // for a pipe that has nothing yet.
@@ -720,11 +751,13 @@ void WakePollers() {
 static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted, PollObserver observer, void* context,
                        ws::NativePollObserver native_observer, void* native_context) {
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
-  std::vector<ws::PollEntry> sockets;
-  std::vector<nfds_t> socket_index;
+  PollScratchLease<FdPollScratch> lease(nfds <= kPollScratchLimit);
+  auto& scratch = lease.get();
+  auto& sockets = scratch.sockets;
+  auto& socket_index = scratch.socket_index;
   // Held so that their events stay open while waited on.
-  std::vector<std::shared_ptr<EventFd>> eventfds;
-  std::vector<nfds_t> eventfd_index;
+  auto& eventfds = scratch.eventfds;
+  auto& eventfd_index = scratch.eventfd_index;
   bool waiting_files = false;  // a pipe that may become readable
   for (nfds_t i = 0; i < nfds; ++i) {
     pollfd* p = &fds[i];
@@ -774,7 +807,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
   }
   PollWaiter* waiter = registration ? registration->get() : nullptr;
   bool look_first = waiter != nullptr;
-  std::vector<HANDLE> handles;
+  auto& handles = scratch.handles;
   for (;;) {
     int wait_ms = 0;  // with something ready, only collect what the rest has
     if (ready == 0 && !look_first) {
