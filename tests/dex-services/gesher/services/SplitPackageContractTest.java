@@ -257,8 +257,14 @@ public final class SplitPackageContractTest {
         require(pm.getProviderInfo(new ComponentName("fixture.not.installed",
                 PACKAGE + ".FeatureProvider"), 0, 0) == null,
                 "Feature provider became owned by an unrelated package");
+        ApkPackage beforeRecompile = pm.get(PACKAGE);
+        File oatDirectory = (File) method(Class.forName("com.gesher.server.Dexopt"),
+                "oatDir", String.class).invoke(null, installedCode.getPath());
+        Files.deleteIfExists(new File(oatDirectory, "base.odex").toPath());
         result = (String[]) install.invoke(installer, archive.getPath());
         require("unchanged".equals(result[1]), "Same archive did not use unchanged path");
+        require(pm.get(PACKAGE) == beforeRecompile,
+                "Rebuilding unchanged compiled code retired the running package identity");
         metadata(pm.get(PACKAGE));
         // A lone unchanged base keeps its installed splits, including their graph.
         File baseOnly = new File(data, "base-only.apk"); Files.write(baseOnly.toPath(), inputs.get("base"));
