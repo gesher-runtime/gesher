@@ -1,15 +1,13 @@
 name: ci
 
 on:
-  # Temporarily pause CI on main pushes; restore push: branches: [main] to resume.
+  # Temporarily pause CI on main pushes; add branches: [main] under push to resume.
+  push:
+    # Canonical tag pushes build and test a release. The protected default
+    # branch publisher is separate from this read-only workflow.
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      release_version:
-        description: 'Installer version for a release (X.Y.Z); leave empty for the CI version'
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
@@ -17,9 +15,10 @@ permissions:
 
 # One current run per PR or branch. The root-specific prefix cannot collide
 # with reusable workflows, which inherit the caller's github.workflow value.
+# A release tag push has a separate group from manual runs on the same ref.
 concurrency:
-  group: ci-run-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-run-${{ github.event_name == 'push' && github.ref_type == 'tag' && 'release-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref_type == 'tag') }}
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -33,6 +32,23 @@ jobs:
       policy_ref: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
     steps:
       - run: echo "SOURCE_IDENTITY source=${{ github.sha }}"
+      # The tag filter's * also matches e.g. v1.2.3-rc1. Stop such a run here,
+      # before every build job (they all depend on this one), not hours later.
+      - name: Validate pushed version tag
+        if: ${{ github.repository == 'gesher-runtime/gesher' && github.event_name == 'push' && github.ref_type == 'tag' }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$ ]] ||
+            { echo "::error::Release tag $TAG must be vX.Y.Z with no leading zeros"; exit 1; }
+          for part in "${BASH_REMATCH[@]:1}"; do
+            [ "$part" -le 65535 ] || { echo "::error::Release tag $TAG has a component above 65535"; exit 1; }
+          done
+          # CI builds before tag-based releases were installed as 0.1.<run number>;
+          # a release must outrank all of them to be offered to those machines.
+          [ "${BASH_REMATCH[1]}" -gt 0 ] || [ "${BASH_REMATCH[2]}" -ge 2 ] ||
+            { echo "::error::Release $TAG must be at least v0.2.0 (earlier CI builds used 0.1.<run number>)"; exit 1; }
   automerge-script:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -43,6 +59,7 @@ jobs:
             .github/scripts
             .github/workflows
             .github/actions/runner-route
+            tools/ci
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -54,6 +71,7 @@ jobs:
         run: |
           python3 -m pip install PyYAML==6.0.3
           python3 .github/scripts/test_automerge_workflows.py
+          python3 tools/ci/test_release_workflows.py
   update-contracts:
     needs: [source-identity]
     strategy:
@@ -816,7 +834,6 @@ jobs:
     runs-on: windows-2022
     env:
       GH_TOKEN: ${{ github.token }}
-      GESHER_RELEASE_VERSION: ${{ inputs.release_version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -921,12 +938,9 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           $hebrew = Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl'
           if (-not (Test-Path $iscc) -or -not (Test-Path $hebrew)) { choco upgrade innosetup --no-progress -y | Out-Null }
-          $version = $env:GESHER_RELEASE_VERSION
-          if ([string]::IsNullOrEmpty($version)) { $version = "0.1.$env:GITHUB_RUN_NUMBER" }
-          if ($version -cnotmatch '\A(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\z' -or
-              @($version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count) {
-            throw 'Installer version must be X.Y.Z, with decimal components from 0 through 65535 and no leading zeros.'
-          }
+          $version = python tools/ci/release_version.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "Installer version: $version" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           & $iscc /Qp "/DBuildDir=$PWD\dist" "/DAppVersion=$version" "/O$PWD\installer" tools\package\gesher.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "GESHER_PACKAGE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

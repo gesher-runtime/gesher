@@ -21,7 +21,68 @@ public class Http2DeviceSmoke {
         ByteArrayOutputStream b=new ByteArrayOutputStream(); b.write(0); b.write(name.length());
         b.write(name.getBytes("US-ASCII")); b.write(value.length()); b.write(value.getBytes("US-ASCII")); return b.toByteArray();
     }
+    static void checkHttp2Disabled() throws Exception {
+        HttpEngine.Builder builder = new HttpEngine.Builder(new android.content.ContextWrapper(null));
+        HttpEngine disabled = builder.setEnableHttp2(false).build();
+        builder.setEnableHttp2(true);  // The already built engine must keep its own value.
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            CompletableFuture<Void> failed = new CompletableFuture<>();
+            String url = "http://127.0.0.1:" + server.getLocalPort() + "/grpc";
+            BidirectionalStream stream = disabled.newBidirectionalStreamBuilder(url, executor,
+                    new BidirectionalStream.Callback() {
+                        @Override public void onStreamReady(BidirectionalStream s) {
+                            failed.completeExceptionally(new AssertionError("Disabled HTTP/2 stream became ready"));
+                        }
+
+                        @Override public void onFailed(BidirectionalStream s, UrlResponseInfo i,
+                                HttpException e) {
+                            if (!(e.getCause() instanceof ProtocolException)) failed.completeExceptionally(e);
+                            else if (i != null) failed.completeExceptionally(
+                                    new AssertionError("Failure before headers fabricated response information"));
+                            else failed.complete(null);
+                        }
+                        @Override public void onResponseHeadersReceived(BidirectionalStream s, UrlResponseInfo i) {}
+                        @Override public void onReadCompleted(BidirectionalStream s, UrlResponseInfo i,
+                                ByteBuffer b, boolean end) {}
+                        @Override public void onWriteCompleted(BidirectionalStream s, UrlResponseInfo i,
+                                ByteBuffer b, boolean end) {}
+                        @Override public void onResponseTrailersReceived(BidirectionalStream s,
+                                UrlResponseInfo i, HeaderBlock trailers) {}
+
+                        @Override public void onSucceeded(BidirectionalStream s, UrlResponseInfo i) {
+                            failed.completeExceptionally(new AssertionError("Disabled HTTP/2 stream succeeded"));
+                        }
+
+                        @Override public void onCanceled(BidirectionalStream s, UrlResponseInfo i) {
+                            failed.completeExceptionally(new AssertionError("Disabled HTTP/2 stream was canceled"));
+                        }
+                    }).build();
+            try {
+                stream.start();
+                failed.get(5, TimeUnit.SECONDS);
+                if (!stream.isDone()) throw new AssertionError("Disabled stream is still active");
+                server.setSoTimeout(200);
+                try (Socket unexpected = server.accept()) {
+                    throw new AssertionError("Disabled HTTP/2 opened a connection");
+                } catch (SocketTimeoutException expected) {
+                    // The independent socket peer must never see a connection attempt.
+                }
+            } finally {
+                stream.cancel();
+            }
+        } finally {
+            disabled.shutdown();
+            executor.shutdownNow();
+        }
+        System.out.println("Http2DeviceSmoke passed: HTTP/2 opt-out fires failure without connecting");
+    }
+
     public static void main(String[] args) throws Exception {
+        if (args.length == 1 && args[0].equals("disabled")) {
+            checkHttp2Disabled();
+            return;
+        }
         boolean gzipHeaders=args.length>0 && args[0].equals("gzip-headers");
         boolean earlyRead=args.length>0 && args[0].equals("early-read");
         boolean readOnly=args.length>0 && args[0].equals("readonly-write");
