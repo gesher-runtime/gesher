@@ -218,8 +218,194 @@ int gesher_selftest(void) {
     regfree(&re);
     char message[64];
     check("regcomp bad pattern", regcomp(&re, "(", REG_EXTENDED) != 0);
-    check("unsupported REG_NEWLINE is rejected explicitly",
-          regcomp(&re, "^x$", REG_EXTENDED | REG_NEWLINE) == REG_INVARG);
+    check("REG_NEWLINE matches line anchors",
+          regcomp(&re, "^x$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nx\nb", 0, NULL, 0) == 0 &&
+              regexec(&re, "a\nx\nb", 0, NULL, REG_NOTBOL | REG_NOTEOL) == 0);
+    regfree(&re);
+    check("REG_NEWLINE matches trailing empty line with offset",
+          regcomp(&re, "^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\n", 1, m, 0) == 0 && m[0].rm_so == 2 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("REG_NEWLINE excludes newline from dot and negated class",
+          regcomp(&re, "a.b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
+    check("REG_NEWLINE excludes newline from negated bracket",
+          regcomp(&re, "a[^x]b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 0, NULL, 0) == REG_NOMATCH &&
+              regexec(&re, "ayb", 0, NULL, 0) == 0);
+    regfree(&re);
+    check("REG_NEWLINE positive space and cntrl classes match newline",
+          regcomp(&re, "a[[:space:]]b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE positive cntrl class matches newline",
+          regcomp(&re, "a[[:cntrl:]]b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    m[0].rm_so = 2;
+    m[0].rm_eo = 3;
+    check("REG_NEWLINE REG_STARTEND + REG_NOTBOL honors preceding newline",
+          regcomp(&re, "^x$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nx", 1, m, REG_STARTEND | REG_NOTBOL) == 0 &&
+              m[0].rm_so == 2 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE internal EOL anchor matches before LF",
+          regcomp(&re, "a$\nb", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE internal BOL anchor matches after LF",
+          regcomp(&re, "a\n^b", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE both internal anchors match across LF",
+          regcomp(&re, "^a$\n^b$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("REG_NEWLINE escaped literal LF matches across lines",
+          regcomp(&re, "^a\\\nb$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "a\nb", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 3);
+    regfree(&re);
+    check("POSIX leftmost-longest submatch preference",
+          regcomp(&re, "(foo|foobar)(bar)?", REG_EXTENDED) == 0 &&
+              regexec(&re, "foobar", 3, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 6 &&
+              m[1].rm_so == 0 && m[1].rm_eo == 6 && m[2].rm_so == -1 && m[2].rm_eo == -1);
+    regfree(&re);
+    // Android android-16.0.0_r4 bionic is the oracle for these results.
+    check("top-level alternative uses compiled entry",
+          regcomp(&re, "a|bb", REG_EXTENDED) == 0 && regexec(&re, "bb", 1, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 2);
+    regfree(&re);
+    const char* nullable_patterns[] = {"a*b", "a?b", "a{0}b", "a{0,2}b"};
+    for (size_t i = 0; i < sizeof(nullable_patterns) / sizeof(nullable_patterns[0]); ++i) {
+        check("nullable leading expression uses compiled entry",
+              regcomp(&re, nullable_patterns[i], REG_EXTENDED) == 0 &&
+                  regexec(&re, "b", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 1);
+        regfree(&re);
+    }
+    check("BRE backreference executor uses compiled entry",
+          regcomp(&re, "a*\\(b\\)\\1", 0) == 0 && regexec(&re, "bb", 1, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 2);
+    regfree(&re);
+    m[0].rm_so = 11;
+    m[0].rm_eo = 12;
+    check("REG_NOSUB keeps internal backreferences without public output",
+          regcomp(&re, "\\(ab\\)\\1", REG_NOSUB) == 0 && re.re_nsub == 1 &&
+              regexec(&re, "abab", 1, m, 0) == 0 &&
+              regexec(&re, "abac", 0, NULL, 0) == REG_NOMATCH &&
+              m[0].rm_so == 11 && m[0].rm_eo == 12);
+    regfree(&re);
+    check("REG_ICASE keeps AOSP byte-exact backreferences",
+          regcomp(&re, "\\(a\\)\\1", REG_ICASE) == 0 &&
+              regexec(&re, "aA", 0, NULL, 0) == REG_NOMATCH &&
+              regexec(&re, "AA", 1, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("backreference to an open outer group reports REG_ESUBREG",
+          regcomp(&re, "\\(\\(a\\)\\1\\)", 0) == REG_ESUBREG);
+    check("AOSP rejects empty alternatives",
+          regcomp(&re, "(foo|foobar)(bar|)", REG_EXTENDED) == REG_EMPTY);
+    check("AOSP rejects unsupported alphabetic escape",
+          regcomp(&re, "\\d", REG_EXTENDED) == REG_EESCAPE);
+    check("AOSP named collating element matches literal LF",
+          regcomp(&re, "[[.newline.]]", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "x\ny", 1, m, 0) == 0 && m[0].rm_so == 1 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("AOSP bracket word boundaries match",
+          regcomp(&re, "[[:<:]]a[[:>:]]", REG_EXTENDED) == 0 &&
+              regexec(&re, " a!", 1, m, 0) == 0 && m[0].rm_so == 1 && m[0].rm_eo == 2);
+    regfree(&re);
+    check("AOSP rejects repeated range", regcomp(&re, "[a-c-e]", REG_EXTENDED) == REG_ERANGE);
+    check("AOSP repeated alternation picks greedy final capture",
+          regcomp(&re, "(a|aa)*", REG_EXTENDED) == 0 && regexec(&re, "aaa", 3, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 3 && m[1].rm_so == 2 && m[1].rm_eo == 3);
+    regfree(&re);
+    check("AOSP reversed repeated alternation picks greedy final capture",
+          regcomp(&re, "(aa|a)*", REG_EXTENDED) == 0 && regexec(&re, "aaa", 3, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 3 && m[1].rm_so == 2 && m[1].rm_eo == 3);
+    regfree(&re);
+    check("AOSP nested star empty and trailing empty captures",
+          regcomp(&re, "(a*)*", REG_EXTENDED) == 0 && regexec(&re, "", 2, m, 0) == 0 &&
+              m[1].rm_so == 0 && m[1].rm_eo == 0 && regexec(&re, "a", 2, m, 0) == 0 &&
+              m[1].rm_so == 1 && m[1].rm_eo == 1);
+    regfree(&re);
+    check("AOSP nested BRE star with backref settles group 1 at trailing empty pass",
+          regcomp(&re, "\\(a*\\)*\\1", 0) == 0 && regexec(&re, "aa", 2, m, 0) == 0 &&
+              m[0].rm_so == 0 && m[0].rm_eo == 2 && m[1].rm_so == 2 && m[1].rm_eo == 2);
+    regfree(&re);
+    check("AOSP nested plus dissects only final iteration",
+          regcomp(&re, "(a(b)|a)+", REG_EXTENDED) == 0 && regexec(&re, "aba", 3, m, 0) == 0 &&
+              m[1].rm_so == 2 && m[1].rm_eo == 3 && m[2].rm_so == -1 && m[2].rm_eo == -1);
+    regfree(&re);
+    const char* bounded_inputs[] = {"a", "aa"};
+    for (size_t i = 0; i < sizeof(bounded_inputs) / sizeof(bounded_inputs[0]); ++i) {
+        regoff_t length = (regoff_t)strlen(bounded_inputs[i]);
+        check("AOSP bounded BRE choice preserves branch-local backreference capture",
+              regcomp(&re, "\\(a*\\)\\{1,2\\}\\1", 0) == 0 &&
+                  regexec(&re, bounded_inputs[i], 2, m, 0) == 0 &&
+                  m[0].rm_so == 0 && m[0].rm_eo == length &&
+                  m[1].rm_so == 0 && m[1].rm_eo == length);
+        regfree(&re);
+    }
+    const char* word_patterns[] = {"\\<a\\>", "[[:<:]]a[[:>:]]"};
+    const int backref_flags[] = {0, REG_NOSUB};
+    for (size_t i = 0; i < sizeof(backref_flags) / sizeof(backref_flags[0]); ++i) {
+        check("Bounded BRE cannot skip a required backreference, including REG_NOSUB",
+              regcomp(&re, "\\(a\\)\\{1,2\\}\\1", backref_flags[i]) == 0 &&
+                  regexec(&re, "a", 2, m, 0) == REG_NOMATCH);
+        regfree(&re);
+        check("Bounded BRE cannot skip a required suffix, including REG_NOSUB",
+              regcomp(&re, "\\(a\\)\\{1,2\\}\\1b", backref_flags[i]) == 0 &&
+                  regexec(&re, "aa", 2, m, 0) == REG_NOMATCH);
+        regfree(&re);
+        check("Nullable bounded BRE still requires the whole expression",
+              regcomp(&re, "\\(a*\\)\\{1,2\\}\\1b", backref_flags[i]) == 0 &&
+                  regexec(&re, "aa", 2, m, 0) == REG_NOMATCH);
+        regfree(&re);
+    }
+    check("BRE whole-pattern filter retains nested referenced group language",
+          regcomp(&re, "\\(a\\)\\(\\1b\\)\\2", 0) == 0 &&
+              regexec(&re, "aabab", 3, m, 0) == 0 && m[0].rm_so == 0 && m[0].rm_eo == 5 &&
+              m[1].rm_so == 0 && m[1].rm_eo == 1 && m[2].rm_so == 1 && m[2].rm_eo == 3);
+    regfree(&re);
+    for (size_t i = 0; i < sizeof(word_patterns) / sizeof(word_patterns[0]); ++i) {
+        m[0].rm_so = 1;
+        m[0].rm_eo = 2;
+        check("REG_STARTEND starts a word region despite a preceding word byte",
+              regcomp(&re, word_patterns[i], REG_EXTENDED) == 0 &&
+                  regexec(&re, "ba", 1, m, REG_STARTEND) == 0 &&
+                  m[0].rm_so == 1 && m[0].rm_eo == 2);
+        m[0].rm_so = 1;
+        m[0].rm_eo = 2;
+        check("REG_STARTEND REG_NOTBOL retains the preceding word byte",
+              regexec(&re, "ba", 1, m, REG_STARTEND | REG_NOTBOL) == REG_NOMATCH);
+        m[0].rm_so = 1;
+        m[0].rm_eo = 2;
+        check("REG_STARTEND REG_NOTBOL permits a preceding nonword byte",
+              regexec(&re, " a", 1, m, REG_STARTEND | REG_NOTBOL) == 0 &&
+                  m[0].rm_so == 1 && m[0].rm_eo == 2);
+        regfree(&re);
+    }
+    m[0].rm_so = 1;
+    m[0].rm_eo = 3;
+    check("BRE backreference respects the REG_STARTEND word-region beginning",
+          regcomp(&re, "\\<\\(a\\)\\1", 0) == 0 && regexec(&re, "baa", 2, m, REG_STARTEND) == 0 &&
+              m[0].rm_so == 1 && m[0].rm_eo == 3 && m[1].rm_so == 1 && m[1].rm_eo == 2);
+    m[0].rm_so = 1;
+    m[0].rm_eo = 3;
+    check("BRE REG_NOTBOL keeps REG_STARTEND inside the preceding word",
+          regexec(&re, "baa", 2, m, REG_STARTEND | REG_NOTBOL) == REG_NOMATCH);
+    regfree(&re);
+    check("REG_NEWLINE extended accepts escaped ordinary slash and escaped bracket",
+          regcomp(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", REG_EXTENDED | REG_NEWLINE) == 0 &&
+              regexec(&re, "|11/11111^", 0, NULL, 0) == 0 &&
+              regexec(&re, "|11x11111^", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
+    check("escaped bracket stays literal with escaped slash",
+          regcomp(&re, "a\\[b\\/c\\]", REG_EXTENDED) == 0 &&
+              regexec(&re, "a[b/c]", 0, NULL, 0) == 0 &&
+              regexec(&re, "ab", 0, NULL, 0) == REG_NOMATCH);
+    regfree(&re);
     check("regerror", regerror(REG_NOMATCH, &re, message, sizeof(message)) > 1 &&
                           message[0] != '\0');
 

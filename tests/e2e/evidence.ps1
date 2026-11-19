@@ -48,7 +48,8 @@ function Write-E2eEvidence {
   Move-Item -LiteralPath $temporary -Destination $script:E2eEvidencePath -Force
 }
 
-function New-E2eEvidence($ManifestData, [string] $ManifestPath, [string[]] $Only, [string] $Directory) {
+function New-E2eEvidence($ManifestData, [string] $ManifestPath, [string[]] $Only, [string] $Directory,
+                         [bool] $RequireApkIdentity = $false) {
   $packages = @($ManifestData.apps | ForEach-Object { $_.package })
   if ($packages.Count -eq 0 -or @($packages | Sort-Object -Unique).Count -ne $packages.Count) {
     throw 'e2e manifest must contain distinct packages'
@@ -94,6 +95,7 @@ function New-E2eEvidence($ManifestData, [string] $ManifestPath, [string[]] $Only
       github_run_id = $env:GITHUB_RUN_ID
       github_run_attempt = $env:GITHUB_RUN_ATTEMPT
       only = @($Only)
+      require_apk_identity = $RequireApkIdentity
     }
     runtime = [ordered]@{
       installer_sha256 = $null; installation_mode = $null
@@ -152,6 +154,24 @@ function Add-E2eApk([string] $Package, [string] $Sha256) {
   $script:E2eEvidence.apks += [ordered]@{
     package = $Package; sha256 = $Sha256; target_sdk = $null
     selected_abi = $null; signer_sha256 = $null
+    sdk_identity = $null; identity_error = $null
   }
+  Write-E2eEvidence
+}
+
+function Set-E2eApkIdentity([string] $Package, $Identity, [string] $ErrorMessage = '') {
+  $matches = @($script:E2eEvidence.apks | Where-Object { $_.package -eq $Package })
+  if ($matches.Count -ne 1) { throw "No distinct observed APK: $Package" }
+  $apk = $matches[0]
+  if ($null -ne $Identity) {
+    if ($Identity.schema_version -ne 1 -or $Identity.package -cne $Package -or
+        $Identity.apk_sha256 -cne $apk.sha256 -or $ErrorMessage) {
+      throw "APK identity does not describe the observed bytes: $Package"
+    }
+    $apk.sdk_identity = $Identity
+  }
+  $apk.identity_error = $(if ($ErrorMessage) { $ErrorMessage } else { $null })
+  # Keep selected_abi and the legacy single-signer field null. The complete
+  # verified signer set and packaged ABI inventory live in sdk_identity.
   Write-E2eEvidence
 }
