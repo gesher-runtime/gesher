@@ -52,10 +52,13 @@ compares numeric versions. A release tag may be `v0.2.0` or `0.2.0` (exactly
 three components); the matching asset must be exactly `gesher-setup-0.2.0.exe`.
 
 An installed Gesher has either a release version (`0.2.0`) or a CI build version
-(`0.2.0.526`: the highest release tag, then the CI run number). A CI build is
+(`0.2.0.526`, with the highest usable published stable version followed by the
+CI run number). A CI build is
 ordered above the release it follows and below the next one, so a CI build of
-0.2.0 is offered 0.2.1 but never 0.2.0. Before the first release tag, CI builds
-are `0.0.0.<run number>`.
+0.2.0 is offered 0.2.1 but never 0.2.0. Before the first usable published
+release, CI builds are `0.0.0.<run number>`. A bare Git tag, draft,
+prerelease, or release missing the updater's required installer metadata does
+not establish a new baseline.
 
 The asset must have GitHub's
 [`digest` metadata](https://docs.github.com/en/rest/releases/assets), formatted as
@@ -77,11 +80,11 @@ that package; it is not a separate Windows ARM64 installer.
 
 ### Publishing a release
 
-A release is published by pushing a tag. Choose a version newer than the latest
-published release, tag the commit on `main`, and push the tag. The first release
-must be at least `v0.2.0`: CI builds made before tag-based releases were
-installed as `0.1.<run number>`, and a lower release would never be offered to
-those machines. The workflow rejects a lower tag.
+Push a version tag to the official repository to start a release. Choose a
+version newer than any published release with a stable version number, and tag
+the protected `main` commit. The first release must be at least `v0.2.0`
+because older CI builds installed as `0.1.<run number>` must be able to
+upgrade.
 
 ```sh
 git fetch origin main
@@ -89,34 +92,40 @@ git tag -a v0.2.1 -m "Gesher 0.2.1" origin/main   # or a specific commit on main
 git push origin v0.2.1
 ```
 
-The tag starts a **ci** run of its own (`refs/tags/v0.2.1`). Its concurrency
-group belongs to that tag only and is never cancelled in progress, so pushes,
-merges and pull request runs cannot cancel it, and it does not cancel them. That
-run builds the installer as exactly `0.2.1` and runs every production job,
-including the package, upgrade and E2E checks. Only when `ci-required` succeeds
-does the `release` job:
+The tag starts a read-only **ci** run in a separate concurrency group from
+branch, pull request, and manual runs. It validates the pushed tag, builds the
+installer as exactly `0.2.1`, and runs the full package, upgrade, E2E, and
+aggregate checks. Branch and pull request runs, manual runs on any ref, and
+standalone fork runs produce CI-versioned installers and cannot publish.
 
-1. require a `vX.Y.Z` tag that still names the tested commit, that commit to be
-   on `main`, and the version to be newer than every published release (a
-   malformed tag such as `v1.2.3-rc1` already stops the run in its first job);
-2. take the tested `gesher-setup-0.2.1.exe` from the same run and check it
-   against its `SHA256SUMS.txt`;
-3. create a draft release with both files and generated release notes, wait for
-   GitHub's asset digest to equal the tested SHA-256, recheck that no newer
-   release appeared meanwhile, and only then publish it as the latest release.
-   Publishing is serialized across tags, so two releases cannot interleave.
+After successful tag CI, **Publish Gesher release** runs from its protected
+default-branch workflow revision. It verifies the official repository, CI
+definition, exact run and attempt, tag-push validation step, current tag,
+`main` ancestry, successful `ci-required` gate, and package artifact receipt.
+It checks the artifact's archive SHA-256 and then the one installer and checksum
+inside it. The publisher handles those files as data.
 
-If any job fails, nothing is published. Fix the problem on `main`, then delete
-the tag (`git push origin :refs/tags/v0.2.1`) and tag the fixed commit, or use
-the next version. A re-run of a failed `release` job replaces a draft left by an
-earlier attempt; it never overwrites or downgrades a published release.
+The publisher serializes its work across tags. It creates a draft with generated
+notes, verifies the GitHub asset digests for both files, and reads the release
+catalog and exact Git tag immediately before making the draft public. GitHub
+does not offer an atomic update conditioned on the observed Git ref or release
+catalog. Keep the tag and release unchanged throughout publication, and wait
+for the publisher before starting a manual release.
 
-Branch, pull request and manual (`workflow_dispatch`) runs never publish, even a
-manual run on a tag ref. Their
-installers carry a CI build version and are not offered by the updater.
+If publication is interrupted, rerun the publisher for the same successful CI
+attempt after inspecting its result. It can resume a draft when the prior
+protected publisher's job log authenticates its release ID and provenance,
+and every existing asset matches the tested bytes. It uploads only missing
+assets. It leaves manual, unknown, unprovable, and mismatched drafts untouched.
+If the publish request's response was lost, the publisher reconciles against
+the exact release and asset identities. Inspect that release if GitHub is
+temporarily unable to confirm the outcome.
 
-Until a suitable
-release exists, a successful check reports that no release is available.
+When the protected CI definition changes before the publisher starts, the
+mismatched run is refused. Use a separate version tag on a commit with the
+current protected CI definition, and preserve any existing draft for inspection.
+Until a suitable release exists, a successful updater check reports that no
+release is available.
 
 ## Failure handling and resource use
 

@@ -3,9 +3,8 @@ name: ci
 on:
   # Temporarily pause CI on main pushes; add branches: [main] under push to resume.
   push:
-    # Pushing a vX.Y.Z tag builds, tests and publishes that release (job: release;
-    # docs/updates.md). Every other run builds X.Y.Z.<run number> after the
-    # highest release tag, so a CI build never outranks the next release.
+    # Canonical tag pushes build and test a release. The protected default
+    # branch publisher is separate from this read-only workflow.
     tags: ['v[0-9]*.[0-9]*.[0-9]*']
   pull_request:
   workflow_dispatch:
@@ -16,11 +15,10 @@ permissions:
 
 # One current run per PR or branch. The root-specific prefix cannot collide
 # with reusable workflows, which inherit the caller's github.workflow value.
-# A release tag has its own group (refs/tags/vX.Y.Z), so no branch or PR run can
-# cancel it, and it is never cancelled in progress.
+# A release tag push has a separate group from manual runs on the same ref.
 concurrency:
-  group: ci-run-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ci-run-${{ github.event_name == 'push' && github.ref_type == 'tag' && 'release-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref_type == 'tag') }}
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -36,8 +34,8 @@ jobs:
       - run: echo "SOURCE_IDENTITY source=${{ github.sha }}"
       # The tag filter's * also matches e.g. v1.2.3-rc1. Stop such a run here,
       # before every build job (they all depend on this one), not hours later.
-      - name: Require a publishable release tag
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+      - name: Validate pushed version tag
+        if: ${{ github.repository == 'gesher-runtime/gesher' && github.event_name == 'push' && github.ref_type == 'tag' }}
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -61,6 +59,7 @@ jobs:
             .github/scripts
             .github/workflows
             .github/actions/runner-route
+            tools/ci
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -72,6 +71,7 @@ jobs:
         run: |
           python3 -m pip install PyYAML==6.0.3
           python3 .github/scripts/test_automerge_workflows.py
+          python3 tools/ci/test_release_workflows.py
   update-contracts:
     needs: [source-identity]
     strategy:
@@ -147,6 +147,7 @@ jobs:
           python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p test_github_read.py
+          python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
           python3 tools/surface/test-verified-artifact.py
@@ -306,6 +307,8 @@ jobs:
           python3 tools/test_audio_buffer_contracts.py
           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_receiver_lifetimes.py
+          python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
+          python3 tools/test_media_encoder_selection.py
 
       - name: Android HttpEngine requests over real HTTP sockets
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
@@ -369,6 +372,13 @@ jobs:
 
       - name: Fetch AOSP sources
         run: tools/fetch-aosp.sh
+
+      - name: Recorder lifecycle and complete-container size budgets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python3 tools/test_media_recorder_lifecycle.py
+          python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
 
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
@@ -451,6 +461,10 @@ jobs:
 
       - name: Cross-compile current-source Windows performance contracts
         run: |
+          python3 tools/test_capture_failures.py --compile-only \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/capture_failure_contract_test.exe \
+            --fixture-output out/capture_failure_fixture_test.exe
           python3 tools/test_procfs_thread_lookup.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/procfs_thread_lookup_test.exe
@@ -474,9 +488,9 @@ jobs:
         run: |
           # Canonical suite/package/e2e always receive the production role.
           if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           else
             exit 1
           fi
@@ -542,7 +556,9 @@ jobs:
           ls -la dist
 
       - name: Freeze default-OFF production role and unchanged shared-code boundary
-        run: python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+        run: |
+          python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+          python3 tools/media_capture/host_roles.py production --build out --dist dist
 
       - name: Bind isolated ordinary Binder actor to exact production compiler and source
         run: |
@@ -600,6 +616,20 @@ jobs:
         with:
           name: native3-locks-host
           path: dist-native3-locks/
+          if-no-files-found: error
+
+      - name: Build isolated synthetic capture hosts after production package is sealed
+        run: |
+          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          ninja -C out dalvikvm media_probe
+          python3 tools/media_capture/host_roles.py fixture --build out --dist dist
+          # Restore the ordinary compilation boundary before the query-only role.
+          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=OFF -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          ninja -C out dalvikvm media_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-capture-test
+          path: dist-media-capture-test/
           if-no-files-found: error
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
@@ -908,28 +938,8 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           $hebrew = Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl'
           if (-not (Test-Path $iscc) -or -not (Test-Path $hebrew)) { choco upgrade innosetup --no-progress -y | Out-Null }
-          # A release tag vX.Y.Z builds exactly X.Y.Z. Every other run builds
-          # X.Y.Z.<run number> after the highest release tag (0.0.0 before the
-          # first), which the updater orders above X.Y.Z and below the next release.
-          $release = '\A(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\z'
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
-            $version = $env:GITHUB_REF_NAME -creplace '\Av', ''
-            if ("v$version" -cne $env:GITHUB_REF_NAME -or $version -cnotmatch $release) {
-              throw "Release tag '$env:GITHUB_REF_NAME' must be vX.Y.Z with no leading zeros."
-            }
-          } else {
-            $tags = @(git ls-remote --tags --refs origin 'refs/tags/v*')
-            if ($LASTEXITCODE -ne 0) { throw 'Could not list the release tags.' }
-            $base = @($tags | ForEach-Object { ($_ -split 'refs/tags/v', 2)[1] } |
-              Where-Object { $_ -cmatch $release -and @($_.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -eq 0 } |
-              Sort-Object { [version]$_ } | Select-Object -Last 1)
-            $base = if ($base.Count) { $base[0] } else { '0.0.0' }
-            $version = "$base.$env:GITHUB_RUN_NUMBER"
-          }
-          if ($version -cnotmatch '\A(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})(\.[1-9][0-9]{0,4})?\z' -or
-              @($version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count) {
-            throw "Installer version '$version' must be X.Y.Z or X.Y.Z.N, with components through 65535 and no leading zeros."
-          }
+          $version = python tools/ci/release_version.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "Installer version: $version" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           & $iscc /Qp "/DBuildDir=$PWD\dist" "/DAppVersion=$version" "/O$PWD\installer" tools\package\gesher.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -1708,6 +1718,7 @@ jobs:
             tools/symbolize.py
             tools/boot-image
             tools/web3
+            tools/media_capture
             tools/package
             tools/windows4
             tools/net-udp
@@ -1867,6 +1878,17 @@ jobs:
         shell: pwsh
         run: |
           python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble isolated capture hosts for explicit synthetic media fixtures
+        if: matrix.shard == 'services'
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name media-capture-test --producer "build" --destination ci-suppliers/media_capture_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/media_capture_test --destination dist --ledger ci-owners.json --owner media_capture_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/media_capture/host_roles.py verify --dist dist --fixture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run offline identity and retirement regressions
@@ -2373,108 +2395,3 @@ jobs:
           if not results or failed:
               raise SystemExit(f"Required jobs did not succeed: {failed}")
           PY
-
-  # A pushed vX.Y.Z tag publishes the installer this same run built and tested,
-  # only after every production job above succeeded (docs/updates.md).
-  release:
-    name: release
-    # Only a tag push publishes; a manual run on a tag ref builds but never publishes.
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [ci-required]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    # One publisher at a time across all tags, so two releases cannot interleave
-    # their checks and leave the older one marked latest.
-    concurrency:
-      group: gesher-release-publish
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
-      SOURCE: ${{ github.sha }}
-    steps:
-      - name: Require a new stable version on main
-        run: |
-          set -euo pipefail
-          fail() { echo "::error::$*"; exit 1; }
-          [[ "$TAG" =~ ^v(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$ ]] || fail "Release tag $TAG must be vX.Y.Z"
-          version=${TAG#v}
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-          # The tag must still name the commit this run tested.
-          tagged=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)
-          [ "$tagged" = "$SOURCE" ] || fail "$TAG moved from $SOURCE to $tagged during the run"
-          # Releases come from main: the tagged commit is main or one of its ancestors.
-          status=$(gh api "repos/$GH_REPO/compare/$SOURCE...main" --jq .status)
-          case "$status" in ahead|identical) ;; *) fail "$SOURCE is not on main (compare status: $status)" ;; esac
-          releases=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[] | [.id, .tag_name, .draft] | @tsv')
-          # Never publish over, or below, a published release.
-          published=$(printf '%s\n' "$releases" | awk -F'\t' '$3 == "false" { print $2 }' |
-            sed -n 's/^v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p')
-          if printf '%s\n' "$published" | grep -qxF "$version"; then fail "Release $version is already published"; fi
-          highest=$(printf '%s\n' "$published" | sed '/^$/d' | sort -V | tail -n 1)
-          if [ -n "$highest" ] && [ "$(printf '%s\n%s\n' "$highest" "$version" | sort -V | tail -n 1)" != "$version" ]; then
-            fail "Release $version is not newer than the published $highest"
-          fi
-          # A draft left by an earlier attempt of this job is replaced, never published as is.
-          printf '%s\n' "$releases" | awk -F'\t' -v tag="$TAG" '$2 == tag && $3 == "true" { print $1 }' | while read -r id; do
-            gh api -X DELETE "repos/$GH_REPO/releases/$id"
-          done
-          echo "Publishing $TAG from $SOURCE (previous release: ${highest:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Download the tested installer
-        uses: actions/download-artifact@v4
-        with:
-          name: gesher-setup
-          path: installer
-
-      - name: Verify the installer and its checksum file
-        working-directory: installer
-        run: |
-          set -euo pipefail
-          fail() { echo "::error::$*"; exit 1; }
-          name="gesher-setup-$VERSION.exe"
-          ls -la
-          [ -f "$name" ] || fail "The artifact has no $name"
-          [ "$(find . -maxdepth 1 -type f -name '*.exe' | wc -l)" -eq 1 ] || fail 'The artifact has more than one installer'
-          hash=$(sha256sum "$name" | cut -d' ' -f1)
-          # Written on Windows: one CRLF-terminated "<sha256>  <name>" line.
-          [ "$(tr -d '\r' < SHA256SUMS.txt)" = "$hash  $name" ] || fail 'SHA256SUMS.txt does not match the installer'
-          echo "INSTALLER=$name" >> "$GITHUB_ENV"
-          echo "SHA256=$hash" >> "$GITHUB_ENV"
-          echo "SIZE=$(stat -c %s "$name")" >> "$GITHUB_ENV"
-
-      - name: Publish the release
-        run: |
-          set -euo pipefail
-          fail() { echo "::error::$*"; exit 1; }
-          # Created as a draft, so the updater never sees a latest release without
-          # its verified installer.
-          gh release create "$TAG" "installer/$INSTALLER" installer/SHA256SUMS.txt \
-            --draft --verify-tag --title "Gesher $VERSION" --generate-notes
-          id=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
-            --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id")
-          [ "$(printf '%s\n' "$id" | sed '/^$/d' | wc -l)" -eq 1 ] || fail "Expected exactly one draft for $TAG, found: $id"
-          # The updater requires GitHub's own asset digest to match the tested bytes.
-          expected="uploaded $SIZE sha256:$SHA256"
-          actual=''
-          for attempt in 1 2 3 4 5 6; do
-            # A transient API error is retried like a digest that is not ready yet.
-            actual=$(gh api "repos/$GH_REPO/releases/$id" --jq ".assets[] | select(.name == \"$INSTALLER\") | \"\(.state) \(.size) \(.digest)\"" || true)
-            [ "$actual" = "$expected" ] && break
-            sleep 5
-          done
-          [ "$actual" = "$expected" ] || fail "Uploaded asset is '$actual', expected '$expected'; the draft was left unpublished"
-          # Recheck immediately before publishing: no newer release may have appeared.
-          highest=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[] | select(.draft | not) | .tag_name' |
-            sed -n 's/^v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -n 1)
-          if [ -n "$highest" ] && { [ "$highest" = "$VERSION" ] ||
-              [ "$(printf '%s\n%s\n' "$highest" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]; }; then
-            fail "Release $highest was published meanwhile; $VERSION is not newer, so the draft was left unpublished"
-          fi
-          gh api -X PATCH "repos/$GH_REPO/releases/$id" -F draft=false -f make_latest=true > /dev/null
-          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
-          [ "$latest" = "$TAG" ] || fail "The latest release is $latest, not $TAG"
-          echo "Published $TAG: $INSTALLER ($SIZE bytes, sha256 $SHA256)" | tee -a "$GITHUB_STEP_SUMMARY"
