@@ -72,6 +72,10 @@ std::unique_ptr<AudioEncoder> AudioEncoder::Create(const std::string& mime, cons
   }
   if (mime == "audio/opus") return CreateOpusEncoder(p, error);
   if (mime == "audio/mp4a-latm") {
+    if (p.aac_profile != 2) {
+      *error = "AAC encoder supports LC only; requested profile " + std::to_string(p.aac_profile);
+      return nullptr;
+    }
     if (!MfAacEncoderAvailable()) {
       *error = "no AAC encoder on this machine (Media Foundation has none)";
       return nullptr;

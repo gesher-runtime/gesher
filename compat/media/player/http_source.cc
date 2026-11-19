@@ -147,7 +147,30 @@ class HttpSource : public DataSource {
       memcpy(out + done, chunk->data() + in, n);
       done += n;
     }
+    if (done > 0 && done <= static_cast<uint64_t>(INT64_MAX - offset)) {
+      read_end_.store(offset + static_cast<int64_t>(done));
+    }
     return static_cast<ssize_t>(done);
+  }
+
+  int64_t CachedBytes() override {
+    const int64_t start = read_end_.load();
+    if (start < 0 || cancelled_) return -1;
+    int64_t end = start;
+    std::lock_guard lock(mu_);
+    for (;;) {
+      const int64_t base = whole_ ? 0 : end - end % static_cast<int64_t>(kChunk);
+      const auto chunk = std::find_if(chunks_.begin(), chunks_.end(), [=](const auto& entry) {
+        return entry.first == base;
+      });
+      if (chunk == chunks_.end() || chunk->second->size() > static_cast<uint64_t>(INT64_MAX - base)) {
+        break;
+      }
+      const int64_t next = base + static_cast<int64_t>(chunk->second->size());
+      if (next <= end) break;
+      end = next;
+    }
+    return end - start;
   }
 
   int64_t Size() override {
@@ -272,6 +295,7 @@ class HttpSource : public DataSource {
   HINTERNET session_ = nullptr;
   HINTERNET connect_ = nullptr;
   std::atomic<int64_t> size_{-1};
+  std::atomic<int64_t> read_end_{-1};
   std::atomic<bool> whole_{false};
   std::atomic<bool> cancelled_{false};
   std::mutex first_mu_;

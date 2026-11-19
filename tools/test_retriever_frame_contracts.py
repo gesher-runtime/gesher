@@ -36,7 +36,14 @@ def main():
     jni = args.jni_source.read_text(encoding="utf-8")
     reader = args.reader_source.read_text(encoding="utf-8")
     start = "std::unique_ptr<VideoFrame> DecodeRetrieverFrame("
-    if start in jni:
+    indexed_selector = "template <typename Consumer>\nvoid VisitRetrieverFrames("
+    has_indexed_selector = indexed_selector in jni
+    has_display_metadata = "bool RetrieverDisplaySize(" in jni
+    orientation = ""
+    if has_indexed_selector:
+        selector = section(jni, indexed_selector, "jobject RetrieverBitmapConfig(")
+        orientation = section(jni, "size_t RetrieverPixelIndex(", "jobject CreateRetrieverBitmap(")
+    elif start in jni:
         selector = section(jni, start, "// _getFrameAtTime(timeUs,")
     else:
         # The previous implementation was an inline portion of the JNI method.
@@ -45,8 +52,13 @@ def main():
                     "VideoDecoder* decoder, int64_t time_us, int option) {\n"
                     + body + "  return chosen;\n}\n")
     adapter = section(reader, "class AospTrackReader :", "class AospExtractor :")
+    format_adapter = section(reader, "Format::Format()", "bool Format::GetFloat(")
     template = (ROOT / "tests/media/retriever_frame_host.cc.in").read_text(encoding="utf-8")
-    for marker, body in (("@TRACK_READER@", adapter), ("@RETRIEVER_SELECTION@", selector)):
+    for marker, body in (("@TRACK_READER@", adapter), ("@RETRIEVER_SELECTION@", selector),
+                         ("@FORMAT_ADAPTER@", format_adapter),
+                         ("@HAS_DISPLAY_METADATA@", str(int(has_display_metadata))),
+                         ("@HAS_INDEXED_SELECTOR@", str(int(has_indexed_selector))),
+                         ("@PRESENTATION_ORIENTATION@", orientation)):
         if template.count(marker) != 1:
             raise ValueError("host fixture marker changed: " + marker)
         template = template.replace(marker, body)
