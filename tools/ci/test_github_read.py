@@ -11,6 +11,7 @@ import sys
 import unittest
 from unittest.mock import call, patch
 
+from artifact_candidates import main as select_batch_artifacts, read_artifacts
 from github_read import GitHubReadError, get_json, main
 from github_jobs import get_jobs
 
@@ -180,7 +181,7 @@ class ReceiptIntegrationTest(unittest.TestCase):
         self.event = {'pull_request': {'head': {'sha': self.head, 'repo': {'id': 8}}}}
         self.run_value = {'id': 7, 'run_attempt': 2, 'head_sha': self.head, 'name': 'ci',
             'repository': {'id': 8, 'full_name': self.repo}, 'head_repository': {'id': 8}}
-        self.jobs = {'total_count': 1, 'jobs': [{'id': 9, 'name': 'build',
+        self.jobs = {'total_count': 1, 'jobs': [{'id': 9, 'name': 'build', 'status': 'completed',
             'conclusion': 'success', 'head_sha': self.head, 'run_id': 7, 'run_attempt': 2,
             'started_at': '2026-11-08T03:49:02Z', 'completed_at': '2026-11-08T03:50:57Z'}]}
         self.inventory = {'total_count': 1, 'artifacts': [{'id': 10, 'name': 'windows-x64',
@@ -189,7 +190,7 @@ class ReceiptIntegrationTest(unittest.TestCase):
                 'head_sha': self.head, 'repository_id': 8, 'head_repository_id': 8}}]}
         self.endpoints = [f'repos/{self.repo}/actions/runs/7',
             f'repos/{self.repo}/actions/runs/7/attempts/2/jobs?per_page=50&page=1',
-            f'repos/{self.repo}/actions/runs/7/artifacts?per_page=100']
+            f'repos/{self.repo}/actions/runs/7/artifacts?per_page=100&page=1&name=windows-x64']
         self.commands = []
         self.downloads = []
         self.enterContext(contextlib.redirect_stdout(io.StringIO()))
@@ -243,6 +244,60 @@ class ReceiptIntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Producer source/attempt/conclusion mismatch'):
             self._receipt()
         self.assertEqual(self.downloads, [])
+
+    def test_real_receipt_selects_one_valid_artifact_from_actual_producer_window(self):
+        current = self.inventory['artifacts'][0]
+        old = dict(current, id=11, digest='sha256:' + 'a' * 64, created_at='2026-11-08T02:50:35Z')
+        self.responses = [response(self.run_value), response(self.jobs),
+                          response({'total_count': 2, 'artifacts': [old, current]})]
+        self._receipt()
+        self.assertEqual(len(self.downloads), 1)
+        self.assertEqual(self.downloads[0][2:6], ['--id', '10', '--digest', current['digest']])
+
+    def test_same_name_conflicts_never_fall_back_to_an_earlier_artifact(self):
+        current = self.inventory['artifacts'][0]
+        old = dict(current, id=11, created_at='2026-11-08T02:50:35Z')
+        alternatives = {
+            'only stale': [old],
+            'overlap': [current, dict(current, id=11)],
+            'invalid overlap': [current, dict(current, id=11, digest='')],
+            'newer than producer': [current, dict(current, id=11, created_at='2026-11-08T05:05:06Z')],
+            'unknown provenance in stale row': [current, dict(old, workflow_run=None)],
+            'missing timestamp': [current, dict(old, created_at=None)],
+            'same ID listed twice': [current, dict(old, id=10)],
+        }
+        for label, rows in alternatives.items():
+            with self.subTest(label=label):
+                self.commands.clear()
+                self.responses = [response(self.run_value), response(self.jobs),
+                                  response({'total_count': len(rows), 'artifacts': rows})]
+                with self.assertRaises(RuntimeError):
+                    self._receipt()
+                self.assertEqual(len(self.commands), 3)
+                self.assertEqual(self.downloads, [])
+                self.sleep.assert_not_called()
+
+    def test_web3_batch_resolves_roles_with_the_same_selector(self):
+        current = self.inventory['artifacts'][0]
+        old = dict(current, id=11, created_at='2026-11-08T02:50:35Z')
+        role = {'head': self.head, 'head_repository_id': '8',
+                'roles': {'windows-x64': 'build'}, 'additional_jobs': []}
+        self.responses = [response(self.jobs), response({'total_count': 2, 'artifacts': [current, old]})]
+        output = io.StringIO()
+        with patch('sys.stdin', io.StringIO(json.dumps(role))), contextlib.redirect_stdout(output):
+            select_batch_artifacts()
+        self.assertEqual(json.loads(output.getvalue()), {'windows-x64': current})
+        self.assertEqual([c[-1] for c in self.commands],
+                         [self.endpoints[1], f'repos/{self.repo}/actions/runs/7/artifacts?per_page=100&page=1'])
+        self.assertEqual(self.downloads, [])
+
+    def test_web3_batch_rejects_wrong_attempt_before_reading_artifacts(self):
+        role = {'head': self.head, 'head_repository_id': '8',
+                'roles': {'windows-x64': 'build'}, 'additional_jobs': []}
+        self.responses = [response({'total_count': 1, 'jobs': [dict(self.jobs['jobs'][0], run_attempt=1)]})]
+        with patch('sys.stdin', io.StringIO(json.dumps(role))), self.assertRaisesRegex(RuntimeError, 'exact-attempt job'):
+            select_batch_artifacts()
+        self.assertEqual([c[-1] for c in self.commands], [self.endpoints[1]])
 
     def test_successful_transport_never_retries_or_accepts_semantic_rejections(self):
         cases = []
@@ -346,6 +401,44 @@ class JobsTest(unittest.TestCase):
                 get_jobs(JOBS_ENDPOINT)
         self.assertEqual(read.call_count, 6)
         self.assertEqual([c.args for c in sleep.call_args_list], [(1,), (2,)])
+
+
+class ArtifactInventoryTest(unittest.TestCase):
+    endpoint = 'repos/gesher-runtime/gesher/actions/runs/7/artifacts'
+
+    @staticmethod
+    def page(count, first, size):
+        return {'total_count': count, 'artifacts': [{'id': i, 'name': f'artifact-{i}'} for i in range(first, first + size)]}
+
+    def test_batch_inventory_reads_every_page(self):
+        pages = [self.page(103, 1, 100), self.page(103, 101, 3)]
+        with patch('artifact_candidates.time.sleep') as sleep, patch('artifact_candidates.get_json', side_effect=pages) as read:
+            result = read_artifacts(self.endpoint, read=read)
+        self.assertEqual([item['id'] for item in result], list(range(1, 104)))
+        self.assertEqual([entry.args[0] for entry in read.call_args_list],
+                         [f'{self.endpoint}?per_page=100&page={page}' for page in (1, 2)])
+        sleep.assert_not_called()
+
+    def test_batch_restarts_after_mutating_inventory_count(self):
+        old = self.page(103, 1, 100)
+        fresh = self.page(104, 1, 100)
+        last = self.page(104, 101, 4)
+        with patch('artifact_candidates.time.sleep') as sleep, \
+                patch('artifact_candidates.get_json', side_effect=[old, last, fresh, last]) as read:
+            result = read_artifacts(self.endpoint, read=read)
+        self.assertEqual(len(result), 104)
+        sleep.assert_called_once_with(1)
+
+    def test_artifact_inventory_refuses_incomplete_or_unexpected_rows(self):
+        for name, pages in (
+                ('windows-x64', [self.page(101, 1, 100)]),
+                ('windows-x64', [self.page(1, 1, 1)]),
+                (None, [self.page(501, 1, 100)]),
+                (None, [self.page(103, 1, 100), self.page(103, 100, 3)]),
+                (None, [self.page(1, 1, 0)] * 3)):
+            with self.subTest(name=name, pages=pages), patch('artifact_candidates.time.sleep'), \
+                    patch('artifact_candidates.get_json', side_effect=pages) as read, self.assertRaises(RuntimeError):
+                read_artifacts(self.endpoint, name=name, read=read)
 
 
 if __name__ == '__main__':
