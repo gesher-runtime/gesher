@@ -22,7 +22,7 @@ function world(over = {}) {
       actor: {id: 42, login: 'maintainer'}}],
     runs: [], checks: ['ci-required', 'arm64-required'].map((name, i) => ({id: 10 + i,
       name, status: 'completed', conclusion: 'success', app: {id: 15368}, check_suite: {id: 1000 + i}})),
-    statuses: [], comments: [], reviews: [], permission: 'write', nativeAutoMethod: null,
+    statuses: [], nextStatusId: 10000, comments: [], reviews: [], permission: 'write', nativeAutoMethod: null,
     mergeError: null, mergeResult: {merged: true}, calls: [], hooks: {}, warnings: [],
     mergeProof: {sha: MERGE, parents: [{sha: BASE}, {sha: HEAD}]},
     targetHead: BASE,
@@ -76,6 +76,14 @@ function world(over = {}) {
     const items = all.slice((a.page - 1) * a.per_page, a.page * a.per_page);
     return field ? {[field]: items, total_count: all.length} : items;
   });
+  const statusWrite = (actor, name) => rec(name, (args) => {
+    if (w.statusErrors?.[name]) throw w.statusErrors[name];
+    const value = {id: w.nextStatusId++, context: args.context, state: args.state,
+      creator: clone(actor), url: `https://api.github.com/repos/${args.owner}/${args.repo}/statuses/${args.sha}`,
+      ...w.statusResponseOverride?.[name]};
+    w.statuses.unshift(value);
+    return value;
+  });
   const writes = (actor, prefix = '') => ({
     pulls: {
       createReview: rec(prefix + 'approve', (args) => {
@@ -103,7 +111,8 @@ function world(over = {}) {
   const github = {rest: {
     pulls: {
       ...actionsWrites.pulls,
-      get: rec('getPR', () => w.pr),
+      get: rec('getPR', () => ({...w.pr, auto_merge: w.nativeAutoMethod ?
+        {merge_method: w.nativeAutoMethod.toLowerCase()} : null})),
       list: page('listPRs', () => [w.pr]),
       listReviews: page('reviews', () => {
         if (w.reviewError) throw w.reviewError;
@@ -130,12 +139,22 @@ function world(over = {}) {
       createWorkflowDispatch: rec('dispatch', () => ({})),
     },
     checks: {listForRef: page('checks', () => w.checks, 'check_runs')},
-    repos: {createCommitStatus: rec('status', () => ({})),
+    repos: {createCommitStatus: statusWrite(ACTIONS_BOT, 'status'),
       getCollaboratorPermissionLevel: rec('permission', () => {
         if (w.permissionError) throw w.permissionError;
         return {permission: w.permission, user: {id: w.permissionUserId ?? 42}};
       }),
       listCommitStatusesForRef: page('statuses', () => w.statuses),
+      getCombinedStatusForRef: async args => {
+        const response = await page('statuses', () => {
+          const latest = new Map();
+          for (const s of w.statuses) if (!latest.has(s.context) || latest.get(s.context).id < s.id)
+            latest.set(s.context, s);
+          return [...latest.values()];
+        }, 'statuses')(args);
+        response.data.sha = w.statusReadbackHead ?? args.ref;
+        return response;
+      },
       compareCommits: rec('compare', (args) => {
         if (w.comparisonError) throw w.comparisonError;
         return w.comparisons?.[args.base] ?? w.comparison;
@@ -168,8 +187,10 @@ function world(over = {}) {
       commit: {oid: r.commit_id}, ...(bot ? w.approvalNodeOverride : w.reviewNodeOverride)} : null});
   };
   const core = {info: () => {}, warning: (s) => w.warnings.push(s)};
-  w.useApp = () => {w.prGithub = {rest: writes(APP_BOT, 'app-'), graphql: github.graphql};};
-  const fire = (eventName, payload) => run({github, core, prGithub: w.prGithub, mergeGithub: w.mergeGithub,
+  w.useApp = () => {w.prGithub = {rest: {...writes(APP_BOT, 'app-'),
+    repos: {createCommitStatus: statusWrite(APP_BOT, 'app-status')}}, graphql: github.graphql};};
+  const fire = (eventName, payload) => run({github, readGithub: w.readGithub, core, prGithub: w.prGithub, mergeGithub: w.mergeGithub,
+    appQaStatus: w.appQaStatus, appId: w.appId, appInstallationId: w.appInstallationId,
     context: {eventName, repo: {owner: 'o', repo: 'r'},
       payload: {repository: {default_branch: 'main', id: w.repositoryId}, ...clone(payload)}}});
   w.labeled = (snapshot = w.pr) => fire('pull_request_target', {action: 'labeled',

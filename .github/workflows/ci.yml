@@ -181,7 +181,8 @@ jobs:
           python3 -m unittest discover -s tools/ci -p test_workflow_actor_metadata.py
           python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
-          python3 -m unittest discover -s tools/ci -p test_github_read.py
+          python3 -m unittest discover -s tools/ci -p 'test_github*.py'
+          python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
@@ -273,6 +274,7 @@ jobs:
           python3 tools/test_layered_bitmap_cache.py --sanitize
           python3 tools/test_camera_conversion_allocations.py --sanitize
           python3 tools/test_surface_present_allocations.py --sanitize
+          python3 tools/test_d3d11_readback.py --sanitize
           python3 tools/test_jni_argument_storage.py --sanitize
           python3 tools/test_art_jni_dispatch.py --sanitize
           python3 tools/test_audio_mixer_allocations.py --sanitize
@@ -282,6 +284,7 @@ jobs:
           python3 tools/test_audio_file_source.py --sanitize
           python3 tools/test_audio_rate_history.py --sanitize
           python3 tools/test_surface_image_cache.py --sanitize
+          python3 tools/test_webview_owned_streams.py --sanitize
 
       - name: Host event loop, audio state and surface geometry contracts
         run: |
@@ -1780,12 +1783,16 @@ jobs:
             tools/fonts
             tools/binder
 
+      - name: Verify and stage the complete core supplier batch
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name windows-x64 --producer "build" --destination ci-suppliers/windows_x64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/windows_x64 --destination dist --ledger ci-owners.json --owner windows_x64
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/windows_x64 --destination dist --ledger ci-owners.json --owner windows_x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Windows thread, Binder, GDI and socket allocation contracts
@@ -1813,25 +1820,19 @@ jobs:
       - name: Verify and assemble framework artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name framework --producer "framework / framework" --destination ci-suppliers/framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination dist --ledger ci-owners.json --owner framework
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/framework --destination dist --ledger ci-owners.json --owner framework
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble native-libs artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name native-libs --producer "native-libs / native-libs" --destination ci-suppliers/native_libs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/native_libs --destination dist --ledger ci-owners.json --owner native_libs
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/native_libs --destination dist --ledger ci-owners.json --owner native_libs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble arm64 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name arm64 --producer "arm64 / build" --destination ci-suppliers/arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/arm64 --destination dist --ledger ci-owners.json --owner arm64
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: ARM64 parked TLS, reuse and actual translator callbacks
@@ -1845,81 +1846,61 @@ jobs:
       - name: Verify and assemble libs-tests artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name libs-tests --producer "libs / build" --destination ci-suppliers/libs_tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/libs_tests --destination dist --ledger ci-owners.json --owner libs_tests --prefix libs-tests
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/libs_tests --destination dist --ledger ci-owners.json --owner libs_tests --prefix libs-tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble art-gtests artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name art-gtests --producer "posix / build" --destination ci-suppliers/art_gtests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/art_gtests --destination dist --ledger ci-owners.json --owner art_gtests --prefix art-gtests
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/art_gtests --destination dist --ledger ci-owners.json --owner art_gtests --prefix art-gtests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble graphics artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name graphics --producer "graphics / build" --destination ci-suppliers/graphics
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/graphics --destination dist --ledger ci-owners.json --owner graphics
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/graphics --destination dist --ledger ci-owners.json --owner graphics
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble angle artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name angle --producer "angle / probe-build" --destination ci-suppliers/angle
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/angle --destination dist --ledger ci-owners.json --owner angle
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/angle --destination dist --ledger ci-owners.json --owner angle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble boot-image artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name boot-image --producer "boot-image / compile" --destination ci-suppliers/boot_image
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/boot_image --destination dist --ledger ci-owners.json --owner boot_image
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/boot_image --destination dist --ledger ci-owners.json --owner boot_image
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble webview artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name webview --producer "webview / build" --destination ci-suppliers/webview
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/webview --destination dist --ledger ci-owners.json --owner webview
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/webview --destination dist --ledger ci-owners.json --owner webview
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble exec artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name exec --producer "exec / exec" --destination ci-suppliers/exec
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/exec --destination dist --ledger ci-owners.json --owner exec
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/exec --destination dist --ledger ci-owners.json --owner exec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble media artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name media --producer "media / media" --destination ci-suppliers/media
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/media --destination dist --ledger ci-owners.json --owner media
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/media --destination dist --ledger ci-owners.json --owner media
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble surfaces artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name surfaces --producer "surfaces / apps" --destination ci-suppliers/surfaces
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/surfaces --destination dist --ledger ci-owners.json --owner surfaces
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/surfaces --destination dist --ledger ci-owners.json --owner surfaces
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble native2 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name native2 --producer "native2 / native2" --destination ci-suppliers/native2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/native2 --destination dist --ledger ci-owners.json --owner native2 --prefix native2
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/native2 --destination dist --ledger ci-owners.json --owner native2 --prefix native2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify normal suite consumes the default-OFF runtime only

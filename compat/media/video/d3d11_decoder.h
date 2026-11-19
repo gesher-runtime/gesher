@@ -74,6 +74,8 @@ class D3D11VideoDecoder : public VideoDecoder {
   bool ExtractFrame(ID3D11Texture2D* texture, int64_t timestamp_us, VideoFrame* out_frame);
 
  private:
+  struct Nv12Readback;
+  bool MapNv12(ID3D11Texture2D* texture, Nv12Readback* readback);
   bool InitD3D11(std::string* error);
   bool InitDecoder(const Format& track, std::string* error);
   bool EnsureStagingTexture(int width, int height);
