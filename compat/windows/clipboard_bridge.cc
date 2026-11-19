@@ -313,7 +313,8 @@ bool ReadRichClipboard(RichClipboardData* out) {
 }
 
 bool WriteRichClipboard(const std::u16string& text, const std::u16string& html,
-                        const uint8_t* image_bytes, size_t image_size) {
+                        const uint8_t* image_bytes, size_t image_size, uint32_t* written_sequence) {
+  if (written_sequence != nullptr) *written_sequence = 0;
   if (!OpenClipboardRetrying()) return false;
   EmptyClipboard();
 
@@ -374,6 +375,7 @@ bool WriteRichClipboard(const std::u16string& text, const std::u16string& html,
     }
   }
 
+  if (any && written_sequence != nullptr) *written_sequence = GetClipboardSequenceNumber();
   CloseClipboard();
   return any;
 }
@@ -404,10 +406,8 @@ Java_com_gesher_server_WindowsHost_nativeHasClipboardImage(JNIEnv*, jclass) {
   return gesher::windows::HasClipboardImage() ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_gesher_server_WindowsHost_nativeSetClipboardRich(JNIEnv* env, jclass,
-                                                          jstring jtext, jstring jhtml,
-                                                          jbyteArray jimage) {
+static bool SetClipboardRich(JNIEnv* env, jstring jtext, jstring jhtml, jbyteArray jimage,
+                             uint32_t* written_sequence) {
   std::u16string text;
   if (jtext != nullptr) {
     const jchar* chars = env->GetStringChars(jtext, nullptr);
@@ -431,9 +431,21 @@ Java_com_gesher_server_WindowsHost_nativeSetClipboardRich(JNIEnv* env, jclass,
     env->GetByteArrayRegion(jimage, 0, size, reinterpret_cast<jbyte*>(image_bytes.data()));
   }
 
-  bool ok = gesher::windows::WriteRichClipboard(
-      text, html, image_bytes.empty() ? nullptr : image_bytes.data(), image_bytes.size());
-  return ok ? JNI_TRUE : JNI_FALSE;
+  return gesher::windows::WriteRichClipboard(
+      text, html, image_bytes.empty() ? nullptr : image_bytes.data(), image_bytes.size(), written_sequence);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_gesher_server_WindowsHost_nativeSetClipboardRich(JNIEnv* env, jclass,
+    jstring text, jstring html, jbyteArray image) {
+  return SetClipboardRich(env, text, html, image, nullptr) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_gesher_server_WindowsHost_nativeSetClipboardRichSequence(JNIEnv* env, jclass,
+    jstring text, jstring html, jbyteArray image) {
+  uint32_t sequence = 0;
+  return SetClipboardRich(env, text, html, image, &sequence) ? static_cast<jint>(sequence) : 0;
 }
 
 }  // extern "C"

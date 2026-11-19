@@ -1,0 +1,34 @@
+name: Clipboard native access
+on:
+  pull_request:
+    paths:
+      - 'compat/devsvc/**'
+      - 'cmake/aosp/devsvc.cmake'
+      - 'app/java/com/gesher/server/ClipboardService.java'
+      - 'app/java/com/gesher/server/WindowsHost.java'
+      - 'app/java/com/gesher/server/ActivityTaskManagerService.java'
+      - 'tests/clipboard/**'
+      - 'tools/test_clipboard_native.py'
+      - '.github/workflows/clipboard-access.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/test_clipboard_native.py
+  windows-access:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build actual Windows clipboard access implementation
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devsvc compat\devsvc\clipboard_access.cc tests\clipboard\access_windows_test.cc /Fe:clipboard-access.exe user32.lib wtsapi32.lib
+      - name: Check actual foreground, session and resource lifetimes
+        shell: pwsh
+        run: |
+          & .\clipboard-access.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard access gate failed' }

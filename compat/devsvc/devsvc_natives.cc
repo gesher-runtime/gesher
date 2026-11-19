@@ -177,8 +177,29 @@ jboolean WindowsHost_setClipboard(JNIEnv* env, jclass, jstring text, jstring htm
   return dev::SetClipboard(Str(env, text), Str(env, html)) ? JNI_TRUE : JNI_FALSE;
 }
 
+jint WindowsHost_setClipboardSequence(JNIEnv* env, jclass, jstring text, jstring html) {
+  uint32_t sequence = 0;
+  return dev::SetClipboard(Str(env, text), Str(env, html), &sequence) ? static_cast<jint>(sequence) : 0;
+}
+
 jint WindowsHost_clipboardSequence(JNIEnv*, jclass) {
   return static_cast<jint>(dev::ClipboardSequence());
+}
+
+jlongArray WindowsHost_foregroundProcess(JNIEnv* env, jclass) {
+  uint32_t pid = 0;
+  uint64_t created = 0;
+  if (!dev::ForegroundProcess(&pid, &created)) return nullptr;
+  jlongArray result = env->NewLongArray(2);
+  if (result != nullptr) {
+    jlong values[] = {static_cast<jlong>(pid), static_cast<jlong>(created)};
+    env->SetLongArrayRegion(result, 0, 2, values);
+  }
+  return result;
+}
+
+jint WindowsHost_sessionLockState(JNIEnv*, jclass) {
+  return dev::SessionLockState();
 }
 
 jint WindowsHost_alarmWait(JNIEnv*, jclass, jlong utcMillis, jboolean wakeup, jint timeoutMs) {
@@ -279,6 +300,8 @@ jstring WindowsHost_pickFile(JNIEnv* env, jclass, jstring title) {
 extern "C" {
 jbyteArray JNICALL Java_com_gesher_server_WindowsHost_nativeClipboardImage(JNIEnv* env, jclass);
 jboolean JNICALL Java_com_gesher_server_WindowsHost_nativeHasClipboardImage(JNIEnv*, jclass);
+jint JNICALL Java_com_gesher_server_WindowsHost_nativeSetClipboardRichSequence(JNIEnv*, jclass,
+    jstring, jstring, jbyteArray);
 jboolean JNICALL Java_com_gesher_server_WindowsHost_nativeSetClipboardRich(JNIEnv* env, jclass,
                                                                            jstring, jstring,
                                                                            jbyteArray);
@@ -304,7 +327,13 @@ const JNINativeMethod gWindowsHostMethods[] = {
      GESHER_JNI(WindowsHost_setClipboard)},
     {"nativeSetClipboardRich", "(" DEVSVC_STRING DEVSVC_STRING "[B)Z",
      GESHER_JNI_SYSV(Java_com_gesher_server_WindowsHost_nativeSetClipboardRich)},
+    {"nativeSetClipboardSequence", "(" DEVSVC_STRING DEVSVC_STRING ")I",
+     GESHER_JNI(WindowsHost_setClipboardSequence)},
+    {"nativeSetClipboardRichSequence", "(" DEVSVC_STRING DEVSVC_STRING "[B)I",
+     GESHER_JNI_SYSV(Java_com_gesher_server_WindowsHost_nativeSetClipboardRichSequence)},
     {"nativeClipboardSequence", "()I", GESHER_JNI(WindowsHost_clipboardSequence)},
+    {"nativeForegroundProcess", "()[J", GESHER_JNI(WindowsHost_foregroundProcess)},
+    {"nativeSessionLockState", "()I", GESHER_JNI(WindowsHost_sessionLockState)},
     {"nativeAlarmWait", "(JZI)I", GESHER_JNI(WindowsHost_alarmWait)},
     {"nativeAlarmKick", "()V", GESHER_JNI(WindowsHost_alarmKick)},
     {"nativePowerStatus", "()[I", GESHER_JNI(WindowsHost_powerStatus)},

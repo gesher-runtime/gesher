@@ -69,6 +69,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         mProviders = new ContentProviders(pm, atm);
         mPendingIntents = new PendingIntents(this, pm);
         atm.setActivityManager(this);
+        pm.appOps().attach(mCallers, this::appOpsUidStates);
         pm.setEnabledStateListener(this::cleanupDisabledPackageComponents,
                 change -> atm.restartForEnabledState(change.pkg, () -> change.restartCurrent(pm)));
     }
@@ -84,6 +85,13 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     CallerIdentity callers() { return mCallers; }
+
+    private java.util.Map<Integer, AppOpsService.UidState> appOpsUidStates() {
+        java.util.Map<Integer, AppOpsService.UidState> states = mAtm.appOpsUidStates();
+        mServices.addAppOpsForegroundServices(states);
+        return states;
+    }
+
 
     void setAccountManager(AccountManagerService accounts) { mAtm.setAccountManager(accounts); }
 
@@ -108,6 +116,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
     /** An app process is gone: its services, receivers and providers too. */
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
         mServices.processDied(app);
+        mPm.appOps().requestUidStateRefresh();
         mBroadcasts.processDied(app);
         // Providers it used: their processes may have no other client left.
         for (ActivityTaskManagerService.ProcessRecord p : mProviders.processDied(app)) {

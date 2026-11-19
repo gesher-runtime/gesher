@@ -25,18 +25,21 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.WeakHashMap;
 
-/** Package-scoped permission state shared by package/activity/permission services. */
+/** UID permission state shared by package/activity/permission services. */
 public final class PermissionPolicy extends IPermissionManager.Default {
     private final PackageManagerService mPm;
     private final PermissionCatalog mCatalog;
     private final File mFile = new File(Device.dataDir(), "system/runtime-permissions");
     private final Properties mDecisions;
-    private final Map<IBinder, AttributionSourceState> mAttributions = new WeakHashMap<>();
+    private record AttributionOwner(String name, int uid, ApkPackage code) { }
+    private record RegisteredAttribution(AttributionSourceState source, List<AttributionOwner> owners) { }
+    private final Map<IBinder, RegisteredAttribution> mAttributions = new WeakHashMap<>();
     private volatile CallerIdentity mCallers;
 
     PermissionPolicy(PackageManagerService pm) {
         mPm = pm;
         mCatalog = new PermissionCatalog(pm);
+        mCallers = new CallerIdentity(pm, null);
         Properties saved = Device.read(mFile);
         mDecisions = saved == null ? new Properties() : saved;
     }
@@ -73,28 +76,59 @@ public final class PermissionPolicy extends IPermissionManager.Default {
 
     boolean granted(String name, String packageName) {
         ApkPackage pkg = mPm.get(packageName);
-        if (pkg == null || name == null || !pkg.parsed.getRequestedPermissions().contains(name)) return false;
+        if (pkg == null || name == null) return false;
         if (GmsSignatureSpoofing.PERMISSION_FAKE_PACKAGE_SIGNATURE.equals(name)) {
-            return GmsSignatureSpoofing.isTrustedPackage(pkg);
+            return pkg.parsed.getRequestedPermissions().contains(name)
+                    && GmsSignatureSpoofing.isTrustedPackage(pkg);
         }
         PermissionInfo info = mCatalog.get(name);
         if (info == null) return false;
+        List<ApkPackage> members = uidMembers(pkg.uid());
+        boolean requested = false;
+        int targetSdk = Integer.MAX_VALUE;
+        for (ApkPackage member : members) {
+            requested |= member.parsed.getRequestedPermissions().contains(name);
+            targetSdk = Math.min(targetSdk, member.parsed.getTargetSdkVersion());
+        }
+        if (!requested) return false;
         int protection = info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE;
         if (protection == PermissionInfo.PROTECTION_NORMAL) return true;
         if (protection == PermissionInfo.PROTECTION_DANGEROUS) {
-            String decision;
-            synchronized (this) { decision = mDecisions.getProperty(key(pkg, name)); }
-            if (decision != null) return "granted".equals(decision);
-            // Enabling the protected runtime must not depend on an APK being present;
-            // otherwise removing GmsCore would silently re-grant every dangerous perm.
-            return !GmsSignatureSpoofing.isEnabled();
+            String decision = runtimeDecisionForUid(pkg.uid(), name, members);
+            // Runtime permissions are UID state. New modern applications do not
+            // receive consent merely because an optional compatibility mode is off.
+            return decision != null ? "granted".equals(decision) : targetSdk < 23;
         }
-        if (!"android".equals(info.packageName) && pkg.packageName.equals(info.packageName)) return true;
         ApkPackage owner = mPm.get(info.packageName);
-        if (owner != null && pkg.signaturesMatch(owner)) return true;
-        return (info.protectionLevel & PermissionInfo.PROTECTION_FLAG_PRIVILEGED) != 0
-                && pkg.isSystemAddon() && pkg.hasVerifiedMicrogSigner()
-                && privilegedAllowlist(pkg.packageName, name);
+        for (ApkPackage member : members) {
+            if (!member.parsed.getRequestedPermissions().contains(name)) continue;
+            if (!"android".equals(info.packageName) && member.packageName.equals(info.packageName)) return true;
+            if (owner != null && member.signaturesMatch(owner)) return true;
+            if ((info.protectionLevel & PermissionInfo.PROTECTION_FLAG_PRIVILEGED) != 0
+                    && member.isSystemAddon() && member.hasVerifiedMicrogSigner()
+                    && privilegedAllowlist(member.packageName, name)) return true;
+        }
+        return false;
+    }
+
+    private List<ApkPackage> uidMembers(int uid) {
+        List<ApkPackage> members = new ArrayList<>();
+        for (ApkPackage pkg : mPm.packages()) if (pkg.uid() == uid) members.add(pkg);
+        return members;
+    }
+
+    private synchronized String runtimeDecisionForUid(int uid, String permission, List<ApkPackage> members) {
+        String decision = mDecisions.getProperty(uidKey(uid, permission));
+        if (decision != null) return decision;
+        boolean granted = false;
+        // Migrate old package records deterministically. Conflicting old decisions
+        // must never depend on whichever package happened to be queried first.
+        for (ApkPackage member : members) {
+            String old = mDecisions.getProperty(legacyKey(member, permission));
+            if ("denied".equals(old)) return "denied";
+            granted |= "granted".equals(old);
+        }
+        return granted ? "granted" : null;
     }
 
     /** Explicit allowlist, never all signature permissions simply because an APK is trusted. */
@@ -121,18 +155,39 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         return false;
     }
 
-    private String key(ApkPackage pkg, String permission) {
+    private String legacyKey(ApkPackage pkg, String permission) {
         String signer = pkg.verifiedSignerSha256();
         // Grants never survive replacement by a different signing identity.
         return pkg.packageName + ":" + (signer == null ? "unsigned" : signer) + ":" + permission;
     }
 
+    private static String uidKey(int uid, String permission) {
+        return "uid:" + uid + ":" + permission;
+    }
+
     /** Uninstall must revoke decisions even if a later install reuses a package UID. */
     public void forgetPackage(String packageName) {
+        synchronized (mAttributions) {
+            mAttributions.values().removeIf(saved -> AppOpsAttribution.chain(saved.source).stream()
+                    .anyMatch(source -> packageName.equals(source.packageName)));
+        }
         synchronized (this) {
             Properties before = new Properties();
             before.putAll(mDecisions);
-            mDecisions.keySet().removeIf(key -> key.toString().startsWith(packageName + ":"));
+            ApkPackage removed = mPm.get(packageName);
+            List<ApkPackage> remaining = removed == null ? List.of() : uidMembers(removed.uid());
+            String prefix = removed == null ? null : "uid:" + removed.uid() + ":";
+            mDecisions.keySet().removeIf(key -> {
+                String saved = key.toString();
+                if (saved.startsWith(packageName + ":")) return true;
+                if (prefix == null || !saved.startsWith(prefix)) return false;
+                String permission = saved.substring(prefix.length());
+                for (ApkPackage member : remaining) {
+                    if (!member.packageName.equals(packageName)
+                            && member.parsed.getRequestedPermissions().contains(permission)) return false;
+                }
+                return true;
+            });
             try { Device.write(mFile, mDecisions); }
             catch (java.io.IOException e) {
                 mDecisions.clear(); mDecisions.putAll(before);
@@ -207,20 +262,32 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                         != PermissionInfo.PROTECTION_DANGEROUS) {
             throw new IllegalArgumentException("Not a requested runtime permission: " + permission);
         }
+        final boolean wasGranted;
         synchronized (this) {
             if (mPm.get(pkg) != installed || mPm.isRemovalPending(pkg)) {
                 throw new SecurityException("Runtime permission owner changed or is retiring");
             }
-            String key = key(installed, permission);
-            Object previous = mDecisions.setProperty(key, decision);
+            wasGranted = granted(permission, pkg);
+            Properties before = new Properties();
+            before.putAll(mDecisions);
+            List<ApkPackage> members = uidMembers(installed.uid());
+            mDecisions.setProperty(uidKey(installed.uid(), permission), decision);
+            for (ApkPackage member : members) mDecisions.remove(legacyKey(member, permission));
             try { Device.write(mFile, mDecisions); }
             catch (java.io.IOException e) {
-                if (previous == null) mDecisions.remove(key); else mDecisions.put(key, previous);
+                mDecisions.clear(); mDecisions.putAll(before);
                 throw new IllegalStateException("Cannot persist permission decision", e);
             }
         }
         invalidateCaches();
-        if (NotificationManagerService.sLast != null) NotificationManagerService.sLast.permissionChanged(pkg);
+        NotificationManagerService notifications = NotificationManagerService.sLast;
+        if (notifications != null) for (ApkPackage member : uidMembers(installed.uid())) {
+            notifications.permissionChanged(member.packageName);
+        }
+        Services.Created services = Services.sLast;
+        if (wasGranted && "denied".equals(decision) && services != null && services.pm == mPm) {
+            services.atm.killUidForPermissionChange(installed, () -> !granted(permission, pkg));
+        }
     }
 
     private void invalidateCaches() {
@@ -241,7 +308,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         ApkPackage installed = mPm.get(pkg);
         if (installed == null) return 0;
         synchronized (this) {
-            return mDecisions.containsKey(key(installed, permission)) ? PackageManager.FLAG_PERMISSION_USER_SET : 0;
+            return runtimeDecisionForUid(installed.uid(), permission, uidMembers(installed.uid())) != null
+                    ? PackageManager.FLAG_PERMISSION_USER_SET : 0;
         }
     }
     @Override public Map<String, PermissionManager.PermissionState> getAllPermissionStates(String pkg, String deviceId, int userId) {
@@ -259,26 +327,57 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     @Override public IBinder registerAttributionSource(AttributionSourceState source) {
         CallerIdentity callers = mCallers;
         if (source == null || callers == null) throw new SecurityException("Unregistered attribution caller");
-        callers.requirePackage(source.packageName);
-        ApkPackage pkg = mPm.get(source.packageName);
-        if (pkg == null || pkg.uid() != source.uid
-                || (source.pid != -1 && source.pid != callers.callerPid())) throw new SecurityException("Forged attribution identity");
+        List<AttributionSourceState> chain = AppOpsAttribution.chain(source);
+        boolean trusted = callers.isSystem() || checkProcessPermission(
+                android.Manifest.permission.UPDATE_APP_OPS_STATS, callers.callerPid(), callers.callerUid())
+                == PackageManager.PERMISSION_GRANTED;
+        if (!trusted) {
+            String name = callers.callerPackage();
+            ApkPackage caller = mPm.get(name);
+            if (caller == null || caller.uid() != source.uid || callers.callerUid() != source.uid
+                    || source.pid != -1 && source.pid != callers.callerPid()) {
+                throw new SecurityException("Attribution source does not belong to the caller");
+            }
+        }
+        List<AttributionOwner> owners = new ArrayList<>();
+        for (AttributionSourceState node : chain) {
+            ApkPackage pkg = node.packageName == null ? null : mPm.get(node.packageName);
+            boolean platform = "android".equals(node.packageName) && node.uid == Process.SYSTEM_UID;
+            if (!platform && (pkg == null || pkg.uid() != node.uid || mPm.isRemovalPending(pkg.packageName))) {
+                throw new SecurityException("Unknown attribution package/UID");
+            }
+            owners.add(new AttributionOwner(node.packageName, node.uid, pkg));
+        }
+        if (chain.size() > 1 && !isRegisteredAttributionSource(chain.get(1))) {
+            throw new SecurityException("Attribution next link is not registered");
+        }
         IBinder token = source.token == null ? new Binder() : source.token;
-        AttributionSourceState saved = new AttributionSourceState();
-        saved.uid = source.uid; saved.pid = callers.callerPid(); saved.packageName = source.packageName;
-        synchronized (mAttributions) { mAttributions.put(token, saved); }
+        AttributionSourceState saved = AppOpsAttribution.copy(source, false);
+        synchronized (mAttributions) { mAttributions.put(token, new RegisteredAttribution(saved, List.copyOf(owners))); }
         return token;
     }
     @Override public boolean isRegisteredAttributionSource(AttributionSourceState source) {
         if (source == null || source.token == null) return false;
         synchronized (mAttributions) {
-            AttributionSourceState saved = mAttributions.get(source.token);
-            return saved != null && saved.uid == source.uid && java.util.Objects.equals(saved.packageName, source.packageName)
-                    && (source.pid == -1 || source.pid == saved.pid);
+            RegisteredAttribution saved = mAttributions.get(source.token);
+            if (saved == null || !attributionOwnersCurrent(saved)) return false;
+            try { return AppOpsAttribution.equalExceptRootToken(saved.source, source); }
+            catch (IllegalArgumentException malformed) { return false; }
         }
     }
+    private boolean attributionOwnersCurrent(RegisteredAttribution saved) {
+        for (AttributionOwner owner : saved.owners) {
+            if (mPm.get(owner.name) != owner.code || mPm.isRemovalPending(owner.name)) return false;
+            if (owner.code != null && owner.code.uid() != owner.uid) return false;
+        }
+        return true;
+    }
     @Override public int getRegisteredAttributionSourceCount(int uid) {
-        synchronized (mAttributions) { return (int)mAttributions.values().stream().filter(s -> s.uid == uid).count(); }
+        if (mCallers == null || !mCallers.isSystem()) throw new SecurityException("Attribution count requires system authority");
+        synchronized (mAttributions) {
+            mAttributions.values().removeIf(saved -> !attributionOwnersCurrent(saved));
+            return (int)mAttributions.values().stream().filter(saved -> saved.source.uid == uid).count();
+        }
     }
 
     int checkAttribution(String permission, AttributionSourceState source, boolean fromDatasource) {

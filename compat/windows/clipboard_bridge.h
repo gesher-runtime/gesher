@@ -41,7 +41,7 @@ bool ReadRichClipboard(RichClipboardData* out);
 // - html -> RegisterClipboardFormat("HTML Format")
 // - image_bytes -> CF_DIB / CF_DIBV5
 bool WriteRichClipboard(const std::u16string& text, const std::u16string& html,
-                        const uint8_t* image_bytes, size_t image_size);
+                        const uint8_t* image_bytes, size_t image_size, uint32_t* written_sequence = nullptr);
 
 // Checks if the Windows clipboard currently has an image in CF_DIB or CF_DIBV5.
 bool HasClipboardImage();
