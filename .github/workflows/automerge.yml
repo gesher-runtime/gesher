@@ -36,7 +36,9 @@ jobs:
     # Fork review events have read-only tokens. Their QA proof is rechecked by
     # the privileged workflow_run event before the required gate turns green.
     if: github.event_name != 'pull_request_review' || github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
-    runs-on: ubuntu-24.04
+    # Only the trusted main workflow can use the privileged controller pool.
+    # Review-event YAML from a PR remains hosted; the group also pins main.
+    runs-on: ${{ fromJSON(vars.GESHER_AUTOMERGE_LOCAL == 'true' && github.workflow_ref == 'gesher-runtime/gesher/.github/workflows/automerge.yml@refs/heads/main' && '{"group":"gesher-automerge","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +46,30 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: .github/scripts
+      - name: Create repository bot token
+        id: gesher-bot
+        if: vars.GESHER_BOT_APP_ID != ''
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.GESHER_BOT_APP_ID }}
+          private-key: ${{ secrets.GESHER_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
       - uses: actions/github-script@v7
+        env:
+          # Prefer the short-lived App token; a repository PAT is a fallback.
+          # Only native auto-merge mutations use this credential.
+          AUTOMERGE_WORKFLOWS_TOKEN: ${{ steps.gesher-bot.outputs.token || secrets.AUTOMERGE_WORKFLOWS_TOKEN }}
         with:
           script: |
             const run = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/label-automerge.js`);
-            await run({github, context, core});
+            const token = process.env.AUTOMERGE_WORKFLOWS_TOKEN;
+            // A separate Octokit instance is essential: changing request headers
+            // on github.graphql would still run the original token's auth hook.
+            const mergeGithub = token ? new github.constructor({
+              auth: token, baseUrl: process.env.GITHUB_API_URL
+            }) : github;
+            await run({github, context, core, mergeGithub});

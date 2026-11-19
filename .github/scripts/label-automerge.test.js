@@ -190,7 +190,81 @@ function forkWorld() {
   return w;
 }
 
-for (const conclusion of ['failure', 'timed_out', 'action_required', 'startup_failure']) {
+for (const index of [0, 1]) {
+  test('fork workflow awaiting approval preserves label and resumes after CI: ' + index, async () => {
+    const w = forkWorld();
+    Object.assign(w.runs[index], {status: 'completed', conclusion: 'action_required'});
+    w.checks = [];
+    await w.ciDone();
+    assert.equal(w.did('removeLabel').length, 0);
+    assert.equal(w.did('comment').length, 0);
+    assert.equal(w.did('status').at(-1)[1].state, 'pending');
+    assert.equal(w.nativeAutoMethod, 'SQUASH');
+    Object.assign(w.runs[index], {run_attempt: 2, conclusion: 'success'});
+    w.checks = world().checks;
+    await w.ciDone();
+    assert.equal(w.did('status').at(-1)[1].state, 'success');
+    assert.equal(w.did('removeLabel').length, 0);
+    assert.equal(w.did('approve').length, 0);
+  });
+}
+
+test('workflow-capable credential only enables and disables native waiting', async () => {
+  const w = world({approved: false});
+  const botGraphql = w.github.graphql;
+  const mutations = [];
+  w.github.graphql = async (query, args) => {
+    assert.doesNotMatch(query, /mutation/);
+    return botGraphql(query, args);
+  };
+  w.mergeGithub = {graphql: async (query, args) => {
+    assert.match(query, /mutation/);
+    assert.match(query, /enablePullRequestAutoMerge|disablePullRequestAutoMerge/);
+    mutations.push(query);
+    return botGraphql(query, args);
+  }};
+  await w.labeled();
+  assert.equal(w.did('approve').length, 1);
+  assert.equal(w.did('status').at(-1)[1].state, 'success');
+  assert.deepEqual(w.did('nativeWait')[0][1], {id: 'PR_7', head: HEAD});
+  w.pr.labels = [];
+  await w.fire('pull_request_target', {action: 'unlabeled', label: {name: 'automerge'}, pull_request: w.pr});
+  assert.equal(w.did('status').at(-1)[1].state, 'failure');
+  assert.equal(w.nativeAutoMethod, null);
+  assert.equal(mutations.length, 2);
+});
+
+test('a rejected workflow-capable credential cannot release the QA gate', async () => {
+  const w = world();
+  w.mergeGithub = {graphql: async () => { throw new Error('workflows permission required'); }};
+  await assert.rejects(w.ciDone(), /workflows permission required/);
+  assert.equal(w.did('status').at(-1)[1].state, 'pending');
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+test('maintainer-enabled squash waiting survives without another privileged mutation', async () => {
+  const w = world({nativeAutoMethod: 'SQUASH'});
+  w.mergeGithub = {graphql: async () => { assert.fail('existing squash waiting needs no mutation'); }};
+  w.runs[0].status = 'in_progress'; w.runs[0].conclusion = null;
+  await w.ciDone();
+  assert.equal(w.did('status').at(-1)[1].state, 'pending');
+  Object.assign(w.runs[0], {status: 'completed', conclusion: 'success'});
+  await w.ciDone();
+  assert.equal(w.did('status').at(-1)[1].state, 'success');
+  assert.equal(w.nativeAutoMethod, 'SQUASH');
+  assert.equal(w.did('nativeWait').length, 0);
+  assert.equal(w.did('nativeCancel').length, 0);
+});
+
+test('a workflow-capable credential cannot authorize an unapproved head', async () => {
+  const w = world(); w.pr.head.sha = OTHER;
+  w.mergeGithub = {graphql: async () => { assert.fail('unapproved head must not enable waiting'); }};
+  await w.ciDone(OTHER);
+  assert.equal(w.did('status').at(-1)[1].state, 'failure');
+  assert.equal(w.did('nativeWait').length, 0);
+});
+
+for (const conclusion of ['failure', 'timed_out', 'startup_failure']) {
   test(conclusion + ' revokes the label and native waiting with one short bot comment', async () => {
     const w = world({nativeAutoMethod: 'SQUASH'});
     w.runs[0].conclusion = conclusion;

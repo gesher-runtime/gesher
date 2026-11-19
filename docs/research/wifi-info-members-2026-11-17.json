@@ -1,0 +1,1219 @@
+{
+  "scope": "Selected SDK36 declarations from actual compiled production output; no runtime percentage",
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "classes": {
+    "android.net.wifi.WifiInfo": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "FREQUENCY_UNITS",
+          "descriptor": "Ljava/lang/String;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "LINK_SPEED_UNITS",
+          "descriptor": "Ljava/lang/String;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "LINK_SPEED_UNKNOWN",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_DPP",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_EAP",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_EAP_WPA3_ENTERPRISE",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_EAP_WPA3_ENTERPRISE_192_BIT",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_OPEN",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_OSEN",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_OWE",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_PASSPOINT_R1_R2",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_PASSPOINT_R3",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_PSK",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_SAE",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_UNKNOWN",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_WAPI_CERT",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_WAPI_PSK",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_WEP",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getAffiliatedMloLinks",
+          "descriptor": "()Ljava/util/List;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getApMldMacAddress",
+          "descriptor": "()Landroid/net/MacAddress;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getApMloLinkId",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getApplicableRedactions",
+          "descriptor": "()J",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getAssociatedMloLinks",
+          "descriptor": "()Ljava/util/List;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getBSSID",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getCurrentSecurityType",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getDetailedStateOf",
+          "descriptor": "(Landroid/net/wifi/SupplicantState;)Landroid/net/NetworkInfo$DetailedState;",
+          "sdk_flags": 9,
+          "candidate_flags": 9
+        },
+        {
+          "kind": "method",
+          "name": "getFrequency",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getHiddenSSID",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getInformationElements",
+          "descriptor": "()Ljava/util/List;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getIpAddress",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getLinkSpeed",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getMacAddress",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getMaxSupportedRxLinkSpeedMbps",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getMaxSupportedTxLinkSpeedMbps",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getNetworkId",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPasspointFqdn",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPasspointProviderFriendlyName",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPasspointUniqueId",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getRssi",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getRxLinkSpeedMbps",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSSID",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSubscriptionId",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSupplicantState",
+          "descriptor": "()Landroid/net/wifi/SupplicantState;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getTxLinkSpeedMbps",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getWifiStandard",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isRestricted",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "makeCopy",
+          "descriptor": "(J)Landroid/net/wifi/WifiInfo;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "feba645de11ba88a53ca18345a15d1a7edd5d1fdb0632f1d6d4e546da80509a6"
+    },
+    "android.net.wifi.WifiInfo$Builder": {
+      "declarations": [
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "build",
+          "descriptor": "()Landroid/net/wifi/WifiInfo;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setBssid",
+          "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiInfo$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setCurrentSecurityType",
+          "descriptor": "(I)Landroid/net/wifi/WifiInfo$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setNetworkId",
+          "descriptor": "(I)Landroid/net/wifi/WifiInfo$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setRssi",
+          "descriptor": "(I)Landroid/net/wifi/WifiInfo$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSsid",
+          "descriptor": "([B)Landroid/net/wifi/WifiInfo$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSubscriptionId",
+          "descriptor": "(I)Landroid/net/wifi/WifiInfo$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "1fa7e90997fb951e8caa5739d6462cd674f656c9afe82bd08f05e304d727f344"
+    }
+  },
+  "transport_copy_bridge_flags": 4161,
+  "baseline": {
+    "commit": "e80cd1854163bd18e4ea5392c25f423184048804",
+    "resolved_compatible": 47,
+    "gaps": 13,
+    "members": [
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "FREQUENCY_UNITS",
+        "descriptor": "Ljava/lang/String;",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "LINK_SPEED_UNITS",
+        "descriptor": "Ljava/lang/String;",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "LINK_SPEED_UNKNOWN",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_DPP",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_EAP",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_EAP_WPA3_ENTERPRISE",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_EAP_WPA3_ENTERPRISE_192_BIT",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_OPEN",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_OSEN",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_OWE",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_PASSPOINT_R1_R2",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_PASSPOINT_R3",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_PSK",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_SAE",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_UNKNOWN",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_WAPI_CERT",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_WAPI_PSK",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "field",
+        "name": "SECURITY_TYPE_WEP",
+        "descriptor": "I",
+        "sdk_flags": 25,
+        "base_flags": 25,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "describeContents",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "equals",
+        "descriptor": "(Ljava/lang/Object;)Z",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "java.lang.Object",
+        "direct": false,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getAffiliatedMloLinks",
+        "descriptor": "()Ljava/util/List;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "member_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getApMldMacAddress",
+        "descriptor": "()Landroid/net/MacAddress;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "member_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getApMloLinkId",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "member_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getApplicableRedactions",
+        "descriptor": "()J",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getAssociatedMloLinks",
+        "descriptor": "()Ljava/util/List;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "member_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getBSSID",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getCurrentSecurityType",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getDetailedStateOf",
+        "descriptor": "(Landroid/net/wifi/SupplicantState;)Landroid/net/NetworkInfo$DetailedState;",
+        "sdk_flags": 9,
+        "base_flags": 9,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getFrequency",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getHiddenSSID",
+        "descriptor": "()Z",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getInformationElements",
+        "descriptor": "()Ljava/util/List;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "member_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getIpAddress",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getLinkSpeed",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getMacAddress",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getMaxSupportedRxLinkSpeedMbps",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getMaxSupportedTxLinkSpeedMbps",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getNetworkId",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getPasspointFqdn",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getPasspointProviderFriendlyName",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getPasspointUniqueId",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getRssi",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getRxLinkSpeedMbps",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getSSID",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getSubscriptionId",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getSupplicantState",
+        "descriptor": "()Landroid/net/wifi/SupplicantState;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getTxLinkSpeedMbps",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "getWifiStandard",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "hashCode",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "java.lang.Object",
+        "direct": false,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "isRestricted",
+        "descriptor": "()Z",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "makeCopy",
+        "descriptor": "(J)Landroid/net/wifi/WifiInfo;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "toString",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "java.lang.Object",
+        "direct": false,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo",
+        "kind": "method",
+        "name": "writeToParcel",
+        "descriptor": "(Landroid/os/Parcel;I)V",
+        "sdk_flags": 1,
+        "base_flags": 1,
+        "base_owner": "android.net.wifi.WifiInfo",
+        "direct": true,
+        "status": "compatible",
+        "issues": []
+      },
+      {
+        "class": "android.net.wifi.WifiInfo$Builder",
+        "kind": "method",
+        "name": "<init>",
+        "descriptor": "()V",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "class_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo$Builder",
+        "kind": "method",
+        "name": "build",
+        "descriptor": "()Landroid/net/wifi/WifiInfo;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "class_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo$Builder",
+        "kind": "method",
+        "name": "setBssid",
+        "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiInfo$Builder;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "class_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo$Builder",
+        "kind": "method",
+        "name": "setCurrentSecurityType",
+        "descriptor": "(I)Landroid/net/wifi/WifiInfo$Builder;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "class_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo$Builder",
+        "kind": "method",
+        "name": "setNetworkId",
+        "descriptor": "(I)Landroid/net/wifi/WifiInfo$Builder;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "class_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo$Builder",
+        "kind": "method",
+        "name": "setRssi",
+        "descriptor": "(I)Landroid/net/wifi/WifiInfo$Builder;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "class_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo$Builder",
+        "kind": "method",
+        "name": "setSsid",
+        "descriptor": "([B)Landroid/net/wifi/WifiInfo$Builder;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "class_absent"
+        ]
+      },
+      {
+        "class": "android.net.wifi.WifiInfo$Builder",
+        "kind": "method",
+        "name": "setSubscriptionId",
+        "descriptor": "(I)Landroid/net/wifi/WifiInfo$Builder;",
+        "sdk_flags": 1,
+        "base_flags": null,
+        "base_owner": null,
+        "direct": false,
+        "status": "gap",
+        "issues": [
+          "class_absent"
+        ]
+      }
+    ]
+  },
+  "runtime_constants": {
+    "count": 18,
+    "sdk_values": {
+      "FREQUENCY_UNITS": "MHz",
+      "LINK_SPEED_UNITS": "Mbps",
+      "LINK_SPEED_UNKNOWN": -1,
+      "SECURITY_TYPE_DPP": 13,
+      "SECURITY_TYPE_EAP": 3,
+      "SECURITY_TYPE_EAP_WPA3_ENTERPRISE": 9,
+      "SECURITY_TYPE_EAP_WPA3_ENTERPRISE_192_BIT": 5,
+      "SECURITY_TYPE_OPEN": 0,
+      "SECURITY_TYPE_OSEN": 10,
+      "SECURITY_TYPE_OWE": 6,
+      "SECURITY_TYPE_PASSPOINT_R1_R2": 11,
+      "SECURITY_TYPE_PASSPOINT_R3": 12,
+      "SECURITY_TYPE_PSK": 2,
+      "SECURITY_TYPE_SAE": 4,
+      "SECURITY_TYPE_UNKNOWN": -1,
+      "SECURITY_TYPE_WAPI_CERT": 8,
+      "SECURITY_TYPE_WAPI_PSK": 7,
+      "SECURITY_TYPE_WEP": 1
+    },
+    "evidence": "All 18 runtime fields are compared with constants inlined from the official SDK by WifiInfoContractTest."
+  },
+  "upstream": {
+    "tag": "android-16.0.0_r4",
+    "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/WifiInfo.java",
+    "sha256": "9b6a82a813cb612866e2d11448016622fcd62c8a290687bcf2db5a36b3bc0da2"
+  }
+}

@@ -416,7 +416,9 @@ const SyscallMap kSyscalls[] = {
     {175, "geteuid", 'i'},    {176, "getgid", 'i'},      {177, "getegid", 'i'},
     {179, "sysinfo", 'i'},    {198, "socket", 'i'},      {203, "connect", 'i'},
     {215, "munmap", 'i'},     {222, "mmap", 'l'},        {226, "mprotect", 'i'},
-    {233, "madvise", 'i'},    {278, "getrandom", 'l'},   {279, "memfd_create", 'i'},
+    {228, "mlock", 'i'},      {229, "munlock", 'i'},     {230, "mlockall", 'i'},
+    {231, "munlockall", 'i'},  {233, "madvise", 'i'},     {278, "getrandom", 'l'},
+    {279, "memfd_create", 'i'}, {284, "mlock2", 'i'},
 };
 std::unordered_map<uint32_t, std::pair<void*, char>> g_syscalls;
 void* g_host_syscall = nullptr;
@@ -694,6 +696,10 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
 
 void InitGuestLibc() {
   for (const VaFn& v : kVaFunctions) AddVaListFunction(Host(v.name), v.index);
+
+  AddPointerVariadicFunction(Host("sscanf"), Host("vsscanf"), 2);
+  AddPointerVariadicFunction(Host("fscanf"), Host("vfscanf"), 2);
+  AddPointerVariadicFunction(Host("scanf"), Host("vscanf"), 1);
 
   for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
     std::string entry = std::string("__gesher_arm64_") + name;

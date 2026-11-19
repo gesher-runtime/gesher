@@ -6,11 +6,75 @@ BASE='657fb27a63c8171d540d6890ad47aa5fba5d26b2'
 # fd.cc gained reviewed nested-epoll readiness and waiter wakeups. Keep those
 # exact bytes pinned independently from the original TCP snapshot.
 FD_BASE='0aafccec6d7c2cfdd88d73e721a3e1ce523edf2b'
-# Positioned I/O needs the existing logical-device registry. The only new fd
-# bytes expose its existing lookup; retain all registry, epoll and TCP behavior
-# byte-for-byte against FD_BASE, and pin the complete reviewed file as well.
+# Positioned I/O exposes the existing logical-device lookup. Stream close and
+# reopen additionally retire device metadata before descriptor reuse. Pin both
+# exact additions at their original namespace boundary; retain every other
+# registry, epoll and TCP byte against FD_BASE except the poll storage changes below.
+# tools/test_stream_device_lifetime.py covers production-adapter cleanup,
+# descriptor reuse, aliases, failed closes/reopens and errno preservation.
 FD_DEVICE_LOOKUP=b'bool DeviceFromFd(int fd, Device* device) { return LookupDevice(fd, device); }\n\n'
-FD_SHA256='7e2fed5465160602f7f01f29c5d93c4d3d04ec6c9139eaf5e54e205317305d4d'
+FD_STREAM_DEVICE_RETIREMENT=b'''void ForgetStreamDevice(int fd, bool closed_or_replaced) {
+  Device device;
+  if (!LookupDevice(fd, &device)) return;
+  int saved = errno;
+  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) ForgetDevice(fd);
+  errno = saved;
+}
+
+'''
+FD_DEVICE_INSERTION=b'}  // namespace gesher\n\nusing gesher::Device;\n'
+# Outer poll reuses bounded working storage. Pin the helper as well as the
+# complete fd.cc and allow only the exact storage substitutions at the call
+# site. The event-loop fixture covers reentry, references and capacity release.
+FD_SHA256='2467a04d74956dbac19e851434cb19450a315f638cbc2e28f015799de5ad8d9c'
+FD_POLL_SCRATCH_HEADER='compat/posix/src/poll_scratch.h'
+FD_POLL_SCRATCH_SHA256='669038c41eb20231d58c371f1ad38ff2e340525a938c476635481d68e7e0d393'
+FD_POLL_SCRATCH_REPLACEMENTS=(
+ (b'#include "internal.h"\n#include "record_lock_descriptors.h"\n',
+  b'#include "internal.h"\n#include "poll_scratch.h"\n#include "record_lock_descriptors.h"\n'),
+ (b'''constexpr short kOut = POLLOUT | POLLWRNORM;
+
+// Readiness of a non-socket fd:''',
+  b'''constexpr short kOut = POLLOUT | POLLWRNORM;
+
+struct FdPollScratch {
+  std::vector<gesher::ws::PollEntry> sockets;
+  std::vector<nfds_t> socket_index;
+  std::vector<std::shared_ptr<gesher::EventFd>> eventfds;
+  std::vector<nfds_t> eventfd_index;
+  std::vector<HANDLE> handles;
+
+  void Reset() {
+    gesher::ClearPollScratch(handles);
+    gesher::ClearPollScratch(eventfd_index);
+    gesher::ClearPollScratch(eventfds);
+    gesher::ClearPollScratch(socket_index);
+    gesher::ClearPollScratch(sockets);
+  }
+};
+
+// Readiness of a non-socket fd:'''),
+ (b'''  std::vector<ws::PollEntry> sockets;
+  std::vector<nfds_t> socket_index;
+  // Held so that their events stay open while waited on.
+  std::vector<std::shared_ptr<EventFd>> eventfds;
+  std::vector<nfds_t> eventfd_index;
+''',
+  b'''  PollScratchLease<FdPollScratch> lease(nfds <= kPollScratchLimit);
+  auto& scratch = lease.get();
+  auto& sockets = scratch.sockets;
+  auto& socket_index = scratch.socket_index;
+  // Held so that their events stay open while waited on.
+  auto& eventfds = scratch.eventfds;
+  auto& eventfd_index = scratch.eventfd_index;
+'''),
+ (b'''  bool look_first = waiter != nullptr;
+  std::vector<HANDLE> handles;
+''',
+  b'''  bool look_first = waiter != nullptr;
+  auto& handles = scratch.handles;
+'''),
+)
 # socket.cc gained the reviewed sendmsg ancillary-data rejection. Pin the
 # published checkpoint independently; all other socket bytes and supplier
 # inputs remain exact. Use the published commit, not local recovery history.
@@ -60,10 +124,9 @@ FCNTL_REPLACEMENTS=(
   }
 '''),
 )
-# The reviewed TCP fixture changes add select/thread diagnostics and two
-# final call-site labels. Derive the complete expected file from BASE using
-# only these unique literal replacements; no function region is excluded.
-# All assertion predicates, deadlines and other fixture bytes remain exact.
+# Pin reviewed select diagnostics and the calibrated Windows owner census.
+# Derive the complete expected fixture from BASE using only these exact
+# replacements. Every other assertion, deadline and byte stays pinned.
 TCP_DIAGNOSTIC_REPLACEMENTS=(
  (br'''static void ready(int fd, bool urgent, int timeout = 0) {
   pollfd p{fd, POLLPRI, 0};
@@ -119,20 +182,47 @@ TCP_OWNER_DIAGNOSTIC_REPLACEMENTS=(
  (b'''namespace gesher::test { int NativeUdpErrorControl(bool blocking); void NativeSupplierRetirement(); void DumpOwnHandleTypes(int mode, uintptr_t caller = 0, uintptr_t observer = 0); }
 ''',
   b'''namespace gesher::test { int NativeUdpErrorControl(bool blocking); void NativeSupplierRetirement(); void DumpOwnHandleTypes(int mode, uintptr_t caller = 0, uintptr_t observer = 0); }
-namespace gesher::test { void ObserveOwnerThreads(int mode, bool failed); }
+namespace gesher::test {
+void ObserveOwnerThreads(int mode, bool failed);
+bool CalibrateOwnerThreads();
+bool QualifiedOwnerThreadsMatch(int mode);
+}
+'''),
+ (b'''static void owned_wait_controls() {
+''',
+  b'''static void owned_wait_controls() {
+  require(gesher::test::CalibrateOwnerThreads(), "classify the actual Windows pool and reject a retained ordinary thread");
+'''),
+ (b'''    gesher::ws::OwnerCensus actual{}; require(gesher::ws::ReadConnectOwnerCensus(&actual), "actual production owner handle/thread census");
+''',
+  b'''    require(retired_operation.expired() && retired_description.expired(), "all product owner references retire after last close");
+    gesher::ws::OwnerCensus actual{}; require(gesher::ws::ReadConnectOwnerCensus(&actual), "actual production owner handle/thread census");
 '''),
  (b'''    require(actual.handles == baseline.handles && actual.threads == baseline.threads, "repeated real ownership returns to warm handle and thread baseline");
 ''',
-  b'''    gesher::test::ObserveOwnerThreads(mode, actual.handles != baseline.handles || actual.threads != baseline.threads);
-    require(actual.handles == baseline.handles && actual.threads == baseline.threads, "repeated real ownership returns to warm handle and thread baseline");
+  b'''    const bool owners_match = gesher::test::QualifiedOwnerThreadsMatch(mode);
+    gesher::test::ObserveOwnerThreads(mode, actual.handles != baseline.handles || !owners_match);
+    require(actual.handles == baseline.handles && owners_match, "repeated real ownership returns to warm handles and exact non-pool thread identities");
 '''),
 )
-# A separate HOST-only observer records bounded post-census TIDs. It queries
-# thread start modules only after a mismatch, then returns to the unchanged
-# assertion. Every production POSIX byte, supplier and deadline stays pinned.
+# The HOST-only observer calibrates the exact system entry address and pins
+# product thread identities. Every production POSIX byte stays pinned.
 OWNER_THREAD_DIAGNOSTIC_PATH='tests/net-tcp-priority/owner_thread_diagnostics.h'
-OWNER_THREAD_DIAGNOSTIC_SHA256='83bdda8c98bc35761d5d2df001990ec155dcabda6a571d75b5057f1f25653f1b'
+OWNER_THREAD_DIAGNOSTIC_SHA256='dfa3b44ce619a6d1eb053bc43ac978f30172ff73ddc30342f6fe75a5ba6e63a3'
 OWNER_THREAD_DIAGNOSTIC_INCLUDE=b'#include "owner_thread_diagnostics.h"\n'
+OWNER_THREAD_CONTROLLER_BEFORE=r'''  if ($Context -eq 'host-posix') {
+    foreach ($mode in 0..3) {
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=([0-9]+)/\2\r?$") { throw "Missing HOST repeated physical owner census $mode" }
+'''
+OWNER_THREAD_CONTROLLER_AFTER=r'''  if ($Context -eq 'host-posix') {
+    if ($text -notmatch '(?m)^TCP_PRIORITY_OWNER_CLASSIFIER default_pool=1 ordinary_thread_rejected=1 exact_retirement=1\r?$') { throw 'Missing HOST calibrated pool and ordinary-thread negative control' }
+    foreach ($mode in 0..3) {
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=[0-9]+/[0-9]+\r?$") { throw "Missing HOST exact process handle census $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_IDENTITIES mode=$mode entries=([1-9][0-9]*)/\1 pool=[0-9]+/[0-9]+ matched=1\r?$") { throw "Missing HOST exact non-pool thread identities $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_REFS mode=$mode operation=0 description=0\r?$") { throw "Missing HOST expired product owner references $mode" }
+'''
 # Only the successful protocol fixture's startup budget changed. Pin its exact
 # reviewed bytes separately; controller, worker and execution gates retain BASE.
 CONTROL_BASE='c62c0ea4f88447c64608851ecf661f630e259442'
@@ -151,6 +241,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
 def check():
  assert hashlib.sha256((ROOT/OWNER_THREAD_DIAGNOSTIC_PATH).read_bytes()).hexdigest()==OWNER_THREAD_DIAGNOSTIC_SHA256,OWNER_THREAD_DIAGNOSTIC_PATH
+ assert hashlib.sha256((ROOT/FD_POLL_SCRATCH_HEADER).read_bytes()).hexdigest()==FD_POLL_SCRATCH_SHA256,FD_POLL_SCRATCH_HEADER
  paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
  paths+=['.github/workflows/net-tcp-coherent-component.yml','tests/net-tcp-priority/contract.cc','tests/net-tcp-priority/native_udp_control.cc','tests/native2/net_udp_trunc.cpp','tests/native2/net_udp_fault_observer.c','tools/net-tcp-priority/qualified/TsfJobSupervisor.cs','tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/ci/receipt-diagnostics.ps1','tools/net-tcp-priority/import-policy.json','tools/net-tcp-priority/import_policy.py','tools/net-tcp-priority/build-guests.py','tools/net-tcp-priority/prepare-ndk.py']
  for path in paths:
@@ -169,8 +260,16 @@ def check():
    assert expected[:expected.index(start)]==original[:original.index(start)],path
    assert expected[expected.index(end):]==original[original.index(end):],path
   elif path=='compat/posix/src/fd.cc':
-   assert actual.count(FD_DEVICE_LOOKUP)==1 and FD_DEVICE_LOOKUP not in expected,path
-   assert actual.replace(FD_DEVICE_LOOKUP,b'',1)==expected,path
+   assert expected.count(FD_DEVICE_INSERTION)==actual.count(FD_DEVICE_INSERTION)==1,path
+   for addition in (FD_DEVICE_LOOKUP,FD_STREAM_DEVICE_RETIREMENT):
+    assert actual.count(addition)==1 and addition not in expected,path
+   additions=FD_DEVICE_LOOKUP+FD_STREAM_DEVICE_RETIREMENT
+   expected=expected.replace(FD_DEVICE_INSERTION,additions+FD_DEVICE_INSERTION,1)
+   for before,after in FD_POLL_SCRATCH_REPLACEMENTS:
+    assert expected.count(before)==actual.count(after)==1,path
+    assert after not in expected and before not in actual,path
+    expected=expected.replace(before,after,1)
+   assert actual==expected,path
    assert hashlib.sha256(actual).hexdigest()==FD_SHA256,path
   elif path=='tests/net-tcp-priority/contract.cc':
    for before,after in TCP_DIAGNOSTIC_REPLACEMENTS:
@@ -225,6 +324,8 @@ def check():
    assert expected.count(anchor)==1 and actual==expected.replace(anchor,addition+anchor),path
   else:assert actual==expected,path
  before=old('tools/net-tcp-priority/run-component.ps1').decode();after=(ROOT/'tools/net-tcp-priority/run-component.ps1').read_text(encoding='utf-8')
+ assert before.count(OWNER_THREAD_CONTROLLER_BEFORE)==after.count(OWNER_THREAD_CONTROLLER_AFTER)==1
+ before=before.replace(OWNER_THREAD_CONTROLLER_BEFORE,OWNER_THREAD_CONTROLLER_AFTER,1)
  marker='function RequireDiagnosticRetirement';assert after[after.index(marker):]==before[before.index(marker):],'Actual controller/guarded-copy/census/cancel/HOST/bothABI execution gates changed'
  raw=old('.github/workflows/net-tcp-coherent-component.yml').decode()
  expected=raw.replace('name: net-tcp-coherent-component','name: net-tcp-selected-component',1).replace('wip/tcp-coherent-port','wip/tcp-minimum-selection').replace('.github/workflows/net-tcp-coherent-component.yml','.github/workflows/net-tcp-selected-component.yml').replace('net-tcp-coherent-component-${{ github.ref }}','net-tcp-selected-component-${{ github.ref }}').replace('supplier: [canonical, retirement]','supplier: [canonical, selected-minimum]').replace('else prefix=tcp-private-supplier','else prefix=tcp-selected-supplier').replace('separately patched diagnostic compiler','intentionally selected two-patch original-profile candidate').replace('# canonical supplier separate from the minimal-retirement diagnostic supplier.','# canonical supplier separate from the intentionally selected minimum candidate.')
@@ -234,5 +335,5 @@ def check():
  assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
  for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
- print('TCP_SELECTED_POLICY_PASS original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow original_fixture_assertions_deadlines=EXACT reviewed_select_and_owner_thread_diagnostics_only controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
+ print('TCP_SELECTED_POLICY_PASS original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_outer_poll_scratch_exact reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
 if __name__=='__main__':check()

@@ -46,6 +46,7 @@ constexpr int kJavaSuccess = 0;
 constexpr int kJavaError = -1;
 constexpr int kJavaBadValue = -2;
 constexpr int kJavaInvalidOperation = -3;
+constexpr int kJavaDeadObject = -6;
 
 struct {
   jfieldID native_handle;  // long mNativeAudioRecordHandle
@@ -218,7 +219,7 @@ ssize_t ReadInto(JNIEnv* env, jobject thiz, void* dst, size_t bytes, bool blocki
   if (s == nullptr) return kJavaInvalidOperation;
   ssize_t n = s->Read(dst, bytes, blocking);
   TraceRecord(s, "read", bytes, n);
-  return n < 0 ? kJavaError : n;
+  return n == kCaptureDeadObject ? kJavaDeadObject : n < 0 ? kJavaError : n;
 }
 
 jint JNICALL AR_readBytes(JNIEnv* env, jobject thiz, jbyteArray data, jint offset, jint size,

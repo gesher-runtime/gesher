@@ -67,7 +67,7 @@ def main():
         assert stack['suspend-before'] == '0' and stack['resume-before'] == '1' and int(stack['birth']) > 0
         call = exactly(group, 'ACTUAL_CLOSER_FILE_CALL index=')
         assert hexvalue(call['unwound-rsi']) == hexvalue(call['FILE']) == hexvalue(held['FILE']) == hexvalue(stack['FILE'])
-        assert call['exact-mov-rsi-rcx-and-lock-file-iat'] == 'true'
+        assert call['exact-rsi-rcx-copy-and-lock-file-iat'] == 'true'
         enter = exactly(group, 'ACTUAL_CLOSER_ENTER_FRAME ')
         begin, end = hexvalue(enter['unwind-begin']), hexvalue(enter['unwind-end'])
         assert begin <= hexvalue(enter['pc']) < end and begin <= hexvalue(enter['named-entry']) < end
