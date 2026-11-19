@@ -4,7 +4,7 @@ $sourceJson = python tools/ci/source_identity.py
 if ($LASTEXITCODE -ne 0) { throw 'Invalid CI source identity' }
 $ciSource = $sourceJson | ConvertFrom-Json
 if ((git rev-parse HEAD) -cne $ciSource.checkout_sha -or $LASTEXITCODE -ne 0) { throw 'Checkout source mismatch' }
-$jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+$jobsRaw = python tools/ci/github_jobs.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect producer' }
 $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'union-tsf / compile')
 Write-CiProducerIdentity -Producer 'union-tsf / compile' -Rows $jobs -SourceIdentity $ciSource

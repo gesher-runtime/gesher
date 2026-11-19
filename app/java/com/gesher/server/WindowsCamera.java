@@ -6,7 +6,9 @@ package com.gesher.server;
 
 import android.util.Size;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 
@@ -22,12 +24,18 @@ public final class WindowsCamera {
         public final String name;
         public final List<Size> sizes;
         public final boolean test;
+        private final boolean rear;
 
-        Device(String id, String name, List<Size> sizes) {
+        Device(String id, String name, List<Size> sizes, boolean rear) {
             this.id = id;
             this.name = name;
             this.sizes = Collections.unmodifiableList(sizes);
             this.test = "gesher-test".equals(id);
+            this.rear = rear;
+        }
+
+        public boolean isRearFacing() {
+            return test || rear;
         }
     }
 
@@ -40,26 +48,56 @@ public final class WindowsCamera {
     public static List<Device> devices() {
         List<Device> devices = sDevices;
         if (devices != null) return devices;
-        devices = new ArrayList<>();
+        List<Device> found = new ArrayList<>();
+        String rearSelection = System.getenv("GESHER_CAMERA_REAR_ID");
+        boolean hasSelection = rearSelection != null && !rearSelection.isEmpty();
+        String testEnv = System.getenv("GESHER_CAMERA_TEST");
+        boolean testCameraEnabled = testEnv != null && !testEnv.isEmpty() && !"0".equals(testEnv);
         try {
-            for (String line : nativeList()) {
-                String[] f = line.split("\t", -1);
-                if (f.length < 3) continue;
-                List<Size> sizes = new ArrayList<>();
-                for (String s : f[2].split(",")) {
-                    int x = s.indexOf('x');
-                    if (x > 0) {
-                        sizes.add(new Size(Integer.parseInt(s.substring(0, x)),
-                                Integer.parseInt(s.substring(x + 1))));
-                    }
-                }
-                if (!sizes.isEmpty()) devices.add(new Device(f[0], f[1], sizes));
-            }
+            found = resolveDevices(nativeList(), rearSelection, hasSelection, testCameraEnabled);
         } catch (UnsatisfiedLinkError e) {
             // Not Gesher's runtime: no cameras.
         }
+        devices = Collections.unmodifiableList(found);
         sDevices = devices;
         return devices;
+    }
+
+    /** Parses real devices with an explicit rear-mounting choice; enumeration implies no facing. */
+    static List<Device> resolveDevices(String[] lines, String rearSelection,
+            boolean hasSelection, boolean testCameraEnabled) {
+        List<Device> found = new ArrayList<>();
+        if (lines == null) return found;
+        for (String line : lines) {
+            String[] f = line.split("\t", -1);
+            if (f.length < 3) continue;
+            List<Size> sizes = new ArrayList<>();
+            for (String s : f[2].split(",")) {
+                int x = s.indexOf('x');
+                if (x > 0) {
+                    sizes.add(new Size(Integer.parseInt(s.substring(0, x)),
+                            Integer.parseInt(s.substring(x + 1))));
+                }
+            }
+            if (sizes.isEmpty()) continue;
+            boolean isTest = "gesher-test".equals(f[0]);
+            if (isTest && !testCameraEnabled) continue;
+            boolean rear = false;
+            if (!isTest) {
+                if (hasSelection) {
+                    rear = rearSelection.equals(selectionKey(f[0]));
+                }
+            }
+            found.add(new Device(f[0], f[1], sizes, rear));
+        }
+        return found;
+    }
+
+    static String selectionKey(String windowsId) {
+        // The symbolic link survives enumeration order changes. Encode it for the
+        // runtime's narrow Windows environment, including any Unicode characters.
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(
+                windowsId.getBytes(StandardCharsets.UTF_8));
     }
 
     /** What Media Foundation answered, for the logs. */

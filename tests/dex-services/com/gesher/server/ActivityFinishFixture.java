@@ -3,8 +3,12 @@ package com.gesher.server;
 
 import android.app.Activity;
 import android.app.ActivityClient;
+import android.app.ActivityManager;
 import android.app.IActivityClientController;
+import android.app.IActivityManager;
 import android.app.IApplicationThread;
+import android.app.Instrumentation;
+import android.app.PendingIntent;
 import android.app.ResultInfo;
 import android.app.servertransaction.ActivityResultItem;
 import android.app.servertransaction.ActivityTransactionItem;
@@ -14,8 +18,13 @@ import android.app.servertransaction.DestroyActivityItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
 import android.app.servertransaction.StopActivityItem;
+import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
+import android.content.IIntentSender;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.Signature;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.IInterface;
@@ -29,6 +38,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 import sun.misc.Unsafe;
 
 /** Exercises production finish selection and lifecycle using real framework transaction objects. */
@@ -98,6 +108,8 @@ public final class ActivityFinishFixture {
         set(code, "packageName", OWNER); set(code, "parsed", parsed); set(code, "mUid", UID);
         set(code, "apkPath", "/fixture/finish/base.apk"); set(code, "mDataDir", "/fixture/finish/data");
         set(code, "sharedLibraries", field(SharedLibraryGraph.class, "EMPTY").get(null));
+        set(code, "mSigningIdentityChecked", true);
+        set(code, "mVerifiedSignatures", new Signature[]{new Signature(new byte[]{1})});
         return code;
     }
     private static final class Event {
@@ -111,11 +123,17 @@ public final class ActivityFinishFixture {
         final ArrayDeque<Event> pending = new ArrayDeque<>();
         IActivityClientController controller;
         boolean autoAck = true;
+        boolean rejectNextResult;
         Operation beforeTransaction;
         int exits;
         @Override public IBinder asBinder() { return binder; }
         @Override public void scheduleExit() { exits++; }
-        @Override public void scheduleTransaction(ClientTransaction transaction) {
+        @Override public void scheduleTransaction(ClientTransaction transaction) throws RemoteException {
+            if (rejectNextResult && transaction.getTransactionItems().stream()
+                    .anyMatch(ActivityResultItem.class::isInstance)) {
+                rejectNextResult = false;
+                throw new RemoteException("Fixture recipient disconnected before result delivery");
+            }
             try {
                 if (beforeTransaction != null) beforeTransaction.run();
                 for (ClientTransactionItem item : transaction.getTransactionItems()) {
@@ -388,11 +406,524 @@ public final class ActivityFinishFixture {
         System.out.println("Activity finish: child parent/resultWho/request routing, canceled results and result-before-resume passed");
     }
 
+    private static void externalUrlResults() throws Exception {
+        Harness h = new Harness();
+        Object source = h.record("Caller", 51, "a", "RESUMED");
+        IBinder sourceToken = token(source);
+        ActivityTaskManagerService atm = (ActivityTaskManagerService) h.atm;
+        Field opener = field(h.atmType, "sOpenExternalUrl");
+        Object previousOpener = opener.get(null);
+        List<String> attempts = new ArrayList<>();
+        try {
+            opener.set(null, (Predicate<String>) url -> {
+                attempts.add(url);
+                return url.startsWith("https:");
+            });
+            Intent web = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/page"));
+            Intent mail = new Intent(Intent.ACTION_VIEW, Uri.parse("mailto:help@example.com"));
+            h.asApp(() -> {
+                int failedStart = atm.startActivity(h.thread, OWNER, null, mail, null, sourceToken,
+                        "compose", 7, 0, null, null);
+                check(failedStart == ActivityManager.START_INTENT_NOT_RESOLVED,
+                        "A failed Windows launch reported success");
+                try {
+                    Instrumentation.checkStartActivityResult(failedStart, mail);
+                    throw new AssertionError("A failed launch must surface as ActivityNotFoundException");
+                } catch (ActivityNotFoundException expected) {
+                    // The same exception a caller of Activity.startActivity receives.
+                }
+                check(atm.startActivity(h.thread, OWNER, null, web, null, sourceToken,
+                                "browse", 8, 0, null, null) == ActivityManager.START_SUCCESS,
+                        "An accepted Windows launch did not report success");
+                check(h.thread.results(source).size() == 1,
+                        "Shell acceptance fabricated an ordinary activity-result completion");
+                check(atm.startActivity(h.thread, OWNER, null,
+                                new Intent(web).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null,
+                                sourceToken, "browseNewTask", 9, 0, null, null) == ActivityManager.START_SUCCESS,
+                        "An accepted NEW_TASK Windows launch did not report success");
+                check(atm.startActivity(h.thread, OWNER, null, mail, null, sourceToken,
+                                null, -1, 0, null, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                        "A failed Windows launch without a result request reported success");
+            });
+            check(attempts.equals(List.of(mail.getDataString(), web.getDataString(),
+                            web.getDataString(), mail.getDataString())),
+                    "Windows received incorrect URLs or more than one call per request: " + attempts);
+            List<ResultInfo> results = h.thread.results(source);
+            check(results.size() == 2, "Each failed or NEW_TASK result request must cancel once: " + results);
+            for (int i = 0; i < results.size(); i++) {
+                ResultInfo result = results.get(i);
+                check(result.mResultCode == Activity.RESULT_CANCELED && result.mData == null
+                                && result.mCallerToken == null
+                                && result.mRequestCode == List.of(7, 9).get(i)
+                                && List.of("compose", "browseNewTask").get(i).equals(result.mResultWho),
+                        "External URL cancellation lost its routing fields: " + result);
+            }
+            check(h.records.equals(List.of(source)), "External URLs created an Android activity");
+
+            opener.set(null, (Predicate<String>) url -> {
+                try {
+                    set(h.process, "exiting", true);
+                } catch (Exception failure) {
+                    throw new AssertionError(failure);
+                }
+                return true;
+            });
+            h.asApp(() -> check(atm.startActivity(h.thread, OWNER, null,
+                            new Intent(web).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null, sourceToken,
+                            "afterExit", 10, 0, null, null) == ActivityManager.START_SUCCESS,
+                    "The Windows launch was accepted before the caller exited"));
+            check(h.thread.results(source).size() == 2, "Exit during the launch left a stale result");
+        } finally {
+            opener.set(null, previousOpener);
+        }
+        System.out.println("External URL results: Windows launch status and canceled result routing passed");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void externalForwardedResults() throws Exception {
+        for (int mode = 0; mode < 5; mode++) {
+            Harness h = new Harness();
+            Object parent = h.record("Parent", 61, "a", "RESUMED");
+            Object child = h.record("Child", 61, "a", "RESUMED", parent, "original-route", 71);
+            AppThread recipientThread = h.thread;
+            if (mode == 4) {
+                recipientThread = new AppThread();
+                recipientThread.controller = h.controller;
+                Object parentProcess = construct(h.processType,
+                        new Class<?>[]{h.atmType, int.class, IApplicationThread.class},
+                        h.atm, PID + 1, recipientThread);
+                set(parentProcess, "packageName", OWNER); set(parentProcess, "processName", OWNER + ":parent");
+                set(parentProcess, "uid", UID); set(parentProcess, "ready", true);
+                ((List<Object>) get(h.atm, "mProcesses")).add(parentProcess);
+                ((List<Object>) get(h.process, "activities")).remove(parent);
+                ((List<Object>) get(parentProcess, "activities")).add(parent);
+                set(parent, "app", parentProcess);
+            }
+            ActivityTaskManagerService atm = (ActivityTaskManagerService) h.atm;
+            Field opener = field(h.atmType, "sOpenExternalUrl");
+            Object previous = opener.get(null);
+            List<String> attempts = new ArrayList<>();
+            final int which = mode;
+            int[] status = {Integer.MIN_VALUE};
+            try {
+                opener.set(null, (Predicate<String>) url -> {
+                    attempts.add(url); return which != 0 && which != 4;
+                });
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/forwarded"))
+                        .addFlags(Intent.FLAG_ACTIVITY_FORWARD_RESULT);
+                if (mode == 2) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                h.asApp(() -> status[0] = atm.startActivity(h.thread, OWNER, null, intent, null,
+                        token(child), "new-route", which == 1 ? 72 : -1, 0, null, null));
+                List<ResultInfo> results = recipientThread.results(parent);
+                if (mode == 1) {
+                    check(status[0] == ActivityManager.START_FORWARD_AND_REQUEST_CONFLICT,
+                            "Forwarding plus a new request did not reject the conflict");
+                    check(attempts.isEmpty() && results.isEmpty() && h.thread.results(child).isEmpty(),
+                            "Conflicting request invoked the shell or sent a result");
+                    check(get(child, "resultTo") == parent, "Rejected forwarding consumed the original route");
+                } else {
+                    boolean failed = mode == 0 || mode == 4;
+                    boolean canceled = failed || mode == 2;
+                    check(status[0] == (failed ? ActivityManager.START_INTENT_NOT_RESOLVED
+                            : ActivityManager.START_SUCCESS), "Forwarded launch lost the actual shell status");
+                    check(attempts.size() == 1 && results.size() == (canceled ? 1 : 0),
+                            "Forwarded route lost or fabricated a result");
+                    if (canceled) {
+                        ResultInfo result = results.get(0);
+                        check(result.mRequestCode == 71 && "original-route".equals(result.mResultWho)
+                                        && result.mResultCode == Activity.RESULT_CANCELED
+                                        && result.mCallerToken == null && result.mData == null,
+                                "Forwarding replaced the original recipient fields");
+                    }
+                    check(get(child, "resultTo") == null, "Forwarding did not detach the intermediate route");
+                    check(h.controller.getCallingActivity(token(child)) == null
+                                    && h.controller.getCallingPackage(token(child)) == null,
+                            "Calling activity queries retained a transferred result route");
+                    h.asApp(() -> h.controller.finishActivity(token(child), Activity.RESULT_OK, null, 0));
+                    check(recipientThread.results(parent).size() == (canceled ? 1 : 0),
+                            "Finishing the intermediate activity sent a duplicate result");
+                }
+            } finally { opener.set(null, previous); }
+        }
+
+        Harness h = new Harness();
+        Object parent = h.record("Parent", 62, "a", "STOPPED");
+        Object child = h.record("Child", 62, "a", "RESUMED", parent, "same-route", 73);
+        Object sibling = h.record("Sibling", 62, "a", "RESUMED", parent, "same-route", 73);
+        h.thread.autoAck = false;
+        h.asApp(() -> {
+            h.controller.finishActivity(token(child), Activity.RESULT_OK, null, 0);
+            h.controller.finishActivity(token(sibling), Activity.RESULT_OK, null, 0);
+        });
+        List<ResultInfo> pending = (List<ResultInfo>) get(parent, "pendingResults");
+        check(pending.size() == 2, "Fixture did not queue both ordinary child results");
+        ResultInfo childResult = pending.get(0);
+        ResultInfo siblingResult = pending.get(1);
+        Object callerState = get(parent, "callerState");
+        var callerSnapshot = callerState.getClass().getDeclaredMethod("get", IBinder.class);
+        callerSnapshot.setAccessible(true);
+        check(callerSnapshot.invoke(callerState, childResult.mCallerToken) != null,
+                "Fixture did not retain the queued caller snapshot");
+        Field opener = field(h.atmType, "sOpenExternalUrl");
+        Object previous = opener.get(null);
+        try {
+            opener.set(null, (Predicate<String>) url -> false);
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/forwarded-pending"))
+                    .addFlags(Intent.FLAG_ACTIVITY_FORWARD_RESULT);
+            h.asApp(() -> ((ActivityTaskManagerService) h.atm).startActivity(h.thread, OWNER, null,
+                    intent, null, token(child), null, -1, 0, null, null));
+            check(pending.size() == 2, "Forwarding retained its stale result or removed another child's result");
+            check(pending.get(0).mResultCode == Activity.RESULT_OK
+                            && pending.get(1).mResultCode == Activity.RESULT_CANCELED,
+                    "Pending result replacement changed the sibling's result or order");
+            check(callerSnapshot.invoke(callerState, childResult.mCallerToken) == null,
+                    "Forwarding retained the discarded result's caller snapshot");
+            check(callerSnapshot.invoke(callerState, siblingResult.mCallerToken) != null,
+                    "Forwarding removed the sibling result's caller snapshot");
+        } finally { opener.set(null, previous); }
+        System.out.println("External URL forwarding: original route, conflicts, ownership and pending results passed");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void externalForwardedLifecycle() throws Exception {
+        for (boolean accepted : new boolean[]{false, true}) {
+            // Parent process dies before/during the shell call, reattaches during it,
+            // loses its activity record, or rejects the result transaction.
+            for (int mode = 0; mode < 5; mode++) {
+                Harness h = new Harness();
+                Object parent = h.record("Parent", 63, "a", mode == 4 ? "RESUMED" : "STOPPED");
+                Object child = h.record("Child", 63, "a", "RESUMED", parent, "saved-route", 74);
+                AppThread parentThread = new AppThread();
+                parentThread.controller = h.controller;
+                Object parentProcess = construct(h.processType,
+                        new Class<?>[]{h.atmType, int.class, IApplicationThread.class},
+                        h.atm, PID + 1, parentThread);
+                set(parentProcess, "packageName", OWNER); set(parentProcess, "processName", OWNER + ":parent");
+                set(parentProcess, "uid", UID); set(parentProcess, "ready", true);
+                ((List<Object>) get(h.atm, "mProcesses")).add(parentProcess);
+                ((List<Object>) get(h.process, "activities")).remove(parent);
+                ((List<Object>) get(parentProcess, "activities")).add(parent);
+                set(parent, "app", parentProcess);
+                if (mode != 3) ((ActivityInfo) get(parent, "info")).flags |= ActivityInfo.FLAG_STATE_NOT_NEEDED;
+                var died = h.atmType.getDeclaredMethod("processDied", h.processType);
+                died.setAccessible(true);
+                if (mode == 0) died.invoke(h.atm, parentProcess);
+                parentThread.rejectNextResult = mode == 4;
+                Field opener = field(h.atmType, "sOpenExternalUrl");
+                Object previous = opener.get(null);
+                final int which = mode;
+                try {
+                    opener.set(null, (Predicate<String>) url -> {
+                        try {
+                            if (which >= 1 && which <= 3) {
+                                died.invoke(h.atm, parentProcess);
+                                if (which == 2) {
+                                    set(parent, "app", h.process);
+                                    ((List<Object>) get(h.process, "activities")).add(parent);
+                                }
+                            }
+                        } catch (Exception failure) { throw new AssertionError(failure); }
+                        return accepted;
+                    });
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/saved-parent"))
+                            .addFlags(Intent.FLAG_ACTIVITY_FORWARD_RESULT);
+                    if (accepted) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    int[] status = {Integer.MIN_VALUE};
+                    h.asApp(() -> status[0] = ((ActivityTaskManagerService) h.atm).startActivity(h.thread,
+                            OWNER, null, intent, null, token(child), null, -1, 0, null, null));
+                    check(status[0] == (accepted ? ActivityManager.START_SUCCESS
+                                    : ActivityManager.START_INTENT_NOT_RESOLVED),
+                            "Parent lifecycle changed the actual shell launch status");
+                    check(get(child, "resultTo") == null, "Parent lifecycle retained the forwarded route");
+                    List<ResultInfo> pending = (List<ResultInfo>) get(parent, "pendingResults");
+                    check(parentThread.results(parent).isEmpty() && h.thread.results(parent).isEmpty(),
+                            "Unattached or disconnected parent received an immediate result");
+                    if (mode == 3) {
+                        check(!h.records.contains(parent) && pending.isEmpty(),
+                                "A retired parent retained a forwarded cancellation");
+                        continue;
+                    }
+                    check(h.records.contains(parent) && pending.size() == 1,
+                            "Saved parent lost its pending cancellation: mode=" + mode);
+                    ResultInfo result = pending.get(0);
+                    check(result.mRequestCode == 74 && "saved-route".equals(result.mResultWho)
+                                    && result.mResultCode == Activity.RESULT_CANCELED
+                                    && result.mData == null && result.mCallerToken == null,
+                            "Saved parent cancellation lost its routing fields");
+                    if (mode == 4) died.invoke(h.atm, parentProcess);
+                    if (get(parent, "app") != h.process) {
+                        set(parent, "app", h.process);
+                        ((List<Object>) get(h.process, "activities")).add(parent);
+                    }
+                    // The parent becomes foreground after its already-forwarded child exits.
+                    h.asApp(() -> h.controller.finishActivity(token(child),
+                            Activity.RESULT_CANCELED, null, 0));
+                    check(pending.isEmpty() && h.thread.results(parent).size() == 1
+                                    && h.thread.results(parent).get(0) == result,
+                            "Restored parent did not consume the retained cancellation exactly once");
+                } finally { opener.set(null, previous); }
+            }
+        }
+        System.out.println("External URL forwarding: process death, reattachment, retired records and failed delivery passed");
+    }
+
+    private static void externalIntentSenderResults() throws Exception {
+        Harness h = new Harness();
+        Object source = h.record("Caller", 52, "a", "RESUMED");
+        IBinder sourceToken = token(source);
+        ActivityTaskManagerService atm = (ActivityTaskManagerService) h.atm;
+        IActivityManager am = (IActivityManager) get(h.atm, "mAm");
+        Field opener = field(h.atmType, "sOpenExternalUrl");
+        Object previousOpener = opener.get(null);
+        List<String> attempts = new ArrayList<>();
+        Intent web = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/sender"));
+        Intent mail = new Intent(Intent.ACTION_VIEW, Uri.parse("mailto:sender@example.com"));
+        try {
+            opener.set(null, (Predicate<String>) url -> {
+                attempts.add(url);
+                return url.startsWith("https:");
+            });
+            h.asApp(() -> {
+                IIntentSender failed = am.getIntentSenderWithFeature(ActivityManager.INTENT_SENDER_ACTIVITY,
+                        OWNER, null, null, null, 1, new Intent[]{mail}, new String[]{null},
+                        PendingIntent.FLAG_IMMUTABLE, null, 0);
+                check(atm.startActivityIntentSender(h.thread, failed, null, null, null, sourceToken,
+                                "senderFailure", 21, 0, 0, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                        "Failed external IntentSender lost its launch error");
+                List<ResultInfo> results = h.thread.results(source);
+                check(results.size() == 1 && results.get(0).mRequestCode == 21
+                                && "senderFailure".equals(results.get(0).mResultWho)
+                                && results.get(0).mResultCode == Activity.RESULT_CANCELED
+                                && results.get(0).mCallerToken == null && results.get(0).mData == null,
+                        "IntentSender failure lost its authenticated holder's cancellation: " + results);
+
+                IIntentSender once = am.getIntentSenderWithFeature(ActivityManager.INTENT_SENDER_ACTIVITY,
+                        OWNER, null, null, null, 2, new Intent[]{web}, new String[]{null},
+                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_ONE_SHOT, null, 0);
+                check(atm.startActivityIntentSender(h.thread, once, null, null, null, sourceToken,
+                                "senderNewTask", 22, Intent.FLAG_ACTIVITY_NEW_TASK,
+                                Intent.FLAG_ACTIVITY_NEW_TASK, null) == ActivityManager.START_SUCCESS,
+                        "Accepted one-shot external IntentSender reported failure");
+                results = h.thread.results(source);
+                check(results.size() == 2 && results.get(1).mRequestCode == 22
+                                && "senderNewTask".equals(results.get(1).mResultWho)
+                                && results.get(1).mResultCode == Activity.RESULT_CANCELED
+                                && results.get(1).mCallerToken == null,
+                        "NEW_TASK IntentSender lost its authenticated holder's cancellation: " + results);
+                check(atm.startActivityIntentSender(h.thread, once, null, null, null, sourceToken,
+                                "duplicate", 23, 0, 0, null) == ActivityManager.START_CANCELED,
+                        "Consumed one-shot external IntentSender launched again");
+                check(attempts.size() == 2 && h.thread.results(source).size() == 2,
+                        "Consumed one-shot sent a duplicate Windows launch or activity result");
+
+                IIntentSender ordinary = am.getIntentSenderWithFeature(ActivityManager.INTENT_SENDER_ACTIVITY,
+                        OWNER, null, null, null, 3, new Intent[]{web}, new String[]{null},
+                        PendingIntent.FLAG_IMMUTABLE, null, 0);
+                check(atm.startActivityIntentSender(h.thread, ordinary, null, null, null, sourceToken,
+                                "ordinary", 24, 0, 0, null) == ActivityManager.START_SUCCESS,
+                        "Accepted ordinary IntentSender reported failure");
+                check(h.thread.results(source).size() == 2,
+                        "Ordinary IntentSender acceptance fabricated completion");
+
+                set(source, "state", state("PAUSED"));
+                check(atm.startActivityIntentSender(h.thread, failed, null, null, null, sourceToken,
+                                "paused", 25, 0, 0, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                        "Paused IntentSender changed the launch failure");
+                @SuppressWarnings("unchecked") List<ResultInfo> pending = (List<ResultInfo>) get(source, "pendingResults");
+                check(h.thread.results(source).size() == 2 && pending.size() == 1
+                                && pending.get(0).mRequestCode == 25 && pending.get(0).mCallerToken == null,
+                        "Paused holder did not retain exactly one pending cancellation");
+                set(source, "state", state("RESUMED"));
+
+                int before = attempts.size();
+                try {
+                    atm.startActivityIntentSender(h.thread, failed, null, null, null, new Binder(),
+                            "unknown", 26, 0, 0, null);
+                    throw new AssertionError("Unknown holder token was accepted");
+                } catch (SecurityException expected) {
+                    check(attempts.size() == before, "Invalid holder token opened a Windows URL");
+                }
+
+                opener.set(null, (Predicate<String>) url -> {
+                    attempts.add(url);
+                    try { set(h.process, "exiting", true); }
+                    catch (Exception failure) { throw new AssertionError(failure); }
+                    return false;
+                });
+                check(atm.startActivityIntentSender(h.thread, failed, null, null, null, sourceToken,
+                                "retired", 27, 0, 0, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                        "Exit during shell invocation changed the shell failure");
+                check(h.thread.results(source).size() == 2 && pending.size() == 1,
+                        "Retired IntentSender holder received a stale cancellation");
+            });
+        } finally {
+            opener.set(null, previousOpener);
+        }
+        System.out.println("External IntentSender results: authenticated holder, one-shot, pending and stale results passed");
+    }
+
+    private static void externalUrlTargets() throws Exception {
+        Harness h = new Harness();
+        Object source = h.record("Caller", 53, "a", "RESUMED");
+        IBinder sourceToken = token(source);
+        ActivityTaskManagerService atm = (ActivityTaskManagerService) h.atm;
+        Field opener = field(h.atmType, "sOpenExternalUrl");
+        Object previousOpener = opener.get(null);
+        List<String> attempts = new ArrayList<>();
+        Intent web = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/private"));
+        try {
+            opener.set(null, (Predicate<String>) url -> { attempts.add(url); return true; });
+            h.asApp(() -> {
+                Intent selectedMissing = new Intent(web);
+                selectedMissing.setSelector(new Intent().setComponent(new ComponentName(OWNER, OWNER + ".Missing")));
+                List<Intent> unresolved = List.of(
+                        new Intent(web).setComponent(new ComponentName(OWNER, OWNER + ".Missing")),
+                        new Intent(web).setPackage(OWNER),
+                        new Intent(web).setComponent(new ComponentName(BrowserPackageSupport.PACKAGE,
+                                BrowserPackageSupport.PACKAGE + ".Missing")),
+                        new Intent(web).setDataAndType(web.getData(), "application/pdf"),
+                        new Intent(web).addCategory("fixture.PRIVATE"),
+                        new Intent(Intent.ACTION_VIEW, Uri.parse("mailto:private@example.com")).setPackage(OWNER),
+                        selectedMissing);
+                for (int i = 0; i < unresolved.size(); i++) {
+                    Intent intent = unresolved.get(i);
+                    int status = atm.startActivity(h.thread, OWNER, null, intent, intent.getType(), sourceToken,
+                            "unresolved", 30 + i, 0, null, null);
+                    check(status == (intent.getComponent() == null && intent.getSelector() == null
+                                    ? ActivityManager.START_INTENT_NOT_RESOLVED
+                                    : ActivityManager.START_CLASS_NOT_FOUND),
+                            "External URL substituted an unresolved target: " + intent + " status=" + status);
+                }
+                check(attempts.isEmpty(), "Unresolved explicit/filter-constrained targets reached Windows");
+                List<ResultInfo> results = h.thread.results(source);
+                check(results.size() == unresolved.size(), "Rejected URL targets did not cancel their result requests");
+                for (int i = 0; i < results.size(); i++) {
+                    check(results.get(i).mRequestCode == 30 + i && results.get(i).mResultCode == Activity.RESULT_CANCELED
+                                    && results.get(i).mCallerToken == null,
+                            "Rejected target cancellation lost its route");
+                }
+                Intent selectedBrowser = new Intent(web);
+                selectedBrowser.setSelector(new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/selection"))
+                        .setPackage(BrowserPackageSupport.PACKAGE));
+                for (Intent intent : List.of(web, new Intent(web).setPackage(BrowserPackageSupport.PACKAGE),
+                        new Intent(web).setComponent(new ComponentName(BrowserPackageSupport.PACKAGE,
+                                BrowserPackageSupport.ACTIVITY)), selectedBrowser)) {
+                    check(atm.startActivity(h.thread, OWNER, null, intent, null, sourceToken,
+                                    null, -1, 0, null, null) == ActivityManager.START_SUCCESS,
+                            "Valid Windows browser target stopped opening");
+                }
+                check(attempts.equals(java.util.Collections.nCopies(4, web.getDataString())),
+                        "Browser targets did not open the original URL exactly once");
+            });
+        } finally {
+            opener.set(null, previousOpener);
+        }
+        System.out.println("External URL targets: explicit package/component and filter constraints passed");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void externalResultOwnership() throws Exception {
+        Harness h = new Harness();
+        Object source = h.record("Caller", 54, "a", "RESUMED");
+        Object foreign = h.record("Other", 55, "b", "RESUMED");
+        AppThread otherThread = new AppThread();
+        otherThread.controller = h.controller;
+        Object otherProcess = construct(h.processType, new Class<?>[]{h.atmType, int.class, IApplicationThread.class},
+                h.atm, PID + 1, otherThread);
+        set(otherProcess, "packageName", OWNER); set(otherProcess, "processName", OWNER + ":other");
+        set(otherProcess, "uid", UID); set(otherProcess, "ready", true);
+        ((List<Object>) get(h.atm, "mProcesses")).add(otherProcess);
+        ((List<Object>) get(h.process, "activities")).remove(foreign);
+        ((List<Object>) get(otherProcess, "activities")).add(foreign);
+        set(foreign, "app", otherProcess);
+        ActivityTaskManagerService atm = (ActivityTaskManagerService) h.atm;
+        IActivityManager am = (IActivityManager) get(h.atm, "mAm");
+        Intent mail = new Intent(Intent.ACTION_VIEW, Uri.parse("mailto:ownership@example.com"));
+        final IIntentSender systemSender;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            systemSender = am.getIntentSenderWithFeature(ActivityManager.INTENT_SENDER_ACTIVITY,
+                    "android", null, null, null, 4, new Intent[]{mail}, new String[]{null},
+                    PendingIntent.FLAG_IMMUTABLE, null, 0);
+        } finally { Binder.restoreCallingIdentity(identity); }
+        Field opener = field(h.atmType, "sOpenExternalUrl");
+        Object previousOpener = opener.get(null);
+        List<String> attempts = new ArrayList<>();
+        try {
+            opener.set(null, (Predicate<String>) url -> { attempts.add(url); return false; });
+            h.asApp(() -> {
+                check(atm.startActivityIntentSender(h.thread, systemSender, null, null, null, token(source),
+                                "systemSender", 41, 0, 0, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                        "System-created URL IntentSender lost its failure");
+                check(h.thread.results(source).size() == 1 && h.thread.results(source).get(0).mRequestCode == 41,
+                        "System-created IntentSender cancellation did not reach the holder");
+                try {
+                    atm.startActivityIntentSender(h.thread, systemSender, null, null, null, token(foreign),
+                            "foreign", 42, 0, 0, null);
+                    throw new AssertionError("Foreign-process result activity was accepted");
+                } catch (SecurityException expected) {
+                    check(attempts.size() == 1, "Foreign result token opened a Windows URL");
+                }
+                for (IBinder token : List.of(token(foreign), new Binder())) {
+                    check(atm.startActivity(h.thread, OWNER, null, mail, null, token,
+                                    "unowned", 43, 0, null, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                            "Unowned result token changed launch failure");
+                }
+                check(h.thread.results(source).size() == 1 && otherThread.results(foreign).isEmpty(),
+                        "Launch cancellation was injected into an unowned result activity");
+                opener.set(null, (Predicate<String>) url -> {
+                    try { set(source, "app", otherProcess); }
+                    catch (Exception failure) { throw new AssertionError(failure); }
+                    return false;
+                });
+                check(atm.startActivityIntentSender(h.thread, systemSender, null, null, null, token(source),
+                                "reattached", 44, 0, 0, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                        "Recipient reattachment changed launch failure");
+                check(h.thread.results(source).size() == 1 && otherThread.results(source).isEmpty(),
+                        "Result crossed to a process attached while the shell opener ran");
+                set(source, "app", h.process);
+                opener.set(null, (Predicate<String>) url -> false);
+                java.io.PrintStream previousOut = System.out;
+                boolean[] reattached = {false};
+                // Force reattachment after result admission but before the Binder
+                // send. Logging is an isolated test boundary, not a production hook.
+                System.setOut(new java.io.PrintStream(previousOut, true) {
+                    @Override public void println(String line) {
+                        previousOut.println(line);
+                        if (!reattached[0] && line.startsWith("system_server: scheduleTransaction ActivityResultItem to ")) {
+                            reattached[0] = true;
+                            try { set(source, "app", otherProcess); }
+                            catch (Exception failure) { throw new AssertionError(failure); }
+                        }
+                    }
+                });
+                try {
+                    check(atm.startActivityIntentSender(h.thread, systemSender, null, null, null, token(source),
+                                    "dispatchRace", 45, 0, 0, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                            "Reattachment during result dispatch changed launch failure");
+                } finally { System.setOut(previousOut); }
+                check(reattached[0] && h.thread.results(source).size() == 2
+                                && h.thread.results(source).get(1).mRequestCode == 45
+                                && otherThread.results(source).isEmpty(),
+                        "Admitted cancellation was redirected to a replacement application thread");
+            });
+        } finally {
+            opener.set(null, previousOpener);
+        }
+        System.out.println("External URL ownership: creator/holder separation and foreign or reattached recipients passed");
+    }
+
     public static int run(boolean realBinder, String group) throws Exception {
         binder = realBinder; checks = 0;
         if (group.equals("all") || group.equals("task")) removeTask();
         if (group.equals("all") || group.equals("affinity")) affinity();
         if (group.equals("all") || group.equals("sub")) subActivities();
+        if (group.equals("all")) externalUrlResults();
+        if (group.equals("all")) externalForwardedResults();
+        if (group.equals("all")) externalForwardedLifecycle();
+        if (group.equals("all")) externalIntentSenderResults();
+        if (group.equals("all")) externalUrlTargets();
+        if (group.equals("all")) externalResultOwnership();
         return checks;
     }
 }

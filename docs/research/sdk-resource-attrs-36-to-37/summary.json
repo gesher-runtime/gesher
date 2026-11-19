@@ -1,0 +1,317 @@
+{
+  "a07_complete": false,
+  "comparison_id": "official-sdk-36-r02-to-37.0-r02-resource-attributes",
+  "delta_rows": 153,
+  "delta_rows_sha256": "fed4b2da9a8b4703aa2d21070e315fc4d83cd646e3cf1328a274594b1d17c324",
+  "dimensions": {
+    "attributes": {
+      "added": 47,
+      "after": 2842,
+      "before": 2802,
+      "changed": 7,
+      "removed": 7,
+      "unchanged": 2788
+    },
+    "resource_roots": {
+      "added": 0,
+      "after": 3,
+      "before": 3,
+      "changed": 0,
+      "removed": 0,
+      "unchanged": 3
+    },
+    "styleables": {
+      "added": 9,
+      "after": 373,
+      "before": 365,
+      "changed": 19,
+      "removed": 1,
+      "unchanged": 345
+    },
+    "symbols": {
+      "added": 55,
+      "after": 1571,
+      "before": 1524,
+      "changed": 0,
+      "removed": 8,
+      "unchanged": 1516
+    }
+  },
+  "generator_sha256": {
+    "sdk_platform_diff.py": "df91c8d5a1abd8de789f63c8a150c5401be281cfb49619de1e2535c12ad78856",
+    "sdk_resource_attrs_diff.py": "c3d573853f98cb22aeaf5e839372474086dae45dd7c20b963da40dd9dc52ebfe"
+  },
+  "interpretation": [
+    "Declarations are scoped XML occurrences. Repeated names in different files or styleables are not collapsed into one effective resource definition.",
+    "Every element attribute and namespace declaration is retained. Format unions, numeric spellings, localization hints and parent names remain raw; missing values are not synthesized.",
+    "Styleable attribute order and enum/flag order are source order. Neither is claimed to equal generated R.styleable indices, compiled IDs or runtime iteration order.",
+    "Styleable parent labels are not expanded. Name-only attribute occurrences are not resolved to other declarations, packages or runtime providers.",
+    "Comments, processing instructions and formatting are bound by whole-file hashes but not interpreted. Documentation visibility, annotations in comments and global top-level declaration order are outside the semantic views.",
+    "Attributes, their ordered symbol identities and symbol values are overlapping views; row counts are not additive API, defect or implementation counts.",
+    "The selected family is data/res/values/attrs*.xml only. Other resource values, configurations, overlays, compiled tables and permission enforcement are not evaluated."
+  ],
+  "manifest_sha256": "4366d9e7c9f6d6194c86dac1bff1e63b0ded72ec8f02a56942794ee7732605fa",
+  "profiles": {
+    "after": {
+      "android_codename": "",
+      "api_level_raw": "37.0",
+      "api_major": 37,
+      "api_minor": 0,
+      "api_minor_explicit_in_source_properties": true,
+      "archive": {
+        "bytes": 67281901,
+        "member_root": "android-37.0",
+        "sha1": "ed8ebf7f8822a4de5686d427f237d2fa30ff7410",
+        "sha256": "840b23e827f96e64aea4c89a1194aac3dc5f6bad37edb231c5c795d890330e8d",
+        "url": "https://dl.google.com/android/repository/platform-37.0_r02.zip"
+      },
+      "artifacts": {
+        "data/res/values/attrs.xml": {
+          "bytes": 613438,
+          "sha256": "82fa3d22c8a37ed66d3b780d702fc80e65c4390b135c7e587003c3b318bc1fc2"
+        },
+        "data/res/values/attrs_car.xml": {
+          "bytes": 984,
+          "sha256": "880a4a7d9f7379902e7f5fa6933e13f9a9f7c7fb3841ec90ec813c1e6565f7ef"
+        },
+        "data/res/values/attrs_manifest.xml": {
+          "bytes": 260254,
+          "sha256": "289cfc8300160c17e20b6fa4f30c801ec8e3dc1cc67a6fd7601fe7bff5f5468b"
+        },
+        "source.properties": {
+          "bytes": 343,
+          "sha256": "fa89029fc0cee414cb5e44a37cd3033771217eeecb5086577bb6d9b1b03b5b5f"
+        }
+      },
+      "base_sdk": true,
+      "beta_version": "",
+      "extension_level": 22,
+      "id": "sdk-37.0-base-ext22-r2",
+      "observations": {
+        "data/res/values/attrs.xml": {
+          "counts": {
+            "attributes": 2222,
+            "attributes_with_format": 1539,
+            "attributes_with_symbols": 149,
+            "distinct_attribute_name_spellings": 1653,
+            "eat_comment_markers": 60,
+            "enum_symbols": 1101,
+            "flag_symbols": 291,
+            "name_only_attributes": 561,
+            "resource_roots": 1,
+            "styleable_attributes": 2188,
+            "styleables": 299,
+            "symbols": 1392,
+            "top_level_attributes": 34
+          },
+          "repeated_scoped_identities": []
+        },
+        "data/res/values/attrs_car.xml": {
+          "counts": {
+            "attributes": 1,
+            "attributes_with_format": 1,
+            "attributes_with_symbols": 0,
+            "distinct_attribute_name_spellings": 1,
+            "eat_comment_markers": 0,
+            "enum_symbols": 0,
+            "flag_symbols": 0,
+            "name_only_attributes": 0,
+            "resource_roots": 1,
+            "styleable_attributes": 0,
+            "styleables": 0,
+            "symbols": 0,
+            "top_level_attributes": 1
+          },
+          "repeated_scoped_identities": []
+        },
+        "data/res/values/attrs_manifest.xml": {
+          "counts": {
+            "attributes": 619,
+            "attributes_with_format": 255,
+            "attributes_with_symbols": 30,
+            "distinct_attribute_name_spellings": 266,
+            "eat_comment_markers": 1,
+            "enum_symbols": 92,
+            "flag_symbols": 87,
+            "name_only_attributes": 336,
+            "resource_roots": 1,
+            "styleable_attributes": 480,
+            "styleables": 74,
+            "symbols": 179,
+            "top_level_attributes": 139
+          },
+          "repeated_scoped_identities": []
+        }
+      },
+      "package_path": "platforms;android-37.0",
+      "platform_codename": "",
+      "platform_version": "17",
+      "preview_sdk_int": "0",
+      "release_classification_basis": "Repository channel and observed codename/preview fields are reported separately; absent properties remain null.",
+      "repository_channel": {
+        "id": "channel-0",
+        "name": "stable"
+      },
+      "repository_codename": "",
+      "sdk_package_revision": "2",
+      "selected_resource_files": [
+        "data/res/values/attrs.xml",
+        "data/res/values/attrs_car.xml",
+        "data/res/values/attrs_manifest.xml"
+      ],
+      "source_properties": {
+        "AndroidVersion.ApiLevel": "37.0",
+        "AndroidVersion.BetaVersion": "",
+        "AndroidVersion.CodeName": "",
+        "AndroidVersion.ExtensionLevel": "22",
+        "AndroidVersion.IsBaseSdk": "true",
+        "AndroidVersion.PreviewSdkInt": "0",
+        "Layoutlib.Api": "15",
+        "Layoutlib.Revision": "1",
+        "Pkg.Desc": "Android SDK Platform 17",
+        "Pkg.Revision": "2",
+        "Pkg.UserSrc": "false",
+        "Platform.CodeName": "",
+        "Platform.MinToolsRev": "22",
+        "Platform.Version": "17"
+      }
+    },
+    "before": {
+      "android_codename": null,
+      "api_level_raw": "36",
+      "api_major": 36,
+      "api_minor": 0,
+      "api_minor_explicit_in_source_properties": false,
+      "archive": {
+        "bytes": 65878410,
+        "member_root": "android-36",
+        "sha1": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
+        "sha256": "37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e",
+        "url": "https://dl.google.com/android/repository/platform-36_r02.zip"
+      },
+      "artifacts": {
+        "data/res/values/attrs.xml": {
+          "bytes": 608653,
+          "sha256": "9e7fffc871b41db5c550be70be804bb8ef2337bae71d302ec166614b1a1c95d6"
+        },
+        "data/res/values/attrs_car.xml": {
+          "bytes": 984,
+          "sha256": "880a4a7d9f7379902e7f5fa6933e13f9a9f7c7fb3841ec90ec813c1e6565f7ef"
+        },
+        "data/res/values/attrs_manifest.xml": {
+          "bytes": 243533,
+          "sha256": "8164b282928162d32dbe775c7fb956adbd724076d8fbe5217a4e3584f5d7f441"
+        },
+        "source.properties": {
+          "bytes": 257,
+          "sha256": "72291ff6611dbfc46fdfb6de2821c4a62c87befa5200713847eda426e3a501c2"
+        }
+      },
+      "base_sdk": true,
+      "beta_version": null,
+      "extension_level": 17,
+      "id": "sdk-36-base-ext17-r2",
+      "observations": {
+        "data/res/values/attrs.xml": {
+          "counts": {
+            "attributes": 2210,
+            "attributes_with_format": 1528,
+            "attributes_with_symbols": 152,
+            "distinct_attribute_name_spellings": 1646,
+            "eat_comment_markers": 59,
+            "enum_symbols": 1062,
+            "flag_symbols": 291,
+            "name_only_attributes": 558,
+            "resource_roots": 1,
+            "styleable_attributes": 2176,
+            "styleables": 297,
+            "symbols": 1353,
+            "top_level_attributes": 34
+          },
+          "repeated_scoped_identities": []
+        },
+        "data/res/values/attrs_car.xml": {
+          "counts": {
+            "attributes": 1,
+            "attributes_with_format": 1,
+            "attributes_with_symbols": 0,
+            "distinct_attribute_name_spellings": 1,
+            "eat_comment_markers": 0,
+            "enum_symbols": 0,
+            "flag_symbols": 0,
+            "name_only_attributes": 0,
+            "resource_roots": 1,
+            "styleable_attributes": 0,
+            "styleables": 0,
+            "symbols": 0,
+            "top_level_attributes": 1
+          },
+          "repeated_scoped_identities": []
+        },
+        "data/res/values/attrs_manifest.xml": {
+          "counts": {
+            "attributes": 591,
+            "attributes_with_format": 239,
+            "attributes_with_symbols": 29,
+            "distinct_attribute_name_spellings": 257,
+            "eat_comment_markers": 1,
+            "enum_symbols": 90,
+            "flag_symbols": 81,
+            "name_only_attributes": 325,
+            "resource_roots": 1,
+            "styleable_attributes": 456,
+            "styleables": 68,
+            "symbols": 171,
+            "top_level_attributes": 135
+          },
+          "repeated_scoped_identities": []
+        }
+      },
+      "package_path": "platforms;android-36",
+      "platform_codename": "",
+      "platform_version": "16",
+      "preview_sdk_int": null,
+      "release_classification_basis": "Repository channel and observed codename/preview fields are reported separately; absent properties remain null.",
+      "repository_channel": {
+        "id": "channel-0",
+        "name": "stable"
+      },
+      "repository_codename": null,
+      "sdk_package_revision": "2",
+      "selected_resource_files": [
+        "data/res/values/attrs.xml",
+        "data/res/values/attrs_car.xml",
+        "data/res/values/attrs_manifest.xml"
+      ],
+      "source_properties": {
+        "AndroidVersion.ApiLevel": "36",
+        "AndroidVersion.ExtensionLevel": "17",
+        "AndroidVersion.IsBaseSdk": "true",
+        "Layoutlib.Api": "15",
+        "Layoutlib.Revision": "1",
+        "Pkg.Desc": "Android SDK Platform 16",
+        "Pkg.Revision": "2",
+        "Pkg.UserSrc": "false",
+        "Platform.CodeName": "",
+        "Platform.MinToolsRev": "22",
+        "Platform.Version": "16"
+      }
+    }
+  },
+  "repository_metadata_provenance": {
+    "captured_utc_date": "2026-11-18",
+    "selection": "The two package records and channel labels below were extracted from this hashed official XML snapshot. The comparison verifies archives and measured files against these pins; it does not fetch or revalidate the mutable repository URL.",
+    "snapshot_bytes": 436016,
+    "snapshot_sha256": "8db7cc1bd65bf8c9dffc3678a70d6dc98b02781a24d1ef0d31ecf111a55cc2d5",
+    "source_url": "https://dl.google.com/android/repository/repository2-3.xml"
+  },
+  "runtime_sdk_int_changed": false,
+  "schema_version": 1,
+  "scope": "Explicit SDK attribute/styleable source metadata; not compiled resources, public API availability, or runtime compatibility.",
+  "source_format_context": {
+    "bytes": 73568,
+    "sha256": "a0cfeeb389deef114fdf88e642a1e0b263f15875f5492b8357f384faefc5d3ea",
+    "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-17.0.0_r1/tools/aapt2/ResourceParser.cpp?format=TEXT"
+  },
+  "source_platform_manifest_sha256": "24b22fb2cb012aced9efa7ab036364ced68dfd284ad0c387b3a31e895bc4e325"
+}

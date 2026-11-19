@@ -29,6 +29,7 @@ class FdWriter : public mkvmuxer::IMkvWriter {
   mkvmuxer::int32 Write(const void* buf, mkvmuxer::uint32 len) override {
     if (!WriteAll(fd_, buf, len)) return -1;
     pos_ += len;
+    size_ = std::max(size_, pos_);
     return 0;
   }
   mkvmuxer::int64 Position() const override { return pos_; }
@@ -38,11 +39,12 @@ class FdWriter : public mkvmuxer::IMkvWriter {
     return 0;
   }
   bool Seekable() const override { return true; }
+  int64_t BytesWritten() const { return size_; }
   void ElementStartNotify(mkvmuxer::uint64, mkvmuxer::int64) override {}
 
  private:
   int fd_;
-  int64_t pos_ = 0;
+  int64_t pos_ = 0, size_ = 0;
 };
 
 struct Pending {
@@ -155,6 +157,10 @@ class WebmMuxer : public Muxer {
       *error = "no tracks";
       return false;
     }
+    if (SupportsFileSizeLimit() && !AdmitFinalSize(HeaderBound() + 12)) {
+      *error = "WebM: file-size limit is too small for container metadata";
+      return false;
+    }
     started_ = true;
     return true;
   }
@@ -177,9 +183,23 @@ class WebmMuxer : public Muxer {
       }
       return true;
     }
+    if (SupportsFileSizeLimit()) {
+      // The recorder's implemented WebM path has one Opus track. libwebm
+      // writes each audio-only SimpleBlock immediately (no video queue or
+      // accurate-duration buffering). Reserve at most one new cluster and
+      // one cue, plus every deferred cue's complete EBML representation.
+      const uint64_t header = writer_.BytesWritten() == 0 ? HeaderBound() : 0;
+      const uint64_t cues = 12 + 64 *
+          (static_cast<uint64_t>(segment_.GetCues()->cue_entries_size()) + 1);
+      const uint64_t base = static_cast<uint64_t>(writer_.BytesWritten()) + header + cues + 64;
+      if (size > UINT64_MAX - base) {
+        *error = "WebM: completed file size is not representable";
+        return false;
+      }
+      if (!AdmitFinalSize(base + size)) return true;
+    }
     if (first_us_ < 0 || time_us < first_us_) first_us_ = first_us_ < 0 ? time_us : first_us_;
     t.pending.push_back({std::vector<uint8_t>(data, data + size), time_us, t.video ? (flags & 1) != 0 : true});
-    bytes_ += static_cast<int64_t>(size);
     return Flush(false, error);
   }
 
@@ -197,9 +217,21 @@ class WebmMuxer : public Muxer {
     return true;
   }
 
-  int64_t BytesWritten() const override { return bytes_; }
+  int64_t BytesWritten() const override { return writer_.BytesWritten(); }
 
  private:
+  bool SupportsFileSizeLimit() const override {
+    return tracks_.size() == 1 && !tracks_[0].video && tracks_[0].mime == "audio/opus";
+  }
+
+  uint64_t HeaderBound() {
+    // Track::Size includes CodecPrivate. The remaining fixed EBML header,
+    // Segment, five-entry reserved SeekHead, SegmentInfo and Tracks wrapper
+    // fit within 1024 bytes for this writer's fixed app names and settings.
+    // Finalize rewrites those reserved fields in place; only Cues append.
+    auto* track = segment_.GetTrackByNumber(tracks_[0].number);
+    return 1024 + (track == nullptr ? 0 : track->Size());
+  }
   // Writes the earliest waiting frames: while every track has one (or all, at the end).
   bool Flush(bool all, std::string* error) {
     for (;;) {
@@ -230,7 +262,6 @@ class WebmMuxer : public Muxer {
   bool started_ = false;
   std::vector<TrackState> tracks_;
   int64_t first_us_ = -1, base_us_ = -1, last_ns_ = 0;
-  int64_t bytes_ = 0;
 };
 
 }  // namespace

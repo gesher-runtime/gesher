@@ -2,6 +2,7 @@
 // docs/webview.md).
 
 #include "webview_host.h"
+#include "owned_stream.h"
 
 #include <shobjidl.h>
 #include <bcrypt.h>
@@ -2069,7 +2070,11 @@ void Host::Destroy() {
 
 void Host::Navigate(const std::wstring& url, const std::wstring& headers,
                     const std::wstring& method, std::vector<uint8_t> body) {
-  Do(impl_, [url, headers, method, body = std::move(body)](Impl* impl) {
+  SharedBody bytes;
+  if (!body.empty() && !method.empty() && method != L"GET") {
+    bytes = std::make_shared<const std::vector<uint8_t>>(std::move(body));
+  }
+  Do(impl_, [url, headers, method, body = std::move(bytes)](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = E_FAIL;
     Com<ICoreWebView2_2> wv2;
@@ -2078,14 +2083,15 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
     if ((!headers.empty() || !get) && impl->webview.As(IID_ICoreWebView2_2, &wv2) &&
         impl->env.As(IID_ICoreWebView2Environment2, &env2)) {
       Com<IStream> stream;
+      hr = S_OK;
       if (!get) {
-        stream = Com<IStream>(SHCreateMemStream(body.empty() ? nullptr : body.data(),
-                                                static_cast<UINT>(body.size())),
-                              /*add_ref=*/false);
+        hr = OwnedStream::Create(body, stream.Put());
       }
       Com<ICoreWebView2WebResourceRequest> request;
-      hr = env2->CreateWebResourceRequest(url.c_str(), get ? L"GET" : method.c_str(),
-                                          stream.get(), headers.c_str(), request.Put());
+      if (SUCCEEDED(hr)) {
+        hr = env2->CreateWebResourceRequest(url.c_str(), get ? L"GET" : method.c_str(),
+                                            stream.get(), headers.c_str(), request.Put());
+      }
       if (SUCCEEDED(hr)) hr = wv2->NavigateWithWebResourceRequest(request.get());
     } else {
       hr = impl->webview->Navigate(url.c_str());
@@ -2281,7 +2287,11 @@ void Host::SetDocumentScript(const std::wstring& script) {
 void Host::RespondToRequest(int64_t id, int32_t status, const std::wstring& reason,
                             const std::wstring& headers, std::vector<uint8_t> body) {
   std::shared_ptr<Impl> shared = impl_;
-  PostToWebViewThread([shared, id, status, reason, headers, body = std::move(body)] {
+  SharedBody bytes;
+  if (status > 0 && !body.empty()) {
+    bytes = std::make_shared<const std::vector<uint8_t>>(std::move(body));
+  }
+  PostToWebViewThread([shared, id, status, reason, headers, body = std::move(bytes)] {
     Impl* impl = shared.get();
     auto it = impl->requests.find(id);
     if (it == impl->requests.end()) return;
@@ -2289,19 +2299,18 @@ void Host::RespondToRequest(int64_t id, int32_t status, const std::wstring& reas
     impl->requests.erase(it);
     if (r.bridge && (status != 200 || impl->destroyed || !impl->bridge_guarded
             || r.generation != impl->bridge_generation || GetTickCount64() >= r.deadline
-            || body.size() > kBridgeBodyLimit)) {
+            || (body && body->size() > kBridgeBodyLimit))) {
       r.deferral->Complete(); // Keep the response installed before dispatch.
       return;
     }
     if (status > 0 && impl->env && !impl->destroyed) {
-      Com<IStream> stream(SHCreateMemStream(body.empty() ? nullptr : body.data(),
-                                            static_cast<UINT>(body.size())),
-                          /*add_ref=*/false);
+      Com<IStream> stream;
       Com<ICoreWebView2WebResourceResponse> response;
       const wchar_t* response_headers = r.bridge
           ? L"Content-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
           : headers.c_str();
-      if (stream && SUCCEEDED(impl->env->CreateWebResourceResponse(
+      if (SUCCEEDED(OwnedStream::Create(body, stream.Put())) &&
+          SUCCEEDED(impl->env->CreateWebResourceResponse(
                         stream.get(), status, reason.c_str(), response_headers, response.Put()))) {
         r.args->put_Response(response.get());
       }

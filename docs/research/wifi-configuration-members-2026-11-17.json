@@ -1,0 +1,2758 @@
+{
+  "schema_version": 1,
+  "source_tag": "android-16.0.0_r4",
+  "base_commit": "e80cd1854163bd18e4ea5392c25f423184048804",
+  "sdk_jar_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "selected_declared_public_protected_members": 182,
+  "baseline_resolution_compatible": 20,
+  "baseline_missing": 162,
+  "candidate_compatible_class_members": 182,
+  "candidate_compatible_dex_members": 182,
+  "selected_classes": [
+    {
+      "baseline": {
+        "absent_from_present_class": 33,
+        "compatible": 19
+      },
+      "candidate": {
+        "compatible": 52
+      },
+      "name": "android.net.wifi.WifiConfiguration",
+      "sdk_count": 52
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 20
+      },
+      "candidate": {
+        "compatible": 20
+      },
+      "name": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "sdk_count": 20
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 3
+      },
+      "candidate": {
+        "compatible": 3
+      },
+      "name": "android.net.wifi.WifiConfiguration$GroupMgmtCipher",
+      "sdk_count": 3
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 4
+      },
+      "candidate": {
+        "compatible": 4
+      },
+      "name": "android.net.wifi.WifiConfiguration$Status",
+      "sdk_count": 4
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 5
+      },
+      "candidate": {
+        "compatible": 5
+      },
+      "name": "android.net.wifi.WifiConfiguration$Protocol",
+      "sdk_count": 5
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 9
+      },
+      "candidate": {
+        "compatible": 9
+      },
+      "name": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "sdk_count": 9
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 8
+      },
+      "candidate": {
+        "compatible": 8
+      },
+      "name": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "sdk_count": 8
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 6
+      },
+      "candidate": {
+        "compatible": 6
+      },
+      "name": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "sdk_count": 6
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 57
+      },
+      "candidate": {
+        "compatible": 57
+      },
+      "name": "android.net.wifi.WifiEnterpriseConfig",
+      "sdk_count": 57
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 8
+      },
+      "candidate": {
+        "compatible": 8
+      },
+      "name": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "sdk_count": 8
+    },
+    {
+      "baseline": {
+        "declaring_class_absent": 10
+      },
+      "candidate": {
+        "compatible": 10
+      },
+      "name": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "sdk_count": 10
+    }
+  ],
+  "members": [
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "BSSID",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "FQDN",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "RANDOMIZATION_AUTO",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "RANDOMIZATION_NONE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "RANDOMIZATION_NON_PERSISTENT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "RANDOMIZATION_PERSISTENT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_DPP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_EAP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_EAP_SUITE_B",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_EAP_WPA3_ENTERPRISE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_EAP_WPA3_ENTERPRISE_192_BIT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_OPEN",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_OWE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_PSK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_SAE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_WAPI_CERT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_WAPI_PSK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SECURITY_TYPE_WEP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "SSID",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "allowedAuthAlgorithms",
+      "descriptor": "Ljava/util/BitSet;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "allowedGroupCiphers",
+      "descriptor": "Ljava/util/BitSet;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "allowedGroupManagementCiphers",
+      "descriptor": "Ljava/util/BitSet;",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "allowedKeyManagement",
+      "descriptor": "Ljava/util/BitSet;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "allowedPairwiseCiphers",
+      "descriptor": "Ljava/util/BitSet;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "allowedProtocols",
+      "descriptor": "Ljava/util/BitSet;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "allowedSuiteBCiphers",
+      "descriptor": "Ljava/util/BitSet;",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "enterpriseConfig",
+      "descriptor": "Landroid/net/wifi/WifiEnterpriseConfig;",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "hiddenSSID",
+      "descriptor": "Z",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "isHomeProviderNetwork",
+      "descriptor": "Z",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "networkId",
+      "descriptor": "I",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "preSharedKey",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "priority",
+      "descriptor": "I",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "providerFriendlyName",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "roamingConsortiumIds",
+      "descriptor": "[J",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "status",
+      "descriptor": "I",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "wepKeys",
+      "descriptor": "[Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "field",
+      "name": "wepTxKeyIndex",
+      "descriptor": "I",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/WifiConfiguration;)V",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "getHttpProxy",
+      "descriptor": "()Landroid/net/ProxyInfo;",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "getKey",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "getMacRandomizationSetting",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "getRandomizedMacAddress",
+      "descriptor": "()Landroid/net/MacAddress;",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "isDppConfigurator",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "isPasspoint",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "setHttpProxy",
+      "descriptor": "(Landroid/net/ProxyInfo;)V",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "setIpConfiguration",
+      "descriptor": "(Landroid/net/IpConfiguration;)V",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "setMacRandomizationSetting",
+      "descriptor": "(I)V",
+      "sdk_flags": 1,
+      "base_status": "absent_from_present_class",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "setSecurityParams",
+      "descriptor": "(I)V",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "compatible_inherited",
+      "base_owner": "java.lang.Object",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "base_status": "compatible",
+      "base_owner": "android.net.wifi.WifiConfiguration",
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "DPP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "FILS_SHA256",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "FILS_SHA384",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "FT_EAP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "FT_PSK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "IEEE8021X",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "NONE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "OSEN",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "OWE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "SAE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "SUITE_B_192",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "WAPI_CERT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "WAPI_PSK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "WPA2_PSK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "WPA_EAP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "WPA_EAP_SHA256",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "WPA_PSK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "WPA_PSK_SHA256",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "strings",
+      "descriptor": "[Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "kind": "field",
+      "name": "varName",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupMgmtCipher",
+      "kind": "field",
+      "name": "BIP_CMAC_256",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupMgmtCipher",
+      "kind": "field",
+      "name": "BIP_GMAC_128",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupMgmtCipher",
+      "kind": "field",
+      "name": "BIP_GMAC_256",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Status",
+      "kind": "field",
+      "name": "CURRENT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Status",
+      "kind": "field",
+      "name": "DISABLED",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Status",
+      "kind": "field",
+      "name": "ENABLED",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Status",
+      "kind": "field",
+      "name": "strings",
+      "descriptor": "[Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "kind": "field",
+      "name": "RSN",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "kind": "field",
+      "name": "WAPI",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "kind": "field",
+      "name": "WPA",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "kind": "field",
+      "name": "strings",
+      "descriptor": "[Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "kind": "field",
+      "name": "varName",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "CCMP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "GCMP_128",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "GCMP_256",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "SMS4",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "TKIP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "WEP104",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "WEP40",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "strings",
+      "descriptor": "[Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "kind": "field",
+      "name": "varName",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "kind": "field",
+      "name": "CCMP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "kind": "field",
+      "name": "GCMP_128",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "kind": "field",
+      "name": "GCMP_256",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "kind": "field",
+      "name": "NONE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "kind": "field",
+      "name": "SMS4",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "kind": "field",
+      "name": "TKIP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "kind": "field",
+      "name": "strings",
+      "descriptor": "[Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "kind": "field",
+      "name": "varName",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "kind": "field",
+      "name": "LEAP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "kind": "field",
+      "name": "OPEN",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "kind": "field",
+      "name": "SAE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "kind": "field",
+      "name": "SHARED",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "kind": "field",
+      "name": "strings",
+      "descriptor": "[Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "kind": "field",
+      "name": "varName",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "EXTRA_WAPI_AS_CERTIFICATE_DATA",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "EXTRA_WAPI_AS_CERTIFICATE_NAME",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "EXTRA_WAPI_USER_CERTIFICATE_DATA",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "EXTRA_WAPI_USER_CERTIFICATE_NAME",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "TLS_V1_0",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "TLS_V1_1",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "TLS_V1_2",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "TLS_V1_3",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "WAPI_AS_CERTIFICATE",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "field",
+      "name": "WAPI_USER_CERTIFICATE",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "enableTrustOnFirstUse",
+      "descriptor": "(Z)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getAltSubjectMatch",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getAnonymousIdentity",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getCaCertificate",
+      "descriptor": "()Ljava/security/cert/X509Certificate;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getCaCertificates",
+      "descriptor": "()[Ljava/security/cert/X509Certificate;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getClientCertificate",
+      "descriptor": "()Ljava/security/cert/X509Certificate;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getClientCertificateChain",
+      "descriptor": "()[Ljava/security/cert/X509Certificate;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getClientKeyPairAlias",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getClientPrivateKey",
+      "descriptor": "()Ljava/security/PrivateKey;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getDecoratedIdentityPrefix",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getDomainSuffixMatch",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getEapMethod",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getIdentity",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getMinimumTlsVersion",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getPassword",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getPhase2Method",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getPlmn",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getRealm",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "getSubjectMatch",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "hasCaCertificate",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "isAuthenticationSimBased",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "isEapMethodServerCertUsed",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "isServerCertValidationEnabled",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "isTrustOnFirstUseEnabled",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setAltSubjectMatch",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setAnonymousIdentity",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setCaCertificate",
+      "descriptor": "(Ljava/security/cert/X509Certificate;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setCaCertificates",
+      "descriptor": "([Ljava/security/cert/X509Certificate;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setClientKeyEntry",
+      "descriptor": "(Ljava/security/PrivateKey;Ljava/security/cert/X509Certificate;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setClientKeyEntryWithCertificateChain",
+      "descriptor": "(Ljava/security/PrivateKey;[Ljava/security/cert/X509Certificate;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setClientKeyPairAlias",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setDecoratedIdentityPrefix",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setDomainSuffixMatch",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setEapMethod",
+      "descriptor": "(I)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setIdentity",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setMinimumTlsVersion",
+      "descriptor": "(I)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setPassword",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setPhase2Method",
+      "descriptor": "(I)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setPlmn",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setRealm",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "setSubjectMatch",
+      "descriptor": "(Ljava/lang/String;)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "kind": "field",
+      "name": "AKA",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "kind": "field",
+      "name": "AKA_PRIME",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "kind": "field",
+      "name": "GTC",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "kind": "field",
+      "name": "MSCHAP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "kind": "field",
+      "name": "MSCHAPV2",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "kind": "field",
+      "name": "NONE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "kind": "field",
+      "name": "PAP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "kind": "field",
+      "name": "SIM",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "AKA",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "AKA_PRIME",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "NONE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "PEAP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "PWD",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "SIM",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "TLS",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "TTLS",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "UNAUTH_TLS",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    },
+    {
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "kind": "field",
+      "name": "WAPI_CERT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "base_status": "declaring_class_absent",
+      "base_owner": null,
+      "candidate_status": "compatible"
+    }
+  ],
+  "constants": [
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "RANDOMIZATION_AUTO",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "RANDOMIZATION_NONE",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "RANDOMIZATION_NON_PERSISTENT",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "RANDOMIZATION_PERSISTENT",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 13,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_DPP",
+      "sdk_value": 13
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_EAP",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 5,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_EAP_SUITE_B",
+      "sdk_value": 5
+    },
+    {
+      "candidate_value": 9,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_EAP_WPA3_ENTERPRISE",
+      "sdk_value": 9
+    },
+    {
+      "candidate_value": 5,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_EAP_WPA3_ENTERPRISE_192_BIT",
+      "sdk_value": 5
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_OPEN",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 6,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_OWE",
+      "sdk_value": 6
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_PSK",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 4,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_SAE",
+      "sdk_value": 4
+    },
+    {
+      "candidate_value": 8,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_WAPI_CERT",
+      "sdk_value": 8
+    },
+    {
+      "candidate_value": 7,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_WAPI_PSK",
+      "sdk_value": 7
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration",
+      "descriptor": "I",
+      "match": true,
+      "name": "SECURITY_TYPE_WEP",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 17,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "DPP",
+      "sdk_value": 17
+    },
+    {
+      "candidate_value": 15,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "FILS_SHA256",
+      "sdk_value": 15
+    },
+    {
+      "candidate_value": 16,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "FILS_SHA384",
+      "sdk_value": 16
+    },
+    {
+      "candidate_value": 7,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "FT_EAP",
+      "sdk_value": 7
+    },
+    {
+      "candidate_value": 6,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "FT_PSK",
+      "sdk_value": 6
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "IEEE8021X",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "NONE",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 5,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "OSEN",
+      "sdk_value": 5
+    },
+    {
+      "candidate_value": 9,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "OWE",
+      "sdk_value": 9
+    },
+    {
+      "candidate_value": 8,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "SAE",
+      "sdk_value": 8
+    },
+    {
+      "candidate_value": 10,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "SUITE_B_192",
+      "sdk_value": 10
+    },
+    {
+      "candidate_value": 14,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "WAPI_CERT",
+      "sdk_value": 14
+    },
+    {
+      "candidate_value": 13,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "WAPI_PSK",
+      "sdk_value": 13
+    },
+    {
+      "candidate_value": 4,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "WPA2_PSK",
+      "sdk_value": 4
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "WPA_EAP",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 12,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "WPA_EAP_SHA256",
+      "sdk_value": 12
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "WPA_PSK",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 11,
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "I",
+      "match": true,
+      "name": "WPA_PSK_SHA256",
+      "sdk_value": 11
+    },
+    {
+      "candidate_value": "key_mgmt",
+      "class": "android.net.wifi.WifiConfiguration$KeyMgmt",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "varName",
+      "sdk_value": "key_mgmt"
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration$GroupMgmtCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "BIP_CMAC_256",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration$GroupMgmtCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "BIP_GMAC_128",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiConfiguration$GroupMgmtCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "BIP_GMAC_256",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration$Status",
+      "descriptor": "I",
+      "match": true,
+      "name": "CURRENT",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration$Status",
+      "descriptor": "I",
+      "match": true,
+      "name": "DISABLED",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiConfiguration$Status",
+      "descriptor": "I",
+      "match": true,
+      "name": "ENABLED",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "descriptor": "I",
+      "match": true,
+      "name": "RSN",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "descriptor": "I",
+      "match": true,
+      "name": "WAPI",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "descriptor": "I",
+      "match": true,
+      "name": "WPA",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": "proto",
+      "class": "android.net.wifi.WifiConfiguration$Protocol",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "varName",
+      "sdk_value": "proto"
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "CCMP",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 7,
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "GCMP_128",
+      "sdk_value": 7
+    },
+    {
+      "candidate_value": 5,
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "GCMP_256",
+      "sdk_value": 5
+    },
+    {
+      "candidate_value": 6,
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "SMS4",
+      "sdk_value": 6
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "TKIP",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "WEP104",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "WEP40",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": "group",
+      "class": "android.net.wifi.WifiConfiguration$GroupCipher",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "varName",
+      "sdk_value": "group"
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "CCMP",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 5,
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "GCMP_128",
+      "sdk_value": 5
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "GCMP_256",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "NONE",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 4,
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "SMS4",
+      "sdk_value": 4
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "descriptor": "I",
+      "match": true,
+      "name": "TKIP",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": "pairwise",
+      "class": "android.net.wifi.WifiConfiguration$PairwiseCipher",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "varName",
+      "sdk_value": "pairwise"
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "descriptor": "I",
+      "match": true,
+      "name": "LEAP",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "descriptor": "I",
+      "match": true,
+      "name": "OPEN",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "descriptor": "I",
+      "match": true,
+      "name": "SAE",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "descriptor": "I",
+      "match": true,
+      "name": "SHARED",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": "auth_alg",
+      "class": "android.net.wifi.WifiConfiguration$AuthAlgorithm",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "varName",
+      "sdk_value": "auth_alg"
+    },
+    {
+      "candidate_value": "android.net.wifi.extra.WAPI_AS_CERTIFICATE_DATA",
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "EXTRA_WAPI_AS_CERTIFICATE_DATA",
+      "sdk_value": "android.net.wifi.extra.WAPI_AS_CERTIFICATE_DATA"
+    },
+    {
+      "candidate_value": "android.net.wifi.extra.WAPI_AS_CERTIFICATE_NAME",
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "EXTRA_WAPI_AS_CERTIFICATE_NAME",
+      "sdk_value": "android.net.wifi.extra.WAPI_AS_CERTIFICATE_NAME"
+    },
+    {
+      "candidate_value": "android.net.wifi.extra.WAPI_USER_CERTIFICATE_DATA",
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "EXTRA_WAPI_USER_CERTIFICATE_DATA",
+      "sdk_value": "android.net.wifi.extra.WAPI_USER_CERTIFICATE_DATA"
+    },
+    {
+      "candidate_value": "android.net.wifi.extra.WAPI_USER_CERTIFICATE_NAME",
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "EXTRA_WAPI_USER_CERTIFICATE_NAME",
+      "sdk_value": "android.net.wifi.extra.WAPI_USER_CERTIFICATE_NAME"
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "I",
+      "match": true,
+      "name": "TLS_V1_0",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "I",
+      "match": true,
+      "name": "TLS_V1_1",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "I",
+      "match": true,
+      "name": "TLS_V1_2",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "I",
+      "match": true,
+      "name": "TLS_V1_3",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": "WAPIAS_",
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "WAPI_AS_CERTIFICATE",
+      "sdk_value": "WAPIAS_"
+    },
+    {
+      "candidate_value": "WAPIUSR_",
+      "class": "android.net.wifi.WifiEnterpriseConfig",
+      "descriptor": "Ljava/lang/String;",
+      "match": true,
+      "name": "WAPI_USER_CERTIFICATE",
+      "sdk_value": "WAPIUSR_"
+    },
+    {
+      "candidate_value": 6,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "descriptor": "I",
+      "match": true,
+      "name": "AKA",
+      "sdk_value": 6
+    },
+    {
+      "candidate_value": 7,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "descriptor": "I",
+      "match": true,
+      "name": "AKA_PRIME",
+      "sdk_value": 7
+    },
+    {
+      "candidate_value": 4,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "descriptor": "I",
+      "match": true,
+      "name": "GTC",
+      "sdk_value": 4
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "descriptor": "I",
+      "match": true,
+      "name": "MSCHAP",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "descriptor": "I",
+      "match": true,
+      "name": "MSCHAPV2",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "descriptor": "I",
+      "match": true,
+      "name": "NONE",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "descriptor": "I",
+      "match": true,
+      "name": "PAP",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 5,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Phase2",
+      "descriptor": "I",
+      "match": true,
+      "name": "SIM",
+      "sdk_value": 5
+    },
+    {
+      "candidate_value": 5,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "AKA",
+      "sdk_value": 5
+    },
+    {
+      "candidate_value": 6,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "AKA_PRIME",
+      "sdk_value": 6
+    },
+    {
+      "candidate_value": -1,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "NONE",
+      "sdk_value": -1
+    },
+    {
+      "candidate_value": 0,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "PEAP",
+      "sdk_value": 0
+    },
+    {
+      "candidate_value": 3,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "PWD",
+      "sdk_value": 3
+    },
+    {
+      "candidate_value": 4,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "SIM",
+      "sdk_value": 4
+    },
+    {
+      "candidate_value": 1,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "TLS",
+      "sdk_value": 1
+    },
+    {
+      "candidate_value": 2,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "TTLS",
+      "sdk_value": 2
+    },
+    {
+      "candidate_value": 7,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "UNAUTH_TLS",
+      "sdk_value": 7
+    },
+    {
+      "candidate_value": 8,
+      "class": "android.net.wifi.WifiEnterpriseConfig$Eap",
+      "descriptor": "I",
+      "match": true,
+      "name": "WAPI_CERT",
+      "sdk_value": 8
+    }
+  ],
+  "ports": [
+    {
+      "path": "app/java/android/net/wifi/WifiConfiguration.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/WifiConfiguration.java",
+      "upstream_sha256": "d1585fa9ab0ca3a9c4837920fd7e471df691fd9e0aae522b8c30f7fd9a75dac1",
+      "ported_sha256": "cb22a3d89630fb8e181a78a3c7a849e74b456854b0d006eab0a5049b7ef30bdf"
+    },
+    {
+      "path": "app/java/android/net/wifi/WifiEnterpriseConfig.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/WifiEnterpriseConfig.java",
+      "upstream_sha256": "45bf5d988b89287e455342a30cb93b0778419d5b0bfdd1e8edc728f136ef03b3",
+      "ported_sha256": "7c7f53a802c07704d42700aa2db3a185c4753368c4fbeb3800d0b3dd9539deb0"
+    },
+    {
+      "path": "app/java/android/net/wifi/SecurityParams.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/SecurityParams.java",
+      "upstream_sha256": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060",
+      "ported_sha256": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060"
+    },
+    {
+      "path": "app/java/android/net/wifi/ParcelUtil.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/ParcelUtil.java",
+      "upstream_sha256": "339abf2b7118066a53c8517f84bbf83b0c8097c97ffe271e8cd3e355a31e520a",
+      "ported_sha256": "a35e0d2b112833ae5e8eb74b266f845bb40f6249d473f841e11e29f2d0f454c8"
+    },
+    {
+      "path": "app/java/android/net/wifi/OuiKeyedData.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/OuiKeyedData.java",
+      "upstream_sha256": "17c8a66b116333ce2cb454909676e6296e26496d142932fb92524a61919b6089",
+      "ported_sha256": "670ea134264cbc80ae7eca2f7beed833475c9aa6f03443cc2ee9582c76b0734a"
+    },
+    {
+      "path": "app/java/android/net/wifi/util/PersistableBundleUtils.java",
+      "upstream_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/util/PersistableBundleUtils.java",
+      "upstream_sha256": "82a38ffde5621d1a0c7c6b8c71ce535502f8c71a68397eb8586742f171094730",
+      "ported_sha256": "82a38ffde5621d1a0c7c6b8c71ce535502f8c71a68397eb8586742f171094730"
+    }
+  ],
+  "reference_only_sources": [
+    {
+      "name": "Environment.java",
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/util/Environment.java?format=TEXT",
+      "sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d"
+    },
+    {
+      "name": "flags-wifi_flags.aconfig",
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/flags/wifi_flags.aconfig?format=TEXT",
+      "sha256": "4b1c143125721e07d24c664496958f16134d5d2f72b2376e27fdd573579666f0"
+    },
+    {
+      "name": "WifiInfo.java",
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/refs/tags/android-16.0.0_r4/framework/java/android/net/wifi/WifiInfo.java?format=TEXT",
+      "sha256": "9b6a82a813cb612866e2d11448016622fcd62c8a290687bcf2db5a36b3bc0da2"
+    },
+    {
+      "name": "SdkLevel.java",
+      "url": "https://android.googlesource.com/platform/frameworks/libs/modules-utils/+/refs/tags/android-16.0.0_r4/java/com/android/modules/utils/build/SdkLevel.java?format=TEXT",
+      "sha256": "74580e2fcc7cac5b405ae727e90a1ce1530e02d944cee375513ce29ad785b929"
+    }
+  ],
+  "limits": [
+    "Public SDK36 selected value family only, not all Wi-Fi APIs or issue56 A02.",
+    "Hidden WifiConfiguration.isMetered(config, WifiInfo) requires an unported mutable WifiInfo hint.",
+    "API37 multi-user feature is outside the API36 runtime profile.",
+    "Descriptors and DEX definitions do not alone prove actual ordered bootclasspath behavior."
+  ]
+}

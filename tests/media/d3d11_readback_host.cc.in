@@ -1,0 +1,546 @@
+// Explicit D3D device/texture/context boundary; production methods follow below.
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <new>
+#include <string>
+#include <vector>
+
+namespace allocation {
+bool enabled = false;
+size_t calls = 0, bytes = 0, live = 0, peak = 0, copies = 0, copied = 0;
+struct alignas(std::max_align_t) Header { size_t size; bool tracked; };
+struct Pause {
+  bool previous = enabled;
+  Pause() { enabled = false; }
+  ~Pause() { enabled = previous; }
+};
+void Start() {
+  if (live != 0) std::abort();
+  calls = bytes = peak = copies = copied = 0;
+  enabled = true;
+}
+void Stop() { enabled = false; }
+}
+
+[[gnu::noinline]] void* operator new(size_t size) {
+  if (size > std::numeric_limits<size_t>::max() - sizeof(allocation::Header)) std::abort();
+  auto* header = static_cast<allocation::Header*>(std::malloc(sizeof(allocation::Header) + size));
+  if (header == nullptr) std::abort();
+  header->size = size;
+  header->tracked = allocation::enabled;
+  if (header->tracked) {
+    ++allocation::calls;
+    allocation::bytes += size;
+    allocation::live += size;
+    allocation::peak = std::max(allocation::peak, allocation::live);
+  }
+  return header + 1;
+}
+[[gnu::noinline]] void operator delete(void* pointer) noexcept {
+  if (pointer == nullptr) return;
+  auto* header = static_cast<allocation::Header*>(pointer) - 1;
+  if (header->tracked) allocation::live -= header->size;
+  std::free(header);
+}
+void* operator new[](size_t size) { return ::operator new(size); }
+void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
+void operator delete(void* pointer, size_t) noexcept { ::operator delete(pointer); }
+void operator delete[](void* pointer, size_t) noexcept { ::operator delete(pointer); }
+
+namespace {
+size_t checks = 0, failures = 0;
+void Check(bool good, const char* why) {
+  ++checks;
+  if (!good) {
+    ++failures;
+    std::fprintf(stderr, "FAIL D3D11 readback: %s\n", why);
+  }
+}
+void* TrackedCopy(void* destination, const void* source, size_t size) {
+  if (allocation::enabled) {
+    ++allocation::copies;
+    allocation::copied += size;
+  }
+  return std::memcpy(destination, source, size);
+}
+}
+
+using UINT = uint32_t;
+using DWORD = uint32_t;
+using BYTE = uint8_t;
+using LONGLONG = int64_t;
+using HRESULT = int32_t;
+constexpr HRESULT S_OK = 0, E_FAIL = -1;
+bool SUCCEEDED(HRESULT hr) { return hr >= 0; }
+bool FAILED(HRESULT hr) { return hr < 0; }
+constexpr UINT DXGI_FORMAT_NV12 = 103, D3D11_USAGE_STAGING = 3;
+constexpr UINT D3D11_CPU_ACCESS_READ = 0x20000, D3D11_MAP_READ = 1;
+struct D3D11_TEXTURE2D_DESC {
+  UINT Width = 0, Height = 0, MipLevels = 1, ArraySize = 1, Format = DXGI_FORMAT_NV12;
+  struct { UINT Count = 1, Quality = 0; } SampleDesc;
+  UINT Usage = 0, BindFlags = 0, CPUAccessFlags = 0, MiscFlags = 0;
+};
+struct D3D11_MAPPED_SUBRESOURCE { void* pData = nullptr; UINT RowPitch = 0, DepthPitch = 0; };
+size_t live_textures = 0;
+struct ID3D11Texture2D {
+  D3D11_TEXTURE2D_DESC description;
+  UINT pitch;
+  std::vector<uint8_t> pixels;
+  bool mapped = false;
+  unsigned references = 1;
+  explicit ID3D11Texture2D(D3D11_TEXTURE2D_DESC desc, UINT row_pitch)
+      : description(desc), pitch(row_pitch), pixels(static_cast<size_t>(row_pitch) * (desc.Height + desc.Height / 2), 0xac) {
+    ++live_textures;
+  }
+  ~ID3D11Texture2D() { Check(!mapped, "texture is released unmapped"); --live_textures; }
+  void GetDesc(D3D11_TEXTURE2D_DESC* out) { *out = description; }
+  void AddRef() { ++references; }
+  void Release() { if (--references == 0) delete this; }
+};
+struct ID3D11Device {
+  bool fail_create = false;
+  unsigned creates = 0;
+  HRESULT CreateTexture2D(const D3D11_TEXTURE2D_DESC* desc, const void* initial, ID3D11Texture2D** out) {
+    allocation::Pause pause;  // GPU storage is an adapter, excluded from CPU-output counts.
+    ++creates;
+    Check(initial == nullptr && desc->Usage == D3D11_USAGE_STAGING &&
+              desc->CPUAccessFlags == D3D11_CPU_ACCESS_READ && desc->BindFlags == 0 &&
+              desc->MipLevels == 1 && desc->ArraySize == 1 && desc->Format == DXGI_FORMAT_NV12,
+          "production staging has CPU read access and one NV12 subresource");
+    *out = nullptr;
+    if (fail_create) return E_FAIL;
+    *out = new ID3D11Texture2D(*desc, desc->Width);
+    return S_OK;
+  }
+};
+struct ID3D11DeviceContext {
+  bool fail_map = false, null_map = false;
+  UINT forced_pitch = 0;
+  unsigned copies = 0, maps = 0, unmaps = 0;
+  void CopyResource(ID3D11Texture2D* destination, ID3D11Texture2D* source) {
+    allocation::Pause pause;
+    ++copies;
+    Check(!destination->mapped && !source->mapped, "copy only unmapped resources");
+    Check(destination->description.Width == source->description.Width &&
+              destination->description.Height == source->description.Height &&
+              source->description.ArraySize == 1 && source->description.MipLevels == 1 &&
+              source->description.Format == DXGI_FORMAT_NV12,
+          "resource copy preserves size and NV12 subresource topology");
+    destination->pitch = source->pitch;
+    destination->pixels = source->pixels;
+  }
+  HRESULT Map(ID3D11Texture2D* texture, UINT subresource, UINT access, UINT flags,
+              D3D11_MAPPED_SUBRESOURCE* mapped) {
+    ++maps;
+    Check(texture != nullptr && subresource == 0 && access == D3D11_MAP_READ && flags == 0,
+          "map exact readback subresource for read");
+    Check(!texture->mapped, "no nested mapping of the staging resource");
+    if (fail_map) return E_FAIL;
+    texture->mapped = true;
+    mapped->pData = null_map ? nullptr : texture->pixels.data();
+    mapped->RowPitch = forced_pitch != 0 ? forced_pitch : texture->pitch;
+    mapped->DepthPitch = 1;  // Texture2D's DepthPitch is not a storage-size contract.
+    return S_OK;
+  }
+  void Unmap(ID3D11Texture2D* texture, UINT subresource) {
+    ++unmaps;
+    Check(texture != nullptr && texture->mapped && subresource == 0, "unmap successful mapping exactly once");
+    texture->mapped = false;
+    // Invalidate the old image, making escaped output aliases observable.
+    std::fill(texture->pixels.begin(), texture->pixels.end(), 0xe3);
+  }
+};
+
+// Media Foundation's ownership/control boundary for the complete Decode method.
+// Decoded texture bytes and timing are supplied explicitly by the fixture.
+constexpr HRESULT MF_E_NOTACCEPTING = -2, MF_E_TRANSFORM_NEED_MORE_INPUT = -3,
+                  MF_E_TRANSFORM_STREAM_CHANGE = -4;
+constexpr int kIidIMFGetService = 1, kMrVideoAccelerationService = 2,
+              kIidID3D11Texture2D = 3, kSampleDiscontinuity = 4, TRUE = 1;
+size_t live_buffers = 0, live_samples = 0, live_services = 0, live_events = 0;
+struct IMFGetService {
+  ID3D11Texture2D* texture;
+  explicit IMFGetService(ID3D11Texture2D* value) : texture(value) { texture->AddRef(); ++live_services; }
+  HRESULT GetService(int service, int iid, void** out) {
+    Check(service == kMrVideoAccelerationService && iid == kIidID3D11Texture2D, "decode requests the existing texture service");
+    texture->AddRef(); *out = texture; return S_OK;
+  }
+  void Release() { texture->Release(); --live_services; delete this; }
+};
+struct IMFMediaBuffer {
+  unsigned references = 1;
+  ID3D11Texture2D* texture = nullptr;
+  std::vector<uint8_t> bytes;
+  explicit IMFMediaBuffer(DWORD size) : bytes(size) { ++live_buffers; }
+  explicit IMFMediaBuffer(ID3D11Texture2D* value) : texture(value) { texture->AddRef(); ++live_buffers; }
+  HRESULT Lock(BYTE** out, DWORD*, DWORD* length) { *out = bytes.data(); if (length != nullptr) *length = static_cast<DWORD>(bytes.size()); return S_OK; }
+  void Unlock() {}
+  void SetCurrentLength(DWORD size) { Check(size == bytes.size(), "input sample length preserved"); }
+  HRESULT QueryInterface(int iid, void** out) {
+    Check(iid == kIidIMFGetService, "decode asks for texture acquisition service");
+    if (texture == nullptr) return E_FAIL;
+    *out = new IMFGetService(texture); return S_OK;
+  }
+  void AddRef() { ++references; }
+  void Release() {
+    if (--references != 0) return;
+    if (texture != nullptr) texture->Release();
+    --live_buffers; delete this;
+  }
+};
+struct IMFSample {
+  IMFMediaBuffer* buffer = nullptr;
+  int64_t time = 0;
+  IMFSample() { ++live_samples; }
+  void AddBuffer(IMFMediaBuffer* value) { Check(buffer == nullptr, "one sample buffer admitted"); buffer = value; buffer->AddRef(); }
+  void SetSampleTime(int64_t value) { time = value; }
+  void GetSampleTime(LONGLONG* out) { *out = time; }
+  void SetUINT32(int, int) {}
+  HRESULT GetBufferByIndex(DWORD index, IMFMediaBuffer** out) {
+    Check(index == 0 && buffer != nullptr, "decode obtains the output's first buffer");
+    buffer->AddRef(); *out = buffer; return S_OK;
+  }
+  void Release() { if (buffer != nullptr) buffer->Release(); --live_samples; delete this; }
+};
+struct OutputEvents {
+  OutputEvents() { ++live_events; }
+  void Release() { --live_events; delete this; }
+};
+struct MFT_OUTPUT_DATA_BUFFER { IMFSample* pSample = nullptr; OutputEvents* pEvents = nullptr; };
+struct IMFTransform {
+  IMFSample* pending = nullptr;
+  ~IMFTransform() { if (pending != nullptr) pending->Release(); }
+  HRESULT ProcessInput(DWORD, IMFSample*, DWORD) { return S_OK; }
+  HRESULT ProcessOutput(DWORD, DWORD count, MFT_OUTPUT_DATA_BUFFER* output, DWORD*) {
+    Check(count == 1, "decode asks for one output");
+    if (pending == nullptr) return MF_E_TRANSFORM_NEED_MORE_INPUT;
+    output->pEvents = new OutputEvents;
+    if (output->pSample == nullptr) output->pSample = pending;
+    else {
+      if (output->pSample->buffer != nullptr) output->pSample->buffer->Release();
+      output->pSample->buffer = pending->buffer;
+      output->pSample->time = pending->time;
+      pending->buffer = nullptr;
+      pending->Release();
+    }
+    pending = nullptr;
+    return S_OK;
+  }
+  void Queue(ID3D11Texture2D* texture, int64_t time) {
+    Check(pending == nullptr, "fixture has one pending output");
+    pending = new IMFSample;
+    auto* buffer = new IMFMediaBuffer(texture);
+    pending->AddBuffer(buffer);
+    buffer->Release();
+    pending->time = time;
+  }
+};
+struct MfApi {
+  HRESULT CreateMemoryBuffer(DWORD size, IMFMediaBuffer** out) const { *out = new IMFMediaBuffer(size); return S_OK; }
+  HRESULT CreateSample(IMFSample** out) const { *out = new IMFSample; return S_OK; }
+};
+const MfApi& Mf() { static MfApi api; return api; }
+#define MEDIA_LOGE(...) ((void)0)
+
+namespace gesher::media {
+@FRAME@
+struct Sample { std::vector<uint8_t> data; int64_t time_us = 0; };
+class D3D11VideoDecoder {
+ public:
+  ID3D11Device* device_ = nullptr;
+  ID3D11DeviceContext* context_ = nullptr;
+  ID3D11Texture2D* staging_texture_ = nullptr;
+  int staging_width_ = 0, staging_height_ = 0;
+  int width_ = 0, height_ = 0;
+  ID3D11Texture2D* current_texture_ = nullptr;
+  void* mft_ = nullptr;
+  std::vector<uint8_t> prefix_;
+  bool prefix_sent_ = false, discontinuity_ = false, provides_samples_ = true;
+  DWORD out_size_ = 0;
+  struct Nv12Readback;
+  bool MapNv12(ID3D11Texture2D*, Nv12Readback*);
+  bool EnsureStagingTexture(int, int);
+  bool ExtractNv12(ID3D11Texture2D*, std::vector<uint8_t>*, int*, int*, int*);
+  bool ExtractRgba(ID3D11Texture2D*, std::vector<uint32_t>*, int*, int*);
+  bool ExtractFrame(ID3D11Texture2D*, int64_t, VideoFrame*);
+  bool Decode(const Sample&, std::vector<VideoFrame>*);
+  void Drain(std::vector<VideoFrame>*) { std::abort(); }  // NOTACCEPTING is outside this boundary fixture.
+  ~D3D11VideoDecoder() {
+    if (staging_texture_ != nullptr) staging_texture_->Release();
+    if (current_texture_ != nullptr) current_texture_->Release();
+  }
+};
+#define memcpy TrackedCopy
+@ALLOCATE@
+@CONVERT@
+@STAGING@
+@EXTRACT@
+@DECODE@
+#undef memcpy
+}
+
+namespace {
+using gesher::media::D3D11VideoDecoder;
+using gesher::media::VideoFrame;
+struct Fixture {
+  ID3D11Device device;
+  ID3D11DeviceContext context;
+  D3D11VideoDecoder decoder;
+  Fixture() { decoder.device_ = &device; decoder.context_ = &context; }
+};
+uint32_t random_state = 0x93e1b6f5;
+uint32_t Random() { random_state ^= random_state << 13; random_state ^= random_state >> 17; return random_state ^= random_state << 5; }
+ID3D11Texture2D* Image(UINT width, UINT height, UINT padding) {
+  D3D11_TEXTURE2D_DESC desc;
+  desc.Width = width; desc.Height = height;
+  auto* image = new ID3D11Texture2D(desc, width + padding);
+  for (UINT y = 0; y < height + height / 2; ++y) {
+    for (UINT x = 0; x < width; ++x) image->pixels[static_cast<size_t>(y) * image->pitch + x] = static_cast<uint8_t>(Random());
+  }
+  return image;
+}
+int Floor256(int value) { return value >= 0 ? value / 256 : -((-value + 255) / 256); }
+uint32_t Rgba(uint8_t y, uint8_t u, uint8_t v) {
+  const int luma = 298 * (static_cast<int>(y) - 16);
+  const int cb = static_cast<int>(u) - 128, cr = static_cast<int>(v) - 128;
+  const auto clamp = [](int value) -> uint32_t { return value < 0 ? 0 : value > 255 ? 255 : static_cast<uint32_t>(value); };
+  return 0xff000000u | clamp(Floor256(luma + 409 * cr + 128)) |
+      (clamp(Floor256(luma - 100 * cb - 208 * cr + 128)) << 8) |
+      (clamp(Floor256(luma + 516 * cb + 128)) << 16);
+}
+void VerifyImage(Fixture& f, ID3D11Texture2D* image, int64_t timestamp) {
+  const int w = static_cast<int>(image->description.Width), h = static_cast<int>(image->description.Height);
+  const size_t luma = static_cast<size_t>(w) * h, chroma = luma / 4;
+  const auto original = image->pixels;
+  VideoFrame frame;
+  std::vector<uint8_t> nv12;
+  std::vector<uint32_t> rgba;
+  int width = -7, height = -7, stride = -7;
+  const unsigned initial_maps = f.context.maps, initial_unmaps = f.context.unmaps;
+  Check(f.decoder.ExtractFrame(image, timestamp, &frame), "I420 conversion succeeds");
+  Check(frame.width == w && frame.height == h && frame.stride_y == w && frame.stride_uv == w / 2 &&
+            frame.crop_left == 0 && frame.crop_top == 0 && frame.crop_right == w - 1 &&
+            frame.crop_bottom == h - 1 && frame.time_us == timestamp,
+        "frame dimensions, tight planes, crop and timestamp survive conversion");
+  Check(frame.data.size() == luma + 2 * chroma, "I420 output size");
+  Check(f.decoder.ExtractNv12(image, &nv12, &width, &height, &stride), "explicit owned NV12 extraction succeeds");
+  Check(width == w && height == h && stride == w && nv12.size() == luma * 3 / 2, "NV12 output geometry");
+  Check(f.decoder.ExtractRgba(image, &rgba, &width, &height), "RGBA conversion succeeds");
+  Check(width == w && height == h && rgba.size() == luma, "RGBA output geometry");
+  bool exact_y = true, exact_uv = true, exact_nv12 = true, exact_rgba = true;
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const size_t pixel = static_cast<size_t>(y) * w + x;
+      const uint8_t y_value = original[static_cast<size_t>(y) * image->pitch + x];
+      const size_t uv_at = static_cast<size_t>(h + y / 2) * image->pitch + (x & ~1);
+      exact_y &= frame.data[pixel] == y_value;
+      exact_nv12 &= nv12[pixel] == y_value;
+      exact_rgba &= rgba[pixel] == Rgba(y_value, original[uv_at], original[uv_at + 1]);
+    }
+  }
+  for (int y = 0; y < h / 2; ++y) {
+    for (int x = 0; x < w / 2; ++x) {
+      const size_t pixel = static_cast<size_t>(y) * (w / 2) + x;
+      const size_t source = static_cast<size_t>(h + y) * image->pitch + 2 * x;
+      exact_uv &= frame.data[luma + pixel] == original[source] && frame.data[luma + chroma + pixel] == original[source + 1];
+      exact_nv12 &= nv12[luma + 2 * pixel] == original[source] && nv12[luma + 2 * pixel + 1] == original[source + 1];
+    }
+  }
+  Check(exact_y, "all I420 luma bytes match independent source oracle");
+  Check(exact_uv, "all I420 chroma bytes match independent source oracle");
+  Check(exact_nv12, "owned NV12 includes no mapped-row padding");
+  Check(exact_rgba, "RGBA fixed-point arithmetic matches independent floor/clamp oracle");
+  Check(image->pixels == original, "source texture is unchanged");
+  Check(f.context.maps == initial_maps + 3 && f.context.unmaps == initial_unmaps + 3 &&
+            !f.decoder.staging_texture_->mapped, "all outputs own bytes beyond matched Unmap");
+}
+void ExistingFailures() {
+  Fixture f;
+  auto* image = Image(16, 12, 32);
+  VideoFrame frame; frame.Allocate(2, 2); frame.time_us = -9;
+  frame.data.assign(6, 0x4e);
+  std::vector<uint8_t> bytes(9, 0x5c);
+  std::vector<uint32_t> rgba(8, 0xaabbccddu);
+  int w = -11, h = -12, stride = -13;
+  f.device.fail_create = true;
+  Check(!f.decoder.ExtractFrame(image, 123, &frame), "staging creation failure reaches caller");
+  Check(f.context.maps == 0 && f.context.unmaps == 0, "creation failure never maps");
+  f.device.fail_create = false;
+  f.context.fail_map = true;
+  Check(!f.decoder.ExtractFrame(image, 123, &frame), "Map failure reaches I420 caller");
+  Check(!f.decoder.ExtractNv12(image, &bytes, &w, &h, &stride), "Map failure reaches NV12 caller");
+  Check(!f.decoder.ExtractRgba(image, &rgba, &w, &h), "Map failure reaches RGBA caller");
+  Check(frame.width == 2 && frame.height == 2 && frame.time_us == -9 && frame.data == std::vector<uint8_t>(6, 0x4e),
+        "failed readback leaves frame unchanged");
+  Check(bytes == std::vector<uint8_t>(9, 0x5c) && rgba == std::vector<uint32_t>(8, 0xaabbccddu) &&
+            w == -11 && h == -12 && stride == -13, "failed readback leaves outputs unchanged");
+  Check(f.context.maps == 3 && f.context.unmaps == 0, "failed Maps never Unmap");
+  f.context.fail_map = false;
+  Check(!f.decoder.ExtractFrame(nullptr, 0, &frame) && !f.decoder.ExtractFrame(image, 0, nullptr) &&
+            !f.decoder.ExtractNv12(nullptr, &bytes, nullptr, nullptr, nullptr) &&
+            !f.decoder.ExtractNv12(image, nullptr, nullptr, nullptr, nullptr), "existing null input errors preserved");
+  VerifyImage(f, image, std::numeric_limits<int64_t>::min());
+  image->Release();
+}
+void LayoutFailures() {
+  Fixture f;
+  auto* image = Image(16, 12, 16);
+  VideoFrame frame;
+  std::vector<uint8_t> nv12{0x5e};
+  std::vector<uint32_t> rgba{0x5e};
+  int width = -5, height = -6;
+  auto rejects = [&] {
+    Check(!f.decoder.ExtractFrame(image, 0, &frame), "invalid layout rejects I420 conversion");
+    Check(!f.decoder.ExtractRgba(image, &rgba, &width, &height), "invalid layout rejects RGBA conversion");
+    Check(!f.decoder.ExtractNv12(image, &nv12, &width, &height, nullptr), "invalid layout rejects owned NV12 extraction");
+    Check(frame.data.empty() && rgba == std::vector<uint32_t>{0x5e} && nv12 == std::vector<uint8_t>{0x5e} &&
+              width == -5 && height == -6, "invalid layout does not mutate destinations");
+  };
+  const auto valid = image->description;
+  for (int invalid = 0; invalid < 10; ++invalid) {
+    image->description = valid;
+    switch (invalid) {
+      case 0: image->description.Width = 0; break;
+      case 1: image->description.Height = 0; break;
+      case 2: image->description.Width = 15; break;
+      case 3: image->description.Height = 11; break;
+      case 4: image->description.Format = 28; break;
+      case 5: image->description.ArraySize = 2; break;
+      case 6: image->description.MipLevels = 2; break;
+      case 7: image->description.SampleDesc.Count = 2; break;
+      case 8: image->description.Width = 0xfffffffeu; break;
+      case 9: image->description.Height = 0xfffffffeu; break;
+    }
+    rejects();
+  }
+  Check(f.context.maps == 0 && f.context.copies == 0 && f.device.creates == 0,
+        "invalid texture descriptions never allocate, copy or map");
+  image->description = valid;
+  f.context.null_map = true;
+  rejects();
+  Check(f.context.maps == 3 && f.context.unmaps == 3, "successful null Map still unmaps");
+  f.context.null_map = false;
+  f.context.forced_pitch = 15;
+  rejects();
+  f.context.forced_pitch = 0x80000000u;
+  rejects();
+  Check(f.context.maps == 9 && f.context.unmaps == 9, "short/unrepresentable pitch still unmaps");
+  f.context.forced_pitch = 0;
+  Check(!f.decoder.ExtractRgba(image, nullptr, nullptr, nullptr), "null RGBA output rejected");
+  VerifyImage(f, image, std::numeric_limits<int64_t>::max());
+  image->Release();
+}
+void DecodeFailures() {
+  auto* image = Image(16, 12, 16);
+  for (bool provided : {false, true}) {
+    for (int failure = 0; failure < 3; ++failure) {
+      Fixture f;
+      IMFTransform transform;
+      f.decoder.mft_ = &transform;
+      f.decoder.provides_samples_ = provided;
+      f.decoder.out_size_ = 128;
+      f.context.fail_map = failure == 1;
+      if (failure == 2) image->description.ArraySize = 2;
+      transform.Queue(image, 123450);
+      gesher::media::Sample input;
+      input.data = {1, 2, 3, 4}; input.time_us = 12345;
+      std::vector<VideoFrame> frames(1);
+      frames.front().time_us = -77;
+      Check(f.decoder.Decode(input, &frames) == (failure == 0), "Decode propagates readback failure");
+      Check(frames.size() == (failure == 0 ? 2u : 1u) && frames.front().time_us == -77,
+            "failed readback never publishes an empty or replacement frame");
+      if (failure == 0) Check(frames.back().time_us == 12345 && frames.back().data.size() == 288,
+                              "Decode publishes successful conversion with sample timestamp");
+      Check(live_buffers == 0 && live_samples == 0 && live_services == 0 && live_events == 0,
+            "Decode releases sample, buffer, acquisition service and events on every outcome");
+      Check(image->references == 2, "only caller and decoder retain output texture after Decode");
+      image->description.ArraySize = 1;
+    }
+  }
+  Check(image->references == 1, "decoder teardown releases acquired texture");
+  image->Release();
+}
+volatile uint64_t output_checksum = 0;
+void Measurements(bool enforce, bool timings) {
+  constexpr int frames = 120, w = 1920, h = 1080;
+  constexpr size_t pixels = static_cast<size_t>(w) * h, i420_bytes = pixels * 3 / 2;
+  Fixture f;
+  auto* image = Image(w, h, 128);
+  VideoFrame reused;
+  std::vector<uint32_t> reused_rgba;
+  Check(f.decoder.ExtractFrame(image, 0, &reused) &&
+            f.decoder.ExtractRgba(image, &reused_rgba, nullptr, nullptr), "warm staging/output allocation");
+  for (int mode = 0; mode < 4; ++mode) {
+    const bool rgba = (mode & 1) != 0, reuse = (mode & 2) != 0;
+    allocation::Start();
+    const auto begin = std::chrono::steady_clock::now();
+    for (int i = 0; i < frames; ++i) {
+      if (rgba) {
+        std::vector<uint32_t> fresh;
+        auto& output = reuse ? reused_rgba : fresh;
+        Check(f.decoder.ExtractRgba(image, &output, nullptr, nullptr), "measured RGBA conversion succeeds");
+        output_checksum = output_checksum ^ output[static_cast<size_t>(i) * 7919 % output.size()];
+      } else {
+        VideoFrame fresh;
+        auto& output = reuse ? reused : fresh;
+        Check(f.decoder.ExtractFrame(image, i, &output), "measured I420 conversion succeeds");
+        output_checksum = output_checksum ^ output.data[static_cast<size_t>(i) * 7919 % output.data.size()];
+      }
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - begin;
+    allocation::Stop();
+    std::printf("MEASURE %s %s %dx%d frames=%d allocations=%zu bytes=%zu peak_bytes=%zu memcpy_calls=%zu memcpy_bytes=%zu\n",
+                rgba ? "RGBA" : "I420", reuse ? "reuse" : "fresh", w, h, frames,
+                allocation::calls, allocation::bytes, allocation::peak, allocation::copies, allocation::copied);
+    if (timings) std::printf("HOST_CPU %s %s total_ms=%.3f (adapter includes RAM copy/poison; no GPU)\n",
+                rgba ? "RGBA" : "I420", reuse ? "reuse" : "fresh",
+                std::chrono::duration<double, std::milli>(elapsed).count());
+    Check(allocation::live == 0, "measured temporary allocations all retire");
+    if (enforce) {
+      Check(allocation::calls == (reuse ? 0 : frames), "only final destination allocates");
+      const size_t final_bytes = rgba ? pixels * sizeof(uint32_t) : i420_bytes;
+      Check(allocation::bytes == (reuse ? 0 : frames * final_bytes), "no intermediate NV12 allocation bytes");
+      Check(allocation::peak == (reuse ? 0 : final_bytes), "peak tracked CPU allocation is final output only");
+      Check(allocation::copied == (rgba ? 0 : frames * pixels), "no intermediate NV12 memcpy traffic");
+    }
+  }
+  image->Release();
+}
+}
+
+int main(int argc, char** argv) {
+  bool compatibility = false, measure = false, timings = false;
+  for (int i = 1; i < argc; ++i) {
+    const std::string argument = argv[i];
+    if (argument == "--compatibility-only") compatibility = true;
+    else if (argument == "--measure") measure = true;
+    else if (argument == "--benchmark") timings = true;
+    else { std::fprintf(stderr, "unknown argument: %s\n", argv[i]); return 2; }
+  }
+  {
+    Fixture f;
+    for (unsigned i = 0; i < 256; ++i) {
+      const UINT w = i == 0 ? 2 : 2 * (1 + Random() % 128);
+      const UINT h = i == 0 ? 2 : 2 * (1 + Random() % 64);
+      auto* image = Image(w, h, i % 4 == 0 ? 0 : Random() % 257);
+      VerifyImage(f, image, static_cast<int64_t>(i) - 128);
+      const unsigned creates = f.device.creates;
+      VerifyImage(f, image, -static_cast<int64_t>(i));
+      Check(f.device.creates == creates, "unchanged dimensions reuse staging texture");
+      image->Release();
+    }
+  }
+  ExistingFailures();
+  if (!compatibility) { LayoutFailures(); DecodeFailures(); }
+  Measurements(!measure, timings);
+  Check(live_textures == 0, "all host texture ownership retires");
+  std::printf("D3D11 readback: %zu checks, %zu failures%s\n", checks, failures,
+              compatibility ? " (valid-layout compatibility scope)" : "");
+  return failures != 0;
+}

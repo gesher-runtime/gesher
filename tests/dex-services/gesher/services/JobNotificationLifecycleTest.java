@@ -15,12 +15,14 @@ import android.content.ComponentName;
 import android.content.pm.ParceledListSlice;
 import android.content.res.AssetManager;
 import android.graphics.drawable.Icon;
+import android.net.Network;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.service.notification.StatusBarNotification;
 import com.gesher.server.NotificationManagerService;
+import com.gesher.server.WindowsHost;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -64,8 +66,9 @@ public final class JobNotificationLifecycleTest {
         final int id;
         final Object job, run;
         final IJobCallback callback;
-        JobHandle(int id, Object job, Object run) {
-            this.id = id; this.job = job; this.run = run;
+        final DelayedStop service;
+        JobHandle(int id, Object job, Object run, DelayedStop service) {
+            this.id = id; this.job = job; this.run = run; this.service = service;
             IBinder target = ((IJobCallback) run).asBinder();
             // Keep the real generated AIDL request/reply path, even in this one-process fixture.
             callback = IJobCallback.Stub.asInterface(new Binder() {
@@ -81,7 +84,11 @@ public final class JobNotificationLifecycleTest {
     /** A running service that acknowledges its stop only when the test explicitly asks. */
     private static final class DelayedStop extends IJobService.Stub {
         int stops;
-        @Override public void startJob(JobParameters parameters) { }
+        JobParameters started;
+        @Override public void startJob(JobParameters parameters) throws RemoteException {
+            started = parameters;
+            parameters.getCallback().acknowledgeStartMessage(parameters.getJobId(), true);
+        }
         @Override public void stopJob(JobParameters parameters) { stops++; }
         @Override public void onNetworkChanged(JobParameters parameters) { }
         @Override public void getTransferredDownloadBytes(JobParameters parameters, JobWorkItem item) { }
@@ -122,6 +129,9 @@ public final class JobNotificationLifecycleTest {
                 background.interrupt(); background.join(5000);
                 require(!background.isAlive(), "Fixture scheduler polling thread did not stop");
             }
+            // Keep a stable satisfying network when Windows sends asynchronous power events.
+            method(schedulerType, "setNetworkSnapshotForTest", String.class).invoke(scheduler,
+                    "internet\t1\nnet\t41\twifi\t1500\t100000000\t100000000\t0\t0\t0\t1\t1\n");
         }
         @SuppressWarnings("unchecked")
         JobHandle run(int id, boolean userInitiated) throws Exception {
@@ -136,7 +146,15 @@ public final class JobNotificationLifecycleTest {
                 ((List<Object>) field(schedulerType, "mJobs").get(scheduler)).add(job);
                 Field running = field(schedulerType, "mRunning"); running.setInt(scheduler, running.getInt(scheduler) + 1);
             }
-            return new JobHandle(id, job, run);
+            DelayedStop service = new DelayedStop();
+            method(runType, "started", IBinder.class).invoke(run, service.asBinder());
+            require(service.started != null && service.started.getJobId() == id,
+                    "JobService did not start " + id);
+            if (userInitiated) {
+                require(new Network(141).equals(service.started.getNetwork()),
+                        "JobService did not receive the satisfying fixture network for " + id);
+            }
+            return new JobHandle(id, job, run, service);
         }
         Notification notification(String channel) throws Exception {
             Notification value = new Notification();
@@ -178,6 +196,8 @@ public final class JobNotificationLifecycleTest {
     private static void contracts(Fixture f) throws Exception {
         JobHandle validation = f.run(701, true);
         validation.post(101, f.notification("jobs-a"), REMOVE);
+        // Recheck running jobs through the same listener invoked by Windows power events.
+        ((WindowsHost.Listener) f.scheduler).onWindowsEvents(WindowsHost.EVENT_POWER_STATUS);
         f.visible(101, true);
         require(f.inUse("jobs-a") && f.associations() == 1, "UIJ was not associated with its channel");
         rejects(NullPointerException.class, () -> validation.post(102, null, REMOVE), "Null notification accepted");
@@ -250,9 +270,8 @@ public final class JobNotificationLifecycleTest {
         JobHandle stopping = f.run(711, true), sharing = f.run(712, false);
         stopping.post(801, f.notification("jobs-a"), REMOVE);
         sharing.post(801, f.notification("jobs-a"), DETACH);
-        DelayedStop delayed = new DelayedStop(); field(f.runType, "service").set(stopping.run, delayed);
         ((IJobScheduler) f.scheduler).cancel("notification-contract", stopping.id);
-        require(delayed.stops == 1 && !((List<?>) field(f.schedulerType, "mJobs").get(f.scheduler)).contains(stopping.job)
+        require(stopping.service.stops == 1 && !((List<?>) field(f.schedulerType, "mJobs").get(f.scheduler)).contains(stopping.job)
                 && f.inUse("jobs-a") && f.associations() == 2, "Scheduled-list removal prematurely retired a running association");
         sharing.finish(); f.visible(801, true);
         removedKey = f.active(801).getKey();

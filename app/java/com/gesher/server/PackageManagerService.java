@@ -819,6 +819,28 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no radio to report.
         }
+        try {
+            addCameraFeatures(FEATURES, WindowsCamera.devices());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no cameras to report.
+        }
+    }
+
+    /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */
+    static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            List<WindowsCamera.Device> cameras) {
+        if (cameras == null || cameras.isEmpty()) return;
+        addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
+        for (WindowsCamera.Device camera : cameras) {
+            if (camera.isRearFacing()) addFeature(features, PackageManager.FEATURE_CAMERA);
+        }
+    }
+
+    private static void addFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, String name) {
+        android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
+        f.name = name;
+        features.put(name, f);
     }
 
     /** The Bluetooth features of {@code adapter} (none without a radio). */
@@ -896,21 +918,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                         Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException("canPackageQuery requires cross-user permission");
         }
-        Map<String, ApkPackage> packages;
-        boolean browser, gms, vending;
-        synchronized (this) {
-            packages = new LinkedHashMap<>(mPackages);
-            for (String removing : mRemoving.keySet()) packages.remove(removing);
-            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
-                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
-            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
-            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
-                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
-        }
-        PackageVisibility visibility = new PackageVisibility(packages, browser, gms, vending,
-                this::isProtectedBroadcast);
+        PackageVisibility visibility = packageVisibility();
         boolean missing = !visibility.contains(sourcePackageName)
                 || !visibility.canSee(callingUid, sourcePackageName);
         for (String target : targetPackageNames) {
@@ -928,6 +936,37 @@ public final class PackageManagerService extends IPackageManager.Default {
             result[i] = visibility.canSee(sourceUid, targetPackageNames[i]);
         }
         return result;
+    }
+
+    /** Resolves the authorized APK from the same snapshot used to check its visibility. */
+    ApkPackage getVisibleSearchPackage(int callingUid, String callerPackage, String packageName) {
+        if (callingUid < 0 || android.os.UserHandle.getUserId(callingUid) != 0) return null;
+        PackageVisibility visibility = packageVisibility();
+        if (!visibility.contains(callerPackage)) return null;
+        // Legacy Binder assigns 10000 to unrelated processes. The authenticated
+        // package still distinguishes their manifest queries and compatibility rules.
+        boolean visible = GmsSignatureSpoofing.isEnabled() || "android".equals(callerPackage)
+                ? visibility.uid(callerPackage) == callingUid && visibility.canSee(callingUid, packageName)
+                : visibility.canSeeFromPackage(callerPackage, packageName);
+        return visible ? visibility.apk(packageName) : null;
+    }
+
+    private PackageVisibility packageVisibility() {
+        Map<String, ApkPackage> packages;
+        boolean browser, gms, vending;
+        synchronized (this) {
+            packages = new LinkedHashMap<>(mPackages);
+            for (String removing : mRemoving.keySet()) packages.remove(removing);
+            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
+                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
+            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
+            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
+                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
+                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
+        }
+        return new PackageVisibility(packages, browser, gms, vending,
+                this::isProtectedBroadcast);
     }
 
     @Override
