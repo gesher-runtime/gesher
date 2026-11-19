@@ -116,6 +116,22 @@ public static class GesherWebViewWin32 {
 
 $webviewFailedBefore = $failed
 
+# Real COM marshal/unmarshal and retained-body lifetime, without a browser.
+if (Test-Path "$Dir/webview_owned_stream_test.exe") {
+  $streamProbe = Start-Process "$Dir/webview_owned_stream_test.exe" -NoNewWindow -PassThru
+  if (-not $streamProbe.WaitForExit(60000)) {
+    $streamProbe.Kill($true); $streamProbe.WaitForExit()
+    Write-Host 'FAIL  webview owned stream COM gate timed out'
+    $script:failed++
+  } elseif ($streamProbe.ExitCode -ne 0) {
+    Write-Host "FAIL  webview owned stream COM gate exit $($streamProbe.ExitCode)"
+    $script:failed++
+  }
+} else {
+  Write-Host 'FAIL  webview_owned_stream_test.exe is missing'
+  $script:failed++
+}
+
 # --- 1. The probe -------------------------------------------------------------
 if (-not $WebView2Version) {
   Write-Host 'FAIL  webview2: no WebView2 Runtime on this machine'

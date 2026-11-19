@@ -44,6 +44,13 @@ Check 'graphics: actual QueueSurface and Win32Surface geometry and damage contra
   $deepSurfaceOut
 } @('surface geometry contracts:', 'native window dispatch contracts:', 'checks, 0 failures')
 
+$deepSurfaceFramesOut = RunTimed "$Dir/media_surface_frame_recycling_test.exe" @() 90
+$deepSurfaceFramesCode = $LASTEXITCODE
+Check 'graphics: actual QueueSurface frame allocation and immutable-reader lifetimes' {
+  $global:LASTEXITCODE = $deepSurfaceFramesCode
+  $deepSurfaceFramesOut
+} @('native surface frame recycling:', 'checks, 0 failures')
+
 $deepAudioEnvironment = @{}
 foreach ($name in 'ANDROID_DATA', 'GESHER_AUDIO') {
   $deepAudioEnvironment[$name] = @{

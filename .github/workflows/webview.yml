@@ -104,6 +104,13 @@ jobs:
           cp out-webview/*.exe out-webview/WebView2Loader.dll dist-webview/
           ls -la dist-webview
 
+      - name: Build agile content stream COM gate
+        run: |
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++" \
+            -std=c++20 -Wall -Wextra -Werror -fno-exceptions -static \
+            tests/native/webview_owned_stream_test.cc -lole32 -luuid \
+            -o dist-webview/webview_owned_stream_test.exe
+
       - uses: actions/setup-java@v4
         if: inputs.apk
         with:
@@ -195,3 +202,10 @@ jobs:
             if ($p.ExitCode -ne 0) { Write-Host "FAIL  $exe exit $($p.ExitCode)"; $code = 1 }
           }
           exit $code
+
+      - name: Agile content stream COM gate
+        shell: pwsh
+        run: |
+          $p = Start-Process 'dist/webview_owned_stream_test.exe' -NoNewWindow -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill($true); throw 'Owned stream COM gate timed out' }
+          if ($p.ExitCode -ne 0) { throw "Owned stream COM gate failed: $($p.ExitCode)" }
