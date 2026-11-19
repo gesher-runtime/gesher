@@ -39,6 +39,7 @@
 // mremap moves anonymous mappings by copying (see mremap below).
 
 #include <sys/mman.h>
+#include <sys/resource.h>
 
 #include <errno.h>
 #include <io.h>
@@ -54,6 +55,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <set>
 #include <vector>
 
 #include "binder_internal.h"
@@ -163,6 +165,9 @@ struct State {
   std::mutex lock;
   std::map<uintptr_t, Region> regions;  // keyed by region start
   std::map<uintptr_t, size_t> groups;   // placeholder reservations: start, size
+  // Only pages explicitly locked by the guest. Win32's working set is not
+  // the guest's lock ledger, and a repeated lock must not spend its quota twice.
+  std::set<uintptr_t> locked_pages;
   size_t page_size;
   size_t granularity;
 
@@ -252,13 +257,8 @@ std::map<uintptr_t, Region>::iterator AddRegion(State& s, uintptr_t start, size_
   return s.regions.emplace(start, std::move(region)).first;
 }
 
-void Release(uintptr_t start, Region& region) {
-  if (region.kind == Kind::kAnon) {
-    VirtualFree(reinterpret_cast<void*>(start), 0, MEM_RELEASE);
-  } else {
-    UnmapViewOfFile(region.view);
-    CloseHandle(region.mapping);
-  }
+void ForgetLocks(State& s, uintptr_t begin, uintptr_t end) {
+  s.locked_pages.erase(s.locked_pages.lower_bound(begin), s.locked_pages.lower_bound(end));
 }
 
 // Caller holds State::lock. Registry operations never call public mprotect/
@@ -483,7 +483,11 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
       if (!readable) VirtualProtect(reinterpret_cast<void*>(p), page, PAGE_NOACCESS, &old);
     }
   }
-  Placeholders().unmap2(GetCurrentProcess(), view.view, MEM_PRESERVE_PLACEHOLDER);
+  if (!Placeholders().unmap2(GetCurrentProcess(), view.view, MEM_PRESERVE_PLACEHOLDER)) {
+    gesher::FailWithLastError();
+    return s.regions.end();
+  }
+  ForgetLocks(s, x, y);
   it->second.kind = Kind::kHole;
   it->second.view = nullptr;
   it->second.mapping = nullptr;
@@ -545,6 +549,23 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 // [begin, end), covered by regions of one group, becomes one placeholder (a
 // single hole entry), which is returned.
 std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t end) {
+  // A partial replacement of a view takes down the whole Win32 view. Until
+  // that path can reliably reconstruct its locks, keep retained pages pinned.
+  for (auto it = FindRegion(s, begin); it != s.regions.end() && it->first < end; ++it) {
+    if (it->second.kind != Kind::kView) continue;
+    const uintptr_t start = it->first;
+    const uintptr_t stop = start + it->second.size;
+    auto locked = s.locked_pages.lower_bound(start);
+    if (start < begin && locked != s.locked_pages.end() && *locked < begin) {
+      errno = EOPNOTSUPP;
+      return s.regions.end();
+    }
+    locked = s.locked_pages.lower_bound(end);
+    if (end < stop && locked != s.locked_pages.end() && *locked < stop) {
+      errno = EOPNOTSUPP;
+      return s.regions.end();
+    }
+  }
   for (uintptr_t at = begin; at < end;) {
     auto it = FindRegion(s, at);
     const uintptr_t region_end = it->first + it->second.size;
@@ -559,7 +580,12 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
         }
         break;
       case Kind::kAnon: {
-        VirtualFree(reinterpret_cast<void*>(x), y - x, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
+        if (!VirtualFree(reinterpret_cast<void*>(x), y - x,
+                         MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
+          gesher::FailWithLastError();
+          return s.regions.end();
+        }
+        ForgetLocks(s, x, y);
         if (it->first != x) it = SplitEntry(s, it, x);
         if (it->first + it->second.size != y) SplitEntry(s, it, y);
         Region& r = it->second;
@@ -570,7 +596,12 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
       }
       case Kind::kView:
         if (it->first == x && region_end == y) {
-          Placeholders().unmap2(GetCurrentProcess(), it->second.view, MEM_PRESERVE_PLACEHOLDER);
+          if (!Placeholders().unmap2(GetCurrentProcess(), it->second.view,
+                                      MEM_PRESERVE_PLACEHOLDER)) {
+            gesher::FailWithLastError();
+            return s.regions.end();
+          }
+          ForgetLocks(s, x, y);
           CloseHandle(it->second.mapping);
           Region& r = it->second;
           r.kind = Kind::kHole;
@@ -578,8 +609,8 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
           r.mapping = nullptr;
           std::fill(r.live.begin(), r.live.end(), false);
           r.live_pages = 0;
-        } else {
-          PunchView(s, it, x, y);
+        } else if (PunchView(s, it, x, y) == s.regions.end()) {
+          return s.regions.end();
         }
         break;
     }
@@ -629,6 +660,7 @@ void* GroupAnonymous(State& s, void* start, size_t len, int prot, int flags) {
       return MAP_FAILED;
     }
     hole = Punch(s, addr, addr + len);
+    if (hole == s.regions.end()) return MAP_FAILED;
   } else {
     if (fixed && RangeIsOurs(s, addr, addr + len)) {
       errno = (flags & MAP_FIXED_NOREPLACE) != 0 ? EEXIST : EINVAL;
@@ -765,6 +797,10 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, int fd, 
       return MAP_FAILED;
     }
     hole = Punch(s, addr, addr + len);
+    if (hole == s.regions.end()) {
+      if (mapping != nullptr) CloseHandle(mapping);
+      return MAP_FAILED;
+    }
   } else {
     uintptr_t at = 0;
     if (!(fixed && RangeIsOurs(s, addr, addr + len))) {
@@ -896,7 +932,12 @@ void* MapAnonymous(State& s, void* start, size_t len, int prot, int flags) {
           errno = gesher::ErrnoFromWin32(GetLastError());
           return MAP_FAILED;
         }
+        ForgetLocks(s, addr, addr + len);
         g_mmap_replaced_private_pages = true;
+        for (size_t i = first; i < last; ++i) {
+          if (region.live[i]) --region.live_pages;
+          region.live[i] = false;
+        }
       }
       if ((AnonymousCommit(prot) & MEM_COMMIT) != 0 &&
           VirtualAlloc(start, len, MEM_COMMIT, protection) == nullptr) {
@@ -1087,10 +1128,9 @@ bool ForEachRun(void* addr, size_t len, Fn fn) {
   return true;
 }
 
-// Query in bounded stack batches: no per-call allocation and no syscall per
-// page. Locked pages cannot be discarded, and large pages are not supported
-// by this page-granular path. mlock/munlock share the mapping registry lock.
-bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page) {
+// Query in bounded stack batches: no per-call allocation or syscall per page.
+template <typename Fn>
+bool ForEachWorkingSetBatch(uintptr_t begin, size_t length, size_t page, Fn fn) {
   PSAPI_WORKING_SET_EX_INFORMATION entries[128] = {};
   for (size_t done = 0; done < length;) {
     const size_t count = std::min<size_t>(128, (length - done) / page);
@@ -1103,6 +1143,56 @@ bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page) {
       gesher::FailWithLastError();
       return false;
     }
+    if (!fn(entries, count)) return false;
+    done += count * page;
+  }
+  return true;
+}
+
+// Only pass runs known to be locked. VirtualUnlock on an unlocked page
+// otherwise evicts it. Drop an entry only after the native lock is gone.
+bool UnlockGuestPages(State& s, uintptr_t begin, uintptr_t end) {
+  auto it = s.locked_pages.lower_bound(begin);
+  while (it != s.locked_pages.end() && *it < end) {
+    const uintptr_t first = *it;
+    uintptr_t next = first + s.page_size;
+    auto last = std::next(it);
+    while (last != s.locked_pages.end() && *last == next && next < end) {
+      next += s.page_size;
+      ++last;
+    }
+    if (VirtualUnlock(reinterpret_cast<void*>(first), next - first)) {
+      it = s.locked_pages.erase(it, last);
+      continue;
+    }
+    const DWORD error = GetLastError();
+    if (error != ERROR_NOT_LOCKED && error != ERROR_INVALID_ADDRESS) {
+      gesher::FailWithLastError();
+      return false;
+    }
+    // An unregistered allocation may have gone away. Query before any
+    // retry so unlocked pages do not get evicted by a second native call.
+    if (!ForEachWorkingSetBatch(first, next - first, s.page_size,
+        [&](const auto* entries, size_t count) {
+          for (size_t i = 0; i < count; ++i) {
+            const auto& attributes = entries[i].VirtualAttributes;
+            if (attributes.Valid && attributes.Locked &&
+                !VirtualUnlock(entries[i].VirtualAddress, s.page_size)) {
+              gesher::FailWithLastError();
+              return false;
+            }
+            it = s.locked_pages.erase(it);
+          }
+          return true;
+        })) return false;
+  }
+  return true;
+}
+
+// Locked pages cannot be discarded, and large pages are not supported by
+// this page-granular path. mlock/munlock share the mapping registry lock.
+bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page) {
+  return ForEachWorkingSetBatch(begin, length, page, [](const auto* entries, size_t count) {
     for (size_t i = 0; i < count; ++i) {
       const auto& attributes = entries[i].VirtualAttributes;
       if (attributes.Valid && (attributes.Locked || attributes.LargePage)) {
@@ -1110,9 +1200,8 @@ bool AdviceUnlocked(uintptr_t begin, size_t length, size_t page) {
         return false;
       }
     }
-    done += count * page;
-  }
-  return true;
+    return true;
+  });
 }
 
 // Validate the complete logical range before any discard. A private file tail
@@ -1167,6 +1256,123 @@ bool PreflightAdvice(State& s, uintptr_t begin, size_t length, int advice) {
         return info.State == MEM_RESERVE ||
                AdviceUnlocked(reinterpret_cast<uintptr_t>(p), n, s.page_size);
       });
+}
+
+// Linux accepts byte ranges and includes every intersecting page.
+bool LockRange(const State& s, uintptr_t& begin, size_t& length) {
+  const size_t offset = begin % s.page_size;
+  if (length > SIZE_MAX - offset - (s.page_size - 1)) {
+    errno = EINVAL;
+    return false;
+  }
+  begin -= offset;
+  length = RoundUp(length + offset, s.page_size);
+  if (length > UINTPTR_MAX - begin) {
+    errno = EINVAL;
+    return false;
+  }
+  return true;
+}
+
+// A committed file view can contain logical holes. A tracked PROT_NONE
+// reservation can contain live pages even without Windows commitment.
+bool IsMappedRange(State& s, uintptr_t begin, size_t length) {
+  const uintptr_t end = begin + length;
+  for (uintptr_t at = begin; at < end;) {
+    auto found = FindRegion(s, at);
+    if (found != s.regions.end()) {
+      const auto& region = found->second;
+      const uintptr_t limit = std::min(end, found->first + region.size);
+      const auto first = region.live.begin() + (at - found->first) / s.page_size;
+      const auto last = region.live.begin() + (limit - found->first) / s.page_size;
+      if (std::find(first, last, false) != last) return false;
+      at = limit;
+    } else {
+      MEMORY_BASIC_INFORMATION info;
+      if (VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)) == 0 ||
+          info.State != MEM_COMMIT) return false;
+      const auto next = s.regions.upper_bound(at);
+      at = std::min(end, reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize);
+      if (next != s.regions.end()) at = std::min(at, next->first);
+    }
+  }
+  return true;
+}
+
+// The native allocator can retire unregistered heap or stack pages without
+// going through munmap. Their entries must not consume guest quota afterward.
+bool PruneNativeLocks(State& s) {
+  for (auto it = s.locked_pages.begin(); it != s.locked_pages.end();) {
+    if (FindRegion(s, *it) != s.regions.end()) { ++it; continue; }
+    bool locked = false;
+    if (!ForEachWorkingSetBatch(*it, s.page_size, s.page_size, [&](const auto* entries, size_t) {
+          const auto& attributes = entries[0].VirtualAttributes;
+          locked = attributes.Valid && attributes.Locked;
+          return true;
+        })) return false;
+    if (locked) ++it;
+    else it = s.locked_pages.erase(it);
+  }
+  return true;
+}
+
+rlim_t GuestLockLimit() {
+  struct rlimit limit;
+  getrlimit(RLIMIT_MEMLOCK, &limit);
+  return limit.rlim_cur;
+}
+
+bool CanAddLockedPages(const State& s, size_t additional, rlim_t byte_limit,
+                       size_t locked_pages) {
+  const rlim_t page_limit = byte_limit == RLIM_INFINITY ? RLIM_INFINITY : byte_limit / s.page_size;
+  return locked_pages <= page_limit && additional <= page_limit - locked_pages;
+}
+
+// The caller has already allocated all accounting nodes. On failure, roll
+// back earlier Win32 runs without disturbing an overlapping preexisting lock.
+bool LockNewPages(State& s, std::set<uintptr_t>& pages) {
+  const int previous_errno = errno;
+  std::vector<std::pair<uintptr_t, uintptr_t>> acquired;
+  acquired.reserve(pages.size());
+  for (auto it = pages.begin(); it != pages.end();) {
+    const uintptr_t first = *it++;
+    uintptr_t last = first + s.page_size;
+    while (it != pages.end() && *it == last) {
+      last += s.page_size;
+      ++it;
+    }
+    errno = ENOMEM;
+    const bool ok = ForEachRun(reinterpret_cast<void*>(first), last - first,
+        [&](uint8_t* addr, size_t length, const MEMORY_BASIC_INFORMATION& info) {
+          if (info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0) {
+            errno = ENOMEM;
+            return false;
+          }
+          if (!VirtualLock(addr, length)) {
+            errno = EAGAIN;
+            return false;
+          }
+          const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
+          acquired.emplace_back(start, start + length);
+          return true;
+        });
+    if (!ok) {
+      const int error = errno;
+      for (const auto& [begin, end] : acquired) {
+        if (!VirtualUnlock(reinterpret_cast<void*>(begin), end - begin)) {
+          // Keep a record of any native lock we could not roll back.
+          auto page = pages.lower_bound(begin);
+          while (page != pages.end() && *page < end)
+            s.locked_pages.insert(pages.extract(page++));
+        }
+      }
+      errno = error;
+      return false;
+    }
+  }
+  s.locked_pages.merge(pages);
+  errno = previous_errno;
+  return true;
 }
 
 // --- zeroing private pages ----------------------------------------------------
@@ -1338,81 +1544,133 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
   return mmap(addr, length, prot, flags, fd, offset);
 }
 
-int munmap(void* addr, size_t length) {
-  State& s = state();
-  uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
-  if (begin % s.page_size != 0 || length == 0) {
-    errno = EINVAL;
-    return -1;
-  }
-  uintptr_t end = begin + RoundUp(length, s.page_size);
-  TRACE("munmap(%p, 0x%zx)\n", addr, length);
+}  // extern "C"
 
-  std::lock_guard<std::mutex> guard(s.lock);
+namespace {
+
+// The caller holds the registry lock, including when mremap releases either
+// the old mapping or a failed destination.
+int Unmap(State& s, uintptr_t begin, uintptr_t end) {
   std::vector<uintptr_t> groups;
+  struct EmptyGroupsCleanup {
+    State& state;
+    const std::vector<uintptr_t>& groups;
+    ~EmptyGroupsCleanup() {
+      // A later native failure must not strand reservations emptied earlier
+      // in this request. Cleanup must also preserve that failure's errno.
+      const int saved_errno = errno;
+      for (uintptr_t group : groups) ReleaseGroupIfEmpty(state, group);
+      errno = saved_errno;
+    }
+  } cleanup{s, groups};
   auto it = FindRegion(s, begin);
   if (it == s.regions.end()) it = s.regions.lower_bound(begin);
   while (it != s.regions.end() && it->first < end) {
-    uintptr_t region_begin = it->first;
+    const uintptr_t start = it->first;
     Region& region = it->second;
-    uintptr_t from = std::max(begin, region_begin);
-    uintptr_t to = std::min(end, region_begin + region.size);
-    if (region.group != 0) {
-      if (std::find(groups.begin(), groups.end(), region.group) == groups.end()) {
-        groups.push_back(region.group);
-      }
-      if (region.kind == Kind::kAnon) {
-        // The pages go back to the placeholder.
-        VirtualFree(reinterpret_cast<void*>(from), to - from,
-                    MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER);
-        if (it->first != from) it = SplitEntry(s, it, from);
-        if (it->first + it->second.size != to) SplitEntry(s, it, to);
-        Region& r = it->second;
-        r.kind = Kind::kHole;
-        std::fill(r.live.begin(), r.live.end(), false);
-        r.live_pages = 0;
-        ++it;
-        continue;
-      }
-      if (region.kind == Kind::kHole) {
-        ++it;
-        continue;
-      }
+    const uintptr_t from = std::max(begin, start);
+    const uintptr_t to = std::min(end, start + region.size);
+    if (region.group != 0 &&
+        std::find(groups.begin(), groups.end(), region.group) == groups.end()) {
+      groups.push_back(region.group);
     }
-    if (from < to) {
-      for (size_t i = (from - region_begin) / s.page_size, n = (to - region_begin) / s.page_size;
-           i < n; ++i) {
-        if (region.live[i]) {
-          region.live[i] = false;
-          --region.live_pages;
-        }
+    if (region.kind == Kind::kHole) { ++it; continue; }
+    if (region.group != 0 && region.kind == Kind::kAnon) {
+      if (!VirtualFree(reinterpret_cast<void*>(from), to - from,
+                       MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
+        return gesher::FailWithLastError();
       }
-      if (region.live_pages == 0) {
-        if (region.group != 0) {
-          // A view nothing is left of: its placeholder.
-          Placeholders().unmap2(GetCurrentProcess(), region.view, MEM_PRESERVE_PLACEHOLDER);
-          CloseHandle(region.mapping);
-          region.kind = Kind::kHole;
-          region.view = nullptr;
-          region.mapping = nullptr;
-          ++it;
-          continue;
-        }
-        Release(region_begin, region);
+      ForgetLocks(s, from, to);
+      if (it->first != from) it = SplitEntry(s, it, from);
+      if (it->first + it->second.size != to) SplitEntry(s, it, to);
+      Region& hole = it->second;
+      hole.kind = Kind::kHole;
+      std::fill(hole.live.begin(), hole.live.end(), false);
+      hole.live_pages = 0;
+      ++it;
+      continue;
+    }
+
+    const auto first = region.live.begin() + (from - start) / s.page_size;
+    const auto last = region.live.begin() + (to - start) / s.page_size;
+    const auto removed = static_cast<size_t>(std::count(first, last, true));
+    if (removed == 0) { ++it; continue; }
+    if (removed == region.live_pages) {
+      bool released;
+      if (region.kind == Kind::kAnon) {
+        released = VirtualFree(reinterpret_cast<void*>(start), 0, MEM_RELEASE) != 0;
+      } else if (region.group == 0) {
+        released = UnmapViewOfFile(region.view) != 0;
+      } else {
+        released = Placeholders().unmap2(GetCurrentProcess(), region.view,
+                                         MEM_PRESERVE_PLACEHOLDER) != 0;
+      }
+      if (!released) return gesher::FailWithLastError();
+      ForgetLocks(s, start, start + region.size);
+      if (region.kind == Kind::kView) CloseHandle(region.mapping);
+      if (region.group == 0) {
         it = s.regions.erase(it);
         continue;
       }
-      if (region.kind == Kind::kAnon) {
-        VirtualFree(reinterpret_cast<void*>(from), to - from, MEM_DECOMMIT);
-      } else {
-        DWORD old;
-        VirtualProtect(reinterpret_cast<void*>(from), to - from, PAGE_NOACCESS, &old);
+      region.kind = Kind::kHole;
+      region.view = nullptr;
+      region.mapping = nullptr;
+    } else if (region.kind == Kind::kAnon) {
+      if (!VirtualFree(reinterpret_cast<void*>(from), to - from, MEM_DECOMMIT))
+        return gesher::FailWithLastError();
+      ForgetLocks(s, from, to);
+    } else {
+      // A partial unmap leaves the Win32 view alive. Make the range
+      // inaccessible before retiring locks, so a failed protect keeps them.
+      auto* address = reinterpret_cast<uint8_t*>(from);
+      struct SavedProtection { uint8_t* address; size_t size; DWORD value; };
+      std::vector<SavedProtection> saved;
+      std::set<uintptr_t> originally_locked(s.locked_pages.lower_bound(from),
+                                            s.locked_pages.lower_bound(to));
+      if (!originally_locked.empty() &&
+          !ForEachRun(address, to - from, [&](uint8_t* page, size_t size,
+                                              const MEMORY_BASIC_INFORMATION& info) {
+            saved.push_back({page, size, info.Protect});
+            return true;
+          })) return gesher::FailWithLastError();
+      DWORD old;
+      if (!VirtualProtect(address, to - from, PAGE_NOACCESS, &old))
+        return gesher::FailWithLastError();
+      if (!originally_locked.empty() && !UnlockGuestPages(s, from, to)) {
+        const int error = errno;
+        for (const auto& span : saved)
+          VirtualProtect(span.address, span.size, span.value, &old);
+        for (auto page = s.locked_pages.lower_bound(from);
+             page != s.locked_pages.end() && *page < to; ++page) {
+          originally_locked.erase(*page);
+        }
+        LockNewPages(s, originally_locked);
+        errno = error;
+        return -1;
       }
     }
+    region.shared_alias = false;
+    std::fill(first, last, false);
+    region.live_pages -= removed;
     ++it;
   }
-  for (uintptr_t group : groups) ReleaseGroupIfEmpty(s, group);
   return 0;
+}
+
+}  // namespace
+
+extern "C" {
+
+int munmap(void* addr, size_t length) {
+  State& s = state();
+  const uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+  if (length == 0 || !AdviceRange(begin, length, s.page_size, &length)) {
+    errno = EINVAL;
+    return -1;
+  }
+  TRACE("munmap(%p, 0x%zx)\n", addr, length);
+  std::lock_guard<std::mutex> guard(s.lock);
+  return Unmap(s, begin, begin + length);
 }
 
 int mprotect(void* addr, size_t length, int prot) {
@@ -1487,6 +1745,12 @@ int madvise(void* addr, size_t length, int advice) {
   // state before recommit restores protection. Loads use RetryAfterMadvise.
   std::lock_guard<std::mutex> registry_guard(s.lock);
   const int previous_errno = errno;
+  if (advice == MADV_DONTNEED || advice == MADV_FREE || advice == MADV_REMOVE) {
+    const auto begin = reinterpret_cast<uintptr_t>(addr);
+    auto pinned = s.locked_pages.lower_bound(begin);
+    if (pinned != s.locked_pages.end() && *pinned < begin + length)
+      return errno = EINVAL, -1;
+  }
   if (!PreflightAdvice(s, reinterpret_cast<uintptr_t>(addr), length, advice)) return -1;
   if (advice == MADV_DONTNEED || advice == MADV_FREE) {
     // Eager reclaim is permitted for MADV_FREE. Only certified private
@@ -1567,13 +1831,49 @@ int mincore(void* addr, size_t length, unsigned char* vec) {
 int mlock(const void* addr, size_t length) {
   State& s = state();
   std::lock_guard<std::mutex> registry_guard(s.lock);
-  InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
-  return VirtualLock(const_cast<void*>(addr), length) ? 0 : (errno = ENOMEM, -1);
+  // Like ordinary Android application processes, this layer has no
+  // CAP_IPC_LOCK. A zero soft limit denies the operation outright.
+  const rlim_t limit = GuestLockLimit();
+  if (limit == 0) return errno = EPERM, -1;
+  uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+  if (!LockRange(s, begin, length)) return -1;
+  if (length == 0) return 0;
+  if (!PruneNativeLocks(s)) return -1;
+  const uintptr_t end = begin + length;
+  const auto first = s.locked_pages.lower_bound(begin);
+  const auto last = s.locked_pages.lower_bound(end);
+  const size_t overlapping = static_cast<size_t>(std::distance(first, last));
+  if (!CanAddLockedPages(s, length / s.page_size - overlapping, limit, s.locked_pages.size()))
+    return errno = ENOMEM, -1;
+  if (!IsMappedRange(s, begin, length)) return errno = ENOMEM, -1;
+
+  std::set<uintptr_t> pages;
+  auto locked = first;
+  for (uintptr_t at = begin; at < end; at += s.page_size) {
+    if (locked != last && *locked == at) ++locked;
+    else pages.insert(at);
+  }
+  if (!LockNewPages(s, pages)) return -1;
+  InvalidateSharedAliases(s, begin, length);
+  return 0;
 }
 
 int munlock(const void* addr, size_t length) {
-  std::lock_guard<std::mutex> registry_guard(state().lock);
-  return VirtualUnlock(const_cast<void*>(addr), length) ? 0 : (errno = ENOMEM, -1);
+  State& s = state();
+  uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+  if (!LockRange(s, begin, length)) return -1;
+  if (length == 0) return 0;
+  std::lock_guard<std::mutex> registry_guard(s.lock);
+  if (!IsMappedRange(s, begin, length)) return errno = ENOMEM, -1;
+  if (!PruneNativeLocks(s)) return -1;
+  return UnlockGuestPages(s, begin, begin + length) ? 0 : -1;
+}
+
+int munlockall(void) {
+  State& s = state();
+  std::lock_guard<std::mutex> registry_guard(s.lock);
+  if (!PruneNativeLocks(s)) return -1;
+  return UnlockGuestPages(s, 0, UINTPTR_MAX) ? 0 : -1;
 }
 
 // mremap for this layer's anonymous mappings. ART's CMC collector, without
@@ -1619,9 +1919,9 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
     return MAP_FAILED;
   }
 
-  std::unique_lock<std::mutex> guard(s.lock);
-  auto file_source = FindRegion(s, old_begin);
-  if (file_source != s.regions.end() && file_source->second.kind == Kind::kView)
+  std::lock_guard<std::mutex> guard(s.lock);
+  auto source_region = FindRegion(s, old_begin);
+  if (source_region != s.regions.end() && source_region->second.kind == Kind::kView)
     return SharedAlias(s, old_begin, old_size, new_size, flags);
   if (old_size == 0) { errno = EINVAL; return MAP_FAILED; }
   // The source: live pages of anonymous regions.
@@ -1651,20 +1951,6 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
     at = region_end;
   }
 
-  // In place, unless asked to move: MREMAP_FIXED and MREMAP_DONTUNMAP always
-  // move, MREMAP_MAYMOVE alone only to grow.
-  if (!may_move || (!dont_unmap && (flags & MREMAP_FIXED) == 0 && new_size <= old_size)) {
-    if (new_size > old_size) {
-      errno = ENOMEM;  // growing in place is not supported
-      return MAP_FAILED;
-    }
-    if (new_size < old_size) {
-      guard.unlock();
-      munmap(reinterpret_cast<void*>(old_begin + new_size), old_size - new_size);
-    }
-    return old_address;
-  }
-
   // The destination: fresh pages, at fixed_address or anywhere.
   uintptr_t new_begin = reinterpret_cast<uintptr_t>(fixed_address);
   if (fixed_address != nullptr) {
@@ -1674,56 +1960,130 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
       return MAP_FAILED;
     }
   }
+  const size_t copy_size = std::min(old_size, new_size);
+  const auto lock_first = s.locked_pages.lower_bound(old_begin);
+  const auto lock_last = s.locked_pages.lower_bound(old_begin + old_size);
+  const size_t source_locks = static_cast<size_t>(std::distance(lock_first, lock_last));
+  // The existing DONTUNMAP path decommits and recommits the old mapping.
+  // It cannot roll that operation back to the original pinned pages.
+  if (dont_unmap && source_locks != 0) return errno = EOPNOTSUPP, MAP_FAILED;
+  const bool growing_locked = new_size > old_size && source_locks != 0;
+  if (growing_locked) {
+    // A change in lock state splits a Linux VMA. There is no single
+    // lock policy to inherit when a resize crosses that boundary.
+    if (source_locks != old_size / s.page_size) return errno = EFAULT, MAP_FAILED;
+    if (!PruneNativeLocks(s)) return MAP_FAILED;
+    size_t replaced_locks = 0;
+    if (fixed_address != nullptr) {
+      replaced_locks = static_cast<size_t>(std::distance(s.locked_pages.lower_bound(new_begin),
+          s.locked_pages.lower_bound(new_begin + new_size)));
+    }
+    if (!CanAddLockedPages(s, (new_size - old_size) / s.page_size, GuestLockLimit(),
+                           s.locked_pages.size() - replaced_locks)) {
+      return errno = EAGAIN, MAP_FAILED;
+    }
+  }
+  // In place, unless asked to move: MREMAP_FIXED and MREMAP_DONTUNMAP always
+  // move, MREMAP_MAYMOVE alone only to grow.
+  if (!may_move || (!dont_unmap && (flags & MREMAP_FIXED) == 0 && new_size <= old_size)) {
+    if (new_size > old_size) {
+      errno = ENOMEM;  // growing in place is not supported
+      return MAP_FAILED;
+    }
+    if (new_size < old_size && Unmap(s, old_begin + new_size, old_begin + old_size) != 0)
+      return MAP_FAILED;
+    return old_address;
+  }
+
+  // Retiring a locked source must be a single native unmap. If a later
+  // region failed to unmap, the already retired regions could not be restored.
+  if (source_locks != 0 &&
+      old_begin + old_size > source_region->first + source_region->second.size) {
+    return errno = EFAULT, MAP_FAILED;
+  }
+  std::vector<size_t> locked_offsets;
+  for (auto it = s.locked_pages.lower_bound(old_begin);
+       it != s.locked_pages.end() && *it - old_begin < copy_size; ++it) {
+    locked_offsets.push_back(*it - old_begin);
+  }
+
   void* destination = MapAnonymous(s, fixed_address, new_size, PROT_READ | PROT_WRITE,
                                    fixed_address != nullptr ? MAP_FIXED : 0);
   if (destination == MAP_FAILED) return MAP_FAILED;
+  new_begin = reinterpret_cast<uintptr_t>(destination);
+  const auto rollback_destination = [&]() {
+    const int error = errno;
+    Unmap(s, new_begin, new_begin + new_size);
+    errno = error;
+    return MAP_FAILED;
+  };
   if (fixed_address != nullptr && destination != fixed_address) {
     errno = EINVAL;
-    return MAP_FAILED;
+    return rollback_destination();
   }
 
-  // Copy, run by run of equal protection; unreadable runs are read through a
-  // temporary protection, then get it back.
-  size_t copy_size = std::min(old_size, new_size);
-  uint8_t* from = reinterpret_cast<uint8_t*>(old_begin);
-  uint8_t* to = static_cast<uint8_t*>(destination);
-  for (size_t done = 0; done < copy_size;) {
-    MEMORY_BASIC_INFORMATION info;
-    if (VirtualQuery(from + done, &info, sizeof(info)) == 0) break;
-    size_t run = std::min(copy_size - done,
-                          static_cast<size_t>(static_cast<uint8_t*>(info.BaseAddress) +
-                                              info.RegionSize - (from + done)));
-    DWORD old_protection;
+  // Copy the source with its protections. The new pages stay accessible
+  // until their native locks have been installed.
+  auto* from = static_cast<uint8_t*>(old_address);
+  auto* to = static_cast<uint8_t*>(destination);
+  struct ProtectionRun { size_t offset; size_t size; DWORD protection; };
+  std::vector<ProtectionRun> protections;
+  errno = ENOMEM;
+  if (!ForEachRun(from, copy_size, [&](uint8_t* addr, size_t length,
+                                      const MEMORY_BASIC_INFORMATION& info) {
+    const size_t offset = addr - from;
     if (info.State == MEM_RESERVE) {
-      // PROT_NONE pages that were never committed (AnonymousCommit): the
-      // destination's become the same.
-      VirtualFree(to + done, run, MEM_DECOMMIT);
-      done += run;
-      continue;
+      return VirtualFree(to + offset, length, MEM_DECOMMIT) != 0;
     }
-    DWORD protection = info.Protect & ~(PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE);
-    bool readable = protection != PAGE_NOACCESS;
-    if (!readable) VirtualProtect(from + done, run, PAGE_READONLY, &old_protection);
-    memcpy(to + done, from + done, run);
-    if (!readable) VirtualProtect(from + done, run, old_protection, &old_protection);
-    VirtualProtect(to + done, run, protection, &old_protection);
-    done += run;
+    if (info.State != MEM_COMMIT) return false;
+    const DWORD protection = info.Protect & ~(PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE);
+    const bool readable = protection != PAGE_NOACCESS && protection != PAGE_EXECUTE;
+    DWORD previous;
+    if (!readable && !VirtualProtect(addr, length, PAGE_READONLY, &previous)) return false;
+    memcpy(to + offset, addr, length);
+    if (!readable && !VirtualProtect(addr, length, previous, &previous)) return false;
+    protections.push_back({offset, length, protection});
+    return true;
+  })) return rollback_destination();
+
+  if (!locked_offsets.empty()) {
+    std::set<uintptr_t> destination_locks;
+    for (size_t offset : locked_offsets) destination_locks.insert(new_begin + offset);
+    if (growing_locked) {
+      for (size_t offset = old_size; offset < new_size; offset += s.page_size)
+        destination_locks.insert(new_begin + offset);
+    }
+    if (!LockNewPages(s, destination_locks)) return rollback_destination();
+  }
+  if (growing_locked) {
+    if (protections.empty()) {
+      errno = ENOMEM;
+      return rollback_destination();
+    }
+    const DWORD last_protection = protections.back().protection;
+    protections.push_back({old_size, new_size - old_size, last_protection});
+  }
+  for (const auto& run : protections) {
+    DWORD previous;
+    if (!VirtualProtect(to + run.offset, run.size, run.protection, &previous)) {
+      gesher::FailWithLastError();
+      return rollback_destination();
+    }
+    if ((run.protection & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                           PAGE_EXECUTE_WRITECOPY)) != 0) {
+      FlushInstructionCache(GetCurrentProcess(), to + run.offset, run.size);
+    }
   }
 
   if (dont_unmap) {
-    // The source stays mapped, as zero pages with its protections.
-    for (size_t done = 0; done < old_size;) {
-      MEMORY_BASIC_INFORMATION info;
-      if (VirtualQuery(from + done, &info, sizeof(info)) == 0) break;
-      size_t run = std::min(old_size - done,
-                            static_cast<size_t>(static_cast<uint8_t*>(info.BaseAddress) +
-                                                info.RegionSize - (from + done)));
-      if (info.State == MEM_COMMIT) ZeroPrivate(from + done, run, info.Protect);
-      done += run;
-    }
-  } else {
-    guard.unlock();
-    munmap(old_address, old_size);
+    // The old range stays mapped with its original protections.
+    ForEachRun(from, old_size, [](uint8_t* addr, size_t length,
+                                 const MEMORY_BASIC_INFORMATION& info) {
+      if (info.State == MEM_COMMIT) ZeroPrivate(addr, length, info.Protect);
+      return true;
+    });
+  } else if (Unmap(s, old_begin, old_begin + old_size) != 0) {
+    return rollback_destination();
   }
   return destination;
 }

@@ -210,7 +210,9 @@ struct Object {
 
   // Recorders.
   std::shared_ptr<CaptureStream> capture;
+  CaptureParams capture_params;
   SLuint32 record_state = kRecordStopped;
+  bool record_ready = false;
 
   // Players.
   bool queue_player = false;
@@ -291,11 +293,16 @@ void RecordLoop(Object* o) {
     {
       std::unique_lock<std::mutex> lock(o->mu);
       o->cv.wait_for(lock, std::chrono::milliseconds(20),
-                     [o] { return o->quit || (o->record_state == kRecordRecording && !o->queue.empty()); });
+                     [o] { return o->quit || (o->record_state == kRecordRecording && o->record_ready && !o->queue.empty()); });
       if (o->quit) return;
-      if (o->record_state != kRecordRecording || o->queue.empty()) continue;
+      if (o->record_state != kRecordRecording || !o->record_ready || o->queue.empty()) continue;
       Object::Buffer& b = o->queue.front();
       ssize_t n = o->capture->Read(const_cast<uint8_t*>(b.data) + b.done, b.size - b.done, false);
+      if (n < 0) {
+        // Wilhelm stops delivering recorder buffers after its AudioRecord is
+        // invalidated. Never complete a buffer with invented silent samples.
+        return;
+      }
       if (n > 0) b.done += static_cast<size_t>(n);
       if (b.done >= b.size) {
         o->queue.pop_front();
@@ -318,6 +325,17 @@ void RecordLoop(Object* o) {
 
 SLresult SYSV ObjRealize(const void* self, SLboolean) {
   Object* o = ObjectOf(self);
+  if (o->kind == Kind::kRecorder && o->capture == nullptr) {
+    // Realization can be deferred after creation; recording authorization
+    // may have been revoked in between, before opening the native device.
+    if (!RecordingAllowed()) return kContentUnsupported;
+    std::string error;
+    o->capture = OpenCapture(o->capture_params, &error);
+    if (o->capture == nullptr) {
+      MEDIA_LOGE("OpenSL ES recorder realize: %s", error.c_str());
+      return kContentUnsupported;
+    }
+  }
   o->state = kObjectRealized;
   if (o->kind == Kind::kPlayer && o->queue_player && !o->feeder.joinable()) {
     o->feeder = std::thread([o] { FeedLoop(o); });
@@ -501,10 +519,12 @@ SLresult SYSV RecSetState(const void* self, SLuint32 state) {
   Object* o = ObjectOf(self);
   if (state != kRecordStopped && state != kRecordPaused && state != kRecordRecording) return kParameterInvalid;
   std::lock_guard<std::mutex> lock(o->mu);
+  if (o->capture == nullptr) return kPreconditionsViolated;
   if (state == kRecordRecording) {
-    o->capture->Start();
+    o->record_ready = o->capture->Start() == kOk;
   } else {
     o->capture->Stop();
+    o->record_ready = false;
     // Stopped: the position starts over (wilhelm's AudioRecord is stopped).
   }
   o->record_state = state;
@@ -844,13 +864,38 @@ SLresult SYSV EngCreateAudioRecorder(const void*, Itf* out, const SLDataSource* 
   if (result != kSuccess) return result;
   struct IoDevice { SLuint32 type, device_type, device_id; void* device; };
   auto* io = static_cast<IoDevice*>(src->locator);
-  if (io->type != kLocatorIoDevice || io->device_type != kIoDeviceAudioInput) return kContentUnsupported;
+  if (io->type != kLocatorIoDevice || io->device_type != kIoDeviceAudioInput ||
+      io->device_id != UINT32_MAX || io->device != nullptr) return kParameterInvalid;
   SLuint32 sink_type = static_cast<DataLocatorHeader*>(sink->locator)->type;
-  if (sink_type != kLocatorAndroidSimpleBufferQueue && sink_type != kLocatorBufferQueue) {
-    return kContentUnsupported;
-  }
+  if (sink_type != kLocatorAndroidSimpleBufferQueue) return kParameterInvalid;
+  const auto buffers = static_cast<DataLocatorQueue*>(sink->locator)->num_buffers;
+  if (buffers < 1 || buffers > 255) return kParameterInvalid;
   auto* pcm = static_cast<DataFormatPcm*>(sink->format);
-  if (pcm->format_type != kFormatPcm && pcm->format_type != kFormatPcmEx) return kContentUnsupported;
+  if (pcm->format_type != kFormatPcm && pcm->format_type != kFormatPcmEx) return kParameterInvalid;
+  // Android validates descriptors at Create; only device initialization waits
+  // until Realize. Do not repair invalid descriptors by clamping their inputs.
+  if (pcm->num_channels == 0 || pcm->samples_per_sec == 0) return kParameterInvalid;
+  if (pcm->num_channels > 8 || pcm->samples_per_sec < 8000000 ||
+      pcm->samples_per_sec > 192000000) return kContentUnsupported;
+  if (pcm->container_size != 8 && pcm->container_size != 16 &&
+      pcm->container_size != 24 && pcm->container_size != 32) return kParameterInvalid;
+  if (pcm->bits_per_sample == 0 || pcm->bits_per_sample > pcm->container_size) return kParameterInvalid;
+  if (pcm->endianness != 1 && pcm->endianness != 2) return kParameterInvalid;
+  if (pcm->channel_mask != 0) {
+    // Wilhelm counts only defined speaker bits: eight indexed channels or
+    // its eighteen positional speakers. The representation bit is not audio.
+    const uint32_t defined = (pcm->channel_mask & 0x80000000u) != 0 ? 0xffu : 0x3ffffu;
+    if (static_cast<uint32_t>(__builtin_popcount(pcm->channel_mask & defined)) != pcm->num_channels) {
+      return kParameterInvalid;
+    }
+  }
+  if (pcm->format_type == kFormatPcmEx) {
+    const auto representation = static_cast<DataFormatPcmEx*>(sink->format)->representation;
+    const bool valid = pcm->container_size == 8 ? representation == 2 :
+        pcm->container_size == 32 ? representation == 1 || representation == kPcmRepresentationFloat : representation == 1;
+    if (!valid) return kParameterInvalid;
+  }
+  if (pcm->container_size != pcm->bits_per_sample || pcm->endianness != 2) return kContentUnsupported;
   bool is_float = pcm->format_type == kFormatPcmEx &&
                   static_cast<DataFormatPcmEx*>(sink->format)->representation == kPcmRepresentationFloat;
   PcmFormat f;
@@ -867,20 +912,15 @@ SLresult SYSV EngCreateAudioRecorder(const void*, Itf* out, const SLDataSource* 
   }
   std::unique_ptr<Object> o(NewObject(Kind::kRecorder));
   o->exposed = exposed;
-  o->queue_capacity = std::max<SLuint32>(static_cast<DataLocatorQueue*>(sink->locator)->num_buffers, 1);
+  o->queue_capacity = buffers;
   o->rate = pcm->samples_per_sec / 1000;
   CaptureParams p;
   p.sample_rate = o->rate;
-  p.channels = std::max<SLuint32>(pcm->num_channels, 1);
+  p.channels = pcm->num_channels;
   p.format = f;
   p.capacity_frames = std::max<size_t>(o->rate / 2, 2048);
   p.name = "OpenSL ES recorder";
-  std::string error;
-  o->capture = OpenCapture(p, &error);
-  if (o->capture == nullptr) {
-    MEDIA_LOGE("OpenSL ES: %s", error.c_str());
-    return kContentUnsupported;
-  }
+  o->capture_params = p;
   o->frame_size = BytesPerSample(f) * p.channels;
   *out = reinterpret_cast<Itf>(&o.release()->object_itf);
   return kSuccess;
