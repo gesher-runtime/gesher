@@ -79,7 +79,7 @@ async function ciReady(github, owner, repo, pr) {
   return (await ciEvidence(github, owner, repo, pr)).ready;
 }
 
-async function failedCI(github, owner, repo, pr, event, run, core, mergeGithub) {
+async function failedCI(github, prGithub, owner, repo, pr, event, run, core, mergeGithub) {
   if (!event) return;
   // Recheck attempt state immediately before removing approval. An old failure
   // must not revoke a newer successful/pending rerun or a later label event.
@@ -87,7 +87,7 @@ async function failedCI(github, owner, repo, pr, event, run, core, mergeGithub) 
   if (currentRun.head_sha !== pr.head.sha || currentRun.head_repository?.id !== pr.head.repo.id ||
       currentRun.repository?.id !== pr.base.repo.id || currentRun.status !== 'completed' ||
       !FAILED_CI.has(currentRun.conclusion) || currentRun.run_attempt !== run.run_attempt) return;
-  const removed = await p.removeLabel(github, owner, repo, pr, event, 'CI failed; fresh approval required', core);
+  const removed = await p.removeLabel(github, prGithub, owner, repo, pr, event, 'CI failed; fresh approval required', core);
   if (!removed) return;
   await status(github, owner, repo, pr.head.sha, false);
   await cancel(github, owner, repo, pr, mergeGithub);
@@ -95,13 +95,13 @@ async function failedCI(github, owner, repo, pr, event, run, core, mergeGithub) 
     repository: pr.base.repo.id, number: pr.number, head: pr.head.sha,
     label: event.id, run: run.id, attempt: run.run_attempt}) + ' -->';
   const comments = await p.list(github.rest.issues.listComments, {owner, repo, issue_number: pr.number});
-  if (comments.some(c => c.user?.login === 'github-actions[bot]' && c.user.type === 'Bot' && c.body?.includes(marker))) return;
+  if (comments.some(c => p.isReceiptBot(c.user) && c.body?.includes(marker))) return;
   const link = `https://github.com/${owner}/${repo}/actions/runs/${run.id}`;
-  await github.rest.issues.createComment({owner, repo, issue_number: pr.number,
+  await prGithub.rest.issues.createComment({owner, repo, issue_number: pr.number,
     body: 'CI failed; removed `automerge`. Fix/rerun CI, then reapply the label. [Run](' + link + ').\n\n' + marker});
 }
 
-async function reconcile(github, owner, repo, number, core, mergeGithub) {
+async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub) {
   const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
   if (pr.state !== 'open') return;
   let ok = false;
@@ -130,7 +130,7 @@ async function reconcile(github, owner, repo, number, core, mergeGithub) {
   }
   const event = await p.labelEvent(github, owner, repo, number);
   const evidence = await ciEvidence(github, owner, repo, pr);
-  if (evidence.failed) return failedCI(github, owner, repo, pr, event, evidence.failed, core, mergeGithub);
+  if (evidence.failed) return failedCI(github, prGithub, owner, repo, pr, event, evidence.failed, core, mergeGithub);
   if (!evidence.ready) return;
   if (!await approved(github, owner, repo, pr)) {
     await status(github, owner, repo, pr.head.sha, false);
@@ -139,17 +139,21 @@ async function reconcile(github, owner, repo, number, core, mergeGithub) {
   await status(github, owner, repo, pr.head.sha, true);
 }
 
-// Only native auto-merge mutations use the optional workflow-capable identity.
-// Receipts, permission checks and required statuses retain github-actions[bot].
-module.exports = async ({github, context, core, mergeGithub = github}) => {
+// PR writes use the installed App. Evidence reads and required statuses use
+// the GitHub Actions token.
+module.exports = async ({github, context, core, prGithub, mergeGithub = prGithub ?? github}) => {
   const {owner, repo} = context.repo;
   const payload = context.payload;
+  if (!prGithub && payload.repository?.id === 1426153186) {
+    throw new Error('The Gesher GitHub App is required for pull request updates');
+  }
+  prGithub ??= github;
   if (context.eventName === 'workflow_run') {
     const run = payload.workflow_run;
     if (run.event !== 'pull_request' || !p.SHA.test(run.head_sha) || !run.head_repository?.id) return;
     const prs = await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
     for (const pr of prs.filter(x => x.head.sha === run.head_sha && x.head.repo?.id === run.head_repository.id)) {
-      await reconcile(github, owner, repo, pr.number, core, mergeGithub);
+      await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub);
     }
     return;
   }
@@ -160,11 +164,11 @@ module.exports = async ({github, context, core, mergeGithub = github}) => {
     if (requested) {
       if (!/^[1-9][0-9]*$/.test(requested) || !Number.isSafeInteger(Number(requested)))
         throw new Error('Invalid pull request number');
-      return reconcile(github, owner, repo, Number(requested), core, mergeGithub);
+      return reconcile(github, prGithub, owner, repo, Number(requested), core, mergeGithub);
     }
     const prs = await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
     for (const pr of prs) {
-      try { await reconcile(github, owner, repo, pr.number, core, mergeGithub); }
+      try { await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub); }
       catch (error) { core.warning('#' + pr.number + ': ' + error.message); }
     }
     return;
@@ -176,7 +180,7 @@ module.exports = async ({github, context, core, mergeGithub = github}) => {
     const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
     if (pr.state !== 'open') return;
     if (payload.action === 'synchronize') {
-      await p.dismissStaleApprovals(github, owner, repo, pr);
+      await p.dismissStaleApprovals(github, prGithub, owner, repo, pr);
       // A delayed push must never remove a fresh opt-in for a newer head.
       if (p.sameTarget(pr, payload.pull_request)) {
         const event = await p.labelEvent(github, owner, repo, number);
@@ -190,7 +194,7 @@ module.exports = async ({github, context, core, mergeGithub = github}) => {
           const olderPendingLabel = receipt === null && Number.isFinite(applied) &&
             Number.isFinite(pushed) && applied + 1000 < pushed;
           if (event.invalidated || receipt === false || olderPendingLabel)
-            await p.removeLabel(github, owner, repo, pr, event, 'new push requires fresh approval', core);
+            await p.removeLabel(github, prGithub, owner, repo, pr, event, 'new push requires fresh approval', core);
         }
       }
     }
@@ -200,20 +204,21 @@ module.exports = async ({github, context, core, mergeGithub = github}) => {
         const boundary = await p.openingBoundary(github, owner, repo, pr);
         const qa = await p.authorQa(github, owner, repo, pr, event, boundary);
         if (!p.explicitApplication(pr, event, boundary, qa) || event.invalidated) {
-          await p.removeLabel(github, owner, repo, pr, event, 'fresh label/QA required', core);
+          await p.removeLabel(github, prGithub, owner, repo, pr, event, 'fresh label/QA required', core);
         } else if (p.sameTarget(pr, payload.pull_request) && event.unambiguous &&
             event.deliveryMatches && event.actor?.id === payload.sender?.id &&
             await p.authorized(github, owner, repo, event)) {
           const receipt = await p.approval(github, owner, repo, pr, event);
-          if (receipt === null) await github.rest.pulls.createReview({owner, repo, pull_number: number,
+          if (receipt === null) await prGithub.rest.pulls.createReview({owner, repo, pull_number: number,
             commit_id: pr.head.sha, event: 'APPROVE',
             body: '<!-- gesher-automerge-v1 ' + JSON.stringify(p.approvalFor(pr, event)) + ' -->'});
         }
       }
     }
   }
-  await reconcile(github, owner, repo, number, core, mergeGithub);
+  await reconcile(github, prGithub, owner, repo, number, core, mergeGithub);
 };
 module.exports.approved = approved;
 module.exports.ciReady = ciReady;
 module.exports.STATUS = STATUS;
+module.exports.APP_SLUG = p.APP_SLUG;

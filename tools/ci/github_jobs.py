@@ -1,6 +1,10 @@
 """Complete, bounded job inventories with smaller GitHub response pages."""
-from github_read import GitHubReadError, get_json
+import argparse
+import json
+import sys
 import time
+
+from github_read import GitHubReadError, get_json
 
 
 class _InventoryChanged(GitHubReadError):
@@ -50,3 +54,20 @@ def _snapshot(endpoint):
         if len(rows) == total:
             return {'total_count': total, 'jobs': rows}
     raise GitHubReadError('Incomplete job inventory')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('endpoint', help='exact GitHub Actions attempt jobs endpoint without a query')
+    args = parser.parse_args()
+    try:
+        jobs = get_jobs(args.endpoint)
+    except GitHubReadError as error:
+        print(f'CI_GITHUB_JOBS_ERROR {error}', file=sys.stderr)
+        return 1
+    print(json.dumps(jobs, ensure_ascii=True))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
