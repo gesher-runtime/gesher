@@ -4,8 +4,12 @@
 #include "pthread_attributes_test_api.h"
 #include <gesher/bionic_shim.h>
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 using namespace pthread_attributes_test;
 namespace {
@@ -52,7 +56,27 @@ void Finish(Worker& worker) {
   CloseHandle(worker.witness);
   worker.witness = nullptr;
 }
+bool IsDescriptorReadable(Thread id) {
+  uintptr_t address = static_cast<uintptr_t>(id);
+  if (address < 0x10000 || (address % sizeof(void*)) != 0) return false;
+  MEMORY_BASIC_INFORMATION mbi{};
+  if (VirtualQuery(reinterpret_cast<const void*>(address), &mbi, sizeof(mbi)) == 0) return false;
+  if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) != 0) return false;
+  constexpr DWORD kReadable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                              PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                              PAGE_EXECUTE_WRITECOPY;
+  if ((mbi.Protect & kReadable) == 0) return false;
+  uintptr_t region_start = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+  uintptr_t page_end = (address & ~uintptr_t{4095}) + 4096;
+  if (page_end - region_start > mbi.RegionSize) return false;
+  for (uintptr_t cursor = address; cursor < page_end; cursor += sizeof(uintptr_t)) {
+    volatile const uintptr_t* slot = reinterpret_cast<const volatile uintptr_t*>(cursor);
+    (void)*slot;
+  }
+  return true;
+}
 void Verify(Thread id, Worker& worker, uintptr_t caller) {
+  Check(IsDescriptorReadable(id), "target descriptor stays page-readable");
   Attr attr{};
   Check(api.getattr(id, &attr) == 0 &&
             reinterpret_cast<ULONG_PTR>(attr.stack_base) == worker.low &&
@@ -90,6 +114,7 @@ int main() {
   Attr self{};
   Check(api.getattr(api.self(), &self) == 0 && Contains(self, reinterpret_cast<uintptr_t>(&local)),
         "calling external thread reports its actual stack");
+  Check(IsDescriptorReadable(api.self()), "caller self descriptor is page-readable");
   for (int kind : {0, 1, 2}) {
     Worker worker;
     Attr requested{};
@@ -131,12 +156,16 @@ int main() {
   Retired(external.id);
   Retired(UINT64_MAX);
   Check(api.getattr(api.self(), nullptr) == 22, "null query output is rejected");
+  std::vector<Thread> seen_ids{api.self()};
   bool replacements = true;
   for (int i = 0; i < 32; ++i) {
     Worker replacement;
     Thread id = 0;
     if (api.create(&id, nullptr, RunGuest, &replacement) != 0)
       AbortFixture("create replacement target");
+    replacements &= IsDescriptorReadable(id) &&
+                    std::find(seen_ids.begin(), seen_ids.end(), id) == seen_ids.end();
+    seen_ids.push_back(id);
     Attr snapshot{};
     replacements &= api.getattr(id, &snapshot) == 0;
     Ready(replacement);
@@ -145,9 +174,10 @@ int main() {
     replacement.stop.store(true);
     replacements &= api.join(id, nullptr) == 0;
     Finish(replacement);
-    replacements &= api.getattr(id, &snapshot) == 3;
+    replacements &= api.getattr(id, &snapshot) == 3 && IsDescriptorReadable(id);
   }
-  Check(replacements, "32 replacement threads keep startup and retirement identities separate");
+  Check(replacements && seen_ids.size() == 33,
+        "32 replacement threads keep unique page-readable identities across retirement");
   std::printf("pthread attributes: %d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }
