@@ -561,6 +561,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: BlobStore attached identity contracts
+        run: |
+          python3 tools/test_blobstore_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Activity finish, null binding and public media receiver contracts
         run: |
           args=(--java-home "$JAVA_HOME" --framework-classes out/framework/classes \

@@ -509,16 +509,20 @@ final class Installer {
                 SystemServer.log("install " + pkg + ": shared-library context/content changed");
             }
             Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-            ApkPackage installed = open(old);
-            ApkPackage previous = mPm.get(pkg);
-            if (previous != null && previous.isSystemAddon()) {
-                if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
-                    throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+            // Rebuilding a missing oat file does not change the installed code.
+            // Preserve its identity for attached processes and their session handles.
+            if (libraryChange || mPm.get(pkg) == null) {
+                ApkPackage installed = open(old);
+                ApkPackage previous = mPm.get(pkg);
+                if (previous != null && previous.isSystemAddon()) {
+                    if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
+                        throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+                    }
+                    installed.setSystemAddon(true);
                 }
-                installed.setSystemAddon(true);
+                installed.prepareInstalledDataDirectories();
+                mPm.add(installed);
             }
-            installed.prepareInstalledDataDirectories();
-            mPm.add(installed);
         }
         return new String[] {pkg, "unchanged", old.codePath,
                 String.valueOf(parsed.versionCode())};

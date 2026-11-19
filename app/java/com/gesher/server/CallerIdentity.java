@@ -58,6 +58,18 @@ public final class CallerIdentity {
         return actual;
     }
 
+    /** Authenticate the attached installation, rather than adopting a name's replacement. */
+    public ApkPackage requireCurrentPackage(String claimedPackage) {
+        if (isSystem()) return mPm.get(claimedPackage);
+        String actual = requirePackage(claimedPackage);
+        ApkPackage code = mAtm == null ? null
+                : mAtm.authenticatedPackageCodeForPid(callerPid(), callerUid());
+        if (code == null || !actual.equals(code.packageName)) {
+            throw new SecurityException("Caller belongs to retired package code");
+        }
+        return code;
+    }
+
     public void requireSystemOrPackage(String ownerPackage) {
         if (!isSystem()) requirePackage(ownerPackage);
     }

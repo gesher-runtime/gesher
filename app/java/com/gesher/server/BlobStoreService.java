@@ -126,8 +126,11 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
     }
 
     private Owner installedOwner(String name) {
+        return installedOwner(name, mPm.get(name));
+    }
+
+    private Owner installedOwner(String name, ApkPackage pkg) {
         if ("android".equals(name)) return new Owner("android", 0, "");
-        ApkPackage pkg = mPm.get(name);
         if (pkg == null) return null;
         return new Owner(name, pkg.firstInstallTime(),
                 pkg.hasVerifiedSigningIdentity() ? "" : pkg.apkPath);
@@ -135,8 +138,9 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
 
     private Owner requireOwner(String name) {
         Objects.requireNonNull(name, "packageName");
-        mCallers.requirePackage(name);
-        Owner owner = installedOwner(name);
+        // Retain the authenticated code snapshot across owner construction. Resolving
+        // only its name could give a surviving old process a replacement's sessions.
+        Owner owner = installedOwner(name, mCallers.requireCurrentPackage(name));
         if (owner == null || mPm.isRemovalPending(name)) {
             throw new SecurityException("BlobStore caller is not an installed package");
         }
