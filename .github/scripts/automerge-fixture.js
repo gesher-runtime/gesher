@@ -111,7 +111,8 @@ function world(over = {}) {
   const github = {rest: {
     pulls: {
       ...actionsWrites.pulls,
-      get: rec('getPR', () => w.pr),
+      get: rec('getPR', () => ({...w.pr, auto_merge: w.nativeAutoMethod ?
+        {merge_method: w.nativeAutoMethod.toLowerCase()} : null})),
       list: page('listPRs', () => [w.pr]),
       listReviews: page('reviews', () => {
         if (w.reviewError) throw w.reviewError;
@@ -188,7 +189,7 @@ function world(over = {}) {
   const core = {info: () => {}, warning: (s) => w.warnings.push(s)};
   w.useApp = () => {w.prGithub = {rest: {...writes(APP_BOT, 'app-'),
     repos: {createCommitStatus: statusWrite(APP_BOT, 'app-status')}}, graphql: github.graphql};};
-  const fire = (eventName, payload) => run({github, core, prGithub: w.prGithub, mergeGithub: w.mergeGithub,
+  const fire = (eventName, payload) => run({github, readGithub: w.readGithub, core, prGithub: w.prGithub, mergeGithub: w.mergeGithub,
     appQaStatus: w.appQaStatus, appId: w.appId, appInstallationId: w.appInstallationId,
     context: {eventName, repo: {owner: 'o', repo: 'r'},
       payload: {repository: {default_branch: 'main', id: w.repositoryId}, ...clone(payload)}}});

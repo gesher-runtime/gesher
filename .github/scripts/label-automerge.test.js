@@ -774,3 +774,79 @@ test('fork review events do not write the App shadow with a read-only event toke
   await w.fire('pull_request_review', {action: 'edited', pull_request: w.pr});
   assert.deepEqual(w.calls, []);
 });
+
+// Route reads to a separate client and make the Actions client reject them.
+function splitReads(w) {
+  const reads = [];
+  const actionsOnly = new Set(['createCommitStatus', 'getCombinedStatusForRef', 'createReview',
+    'dismissReview', 'removeLabel', 'createComment']);
+  const rest = {};
+  for (const [ns, fns] of Object.entries(w.github.rest)) {
+    rest[ns] = {};
+    for (const [name, fn] of Object.entries(fns)) {
+      rest[ns][name] = async (args) => { reads.push(name); return fn(args); };
+      if (!actionsOnly.has(name)) fns[name] = async () => assert.fail('GITHUB_TOKEN used for ' + name);
+    }
+  }
+  const graphql = w.github.graphql;
+  w.readGithub = {rest, graphql: async (...args) => { reads.push('graphql'); return graphql(...args); }};
+  w.github.graphql = async (query, args) => {
+    if (!query.includes('mutation')) assert.fail('GITHUB_TOKEN used for a GraphQL read');
+    return graphql(query, args);
+  };
+  return reads;
+}
+
+for (const appQaStatus of [false, true]) {
+  test(`evidence reads use the read client; the required status stays on Actions (App status ${appQaStatus})`, async () => {
+    const w = appStatusWorld({appQaStatus});
+    const reads = splitReads(w);
+    await w.ciDone();
+    assert.equal(lastStatus(w, appStatus.STATUS)?.state, 'success');
+    assert.ok(w.did('status').every(([, a]) => a.context === appStatus.STATUS));
+    for (const name of ['listEvents', 'getCollaboratorPermissionLevel', 'listReviews',
+      'listWorkflowRunsForRepo', 'listForRef', 'getWorkflowRun', 'graphql']) assert.ok(reads.includes(name), name);
+  });
+}
+
+test('workflow_run reconciles the PRs GitHub names and lists open PRs only for forks', async () => {
+  const w = world({repositoryId: 10});
+  await w.fire('workflow_run', {workflow_run: {event: 'pull_request', head_sha: HEAD,
+    head_repository: {id: 10}, pull_requests: [{number: 7, head: structuredClone(w.pr.head),
+      base: structuredClone(w.pr.base)}]}});
+  assert.equal(w.did('listPRs').length, 0);
+  assert.equal(w.did('status').at(-1)[1].state, 'success');
+
+  const stale = world({repositoryId: 10});
+  // A PR named for a different head than the run is not reconciled.
+  await stale.fire('workflow_run', {workflow_run: {event: 'pull_request', head_sha: HEAD,
+    head_repository: {id: 10}, pull_requests: [{number: 7, head: {...structuredClone(stale.pr.head), sha: OTHER},
+      base: structuredClone(stale.pr.base)}]}});
+  assert.deepEqual(stale.calls, []);
+
+  const fork = world({repositoryId: 10});
+  fork.pr.head.repo.id = 20;
+  for (const r of fork.runs) r.head_repository.id = 20;
+  await fork.ciDone(HEAD, 20);
+  assert.equal(fork.did('listPRs').length, 1);
+  assert.equal(fork.did('status').at(-1)[1].state, 'success');
+});
+
+test('native waiting is cancelled from REST pull request state without a GraphQL read', async () => {
+  const w = world({nativeAutoMethod: 'SQUASH'}); w.pr.labels = [];
+  const graphql = w.github.graphql;
+  w.github.graphql = async (query, args) => {
+    if (!query.includes('mutation')) assert.fail('unexpected GraphQL read');
+    return graphql(query, args);
+  };
+  await w.pushed();
+  assert.equal(w.nativeAutoMethod, null);
+  assert.equal(w.did('nativeCancel').length, 1);
+});
+
+test('registered workflow identity is read once per controller invocation', async () => {
+  const w = appStatusWorld();
+  await w.ciDone();
+  bothStates(w, 'success');
+  assert.equal(w.did('workflow').length, 2);
+});

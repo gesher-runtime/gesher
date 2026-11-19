@@ -94,11 +94,13 @@ class QueueWorkflows(unittest.TestCase):
                          "!(github.event.sender.id == 358279050 && "
                          "(github.event.action == 'submitted' || github.event.action == 'dismissed')))) && "
                          "!(github.event_name == 'pull_request_target' && github.event.action == 'unlabeled' && "
-                         "github.event.sender.id == 358279050 && github.event.label.name == 'automerge')")
+                         "github.event.sender.id == 358279050 && github.event.label.name == 'automerge') && "
+                         "!(github.event_name == 'pull_request_target' && github.event.action == 'edited' && "
+                         "github.event.changes.base == null)")
 
     def test_workflow_credential_is_separate_from_required_status_identity(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, flag, token, controller = doc['jobs']['automerge']['steps']
+        checkout, flag, token, reader, controller = doc['jobs']['automerge']['steps']
         self.assertEqual(checkout['with']['ref'], '${{ github.event.repository.default_branch }}')
         self.assertFalse(checkout['with']['persist-credentials'])
         self.assertEqual(token['if'], "vars.GESHER_BOT_APP_ID != ''")
@@ -126,10 +128,30 @@ class QueueWorkflows(unittest.TestCase):
         self.assertIn('appId: Number(process.env.GESHER_BOT_APP_ID)', controller['with']['script'])
         self.assertIn('appInstallationId: Number(process.env.GESHER_BOT_INSTALLATION_ID)', controller['with']['script'])
 
+    def test_evidence_reads_use_a_read_only_app_token_with_actions_fallback(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
+        checkout, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        self.assertEqual(reader['id'], 'gesher-read')
+        self.assertEqual(reader['uses'], token['uses'])
+        self.assertEqual(reader['if'], "vars.GESHER_BOT_APP_ID != ''")
+        # A missing installation permission must not stop the controller.
+        self.assertIs(reader['continue-on-error'], True)
+        self.assertEqual({key: value for key, value in reader['with'].items()
+                          if key.startswith('permission-')},
+                         {'permission-actions': 'read', 'permission-checks': 'read',
+                          'permission-issues': 'read', 'permission-metadata': 'read',
+                          'permission-pull-requests': 'read'})
+        for key in ['app-id', 'private-key', 'owner', 'repositories']:
+            self.assertEqual(reader['with'][key], token['with'][key])
+        self.assertEqual(controller['env']['GESHER_READ_TOKEN'], '${{ steps.gesher-read.outputs.token }}')
+        script = controller['with']['script']
+        self.assertIn('auth: readToken', script)
+        self.assertIn('run({github, readGithub,', script)
+
     def test_exact_flag_controls_both_token_permission_and_status_writer(self):
         import os
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, flag, token, controller = doc['jobs']['automerge']['steps']
+        checkout, flag, token, reader, controller = doc['jobs']['automerge']['steps']
         self.assertEqual(flag['id'], 'app-qa-flag')
         self.assertEqual(flag['uses'], 'actions/github-script@v7')
         self.assertEqual(flag['env'], {'GESHER_APP_QA_STATUS': '${{ vars.GESHER_APP_QA_STATUS }}'})

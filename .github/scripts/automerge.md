@@ -64,6 +64,27 @@ all three contexts are bound to GitHub Actions, force pushes/deletion are blocke
 and there are no permanent bypass actors. Branch updates may need fresh CI;
 there is no automatic second full CI run simply for merging.
 
+## API quota
+
+Every controller event rereads labels, reviews, permission and CI evidence. These
+reads use a separate read-only Gesher App token (`actions`, `checks`, `issues`,
+`metadata` and `pull-requests` read), so they count against the App installation's
+quota rather than the repository's shared `GITHUB_TOKEN` quota. Exhausting that
+shared quota previously left `qa/label-approval` pending after CI succeeded.
+The required `qa/label-approval` status and its readback still use
+`github-actions[bot]`, because the ruleset binds that context to GitHub Actions.
+If the installation lacks one of those read permissions, token creation fails
+without stopping the job, a notice is logged and reads fall back to `GITHUB_TOKEN`.
+
+Same-repository `workflow_run` events reconcile the PRs GitHub names in the event
+instead of listing every open PR; fork runs still list open PRs. Native
+auto-merge cancellation reads its state from the REST pull request it already
+fetched. Registered workflow identities are read once per job. Title or body
+edits do not start the job; base changes still do.
+
+If the gate is stuck pending after CI because a controller run failed, rerun it:
+`gh workflow run automerge.yml -f pull_request_number=<PR>`.
+
 ## Fork pull requests
 
 Fork PRs follow the same label, QA and CI requirements. A maintainer applies the

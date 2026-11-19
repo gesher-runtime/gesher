@@ -38,7 +38,9 @@ jobs:
         !(github.event.sender.id == 358279050 &&
           (github.event.action == 'submitted' || github.event.action == 'dismissed')))) &&
       !(github.event_name == 'pull_request_target' && github.event.action == 'unlabeled' &&
-        github.event.sender.id == 358279050 && github.event.label.name == 'automerge')
+        github.event.sender.id == 358279050 && github.event.label.name == 'automerge') &&
+      !(github.event_name == 'pull_request_target' && github.event.action == 'edited' &&
+        github.event.changes.base == null)
     concurrency:
       group: merge-approval-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha || github.run_id }}
       queue: max
@@ -74,8 +76,26 @@ jobs:
           # Empty input is omitted by the pinned action. Phase 1 installations
           # do not need Statuses permission until the shadow gate is enabled.
           permission-statuses: ${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}
+      # Evidence reads use the App installation's own API quota. Without these
+      # read permissions the step fails and reads fall back to GITHUB_TOKEN.
+      - name: Create read-only bot token
+        id: gesher-read
+        if: vars.GESHER_BOT_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.GESHER_BOT_APP_ID }}
+          private-key: ${{ secrets.GESHER_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: read
+          permission-checks: read
+          permission-issues: read
+          permission-metadata: read
+          permission-pull-requests: read
       - uses: actions/github-script@v7
         env:
+          GESHER_READ_TOKEN: ${{ steps.gesher-read.outputs.token }}
           GESHER_BOT_TOKEN: ${{ steps.gesher-bot.outputs.token }}
           GESHER_BOT_SLUG: ${{ steps.gesher-bot.outputs.app-slug }}
           GESHER_BOT_APP_ID: ${{ vars.GESHER_BOT_APP_ID }}
@@ -94,7 +114,13 @@ jobs:
             const mergeGithub = token ? new github.constructor({
               auth: token, baseUrl: process.env.GITHUB_API_URL
             }) : github;
-            await run({github, context, core, mergeGithub, prGithub: appToken ? mergeGithub : undefined,
+            const readToken = process.env.GESHER_READ_TOKEN;
+            if (appToken && !readToken)
+              core.notice('Gesher App read token unavailable; evidence reads use GITHUB_TOKEN');
+            const readGithub = readToken ? new github.constructor({
+              auth: readToken, baseUrl: process.env.GITHUB_API_URL
+            }) : undefined;
+            await run({github, readGithub, context, core, mergeGithub, prGithub: appToken ? mergeGithub : undefined,
               appQaStatus: process.env.GESHER_APP_QA_STATUS === 'true',
               appId: Number(process.env.GESHER_BOT_APP_ID),
               appInstallationId: Number(process.env.GESHER_BOT_INSTALLATION_ID)});

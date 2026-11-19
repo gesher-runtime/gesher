@@ -27,12 +27,21 @@ async function approved(github, owner, repo, pr) {
 async function cancel(github, owner, repo, pr, mergeGithub = github) {
   const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
   if (current.state !== 'open' || current.head.sha !== pr.head.sha) return;
-  const {node} = await github.graphql(`query($id: ID!) {
-    node(id: $id) { ... on PullRequest { autoMergeRequest { enabledAt } } }
-  }`, {id: pr.node_id});
-  if (node?.autoMergeRequest) await mergeGithub.graphql(`mutation($id: ID!) {
+  // The REST pull request already carries native auto-merge state.
+  if (current.auto_merge) await mergeGithub.graphql(`mutation($id: ID!) {
     disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId }
   }`, {id: pr.node_id});
+}
+
+// Registered workflow identity does not change within one controller job.
+const workflowIdentity = new WeakMap();
+async function registeredWorkflow(github, owner, repo, file) {
+  let cache = workflowIdentity.get(github);
+  if (!cache) workflowIdentity.set(github, cache = new Map());
+  const key = owner + '/' + repo + '/' + file;
+  if (!cache.has(key)) cache.set(key, github.rest.actions.getWorkflow({owner, repo, workflow_id: file})
+    .then(({data}) => data, (error) => { cache.delete(key); throw error; }));
+  return cache.get(key);
 }
 
 async function ciEvidence(github, owner, repo, pr) {
@@ -42,7 +51,7 @@ async function ciEvidence(github, owner, repo, pr) {
     {owner, repo, ref: pr.head.sha, filter: 'latest'}, 'check_runs');
   let ready = true;
   for (const [file, name] of [['ci.yml', 'ci-required'], ['arm64-windows.yml', 'arm64-required']]) {
-    const {data: workflow} = await github.rest.actions.getWorkflow({owner, repo, workflow_id: file});
+    const workflow = await registeredWorkflow(github, owner, repo, file);
     if (!Number.isSafeInteger(workflow.id) || workflow.id <= 0 ||
         workflow.state !== 'active' || workflow.path !== '.github/workflows/' + file) return {ready: false};
     const matching = runs.filter(r => r.workflow_id === workflow.id && r.path === workflow.path &&
@@ -164,22 +173,29 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
   }
 }
 
-// PR writes use the installed App. Evidence reads and the existing required
-// status retain the Actions token; the App status is explicitly opt-in.
-module.exports = async ({github, context, core, prGithub, mergeGithub = prGithub ?? github,
-  appQaStatus = false, appId, appInstallationId}) => {
+// PR writes use the installed App. Evidence reads use a read-only App token
+// when available, so they do not exhaust the repository's GITHUB_TOKEN quota.
+// The existing required status and its readback retain the Actions token; the
+// App status is explicitly opt-in.
+module.exports = async ({github: actionsGithub, readGithub, context, core, prGithub,
+  mergeGithub = prGithub ?? actionsGithub, appQaStatus = false, appId, appInstallationId}) => {
+  const github = readGithub ?? actionsGithub;
   const {owner, repo} = context.repo;
   const payload = context.payload;
   if (!prGithub && payload.repository?.id === 1426153186) {
     throw new Error('The Gesher GitHub App is required for pull request updates');
   }
-  const statuses = qaStatuses({github, appGithub: prGithub, owner, repo,
+  const statuses = qaStatuses({github: actionsGithub, appGithub: prGithub, owner, repo,
     enabled: appQaStatus, appId, installationId: appInstallationId});
   prGithub ??= github;
   if (context.eventName === 'workflow_run') {
     const run = payload.workflow_run;
     if (run.event !== 'pull_request' || !p.SHA.test(run.head_sha) || !run.head_repository?.id) return;
-    const prs = await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
+    // Same-repository runs name their PRs in the trusted event; fork runs do not.
+    const named = (run.pull_requests || []).filter(x => x.base?.ref === 'main' &&
+      x.base.repo?.id === payload.repository?.id && Number.isSafeInteger(x.number));
+    const prs = named.length ? named :
+      await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
     for (const pr of prs.filter(x => x.head.sha === run.head_sha && x.head.repo?.id === run.head_repository.id)) {
       await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses);
     }
