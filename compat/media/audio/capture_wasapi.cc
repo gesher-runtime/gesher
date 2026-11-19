@@ -89,7 +89,7 @@ HRESULT DefaultEndpoint(EDataFlow flow, IMMDevice** device) {
 class WasapiCapture : public CaptureSource {
  public:
   ~WasapiCapture() override {
-    if (client_ != nullptr) client_->Stop();
+    if (started_) Stop();
     SafeRelease(capture_);
     SafeRelease(client_);
     SafeRelease(device_);
@@ -123,6 +123,11 @@ class WasapiCapture : public CaptureSource {
         return false;
       }
     }
+    if (channels_ == 0 || rate_ == 0 ||
+        (is_float_ ? bits_ != 32 : bits_ != 16 && bits_ != 32)) {
+      *error = "WASAPI capture: unsupported mix format";
+      return false;
+    }
     // 200 ms buffered, shared mode, polled.
     hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, loopback ? AUDCLNT_STREAMFLAGS_LOOPBACK : 0,
                              2000000, 0, format_, nullptr);
@@ -144,26 +149,45 @@ class WasapiCapture : public CaptureSource {
            (is_float_ ? ", float" : "");
   }
   std::string DeviceName() const override { return name_; }
-  bool Start() override { return SUCCEEDED(client_->Start()); }
-  void Stop() override { client_->Stop(); }
+  bool Start() override {
+    if (started_) return true;
+    // WASAPI Stop preserves queued endpoint packets. A new capture activation
+    // must discard them before Start resumes the stopped stream. Reset is
+    // valid after initialization, including before the first Start.
+    if (FAILED(client_->Reset()) || FAILED(client_->Start())) return false;
+    started_ = true;
+    return true;
+  }
+  void Stop() override {
+    if (started_) client_->Stop();
+    started_ = false;
+  }
 
   bool Pull(std::vector<float>* out) override {
     for (int guard = 0; guard < 64; guard++) {
       UINT32 packet = 0;
       HRESULT hr = capture_->GetNextPacketSize(&packet);
-      if (FAILED(hr)) return hr != AUDCLNT_E_DEVICE_INVALIDATED ? true : false;
+      if (FAILED(hr)) return false;
       if (packet == 0) return true;
       BYTE* data = nullptr;
       UINT32 frames = 0;
       DWORD flags = 0;
       hr = capture_->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
-      if (FAILED(hr)) return hr != AUDCLNT_E_DEVICE_INVALIDATED;
+      // BUFFER_ERROR is a recoverable no-packet pass; Windows requires the
+      // next processing pass, not generated samples or a fabricated success.
+      if (hr == AUDCLNT_E_BUFFER_ERROR) return true;
+      if (FAILED(hr)) return false;
+      if (hr == AUDCLNT_S_BUFFER_EMPTY || frames == 0) return true;
       const size_t at = out->size();
       out->resize(at + static_cast<size_t>(frames) * channels_);
       float* d = out->data() + at;
       const size_t count = static_cast<size_t>(frames) * channels_;
-      if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0 || data == nullptr) {
+      if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0) {
         std::fill(d, d + count, 0.0f);
+      } else if (data == nullptr) {
+        capture_->ReleaseBuffer(frames);
+        out->resize(at);
+        return false;
       } else if (is_float_ && bits_ == 32) {
         memcpy(d, data, count * sizeof(float));
       } else if (bits_ == 16) {
@@ -182,6 +206,7 @@ class WasapiCapture : public CaptureSource {
 
  private:
   bool loopback_ = false;
+  bool started_ = false;
   IMMDevice* device_ = nullptr;
   IAudioClient* client_ = nullptr;
   IAudioCaptureClient* capture_ = nullptr;

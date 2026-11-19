@@ -117,11 +117,20 @@ rejected('TCP fixture missing required diagnostics', without_diagnostics, target
 print('TCP diagnostic source policy: six negative controls passed')
 
 rejected('thread census equality relaxation',
-         fixture.replace(b'actual.threads == baseline.threads',
-                         b'actual.threads >= baseline.threads', 1), target=fixture_path)
+         fixture.replace(b'actual.handles == baseline.handles && owners_match',
+                         b'actual.handles == baseline.handles && true', 1), target=fixture_path)
 rejected('thread census observer forced on successful modes',
-         fixture.replace(b'ObserveOwnerThreads(mode, actual.handles != baseline.handles || actual.threads != baseline.threads)',
+         fixture.replace(b'ObserveOwnerThreads(mode, actual.handles != baseline.handles || !owners_match)',
                          b'ObserveOwnerThreads(mode, true)', 1), target=fixture_path)
+rejected('thread census calibration bypassed',
+         fixture.replace(b'require(gesher::test::CalibrateOwnerThreads(),',
+                         b'require(true,', 1), target=fixture_path)
+rejected('owned connect operation retirement unchecked',
+         fixture.replace(b'retired_operation.expired() && retired_description.expired()',
+                         b'true && retired_description.expired()', 1), target=fixture_path)
+rejected('owned socket description retirement unchecked',
+         fixture.replace(b'retired_operation.expired() && retired_description.expired()',
+                         b'retired_operation.expired() && true', 1), target=fixture_path)
 thread_diagnostic = ROOT / policy.OWNER_THREAD_DIAGNOSTIC_PATH
 thread_source = thread_diagnostic.read_bytes()
 rejected('thread observer querying a reused foreign-process TID',
@@ -130,7 +139,7 @@ rejected('thread observer querying a reused foreign-process TID',
 rejected('thread observer leaking its diagnostic handles',
          thread_source.replace(b'if (CloseHandle(thread)) ++closed;', b'if (true) ++closed;', 1),
          target=thread_diagnostic)
-print('thread diagnostic source policy: four negative controls passed')
+print('thread diagnostic source policy: seven negative controls passed')
 
 receipt_path = ROOT / 'tools/ci/receipt-diagnostics.ps1'
 receipt = receipt_path.read_bytes()

@@ -102,11 +102,20 @@ try {
         "[Gesher]`nVersion=0.1.10`nVersion=0.1.11`n",
         "[Gesher]`nVersion=0.1.10`n[Gesher]`nVersion=0.1.10`n",
         "[Gesher]`nVersion=0.1.65536`n",
+        "[Gesher]`nVersion=0.1.10.0`n",
+        "[Gesher]`nVersion=0.1.10.65536`n",
+        "[Gesher]`nVersion=0.1.10.1.2`n",
         "[Gesher]`nVersion=00.1.10`n"
     )) {
         [IO.File]::WriteAllText($metadata, $invalid)
         Assert-RuntimeFile ($null -eq (New-GesherRuntimeSync $install $profile app).Generation) 'Invalid installed version metadata was accepted as a cache identity'
     }
+    # A CI build (X.Y.Z.N) is its own installation generation, distinct from its release.
+    [IO.File]::WriteAllText($metadata, "[Gesher]`nVersion=0.1.10`n")
+    $releaseGeneration = (New-GesherRuntimeSync $install $profile app).Generation
+    [IO.File]::WriteAllText($metadata, "[Gesher]`nVersion=0.1.10.526`n")
+    $buildGeneration = (New-GesherRuntimeSync $install $profile app).Generation
+    Assert-RuntimeFile ($buildGeneration -and $buildGeneration -cne $releaseGeneration -and $buildGeneration.EndsWith("`n0.1.10.526")) 'A CI build version was not a distinct cache identity'
 
     # The installed launcher can run in a Windows PowerShell environment where
     # Get-FileHash is unavailable. Exercise the production helper in a fresh
