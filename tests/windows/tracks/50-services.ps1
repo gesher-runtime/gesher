@@ -853,7 +853,8 @@ try {
     @{ Class = 'BlobStoreContractTest'; Count = 25; Name = 'empty shared-blob queries, zero quota and unsupported storage' },
     @{ Class = 'NsdContractTest'; Count = 65; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
     @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
-    @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' }
+    @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' },
+    @{ Class = 'RoleManagerUnsupportedTest'; Count = 168; Name = 'RoleManager absence, permission, callback and mutation contracts' }
   )
   foreach ($contract in $canonicalChecks) {
     CheckTimed "services: $($contract.Name)" "$Dir/dalvikvm.exe" `

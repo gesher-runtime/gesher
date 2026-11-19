@@ -1,6 +1,10 @@
 // Included only in the CI fixture build, inside uia_bridge.cc's namespace.
 // Dispatches the EXISTING four query wrappers on a fixture-owned real HWND's
 // owner STA. No production dispatch path or JNI implementation is duplicated.
+jlong FixtureQueryNanos() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      gesher::accessibility::Clock::now().time_since_epoch()).count();
+}
 struct FixtureQuery {
   HWND hwnd = nullptr;
   WNDPROC original = nullptr;
@@ -11,6 +15,8 @@ struct FixtureQuery {
   HANDLE sender = nullptr;
   std::atomic<bool> entered{false}, done{false};
   std::atomic<bool> unavailable{false};
+  jlong dispatch_started_ns = 0;
+  std::atomic<jlong> wrapper_entered_ns{0}, wrapper_returned_ns{0};
 };
 std::mutex g_fixture_mutex;
 std::map<HWND, std::shared_ptr<FixtureQuery>> g_fixture_hooks;
@@ -27,6 +33,9 @@ LRESULT CALLBACK FixtureProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
   }
   if (!state) return DefWindowProcW(hwnd, msg, wparam, lparam);
   if (msg == kFixtureMessage && lparam == reinterpret_cast<LPARAM>(state.get())) {
+    // Measure the actual owner-side wrapper, excluding nativeStart's fixture
+    // setup and asynchronous HWND dispatch. No production deadline is changed.
+    state->wrapper_entered_ns.store(FixtureQueryNanos(), std::memory_order_release);
     state->entered.store(true, std::memory_order_release);
     bool unavailable = false;
     if (state->direct) {
@@ -48,6 +57,7 @@ LRESULT CALLBACK FixtureProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
         case 3: unavailable = !Perform(hwnd, state->node, kClick, nullptr, state->epoch); break;
       }
     }
+    state->wrapper_returned_ns.store(FixtureQueryNanos(), std::memory_order_release);
     state->unavailable.store(unavailable, std::memory_order_release);
     state->done.store(true, std::memory_order_release);
     return 1;
@@ -67,6 +77,7 @@ DWORD WINAPI FixtureSender(void* pointer) {
   return 0;
 }
 jlong QueryFixture_nativeStart(JNIEnv*, jclass, jlong value, jint kind, jlong node, jboolean direct) {
+  const jlong dispatch_started_ns = FixtureQueryNanos();
   HWND hwnd = reinterpret_cast<HWND>(static_cast<intptr_t>(value));
   if (!IsAppWindow(hwnd) || kind < 0 || kind > 3 || kFixtureMessage == 0) return 0;
   Subclass(hwnd);  // preserve UIA's original chain, including NCDESTROY cleanup
@@ -78,6 +89,7 @@ jlong QueryFixture_nativeStart(JNIEnv*, jclass, jlong value, jint kind, jlong no
   std::fprintf(stderr, "gesher-a11y: ACTUAL_QUERY_FIXTURE_MODULE pid=%lu path=%ls\n", GetCurrentProcessId(), module);
   auto state = std::make_shared<FixtureQuery>();
   state->hwnd = hwnd; state->epoch = epoch; state->kind = kind; state->node = node; state->direct = direct == JNI_TRUE;
+  state->dispatch_started_ns = dispatch_started_ns;
   uint64_t id;
   {
     std::lock_guard<std::mutex> lock(g_fixture_mutex);
@@ -115,6 +127,28 @@ jlong QueryFixture_nativeGeneration(JNIEnv*, jclass, jlong id) {
   std::lock_guard<std::mutex> lock(g_fixture_mutex);
   auto found = g_fixture_queries.find(static_cast<uint64_t>(id));
   return found == g_fixture_queries.end() ? 0 : static_cast<jlong>(found->second->epoch->generation);
+}
+jlongArray QueryFixture_nativeTiming(JNIEnv* env, jclass, jlong id) {
+  // The caller samples immediately AFTER the real window close/owner join,
+  // while still holding the real Java monitor. Capture before fixture lookup
+  // and reporting allocations, using the SAME clock as the owner timestamps.
+  const jlong observed_ns = FixtureQueryNanos();
+  std::shared_ptr<FixtureQuery> state;
+  {
+    std::lock_guard<std::mutex> lock(g_fixture_mutex);
+    auto found = g_fixture_queries.find(static_cast<uint64_t>(id));
+    if (found == g_fixture_queries.end()) return nullptr;
+    state = found->second;
+  }
+  const jlong times[] = {
+      state->dispatch_started_ns,
+      state->wrapper_entered_ns.load(std::memory_order_acquire),
+      state->wrapper_returned_ns.load(std::memory_order_acquire),
+      observed_ns,
+  };
+  jlongArray result = env->NewLongArray(std::size(times));
+  if (result) env->SetLongArrayRegion(result, 0, std::size(times), times);
+  return result;
 }
 jboolean QueryFixture_nativeJoin(JNIEnv*, jclass, jlong id) {
   std::shared_ptr<FixtureQuery> state;
@@ -163,6 +197,7 @@ jboolean RegisterQueryFixture(JNIEnv* env, jclass, jclass type) {
     {"nativeStart", "(JIJZ)J", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeStart)},
     {"nativeState", "(J)J", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeState)},
     {"nativeGeneration", "(J)J", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeGeneration)},
+    {"nativeTiming", "(J)[J", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeTiming)},
     {"nativeJoin", "(J)Z", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeJoin)},
     {"nativeActive", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeActive)},
     {"nativeAttached", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeAttached)},

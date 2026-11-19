@@ -184,6 +184,7 @@ jobs:
             -O binary --only-section=.text /tmp/arm64-fpcr-code.o dist-arm64/arm64-fpcr-code.bin
           # Step 1 (guest): a self-contained .so, no libc/TLS/stack guard.
           bash tests/native/build-lookup-graph.sh "$cc" dist-arm64 _arm64
+          bash tests/native/build-load-transaction-graph.sh "$cc" dist-arm64/elf-load-transaction-arm64
           "$cc" -std=c11 -O2 -Wall -Wextra -Werror tests/native/aaudio_builder_contract_test.c \
             -laaudio -ldl -o dist-arm64/aaudio_builder_arm64
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++" \
