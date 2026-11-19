@@ -27,6 +27,7 @@ static inline int GesherUiRtl(enum GesherUiLanguage lang) {
   return lang == GESHER_UI_HE;
 }
 static inline const wchar_t* GesherUiText(enum GesherUiLanguage lang, const char* key) {
+  if (strcmp(key, "intent_chooser_title") == 0) return lang == GESHER_UI_HE ? L"\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d9\u05d9\u05e9\u05d5\u05dd" : L"Gesher \u2014 choose an app";
   if (strcmp(key, "chooser_title") == 0) return lang == GESHER_UI_HE ? L"\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df" : L"Gesher accounts";
   if (strcmp(key, "chooser_prompt") == 0) return lang == GESHER_UI_HE ? L"\u05d1\u05d7\u05e8 \u05d7\u05e9\u05d1\u05d5\u05df \u05e2\u05d1\u05d5\u05e8 \u05d9\u05d9\u05e9\u05d5\u05dd \u05d6\u05d4:" : L"Choose an account for this application:";
   if (strcmp(key, "chooser_select") == 0) return lang == GESHER_UI_HE ? L"\u05d1\u05d7\u05d9\u05e8\u05d4" : L"Select";

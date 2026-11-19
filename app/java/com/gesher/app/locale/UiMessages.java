@@ -25,6 +25,7 @@ public final class UiMessages {
         String lang = language(tags);
         String value;
         switch (key) {
+            case "intent_chooser_title": value = lang.equals("he") ? "\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d9\u05d9\u05e9\u05d5\u05dd" : "Gesher \u2014 choose an app"; break;
             case "chooser_title": value = lang.equals("he") ? "\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df" : "Gesher accounts"; break;
             case "chooser_prompt": value = lang.equals("he") ? "\u05d1\u05d7\u05e8 \u05d7\u05e9\u05d1\u05d5\u05df \u05e2\u05d1\u05d5\u05e8 \u05d9\u05d9\u05e9\u05d5\u05dd \u05d6\u05d4:" : "Choose an account for this application:"; break;
             case "chooser_select": value = lang.equals("he") ? "\u05d1\u05d7\u05d9\u05e8\u05d4" : "Select"; break;

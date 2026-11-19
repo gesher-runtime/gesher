@@ -8,6 +8,10 @@
     }
   },
   "messages": {
+    "intent_chooser_title": {
+      "en": "Gesher — choose an app",
+      "he": "גשר — בחירת יישום"
+    },
     "chooser_title": {
       "en": "Gesher accounts",
       "he": "גשר — בחירת חשבון"

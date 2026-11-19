@@ -156,6 +156,16 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         return PackageManager.PERMISSION_DENIED;
     }
 
+    /** ActivityManager.checkComponentPermission, with this runtime's UID permission store. */
+    int checkComponentPermission(String permission, int uid, int owningUid, boolean exported) {
+        if (uid < 0) return PackageManager.PERMISSION_DENIED;
+        if (android.app.ActivityManager.canAccessUnexportedComponents(uid)) return PackageManager.PERMISSION_GRANTED;
+        if (android.os.UserHandle.isIsolated(uid)) return PackageManager.PERMISSION_DENIED;
+        if (owningUid >= 0 && android.os.UserHandle.isSameApp(uid, owningUid)) return PackageManager.PERMISSION_GRANTED;
+        if (!exported) return PackageManager.PERMISSION_DENIED;
+        return permission == null ? PackageManager.PERMISSION_GRANTED : checkUidPermission(uid, permission, 0);
+    }
+
     int checkProcessPermission(String permission, int pid, int uid) {
         CallerIdentity callers = mCallers;
         if (callers == null) return PackageManager.PERMISSION_DENIED;
