@@ -30,6 +30,22 @@ Check 'framework: WifiInfo Builder, MLO, redaction and native Parcelable contrac
   else { $global:LASTEXITCODE = 1; "WifiInfo native Parcel evidence failed: $deepWifiInfoWireFailure" }
 } @('WifiInfoContractTest all passed:', 'parcel=true', 'WifiInfo native Parcel bytes match Android reference: 9 cases')
 
+$deepWifiSpecifierOut = FixesRun ($dvmFixes + 'gesher.services.WifiNetworkSpecifierContractTest') 90
+$deepWifiSpecifierCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiNetworkSpecifierParcel.ps1"
+$deepWifiSpecifierWireOK = $false
+$deepWifiSpecifierWireFailure = ''
+try {
+  Assert-WifiNetworkSpecifierParcelEvidence -Output $deepWifiSpecifierOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-network-specifier-android-reference-2026-11-18.json')
+  $deepWifiSpecifierWireOK = $true
+} catch { $deepWifiSpecifierWireFailure = $_.Exception.Message }
+Check 'framework: Wi-Fi specifier validation, matching and native NetworkRequest Parcel' {
+  $global:LASTEXITCODE = $deepWifiSpecifierCode
+  $deepWifiSpecifierOut
+  if ($deepWifiSpecifierWireOK) { 'WifiNetworkSpecifier native Parcel bytes match pinned AOSP r4 reference: 12 cases' }
+  else { $global:LASTEXITCODE = 1; "WifiNetworkSpecifier native Parcel evidence failed: $deepWifiSpecifierWireFailure" }
+} @('WifiNetworkSpecifierContractTest all passed:', 'parcel=true', 'WifiNetworkSpecifier boot NetworkRequest Parcel passed: 4 checks', 'WifiNetworkSpecifier native Parcel bytes match pinned AOSP r4 reference: 12 cases')
+
 $deepNetworkOut = FixesRun ($dvmFixes + 'gesher.services.NetworkSnapshotContractTest') 90
 $deepNetworkCode = $LASTEXITCODE
 Check 'framework: network route, address, snapshot and proxy contracts with native Parcel' {
