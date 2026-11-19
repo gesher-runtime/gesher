@@ -1,0 +1,413 @@
+{
+  "comparison_id": "official-sdk-36-r02-to-37.0-r02",
+  "delta_rows_sha256": "20896456488ead1c79c6cf829f37830a158f1475f1c45c934ff6fd6b78765e22",
+  "generator_files_sha256": {
+    "java_api_inventory.py": "0d66695c9b4689858abba61d0a127e9cefbe68ab2d426a03ecabd001fd62ca83",
+    "java_member_inventory.py": "290d6fe66049e90d6f29495b038b4f9365c0be89105d94a76c27fa9ca76a5475",
+    "sdk_platform_diff.py": "df91c8d5a1abd8de789f63c8a150c5401be281cfb49619de1e2535c12ad78856"
+  },
+  "interpretation": [
+    "Encoded classes include all classfile visibilities. Public/protected declarations are counted once on their encoded declaring class; inherited members are not expanded for every subclass.",
+    "A declaration removed from one class can resolve in a superclass/interface. Removed rows include conservative lookup in the after SDK, with unresolved and ambiguous outcomes retained.",
+    "Descriptor presence and flag differences do not establish binary or source compatibility. Classfile flags are raw JVM flags, not reconstructed InnerClasses source modifiers.",
+    "All measured before declarations form the target-lookup denominator, independently of whether a changed row is emitted.",
+    "Final public XML entries include declarations marked hidden/system in comments. Comments and resource annotations are not interpreted as a public SDK API filter.",
+    "Active staging names exclude removed_ placeholders; slot inventories include every allocated placeholder. Finalized staging alias slots retain their old IDs and a final ID matched by type/name when present.",
+    "Resource file changes compare complete bytes under data/res; hash changes alone are not semantic changes. Archives pin other files but those files are not interpreted.",
+    "No aggregate coverage percentage combines Java, preprocessed AIDL, resources, NDK, CompatChanges or behavior. Unmeasured dimensions have no denominator."
+  ],
+  "java": {
+    "before_declaration_target_lookup": {
+      "denominator": 90630,
+      "location_counts": {
+        "declared": 90592,
+        "inherited": 5
+      },
+      "possible_flag_difference_counts": {},
+      "status_counts": {
+        "declaring_class_absent": 32,
+        "descriptor_found": 90597,
+        "descriptor_not_found": 1
+      }
+    },
+    "declaration_kinds": {
+      "after": {
+        "constructor": 5645,
+        "field": 32797,
+        "method": 55356
+      },
+      "before": {
+        "constructor": 5515,
+        "field": 31432,
+        "method": 53683
+      }
+    },
+    "encoded_class_definitions": {
+      "added": 217,
+      "after": 6440,
+      "before": 6227,
+      "changed": 5,
+      "removed": 4,
+      "unchanged": 6218
+    },
+    "encoded_classfile_visibility": {
+      "after": {
+        "other": 5,
+        "public": 6435
+      },
+      "before": {
+        "other": 5,
+        "public": 6222
+      }
+    },
+    "public_protected_declarations": {
+      "added": 3206,
+      "after": 93798,
+      "before": 90630,
+      "flags_changed": 98,
+      "removed": 38,
+      "unchanged": 90494
+    }
+  },
+  "manifest_sha256": "24b22fb2cb012aced9efa7ab036364ced68dfd284ad0c387b3a31e895bc4e325",
+  "preprocessed_aidl": {
+    "added": 173,
+    "after": 1709,
+    "before": 1538,
+    "changed": 0,
+    "removed": 2,
+    "unchanged": 1536
+  },
+  "profiles": {
+    "after": {
+      "android_codename": "",
+      "api_level_raw": "37.0",
+      "api_major": 37,
+      "api_minor": 0,
+      "api_minor_explicit_in_source_properties": true,
+      "archive": {
+        "bytes": 67281901,
+        "member_root": "android-37.0",
+        "sha1": "ed8ebf7f8822a4de5686d427f237d2fa30ff7410",
+        "sha256": "840b23e827f96e64aea4c89a1194aac3dc5f6bad37edb231c5c795d890330e8d",
+        "url": "https://dl.google.com/android/repository/platform-37.0_r02.zip"
+      },
+      "archive_file_count": 11384,
+      "artifacts": {
+        "android.jar": {
+          "bytes": 43044472,
+          "sha256": "bf1b4387cc7ca94fc6ef684f040d9d16fbf16248e181819f020736ea2053f177"
+        },
+        "build.prop": {
+          "bytes": 4346,
+          "sha256": "08f3d536c482a1cf7ba1466b9fb4ca2813a1898d3c5fdab6f093223a7e8a1e2b"
+        },
+        "data/res/values/public-final.xml": {
+          "bytes": 275607,
+          "sha256": "ddb8f8ddb2d714a435f57db5283b33048776557d7f9d8871fb93a882c3fb583a"
+        },
+        "data/res/values/public-staging.xml": {
+          "bytes": 13109,
+          "sha256": "40aefd2e062d7e4f755d7f68bf3d0de8ded23cd8310700a3a2748a330af97c32"
+        },
+        "framework.aidl": {
+          "bytes": 136049,
+          "sha256": "67fe395a71d80321c1488a4c18c920c2283283c116be0bc7234763bd37544345"
+        },
+        "source.properties": {
+          "bytes": 343,
+          "sha256": "fa89029fc0cee414cb5e44a37cd3033771217eeecb5086577bb6d9b1b03b5b5f"
+        }
+      },
+      "base_sdk": true,
+      "beta_version": "",
+      "extension_level": 22,
+      "id": "sdk-37.0-base-ext22-r2",
+      "java_inventory": {
+        "archive_bytes": 43044472,
+        "class_definitions": 6440,
+        "encoded_member_definitions": 97562,
+        "entries": 15156,
+        "name": "android.jar",
+        "role": "sdk",
+        "selected_members": 6440,
+        "sha256": "bf1b4387cc7ca94fc6ef684f040d9d16fbf16248e181819f020736ea2053f177",
+        "source_id": "sdk-37.0-base-ext22-r2",
+        "uncompressed_bytes": 51066418,
+        "versions": {
+          "class_major_52": 6440
+        }
+      },
+      "package_path": "platforms;android-37.0",
+      "platform_codename": "",
+      "platform_version": "17",
+      "preview_sdk_int": "0",
+      "release_classification_basis": "Repository channel and observed codename/preview fields are reported separately; absent properties remain null.",
+      "repository_channel": {
+        "id": "channel-0",
+        "name": "stable"
+      },
+      "repository_codename": "",
+      "repository_package": {
+        "api_level_raw": "37.0",
+        "base_extension_raw": "true",
+        "channel": {
+          "id": "channel-0",
+          "name": "stable"
+        },
+        "codename": "",
+        "codename_element_present": true,
+        "complete_archive": {
+          "bytes": 67281901,
+          "checksum": "ed8ebf7f8822a4de5686d427f237d2fa30ff7410",
+          "checksum_type": "sha1",
+          "url": "platform-37.0_r02.zip"
+        },
+        "display_name": "Android SDK Platform 37.0",
+        "extension_level_raw": "22",
+        "license_ref": "android-sdk-license",
+        "revision": "2",
+        "revision_components": {
+          "major": "2",
+          "micro": null,
+          "minor": null
+        }
+      },
+      "resource_file_count": 11199,
+      "resource_file_inventory_sha256": "60aa3b81160996e35ada6a2e8dcd5d5abd3c0d3bacafbdb79d69898660ae050c",
+      "resource_file_total_bytes": 61502477,
+      "sdk_package_revision": "2",
+      "source_properties": {
+        "AndroidVersion.ApiLevel": "37.0",
+        "AndroidVersion.BetaVersion": "",
+        "AndroidVersion.CodeName": "",
+        "AndroidVersion.ExtensionLevel": "22",
+        "AndroidVersion.IsBaseSdk": "true",
+        "AndroidVersion.PreviewSdkInt": "0",
+        "Layoutlib.Api": "15",
+        "Layoutlib.Revision": "1",
+        "Pkg.Desc": "Android SDK Platform 17",
+        "Pkg.Revision": "2",
+        "Pkg.UserSrc": "false",
+        "Platform.CodeName": "",
+        "Platform.MinToolsRev": "22",
+        "Platform.Version": "17"
+      }
+    },
+    "before": {
+      "android_codename": null,
+      "api_level_raw": "36",
+      "api_major": 36,
+      "api_minor": 0,
+      "api_minor_explicit_in_source_properties": false,
+      "archive": {
+        "bytes": 65878410,
+        "member_root": "android-36",
+        "sha1": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
+        "sha256": "37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e",
+        "url": "https://dl.google.com/android/repository/platform-36_r02.zip"
+      },
+      "archive_file_count": 11342,
+      "artifacts": {
+        "android.jar": {
+          "bytes": 27768026,
+          "sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a"
+        },
+        "build.prop": {
+          "bytes": 4124,
+          "sha256": "2f5f0aff379e840a50941bcd1e9c5d1035cca1fa1fe08cd852af344a07dad272"
+        },
+        "data/res/values/public-final.xml": {
+          "bytes": 257406,
+          "sha256": "212f215240388e6cab769e12ccd401e2ea1bf603a864aab6c54f3f86ce0a8781"
+        },
+        "data/res/values/public-staging.xml": {
+          "bytes": 14143,
+          "sha256": "8d79a185d218ba8f47ad3e61fa3324527b5f5de73af04a4e09f15c5eca421e0a"
+        },
+        "framework.aidl": {
+          "bytes": 121424,
+          "sha256": "d45522596d198f64877be16fef2c8c3384b095e83eafec46976f5c5836619b20"
+        },
+        "source.properties": {
+          "bytes": 257,
+          "sha256": "72291ff6611dbfc46fdfb6de2821c4a62c87befa5200713847eda426e3a501c2"
+        }
+      },
+      "base_sdk": true,
+      "beta_version": null,
+      "extension_level": 17,
+      "id": "sdk-36-base-ext17-r2",
+      "java_inventory": {
+        "archive_bytes": 27768026,
+        "class_definitions": 6227,
+        "encoded_member_definitions": 94221,
+        "entries": 14996,
+        "name": "android.jar",
+        "role": "sdk",
+        "selected_members": 6227,
+        "sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+        "source_id": "sdk-36-base-ext17-r2",
+        "uncompressed_bytes": 49259446,
+        "versions": {
+          "class_major_52": 6227
+        }
+      },
+      "package_path": "platforms;android-36",
+      "platform_codename": "",
+      "platform_version": "16",
+      "preview_sdk_int": null,
+      "release_classification_basis": "Repository channel and observed codename/preview fields are reported separately; absent properties remain null.",
+      "repository_channel": {
+        "id": "channel-0",
+        "name": "stable"
+      },
+      "repository_codename": null,
+      "repository_package": {
+        "api_level_raw": "36",
+        "base_extension_raw": "true",
+        "channel": {
+          "id": "channel-0",
+          "name": "stable"
+        },
+        "codename": null,
+        "codename_element_present": false,
+        "complete_archive": {
+          "bytes": 65878410,
+          "checksum": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
+          "checksum_type": "sha1",
+          "url": "platform-36_r02.zip"
+        },
+        "display_name": "Android SDK Platform 36",
+        "extension_level_raw": "17",
+        "license_ref": "android-sdk-license",
+        "revision": "2",
+        "revision_components": {
+          "major": "2",
+          "micro": null,
+          "minor": null
+        }
+      },
+      "resource_file_count": 11158,
+      "resource_file_inventory_sha256": "db72f9e2a718047a9aed11d00d8bcbb818094929188b56ea731c4bc988a53342",
+      "resource_file_total_bytes": 58628348,
+      "sdk_package_revision": "2",
+      "source_properties": {
+        "AndroidVersion.ApiLevel": "36",
+        "AndroidVersion.ExtensionLevel": "17",
+        "AndroidVersion.IsBaseSdk": "true",
+        "Layoutlib.Api": "15",
+        "Layoutlib.Revision": "1",
+        "Pkg.Desc": "Android SDK Platform 16",
+        "Pkg.Revision": "2",
+        "Pkg.UserSrc": "false",
+        "Platform.CodeName": "",
+        "Platform.MinToolsRev": "22",
+        "Platform.Version": "16"
+      }
+    }
+  },
+  "project_source_context": {
+    "android17_aosp_module_profile": null,
+    "aosp_lock_sha256": "b669e83edc8c4fb5102f37c1511d9d8b467ba718aa76fbd13892e6f3bd54ec18",
+    "aosp_tag": "android-16.0.0_r4",
+    "evidence_path": "aosp.lock",
+    "runtime_sdk_int_changed": false,
+    "sdk_to_aosp_module_alignment": "not_established",
+    "source_equivalent_remote_main_commit": "1e14cbb8629e1defba0009f58996630e51bc0c19",
+    "source_tree": "a33e0765eaf122320e93c8ef3dea8d9922aa50fe"
+  },
+  "repository_metadata_provenance": {
+    "captured_utc_date": "2026-11-18",
+    "selection": "The two package records and channel labels below were extracted from this hashed official XML snapshot. The comparison verifies archives and measured files against these pins; it does not fetch or revalidate the mutable repository URL.",
+    "snapshot_bytes": 436016,
+    "snapshot_sha256": "8db7cc1bd65bf8c9dffc3678a70d6dc98b02781a24d1ef0d31ecf111a55cc2d5",
+    "source_url": "https://dl.google.com/android/repository/repository2-3.xml"
+  },
+  "resources": {
+    "active_staging_names": {
+      "added": 37,
+      "after": 43,
+      "before": 48,
+      "changed": 6,
+      "removed": 42,
+      "unchanged": 0
+    },
+    "files": {
+      "added": 97,
+      "after": 11199,
+      "before": 11158,
+      "changed": 265,
+      "removed": 56,
+      "unchanged": 10837
+    },
+    "final_public_ids": {
+      "added": 58,
+      "after": 3037,
+      "before": 2979,
+      "changed": 0,
+      "removed": 0,
+      "unchanged": 2979
+    },
+    "finalized_staging_alias_slots": {
+      "added": 79,
+      "after": 376,
+      "before": 297,
+      "changed": 0,
+      "removed": 0,
+      "unchanged": 297
+    },
+    "groups": {
+      "added": 24,
+      "after": 45,
+      "before": 39,
+      "changed": 0,
+      "removed": 18,
+      "unchanged": 21
+    },
+    "slot_classification": {
+      "after": {
+        "finalized_staging_alias_slots": {
+          "named_slots": 303,
+          "removed_placeholders": 73
+        },
+        "staging_slots": {
+          "named_slots": 43,
+          "removed_placeholders": 5
+        }
+      },
+      "before": {
+        "finalized_staging_alias_slots": {
+          "named_slots": 245,
+          "removed_placeholders": 52
+        },
+        "staging_slots": {
+          "named_slots": 48,
+          "removed_placeholders": 5
+        }
+      }
+    },
+    "staging_slots": {
+      "added": 48,
+      "after": 48,
+      "before": 53,
+      "changed": 0,
+      "removed": 53,
+      "unchanged": 0
+    }
+  },
+  "row_count": 4526,
+  "schema_version": 1,
+  "scope": "Offline SDK platform artifact changes; no runtime compatibility conclusion.",
+  "unmeasured": {
+    "aosp_module_revision_alignment": "An SDK API/extension/revision does not identify the project's AOSP tag or individual module commits.",
+    "binder_transactions_and_source_aidl": "framework.aidl is a preprocessed declaration list; source methods, transaction IDs, parcel layouts and Binder behavior are not inputs.",
+    "compiled_and_runtime_resources": "XML IDs and file hashes do not establish compiled resource tables, overlays, device configuration or runtime provisioning.",
+    "cts_cdd_and_runtime_behavior": "No CTS/CDD qualification, runtime API37 execution, services, permissions or behavior is measured.",
+    "java_constant_values": "ConstantValue attributes are not decoded.",
+    "java_generics_annotations_exceptions": "Signature, annotation, annotation-default and Exceptions attributes are not decoded; data/annotations.zip is not compared.",
+    "java_source_access_and_full_linkage": "InnerClasses source access, generic typing, protected receiver rules, class loaders, optional SDK jars and complete JVM linkage are not evaluated.",
+    "ndk_exports": "No separately pinned NDK sysroot/export artifacts are inputs.",
+    "source_compat_changes": "No separately pinned source CompatChanges inventory is an input."
+  }
+}

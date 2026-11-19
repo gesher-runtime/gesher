@@ -633,33 +633,43 @@ FILE* fopen(const char* path, const char* mode) {
 
 FILE* fopen64(const char* path, const char* mode) { return fopen(path, mode); }
 
-int fclose(FILE* stream) {
+int gesher_fclose_state(FILE* stream, int* retired) {
+  if (retired) *retired = 0;
   if (!stream) return errno = EINVAL, EOF;
   StreamLock stream_lock(stream);
-  gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
+  int fd = _fileno(stream);
+  gesher::record_locks::ClosingDescriptor transaction(fd);
   if (transaction.Error()) return errno = transaction.Error(), EOF;
   // Use the CRT's documented unlocked entry under its stream lock, avoiding
   // recursion through this public fclose symbol.
+  if (retired) *retired = 1;
   int result = _fclose_nolock(stream);
   int saved = result == EOF ? gesher_errno_from_crt(errno) : errno;
+  gesher::ForgetStreamDevice(fd, result == 0);
   int error = transaction.Finish(result == 0);
   if (error) return errno = error, EOF;
   errno = saved;
   return result;
 }
 
+int fclose(FILE* stream) { return gesher_fclose_state(stream, nullptr); }
+
 // The stream is reopened by the CRT on the Windows name (NUL for /dev/null),
 // keeping its FILE.
-FILE* freopen(const char* path, const char* mode, FILE* stream) {
+FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int* retired) {
+  if (retired) *retired = 0;
   if (!stream) return errno = EINVAL, nullptr;
   StreamLock stream_lock(stream);
-  gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
+  int fd = _fileno(stream);
+  gesher::record_locks::ClosingDescriptor transaction(fd);
   if (transaction.Error()) return errno = transaction.Error(), nullptr;
   auto fail_reopen = [&](int requested_error) -> FILE* {
     // Even a destination rejected before the CRT reopen still closes the
     // original stream. Use the already-held stream/descriptor transaction
     // exactly once, including when flushing/closing itself reports an error.
+    if (retired) *retired = 1;
     int closed = _fclose_nolock(stream);
+    gesher::ForgetStreamDevice(fd, closed == 0);
     int metadata_error = transaction.Finish(closed == 0);
     errno = metadata_error ? metadata_error : requested_error;
     return nullptr;
@@ -669,7 +679,10 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
   if (!ParseMode(mode, &flags, crt_mode)) {
     return fail_reopen(EINVAL);
   }
-  if (path == nullptr) return stream;  // a mode change: the CRT cannot; Linux may refuse too
+  if (path == nullptr) {
+    if (retired) *retired = 1;
+    return stream;  // a mode change: the CRT cannot; Linux may refuse too
+  }
   std::wstring windows;
   switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
     case PathKind::kFile:
@@ -688,13 +701,19 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
   // existence check before reopening would still race another creator.
   if (mode[0] == 'w' && (flags & O_EXCL) != 0) wmode += L'x';
   if ((flags & O_CLOEXEC) != 0) wmode += L'N';
+  if (retired) *retired = 1;
   FILE* result = _wfreopen(windows.c_str(), wmode.c_str(), stream);
   int saved = result == nullptr ? gesher_errno_from_crt(errno) : errno;
+  gesher::ForgetStreamDevice(fd, result != nullptr);
   if (result == nullptr && saved == ENOENT && HasNonDirectoryParent(windows)) saved = ENOTDIR;
   int error = transaction.Finish(result != nullptr);
   if (error) return errno = error, nullptr;
   errno = saved;
   return result;
+}
+
+FILE* freopen(const char* path, const char* mode, FILE* stream) {
+  return gesher_freopen_state(path, mode, stream, nullptr);
 }
 
 FILE* freopen64(const char* path, const char* mode, FILE* stream) {

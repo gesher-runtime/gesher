@@ -32,6 +32,9 @@ def main() -> None:
                   if args.source_ref else (ROOT / path).read_text(encoding='utf-8'))
     snippets = [method(production, marker) for marker in (
         'private static final class Session',
+        'private static void post(Session s, int what, int arg1, int arg2, Object obj)',
+        'public static void setHasPreviewCallback(Camera camera, boolean installed, boolean manual)',
+        'public static void addCallbackBuffer(Camera camera, byte[] buffer, int msgType)',
         'private static void previewLoop(Session s, WindowsCamera.Capture capture, Size size)',
         'private static byte[] frame(Session s, byte[] nv12, int cw, int ch, int w, int h')]
     # The frame signature gained a manual-admission argument; match its exact start.

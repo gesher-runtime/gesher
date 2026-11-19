@@ -25,6 +25,7 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "poll_scratch.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
 
@@ -165,6 +166,14 @@ void RegisterDevice(int fd, Device device) {
 }
 
 bool DeviceFromFd(int fd, Device* device) { return LookupDevice(fd, device); }
+
+void ForgetStreamDevice(int fd, bool closed_or_replaced) {
+  Device device;
+  if (!LookupDevice(fd, &device)) return;
+  int saved = errno;
+  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) ForgetDevice(fd);
+  errno = saved;
+}
 
 }  // namespace gesher
 
@@ -381,6 +390,22 @@ namespace {
 constexpr short kIn = POLLIN | POLLRDNORM;
 constexpr short kOut = POLLOUT | POLLWRNORM;
 
+struct FdPollScratch {
+  std::vector<gesher::ws::PollEntry> sockets;
+  std::vector<nfds_t> socket_index;
+  std::vector<std::shared_ptr<gesher::EventFd>> eventfds;
+  std::vector<nfds_t> eventfd_index;
+  std::vector<HANDLE> handles;
+
+  void Reset() {
+    gesher::ClearPollScratch(handles);
+    gesher::ClearPollScratch(eventfd_index);
+    gesher::ClearPollScratch(eventfds);
+    gesher::ClearPollScratch(socket_index);
+    gesher::ClearPollScratch(sockets);
+  }
+};
+
 // Readiness of a non-socket fd: pipes are readable when data is buffered or
 // the writer is gone; files and other devices are always ready. Returns false
 // for a pipe that has nothing yet.
@@ -487,11 +512,13 @@ void WakePollers() {
 static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted, PollObserver observer, void* context,
                        ws::NativePollObserver native_observer, void* native_context) {
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
-  std::vector<ws::PollEntry> sockets;
-  std::vector<nfds_t> socket_index;
+  PollScratchLease<FdPollScratch> lease(nfds <= kPollScratchLimit);
+  auto& scratch = lease.get();
+  auto& sockets = scratch.sockets;
+  auto& socket_index = scratch.socket_index;
   // Held so that their events stay open while waited on.
-  std::vector<std::shared_ptr<EventFd>> eventfds;
-  std::vector<nfds_t> eventfd_index;
+  auto& eventfds = scratch.eventfds;
+  auto& eventfd_index = scratch.eventfd_index;
   bool waiting_files = false;  // a pipe that may become readable
   for (nfds_t i = 0; i < nfds; ++i) {
     pollfd* p = &fds[i];
@@ -539,7 +566,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
   }
   PollWaiter* waiter = registration ? registration->get() : nullptr;
   bool look_first = waiter != nullptr;
-  std::vector<HANDLE> handles;
+  auto& handles = scratch.handles;
   for (;;) {
     int wait_ms = 0;  // with something ready, only collect what the rest has
     if (ready == 0 && !look_first) {

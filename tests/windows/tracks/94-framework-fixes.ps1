@@ -23,6 +23,15 @@ Check 'network: Android HttpEngine requests over real ART and HTTP sockets' {
   $httpEngineOut
 } @('HttpEngineDeviceSmoke passed:')
 
+foreach ($httpPolicyMode in @('ordinary', 'global-enabled', 'global-disabled')) {
+  $httpPolicyOut = FixesRun ($dvmFixes + 'HttpEngineProtocolPolicyTest' + $httpPolicyMode) 45
+  $httpPolicyCode = $LASTEXITCODE
+  Check "network: HTTP/2 $httpPolicyMode engine isolation and request/response headers" {
+    if ($httpPolicyCode -ne 0) { throw "HTTP protocol policy failed: $httpPolicyOut" }
+    $httpPolicyOut
+  } @('HttpEngineProtocolPolicyTest passed:')
+}
+
 $http2Out = FixesRun ($dvmFixes + 'Http2DeviceSmoke') 45
 $http2Code = $LASTEXITCODE
 Check 'network: HTTP/2 full duplex, direct buffers, flush and gRPC trailers' {
@@ -30,7 +39,7 @@ Check 'network: HTTP/2 full duplex, direct buffers, flush and gRPC trailers' {
   $http2Out
 } @('Http2DeviceSmoke passed:')
 
-$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write')
+$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'disabled')
 foreach ($http2ContractMode in $http2ContractModes) {
   $http2ContractOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + $http2ContractMode) 45
   $http2ContractCode = $LASTEXITCODE
@@ -86,6 +95,14 @@ Check 'services: concurrent clipboard callbacks and native Windows clipboard upd
   $global:LASTEXITCODE = $clipboardCallbacksCode
   $clipboardCallbacksOut
 } @('ClipboardCallbackTest all passed:')
+
+$receiverExportOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ReceiverExportContractTest') 90
+$receiverExportCode = $LASTEXITCODE
+Check 'services: dynamic receiver exports, protected broadcasts and sticky-query exemptions' {
+  $global:LASTEXITCODE = $receiverExportCode
+  $receiverExportOut
+} @('ReceiverExportContractTest passed:', 'binder=true')
 
 $contentObserverOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'ContentObserverLifecycleTest') 90

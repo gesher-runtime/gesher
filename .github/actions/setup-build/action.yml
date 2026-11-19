@@ -57,7 +57,12 @@ runs:
 
     - name: Install build tools
       shell: bash
-      run: sudo apt-get install -y --no-install-recommends ninja-build ccache
+      run: |
+        if ! apt-cache show ninja-build >/dev/null 2>&1 ||
+           ! apt-cache show ccache >/dev/null 2>&1; then
+          sudo apt-get -o Acquire::Retries=2 update --error-on=any
+        fi
+        sudo apt-get install -y --no-install-recommends ninja-build ccache
 
     - name: Cache compiler output
       uses: actions/cache@v4

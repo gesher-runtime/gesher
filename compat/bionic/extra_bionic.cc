@@ -44,12 +44,6 @@
 #include <string>
 #include <vector>
 
-extern "C" {
-// stdio_bionic.cc's va_list forms (System V, extern "C" for its trampolines).
-int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt,
-                                       gesher::bionic::SysvVaList* ap);
-}
-
 namespace gesher::bionic {
 
 namespace {
@@ -1024,58 +1018,6 @@ wchar32* BIONIC_SYSV Wmemset(wchar32* d, wchar32 c, size_t n) {
   for (size_t i = 0; i < n; ++i) d[i] = c;
   return d;
 }
-// UTF-8 <-> UTF-32 for the multibyte conversions below.
-std::string Utf8(const wchar32* s, size_t n = SIZE_MAX) {
-  std::string out;
-  for (size_t i = 0; i < n && s[i] != 0; ++i) {
-    uint32_t c = s[i];
-    if (c < 0x80) {
-      out += static_cast<char>(c);
-    } else if (c < 0x800) {
-      out += static_cast<char>(0xc0 | (c >> 6));
-      out += static_cast<char>(0x80 | (c & 0x3f));
-    } else if (c < 0x10000) {
-      out += static_cast<char>(0xe0 | (c >> 12));
-      out += static_cast<char>(0x80 | ((c >> 6) & 0x3f));
-      out += static_cast<char>(0x80 | (c & 0x3f));
-    } else {
-      out += static_cast<char>(0xf0 | (c >> 18));
-      out += static_cast<char>(0x80 | ((c >> 12) & 0x3f));
-      out += static_cast<char>(0x80 | ((c >> 6) & 0x3f));
-      out += static_cast<char>(0x80 | (c & 0x3f));
-    }
-  }
-  return out;
-}
-}  // namespace
-
-// Wide formatted output: the narrow formatter (stdio_bionic.cc) on the
-// format converted to UTF-8, which handles %ls and %lc itself.
-extern "C" int BIONIC_SYSV gesher_extra_vfwprintf(void* f, const wchar32* fmt, SysvVaList* ap) {
-  std::string narrow = Utf8(fmt);
-  return gesher_bionic_vfprintf(f, narrow.c_str(), ap);
-}
-extern "C" int BIONIC_SYSV gesher_extra_vwprintf(const wchar32* fmt, SysvVaList* ap) {
-  static void* out = LookupBionicSymbol("stdout");
-  return gesher_extra_vfwprintf(out != nullptr ? *static_cast<void**>(out) : stdout, fmt, ap);
-}
-namespace {
-
-wchar32* BIONIC_SYSV Fgetws(wchar32* buf, int n, void* f) {
-  static auto fgetwc = Shim<uint32_t(BIONIC_SYSV*)(void*)>("fgetwc");
-  if (n <= 0 || fgetwc == nullptr) return nullptr;
-  int i = 0;
-  while (i < n - 1) {
-    uint32_t c = fgetwc(f);
-    if (c == 0xffffffffu) break;  // WEOF
-    buf[i++] = c;
-    if (c == '\n') break;
-  }
-  if (i == 0) return nullptr;
-  buf[i] = 0;
-  return buf;
-}
-
 // --- stdio: unlocked forms, buffers, memory streams -----------------------------
 // The .so's FILE* is the CRT's (stdio_bionic.cc), or &__sF[n] for the three
 // standard streams in libraries built for API < 23.
@@ -1091,39 +1033,14 @@ FILE* F(void* f) {
   }
   return static_cast<FILE*>(f);
 }
-void BIONIC_SYSV Flockfile(void* f) { _lock_file(F(f)); }
-void BIONIC_SYSV Funlockfile(void* f) { _unlock_file(F(f)); }
-int BIONIC_SYSV Ftrylockfile(void* f) {
-  _lock_file(F(f));  // the CRT has no try form
-  return 0;
-}
-int BIONIC_SYSV GetcUnlocked(void* f) { return _getc_nolock(F(f)); }
-int BIONIC_SYSV GetcharUnlocked() { return _getc_nolock(stdin); }
-int BIONIC_SYSV PutcUnlocked(int c, void* f) { return _putc_nolock(c, F(f)); }
-int BIONIC_SYSV PutcharUnlocked(int c) { return _putc_nolock(c, stdout); }
-size_t BIONIC_SYSV FreadUnlocked(void* b, size_t s, size_t n, void* f) {
-  return ReadStream(b, s, n, F(f), true);
-}
-size_t BIONIC_SYSV FwriteUnlocked(const void* b, size_t s, size_t n, void* f) {
-  return _fwrite_nolock(b, s, n, F(f));
-}
-int BIONIC_SYSV FputsUnlocked(const char* s, void* f) { return std::fputs(s, F(f)); }
-char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) { return std::fgets(s, n, F(f)); }
 int BIONIC_SYSV FflushUnlocked(void* f) { return _fflush_nolock(f == nullptr ? nullptr : F(f)); }
 int BIONIC_SYSV FeofUnlocked(void* f) { return std::feof(F(f)); }
-int BIONIC_SYSV FerrorUnlocked(void* f) { return std::ferror(F(f)); }
-void BIONIC_SYSV ClearerrUnlocked(void* f) { std::clearerr(F(f)); }
 int BIONIC_SYSV FilenoUnlocked(void* f) { return _fileno(F(f)); }
 int BIONIC_SYSV Fsetlocking(void*, int) { return 1; }  // FSETLOCKING_INTERNAL
 void BIONIC_SYSV Setlinebuf(void* f) { std::setvbuf(F(f), nullptr, _IOLBF, BUFSIZ); }
 void BIONIC_SYSV Setbuffer(void* f, char* buf, size_t size) {
   std::setvbuf(F(f), buf, buf != nullptr ? _IOFBF : _IONBF, size);
 }
-int BIONIC_SYSV Getw(void* f) {
-  int v;
-  return std::fread(&v, sizeof(v), 1, F(f)) == 1 ? v : EOF;
-}
-int BIONIC_SYSV Putw(int v, void* f) { return std::fwrite(&v, sizeof(v), 1, F(f)) == 1 ? 0 : EOF; }
 // fmemopen: a temporary file holding the buffer's bytes; reads see them, and
 // writes reach the buffer when the stream is flushed or closed only through
 // the open_memstream path below, so this is for reading (the common use).
@@ -1654,13 +1571,6 @@ int SystemPropertyGetValue(const char* name, char* value) {
   return static_cast<int>(v.size());
 }
 
-// The trampolines for the variadic wide forms (GESHER_VA_TRAMPOLINE).
-asm(".text\n"
-    GESHER_VA_TRAMPOLINE("gesher_extra_wprintf", "gesher_extra_vwprintf", "8", "%rsi")
-    GESHER_VA_TRAMPOLINE("gesher_extra_fwprintf", "gesher_extra_vfwprintf", "16", "%rdx"));
-extern "C" int gesher_extra_wprintf();
-extern "C" int gesher_extra_fwprintf();
-
 void RegisterExtra(SymbolTable& t) {
   E("tsearch", search::Tsearch);
   E("tfind", search::Tfind);
@@ -1902,35 +1812,13 @@ void RegisterExtra(SymbolTable& t) {
   E("wmempcpy", Wmempcpy);
   E("wmemmove", Wmemmove);
   E("wmemset", Wmemset);
-  t["wprintf"] = reinterpret_cast<void*>(&gesher_extra_wprintf);
-  t["fwprintf"] = reinterpret_cast<void*>(&gesher_extra_fwprintf);
-  t["vwprintf"] = reinterpret_cast<void*>(&gesher_extra_vwprintf);
-  t["vfwprintf"] = reinterpret_cast<void*>(&gesher_extra_vfwprintf);
-  E("fgetws", Fgetws);
   // stdio.
-  E("flockfile", Flockfile);
-  E("funlockfile", Funlockfile);
-  E("ftrylockfile", Ftrylockfile);
-  E("getc_unlocked", GetcUnlocked);
-  E("fgetc_unlocked", GetcUnlocked);
-  E("getchar_unlocked", GetcharUnlocked);
-  E("putc_unlocked", PutcUnlocked);
-  E("fputc_unlocked", PutcUnlocked);
-  E("putchar_unlocked", PutcharUnlocked);
-  E("fread_unlocked", FreadUnlocked);
-  E("fwrite_unlocked", FwriteUnlocked);
-  E("fputs_unlocked", FputsUnlocked);
-  E("fgets_unlocked", FgetsUnlocked);
   E("fflush_unlocked", FflushUnlocked);
   E("feof_unlocked", FeofUnlocked);
-  E("ferror_unlocked", FerrorUnlocked);
-  E("clearerr_unlocked", ClearerrUnlocked);
   E("fileno_unlocked", FilenoUnlocked);
   E("__fsetlocking", Fsetlocking);
   E("setlinebuf", Setlinebuf);
   E("setbuffer", Setbuffer);
-  E("getw", Getw);
-  E("putw", Putw);
   E("fmemopen", Fmemopen);
   E("ctermid", Ctermid);
   E("tmpnam", Tmpnam);

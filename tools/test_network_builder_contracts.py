@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Exercise production network builders with SDK-only callers and host boundaries.
+"""Exercise production network builders and HTTP engine policy on the host.
 
 --source-ref replaces the existing NetworkCapabilities/NetworkRequest sources;
 new complete value dependencies remain available to isolate behavior regressions.
 Native Parcel assertions run separately in the Windows ART fixtures.
+The full framework CI run also checks the pinned AOSP HTTP provider.
 """
 from __future__ import annotations
 import argparse
@@ -11,9 +12,11 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+OKHTTP_SOURCE = ROOT / "third_party/aosp/external/okhttp"
 
 
 def main() -> None:
@@ -23,6 +26,11 @@ def main() -> None:
     parser.add_argument("--source-ref")
     parser.add_argument("--case", default="all", choices=["all", "bounds", "specifiers", "legacy", "ethernet", "raw", "enterprise", "values"])
     args = parser.parse_args()
+    # The pinned framework workflow calls this entry point after fetching AOSP.
+    # Local builder-only runs can still use prebuilt classes without that checkout.
+    full_run = args.case == "all" and args.source_ref is None
+    if full_run and os.environ.get("GITHUB_ACTIONS") == "true" and not OKHTTP_SOURCE.is_dir():
+        parser.error(f"pinned AOSP OkHttp sources required for HTTP engine checks: {OKHTTP_SOURCE}")
     cc = shutil.which("cc")
     if not cc:
         parser.error("C compiler required for the declared host initialization boundary")
@@ -57,6 +65,10 @@ def main() -> None:
                         str(ROOT / "tests/network-builder/NetworkBuilderHost.java")], check=True)
         subprocess.run([str(args.java_home / "bin/java"), "-cp", runtime,
                         "NetworkBuilderHost", str(native), args.case], check=True, timeout=30)
+    if full_run and OKHTTP_SOURCE.is_dir():
+        subprocess.run([sys.executable, str(ROOT / "tools/test_http_engine_policy.py"),
+                        "--java-home", str(args.java_home.resolve()),
+                        "--okhttp-source", str(OKHTTP_SOURCE)], check=True, timeout=300)
 
 
 if __name__ == "__main__":
