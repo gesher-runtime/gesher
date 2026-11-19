@@ -1,5 +1,8 @@
 """CI only: hash one exact GitHub artifact archive before isolated extraction."""
 import argparse
+from email.utils import parsedate_to_datetime
+import json
+import math
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
@@ -18,6 +21,71 @@ import zipfile
 # authentication, redirect policy, digest and member validation are not transient.
 RETRY_DELAYS = (1, 3)
 TRANSIENT_HTTP = frozenset((429, 500, 502, 503, 504))
+_MAX_RATE_WAIT_SECONDS = 120
+_RATE_HEADERS = ('date', 'retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset',
+                 'x-ratelimit-limit', 'x-ratelimit-used', 'x-ratelimit-resource')
+
+def _reject_json_constant(value):
+    # Python accepts these JavaScript extensions by default; GitHub's response
+    # contract is JSON, so NaN/Infinity are parse failures rather than metadata.
+    raise ValueError(f'Non-JSON constant: {value}')
+
+
+def _number(value):
+    return int(value) if isinstance(value, str) and re.fullmatch(r'[0-9]{1,20}', value) else None
+
+
+def rate_limit_info(status, headers, body, failures=0):
+    """Recognize GitHub quota responses, never an arbitrary forbidden request.
+
+    This small policy is also kept in the standalone archive downloader, whose
+    trusted-source users must not acquire a new unchecked import dependency.
+    """
+    if status not in (403, 429) or len(body) > 16384:
+        return None
+    try:
+        message = json.loads(body, parse_constant=_reject_json_constant).get('message')
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return None
+    if not isinstance(message, str):
+        return None
+    primary = message.startswith('API rate limit exceeded for ')
+    secondary = message.startswith('You have exceeded a secondary rate limit')
+    if not primary and not secondary:
+        return None
+    remaining = _number(headers.get('x-ratelimit-remaining'))
+    reset = _number(headers.get('x-ratelimit-reset'))
+    retry_after = _number(headers.get('retry-after'))
+    resource = headers.get('x-ratelimit-resource', '')
+    info = dict(kind='primary' if primary else 'secondary', remaining=remaining,
+                reset=reset, retry_after=retry_after, delay=None,
+                limit=_number(headers.get('x-ratelimit-limit')),
+                used=_number(headers.get('x-ratelimit-used')),
+                resource=resource if re.fullmatch(r'[a-z_]{1,64}', resource) else None)
+    if any(key in headers and number is None for key, number in (
+            ('retry-after', retry_after), ('x-ratelimit-remaining', remaining),
+            ('x-ratelimit-reset', reset))):
+        return info
+    delay = 0
+    if primary or remaining == 0:
+        if remaining != 0 or reset is None:
+            return info
+        try:
+            date = parsedate_to_datetime(headers.get('date', ''))
+            if date.tzinfo is None:
+                return info
+            # Server time avoids retrying early when the runner clock is ahead.
+            delay = max(1, math.ceil(reset - date.timestamp() + 1))
+        except (ValueError, TypeError, OverflowError):
+            return info
+    if retry_after is not None:
+        delay = max(delay, retry_after, 1)
+    elif secondary and remaining != 0:
+        delay = 60 * (2 ** failures)
+    info['delay'] = delay
+    return info
+
+
 
 class ArtifactError(RuntimeError):
     """A diagnostic code selected by this module, never remote exception text."""
@@ -26,14 +94,29 @@ class ArtifactError(RuntimeError):
         self.code = code
 
 class DownloadError(ArtifactError):
-    def __init__(self, code, transient):
+    def __init__(self, code, transient, quota=None):
         super().__init__(code)
         self.transient = transient
+        self.quota = quota
         self.attempts = 0
 
 def download_error(stage, error):
     if isinstance(error, urllib.error.HTTPError):
         status = error.code if type(error.code) is int else 0
+        if stage == 'api' and status in (403, 429):
+            headers = {}
+            for name, value in error.headers.items():
+                key = name.lower()
+                if key in _RATE_HEADERS:
+                    if key in headers:
+                        return DownloadError(f'{stage}-http-{status}', False)
+                    headers[key] = value.strip()
+            try:
+                body = error.read(16385)
+            except Exception:
+                body = b''
+            quota = rate_limit_info(status, headers, body)
+            return DownloadError(f'{stage}-http-{status}', quota is not None, quota)
         return DownloadError(f'{stage}-http-{status}', status in TRANSIENT_HTTP)
     reason = error.reason if isinstance(error, urllib.error.URLError) else error
     if isinstance(reason, TimeoutError):
@@ -132,6 +215,8 @@ def download_verified(artifact_id, expected, root):
     if not token:
         raise ArtifactError('request-credential-missing')
     api = f'https://api.github.com/repos/{repository}/actions/artifacts/{artifact_id}/zip'
+    rate_wait = 0
+    rate_failures = 0
     for attempt in range(1, len(RETRY_DELAYS) + 2):
         try:
             # A new signed URL, stream, file and hash on every attempt. The
@@ -151,10 +236,29 @@ def download_verified(artifact_id, expected, root):
             return
         except DownloadError as error:
             error.attempts = attempt
-            if not error.transient or attempt > len(RETRY_DELAYS):
+            delay = RETRY_DELAYS[attempt - 1] if attempt <= len(RETRY_DELAYS) else None
+            if error.quota is not None:
+                info = error.quota
+                delay = info['delay']
+                if (delay is not None and info['kind'] == 'secondary'
+                        and info['remaining'] != 0 and info['retry_after'] is None):
+                    delay *= 2 ** rate_failures
+                permitted = (delay is not None and rate_wait + delay <= _MAX_RATE_WAIT_SECONDS
+                             and attempt <= len(RETRY_DELAYS))
+                print('SURFACE_API_RATE_LIMIT ' + ' '.join(
+                    f'{key}={info[key]}' for key in ('kind', 'limit', 'used', 'remaining', 'resource', 'reset', 'retry_after'))
+                    + f' action={"wait" if permitted else "fail"}', file=sys.stderr, flush=True)
+                if not permitted:
+                    raise
+                rate_wait += delay
+                rate_failures += 1
+            if not error.transient or delay is None:
                 raise
             print(f'SURFACE_ARCHIVE_RETRY id={artifact_id} attempt={attempt} reason={error.code}', file=sys.stderr, flush=True)
-            time.sleep(RETRY_DELAYS[attempt - 1])
+            while delay > 0:
+                chunk = min(delay, 60)
+                time.sleep(chunk)
+                delay -= chunk
 
 def failure_code(error):
     if isinstance(error, ArtifactError):
