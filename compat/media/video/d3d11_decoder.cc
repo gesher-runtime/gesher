@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -574,7 +575,11 @@ bool D3D11VideoDecoder::Decode(const Sample& in, std::vector<VideoFrame>* out) {
         // Convert to VideoFrame for output pipeline
         VideoFrame f;
         if (current_texture_ != nullptr) {
-          ExtractFrame(current_texture_, sample_time / 10, &f);
+          if (!ExtractFrame(current_texture_, sample_time / 10, &f)) {
+            media_buf->Release();
+            db.pSample->Release();
+            return false;
+          }
         } else {
           // Software fallback buffer read
           f.Allocate(width_, height_);
@@ -670,29 +675,69 @@ bool D3D11VideoDecoder::BindToAngleTexture(ID3D11Texture2D* texture, unsigned in
   return handle != nullptr;
 }
 
-bool D3D11VideoDecoder::ExtractNv12(ID3D11Texture2D* texture, std::vector<uint8_t>* out_nv12,
-                                   int* out_width, int* out_height, int* out_stride) {
-  if (texture == nullptr || out_nv12 == nullptr || context_ == nullptr) return false;
+// Keep the staging resource mapped only while a synchronous conversion owns its
+// pointer. No mapped pixels escape into VideoFrame or another caller's output.
+struct D3D11VideoDecoder::Nv12Readback {
+  ID3D11DeviceContext* context = nullptr;
+  ID3D11Texture2D* texture = nullptr;
+  D3D11_MAPPED_SUBRESOURCE mapped = {};
+  int width = 0, height = 0;
+
+  Nv12Readback() = default;
+  Nv12Readback(const Nv12Readback&) = delete;
+  Nv12Readback& operator=(const Nv12Readback&) = delete;
+  ~Nv12Readback() {
+    if (texture != nullptr) context->Unmap(texture, 0);
+  }
+};
+
+bool D3D11VideoDecoder::MapNv12(ID3D11Texture2D* texture, Nv12Readback* readback) {
+  if (texture == nullptr || context_ == nullptr || device_ == nullptr) return false;
 
   D3D11_TEXTURE2D_DESC desc = {};
   texture->GetDesc(&desc);
-  int w = desc.Width;
-  int h = desc.Height;
+  // NV12 has even dimensions and one shared pitch for Y and interleaved UV.
+  // This path copies a complete, single-subresource texture into staging;
+  // accepting an array or another format would make CopyResource invalid.
+  if (desc.Format != DXGI_FORMAT_NV12 || desc.Width == 0 || desc.Height == 0 ||
+      (desc.Width & 1) != 0 || (desc.Height & 1) != 0 || desc.MipLevels != 1 ||
+      desc.ArraySize != 1 || desc.SampleDesc.Count != 1 ||
+      desc.Width > static_cast<UINT>(std::numeric_limits<int>::max()) ||
+      desc.Height > static_cast<UINT>(std::numeric_limits<int>::max())) return false;
+  const int w = static_cast<int>(desc.Width), h = static_cast<int>(desc.Height);
+  if (static_cast<size_t>(w) > std::numeric_limits<size_t>::max() / h / sizeof(uint32_t)) {
+    return false;
+  }
 
   if (!EnsureStagingTexture(w, h)) return false;
 
   context_->CopyResource(staging_texture_, texture);
+  HRESULT hr = context_->Map(staging_texture_, 0, D3D11_MAP_READ, 0, &readback->mapped);
+  if (FAILED(hr)) return false;
+  // A successful Map must be paired with Unmap, including rejected layouts.
+  readback->context = context_;
+  readback->texture = staging_texture_;
+  const size_t pitch = readback->mapped.RowPitch;
+  const size_t rows = static_cast<size_t>(h) + h / 2;
+  if (readback->mapped.pData == nullptr || pitch < desc.Width ||
+      pitch > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+      pitch > std::numeric_limits<size_t>::max() / rows) return false;
+  readback->width = w;
+  readback->height = h;
+  return true;
+}
 
-  D3D11_MAPPED_SUBRESOURCE mapped = {};
-  HRESULT hr = context_->Map(staging_texture_, 0, D3D11_MAP_READ, 0, &mapped);
-  if (FAILED(hr) || mapped.pData == nullptr) return false;
-
-  size_t row_pitch = mapped.RowPitch;
-  size_t nv12_size = static_cast<size_t>(w) * h * 3 / 2;
-  out_nv12->resize(nv12_size);
+bool D3D11VideoDecoder::ExtractNv12(ID3D11Texture2D* texture, std::vector<uint8_t>* out_nv12,
+                                   int* out_width, int* out_height, int* out_stride) {
+  if (out_nv12 == nullptr) return false;
+  Nv12Readback readback;
+  if (!MapNv12(texture, &readback)) return false;
+  const int w = readback.width, h = readback.height;
+  const size_t row_pitch = readback.mapped.RowPitch;
+  out_nv12->resize(static_cast<size_t>(w) * h * 3 / 2);
 
   // Copy Y plane
-  const uint8_t* src_y = static_cast<const uint8_t*>(mapped.pData);
+  const uint8_t* src_y = static_cast<const uint8_t*>(readback.mapped.pData);
   uint8_t* dst_y = out_nv12->data();
   for (int y = 0; y < h; y++) {
     memcpy(dst_y + static_cast<size_t>(y) * w, src_y + y * row_pitch, w);
@@ -705,8 +750,6 @@ bool D3D11VideoDecoder::ExtractNv12(ID3D11Texture2D* texture, std::vector<uint8_
     memcpy(dst_uv + static_cast<size_t>(y) * w, src_uv + y * row_pitch, w);
   }
 
-  context_->Unmap(staging_texture_, 0);
-
   if (out_width) *out_width = w;
   if (out_height) *out_height = h;
   if (out_stride) *out_stride = w;
@@ -715,19 +758,23 @@ bool D3D11VideoDecoder::ExtractNv12(ID3D11Texture2D* texture, std::vector<uint8_
 
 bool D3D11VideoDecoder::ExtractRgba(ID3D11Texture2D* texture, std::vector<uint32_t>* out_rgba,
                                    int* out_width, int* out_height) {
-  std::vector<uint8_t> nv12;
-  int w = 0, h = 0, stride = 0;
-  if (!ExtractNv12(texture, &nv12, &w, &h, &stride)) return false;
+  if (out_rgba == nullptr) return false;
+  Nv12Readback readback;
+  if (!MapNv12(texture, &readback)) return false;
+  const int w = readback.width, h = readback.height;
+  const size_t pitch = readback.mapped.RowPitch;
 
   out_rgba->resize(static_cast<size_t>(w) * h);
-  const uint8_t* y_plane = nv12.data();
-  const uint8_t* uv_plane = nv12.data() + static_cast<size_t>(w) * h;
+  const uint8_t* y_plane = static_cast<const uint8_t*>(readback.mapped.pData);
+  const uint8_t* uv_plane = y_plane + pitch * h;
 
   for (int y = 0; y < h; y++) {
+    const uint8_t* yr = y_plane + static_cast<size_t>(y) * pitch;
+    const uint8_t* uv = uv_plane + static_cast<size_t>(y / 2) * pitch;
     for (int x = 0; x < w; x++) {
-      int y_val = y_plane[y * w + x];
-      int u_val = uv_plane[(y / 2) * w + (x & ~1)];
-      int v_val = uv_plane[(y / 2) * w + (x & ~1) + 1];
+      int y_val = yr[x];
+      int u_val = uv[x & ~1];
+      int v_val = uv[(x & ~1) + 1];
 
       int c = y_val - 16;
       int d = u_val - 128;
@@ -737,7 +784,7 @@ bool D3D11VideoDecoder::ExtractRgba(ID3D11Texture2D* texture, std::vector<uint32
       int g = std::clamp((298 * c - 100 * d - 208 * e + 128) >> 8, 0, 255);
       int b = std::clamp((298 * c + 516 * d + 128) >> 8, 0, 255);
 
-      (*out_rgba)[y * w + x] = static_cast<uint32_t>(r) |
+      (*out_rgba)[static_cast<size_t>(y) * w + x] = static_cast<uint32_t>(r) |
                                (static_cast<uint32_t>(g) << 8) |
                                (static_cast<uint32_t>(b) << 16) |
                                0xFF000000;
@@ -749,14 +796,14 @@ bool D3D11VideoDecoder::ExtractRgba(ID3D11Texture2D* texture, std::vector<uint32
 }
 
 bool D3D11VideoDecoder::ExtractFrame(ID3D11Texture2D* texture, int64_t timestamp_us, VideoFrame* out_frame) {
-  if (texture == nullptr || out_frame == nullptr) return false;
-  std::vector<uint8_t> nv12;
-  int w = 0, h = 0, stride = 0;
-  if (!ExtractNv12(texture, &nv12, &w, &h, &stride)) return false;
+  if (out_frame == nullptr) return false;
+  Nv12Readback readback;
+  if (!MapNv12(texture, &readback)) return false;
 
-  out_frame->Allocate(w, h);
+  out_frame->Allocate(readback.width, readback.height);
   out_frame->time_us = timestamp_us;
-  Nv12ToI420(nv12.data(), w, h, out_frame);
+  Nv12ToI420(static_cast<const uint8_t*>(readback.mapped.pData),
+             static_cast<int>(readback.mapped.RowPitch), readback.height, out_frame);
   return true;
 }
 
