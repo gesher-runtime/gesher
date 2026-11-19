@@ -85,6 +85,10 @@ public final class PackageInstallerIdentityHost {
             session[0] = service.createSession(params, name, null, 0);
             check(service.openSession(session[0]) != null, "Current installer cannot open its session");
             check(service.getSessionInfo(session[0]).getMode() == params.mode, "Inherited mode changed");
+            check(service.getAllSessions(0).getList().size() == 1,
+                    "Current installer cannot enumerate its session");
+            check(service.getMySessions(name, 0).getList().size() == 1,
+                    "Current installer lost its own session inventory");
         });
         old.exiting = true;
         as(old.pid, old.uid, () -> {
@@ -145,6 +149,8 @@ public final class PackageInstallerIdentityHost {
         });
         int system = service.createSession(params, "android", null, 0);
         check(service.openSession(system) != null, "Local system caller lost session authority");
+        check(service.getMySessions("android", 0).getList().size() == 1,
+                "Local system caller lost its own session inventory");
         service.abandonSession(system);
     }
     private static void recompileUnchanged(Installer backend, PackageManagerService pm, ApkPackage pkg)

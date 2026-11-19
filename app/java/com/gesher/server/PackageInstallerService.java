@@ -214,6 +214,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         for (Session s : snapshot) {
             if (s.ownerCurrent() && ("android".equals(owner) || owner.equals(s.owner))) list.add(s.info());
         }
+        // Snapshot collection can race with replacement of the attached installation.
+        // Validate the caller again before exposing the collected session metadata.
+        caller();
         return new ParceledListSlice<>(list);
     }
     @Override public ParceledListSlice<PackageInstaller.SessionInfo> getMySessions(String pkg, int user) {
@@ -224,6 +227,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         for (Session s : snapshot) {
             if (owner.equals(s.owner) && s.ownerCurrent()) list.add(s.info());
         }
+        owner(pkg, user);
         return new ParceledListSlice<>(list);
     }
     @Override public ParceledListSlice<PackageInstaller.SessionInfo> getStagedSessions() {
