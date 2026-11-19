@@ -121,10 +121,12 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
 # disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
 # have SOURCE retention: they are read from frameworks/base's sources (what the
-# framework build checked out, $AOSP_DIR or third_party/aosp).
+# framework build checked out, $AOSP_DIR or third_party/aosp), plus RoleManager's
+# module change, which is absent from frameworks/base.
 aosp=${AOSP_DIR:-$root/third_party/aosp}
 java -cp "$gencp" "$(native "$root/app/gen/CompatChangesGen.java")" "$(native "$framework")" \
-  "$(native "$work/gen")" com.gesher.server.gen "$(native "$aosp/frameworks/base")"
+  "$(native "$work/gen")" com.gesher.server.gen "$(native "$aosp/frameworks/base")" \
+  "$(native "$root/app/java/android/app/role")"
 
 mkdir -p "$work/classes"
 # Not app/java/com/google: those are client-SDK stubs (play-services, Firebase) that
