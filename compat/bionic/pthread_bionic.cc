@@ -169,7 +169,44 @@ struct ExternalThreadRecord {
   bool translated_attributes_ready = false;
 };
 std::unordered_map<bionic_pthread_t, ExternalThreadRecord> g_external_threads;
-std::atomic<bionic_pthread_t> g_next_id{1};
+
+// Native Android crash reporters and profilers treat pthread_t as a Bionic
+// pthread_internal_t* and scan [pthread_self(), page_end) for internal fields.
+// Allocate 64-byte descriptors monotonically from committed 64 KiB slabs that
+// are never freed so pthread_t values are valid, readable pointers within a
+// committed 4 KiB page and retired IDs are never reused.
+constexpr size_t kDescriptorSlabBytes = 64 * 1024;
+struct alignas(64) ThreadDescriptor {
+  bionic_pthread_t self;
+  int32_t tid;
+  int32_t pid;
+  uint64_t reserved[6];
+};
+static_assert(sizeof(ThreadDescriptor) == 64);
+static_assert(4096 % sizeof(ThreadDescriptor) == 0);
+static_assert(kDescriptorSlabBytes % sizeof(ThreadDescriptor) == 0);
+
+std::mutex g_descriptor_mutex;
+uint8_t* g_descriptor_slab = nullptr;
+size_t g_descriptor_offset = kDescriptorSlabBytes;
+
+ThreadDescriptor* AllocateThreadDescriptor(int32_t tid) {
+  std::lock_guard<std::mutex> lock(g_descriptor_mutex);
+  if (g_descriptor_slab == nullptr ||
+      g_descriptor_offset + sizeof(ThreadDescriptor) > kDescriptorSlabBytes) {
+    auto* slab = static_cast<uint8_t*>(
+        VirtualAlloc(nullptr, kDescriptorSlabBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    if (slab == nullptr) return nullptr;
+    g_descriptor_slab = slab;
+    g_descriptor_offset = 0;
+  }
+  auto* descriptor = reinterpret_cast<ThreadDescriptor*>(g_descriptor_slab + g_descriptor_offset);
+  g_descriptor_offset += sizeof(ThreadDescriptor);
+  descriptor->self = reinterpret_cast<bionic_pthread_t>(descriptor);
+  descriptor->tid = tid;
+  descriptor->pid = static_cast<int32_t>(GetCurrentProcessId());
+  return descriptor;
+}
 
 thread_local bionic_pthread_t t_self = 0;
 thread_local ThreadRecord* t_record = nullptr;
@@ -279,7 +316,9 @@ DWORD WINAPI ThreadTrampoline(void* raw) {
 
 bionic_pthread_t SelfId() {
   if (t_self == 0) {
-    t_self = g_next_id.fetch_add(1);
+    ThreadDescriptor* descriptor = AllocateThreadDescriptor(SelfTid());
+    if (descriptor == nullptr) return 0;
+    t_self = descriptor->self;
     std::lock_guard<std::mutex> lock(g_threads_mutex);
     ReapCpuClocks();
     HANDLE retained = nullptr;
@@ -527,10 +566,12 @@ int BIONIC_SYSV gesher_bionic___gesher_arm64_pthread_getattr_np(
 int BIONIC_SYSV gesher_bionic_pthread_create(bionic_pthread_t* thread,
                                             const bionic_pthread_attr_t* attr,
                                             void* (BIONIC_SYSV* start)(void*), void* arg) {
+  ThreadDescriptor* descriptor = AllocateThreadDescriptor(0);
+  if (descriptor == nullptr) return kEAGAIN;
   auto* record = new ThreadRecord();
   record->detached = attr != nullptr && (attr->flags & kAttrDetached) != 0;
   uint64_t stack = attr != nullptr && attr->stack_size != 0 ? attr->stack_size : kDefaultStack;
-  bionic_pthread_t id = g_next_id.fetch_add(1);
+  bionic_pthread_t id = descriptor->self;
   auto* sa = new StartArg{start, arg, id, record};
   std::lock_guard<std::mutex> lock(g_threads_mutex);  // until the record is complete
   DWORD tid = 0;
@@ -541,6 +582,7 @@ int BIONIC_SYSV gesher_bionic_pthread_create(bionic_pthread_t* thread,
     delete record;
     return kEAGAIN;
   }
+  descriptor->tid = static_cast<int32_t>(tid);
   record->handle = h;
   record->tid = static_cast<int32_t>(tid);
   g_threads[id] = record;

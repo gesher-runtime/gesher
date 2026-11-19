@@ -25,19 +25,43 @@ bool Contains(void* base, size_t size, uintptr_t address) {
   uintptr_t low = reinterpret_cast<uintptr_t>(base);
   return address >= low && address - low < size;
 }
+#if defined(__BIONIC__)
+bool DescriptorPageReadable(pthread_t thread) {
+  uintptr_t address = static_cast<uintptr_t>(thread);
+  long page_size = sysconf(_SC_PAGESIZE);
+  if (page_size <= 0) return false;
+  uintptr_t size = static_cast<uintptr_t>(page_size);
+  if (address < 0x10000 || (address % sizeof(void*)) != 0) return false;
+  uintptr_t page_end = (address & ~(size - 1)) + size;
+  for (uintptr_t cursor = address; cursor < page_end; cursor += sizeof(uintptr_t)) {
+    volatile const uintptr_t* slot = reinterpret_cast<const volatile uintptr_t*>(cursor);
+    (void)*slot;
+  }
+  return true;
+}
+#endif
 struct Worker {
   std::atomic<bool> ready{false}, stop{false}, leaving{false};
   void* base = nullptr;
   size_t size = 0;
   uintptr_t local = 0;
   int result = -1;
+#if defined(__BIONIC__)
+  pthread_t self = 0;
+  bool self_readable = false;
+#endif
 };
 void* Run(void* raw) {
   auto& worker = *static_cast<Worker*>(raw);
   int local = 0;
   pthread_attr_t self{};
+  pthread_t current = pthread_self();
   worker.local = reinterpret_cast<uintptr_t>(&local);
-  worker.result = pthread_getattr_np(pthread_self(), &self);
+#if defined(__BIONIC__)
+  worker.self = current;
+  worker.self_readable = DescriptorPageReadable(current);
+#endif
+  worker.result = pthread_getattr_np(current, &self);
   if (worker.result == 0) {
     worker.result = pthread_attr_getstack(&self, &worker.base, &worker.size);
     pthread_attr_destroy(&self);
@@ -82,6 +106,7 @@ int main() {
   Check(pthread_attr_setstack(&attr, reinterpret_cast<void*>(0x100001), 16384) == EINVAL &&
             pthread_attr_setstack(&attr, reinterpret_cast<void*>(0x100000), 16385) == EINVAL,
         "Android supplied stack alignment");
+  Check(DescriptorPageReadable(pthread_self()), "main thread descriptor page is readable");
 #endif
   pthread_attr_destroy(&attr);
   int caller = 0;
@@ -105,6 +130,10 @@ int main() {
     Check(Contains(base, size, worker.local) &&
               !Contains(base, size, reinterpret_cast<uintptr_t>(&caller)),
           "peer contains target local and excludes caller local");
+#if defined(__BIONIC__)
+    Check(pthread_equal(worker.self, target) != 0 && worker.self_readable,
+          "worker pthread_self matches peer handle and descriptor page is readable");
+#endif
     if (kind == 2) Check(pthread_detach(target) == 0, "public detach running target");
     Check(pthread_getattr_np(target, &peer) == 0 &&
               pthread_attr_getdetachstate(&peer, &value) == 0 &&
