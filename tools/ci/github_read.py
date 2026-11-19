@@ -11,6 +11,9 @@ _BACKOFF_SECONDS = (1, 2, 4)
 _HTTP_STATUS = re.compile(r'\(HTTP ([1-5][0-9]{2})\)')
 _STREAM_CANCEL = re.compile(
     r'(?:^|: )stream error: stream ID [1-9][0-9]*; CANCEL; received from peer$')
+_DIAL_TIMEOUT = re.compile(
+    r'(?:gh: )?(?:Get "https://[^"\r\n]+": )?dial tcp '
+    r'(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]+\]):443: i/o timeout')
 
 
 class GitHubReadError(RuntimeError):
@@ -29,9 +32,10 @@ def _transient(stderr):
     statuses = _HTTP_STATUS.findall(stderr)
     if statuses:
         return all(status in ('502', '503', '504') for status in statuses)
-    # This is the observed Go HTTP/2 stream cancellation, optionally prefixed by
-    # Get "https://api.github.com/...": . Other resets/timeouts are not inferred.
-    return any(_STREAM_CANCEL.search(line) for line in stderr.splitlines())
+    # Go's HTTPS dial timeout precedes any response. Require its single
+    # diagnostic so it cannot override an additional error from gh.
+    return bool(_DIAL_TIMEOUT.fullmatch(stderr.strip())) or any(
+        _STREAM_CANCEL.search(line) for line in stderr.splitlines())
 
 
 def get_json(endpoint):
