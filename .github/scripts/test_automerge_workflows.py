@@ -44,6 +44,29 @@ class QueueWorkflows(unittest.TestCase):
                 run = subprocess.run([sys.executable, '-c', body], env=env, capture_output=True)
                 self.assertEqual(run.returncode == 0, result == 'success')
 
+    def test_release_publish_uses_only_protected_workflow_code(self):
+        ci = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
+        self.assertEqual(ci['permissions'], {'contents': 'read', 'actions': 'read'})
+        self.assertFalse(any('write' in job.get('permissions', {}).values() for job in ci['jobs'].values()))
+        identity = ci['jobs']['source-identity']['steps'][1]
+        self.assertEqual(identity['name'], 'Validate pushed version tag')
+        self.assertEqual(identity['if'], "${{ github.repository == 'gesher-runtime/gesher' && "
+                         "github.event_name == 'push' && github.ref_type == 'tag' }}")
+        publisher = yaml.safe_load((ROOT / '.github/workflows/publish-release.yml').read_text(encoding='utf-8'))
+        self.assertEqual(publisher[True], {'workflow_run': {'workflows': ['ci'], 'types': ['completed']}})
+        self.assertEqual(publisher['permissions'], {})
+        job = publisher['jobs']['publish']
+        self.assertEqual(set(publisher['jobs']), {'publish'})
+        self.assertIn("publish-release.yml@refs/heads/main'", job['if'])
+        self.assertIn("github.event.workflow_run.event == 'push'", job['if'])
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", job['if'])
+        self.assertEqual(job['permissions'], {'actions': 'read', 'contents': 'write'})
+        checkout, invocation = job['steps']
+        self.assertRegex(checkout['uses'], r'^actions/checkout@[0-9a-f]{40}$')
+        self.assertEqual(checkout['with']['ref'], '${{ github.workflow_sha }}')
+        self.assertFalse(checkout['with']['persist-credentials'])
+        self.assertEqual(invocation['run'], 'python3 tools/ci/publish_release.py')
+
     def test_no_controller_polling_or_direct_merging(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
         self.assertNotIn('schedule', doc[True])
