@@ -595,6 +595,12 @@ jobs:
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
+      - name: Geolocation request and timeout lifetime contracts
+        run: |
+          python3 tools/test_geolocation_retention.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Audio effect capability and constructor contracts
         run: |
           python3 tools/test_audio_effect_contracts.py --java-home "$JAVA_HOME" \
