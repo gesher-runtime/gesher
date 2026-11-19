@@ -22,13 +22,13 @@ try {
   ) }
   $manifestPath = Join-Path $directory 'apps.json'
   $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8
-  New-E2eEvidence $manifest $manifestPath @('fixture.a') $directory
+  New-E2eEvidence $manifest $manifestPath @('fixture.a') $directory $true
   $read = ReadEvidence
   EvidenceCheck 'initial checkpoint contains every planned scenario and explicit exclusion' (
     $read.checks.Count -eq 5 -and
     @($read.checks | Where-Object { $_.status -eq 'not_run' }).Count -eq 4 -and
     @($read.checks | Where-Object { $_.package -eq 'fixture.b' -and $_.status -eq 'skipped' -and $_.reason -eq 'excluded_by_only' }).Count -eq 1 -and
-    -not $read.completed)
+    -not $read.completed -and $read.runner.require_apk_identity)
   EvidenceCheck 'manifest hash identifies actual input bytes' (
     $read.manifest_sha256 -eq (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant())
 
@@ -66,14 +66,33 @@ try {
     $read.apks.Count -eq 1 -and $read.apks[0].sha256 -eq ('a' * 64) -and
     $null -eq $read.apks[0].signer_sha256 -and $null -eq $read.apks[0].selected_abi)
 
+  $identity = [pscustomobject]@{ schema_version = 1; package = 'fixture.a'; apk_sha256 = ('a' * 64)
+    signer_certificate_sha256 = @(('b' * 64), ('c' * 64)); packaged_native_abis = @('arm64-v8a', 'x86_64') }
+  Set-E2eApkIdentity 'fixture.a' $identity
+  $read = ReadEvidence
+  EvidenceCheck 'SDK identity retains every signer and keeps packaged ABIs separate from selected ABI' (
+    $read.apks[0].sdk_identity.signer_certificate_sha256.Count -eq 2 -and
+    $read.apks[0].sdk_identity.packaged_native_abis.Count -eq 2 -and
+    $null -eq $read.apks[0].selected_abi -and $null -eq $read.apks[0].signer_sha256)
+  $identity.apk_sha256 = ('d' * 64)
+  $rejected = $false
+  try { Set-E2eApkIdentity 'fixture.a' $identity } catch { $rejected = $_ -match 'observed bytes' }
+  EvidenceCheck 'SDK metadata from different APK bytes is rejected' $rejected
+  Set-E2eApkIdentity 'fixture.a' $null 'fixture tool unavailable'
+  $read = ReadEvidence
+  EvidenceCheck 'collector errors remain explicit in the checkpoint' (
+    $read.apks[0].identity_error -eq 'fixture tool unavailable')
+
   $rejected = $false
   try { New-E2eEvidence $manifest $manifestPath @('fixture.unknown') $directory } catch { $rejected = $_ -match 'Unknown -Only' }
   EvidenceCheck 'unknown selection is rejected instead of creating an empty success' $rejected
 
-  $tokens = $null; $parseErrors = $null
-  [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-e2e.ps1'), [ref]$tokens, [ref]$parseErrors)
-  EvidenceCheck 'instrumented Windows runner parses' ($parseErrors.Count -eq 0)
-  foreach ($error in $parseErrors) { Write-Host $error }
+  foreach ($scriptName in @('run-e2e.ps1', 'prepare-identity-sdk.ps1')) {
+    $tokens = $null; $parseErrors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $scriptName), [ref]$tokens, [ref]$parseErrors)
+    EvidenceCheck "$scriptName parses" ($parseErrors.Count -eq 0)
+    foreach ($error in $parseErrors) { Write-Host $error }
+  }
   Close-E2eEvidenceRun
   $rejected = $false
   try { Write-E2eEvidence } catch { $rejected = $_ -match 'ownership' }
