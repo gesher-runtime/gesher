@@ -205,8 +205,10 @@ jobs:
         with:
           phase: initialize
 
-      - name: Verify XSD compiler dependency acquisition
-        run: python3 -m unittest discover -s tools/tests -p test_framework_xsdc.py -v
+      - name: Verify framework compiler dependency acquisition
+        run: |
+          python3 -m unittest discover -s tools/tests -p test_framework_xsdc.py -v
+          python3 -m unittest discover -s tools/tests -p test_framework_jvm_tools.py -v
 
       - name: Cache keys
         run: echo "AOSP_KEY=aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}" >> "$GITHUB_ENV"
