@@ -201,6 +201,7 @@ jobs:
           python3 tools/test_elf_lookup_contracts.py --sanitize
           python3 tools/test_elf_lookup_contracts.py --linux-reference
           python3 tools/test_elf_lookup_performance.py --sanitize
+          python3 tools/test_elf_packed_relocations.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
