@@ -15,10 +15,10 @@ function New-GesherRuntimeSync {
         $info = Get-Item -LiteralPath $metadata -Force
         if ($info.Length -le 4096) {
             $text = [IO.File]::ReadAllText($info.FullName)
-            # Setup owns this small file. Accept its unambiguous canonical form;
+            # Setup owns this small file. Accept its unambiguous canonical form (X.Y.Z for a release, X.Y.Z.N for a CI build);
             # corrupt/extended metadata safely falls back to checking content.
             $match = [regex]::Match($text,
-                '\A\s*\[Gesher\]\s*\r?\nVersion=((0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4}))\s*\z')
+                '\A\s*\[Gesher\]\s*\r?\nVersion=((0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})(\.[1-9][0-9]{0,4})?)\s*\z')
             if ($match.Success -and @($match.Groups[1].Value.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -eq 0) {
                 $generation = [IO.Path]::GetFullPath($InstallDirectory) + "`n" + $match.Groups[1].Value
             }

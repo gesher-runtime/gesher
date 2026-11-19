@@ -6,6 +6,8 @@ package com.gesher.peer;
 
 import android.app.Activity;
 import android.app.Application;
+import android.app.SearchManager;
+import android.app.SearchableInfo;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.os.Bundle;
@@ -28,6 +30,15 @@ public class PeerActivity extends Activity {
         report("PeerActivity onCreate in process " + Application.getProcessName() + " (pid "
                 + Process.myPid() + "), action " + getIntent().getAction() + ", started by "
                 + (caller != null ? caller.flattenToShortString() : "no activity"));
+        SearchManager search = getSystemService(SearchManager.class);
+        ComponentName searchable = new ComponentName("com.gesher.components",
+                "com.gesher.components.SecondActivity");
+        SearchableInfo info = search.getSearchableInfo(searchable);
+        if (info == null || !searchable.equals(info.getSearchActivity())
+                || !"com.gesher.components.items".equals(info.getSuggestAuthority())) {
+            throw new AssertionError("Manifest-visible foreign searchable metadata was hidden");
+        }
+        report("manifest-visible foreign searchable metadata verified");
     }
 
     @Override

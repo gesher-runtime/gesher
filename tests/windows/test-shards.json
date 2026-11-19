@@ -94,6 +94,7 @@
       "76-media4-opensl.ps1",
       "77-exec4-spawn.ps1",
       "79-media4-muxer.ps1",
+      "87-ndk-extractor.ps1",
       "83-libcore-io.ps1",
       "93-microg-gms.ps1",
       "94-framework-fixes.ps1",
