@@ -10,6 +10,7 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -46,6 +47,8 @@ struct NativeCall {
 };
 std::vector<NativeCall> calls;
 bool fail_reserve = false, fail_replace = false, fail_commit = false, placeholders = true;
+uintptr_t failing_unmap_address = 0;
+DWORD native_error = 0;
 std::map<uintptr_t, size_t> plain_reservations;
 void* VirtualAlloc(void* address, size_t length, DWORD flags, DWORD protection) {
   const uintptr_t at = address == nullptr ? kBase : reinterpret_cast<uintptr_t>(address);
@@ -66,6 +69,11 @@ void* VirtualAlloc(void* address, size_t length, DWORD flags, DWORD protection) 
 }
 bool VirtualFree(void* address, size_t length, DWORD flags) {
   calls.push_back({"free", reinterpret_cast<uintptr_t>(address), length, flags, 0});
+  if (reinterpret_cast<uintptr_t>(address) == failing_unmap_address &&
+      flags == (MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
+    native_error = EACCES;
+    return false;
+  }
   if (flags == MEM_RELEASE) plain_reservations.erase(reinterpret_cast<uintptr_t>(address));
   return true;
 }
@@ -99,9 +107,10 @@ const PlaceholderBoundary& Placeholders() { static PlaceholderBoundary boundary;
 // MapAnonymous reports a plain MAP_FIXED that already decommitted its pages
 // (the loader's shared-copy bookkeeping reads it) and maps Win32 errors.
 thread_local bool g_mmap_replaced_private_pages = false;
-DWORD GetLastError() { return 0; }
+DWORD GetLastError() { return native_error; }
 namespace gesher {
 int ErrnoFromWin32(DWORD error) { return error == 0 ? EINVAL : static_cast<int>(error); }
+inline int FailWithLastError() { errno = ErrnoFromWin32(GetLastError()); return -1; }
 }  // namespace gesher
 
 @TYPES@
@@ -117,6 +126,23 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s,
     std::map<uintptr_t, Region>::iterator, uintptr_t, uintptr_t) {
   Check(false, "NOREPLACE cannot punch a partial live file view");
   return s.regions.end();
+}
+
+// Unmap's locked-file-view rollback is also outside this anonymous fixture.
+// Fail if a test reaches it; do not simulate successful file locking/unlocking.
+struct MEMORY_BASIC_INFORMATION { DWORD Protect; };
+template <typename Fn>
+bool ForEachRun(void*, size_t, Fn) {
+  Check(false, "NOREPLACE fixture cannot query partial locked file views");
+  return false;
+}
+inline bool UnlockGuestPages(State&, uintptr_t, uintptr_t) {
+  Check(false, "NOREPLACE fixture cannot unlock partial file views");
+  return false;
+}
+inline bool LockNewPages(State&, std::set<uintptr_t>&) {
+  Check(false, "NOREPLACE fixture cannot restore file-view locks");
+  return false;
 }
 
 @PRODUCTION@
@@ -137,6 +163,7 @@ std::string Snapshot(const State& state) {
 void ResetBoundary() {
   calls.clear(); plain_reservations.clear();
   fail_reserve = fail_replace = fail_commit = false;
+  failing_unmap_address = 0; native_error = 0;
   placeholders = true; errno = 0;
 }
 void Prepare(State& state, int protection = PROT_READ | PROT_WRITE) {
@@ -378,9 +405,57 @@ void PlainCollisionsAndFailure() {
   ResetBoundary();
   active_state = nullptr;
 }
+void UnmapFailureCleanup() {
+  State value;
+  Prepare(value);
+  const uintptr_t second = kBase + 8 * kPage;
+  Check(GroupAnonymous(value, reinterpret_cast<void*>(second), 4 * kPage,
+          PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE)
+      == reinterpret_cast<void*>(second), "second unmap group created");
+  active_state = &value;
+  failing_unmap_address = second;
+  Check(munmap(reinterpret_cast<void*>(kBase), 12 * kPage) == -1 && errno == EACCES,
+        "later native unmap failure and its errno reach the caller");
+  Check(!value.groups.contains(kBase),
+        "later failure still releases an earlier successfully emptied group");
+  Check(value.regions.at(second).kind == Kind::kAnon && value.regions.at(second).live_pages == 4,
+        "failed unmap retains the later mapping and its bookkeeping");
+  failing_unmap_address = 0;
+  Check(munmap(reinterpret_cast<void*>(second), 4 * kPage) == 0 && value.groups.empty(),
+        "retry releases the remaining group without leaking reservations");
+  active_state = nullptr;
+
+  State holes;
+  Prepare(holes);
+  Punch(holes, kBase, kBase + 4 * kPage);
+  active_state = &holes;
+  Check(munmap(reinterpret_cast<void*>(kBase), 4 * kPage) == 0 && holes.groups.empty(),
+        "unmapping an all-hole group releases its empty reservation");
+  active_state = nullptr;
+}
+
+template <typename Registry>
+void LockedViewPreflight() {
+  Registry value;
+  if constexpr (requires { value.locked_pages; }) {
+    Prepare(value);
+    value.regions.at(kBase).kind = Kind::kView;
+    value.locked_pages.insert(kBase);
+    const std::string before = Snapshot(value);
+    calls.clear(); errno = 0;
+    Check(Punch(value, kBase + 3 * kPage, kBase + 4 * kPage) == value.regions.end()
+              && errno == EOPNOTSUPP,
+          "unsupported partial view replacement reports failure before touching retained locks");
+    Check(Snapshot(value) == before && value.locked_pages.contains(kBase) && calls.empty(),
+          "partial view rejection leaves retained mapping and locks unchanged");
+  }
+}
+
 }  // namespace
 
 int main() {
+  UnmapFailureCleanup();
+  LockedViewPreflight<State>();
   ArtFallback();
   Collisions();
   FragmentedHoles();
