@@ -1,5 +1,5 @@
 ; Gesher's Windows installer (Inno Setup 6), built in CI by the package job:
-;   iscc /DBuildDir=<dir with the build output> /DAppVersion=<x.y.z> gesher.iss
+;   iscc /DBuildDir=<dir with the build output> /DAppVersion=<x.y.z | x.y.z.n> gesher.iss
 ; Installs per user (no administrator rights) into
 ; %LOCALAPPDATA%\Programs\Gesher, puts `gesher` and `gesher-app` on the user's
 ; PATH, adds Start menu entries and opens `.apk`

@@ -4,28 +4,28 @@
 // MediaRecorder's audio) is a CaptureStream of this process's capture engine.
 // The engine's thread takes what the input source gives, every 10 ms, and
 // hands it to each started stream, converted to the stream's rate (linear
-// interpolation), channels and PCM format. The source is, in order:
+// interpolation), channels and PCM format. Normal builds use the actual
+// default WASAPI capture endpoint. Initialization/start failure is reported;
+// device loss becomes a terminal error, without substituting another input.
 //
-//  - GESHER_AUDIO_SOURCE=<file.wav>: a WAV file played as the microphone,
-//    paced by the clock, from its start each time recording starts from idle,
-//    looping (a source a machine without a microphone, CI, can feed);
-//  - GESHER_AUDIO_SOURCE=loopback: what the default output endpoint plays
-//    (WASAPI loopback);
-//  - the default capture endpoint (WASAPI shared mode): the PC's microphone;
-//  - silence, paced by the clock, when there is none (as a muted microphone:
-//    recorders still open, AudioManager lists no input device).
+// Only the separately built GESHER_CAPTURE_TEST_SOURCES fixture role accepts
+// GESHER_AUDIO_SOURCE=<file.wav>, loopback or null. Its explicitly selected
+// synthetic inputs are unavailable to ordinary applications and releases.
 //
 // Nothing here knows Java: the JNI and NDK layers sit on top.
 #pragma once
 
 #include <sys/types.h>
 
+#include <atomic>
 #include <condition_variable>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -50,6 +50,9 @@ struct CaptureEvents {
   std::function<void()> data;
 };
 
+inline constexpr int kCaptureUnavailable = -19; // Android native NO_INIT (-ENODEV).
+inline constexpr int kCaptureDeadObject = -32; // Android native DEAD_OBJECT (-EPIPE).
+
 class CaptureEngine;
 
 struct CaptureStats {
@@ -70,6 +73,15 @@ class CaptureStream {
   int Start();
   void Stop();
   bool started() const;
+  int error() const;
+
+  // Lifecycle/error observers snapshot this sequence before checking their
+  // predicates, then wait without holding either the API or capture mutex.
+  // A change between the check and wait cannot lose its notification. API
+  // lifecycle changes can use the same wake without a callback into the API.
+  uint64_t StateWakeSequence() const;
+  void WaitForStateWake(uint64_t observed) const;
+  void NotifyStateWake();
 
   // Copies up to `bytes` (whole frames) of what was captured; with `blocking`,
   // waits until that much is there or the stream stops. Returns the bytes
@@ -108,7 +120,10 @@ class CaptureStream {
   // Capture thread: `frames` frames of the source (float, src_channels
   // interleaved, at src_rate) arrive.
   void Push(const float* src, size_t frames, uint32_t src_rate, uint32_t src_channels,
-            int64_t now_ns);
+            int64_t now_ns, std::optional<uint64_t> generation = std::nullopt);
+
+  int Activate(uint64_t generation);
+  void Fail(int error);
 
   CaptureEngine* engine_;
   CaptureParams params_;
@@ -116,7 +131,10 @@ class CaptureStream {
 
   mutable std::mutex mu_;
   std::condition_variable cv_;
+  std::atomic<uint64_t> state_wake_sequence_{0};
   bool started_ = false, released_ = false;
+  int error_ = kOk;
+  uint64_t generation_ = 0;
   std::vector<uint8_t> ring_;
   uint64_t written_ = 0, read_ = 0;  // frames
   uint32_t overruns_ = 0;
@@ -126,6 +144,9 @@ class CaptureStream {
   // The resampler's state: the fractional source position and the last frame.
   double phase_ = 0;
   std::vector<float> last_;
+  // Protected by mu_; at most the ring's capacity of converted frames.
+  std::vector<float> converted_;
+  std::array<float, 8> current_frame_{}, previous_frame_{};
   bool primed_ = false;
   uint32_t marker_ = 0;
   bool marker_reached_ = false;
