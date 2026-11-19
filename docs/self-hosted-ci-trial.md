@@ -1,5 +1,9 @@
 # ARM64 Windows PR build on a WSL runner
 
+For required framework builds and the current disk-cache policy, see
+[self-hosted-ci.md](self-hosted-ci.md). Automatic ARM64 comparisons can remain
+off while required jobs use the machine; manual diagnostics still work.
+
 This optional pilot builds current internal PR merge commits on Ubuntu 24.04
 inside WSL2. It starts when the existing `arm64-windows` workflow starts, or
 manually with that workflow's run ID. It does not replace existing required
@@ -21,10 +25,12 @@ a separate rollout. No Android-visible behavior or test target changes.
   metadata must be retried after the merge ref becomes available.
 - A GitHub organization runner group restricts repository access to this
   repository and workflow access to
-  `gesher-runtime/gesher/.github/workflows/arm64-windows-self-hosted.yml@refs/heads/main`.
+  `gesher-runtime/gesher/.github/workflows/arm64-windows-self-hosted.yml@refs/heads/main`
+  and the reviewed immutable framework policy listed in `self-hosted-ci.md`.
   **Labels alone are not a security boundary.** The management preparation script refuses to
   register a runner if GitHub does not accept and return that exact policy.
-  It never falls back to the Default group or repository-wide registration.
+  It refuses any other workflow grant and never falls back to the Default group
+  or repository-wide registration.
 - The build job has only `contents: read`, no persisted checkout credentials,
   separate cache prefixes and distinct artifacts. It is not a trusted artifact
   producer for the ordinary CI pipeline. Trial artifacts must not be substituted
