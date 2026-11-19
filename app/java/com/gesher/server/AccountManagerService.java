@@ -842,12 +842,15 @@ public final class AccountManagerService extends IAccountManager.Default {
     public boolean removeAccountExplicitly(Account account) {
         if (account == null) return false;
         synchronized (this) { if (synthetic(account, mAccounts.get(account))) return false; }
-        Entry removed;
+        AccountChange change;
         synchronized (this) {
-            removed = mAccounts.get(account); requireOwner(caller(null), removed);
+            Entry removed = mAccounts.get(account); requireOwner(caller(null), removed);
+            // Capture the authorized installation while the entry is authoritative.
+            // A client can uninstall/reinstall as soon as this monitor is released.
+            change = captureChange(account, true, removed, true);
             beginMutation(); mAccounts.remove(account); save();
         }
-        changed(account, true, removed); return true;
+        deliverChange(change); return true;
     }
 
     @Override
