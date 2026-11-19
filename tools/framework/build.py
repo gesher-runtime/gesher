@@ -549,7 +549,13 @@ class Builder:
         for name, url in (('javapoet', self.JAVAPOET), ('guava', self.GUAVA)):
             jars[name] = os.path.join(d, f'{name}.jar')
             if not os.path.isfile(jars[name]):
-                run(['curl', '-fsSL', '-o', jars[name], url])
+                # Retry transient Maven errors without leaving a partial JAR in the cache.
+                with tempfile.TemporaryDirectory(prefix=f'{name}-', dir=d) as temporary:
+                    download = os.path.join(temporary, f'{name}.jar')
+                    run(['curl', '-fsSL', '--connect-timeout', '10', '--max-time', '30',
+                         '--retry', '3', '--retry-max-time', '90', '-o', download, url],
+                        timeout=120)
+                    os.replace(download, jars[name])
         jars['kotlin-stdlib'] = os.path.join(kotlinc, 'lib', 'kotlin-stdlib.jar')
         return os.path.join(kotlinc, 'bin', 'kotlinc'), jars
 
