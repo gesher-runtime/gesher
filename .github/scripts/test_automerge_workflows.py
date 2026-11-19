@@ -17,7 +17,17 @@ class QueueWorkflows(unittest.TestCase):
             self.assertIn('pull_request', doc[True])
             self.assertNotIn('merge_group', doc[True])
             jobs = doc['jobs']
-            self.assertEqual(set(jobs[gate]['needs']), set(jobs) - {gate})
+            # Only the tag-only publisher runs after the gate; every other job is gated.
+            downstream = {name for name, job in jobs.items()
+                          if gate in ([job['needs']] if isinstance(job.get('needs'), str) else job.get('needs', []))}
+            if workflow == 'ci':
+                self.assertEqual(downstream, {'release'})
+                self.assertEqual(jobs['release']['needs'], [gate])
+                self.assertEqual(jobs['release']['if'],
+                                 "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}")
+            else:
+                self.assertEqual(downstream, set())
+            self.assertEqual(set(jobs[gate]['needs']), set(jobs) - {gate} - downstream)
             self.assertEqual(jobs[gate]['if'], 'always()')
             body = jobs[gate]['steps'][0]['run'].split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
             for result in ['success', 'failure', 'cancelled', 'skipped']:

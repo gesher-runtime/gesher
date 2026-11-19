@@ -1,15 +1,14 @@
 name: ci
 
 on:
-  # Temporarily pause CI on main pushes; restore push: branches: [main] to resume.
+  # Temporarily pause CI on main pushes; add branches: [main] under push to resume.
+  push:
+    # Pushing a vX.Y.Z tag builds, tests and publishes that release (job: release;
+    # docs/updates.md). Every other run builds X.Y.Z.<run number> after the
+    # highest release tag, so a CI build never outranks the next release.
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      release_version:
-        description: 'Installer version for a release (X.Y.Z); leave empty for the CI version'
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
@@ -17,9 +16,11 @@ permissions:
 
 # One current run per PR or branch. The root-specific prefix cannot collide
 # with reusable workflows, which inherit the caller's github.workflow value.
+# A release tag has its own group (refs/tags/vX.Y.Z), so no branch or PR run can
+# cancel it, and it is never cancelled in progress.
 concurrency:
   group: ci-run-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -33,6 +34,23 @@ jobs:
       policy_ref: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
     steps:
       - run: echo "SOURCE_IDENTITY source=${{ github.sha }}"
+      # The tag filter's * also matches e.g. v1.2.3-rc1. Stop such a run here,
+      # before every build job (they all depend on this one), not hours later.
+      - name: Require a publishable release tag
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$ ]] ||
+            { echo "::error::Release tag $TAG must be vX.Y.Z with no leading zeros"; exit 1; }
+          for part in "${BASH_REMATCH[@]:1}"; do
+            [ "$part" -le 65535 ] || { echo "::error::Release tag $TAG has a component above 65535"; exit 1; }
+          done
+          # CI builds before tag-based releases were installed as 0.1.<run number>;
+          # a release must outrank all of them to be offered to those machines.
+          [ "${BASH_REMATCH[1]}" -gt 0 ] || [ "${BASH_REMATCH[2]}" -ge 2 ] ||
+            { echo "::error::Release $TAG must be at least v0.2.0 (earlier CI builds used 0.1.<run number>)"; exit 1; }
   automerge-script:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -786,7 +804,6 @@ jobs:
     runs-on: windows-2022
     env:
       GH_TOKEN: ${{ github.token }}
-      GESHER_RELEASE_VERSION: ${{ inputs.release_version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -891,12 +908,29 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           $hebrew = Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl'
           if (-not (Test-Path $iscc) -or -not (Test-Path $hebrew)) { choco upgrade innosetup --no-progress -y | Out-Null }
-          $version = $env:GESHER_RELEASE_VERSION
-          if ([string]::IsNullOrEmpty($version)) { $version = "0.1.$env:GITHUB_RUN_NUMBER" }
-          if ($version -cnotmatch '\A(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\z' -or
-              @($version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count) {
-            throw 'Installer version must be X.Y.Z, with decimal components from 0 through 65535 and no leading zeros.'
+          # A release tag vX.Y.Z builds exactly X.Y.Z. Every other run builds
+          # X.Y.Z.<run number> after the highest release tag (0.0.0 before the
+          # first), which the updater orders above X.Y.Z and below the next release.
+          $release = '\A(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\z'
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $version = $env:GITHUB_REF_NAME -creplace '\Av', ''
+            if ("v$version" -cne $env:GITHUB_REF_NAME -or $version -cnotmatch $release) {
+              throw "Release tag '$env:GITHUB_REF_NAME' must be vX.Y.Z with no leading zeros."
+            }
+          } else {
+            $tags = @(git ls-remote --tags --refs origin 'refs/tags/v*')
+            if ($LASTEXITCODE -ne 0) { throw 'Could not list the release tags.' }
+            $base = @($tags | ForEach-Object { ($_ -split 'refs/tags/v', 2)[1] } |
+              Where-Object { $_ -cmatch $release -and @($_.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -eq 0 } |
+              Sort-Object { [version]$_ } | Select-Object -Last 1)
+            $base = if ($base.Count) { $base[0] } else { '0.0.0' }
+            $version = "$base.$env:GITHUB_RUN_NUMBER"
           }
+          if ($version -cnotmatch '\A(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})(\.[1-9][0-9]{0,4})?\z' -or
+              @($version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count) {
+            throw "Installer version '$version' must be X.Y.Z or X.Y.Z.N, with components through 65535 and no leading zeros."
+          }
+          "Installer version: $version" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           & $iscc /Qp "/DBuildDir=$PWD\dist" "/DAppVersion=$version" "/O$PWD\installer" tools\package\gesher.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "GESHER_PACKAGE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -2339,3 +2373,108 @@ jobs:
           if not results or failed:
               raise SystemExit(f"Required jobs did not succeed: {failed}")
           PY
+
+  # A pushed vX.Y.Z tag publishes the installer this same run built and tested,
+  # only after every production job above succeeded (docs/updates.md).
+  release:
+    name: release
+    # Only a tag push publishes; a manual run on a tag ref builds but never publishes.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [ci-required]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # One publisher at a time across all tags, so two releases cannot interleave
+    # their checks and leave the older one marked latest.
+    concurrency:
+      group: gesher-release-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      SOURCE: ${{ github.sha }}
+    steps:
+      - name: Require a new stable version on main
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$ ]] || fail "Release tag $TAG must be vX.Y.Z"
+          version=${TAG#v}
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          # The tag must still name the commit this run tested.
+          tagged=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)
+          [ "$tagged" = "$SOURCE" ] || fail "$TAG moved from $SOURCE to $tagged during the run"
+          # Releases come from main: the tagged commit is main or one of its ancestors.
+          status=$(gh api "repos/$GH_REPO/compare/$SOURCE...main" --jq .status)
+          case "$status" in ahead|identical) ;; *) fail "$SOURCE is not on main (compare status: $status)" ;; esac
+          releases=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[] | [.id, .tag_name, .draft] | @tsv')
+          # Never publish over, or below, a published release.
+          published=$(printf '%s\n' "$releases" | awk -F'\t' '$3 == "false" { print $2 }' |
+            sed -n 's/^v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p')
+          if printf '%s\n' "$published" | grep -qxF "$version"; then fail "Release $version is already published"; fi
+          highest=$(printf '%s\n' "$published" | sed '/^$/d' | sort -V | tail -n 1)
+          if [ -n "$highest" ] && [ "$(printf '%s\n%s\n' "$highest" "$version" | sort -V | tail -n 1)" != "$version" ]; then
+            fail "Release $version is not newer than the published $highest"
+          fi
+          # A draft left by an earlier attempt of this job is replaced, never published as is.
+          printf '%s\n' "$releases" | awk -F'\t' -v tag="$TAG" '$2 == tag && $3 == "true" { print $1 }' | while read -r id; do
+            gh api -X DELETE "repos/$GH_REPO/releases/$id"
+          done
+          echo "Publishing $TAG from $SOURCE (previous release: ${highest:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Download the tested installer
+        uses: actions/download-artifact@v4
+        with:
+          name: gesher-setup
+          path: installer
+
+      - name: Verify the installer and its checksum file
+        working-directory: installer
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          name="gesher-setup-$VERSION.exe"
+          ls -la
+          [ -f "$name" ] || fail "The artifact has no $name"
+          [ "$(find . -maxdepth 1 -type f -name '*.exe' | wc -l)" -eq 1 ] || fail 'The artifact has more than one installer'
+          hash=$(sha256sum "$name" | cut -d' ' -f1)
+          # Written on Windows: one CRLF-terminated "<sha256>  <name>" line.
+          [ "$(tr -d '\r' < SHA256SUMS.txt)" = "$hash  $name" ] || fail 'SHA256SUMS.txt does not match the installer'
+          echo "INSTALLER=$name" >> "$GITHUB_ENV"
+          echo "SHA256=$hash" >> "$GITHUB_ENV"
+          echo "SIZE=$(stat -c %s "$name")" >> "$GITHUB_ENV"
+
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          # Created as a draft, so the updater never sees a latest release without
+          # its verified installer.
+          gh release create "$TAG" "installer/$INSTALLER" installer/SHA256SUMS.txt \
+            --draft --verify-tag --title "Gesher $VERSION" --generate-notes
+          id=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id")
+          [ "$(printf '%s\n' "$id" | sed '/^$/d' | wc -l)" -eq 1 ] || fail "Expected exactly one draft for $TAG, found: $id"
+          # The updater requires GitHub's own asset digest to match the tested bytes.
+          expected="uploaded $SIZE sha256:$SHA256"
+          actual=''
+          for attempt in 1 2 3 4 5 6; do
+            # A transient API error is retried like a digest that is not ready yet.
+            actual=$(gh api "repos/$GH_REPO/releases/$id" --jq ".assets[] | select(.name == \"$INSTALLER\") | \"\(.state) \(.size) \(.digest)\"" || true)
+            [ "$actual" = "$expected" ] && break
+            sleep 5
+          done
+          [ "$actual" = "$expected" ] || fail "Uploaded asset is '$actual', expected '$expected'; the draft was left unpublished"
+          # Recheck immediately before publishing: no newer release may have appeared.
+          highest=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[] | select(.draft | not) | .tag_name' |
+            sed -n 's/^v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -n 1)
+          if [ -n "$highest" ] && { [ "$highest" = "$VERSION" ] ||
+              [ "$(printf '%s\n%s\n' "$highest" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]; }; then
+            fail "Release $highest was published meanwhile; $VERSION is not newer, so the draft was left unpublished"
+          fi
+          gh api -X PATCH "repos/$GH_REPO/releases/$id" -F draft=false -f make_latest=true > /dev/null
+          latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          [ "$latest" = "$TAG" ] || fail "The latest release is $latest, not $TAG"
+          echo "Published $TAG: $INSTALLER ($SIZE bytes, sha256 $SHA256)" | tee -a "$GITHUB_STEP_SUMMARY"

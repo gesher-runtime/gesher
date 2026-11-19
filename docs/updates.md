@@ -48,8 +48,14 @@ updates or update individual DLLs independently.
 The updater reads the public
 [`releases/latest` endpoint](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)
 for **`gesher-runtime/gesher`**. It accepts only stable, non-draft releases and
-compares three numeric version components. A tag may be `v0.2.0` or `0.2.0`;
-the matching asset must be exactly `gesher-setup-0.2.0.exe`.
+compares numeric versions. A release tag may be `v0.2.0` or `0.2.0` (exactly
+three components); the matching asset must be exactly `gesher-setup-0.2.0.exe`.
+
+An installed Gesher has either a release version (`0.2.0`) or a CI build version
+(`0.2.0.526`: the highest release tag, then the CI run number). A CI build is
+ordered above the release it follows and below the next one, so a CI build of
+0.2.0 is offered 0.2.1 but never 0.2.0. Before the first release tag, CI builds
+are `0.0.0.<run number>`.
 
 The asset must have GitHub's
 [`digest` metadata](https://docs.github.com/en/rest/releases/assets), formatted as
@@ -69,23 +75,47 @@ There is currently one Windows package: x64, matching the installer's
 `x64compatible` requirement. The bundled Android ARM64 translator is part of
 that package; it is not a separate Windows ARM64 installer.
 
-### Preparing a release asset
+### Publishing a release
 
-1. Run the **ci** workflow on the intended commit with the optional
-   `release_version` input, for example `0.2.0`. The input is validated as three
-   numeric components in the Windows version range. Ordinary CI builds retain
-   the existing `0.1.<run_number>` numbering.
-2. Wait for the full run, including Windows, framework, package and E2E checks,
-   to succeed. Download that run's `gesher-setup` artifact; it contains the
-   installer and `SHA256SUMS.txt`.
-3. Publish a stable GitHub Release for that exact commit with the matching
-   `v0.2.0` tag and upload the tested `gesher-setup-0.2.0.exe` unchanged. GitHub
-   calculates its asset digest. Include the checksum file and release notes.
-4. Confirm that the published asset's filename, product version and API digest
-   agree. The release must be selected as GitHub's latest stable release to be
-   offered by the updater.
+A release is published by pushing a tag. Choose a version newer than the latest
+published release, tag the commit on `main`, and push the tag. The first release
+must be at least `v0.2.0`: CI builds made before tag-based releases were
+installed as `0.1.<run number>`, and a lower release would never be offered to
+those machines. The workflow rejects a lower tag.
 
-Adding this feature does not create a tag or publish a release. Until a suitable
+```sh
+git fetch origin main
+git tag -a v0.2.1 -m "Gesher 0.2.1" origin/main   # or a specific commit on main
+git push origin v0.2.1
+```
+
+The tag starts a **ci** run of its own (`refs/tags/v0.2.1`). Its concurrency
+group belongs to that tag only and is never cancelled in progress, so pushes,
+merges and pull request runs cannot cancel it, and it does not cancel them. That
+run builds the installer as exactly `0.2.1` and runs every production job,
+including the package, upgrade and E2E checks. Only when `ci-required` succeeds
+does the `release` job:
+
+1. require a `vX.Y.Z` tag that still names the tested commit, that commit to be
+   on `main`, and the version to be newer than every published release (a
+   malformed tag such as `v1.2.3-rc1` already stops the run in its first job);
+2. take the tested `gesher-setup-0.2.1.exe` from the same run and check it
+   against its `SHA256SUMS.txt`;
+3. create a draft release with both files and generated release notes, wait for
+   GitHub's asset digest to equal the tested SHA-256, recheck that no newer
+   release appeared meanwhile, and only then publish it as the latest release.
+   Publishing is serialized across tags, so two releases cannot interleave.
+
+If any job fails, nothing is published. Fix the problem on `main`, then delete
+the tag (`git push origin :refs/tags/v0.2.1`) and tag the fixed commit, or use
+the next version. A re-run of a failed `release` job replaces a draft left by an
+earlier attempt; it never overwrites or downgrades a published release.
+
+Branch, pull request and manual (`workflow_dispatch`) runs never publish, even a
+manual run on a tag ref. Their
+installers carry a CI build version and are not offered by the updater.
+
+Until a suitable
 release exists, a successful check reports that no release is available.
 
 ## Failure handling and resource use
