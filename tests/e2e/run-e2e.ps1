@@ -17,6 +17,8 @@ param(
   [Alias('Out')] [string] $OutDir = 'e2e-results',
   [string[]] $Only = @(),
   [switch] $SkipInstall,
+  [switch] $RequireApkIdentity,
+  [string] $BuildTools = '',
   [string] $InvocationId = ([guid]::NewGuid().ToString('N'))
 )
 $ErrorActionPreference = 'Stop'
@@ -33,7 +35,7 @@ Set-Content $summary ''
 $script:failed = 0
 $script:lines = @()
 $manifestData = Get-Content -Raw $Manifest | ConvertFrom-Json
-New-E2eEvidence $manifestData $Manifest $Only $OutDir
+New-E2eEvidence $manifestData $Manifest $Only $OutDir $RequireApkIdentity.IsPresent
 . (Join-Path $root 'tests\windows\graphics\WindowChecks.ps1')
 Add-Type -AssemblyName System.Drawing
 
@@ -387,6 +389,7 @@ foreach ($a in $manifestData.apps) {
   $info = @()
   $ranWindow = $false
   $downloadFailed = $false
+  $identityFailed = $false
   Set-E2eCheck $pkg 'launch' 'running'
   # --- Download and verify.
   $apk = Join-Path $apks "$($pkg)_$($a.versionCode).apk"
@@ -400,6 +403,25 @@ foreach ($a in $manifestData.apps) {
   } catch {
     $downloadFailed = $true
     $problems += "download $url failed: $_"
+  }
+  # --- Measure the identity of the pinned bytes with the SDK, without running
+  # APK code. An unavailable optional collector stays explicit; CI requires it.
+  if (-not $problems) {
+    $identityArgs = @((Join-Path $PSScriptRoot 'apk_identity.py'), '--apk', $apk,
+      '--package', $pkg, '--version-code', [string]$a.versionCode, '--sha256', $sha)
+    if ($BuildTools) { $identityArgs += @('--build-tools', $BuildTools) }
+    $identityErrorPath = Join-Path $OutDir "$pkg.identity-error.log"
+    $identityJson = & python @identityArgs 2> $identityErrorPath | Out-String
+    if ($LASTEXITCODE -eq 0) {
+      Set-E2eApkIdentity $pkg ($identityJson | ConvertFrom-Json)
+    } else {
+      Set-E2eApkIdentity $pkg $null "SDK identity collection failed; see $pkg.identity-error.log"
+      if ($RequireApkIdentity) {
+        $identityFailed = $true
+        $problems += 'Required SDK APK identity collection failed'
+      }
+      else { $info += 'APK identity unmeasured: SDK collection failed' }
+    }
   }
   # --- Install.
   if (-not $problems) {
@@ -469,7 +491,7 @@ foreach ($a in $manifestData.apps) {
   }
   $standIns = [regex]::Matches($log + (ReadText $appLog), 'stand-in (\S+) not implemented') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
   if ($standIns) { Report "INFO  e2e: ${pkg}: stand-in methods called but not implemented: $($standIns -join ', ')" }
-  $observedStatus = if (-not $problems) { 'passed' } elseif ($downloadFailed) { 'blocked' } else { 'failed' }
+  $observedStatus = if (-not $problems) { 'passed' } elseif ($downloadFailed -or $identityFailed) { 'blocked' } else { 'failed' }
   Set-E2eCheck $pkg 'launch' $observedStatus $problems
   if (-not $problems) {
     if ($known) { Report "PASS  e2e: $name (listed as a known failure: $known)" }

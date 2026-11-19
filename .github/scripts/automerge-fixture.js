@@ -7,6 +7,8 @@ const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const BASE = 'c'.repeat(40);
 const MERGE = 'd'.repeat(40);
+const ACTIONS_BOT = {login: 'github-actions[bot]', id: 41898282, type: 'Bot'};
+const APP_BOT = {login: 'gesher-runtime-automation[bot]', id: 358279050, type: 'Bot'};
 const T = (second) => '2026-11-16T10:00:' + String(second).padStart(2, '0') + 'Z';
 const clone = structuredClone;
 
@@ -40,7 +42,7 @@ function world(over = {}) {
     const value = {repository: w.pr.base.repo.id, number: w.pr.number, head: w.pr.head.sha,
       base: w.pr.base.ref, label: event.id, actor: event.actor.id, ...patch};
     w.reviews.push({id: 200 + w.reviews.length, node_id: 'BOT_' + w.reviews.length,
-      user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED',
+      user: clone(ACTIONS_BOT), state: 'APPROVED',
       commit_id: value.head, submitted_at: T(Math.max(31, Number(event.created_at.slice(17,19)) + 1)),
       body: '<!-- gesher-automerge-v1 ' + JSON.stringify(value) + ' -->'});
   };
@@ -48,7 +50,7 @@ function world(over = {}) {
   w.seedOpening = (boundary = T(0), patch = {}) => {
     const value = {repository: w.pr.base.repo.id, number: w.pr.number,
       created: w.pr.created_at, boundary, ...patch};
-    w.comments.push({id: 200 + w.comments.length, user: {login: 'github-actions[bot]', type: 'Bot'},
+    w.comments.push({id: 200 + w.comments.length, user: clone(ACTIONS_BOT),
       created_at: T(1), updated_at: T(1),
       body: '<!-- gesher-automerge-opening-v1 ' + JSON.stringify(value) + ' -->'});
   };
@@ -74,20 +76,34 @@ function world(over = {}) {
     const items = all.slice((a.page - 1) * a.per_page, a.page * a.per_page);
     return field ? {[field]: items, total_count: all.length} : items;
   });
-  const github = {rest: {
+  const writes = (actor, prefix = '') => ({
     pulls: {
-      get: rec('getPR', () => w.pr),
-      createReview: rec('approve', (args) => {
+      createReview: rec(prefix + 'approve', (args) => {
         if (w.approveError) throw w.approveError;
         const r = {id: 400 + w.reviews.length, node_id: 'BOT_' + w.reviews.length,
-          user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED',
+          user: clone(actor), state: 'APPROVED',
           submitted_at: T(Math.max(31, Number(w.events.at(-1).created_at.slice(17,19)) + 1)), commit_id: args.commit_id, body: args.body};
         w.reviews.push(r); return r;
       }),
-      dismissReview: rec('dismiss', (args) => {
+      dismissReview: rec(prefix + 'dismiss', (args) => {
         const r = w.reviews.find((r) => r.id === args.review_id);
         r.state = 'DISMISSED'; return r;
       }),
+    },
+    issues: {
+      removeLabel: rec(prefix + 'removeLabel', () => {w.pr.labels = []; return {};}),
+      createComment: rec(prefix + 'comment', (args) => {
+        const item = {id: 300 + w.comments.length, user: clone(actor),
+          created_at: w.commentAt ?? T(31), updated_at: w.commentAt ?? T(31), body: args.body};
+        w.comments.push(item); return item;
+      }),
+    },
+  });
+  const actionsWrites = writes(ACTIONS_BOT);
+  const github = {rest: {
+    pulls: {
+      ...actionsWrites.pulls,
+      get: rec('getPR', () => w.pr),
       list: page('listPRs', () => [w.pr]),
       listReviews: page('reviews', () => {
         if (w.reviewError) throw w.reviewError;
@@ -101,15 +117,9 @@ function world(over = {}) {
       }),
     },
     issues: {
+      ...actionsWrites.issues,
       listEvents: page('events', () => w.events),
       listComments: page('comments', () => w.comments),
-      removeLabel: rec('removeLabel', () => {w.pr.labels = []; return {};}),
-      createComment: rec('comment', (args) => {
-        const item = {id: 300 + w.comments.length, user: {login: 'github-actions[bot]', type: 'Bot'},
-          created_at: w.commentAt ?? T(31), updated_at: w.commentAt ?? T(31), body: args.body};
-        w.comments.push(item);
-        return item;
-      }),
     },
     actions: {
       listWorkflowRunsForRepo: page('runs', (a) => w.runs.filter((r) => r.head_sha === a.head_sha), 'workflow_runs'),
@@ -158,9 +168,10 @@ function world(over = {}) {
       commit: {oid: r.commit_id}, ...(bot ? w.approvalNodeOverride : w.reviewNodeOverride)} : null});
   };
   const core = {info: () => {}, warning: (s) => w.warnings.push(s)};
-  const fire = (eventName, payload) => run({github, core, mergeGithub: w.mergeGithub,
+  w.useApp = () => {w.prGithub = {rest: writes(APP_BOT, 'app-'), graphql: github.graphql};};
+  const fire = (eventName, payload) => run({github, core, prGithub: w.prGithub, mergeGithub: w.mergeGithub,
     context: {eventName, repo: {owner: 'o', repo: 'r'},
-      payload: {repository: {default_branch: 'main'}, ...clone(payload)}}});
+      payload: {repository: {default_branch: 'main', id: w.repositoryId}, ...clone(payload)}}});
   w.labeled = (snapshot = w.pr) => fire('pull_request_target', {action: 'labeled',
     label: {name: 'automerge'}, sender: {id: 42}, pull_request: snapshot});
   w.pushed = (snapshot = w.pr) => fire('pull_request_target', {action: 'synchronize', pull_request: snapshot});
@@ -180,4 +191,4 @@ function authorWorld(over = {}) {
 }
 
 
-module.exports = {world, authorWorld, HEAD, OTHER, BASE, T};
+module.exports = {world, authorWorld, HEAD, OTHER, BASE, T, APP_BOT};
