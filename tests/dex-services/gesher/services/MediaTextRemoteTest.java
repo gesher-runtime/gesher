@@ -11,6 +11,7 @@ import android.os.Parcel;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.service.textservice.SpellCheckerService;
 import android.view.textservice.SentenceSuggestionsInfo;
 import android.view.textservice.SpellCheckerSession;
 import android.view.textservice.SuggestionsInfo;
@@ -63,6 +64,13 @@ public final class MediaTextRemoteTest {
         check(Process.myUid() == Process.SYSTEM_UID, "system server UID");
         ApkPackage apk = ApkPackage.parse(apkPath);
         check(apk.uid() == CLIENT_UID, "fixture APK must use the ordinary legacy app UID");
+        boolean declaresSpellChecker = false;
+        for (var service : apk.parsed.getServices()) {
+            for (var intent : service.getIntents()) {
+                declaresSpellChecker |= intent.getIntentFilter().hasAction(SpellCheckerService.SERVICE_INTERFACE);
+            }
+        }
+        check(!declaresSpellChecker, "no-provider transport fixture must not declare a spell checker");
         Map<String, IBinder> services = Services.create(Collections.singletonList(apk));
         Object created = field(Services.class, "sLast").get(null);
         Object atm = field(created.getClass(), "atm").get(created);
@@ -164,7 +172,10 @@ public final class MediaTextRemoteTest {
         TextServicesManager manager = context.getSystemService(TextServicesManager.class);
         check(manager != null && manager == context.getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE),
                 "remote-backed public text manager constructs and caches");
-        check(!manager.isSpellCheckerEnabled() && manager.getCurrentSpellCheckerInfo() == null
+        check(manager.isSpellCheckerEnabled() && text.isSpellCheckerEnabled(0),
+                "remote default enabled preference is independent of provider availability");
+        check(manager.getCurrentSpellCheckerInfo() == null
+                        && manager.getCurrentSpellCheckerSubtype(true) == null
                         && manager.getEnabledSpellCheckerInfos().isEmpty()
                         && text.getEnabledSpellCheckers(0) == null,
                 "remote no-checker results retain exact Binder and public shapes");

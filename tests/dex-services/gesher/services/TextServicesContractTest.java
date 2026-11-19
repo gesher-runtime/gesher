@@ -3,6 +3,7 @@ package gesher.services;
 
 import android.app.ActivityThread;
 import android.app.ContentProviderHolder;
+import android.app.GesherSettingsContext;
 import android.app.IActivityManager;
 import android.content.AttributionSource;
 import android.content.Context;
@@ -60,19 +61,10 @@ public final class TextServicesContractTest {
         AssetManager.createSystemAssetsInZygoteLocked(false,
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         if (Looper.myLooper() == null) Looper.prepareMainLooper();
+        GesherSettingsContext.prepare();
         Map<String, IBinder> created = Services.createInProcess(Collections.emptyList());
         IBinder target = created.get(Context.TEXT_SERVICES_MANAGER_SERVICE);
         check(target != null, "textservices is registered");
-        ContentProviderHolder settingsHolder = IActivityManager.Stub.asInterface(created.get(Context.ACTIVITY_SERVICE))
-                .getContentProviderExternal(Settings.AUTHORITY, 0, null, "text-services-contract");
-        Bundle disabled = new Bundle();
-        disabled.putString("value", "0");
-        rejects(SecurityException.class, () -> settingsHolder.provider.call(
-                new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
-                "PUT_secure", Settings.Secure.SPELL_CHECKER_ENABLED, disabled));
-        rejects(SecurityException.class, () -> settingsHolder.provider.call(
-                new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
-                "gesher:select-default-spell-checker", null, null));
         AtomicInteger transactions = new AtomicInteger();
         IBinder transport = new Binder() {
             @Override public IInterface queryLocalInterface(String descriptor) { return null; }
@@ -95,6 +87,18 @@ public final class TextServicesContractTest {
         Constructor<ActivityThread> constructor = ActivityThread.class.getDeclaredConstructor();
         constructor.setAccessible(true);
         Context context = constructor.newInstance().getSystemContext();
+        // Like normal startup, acquire the provider only after its framework
+        // context can resolve the registered display and package services.
+        ContentProviderHolder settingsHolder = IActivityManager.Stub.asInterface(created.get(Context.ACTIVITY_SERVICE))
+                .getContentProviderExternal(Settings.AUTHORITY, 0, null, "text-services-contract");
+        Bundle disabled = new Bundle();
+        disabled.putString("value", "0");
+        rejects(SecurityException.class, () -> settingsHolder.provider.call(
+                new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
+                "PUT_secure", Settings.Secure.SPELL_CHECKER_ENABLED, disabled));
+        rejects(SecurityException.class, () -> settingsHolder.provider.call(
+                new AttributionSource(Process.myUid(), "android", null), Settings.AUTHORITY,
+                "gesher:select-default-spell-checker", null, null));
         TextServicesManager manager = context.getSystemService(TextServicesManager.class);
         check(manager != null && manager.getClass() == TextServicesManager.class,
                 "real public TextServicesManager constructs");

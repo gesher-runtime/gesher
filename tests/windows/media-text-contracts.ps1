@@ -87,8 +87,10 @@ function Test-MediaTextTransport([string] $Dir, [string[]] $VmArguments, [string
       if (((Get-Content -LiteralPath $managerLog -Raw -ErrorAction Stop) + '').Contains('servicemanager: ready on /dev/binder')) { break }
       Start-Sleep -Milliseconds 100
     }
+    # The no-provider text contract needs an ordinary APK without a spell checker;
+    # components.apk contains the separate real-provider session fixture.
     $server = Start-MediaTextProcess 'media-text-server' "$Dir/dalvikvm.exe" `
-      ($VmArguments + 'gesher.services.MediaTextRemoteTest' + 'server' + (MediaTextGuestPath $ready) + (MediaTextGuestPath (Join-Path $Dir 'components.apk')))
+      ($VmArguments + 'gesher.services.MediaTextRemoteTest' + 'server' + (MediaTextGuestPath $ready) + (MediaTextGuestPath (Join-Path $Dir 'lifecycle.apk')))
     while (-not (Test-Path -LiteralPath $ready -PathType Leaf)) {
       if ($broker.HasExited) { throw "Media/text binderd exited before server readiness: $($broker.ExitCode)" }
       if ($manager.HasExited) { throw "Media/text servicemanager exited before server readiness: $($manager.ExitCode)" }
