@@ -181,7 +181,8 @@ def emit_record(label, value, raw=None, flush=None):
 
 
 def receipt_name(role):
-    require(role in ('production', 'query-hook', 'binder-ordinary-actor', 'native3-common-host-fixture'), 'Unknown selected artifact role')
+    require(role in ('production', 'query-hook', 'binder-ordinary-actor', 'native3-common-host-fixture',
+                     'capture-fixture'), 'Unknown selected artifact role')
     return 'selected-pthread-' + role + '-toolchain.json'
 
 
@@ -244,6 +245,14 @@ def production_targets(directory, production, info, hook=False):
         extra.remove('binder_sg_actor.exe')
     if hook:
         extra.discard(HOOK)
+    capture_fixtures = {'dalvikvm-media-capture-test.exe', 'media_probe-media-capture-test.exe'}
+    if extra & capture_fixtures:
+        # These are a distinct, compiler/source-bound role, never production.
+        spec = importlib.util.spec_from_file_location('isolated_capture_roles', ROOT / 'tools/media_capture/host_roles.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.verify(directory, True)
+        extra -= capture_fixtures
     probes = {
         'angle_probe.exe', 'arm64_fpcr_test.exe', 'arm64_fpsr_test.exe', 'arm64_smoke_test.exe',
         'skia_gl_probe.exe', 'skia_probe.exe', 'webview2_probe.exe', 'webview2_probe_dll.exe',

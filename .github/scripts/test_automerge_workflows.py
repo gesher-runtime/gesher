@@ -10,6 +10,24 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class QueueWorkflows(unittest.TestCase):
+    def test_local_controller_pool_requires_main_and_an_explicit_flag(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
+        job = doc['jobs']['automerge']
+        # Routing must not acquire a hosted admission-job dependency: avoiding
+        # that hosted queue is the purpose of this dedicated control pool.
+        self.assertNotIn('needs', job)
+        expression = job['runs-on']
+        prefix = "${{ fromJSON(vars.GESHER_AUTOMERGE_LOCAL == 'true' && github.workflow_ref == 'gesher-runtime/gesher/.github/workflows/automerge.yml@refs/heads/main' && '"
+        self.assertTrue(expression.startswith(prefix))
+        local, hosted = expression[len(prefix):].removesuffix(') }}').split("' || '")
+        self.assertTrue(hosted.endswith("'"))
+        self.assertEqual(json.loads(hosted[:-1]), 'ubuntu-24.04')
+        self.assertEqual(json.loads(local), {'group': 'gesher-automerge',
+                                          'labels': ['self-hosted', 'linux', 'x64']})
+        self.assertIn('labeled', doc[True]['pull_request_target']['types'])
+        self.assertIn('unlabeled', doc[True]['pull_request_target']['types'])
+        self.assertEqual(set(doc[True]['workflow_run']['workflows']), {'ci', 'arm64-windows'})
+
     def test_both_gates_cover_all_jobs_and_fail_closed(self):
         for workflow, gate in [('ci', 'ci-required'), ('arm64-windows', 'arm64-required')]:
             doc = yaml.safe_load((ROOT / f'.github/workflows/{workflow}.yml').read_text(encoding='utf-8'))
