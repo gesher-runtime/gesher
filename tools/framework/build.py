@@ -530,8 +530,46 @@ class Builder:
                            '-o', d, '-j'] + args)
 
     KOTLINC = 'https://github.com/JetBrains/kotlin/releases/download/v2.1.21/kotlin-compiler-2.1.21.zip'
-    JAVAPOET = 'https://repo1.maven.org/maven2/com/squareup/javapoet/1.13.0/javapoet-1.13.0.jar'
-    GUAVA = 'https://repo1.maven.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar'
+    JVM_MAVEN_ORIGINS = ('https://repo1.maven.org/maven2', 'https://repo.maven.apache.org/maven2')
+    JVM_MAVEN_ARTIFACTS = {
+        'javapoet': ('com/squareup/javapoet/1.13.0/javapoet-1.13.0.jar',
+                     '4c7517e848a71b36d069d12bb3bf46a70fd4cda3105d822b0ed2e19c00b69291'),
+        'guava': ('com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar',
+                  '4bf0e2c5af8e4525c96e8fde17a4f7307f97f8478f11c4c8e35a0e3298ae4e90'),
+    }
+
+    def jvm_maven_jar(self, directory, name, artifact, sha256):
+        jar = os.path.join(directory, f'{name}.jar')
+
+        def valid(path):
+            try:
+                with open(path, 'rb') as f:
+                    return hashlib.sha256(f.read()).hexdigest() == sha256
+            except FileNotFoundError:
+                return False
+
+        if valid(jar):
+            return jar
+        errors = []
+        for origin in self.JVM_MAVEN_ORIGINS:
+            url = f'{origin}/{artifact}'
+            # Keep failed downloads out of the shared cache. A 404 does not
+            # retry the same origin, but the other Central endpoint may work.
+            with tempfile.TemporaryDirectory(prefix=f'{name}-', dir=directory) as temporary:
+                download = os.path.join(temporary, f'{name}.jar')
+                try:
+                    run(['curl', '-fsSL', '--connect-timeout', '10', '--max-time', '30',
+                         '--retry', '3', '--retry-max-time', '90', '-o', download, url],
+                        timeout=120)
+                except (RuntimeError, subprocess.TimeoutExpired) as error:
+                    errors.append(f'{url}: {error}')
+                    continue
+                if not valid(download):
+                    errors.append(f'{url}: SHA-256 mismatch')
+                    continue
+                os.replace(download, jar)
+                return jar
+        raise RuntimeError(f'cannot acquire verified {name}:\n' + '\n'.join(errors))
 
     def jvm_tools(self):
         """kotlinc (JetBrains' release), JavaPoet and Guava: what AOSP's
@@ -545,17 +583,8 @@ class Builder:
             with zipfile.ZipFile(z) as f:
                 f.extractall(d)
             os.chmod(os.path.join(kotlinc, 'bin', 'kotlinc'), 0o755)
-        jars = {}
-        for name, url in (('javapoet', self.JAVAPOET), ('guava', self.GUAVA)):
-            jars[name] = os.path.join(d, f'{name}.jar')
-            if not os.path.isfile(jars[name]):
-                # Retry transient Maven errors without leaving a partial JAR in the cache.
-                with tempfile.TemporaryDirectory(prefix=f'{name}-', dir=d) as temporary:
-                    download = os.path.join(temporary, f'{name}.jar')
-                    run(['curl', '-fsSL', '--connect-timeout', '10', '--max-time', '30',
-                         '--retry', '3', '--retry-max-time', '90', '-o', download, url],
-                        timeout=120)
-                    os.replace(download, jars[name])
+        jars = {name: self.jvm_maven_jar(d, name, artifact, sha256)
+                for name, (artifact, sha256) in self.JVM_MAVEN_ARTIFACTS.items()}
         jars['kotlin-stdlib'] = os.path.join(kotlinc, 'lib', 'kotlin-stdlib.jar')
         return os.path.join(kotlinc, 'bin', 'kotlinc'), jars
 

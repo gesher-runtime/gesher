@@ -89,6 +89,9 @@ int main(int argc, char** argv) {
     bool exact = initial == sizeof(bytes);
     for (size_t i = 0; i < sizeof(bytes); ++i) exact &= bytes[i] == ByteAt(17 + i);
     Check(exact, "initial whole-body bytes arrive before peer releases its tail");
+    const int64_t cached_prefix = source->CachedBytes();
+    Check(cached_prefix >= 0 && cached_prefix <= 65536 - 49,
+          "whole cache reports only the received prefix before the peer releases its tail");
     {
       auto release = Open(base, "/release-gated");
       uint8_t released = 0;
@@ -99,8 +102,11 @@ int main(int argc, char** argv) {
           "file-backed whole response supports forward seek to final bytes");
     Check(bytes[0] == ByteAt(2 * 1024 * 1024 + 10) && bytes[2] == ByteAt(2 * 1024 * 1024 + 12),
           "final whole-body bytes are exact");
+    Check(source->CachedBytes() == 0, "final read consumes all following whole-response cache");
     Check(source->ReadAt(7, bytes, 2) == 2 && bytes[0] == ByteAt(7) && bytes[1] == ByteAt(8),
           "file-backed whole response supports backward seek");
+    Check(source->CachedBytes() == 2 * 1024 * 1024 + 13 - 9,
+          "backward seek exposes the exact already-received whole-response suffix");
     std::vector<std::thread> readers;
     for (int t = 0; t < 4; ++t) readers.emplace_back([&, t] {
       for (int j = 0; j < 15; ++j) {
@@ -114,6 +120,7 @@ int main(int argc, char** argv) {
     for (auto& reader : readers) reader.join();
     source->Cancel();
     Check(source->ReadAt(0, bytes, 1) == -EINTR, "whole source cancellation rejects cached reads");
+    Check(source->CachedBytes() == -1, "cancelled whole source has unavailable cache");
   }
   {
     auto source = Open(base, "/stream-unknown");
@@ -121,6 +128,8 @@ int main(int argc, char** argv) {
     uint8_t bytes[32] = {};
     Check(source->ReadAt(7, bytes, sizeof(bytes)) == sizeof(bytes), "unknown 200 early read");
     Check(source->Size() == 2 * 1024 * 1024 + 13, "unknown 200 size drains spool to real EOF");
+    Check(source->CachedBytes() == 2 * 1024 * 1024 + 13 - 39,
+          "unknown-length drain preserves the last public read position for cached bytes");
     Check(source->ReadAt(INT64_MAX, bytes, 1) == 0, "unknown 200 maximum offset becomes EOF");
   }
   {

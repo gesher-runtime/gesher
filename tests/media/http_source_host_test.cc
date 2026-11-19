@@ -263,7 +263,8 @@ BOOL WinHttpQueryDataAvailable(HINTERNET req, DWORD* count) {
   return true;
 }
 BOOL WinHttpReadData(HINTERNET req, void* out, DWORD count, DWORD* got) {
-  if (req->path == L"/stream-blocked" && req->cursor == 0) {
+  if ((req->path == L"/stream-blocked" && req->cursor == 0) ||
+      (req->path == L"/stream-blocked-tail" && req->cursor >= 65536)) {
     std::unique_lock<std::mutex> lock(blocked_mu);
     read_blocked = true;
     blocked_cv.notify_all();
@@ -495,6 +496,111 @@ void StreamingContracts() {
   }
   Check(file_handles == 0 && handles == 0, "all streaming paths retire their resources");
 }
+
+void CachedByteContracts() {
+  {
+    auto source = Open("stream-blocked-tail");
+    CheckBytes(*source, 0, 32, "cache snapshot prepares a committed prefix before blocked I/O");
+    { std::lock_guard<std::mutex> lock(blocked_mu); read_blocked = false; release_read = false; }
+    std::thread reader([&] { CheckBytes(*source, 65536, 1, "blocked tail eventually completes"); });
+    {
+      std::unique_lock<std::mutex> lock(blocked_mu);
+      Check(blocked_cv.wait_for(lock, std::chrono::seconds(2), [] { return read_blocked; }),
+            "next transfer blocks while a valid spool prefix exists");
+    }
+    int64_t cached = -99;
+    bool queried = false;
+    std::thread query([&] {
+      cached = source->CachedBytes();
+      { std::lock_guard<std::mutex> lock(blocked_mu); queried = true; }
+      blocked_cv.notify_all();
+    });
+    {
+      std::unique_lock<std::mutex> lock(blocked_mu);
+      Check(blocked_cv.wait_for(lock, std::chrono::seconds(2), [&] { return queried; }),
+            "cache snapshot returns before the blocked network read is released");
+      release_read = true;
+    }
+    blocked_cv.notify_all();
+    query.join();
+    reader.join();
+    Check(cached == 65536 - 32, "blocked read cannot hide or extend the committed cache prefix");
+  }
+  {
+    auto source = Open("stream-large");
+    const int calls = requests;
+    const int64_t before = transport_bytes;
+    Check(source->CachedBytes() == -1 && requests == calls && transport_bytes == before,
+          "cache query before a read is unknown and does not start a request");
+    CheckBytes(*source, 17, 32, "whole cache initial read preserves input bytes");
+    const int64_t received = transport_bytes;
+    Check(source->CachedBytes() == 65536 - 49 && transport_bytes == received,
+          "whole cache counts committed prefix after the actual read without draining");
+    CheckBytes(*source, 7, 2, "whole cache backward read preserves input bytes");
+    Check(source->CachedBytes() == 65536 - 9 && transport_bytes == received,
+          "backward read moves the cache origin without a new transfer");
+    CheckBytes(*source, 65532, 8, "whole cache read crosses a stored-block boundary");
+    Check(source->CachedBytes() == 131072 - 65540,
+          "forward read counts only the newly committed prefix after its end");
+    source->Cancel();
+    Check(source->CachedBytes() == -1, "cancelled spool cannot report available cached bytes");
+  }
+  {
+    auto source = Open("stream-unknown");
+    CheckBytes(*source, 7, 32, "unknown whole cache records its first read");
+    Check(source->CachedBytes() == 65536 - 39,
+          "unknown content length still has an exact received cache prefix");
+    Check(source->Size() == 2 * kFixtureChunk + 13,
+          "explicit size query drains unknown response for cache fixture");
+    const int64_t received = transport_bytes;
+    Check(source->CachedBytes() == 2 * kFixtureChunk + 13 - 39 && transport_bytes == received,
+          "size query extends cache without moving the last public read end");
+    CheckBytes(*source, 2 * kFixtureChunk + 10, 3, "whole cache reads the final short tail");
+    Check(source->CachedBytes() == 0, "fully consumed response has no following cache");
+  }
+  {
+    auto source = Open("stream-error");
+    std::vector<uint8_t> bytes(131072, 0xed);
+    Check(source->ReadAt(0, bytes.data(), bytes.size()) == 65536,
+          "network failure returns its complete verified prefix");
+    Check(source->CachedBytes() == 0,
+          "short successful prefix advances the public read end before network failure");
+    CheckBytes(*source, 7, 32, "network failure preserves backward reads of verified bytes");
+    Check(source->CachedBytes() == 65536 - 39,
+          "cache never includes unreceived transport bytes after failure");
+  }
+  {
+    auto source = Open("stream-large");
+    CheckBytes(*source, 0, 32, "disk failure cache begins with a committed block");
+    fail_write_after = 113;
+    uint8_t byte = 99;
+    Check(source->ReadAt(65536, &byte, 1) == -EIO && byte == 99,
+          "failed next block does not produce a successful read");
+    fail_write_after = -1;
+    Check(source->CachedBytes() == 65536 - 32,
+          "partial disk write remains outside the committed cache and read end");
+  }
+  {
+    auto source = Open("range");
+    CheckBytes(*source, 7, 32, "range cache records its public read end");
+    Check(source->CachedBytes() == kFixtureChunk - 39,
+          "range cache still counts the contiguous chunk suffix");
+    CheckBytes(*source, 2 * kFixtureChunk, 1, "range fixture receives a disconnected chunk");
+    CheckBytes(*source, 7, 32, "range cache returns to the first chunk");
+    Check(source->CachedBytes() == kFixtureChunk - 39,
+          "range cache excludes chunks beyond a missing range");
+  }
+  {
+    auto source = Open("ignore");
+    CheckBytes(*source, 7, 32, "partial range fixture starts with cached data");
+    uint8_t bytes[4] = {};
+    Check(source->ReadAt(kFixtureChunk - 2, bytes, sizeof(bytes)) == 2,
+          "failed nonzero range returns the existing two-byte prefix");
+    Check(source->CachedBytes() == 0,
+          "range partial success moves the read end past the verified prefix");
+  }
+  Check(file_handles == 0 && handles == 0, "cache accounting retires every source resource");
+}
 }  // namespace
 
 void RangeToWholeTransition(bool concurrent) {
@@ -544,12 +650,16 @@ void RangeToWholeTransition(bool concurrent) {
       byte = 0xed;
       Check(source->ReadAt(65536, &byte, 1) == 1 && byte == ByteAt(65536),
             "late response never restarts already-spooled prefix");
+      Check(source->CachedBytes() == 131072 - 65537,
+            "concurrent mode transition counts the one adopted spool after the final read");
     } else {
       byte = 0xed;
       Check(source->ReadAt(0, &byte, 1) == 1 && byte == ByteAt(0),
             "later legal 200 at zero must not report false EOF");
       Check(source->ReadAt(0, &byte, 1) == 1 && byte == ByteAt(0),
             "subsequent same read succeeds");
+      Check(source->CachedBytes() == 65536 - 1,
+            "range-to-whole transition replaces stale range accounting with the stored prefix");
     }
   }
   Check(handles == 0 && file_handles == 0, "transition releases every handle");
@@ -633,6 +743,7 @@ int main(int argc, char** argv) {
   }
   Check(handles == 0, "all request, connection and session handles close");
   StreamingContracts();
+  CachedByteContracts();
   Measurements(true);
   Check(handles == 0 && file_handles == 0, "measured source leaves no owned resources");
   std::printf("HTTP source host contracts: %d checks, %d failures, %d requests\n",

@@ -57,17 +57,24 @@ Primary contract references:
 and Gesher's internal `DataSource` contract in
 [`data_source.h`](../../compat/media/player/data_source.h).
 
-## Integration with pending extractor work
+## Integration with extractor cache accounting
 
-This change is independent against the stated current-main baseline. Pending
-[PR #119](https://github.com/gesher-runtime/gesher/pull/119) and
-[PR #101](https://github.com/gesher-runtime/gesher/pull/101) add the same
-`read_end_`/`CachedBytes()` accounting to `HttpSource`. Their current implementation
-inspects only `chunks_`. Combining either with this PR requires accounting for
-the valid disk-spooled whole-response prefix and advancing `read_end_` after
-successful `ReadWhole()` results. That combined API behavior needs its own
-validation; clean semantic composition with those pending branches is not
-claimed. Their unrelated API additions are not included here.
+[PR #101](https://github.com/gesher-runtime/gesher/pull/101) has merged into main,
+bringing `read_end_`/`CachedBytes()` accounting to `HttpSource`. The combined
+implementation counts the committed disk-spooled prefix when a whole response
+is active, and uses the range LRU only while range mode remains active. The
+mode and valid prefix are published atomically; a cache query performs no network
+or disk I/O, does not wait for a blocked spool transfer, and never counts a partial
+failed disk write. Writers still serialize the spool cursor and append transaction.
+
+Every positive public read advances the cache origin by the number of bytes
+actually returned. This includes short successful prefixes before an error and
+the same read that changes from ranges to a whole response. Failed reads do not
+invent a new successful position, and cancellation reports an unavailable cache.
+The host suite covers initial and unknown-length whole responses, seek, explicit
+size discovery, failed transfers/writes, range gaps and both mode-transition
+paths. The existing Windows loopback fixture checks the cache before releasing
+the gated response tail, then after final/backward reads and cancellation.
 
 ## Reproducible comparison
 

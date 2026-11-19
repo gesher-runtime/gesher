@@ -122,19 +122,20 @@ class HttpSource : public DataSource {
     if (size == 0) return 0;
     if (!EnsureFirst()) return cancelled_ ? -EINTR : -EIO;
     size = std::min(size, static_cast<size_t>(std::numeric_limits<ssize_t>::max()));
-    if (whole_) return ReadWhole(offset, data, size);
+    if (whole_) return CompleteRead(offset, ReadWhole(offset, data, size));
     uint8_t* out = static_cast<uint8_t*>(data);
     size_t done = 0;
     while (done < size) {
       if (cancelled_) return -EINTR;
       if (done > static_cast<uint64_t>(std::numeric_limits<int64_t>::max() - offset)) {
-        return done > 0 ? static_cast<ssize_t>(done) : -EOVERFLOW;
+        return CompleteRead(offset, done > 0 ? static_cast<ssize_t>(done) : -EOVERFLOW);
       }
       int64_t pos = offset + static_cast<int64_t>(done);
       if (whole_) {
         const ssize_t tail = ReadWhole(pos, out + done, size - done);
-        if (tail < 0) return tail == -EINTR || done == 0 ? tail : static_cast<ssize_t>(done);
-        return static_cast<ssize_t>(done) + tail;
+        if (tail < 0) return CompleteRead(offset,
+            tail == -EINTR || done == 0 ? tail : static_cast<ssize_t>(done));
+        return CompleteRead(offset, static_cast<ssize_t>(done) + tail);
       }
       if (size_ >= 0 && pos >= size_) break;
       int64_t base = pos - pos % static_cast<int64_t>(kChunk);
@@ -153,7 +154,7 @@ class HttpSource : public DataSource {
         if (whole_) continue;
         if (!fetched) {
           MEDIA_LOGE("http: %s", error.c_str());
-          return done > 0 ? static_cast<ssize_t>(done) : -EIO;
+          return CompleteRead(offset, done > 0 ? static_cast<ssize_t>(done) : -EIO);
         }
         std::lock_guard<std::mutex> lock(mu_);
         chunk = Keep(base, std::move(bytes));
@@ -164,7 +165,33 @@ class HttpSource : public DataSource {
       memcpy(out + done, chunk->data() + in, n);
       done += n;
     }
-    return static_cast<ssize_t>(done);
+    return CompleteRead(offset, static_cast<ssize_t>(done));
+  }
+
+  int64_t CachedBytes() override {
+    const int64_t start = read_end_.load();
+    if (start < 0 || cancelled_) return -1;
+    // A whole response owns a committed disk prefix, not a range-cache entry.
+    // Its atomic committed count needs no spool lock: a metadata query must
+    // not wait for another reader's synchronous WinHTTP transfer or count a
+    // block whose write failed partway through publication.
+    if (whole_) return WholeCachedBytes(start);
+    int64_t end = start;
+    std::lock_guard lock(mu_);
+    if (whole_) return WholeCachedBytes(start);
+    for (;;) {
+      const int64_t base = end - end % static_cast<int64_t>(kChunk);
+      const auto chunk = std::find_if(chunks_.begin(), chunks_.end(), [=](const auto& entry) {
+        return entry.first == base;
+      });
+      if (chunk == chunks_.end() || chunk->second->size() > static_cast<uint64_t>(INT64_MAX - base)) {
+        break;
+      }
+      const int64_t next = base + static_cast<int64_t>(chunk->second->size());
+      if (next <= end) break;
+      end = next;
+    }
+    return end - start;
   }
 
   int64_t Size() override {
@@ -192,6 +219,18 @@ class HttpSource : public DataSource {
   }
 
  private:
+  ssize_t CompleteRead(int64_t offset, ssize_t result) {
+    // Count only bytes actually returned, including a verified short prefix
+    // before a later error and a read that changes from ranges to the spool.
+    if (result > 0 && result <= INT64_MAX - offset) read_end_.store(offset + result);
+    return result;
+  }
+
+  int64_t WholeCachedBytes(int64_t start) const {
+    const int64_t end = whole_size_.load();
+    return end > start ? end - start : 0;
+  }
+
   // Readers retain immutable bytes after releasing mu_; an unrelated read
   // can then evict an LRU entry without invalidating the reader's copy.
   using Chunk = std::shared_ptr<const std::vector<uint8_t>>;
@@ -330,8 +369,9 @@ class HttpSource : public DataSource {
     return true;
   }
 
-  // whole_mu_ protects the request, file cursor and the committed byte count.
-  // Synchronous API calls on a request never overlap, including its close.
+  // whole_mu_ serializes the request, file cursor and append publication.
+  // Cache queries only read the atomic committed count. Synchronous API calls
+  // on a request never overlap, including its close.
   void ReleaseWhole() {
     whole_request_.Reset();
     if (whole_file_ != INVALID_HANDLE_VALUE) CloseHandle(whole_file_);
@@ -387,7 +427,7 @@ class HttpSource : public DataSource {
       if (whole_length_ >= 0 && whole_size_ != whole_length_) {
         return FailWhole("truncated whole HTTP body");
       }
-      size_ = whole_size_;
+      size_ = whole_size_.load();
       return true;
     }
     if (got > static_cast<uint64_t>(std::numeric_limits<int64_t>::max() - whole_size_) ||
@@ -444,13 +484,16 @@ class HttpSource : public DataSource {
   HINTERNET session_ = nullptr;
   HINTERNET connect_ = nullptr;
   std::atomic<int64_t> size_{-1};
+  std::atomic<int64_t> read_end_{-1};
   std::atomic<bool> whole_{false};
   std::atomic<bool> cancelled_{false};
   std::mutex whole_mu_;
   Handle whole_request_;
   HANDLE whole_file_ = INVALID_HANDLE_VALUE;
   std::vector<uint8_t> whole_buffer_;
-  int64_t whole_size_ = 0;
+  // Writers remain serialized by whole_mu_; cache queries only observe this
+  // successfully committed prefix and never touch the live spool cursor.
+  std::atomic<int64_t> whole_size_{0};
   int64_t whole_length_ = -1;
   bool whole_failed_ = false;
   std::mutex first_mu_;
