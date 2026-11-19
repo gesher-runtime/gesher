@@ -128,6 +128,10 @@ public final class ActivityClientHook implements InvocationHandler {
             WindowSession session = WindowSession.get();
             if (session != null) session.minimizeTask(token);
         }
+        if (name.equals("activityResumed") && token != null) {
+            WindowSession session = WindowSession.get();
+            if (session != null) session.activateActivity(token);
+        }
         return result;
     }
 }

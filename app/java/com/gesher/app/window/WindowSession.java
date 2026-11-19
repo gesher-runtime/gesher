@@ -1556,6 +1556,37 @@ public final class WindowSession extends IWindowSession.Stub {
         return !windows.isEmpty();
     }
 
+    /** Brings a resumed activity's Win32 window to the front or restores it when minimized. */
+    public void activateActivity(IBinder activityToken) {
+        if (activityToken == null) return;
+        AppWindow target = null;
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (!v.popup && v.attrs.token == activityToken && v.nativeWindow != null && v.shown) {
+                    target = v;
+                    break;
+                }
+            }
+        }
+        if (target == null || !shownOnDesktop(target)) return;
+        final AppWindow w = target;
+        Runnable act = () -> {
+            if (w.nativeWindow == null || !w.shown) return;
+            if (w.minimized) {
+                w.minimized = false;
+                w.nativeWindow.show();
+            } else if (!w.focused) {
+                w.nativeWindow.activate();
+            }
+        };
+        if (w.handler != null) {
+            w.handler.post(act);
+        } else {
+            act.run();
+        }
+    }
+
     /** Remembers where a top-level window of a task is, as it goes or is hidden. */
     private void rememberTaskScreen(AppWindow w) {
         if (w.taskId < 0 || w.nativeWindow == null) return;
