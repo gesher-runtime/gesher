@@ -20,7 +20,7 @@ def main() -> None:
     for name in ("framework-classes", "core-classes", "app-classes", "apksig", "java-home"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--source-ref", help="Compile prior URI/provider sources as a negative control")
-    parser.add_argument("--case", choices=("delegation", "identity", "modes", "patterns", "revocation", "retirement", "validation"))
+    parser.add_argument("--case", choices=("admission", "delegation", "identity", "modes", "patterns", "revocation", "retirement", "validation"))
     parser.add_argument("--intent", action="store_true", help="Intent batching and start-owned grant lifecycle contracts")
     args = parser.parse_args()
     cc = shutil.which("cc")
@@ -34,7 +34,7 @@ def main() -> None:
         library = work / "liburi_grants_host.so"
         subprocess.run([cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
-                        str(ROOT / ("tests/uri/intent_framework_host.c" if args.intent else "tests/uri/framework_host.c")), "-o", str(library)], check=True)
+                        str(ROOT / "tests/uri/intent_framework_host.c"), "-o", str(library)], check=True)
         sources = []
         for name in (("UriGrants", "ContentProviders", "ActiveServices", "ActivityTaskManagerService", "UriGrantsManagerService") if args.intent else ("UriGrants", "ContentProviders")):
             relative = "app/java/com/gesher/server/" + name + ".java"
@@ -53,7 +53,14 @@ def main() -> None:
         environment = os.environ.copy()
         environment["ANDROID_DATA"] = str(work / "data")
         environment["GESHER_MICROG_SPOOF"] = "1"
-        command = [str(args.java_home / "bin/java"), "-Djava.io.tmpdir=" + str(work),
+        # Actual owner tokens and provider connections initialize local Binder.
+        # Reuse the pinned core Cleaner with the existing JNI lifetime adapter.
+        cleaner = work / "cleaner" / "sun/misc"
+        cleaner.mkdir(parents=True)
+        for source in (args.core_classes / "sun/misc").glob("Cleaner*.class"):
+            shutil.copy2(source, cleaner / source.name)
+        java_options = ["--patch-module", "jdk.unsupported=" + str(work / "cleaner")]
+        command = [str(args.java_home / "bin/java"), *java_options, "-Djava.io.tmpdir=" + str(work),
                    "-cp", str(classes) + os.pathsep + classpath, ("IntentUriGrantHost" if args.intent else "UriGrantHost"), str(library)]
         if args.case:
             command.append(args.case)

@@ -325,7 +325,28 @@ $uriGrantsCode = $LASTEXITCODE
 Check 'services: URI delegation, provider patterns, exact identities and scoped revocation' {
   $global:LASTEXITCODE = $uriGrantsCode
   $uriGrantsOut
-} @('UriGrantContractTest all passed: 138 checks; binder=true')
+} @('UriGrantContractTest all passed: 154 checks; binder=true')
+
+# Direct-service fixture: actual metadata publication, persisted record reload,
+# owner retirement, shared UID, file IO concurrency, admin types and quota.
+# Actual APK removal/reinstall is covered by PackageUninstallTest separately;
+# this fixture does not claim to exercise Binder transport or process teardown.
+$persistableUriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'PersistableUriGrantContractTest') 90
+$persistableUriGrantsCode = $LASTEXITCODE
+Check 'services: persisted URI records, release, reload and quota' {
+  $global:LASTEXITCODE = $persistableUriGrantsCode
+  $persistableUriGrantsOut
+} @('PersistableUriGrantContractTest all passed: 99 checks')
+
+$uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'PackageUidIsolationContractTest' +
+  (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/v2only.apk'))) 90
+$uidIsolationCode = $LASTEXITCODE
+Check 'services: per-package identity, distinct UID allocation, sharedUserId and isolation' {
+  $global:LASTEXITCODE = $uidIsolationCode
+  $uidIsolationOut
+} @('PackageUidIsolationContractTest passed:')
 
 $intentUriGrantsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'IntentUriGrantContractTest') 90

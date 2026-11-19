@@ -204,7 +204,11 @@ public final class SystemServer {
             ApkPackage p = ApkPackage.parse(apk);
             selectCommandLinePackage(packages, p);
         }
-        preparePackageStorage(committed, packages);
+        try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {
+            identity.commit();
+            preparePackageStorage(committed, packages);
+            identity.accept();
+        }
 
         // The services, published with servicemanager.
         Map<String, IBinder> services = Services.create(packages);

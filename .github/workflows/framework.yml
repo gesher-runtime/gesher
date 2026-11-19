@@ -502,6 +502,13 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
 
+      - name: Package UID admission, permission and interruption contracts
+        run: |
+          python3 tools/test_package_uid_isolation.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Unsupported connectionless handwriting callback contracts
         run: |
           python3 tools/test_handwriting_unavailable.py --java-home "$JAVA_HOME" \

@@ -1,0 +1,59 @@
+# Test-only UI driver: consent to this fixture's exact two-permission request.
+# The production controller still authenticates, prompts and persists its decision.
+if (-not ('Web3LocationConsent' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class Web3LocationConsent {
+  delegate bool EnumWindow(IntPtr window, IntPtr data);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindow callback, IntPtr data);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+  [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr window, int id);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+  static extern int GetClassName(IntPtr window, StringBuilder name, int size);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, EntryPoint="SendMessageTimeoutW")]
+  static extern IntPtr ReadText(IntPtr window, uint message, IntPtr size, StringBuilder text,
+      uint flags, uint timeout, out IntPtr result);
+  [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW")]
+  static extern IntPtr Click(IntPtr window, uint message, IntPtr w, IntPtr l,
+      uint flags, uint timeout, out IntPtr result);
+  static string Text(IntPtr window) {
+    if (window == IntPtr.Zero) return "";
+    var text = new StringBuilder(4096);
+    IntPtr result;
+    return ReadText(window, 0x000D, (IntPtr)text.Capacity, text, 2, 500, out result) != IntPtr.Zero
+        ? text.ToString() : "";
+  }
+  public static bool Respond(int owner, bool allow) {
+    if (owner <= 0) return false;
+    var matches = new List<IntPtr>();
+    EnumWindows((window, data) => {
+      uint process;
+      GetWindowThreadProcessId(window, out process);
+      var kind = new StringBuilder(64);
+      GetClassName(window, kind, kind.Capacity);
+      if (process != (uint)owner || kind.ToString() != "#32770" || !IsWindowVisible(window)) return true;
+      if (Text(GetDlgItem(window, 1101)) != "com.gesher.web3app") return true;
+      var details = Text(GetDlgItem(window, 1102));
+      var permissions = System.Text.RegularExpressions.Regex.Matches(details, @"android\.permission\.[A-Z_]+");
+      var expected = new HashSet<string> { "android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION" };
+      if (permissions.Count != 2) return true;
+      foreach (System.Text.RegularExpressions.Match permission in permissions)
+        if (!expected.Remove(permission.Value)) return true;
+      if (expected.Count == 0 && GetDlgItem(window, 6) != IntPtr.Zero
+          && GetDlgItem(window, 2) != IntPtr.Zero) matches.Add(window);
+      return true;
+    }, IntPtr.Zero);
+    if (matches.Count != 1) return false;
+    var button = GetDlgItem(matches[0], allow ? 6 : 2); // IDYES / IDCANCEL
+    if (!IsWindowEnabled(button)) return false;
+    IntPtr ignored;
+    return Click(button, 0x00F5, IntPtr.Zero, IntPtr.Zero, 2, 500, out ignored) != IntPtr.Zero; // BM_CLICK
+  }
+}
+'@
+}
