@@ -4,6 +4,8 @@
  */
 package com.gesher.server;
 
+import static android.view.inputmethod.ConnectionlessHandwritingCallback.CONNECTIONLESS_HANDWRITING_ERROR_UNSUPPORTED;
+
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
@@ -397,6 +399,14 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
             CursorAnchorInfo cursorAnchorInfo, String delegatePackageName,
             String delegatorPackageName,
             com.android.internal.inputmethod.IConnectionlessHandwritingCallback callback) {
+        // The Windows IME bridge does not offer connectionless handwriting.
+        // Complete the request as AOSP does for an IME without that capability,
+        // so clients do not wait indefinitely for recognition that never starts.
+        try {
+            callback.onError(CONNECTIONLESS_HANDWRITING_ERROR_UNSUPPORTED);
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
     }
 
     @Override

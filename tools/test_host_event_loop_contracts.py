@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +90,16 @@ def main():
                 print(f'FAIL {name}: exit={result.returncode}\n{result.stderr[:12000]}', flush=True)
             else:
                 print('PASS ' + name, flush=True)
+    if args.case in (None, 'epoll'):
+        # Complete eventfd producers and epoll state complement the declared
+        # fairness adapter above, under the same maintained CI gate.
+        command = [sys.executable, str(ROOT / 'tools/test_epoll_eventfd_edges.py'), '--cxx', args.cxx]
+        if args.source_ref:
+            command += ['--source-ref', args.source_ref]
+        if args.sanitize:
+            command += ['--sanitize']
+        if subprocess.run(command, timeout=180).returncode:
+            failed.append('eventfd-edge')
     return int(bool(failed))
 
 

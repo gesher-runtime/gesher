@@ -63,6 +63,37 @@ rejected('duplicate reviewed fcntl preamble even with a new full-file hash',
          original + b'\n' + policy.FCNTL_REPLACEMENTS[1][1], True)
 print('vector/fcntl source policy: positive source and nine negative controls passed')
 
+fd_path = ROOT / 'compat/posix/src/fd.cc'
+fd_source = fd_path.read_bytes()
+stream_retirement = policy.FD_STREAM_DEVICE_RETIREMENT
+fd_controls = (
+    ('unrelated descriptor bytes',
+     fd_source + b'\n// unrelated descriptor change\n'),
+    ('stream retirement condition changed',
+     fd_source.replace(stream_retirement,
+                       stream_retirement.replace(b'closed_or_replaced ||',
+                                                 b'closed_or_replaced &&', 1), 1)),
+    ('stream retirement errno preservation removed',
+     fd_source.replace(stream_retirement,
+                       stream_retirement.replace(b'  errno = saved;\n',
+                                                 b'  errno = 0;\n', 1), 1)),
+    ('stream retirement helper missing',
+     fd_source.replace(stream_retirement, b'', 1)),
+    ('stream retirement helper duplicated',
+     fd_source + stream_retirement),
+    ('stream retirement helper moved',
+     fd_source.replace(policy.FD_DEVICE_LOOKUP + stream_retirement,
+                       stream_retirement + policy.FD_DEVICE_LOOKUP, 1)),
+    ('existing device lookup changed',
+     fd_source.replace(policy.FD_DEVICE_LOOKUP,
+                       policy.FD_DEVICE_LOOKUP.replace(b'return LookupDevice(fd, device);',
+                                                       b'return false;', 1), 1)),
+)
+for label, replacement in fd_controls:
+    rejected(label + ' even with a new full-file hash', replacement, True,
+             target=fd_path, pin_name='FD_SHA256')
+print('stream-device source policy: positive source and seven negative controls passed')
+
 fixture_path = ROOT / 'tests/net-tcp-priority/contract.cc'
 fixture = fixture_path.read_bytes()
 rejected('unrelated TCP fixture bytes',
@@ -86,11 +117,20 @@ rejected('TCP fixture missing required diagnostics', without_diagnostics, target
 print('TCP diagnostic source policy: six negative controls passed')
 
 rejected('thread census equality relaxation',
-         fixture.replace(b'actual.threads == baseline.threads',
-                         b'actual.threads >= baseline.threads', 1), target=fixture_path)
+         fixture.replace(b'actual.handles == baseline.handles && owners_match',
+                         b'actual.handles == baseline.handles && true', 1), target=fixture_path)
 rejected('thread census observer forced on successful modes',
-         fixture.replace(b'ObserveOwnerThreads(mode, actual.handles != baseline.handles || actual.threads != baseline.threads)',
+         fixture.replace(b'ObserveOwnerThreads(mode, actual.handles != baseline.handles || !owners_match)',
                          b'ObserveOwnerThreads(mode, true)', 1), target=fixture_path)
+rejected('thread census calibration bypassed',
+         fixture.replace(b'require(gesher::test::CalibrateOwnerThreads(),',
+                         b'require(true,', 1), target=fixture_path)
+rejected('owned connect operation retirement unchecked',
+         fixture.replace(b'retired_operation.expired() && retired_description.expired()',
+                         b'true && retired_description.expired()', 1), target=fixture_path)
+rejected('owned socket description retirement unchecked',
+         fixture.replace(b'retired_operation.expired() && retired_description.expired()',
+                         b'retired_operation.expired() && true', 1), target=fixture_path)
 thread_diagnostic = ROOT / policy.OWNER_THREAD_DIAGNOSTIC_PATH
 thread_source = thread_diagnostic.read_bytes()
 rejected('thread observer querying a reused foreign-process TID',
@@ -99,7 +139,7 @@ rejected('thread observer querying a reused foreign-process TID',
 rejected('thread observer leaking its diagnostic handles',
          thread_source.replace(b'if (CloseHandle(thread)) ++closed;', b'if (true) ++closed;', 1),
          target=thread_diagnostic)
-print('thread diagnostic source policy: four negative controls passed')
+print('thread diagnostic source policy: seven negative controls passed')
 
 receipt_path = ROOT / 'tools/ci/receipt-diagnostics.ps1'
 receipt = receipt_path.read_bytes()

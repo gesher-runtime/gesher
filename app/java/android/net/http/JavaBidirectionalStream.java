@@ -2,6 +2,7 @@
 package android.net.http;
 
 import android.net.Network;
+import java.net.ProtocolException;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -23,7 +24,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     volatile boolean done;
     private boolean started, ready, headersSent, readPending, readEnded, writeEnded, endQueued;
     private ByteBuffer pendingRead;
-    private Response info;
+    private volatile Response info;
     private int initialHeaderCount;
     private int pendingCallbacks;
     private static void trace(String value) {
@@ -35,7 +36,6 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         callbacks=new JavaHttpEngine.SerialExecutor(b.executor); writer=new JavaHttpEngine.SerialExecutor(engine.io);
         priority=b.priority; tag=b.tag; uid=b.uid; hasTag=b.hasTag; hasUid=b.hasUid; delay=b.delay;
         writeEnded=method.equals("GET") || method.equals("HEAD"); endQueued=writeEnded;
-        info=new Response(url.toExternalForm(),0,new JavaHttpEngine.Headers(Collections.emptyList()));
     }
     @Override public HeaderBlock getHeaders() { return headers; }
     @Override public String getHttpMethod() { return method; }
@@ -75,6 +75,9 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         if (started) throw new IllegalStateException("Stream has already started");
         engine.register(this); started=true;
         io(() -> {
+            // The current duplex transport requires HTTP/2. Fail through the
+            // ordinary asynchronous callback path before opening a connection.
+            if (!engine.http2Enabled) throw new ProtocolException("HTTP/2 is disabled for this engine");
             Http2Transport opened=new Http2Transport();
             synchronized (this) { if (done) { opened.close(); return; } transport=opened; }
             opened.connect(url,network);
@@ -222,16 +225,20 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         @Override public boolean isImmediatelyRetryable() { return false; }
     },false); }
     private void finish(HttpException error, boolean canceled) {
-        synchronized (this) { if (done) return; done=true; writes.clear(); pendingRead=null; notifyAll(); }
+        final Response terminalInfo;
+        synchronized (this) {
+            if (done) return;
+            done=true; terminalInfo=info; writes.clear(); pendingRead=null; notifyAll();
+        }
         trace(canceled ? "canceled" : error==null ? "succeeded" : "failed");
         try { engine.io.execute(() -> { Http2Transport t=transport; if (t!=null) try { t.close(); } catch (Exception ignored) {} }); }
         catch (RuntimeException ignored) {}
         engine.release(this);
         try { callbacks.execute(() -> {
             try {
-                if (canceled) callback.onCanceled(this,info);
-                else if (error!=null) callback.onFailed(this,info,error);
-                else callback.onSucceeded(this,info);
+                if (canceled) callback.onCanceled(this,terminalInfo);
+                else if (error!=null) callback.onFailed(this,terminalInfo,error);
+                else callback.onSucceeded(this,terminalInfo);
             } catch (RuntimeException ignored) {}
         }); } catch (RuntimeException ignored) {}
     }
