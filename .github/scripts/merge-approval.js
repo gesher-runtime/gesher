@@ -9,6 +9,8 @@ const RECEIPT = 'gesher-automerge-v1';
 const OPENING = 'gesher-automerge-opening-v1';
 const QA = 'gesher-automerge-qa-v1';
 const BOT = 'github-actions[bot]';
+const APP_SLUG = 'gesher-runtime-automation';
+const RECEIPT_BOTS = new Map([[BOT, 41898282], [`${APP_SLUG}[bot]`, 358279050]]);
 const SHA = /^[a-f0-9]{40}$/i;
 const TARGET_CHANGES = new Set(['base_ref_changed', 'automatic_base_change_succeeded']);
 const INVALIDATES = new Set(['reopened', 'head_ref_force_pushed', ...TARGET_CHANGES]);
@@ -117,7 +119,7 @@ async function openingBoundary(github, owner, repo, pr) {
     {owner, repo, issue_number: pr.number});
   let boundary = null;
   for (const c of comments) {
-    if (c.user?.login !== BOT || c.user.type !== 'Bot') continue;
+    if (!isReceiptBot(c.user)) continue;
     const markers = (c.body || '').split('\n').filter((s) => s.startsWith('<!-- ' + OPENING + ' '));
     if (markers.length > 1) throw new Error('ambiguous opening receipt');
     if (!markers.length) continue;
@@ -189,13 +191,18 @@ function approvalFor(pr, event) {
     base: pr.base.ref, label: event.id, actor: event.actor.id};
 }
 
+function isReceiptBot(user) {
+  return user?.type === 'Bot' && Number.isSafeInteger(user.id) &&
+    RECEIPT_BOTS.get(user.login) === user.id;
+}
+
 async function approval(github, owner, repo, pr, event) {
   const reviews = await list(github.rest.pulls.listReviews,
     {owner, repo, pull_number: pr.number});
   const expected = approvalFor(pr, event);
   const matches = [];
   for (const r of reviews) {
-    if (r.user?.login !== BOT || r.user.type !== 'Bot' || !['APPROVED', 'DISMISSED'].includes(r.state)) continue;
+    if (!isReceiptBot(r.user) || !['APPROVED', 'DISMISSED'].includes(r.state)) continue;
     const markers = (r.body || '').split('\n').filter((s) => s.startsWith('<!-- ' + RECEIPT + ' '));
     if (markers.length > 1) throw new Error('ambiguous approval receipt');
     if (!markers.length) continue;
@@ -223,28 +230,28 @@ async function approval(github, owner, repo, pr, event) {
 }
 
 // Dismiss only this controller's stale approvals, leaving human reviews alone.
-async function dismissStaleApprovals(github, owner, repo, pr) {
+async function dismissStaleApprovals(github, prGithub, owner, repo, pr) {
   const reviews = await list(github.rest.pulls.listReviews,
     {owner, repo, pull_number: pr.number});
   for (const r of reviews) {
-    if (r.user?.login === BOT && r.user.type === 'Bot' && r.state === 'APPROVED' &&
+    if (isReceiptBot(r.user) && r.state === 'APPROVED' &&
         r.commit_id !== pr.head.sha && (r.body || '').includes('<!-- ' + RECEIPT + ' ')) {
       const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
       if (current.state !== 'open' || r.commit_id === current.head.sha) continue;
-      await github.rest.pulls.dismissReview({owner, repo, pull_number: pr.number,
+      await prGithub.rest.pulls.dismissReview({owner, repo, pull_number: pr.number,
         review_id: r.id, message: 'New commits invalidate this automerge approval.'});
     }
   }
 }
 
-async function removeLabel(github, owner, repo, pr, event, why, core) {
+async function removeLabel(github, prGithub, owner, repo, pr, event, why, core) {
   // An old job must not remove a newly applied approval.
   const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
   const now = await labelEvent(github, owner, repo, pr.number);
   if (current.state !== 'open' || current.number !== pr.number ||
       !sameTarget(pr, current) || !hasLabel(current) || now?.id !== event.id) return false;
   try {
-    await github.rest.issues.removeLabel({owner, repo, issue_number: pr.number, name: LABEL});
+    await prGithub.rest.issues.removeLabel({owner, repo, issue_number: pr.number, name: LABEL});
   } catch (err) {
     if (err.status === 404) return false;
     throw err;
@@ -255,4 +262,4 @@ async function removeLabel(github, owner, repo, pr, event, why, core) {
 
 module.exports = {list, hasLabel, labelEvent, openingBoundary, authorQa,
   explicitApplication, authorized, approval, approvalFor, sameTarget,
-  dismissStaleApprovals, removeLabel, SHA};
+  dismissStaleApprovals, removeLabel, isReceiptBot, SHA, APP_SLUG};
