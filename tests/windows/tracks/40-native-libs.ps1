@@ -23,6 +23,14 @@ Check 'ELF loader: load a trivial .so and call it' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
 } @('elf_load_test all passed')
 
+# Public loading/lookup/iteration on real ELF dependency graphs. The second
+# executable changes only the test copy's protection primitive for one failure.
+foreach ($transactionExe in 'elf_load_transaction_test.exe', 'elf_load_transaction_failure_test.exe') {
+  Check "ELF loader: graph rollback, retry, cycles, constructors and concurrent publication ($transactionExe)" {
+    & "$Dir/$transactionExe" (NoDrive "$Dir/elf-load-transaction")
+  } @('elf_load_transaction_test all passed')
+}
+
 # textrel.so contains dynamic relocations into a read-only pointer table.
 # Its constructor and selftest both require the relocated pointers to work.
 Check 'ELF loader: TEXTREL pages relocate before constructors and selftest' {
@@ -130,6 +138,10 @@ Check 'native libs: a stand-in libart.so a packer finds in /proc/self/maps and h
 Check 'bionic shim: ftruncate rights, cursor and same-size final-page invalidation' {
   & "$Dir/bionic_ftruncate_test.exe"
 } @('bionic_ftruncate_test all passed')
+
+Check 'bionic shim: shared CRT stream ownership and wide stdio' {
+  & "$Dir/bionic_stdio_contract_test.exe"
+} @('bionic_stdio_contract_test all passed')
 
 # Step 4, the JNI path: dalvikvm runs gesher.JniTest (tests/native/java), whose
 # System.load of jni_test.so goes through ART's host libnativeloader path to

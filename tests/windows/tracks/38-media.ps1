@@ -389,6 +389,10 @@ public static class GesherMediaCapture {
     $global:LASTEXITCODE = $video.Exit
     $video.Out
   } @('VideoTest retriever frames: video 320x240 yes, at 1.25 s closest 320x240 blue, at 1.6 s previous sync 320x240 white, scaled at 0.25 s 160x120 red')
+  Check 'media: MediaMetadataRetriever indexed frames, bitmap configs and invalid ranges in videoapp.apk' {
+    $global:LASTEXITCODE = $video.Exit
+    $video.Out
+  } @('VideoTest retriever indexed: 60 frames, [320x240 red, 320x240 lime, 320x240 lime], last 320x240 white, RGB565 true, timed RGB565 true, fallback true 160x120 red, invalid true')
   Check 'media: MediaPlayer with video in videoapp.apk: the clip''s H.264 into a TextureView with its AAC audio, the video size, the frames shown, completion, A/V sync (the frame shown matches the audio position within 120 ms); VideoView plays to its end' {
     $global:LASTEXITCODE = $video.Exit
     $video.Out

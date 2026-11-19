@@ -16,12 +16,12 @@ processes. A Windows PC may have a microphone or not; CI runners have none
   counterpart of the output engine: one thread takes the input source's audio
   every 10 ms and hands each started stream its share, converted to the
   stream's rate (linear interpolation), channels and PCM format. The source
-  is GESHER_AUDIO_SOURCE's WAV file when set (played as the microphone, paced
-  by the clock, from its start each time recording starts from idle, looping:
-  what CI feeds), GESHER_AUDIO_SOURCE=loopback (WASAPI loopback of the
-  default output), else the default capture endpoint in WASAPI shared mode
-  (the PC's microphone), else silence paced by the clock (recorders still
-  open, as a muted microphone does; AudioManager lists no input device).
+  is the actual default capture endpoint in WASAPI shared mode. Unavailable
+  initialization/start and terminal device loss are reported to callers;
+  synthetic samples do not replace missing hardware. Explicit WAV, loopback
+  and null sources exist only in a separate capture-test build. This replaces
+  the original automatic silence fallback; see
+  [capture failure contracts](../capture-failure-contracts.md).
   AudioRecord, AAudio input streams, OpenSL ES audio recorders and
   MediaRecorder are streams of it.
 - **The record permission** is the manifest's RECORD_AUDIO (Gesher grants what

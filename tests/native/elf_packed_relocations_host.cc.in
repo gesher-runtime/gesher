@@ -1,0 +1,621 @@
+// The complete production APS2 decoder and Relocate run below. ApplyRelr and
+// architecture-specific applications observe dispatch and own test destinations;
+// they do not emulate Windows memory protection, symbol lookup or actual IFUNCs.
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <limits>
+#include <new>
+#include <random>
+#include <set>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace allocation {
+thread_local bool active = false;
+thread_local size_t count = 0, total = 0, current = 0, peak = 0;
+struct alignas(std::max_align_t) Header { size_t size; bool tracked; };
+void Reset() {
+  if (current != 0) std::abort();
+  count = total = current = peak = 0;
+}
+}
+__attribute__((noinline)) void* operator new(size_t size) {
+  using namespace allocation;
+  if (size > SIZE_MAX - sizeof(Header)) std::abort();
+  auto* header = static_cast<Header*>(std::malloc(sizeof(Header) + std::max<size_t>(size, 1)));
+  if (header == nullptr) std::abort();
+  header->size = size;
+  header->tracked = active;
+  if (active) { ++count; total += size; current += size; peak = std::max(peak, current); }
+  return header + 1;
+}
+void* operator new[](size_t size) { return ::operator new(size); }
+__attribute__((noinline)) void operator delete(void* pointer) noexcept {
+  if (pointer == nullptr) return;
+  auto* header = static_cast<allocation::Header*>(pointer) - 1;
+  if (header->tracked) allocation::current -= header->size;
+  std::free(header);
+}
+void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
+void operator delete(void* pointer, size_t) noexcept { ::operator delete(pointer); }
+void operator delete[](void* pointer, size_t) noexcept { ::operator delete(pointer); }
+
+struct Elf64_Rela { uint64_t r_offset = 0, r_info = 0; int64_t r_addend = 0; };
+using Elf64_Relr = uint64_t;
+bool operator==(const Elf64_Rela& a, const Elf64_Rela& b) {
+  return a.r_offset == b.r_offset && a.r_info == b.r_info && a.r_addend == b.r_addend;
+}
+constexpr uint32_t PT_LOAD = 1, PF_X = 1, PF_W = 2, PF_R = 4;
+constexpr int PROT_READ = 1, PROT_WRITE = 2;
+constexpr size_t kPageSize = 0x1000;
+size_t PageDown(size_t value) { return value & ~(kPageSize - 1); }
+size_t PageUp(size_t value) { return PageDown(value + kPageSize - 1); }
+struct Elf64_Phdr {
+  uint32_t p_type = 0, p_flags = 0;
+  uint64_t p_vaddr = 0, p_memsz = 0;
+};
+struct Library;
+using Relocator = bool (*)(Library*, std::string*);
+struct Library {
+  uint8_t* base = nullptr;
+  uint8_t* load_bias = nullptr;
+  size_t map_size = 0;
+  std::vector<std::pair<uintptr_t, uintptr_t>> writable;
+  std::set<uintptr_t> made_writable;
+  const Elf64_Phdr* file_phdr = nullptr;
+  uint16_t file_phnum = 0;
+  bool overlapping_load_pages = false;
+  bool is_aarch64 = false;
+  const Elf64_Relr* relr = nullptr;
+  const uint8_t* android_rela = nullptr;
+  size_t android_rela_size = 0;
+  const Elf64_Rela* rela = nullptr;
+  size_t rela_count = 0;
+  const Elf64_Rela* jmprel = nullptr;
+  size_t jmprel_count = 0;
+  std::vector<Elf64_Rela>* observed = nullptr;
+  std::vector<int>* order = nullptr;
+  uint64_t* destination = nullptr;
+  size_t destination_words = 0, calls = 0, fail_at = SIZE_MAX;
+  size_t mutate_at = SIZE_MAX;
+  uint8_t* mutate = nullptr;
+  size_t mutate_size = 0;
+  bool relr_ok = true;
+  uint8_t* relr_mutate = nullptr;
+  uint8_t relr_value = 0;
+  bool wrong_arch = false;
+  Library* reenter = nullptr;
+  Relocator relocate = nullptr;
+  bool reenter_ok = true;
+};
+// Model the readable/writable bits of the loader's Windows protection boundary.
+int LoadProt(const Library* lib, uint32_t flags) {
+  return ((flags & PF_R) || (lib->is_aarch64 && (flags & PF_X)) ? PROT_READ : 0) |
+      (flags & PF_W ? PROT_WRITE : 0);
+}
+// The host owns these bounded byte arrays instead of a Windows mapping.
+// Keep the production range validator intact and describe the available span.
+void MappedBytes(Library& lib, const uint8_t* data, size_t size) {
+  lib.base = const_cast<uint8_t*>(data);
+  lib.load_bias = lib.base;
+  lib.map_size = size;
+  const auto start = reinterpret_cast<uintptr_t>(data);
+  lib.writable = {{start, start + size}};
+}
+void Fail(std::string* error, const std::string& message) { if (error) *error = message; }
+bool ApplyRelr(Library* lib, std::string* error) {
+  if (lib->order) lib->order->push_back(0);
+  if (lib->relr_mutate) *lib->relr_mutate = lib->relr_value;
+  if (!lib->relr_ok) { Fail(error, "relr application rejected"); return false; }
+  return true;
+}
+bool Apply(Library* lib, const Elf64_Rela& r, bool arch, std::string* error) {
+  lib->wrong_arch |= arch != lib->is_aarch64;
+  const size_t call = lib->calls++;
+  if (lib->order) lib->order->push_back(arch ? 2 : 1);
+  if (call == lib->fail_at) { Fail(error, "relocation application rejected"); return false; }
+  if (lib->observed) lib->observed->push_back(r);
+  if (lib->destination_words) {
+    lib->destination[(r.r_offset / 8) % lib->destination_words] =
+        static_cast<uint64_t>(r.r_addend) + r.r_info + 0x12340000u;
+  }
+  if (call == lib->mutate_at) {
+    if (lib->mutate) std::memset(lib->mutate, 0xa5, lib->mutate_size);
+    if (lib->reenter) {
+      std::string nested_error;
+      lib->reenter_ok = lib->relocate(lib->reenter, &nested_error);
+    }
+  }
+  return true;
+}
+bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
+  return Apply(lib, r, false, error);
+}
+bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
+  return Apply(lib, r, true, error);
+}
+namespace candidate {
+@CANDIDATE@
+}
+#if HAS_REFERENCE
+namespace reference {
+@REFERENCE@
+}
+#endif
+
+namespace {
+size_t checks = 0, failures = 0;
+void Check(bool value, const char* label) {
+  ++checks;
+  if (!value) {
+    ++failures;
+    if (failures < 25) std::fprintf(stderr, "FAIL packed relocations: %s\n", label);
+  }
+}
+void Sleb(std::vector<uint8_t>& bytes, int64_t value) {
+  bool more;
+  do {
+    uint8_t byte = static_cast<uint8_t>(value) & 0x7f;
+    value >>= 7;
+    more = !((value == 0 && !(byte & 0x40)) || (value == -1 && (byte & 0x40)));
+    bytes.push_back(byte | (more ? 0x80 : 0));
+  } while (more);
+}
+int64_t Add(int64_t a, int64_t b) {
+  return static_cast<int64_t>(static_cast<uint64_t>(a) + static_cast<uint64_t>(b));
+}
+struct Encoded {
+  std::vector<uint8_t> bytes;
+  std::vector<Elf64_Rela> values;
+};
+// Independent producer: write chosen groups and save each intended field value.
+// Every flag combination, signed deltas and transitions between groups occur.
+Encoded Encode(std::mt19937_64& random, size_t groups, int fixed_flags = -1) {
+  Encoded out;
+  struct Group { size_t size; unsigned flags; };
+  std::vector<Group> plan;
+  size_t count = 0;
+  for (size_t i = 0; i < groups; ++i) {
+    const size_t n = 1 + random() % 9;
+    plan.push_back({n, fixed_flags < 0 ? static_cast<unsigned>(random() % 16)
+                                     : static_cast<unsigned>(fixed_flags)});
+    count += n;
+  }
+  out.bytes = {'A', 'P', 'S', '2'};
+  Sleb(out.bytes, static_cast<int64_t>(count));
+  uint64_t offset = random() % 4096;
+  Sleb(out.bytes, static_cast<int64_t>(offset));
+  uint64_t info = 0;
+  int64_t addend = 0;
+  for (const Group group : plan) {
+    Sleb(out.bytes, static_cast<int64_t>(group.size));
+    Sleb(out.bytes, group.flags);
+    const int64_t offset_delta = static_cast<int64_t>(random() % 65) - 32;
+    if (group.flags & 2) Sleb(out.bytes, offset_delta);
+    if (group.flags & 1) { info = random(); Sleb(out.bytes, static_cast<int64_t>(info)); }
+    if (!(group.flags & 8)) addend = 0;
+    if ((group.flags & 12) == 12) {
+      const int64_t delta = static_cast<int64_t>(random() % 2001) - 1000;
+      addend = Add(addend, delta);
+      Sleb(out.bytes, delta);
+    }
+    for (size_t i = 0; i < group.size; ++i) {
+      const int64_t delta = (group.flags & 2) ? offset_delta : static_cast<int64_t>(random() % 65) - 32;
+      offset += static_cast<uint64_t>(delta);
+      if (!(group.flags & 2)) Sleb(out.bytes, delta);
+      if (!(group.flags & 1)) { info = random(); Sleb(out.bytes, static_cast<int64_t>(info)); }
+      if ((group.flags & 12) == 8) {
+        const int64_t da = static_cast<int64_t>(random() % 2001) - 1000;
+        addend = Add(addend, da); Sleb(out.bytes, da);
+      }
+      out.values.push_back({offset, info, addend});
+    }
+  }
+  return out;
+}
+
+void Valid(Relocator relocate, Encoded data, bool arch, bool extras = true) {
+  std::vector<Elf64_Rela> observed;
+  const std::array<Elf64_Rela, 2> regular{{{8, 19, -31}, {24, 7, 9}}};
+  const Elf64_Rela plt{17, 13, -7};
+  Library lib;
+  lib.is_aarch64 = arch;
+  lib.android_rela = data.bytes.data(); lib.android_rela_size = data.bytes.size();
+  MappedBytes(lib, data.bytes.data(), data.bytes.size());
+  lib.observed = &observed;
+  if (extras) {
+    lib.rela = regular.data(); lib.rela_count = regular.size();
+    lib.jmprel = &plt; lib.jmprel_count = 1;
+  }
+  std::string error;
+  Check(relocate(&lib, &error), "valid encoded table accepted");
+  std::vector<Elf64_Rela> expected;
+  if (extras) expected.insert(expected.end(), regular.begin(), regular.end());
+  expected.insert(expected.end(), data.values.begin(), data.values.end());
+  if (extras) expected.push_back(plt);
+  Check(observed == expected, "exact relocation field values and regular/packed/PLT order");
+  Check(!lib.wrong_arch && error.empty(), "correct architecture and no spurious error");
+}
+
+void Malformed(Relocator relocate, const std::vector<uint8_t>& bytes) {
+  std::vector<Elf64_Rela> observed;
+  std::vector<int> order;
+  const Elf64_Rela ordinary{0, 0, 0};
+  const Elf64_Relr relr = 0;
+  Library lib;
+  lib.android_rela = bytes.empty() ? reinterpret_cast<const uint8_t*>("x") : bytes.data();
+  lib.android_rela_size = bytes.size(); lib.relr = &relr;
+  MappedBytes(lib, lib.android_rela, bytes.size());
+  lib.rela = &ordinary; lib.rela_count = 1; lib.observed = &observed; lib.order = &order;
+  std::string error;
+  Check(!relocate(&lib, &error), "malformed packed input rejected");
+  Check(!error.empty() && observed.empty() && order == std::vector<int>{0},
+        "packed validation precedes ordinary application; RELR still runs first");
+}
+
+void Ownership(Relocator relocate, bool arch) {
+  std::mt19937_64 random(17);
+  const Encoded input = Encode(random, 6);
+  for (size_t mutate_at : {size_t{0}, size_t{1}, size_t{5}}) {
+    Encoded data = input;
+    Encoded child = Encode(random, 4);
+    std::vector<Elf64_Rela> observed, child_observed;
+    const Elf64_Rela regular{11, 22, 33}, plt{44, 55, 66};
+    Library nested;
+    nested.is_aarch64 = !arch;
+    nested.android_rela = child.bytes.data(); nested.android_rela_size = child.bytes.size();
+    MappedBytes(nested, child.bytes.data(), child.bytes.size());
+    nested.observed = &child_observed;
+    Library lib;
+    lib.is_aarch64 = arch;
+    lib.android_rela = data.bytes.data(); lib.android_rela_size = data.bytes.size();
+    MappedBytes(lib, data.bytes.data(), data.bytes.size());
+    lib.rela = &regular; lib.rela_count = 1; lib.jmprel = &plt; lib.jmprel_count = 1;
+    lib.observed = &observed;
+    lib.mutate_at = mutate_at; lib.mutate = data.bytes.data(); lib.mutate_size = data.bytes.size();
+    lib.reenter = &nested; lib.relocate = relocate;
+    std::string error;
+    Check(relocate(&lib, &error), "metadata may be overwritten by ordinary/packed resolver");
+    std::vector<Elf64_Rela> expected{regular};
+    expected.insert(expected.end(), data.values.begin(), data.values.end()); expected.push_back(plt);
+    Check(observed == expected, "outer snapshot survives overwrite and reentrant relocation");
+    Check(lib.reenter_ok && child_observed == child.values, "nested relocation has independent storage");
+    Check(!lib.wrong_arch && !nested.wrong_arch, "reentry preserves both architecture dispatches");
+  }
+  // RELR is deliberately allowed to change the bytes that will be snapshotted.
+  Encoded data = input;
+  data.bytes[0] = 'X';
+  const Elf64_Relr relr = 0;
+  std::vector<Elf64_Rela> observed;
+  Library lib;
+  lib.android_rela = data.bytes.data(); lib.android_rela_size = data.bytes.size(); lib.relr = &relr;
+  MappedBytes(lib, data.bytes.data(), data.bytes.size());
+  lib.relr_mutate = data.bytes.data(); lib.relr_value = 'A'; lib.observed = &observed;
+  std::string error;
+  Check(relocate(&lib, &error) && observed == data.values, "packed snapshot occurs after RELR effects");
+}
+
+void Failures(Relocator relocate, bool arch) {
+  std::mt19937_64 random(71);
+  Encoded data = Encode(random, 3);
+  const Elf64_Rela ordinary{8, 1, 2}, plt{16, 3, 4};
+  std::vector<Elf64_Rela> expected{ordinary};
+  expected.insert(expected.end(), data.values.begin(), data.values.end()); expected.push_back(plt);
+  for (size_t fail_at = 0; fail_at < expected.size(); ++fail_at) {
+    std::vector<Elf64_Rela> observed;
+    Library lib;
+    lib.is_aarch64 = arch;
+    lib.android_rela = data.bytes.data(); lib.android_rela_size = data.bytes.size();
+    MappedBytes(lib, data.bytes.data(), data.bytes.size());
+    lib.rela = &ordinary; lib.rela_count = 1; lib.jmprel = &plt; lib.jmprel_count = 1;
+    lib.observed = &observed; lib.fail_at = fail_at;
+    std::string error;
+    Check(!relocate(&lib, &error) && error == "relocation application rejected",
+          "application failure propagates unchanged");
+    Check(lib.calls == fail_at + 1 && observed == std::vector<Elf64_Rela>(expected.begin(), expected.begin() + fail_at),
+          "no relocation after first application failure");
+  }
+  const Elf64_Relr relr = 0;
+  Library lib;
+  lib.relr = &relr; lib.relr_ok = false;
+  lib.android_rela = reinterpret_cast<const uint8_t*>("bad"); lib.android_rela_size = 3;
+  std::string error;
+  Check(!relocate(&lib, &error) && error == "relr application rejected", "RELR failure precedes packed validation");
+}
+
+void Behavior(Relocator relocate) {
+  std::mt19937_64 random(0x47534852);
+  for (bool arch : {false, true}) {
+    for (int flags = 0; flags < 16; ++flags) Valid(relocate, Encode(random, 4, flags), arch);
+    for (size_t i = 0; i < 1000; ++i) Valid(relocate, Encode(random, 1 + random() % 12), arch);
+    Valid(relocate, Encode(random, 0), arch);
+    Encoded boundary{{'A', 'P', 'S', '2'}, {}};
+    Sleb(boundary.bytes, 2); Sleb(boundary.bytes, -1);
+    Sleb(boundary.bytes, 2); Sleb(boundary.bytes, 15);
+    Sleb(boundary.bytes, -1); Sleb(boundary.bytes, -1);
+    Sleb(boundary.bytes, INT64_MIN);
+    boundary.values = {{UINT64_MAX - 1, UINT64_MAX, INT64_MIN},
+                       {UINT64_MAX - 2, UINT64_MAX, INT64_MIN}};
+    Valid(relocate, boundary, arch);
+    Encoded trailing = Encode(random, 3); trailing.bytes.insert(trailing.bytes.end(), {0x80, 0xff, 0});
+    Valid(relocate, trailing, arch);
+    Ownership(relocate, arch); Failures(relocate, arch);
+  }
+  const Encoded input = Encode(random, 3, 8);
+  for (size_t size = 0; size < input.bytes.size(); ++size)
+    Malformed(relocate, {input.bytes.begin(), input.bytes.begin() + size});
+  for (int flags = 0; flags < 16; ++flags) {
+    const Encoded all_fields = Encode(random, 3, flags);
+    for (size_t size = 0; size < all_fields.bytes.size(); ++size)
+      Malformed(relocate, {all_fields.bytes.begin(), all_fields.bytes.begin() + size});
+  }
+  Malformed(relocate, {'X', 'P', 'S', '2', 0, 0});
+  Malformed(relocate, {'A', 'P', 'S', '2', 1, 0, 0, 0}); // zero group
+  Malformed(relocate, {'A', 'P', 'S', '2', 1, 0, 2, 3, 8, 8}); // too many members
+  Malformed(relocate, {'A', 'P', 'S', '2', 0x80}); // unterminated count
+  Malformed(relocate, {'A', 'P', 'S', '2', 0, 0x80}); // unterminated initial offset
+  Library absent;
+  std::string error;
+  Check(relocate(&absent, &error), "absent packed section needs no special path");
+  // An invalid signature is sufficient to reject without touching any of the
+  // claimed trailing section. ASan rejects an eager snapshot copy of this body.
+  const std::array<uint8_t, 4> bad_magic{'N', 'O', 'P', 'E'};
+  Library invalid_header;
+  invalid_header.android_rela = bad_magic.data(); invalid_header.android_rela_size = 1u << 20;
+  MappedBytes(invalid_header, bad_magic.data(), bad_magic.size());
+  Check(!relocate(&invalid_header, &error), "bad magic rejects before reading claimed trailing bytes");
+  Check(error == "DT_ANDROID_RELA is not APS2-packed" && invalid_header.calls == 0,
+        "header rejection preserves its error without relocation application");
+}
+
+// All bytes below stay inside an ordinary owned array. Vary only the declared
+// mapping metadata and require rejection before snapshot/application when its
+// readable coverage is insufficient.
+void MappedRanges(Relocator relocate) {
+  std::array<uint8_t, 16> bytes{'A', 'P', 'S', '2', 0, 0};
+  const Elf64_Rela ordinary{8, 1, 2};
+  for (bool arch : {false, true}) {
+    auto run = [&](Library lib, bool expected, const char* label) {
+      lib.is_aarch64 = arch;
+      lib.rela = &ordinary; lib.rela_count = 1;
+      std::string error;
+      Check(relocate(&lib, &error) == expected, label);
+      Check(expected ? error.empty() && lib.calls == 1 : !error.empty() && lib.calls == 0,
+            "range admission precedes ordinary relocation application");
+    };
+    Library mapped;
+    mapped.android_rela = bytes.data(); mapped.android_rela_size = 6;
+    MappedBytes(mapped, bytes.data(), bytes.size());
+    run(mapped, true, "copied reservation supplies readable packed bytes");
+    Library limited = mapped; limited.map_size = 5;
+    run(limited, false, "body must fit the declared reservation");
+    limited.map_size = 3;
+    run(limited, false, "header must fit the declared reservation");
+    limited = mapped; limited.base = bytes.data() + 1;
+    run(limited, false, "packed header cannot precede reservation");
+    limited = mapped; limited.android_rela_size = SIZE_MAX;
+    run(limited, false, "section size must be representable within reservation");
+    mapped.writable.clear();
+    std::array<Elf64_Phdr, 3> segments{{{PT_LOAD, PF_R, 0, 6}, {}, {}}};
+    mapped.file_phdr = segments.data(); mapped.file_phnum = segments.size();
+    run(mapped, true, "read-only file segment supplies packed bytes");
+    segments[0].p_memsz = 4;
+    run(mapped, false, "readable header cannot authorize an uncovered body");
+    segments[1] = {PT_LOAD, PF_R, 4, 2};
+    run(mapped, true, "adjacent readable segments cover the complete body");
+    segments[0].p_memsz = 3; segments[1] = {PT_LOAD, PF_R, 3, 3};
+    run(mapped, true, "header may cross adjacent readable segments");
+    std::swap(segments[0], segments[1]);
+    run(mapped, true, "program-header ordering does not affect coverage");
+    segments[0] = {PT_LOAD, PF_R, 4, 2}; segments[1] = {PT_LOAD, PF_R, 0, 3};
+    run(mapped, false, "gap inside reservation is not readable coverage");
+    segments[0] = {PT_LOAD, 0, 0, 6}; segments[1] = {};
+    run(mapped, false, "unreadable segment does not supply metadata");
+    segments[0] = {PT_LOAD, PF_R, UINT64_MAX, 6};
+    run(mapped, false, "segment address addition is checked");
+    segments[0] = {PT_LOAD, PF_R, 0, UINT64_MAX};
+    run(mapped, false, "segment extent addition is checked");
+    for (uintptr_t virtual_base : {uintptr_t{0x1000}, uintptr_t{1} << 63}) {
+      mapped.load_bias = reinterpret_cast<uint8_t*>(
+          reinterpret_cast<uintptr_t>(mapped.base) - virtual_base);
+      segments[0] = {PT_LOAD, PF_R, virtual_base, 6};
+      run(mapped, true, "nonzero ELF virtual base preserves readable coverage");
+    }
+
+    // Observe the effective permissions without altering real process memory.
+    // The later unaligned segment covers neither metadata byte directly, but
+    // its page-rounded protection overrides the earlier readable range.
+    alignas(kPageSize) std::array<uint8_t, 2 * kPageSize> shared{};
+    std::copy_n(bytes.begin(), 6, shared.begin() + kPageSize - 4);
+    std::copy_n(bytes.begin(), 6, shared.begin() + kPageSize + 16);
+    std::copy_n(bytes.begin(), 6, shared.begin() + 16);
+    Library overlap;
+    overlap.base = overlap.load_bias = shared.data();
+    overlap.map_size = shared.size();
+    overlap.overlapping_load_pages = true;
+    segments[0] = {PT_LOAD, PF_R, 0, shared.size()};
+    segments[1] = {PT_LOAD, 0, kPageSize + 128, 32};
+    overlap.file_phdr = segments.data(); overlap.file_phnum = segments.size();
+    overlap.android_rela = shared.data() + kPageSize - 4; overlap.android_rela_size = 6;
+    run(overlap, false, "packed body rejects a later non-readable page protection");
+    overlap.android_rela = shared.data() + kPageSize + 16;
+    run(overlap, false, "packed header rejects a later non-readable page protection");
+    overlap.android_rela = shared.data() + 16;
+    run(overlap, true, "metadata stays readable when the denied page lies outside it");
+    overlap.android_rela = shared.data() + kPageSize - 4;
+    segments[1].p_flags = PF_R | PF_W;
+    run(overlap, true, "packed metadata may span legitimate readable overlapping mappings");
+    segments[1].p_flags = 0;
+    overlap.made_writable.insert(reinterpret_cast<uintptr_t>(shared.data()) + kPageSize);
+    run(overlap, true, "earlier relocation may have made the affected page readable and writable");
+
+    overlap.made_writable.clear();
+    segments[0].p_flags = PF_W;
+    segments[1].p_flags = PF_W;
+    run(overlap, true, "Windows writable segments supply readable packed metadata");
+    segments[1].p_flags = 0;
+    run(overlap, false, "later denied page still overrides a writable metadata extent");
+    segments[0].p_flags = PF_X;
+    segments[1].p_flags = PF_X;
+    run(overlap, arch, "only translated execute-only segments supply readable metadata");
+    overlap.overlapping_load_pages = false;
+    segments[1] = {};
+    run(overlap, arch, "the same translated protection applies without overlapping pages");
+
+    overlap.overlapping_load_pages = true;
+    overlap.android_rela = shared.data() + 16;
+    segments[0] = {PT_LOAD, PF_W, 16, 3};
+    segments[1] = {PT_LOAD, PF_W, 19, 3};
+    run(overlap, true, "adjacent writable byte extents cover metadata on a shared page");
+    segments[1] = {PT_LOAD, PF_W, 20, 2};
+    run(overlap, false, "a readable shared page cannot authorize an undeclared byte gap");
+  }
+}
+
+// Corrupt only bytes after the bounded count. ASan/UBSan check that a damaged
+// field boundary can never make the unchecked application pass read beyond the
+// compact snapshot. Overflowing signed addend patterns have no defined old-C++
+// oracle, so only the new parser runs these cases; its bit accumulation is unsigned.
+void Corruption(Relocator relocate) {
+  std::mt19937_64 random(0x41505332);
+  for (size_t n = 0; n < 20000; ++n) {
+    Encoded data = Encode(random, 3);
+    const size_t at = 5 + random() % (data.bytes.size() - 5);
+    data.bytes[at] = static_cast<uint8_t>(random());
+    if (n % 3 == 0) data.bytes.resize(at);
+    if (n % 7 == 0) data.bytes.insert(data.bytes.begin() + at, 1 + random() % 12, 0x80);
+    std::vector<Elf64_Rela> observed;
+    Library lib;
+    lib.is_aarch64 = n % 2; lib.android_rela = data.bytes.data(); lib.android_rela_size = data.bytes.size();
+    MappedBytes(lib, data.bytes.data(), data.bytes.size());
+    lib.observed = &observed;
+    std::string error;
+    const bool accepted = relocate(&lib, &error);
+    Check(accepted ? error.empty() && !lib.wrong_arch : !error.empty() && observed.empty(),
+          "corruption is either fully validated or rejected before application");
+    Check(lib.calls <= 27, "corrupted stream cannot escape its original bounded count");
+  }
+}
+
+std::vector<uint8_t> Workload(size_t count, unsigned mode) {
+  std::vector<uint8_t> bytes{'A', 'P', 'S', '2'};
+  Sleb(bytes, static_cast<int64_t>(count)); Sleb(bytes, 0);
+  size_t done = 0, group = 0;
+  while (done < count) {
+    const size_t size = mode == 3 ? std::min<size_t>(count - done, 64) : count;
+    const unsigned flags = mode == 0 ? 11 : mode == 1 ? 15 : mode == 2 ? 8 : 8 + group++ % 4;
+    Sleb(bytes, static_cast<int64_t>(size)); Sleb(bytes, flags);
+    if (flags & 2) Sleb(bytes, 8); // grouped offset delta
+    if (flags & 1) Sleb(bytes, 8); // relative-relocation type
+    if (flags & 4) Sleb(bytes, 16);
+    for (size_t i = 0; i < size; ++i) {
+      if (!(flags & 2)) Sleb(bytes, 8);
+      if (!(flags & 1)) Sleb(bytes, 8);
+      if (!(flags & 4)) Sleb(bytes, static_cast<int64_t>((done + i) % 7) - 3);
+    }
+    done += size;
+  }
+  return bytes;
+}
+
+struct Measurement { size_t count, bytes, peak; double micros; uint64_t checksum; };
+Measurement Measure(Relocator relocate, size_t count, unsigned mode, bool gate, const char* label) {
+  const auto packed = Workload(count, mode);
+  std::vector<uint64_t> destination(std::max<size_t>(count + 1, 1));
+  Library lib;
+  lib.android_rela = packed.data(); lib.android_rela_size = packed.size();
+  MappedBytes(lib, packed.data(), packed.size());
+  lib.destination = destination.data(); lib.destination_words = destination.size();
+  std::string error;
+  allocation::Reset(); allocation::active = true;
+  const bool okay = relocate(&lib, &error);
+  allocation::active = false;
+  Measurement result{allocation::count, allocation::total, allocation::peak, 0, 0};
+  Check(okay && lib.calls == count, "measured relocation workload completes");
+  Check(allocation::current == 0, "no snapshot storage retained after relocation");
+  if (gate) {
+    Check(result.peak <= packed.size(), "temporary payload bounded by compact input bytes");
+    Check(result.count <= 1, "at most one compact snapshot allocation");
+  }
+  // Per-round repetition is outside the counted interval and serves only an
+  // informational host timing. It is never a CI performance threshold.
+  const size_t repeats = count < 100 ? 50000 : count < 10000 ? 500 : 16;
+  std::array<double, 7> times{};
+  for (double& time : times) {
+    const std::clock_t begin = std::clock();
+    for (size_t round = 0; round < repeats; ++round) {
+      lib.calls = 0;
+      if (!relocate(&lib, &error)) std::abort();
+    }
+    time = static_cast<double>(std::clock() - begin) * 1000000 / CLOCKS_PER_SEC / repeats;
+  }
+  std::sort(times.begin(), times.end()); result.micros = times[times.size() / 2];
+  uint64_t checksum = 0;
+  for (uint64_t value : destination) checksum ^= value;
+  result.checksum = checksum;
+  constexpr const char* names[] = {"per-addend", "fully-grouped", "ungrouped", "mixed-groups"};
+#if defined(_WIN32)
+  constexpr const char* clock_label = "median_clock_us"; // UCRT clock need not be process CPU time.
+#else
+  constexpr const char* clock_label = "median_cpu_us";
+#endif
+  std::printf("%s %s relocs=%zu packed=%zu allocations=%zu bytes=%zu peak=%zu %s=%.3f checksum=%llu\n",
+              label, names[mode], count, packed.size(),
+              result.count, result.bytes, result.peak, clock_label, result.micros,
+              static_cast<unsigned long long>(checksum));
+  return result;
+}
+
+void Concurrent(Relocator relocate) {
+  std::atomic<bool> okay{true};
+  std::array<std::thread, 4> threads;
+  for (size_t i = 0; i < threads.size(); ++i) threads[i] = std::thread([&, i] {
+    std::mt19937_64 random(100 + i);
+    for (size_t n = 0; n < 100; ++n) {
+      const Encoded data = Encode(random, 10);
+      std::vector<Elf64_Rela> observed;
+      Library lib;
+      lib.is_aarch64 = i % 2; lib.android_rela = data.bytes.data(); lib.android_rela_size = data.bytes.size();
+      MappedBytes(lib, data.bytes.data(), data.bytes.size());
+      lib.observed = &observed;
+      std::string error;
+      if (!relocate(&lib, &error) || observed != data.values || lib.wrong_arch) okay = false;
+    }
+  });
+  for (auto& thread : threads) thread.join();
+  Check(okay, "concurrent loads have independent snapshots and cursors");
+}
+}
+
+int main(int argc, char** argv) {
+  const bool gate = argc < 2 || std::strcmp(argv[1], "measure") != 0;
+  Behavior(candidate::Relocate); Concurrent(candidate::Relocate);
+  // This mode is used only with the new defined unsigned addend accumulation.
+  // Old-source runs retain the entire valid-input/malformed regression suite.
+  @CORRUPTION@
+  @RANGE_CHECKS@
+#if HAS_REFERENCE
+  Behavior(reference::Relocate); Concurrent(reference::Relocate);
+#endif
+  for (size_t count : {size_t{32}, size_t{4096}, size_t{281843}})
+    for (unsigned mode : {0u, 1u, 2u, 3u}) {
+#if HAS_REFERENCE
+      const Measurement current = Measure(candidate::Relocate, count, mode, gate, "candidate");
+      const Measurement previous = Measure(reference::Relocate, count, mode, false, "reference");
+      Check(current.checksum == previous.checksum, "measured destinations match exact baseline");
+#else
+      Measure(candidate::Relocate, count, mode, gate, "candidate");
+#endif
+    }
+  std::printf("ELF packed relocation contracts: %zu checks, %zu failures\n", checks, failures);
+  return failures != 0;
+}

@@ -1,0 +1,56 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+package com.gesher.server;
+
+import android.content.IIntentSender;
+import android.content.Intent;
+
+/** Explicit non-Android boundaries for native Parcel record-format qualification.
+ * No package installation, signer verification, Binder dispatch or toast API is modeled.
+ * The builder inserts the three unchanged production toast identity methods below. */
+final class Device {
+    static String fixtureDirectory;
+    public static String dataDir() {
+        if (fixtureDirectory == null) throw new AssertionError("Owned fixture directory not set");
+        return fixtureDirectory;
+    }
+}
+final class SystemServer {
+    static void log(String value) { System.out.println("FORMAT_FIXTURE " + value); }
+}
+final class GmsSignatureSpoofing {
+    static boolean protectedIdentity;
+    static boolean isEnabled() { return protectedIdentity; }
+}
+final class ApkPackage {
+    String name;
+    String fixtureCodeIdentity;
+    int uid() { return 10000; }
+}
+final class PackageManagerService {
+    ApkPackage owner;
+    ApkPackage get(String name) { return owner != null && owner.name.equals(name) ? owner : null; }
+}
+final class Services {
+    static Created sLast;
+    static final class Created { PackageManagerService pm; }
+}
+final class ActivityManagerService {
+    PendingIntents pendingIntents() { throw new AssertionError("PendingIntent service is outside record-format probe"); }
+}
+final class PendingIntents {
+    static final class Record {
+        int type, uid, requestCode, flags;
+        String packageName, creatorIdentity;
+        Intent[] intents;
+        String[] resolvedTypes;
+    }
+    Record record(IIntentSender sender) { throw new AssertionError("PendingIntent lookup is outside probe"); }
+    IIntentSender get(int type, String pkg, int request, Intent[] intents, String[] resolved, int flags) {
+        throw new AssertionError("PendingIntent creation is outside probe");
+    }
+    int send(Record record, Intent fillIn, String type) { throw new AssertionError("PendingIntent activation is outside probe"); }
+}
+final class NotificationManagerService {
+// @@TOAST_IDENTITY_METHODS@@
+    static String codeIdentity(ApkPackage pkg) { return pkg == null ? null : pkg.fixtureCodeIdentity; }
+}

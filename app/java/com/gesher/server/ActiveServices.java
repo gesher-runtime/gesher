@@ -104,6 +104,9 @@ final class ActiveServices {
         boolean startRequested;
         int lastStartId;
         int foregroundId;
+        int foregroundType;
+        int foregroundCapabilities;
+        boolean whileInUseAtStart;
         String foregroundChannelId;
         int startResult = Service.START_STICKY_COMPATIBILITY;
         Intent lastStartIntent;
@@ -344,12 +347,16 @@ final class ActiveServices {
         int grantUid = sender.system ? android.os.Process.SYSTEM_UID : grantSender.uid();
         List<UriGrants.Grant> prepared = uriGrants == null ? java.util.Collections.emptyList()
                 : uriGrants.prepareIntent(grantUid, info.packageName, service);
+        AppOpsService.UidState callerState = mAtm.appOpsUidStates().get(grantUid);
+        boolean whileInUseAtStart = sender.system || callerState != null
+                && callerState.state() <= android.app.AppOpsManager.UID_STATE_TOP;
         ServiceRecord r;
         synchronized (this) {
             if (!sender.acceptance.getAsBoolean() || target == null
                     || mPm.get(info.packageName) != target || mPm.isRemovalPending(info.packageName)) return null;
             r = record(info, target);
             r.startRequested = true;
+            r.whileInUseAtStart = whileInUseAtStart;
             r.lastStartIntent = new Intent(service);
             r.startLifetime = sender.lifetime;
             int startId = ++r.lastStartId;
@@ -579,12 +586,15 @@ final class ActiveServices {
 
     void setServiceForeground(ComponentName className, IBinder token, int id,
             Notification notification, int flags, int foregroundServiceType) {
+        java.util.Map<Integer, AppOpsService.UidState> visible = mAtm.appOpsUidStates();
         mNotifications.withChannelLifecycle(() -> setServiceForegroundLocked(className, token,
-                id, notification, flags, foregroundServiceType));
+                id, notification, flags, foregroundServiceType, visible));
+        mPm.appOps().requestUidStateRefresh();
     }
 
     private void setServiceForegroundLocked(ComponentName className, IBinder token, int id,
-            Notification notification, int flags, int foregroundServiceType) {
+            Notification notification, int flags, int foregroundServiceType,
+            java.util.Map<Integer, AppOpsService.UidState> visible) {
         ServiceRecord r;
         int previous;
         ApkPackage captured;
@@ -595,7 +605,39 @@ final class ActiveServices {
             requireServiceOwner(r);
             if (id != 0 && notification == null) throw new IllegalArgumentException("Missing foreground notification");
             previous = r.foregroundId;
+            int selectedType = id == 0 ? 0
+                    : foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
+                            ? r.info.getForegroundServiceType() : foregroundServiceType;
+            if ((selectedType & ~r.info.getForegroundServiceType()) != 0) {
+                throw new IllegalArgumentException("Foreground service type is not declared in the manifest");
+            }
+            int eligible = 0;
+            AppOpsService.UidState state = captured == null ? null : visible.get(captured.uid());
+            boolean whileInUse = captured != null && (captured.parsed.getTargetSdkVersion() < 30
+                    || r.whileInUseAtStart || state != null && state.state() <= android.app.AppOpsManager.UID_STATE_TOP);
+            // A service started while its app is background cannot manufacture while-in-use
+            // camera/microphone/location access. Existing admitted capabilities survive an
+            // ordinary notification update, but never gain a newly selected type in background.
+            if (whileInUse) {
+                if ((selectedType & ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) != 0) eligible |= android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_LOCATION;
+                if ((selectedType & ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA) != 0) eligible |= android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA;
+                if ((selectedType & ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) != 0) eligible |= android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
+            } else {
+                if ((selectedType & ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) != 0) {
+                    eligible |= r.foregroundCapabilities & android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_LOCATION;
+                    if (captured != null && mPm.permissions().checkPermission(captured.packageName,
+                            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                        eligible |= android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_LOCATION;
+                }
+                if ((selectedType & ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA) != 0) eligible |= r.foregroundCapabilities & android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA;
+                if ((selectedType & ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) != 0) eligible |= r.foregroundCapabilities & android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
+            }
             r.foregroundId = id;
+            r.foregroundType = selectedType;
+            r.foregroundCapabilities = eligible;
+            // stopForeground ends this admission. A later foreground entry must
+            // use its current eligibility, not the earlier startService visibility.
+            if (id == 0 && previous != 0) r.whileInUseAtStart = false;
             r.foregroundChannelId = id == 0 ? null : notification.getChannelId();
         }
         if (id != 0) {
@@ -620,7 +662,21 @@ final class ActiveServices {
         synchronized (this) {
             ServiceRecord r = byToken(token);
             if (r != null) requireServiceOwner(r);
-            return r != null && r.foregroundId != 0 ? r.info.getForegroundServiceType() : 0;
+            return r != null && r.foregroundId != 0 ? r.foregroundType : 0;
+        }
+    }
+
+    synchronized void addAppOpsForegroundServices(java.util.Map<Integer, AppOpsService.UidState> states) {
+        for (ServiceRecord service : mServices.values()) {
+            if (service.foregroundId == 0 || service.app == null || service.app.dead || service.app.exiting) continue;
+            ApkPackage pkg = mPm.get(service.info.packageName);
+            if (pkg == null || pkg != service.app.packageCode || mPm.isRemovalPending(pkg.packageName)) continue;
+            AppOpsService.UidState previous = states.get(pkg.uid());
+            if (previous == null) continue;
+            int capabilities = previous.capabilities();
+            capabilities |= service.foregroundCapabilities;
+            states.put(pkg.uid(), new AppOpsService.UidState(Math.min(previous.state(),
+                    android.app.AppOpsManager.UID_STATE_FOREGROUND_SERVICE), capabilities));
         }
     }
 
@@ -889,6 +945,9 @@ final class ActiveServices {
                 }
             }
         }
+        // Removing the service also removes its foreground capabilities even if
+        // another service or an activity keeps the process alive.
+        mPm.appOps().requestUidStateRefresh();
         synchronized (this) { clearStartGrants(r, Integer.MAX_VALUE); }
         if (r.foregroundId != 0) mNotifications.cancel(r.info.packageName, null, r.foregroundId);
         if (r.app == null || !r.created) return;
@@ -1052,6 +1111,8 @@ final class ActiveServices {
                 if (r.foregroundId != 0) {
                     mNotifications.cancel(r.info.packageName, null, r.foregroundId);
                     r.foregroundId = 0;
+                    r.foregroundType = 0;
+                    mPm.appOps().requestUidStateRefresh();
                     r.foregroundChannelId = null;
                 }
                 r.app = null;

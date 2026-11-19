@@ -1,15 +1,13 @@
 name: ci
 
 on:
-  # Temporarily pause CI on main pushes; restore push: branches: [main] to resume.
+  # Temporarily pause CI on main pushes; add branches: [main] under push to resume.
+  push:
+    # Canonical tag pushes build and test a release. The protected default
+    # branch publisher is separate from this read-only workflow.
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      release_version:
-        description: 'Installer version for a release (X.Y.Z); leave empty for the CI version'
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
@@ -17,9 +15,10 @@ permissions:
 
 # One current run per PR or branch. The root-specific prefix cannot collide
 # with reusable workflows, which inherit the caller's github.workflow value.
+# A release tag push has a separate group from manual runs on the same ref.
 concurrency:
-  group: ci-run-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-run-${{ github.event_name == 'push' && github.ref_type == 'tag' && 'release-' || '' }}${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref_type == 'tag') }}
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -33,6 +32,23 @@ jobs:
       policy_ref: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
     steps:
       - run: echo "SOURCE_IDENTITY source=${{ github.sha }}"
+      # The tag filter's * also matches e.g. v1.2.3-rc1. Stop such a run here,
+      # before every build job (they all depend on this one), not hours later.
+      - name: Validate pushed version tag
+        if: ${{ github.repository == 'gesher-runtime/gesher' && github.event_name == 'push' && github.ref_type == 'tag' }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$ ]] ||
+            { echo "::error::Release tag $TAG must be vX.Y.Z with no leading zeros"; exit 1; }
+          for part in "${BASH_REMATCH[@]:1}"; do
+            [ "$part" -le 65535 ] || { echo "::error::Release tag $TAG has a component above 65535"; exit 1; }
+          done
+          # CI builds before tag-based releases were installed as 0.1.<run number>;
+          # a release must outrank all of them to be offered to those machines.
+          [ "${BASH_REMATCH[1]}" -gt 0 ] || [ "${BASH_REMATCH[2]}" -ge 2 ] ||
+            { echo "::error::Release $TAG must be at least v0.2.0 (earlier CI builds used 0.1.<run number>)"; exit 1; }
   automerge-script:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -43,6 +59,7 @@ jobs:
             .github/scripts
             .github/workflows
             .github/actions/runner-route
+            tools/ci
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -54,6 +71,42 @@ jobs:
         run: |
           python3 -m pip install PyYAML==6.0.3
           python3 .github/scripts/test_automerge_workflows.py
+          python3 tools/ci/test_release_workflows.py
+  api37-report-tests:
+    needs: [source-identity]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            profile: linux
+          - os: windows-2022
+            profile: windows
+          - os: windows-2025
+            profile: windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      # Exercise the host's ordinary file encoding; report writers choose UTF-8.
+      PYTHONUTF8: '0'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.13'
+      - name: Report gate failure and selection contracts
+        shell: bash
+        run: python -m unittest discover -s tools/ci -p test_run_api37_report_tests.py -v
+      - name: SDK, NDK, ELF and source report suites
+        shell: bash
+        run: python tools/ci/run_api37_report_tests.py --profile ${{ matrix.profile }}
   update-contracts:
     needs: [source-identity]
     strategy:
@@ -128,7 +181,9 @@ jobs:
           python3 -m unittest discover -s tools/ci -p test_workflow_actor_metadata.py
           python3 -m unittest discover -s tools/ci -p test_self_hosted_trial.py
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
-          python3 -m unittest discover -s tools/ci -p test_github_read.py
+          python3 -m unittest discover -s tools/ci -p 'test_github*.py'
+          python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
           python3 tools/surface/test-verified-artifact.py
@@ -142,6 +197,7 @@ jobs:
           python3 -m unittest discover -s tools/tests -p test_host_bp_srcs.py
           python3 -m unittest discover -s tools/tests -p test_framework_tree.py
           python3 -m unittest discover -s tools/tests -p test_soong_zip.py
+          python3 -m unittest discover -s tools/tests -p test_sdk_resource_attrs_diff.py
           python3 tools/fonts/test-standalone-link.py
 
       - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
@@ -182,6 +238,11 @@ jobs:
           python3 tools/test_elf_lookup_contracts.py --sanitize
           python3 tools/test_elf_lookup_contracts.py --linux-reference
           python3 tools/test_elf_lookup_performance.py --sanitize
+          python3 tools/test_elf_packed_relocations.py --sanitize
+          python3 tools/test_elf_atomic_load.py --sanitize
+          python3 tools/test_elf_tls_rollback.py --sanitize
+          python3 tools/test_arm64_pending_rollback.py --sanitize
+          python3 tools/test_arm64_native_rollback.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
@@ -195,6 +256,12 @@ jobs:
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
 
+      - name: Stream device identity across close and reopen
+        run: python3 tools/test_stream_device_lifetime.py --sanitize
+
+      - name: Bionic stream state across close and reopen failures
+        run: python3 tools/test_stdio_lifetime_contracts.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
 
@@ -207,10 +274,13 @@ jobs:
           python3 tools/test_fnmatch_performance.py --sanitize
           python3 tools/test_virtual_path_classification.py --sanitize
           python3 tools/test_binder_reply_allocations.py --sanitize
+          python3 tools/test_binder_receive_views.py --sanitize
           python3 tools/test_camera_capture_allocations.py --sanitize
           python3 tools/test_layered_bitmap_cache.py --sanitize
           python3 tools/test_camera_conversion_allocations.py --sanitize
           python3 tools/test_surface_present_allocations.py --sanitize
+          python3 tools/test_d3d11_readback.py --sanitize
+          python3 tools/test_surface_frame_recycling.py --sanitize
           python3 tools/test_jni_argument_storage.py --sanitize
           python3 tools/test_art_jni_dispatch.py --sanitize
           python3 tools/test_audio_mixer_allocations.py --sanitize
@@ -219,6 +289,7 @@ jobs:
           python3 tools/test_audio_file_source.py --sanitize
           python3 tools/test_audio_rate_history.py --sanitize
           python3 tools/test_surface_image_cache.py --sanitize
+          python3 tools/test_webview_owned_streams.py --sanitize
 
       - name: Host event loop, audio state and surface geometry contracts
         run: |
@@ -262,6 +333,7 @@ jobs:
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
           python3 tools/test_directory_rename_contracts.py --sanitize
+          python3 tools/test_inotify_records.py --sanitize
           python3 -m unittest discover -s tools/tests -p test_sqlite_source_download.py
           python3 tools/test_sqlite_paths.py --fetch --sanitize --negative-control
           python3 tools/test_media_source_contracts.py --sanitize
@@ -287,6 +359,8 @@ jobs:
           python3 tools/test_audio_buffer_contracts.py
           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_receiver_lifetimes.py
+          python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
+          python3 tools/test_media_encoder_selection.py
 
       - name: Android HttpEngine requests over real HTTP sockets
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
@@ -335,6 +409,9 @@ jobs:
           python3 tools/i18n/check.py --check
           python3 tools/test_preferred_languages.py --sanitize
 
+      - name: App crash diagnosis and best-effort reporting contracts
+        run: python3 tools/test_app_crash_diagnostics.py
+
   build-framework-assets:
     needs: [artifact-preflight, source-identity]
     runs-on: ubuntu-24.04
@@ -350,6 +427,13 @@ jobs:
 
       - name: Fetch AOSP sources
         run: tools/fetch-aosp.sh
+
+      - name: Recorder lifecycle and complete-container size budgets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python3 tools/test_media_recorder_lifecycle.py
+          python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
 
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
@@ -432,6 +516,13 @@ jobs:
 
       - name: Cross-compile current-source Windows performance contracts
         run: |
+          python3 tools/test_toast_history_identity.py --compile-only \
+            --cc "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang" \
+            --output out/toast_history_identity_test.exe
+          python3 tools/test_capture_failures.py --compile-only \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/capture_failure_contract_test.exe \
+            --fixture-output out/capture_failure_fixture_test.exe
           python3 tools/test_procfs_thread_lookup.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/procfs_thread_lookup_test.exe
@@ -455,9 +546,9 @@ jobs:
         run: |
           # Canonical suite/package/e2e always receive the production role.
           if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           else
             exit 1
           fi
@@ -523,7 +614,9 @@ jobs:
           ls -la dist
 
       - name: Freeze default-OFF production role and unchanged shared-code boundary
-        run: python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+        run: |
+          python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+          python3 tools/media_capture/host_roles.py production --build out --dist dist
 
       - name: Bind isolated ordinary Binder actor to exact production compiler and source
         run: |
@@ -581,6 +674,20 @@ jobs:
         with:
           name: native3-locks-host
           path: dist-native3-locks/
+          if-no-files-found: error
+
+      - name: Build isolated synthetic capture hosts after production package is sealed
+        run: |
+          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          ninja -C out dalvikvm media_probe
+          python3 tools/media_capture/host_roles.py fixture --build out --dist dist
+          # Restore the ordinary compilation boundary before the query-only role.
+          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=OFF -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          ninja -C out dalvikvm media_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-capture-test
+          path: dist-media-capture-test/
           if-no-files-found: error
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
@@ -785,11 +892,14 @@ jobs:
     runs-on: windows-2022
     env:
       GH_TOKEN: ${{ github.token }}
-      GESHER_RELEASE_VERSION: ${{ inputs.release_version }}
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            app/java/com/gesher/app
+            app/java/com/gesher/server
+            tests/app-crash
+            tools
             tools/package
             tools/ci
             tools/surface
@@ -890,12 +1000,9 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           $hebrew = Join-Path (Split-Path $iscc) 'Languages\Hebrew.isl'
           if (-not (Test-Path $iscc) -or -not (Test-Path $hebrew)) { choco upgrade innosetup --no-progress -y | Out-Null }
-          $version = $env:GESHER_RELEASE_VERSION
-          if ([string]::IsNullOrEmpty($version)) { $version = "0.1.$env:GITHUB_RUN_NUMBER" }
-          if ($version -cnotmatch '\A(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\z' -or
-              @($version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count) {
-            throw 'Installer version must be X.Y.Z, with decimal components from 0 through 65535 and no leading zeros.'
-          }
+          $version = python tools/ci/release_version.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "Installer version: $version" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           & $iscc /Qp "/DBuildDir=$PWD\dist" "/DAppVersion=$version" "/O$PWD\installer" tools\package\gesher.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "GESHER_PACKAGE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -924,6 +1031,10 @@ jobs:
           $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
           Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
+          python tools/test_app_crash_diagnostics.py --launcher "$app\gesher-launch.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
+          python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
+          if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
           foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1') {
             if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) { throw "The installer left out $file" }
           }
@@ -1614,6 +1725,10 @@ jobs:
           path: ${{ steps.apk-cache.outputs.path }}
           key: e2e-apks-v1-${{ hashFiles('tests/e2e/apps.json') }}
 
+      - name: Prepare Android SDK identity tools
+        shell: pwsh
+        run: ./tests/e2e/prepare-identity-sdk.ps1
+
       - name: Run real apps
         shell: pwsh
         run: |
@@ -1629,14 +1744,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
-          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation
+          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -BuildTools $env:GESHER_TEST_BUILD_TOOLS
           exit $LASTEXITCODE
 
       - name: Validate and publish real-app coverage
         if: always()
         shell: pwsh
         run: |
-          python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results
+          python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results --require-apk-identity
           $result = $LASTEXITCODE
           if (Test-Path e2e-results/coverage.md) {
             Get-Content e2e-results/coverage.md | Add-Content $env:GITHUB_STEP_SUMMARY
@@ -1673,6 +1788,7 @@ jobs:
             tools/symbolize.py
             tools/boot-image
             tools/web3
+            tools/media_capture
             tools/package
             tools/windows4
             tools/net-udp
@@ -1686,12 +1802,16 @@ jobs:
             tools/fonts
             tools/binder
 
+      - name: Verify and stage the complete core supplier batch
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify and assemble windows-x64 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name windows-x64 --producer "build" --destination ci-suppliers/windows_x64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/windows_x64 --destination dist --ledger ci-owners.json --owner windows_x64
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/windows_x64 --destination dist --ledger ci-owners.json --owner windows_x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Windows thread, Binder, GDI and socket allocation contracts
@@ -1707,6 +1827,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/native_poll_allocations_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/toast_history_identity_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Windows SQLite guest paths, URI metadata and journal IO
         if: matrix.shard == 'native'
@@ -1719,25 +1841,19 @@ jobs:
       - name: Verify and assemble framework artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name framework --producer "framework / framework" --destination ci-suppliers/framework
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination dist --ledger ci-owners.json --owner framework
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/framework --destination dist --ledger ci-owners.json --owner framework
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble native-libs artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name native-libs --producer "native-libs / native-libs" --destination ci-suppliers/native_libs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/native_libs --destination dist --ledger ci-owners.json --owner native_libs
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/native_libs --destination dist --ledger ci-owners.json --owner native_libs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble arm64 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name arm64 --producer "arm64 / build" --destination ci-suppliers/arm64
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/arm64 --destination dist --ledger ci-owners.json --owner arm64
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: ARM64 parked TLS, reuse and actual translator callbacks
@@ -1751,87 +1867,78 @@ jobs:
       - name: Verify and assemble libs-tests artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name libs-tests --producer "libs / build" --destination ci-suppliers/libs_tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/libs_tests --destination dist --ledger ci-owners.json --owner libs_tests --prefix libs-tests
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/libs_tests --destination dist --ledger ci-owners.json --owner libs_tests --prefix libs-tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble art-gtests artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name art-gtests --producer "posix / build" --destination ci-suppliers/art_gtests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/art_gtests --destination dist --ledger ci-owners.json --owner art_gtests --prefix art-gtests
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/art_gtests --destination dist --ledger ci-owners.json --owner art_gtests --prefix art-gtests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble graphics artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name graphics --producer "graphics / build" --destination ci-suppliers/graphics
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/graphics --destination dist --ledger ci-owners.json --owner graphics
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/graphics --destination dist --ledger ci-owners.json --owner graphics
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble angle artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name angle --producer "angle / probe-build" --destination ci-suppliers/angle
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/angle --destination dist --ledger ci-owners.json --owner angle
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/angle --destination dist --ledger ci-owners.json --owner angle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble boot-image artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name boot-image --producer "boot-image / compile" --destination ci-suppliers/boot_image
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/boot_image --destination dist --ledger ci-owners.json --owner boot_image
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/boot_image --destination dist --ledger ci-owners.json --owner boot_image
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble webview artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name webview --producer "webview / build" --destination ci-suppliers/webview
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/webview --destination dist --ledger ci-owners.json --owner webview
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/webview --destination dist --ledger ci-owners.json --owner webview
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble exec artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name exec --producer "exec / exec" --destination ci-suppliers/exec
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/exec --destination dist --ledger ci-owners.json --owner exec
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/exec --destination dist --ledger ci-owners.json --owner exec
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble media artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name media --producer "media / media" --destination ci-suppliers/media
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/media --destination dist --ledger ci-owners.json --owner media
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/media --destination dist --ledger ci-owners.json --owner media
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble surfaces artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name surfaces --producer "surfaces / apps" --destination ci-suppliers/surfaces
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/surfaces --destination dist --ledger ci-owners.json --owner surfaces
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/surfaces --destination dist --ledger ci-owners.json --owner surfaces
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble native2 artifact
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --name native2 --producer "native2 / native2" --destination ci-suppliers/native2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/surface/assemble-artifacts.py --source ci-suppliers/native2 --destination dist --ledger ci-owners.json --owner native2 --prefix native2
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/native2 --destination dist --ledger ci-owners.json --owner native2 --prefix native2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify normal suite consumes the default-OFF runtime only
         shell: pwsh
         run: |
           python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble isolated capture hosts for explicit synthetic media fixtures
+        if: matrix.shard == 'services'
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name media-capture-test --producer "build" --destination ci-suppliers/media_capture_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/media_capture_test --destination dist --ledger ci-owners.json --owner media_capture_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/media_capture/host_roles.py verify --dist dist --fixture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run offline identity and retirement regressions
@@ -1901,6 +2008,7 @@ jobs:
           path: |
             results.txt
             ci-owners.json
+            dist/realtime-signals-evidence/**/*.json
           if-no-files-found: error
 
   test:
@@ -2324,7 +2432,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, update-contracts, reader-ownership, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, api37-report-tests, update-contracts, reader-ownership, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job

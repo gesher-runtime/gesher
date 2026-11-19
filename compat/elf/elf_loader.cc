@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -183,6 +184,8 @@ struct Library {
 
   // What the %fs rewrite did (fs_rewrite.h).
   FsRewriteStats fs{};
+  std::unique_ptr<FsRewriteRegistration> rewrite_registration;
+  bool guest_code_registered = false;
 
   // The program headers inside the mapping, for dl_iterate_phdr.
   const Elf64_Phdr* phdr = nullptr;
@@ -199,14 +202,28 @@ struct Library {
   std::set<uintptr_t> made_writable;
   const Elf64_Phdr* file_phdr = nullptr;  // the program headers in the file image
   uint16_t file_phnum = 0;
+  bool overlapping_load_pages = false;
 
   std::vector<std::string> needed;
   std::vector<Library*> dependencies;
+  // Only the loading thread can see this private relocation scope. It is
+  // cleared before publishing the completed graph.
+  const std::vector<Library*>* load_scope = nullptr;
+
+  // Unresolved-import diagnostics have the same lifetime as this object.
+  // In particular, no process-global stub may retain its unmapped strtab.
+  std::vector<uint8_t*> unresolved_pages;
+  size_t unresolved_page_used = 0;
+  std::vector<void*> unresolved_functions;
+  uint8_t* unresolved_data = nullptr;
+  std::vector<const char*> unresolved_data_names;
 };
 
 namespace {
 
-std::mutex g_mutex;
+// Like bionic's recursive dlopen lock: serialize complete load operations,
+// while constructors and IFUNC callbacks may re-enter on the same thread.
+std::recursive_mutex g_mutex;
 std::vector<Library*>& Loaded() {
   static std::vector<Library*> v;
   return v;
@@ -259,23 +276,20 @@ void SYSV UnresolvedCalled(const char* name) {
 
 // A stub is `mov rdi, imm64(name); mov rax, imm64(UnresolvedCalled); jmp rax`.
 constexpr size_t kStubSize = 32;
-std::mutex g_stub_mutex;
-uint8_t* g_stub_page = nullptr;
-size_t g_stub_used = 0;
-constexpr size_t kStubPageSize = 0x10000;
+constexpr size_t kStubPageSize = kPageSize;
 
-void* MakeUnresolvedStub(const char* name) {
-  std::lock_guard<std::mutex> lock(g_stub_mutex);
-  if (g_stub_page == nullptr || g_stub_used + kStubSize > kStubPageSize) {
-    g_stub_page = static_cast<uint8_t*>(
+void* MakeUnresolvedStub(Library* lib, const char* name) {
+  if (lib->unresolved_pages.empty() || lib->unresolved_page_used + kStubSize > kStubPageSize) {
+    auto* page = static_cast<uint8_t*>(
         VirtualAlloc(nullptr, kStubPageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-    if (g_stub_page == nullptr) return nullptr;
-    g_stub_used = 0;
+    if (page == nullptr) return nullptr;
+    lib->unresolved_pages.push_back(page);
+    lib->unresolved_page_used = 0;
   }
-  uint8_t* p = g_stub_page + g_stub_used;
-  g_stub_used += kStubSize;
-  // The name must outlive the object's strtab only as long as the object; it
-  // lives in the mapping, which is never unmapped.
+  uint8_t* p = lib->unresolved_pages.back() + lib->unresolved_page_used;
+  lib->unresolved_page_used += kStubSize;
+  // The owning library withdraws translator bindings and frees these stubs
+  // before releasing the strtab mapping on an aborted load.
   uint64_t name_ptr = reinterpret_cast<uint64_t>(name);
   uint64_t target = reinterpret_cast<uint64_t>(&UnresolvedCalled);
   p[0] = 0x48; p[1] = 0xBF;  // mov rdi, imm64
@@ -284,6 +298,7 @@ void* MakeUnresolvedStub(const char* name) {
   std::memcpy(p + 12, &target, 8);
   p[20] = 0xFF; p[21] = 0xE0;  // jmp rax
   FlushInstructionCache(GetCurrentProcess(), p, kStubSize);
+  lib->unresolved_functions.push_back(p);
   return p;
 }
 
@@ -295,41 +310,50 @@ void* MakeUnresolvedStub(const char* name) {
 constexpr size_t kDataSlot = 256;
 constexpr size_t kDataRegionSize = size_t{1} << 20;  // 4096 slots
 std::mutex g_data_mutex;
-uint8_t* g_data_region = nullptr;
-size_t g_data_used = 0;
-const char* g_data_names[kDataRegionSize / kDataSlot];
+std::vector<Library*> g_data_owners;
+std::once_flag g_data_handler_once;
 
 LONG CALLBACK UnresolvedDataHandler(EXCEPTION_POINTERS* info) {
   const EXCEPTION_RECORD* r = info->ExceptionRecord;
-  if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || r->NumberParameters < 2 ||
-      g_data_region == nullptr) {
+  if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || r->NumberParameters < 2) {
     return EXCEPTION_CONTINUE_SEARCH;
   }
   auto addr = static_cast<uintptr_t>(r->ExceptionInformation[1]);
-  auto base = reinterpret_cast<uintptr_t>(g_data_region);
-  if (addr < base || addr >= base + kDataRegionSize) return EXCEPTION_CONTINUE_SEARCH;
-  size_t slot = (addr - base) / kDataSlot;
-  const char* name = slot < g_data_used / kDataSlot ? g_data_names[slot] : "?";
+  std::string name;
+  size_t offset = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_data_mutex);
+    for (Library* lib : g_data_owners) {
+      auto base = reinterpret_cast<uintptr_t>(lib->unresolved_data);
+      if (addr < base || addr >= base + kDataRegionSize) continue;
+      size_t slot = (addr - base) / kDataSlot;
+      name = slot < lib->unresolved_data_names.size() ? lib->unresolved_data_names[slot] : "?";
+      offset = (addr - base) % kDataSlot;
+      break;
+    }
+  }
+  if (name.empty()) return EXCEPTION_CONTINUE_SEARCH;
   std::fprintf(stderr,
                "gesher elf: loaded code accessed data symbol '%s' (+%zu), which nothing "
                "defines (the bionic shim lacks it)\n",
-               name, static_cast<size_t>((addr - base) % kDataSlot));
+               name.c_str(), offset);
   std::fflush(stderr);
   std::abort();
 }
 
-void* MakeUnresolvedData(const char* name) {
+void* MakeUnresolvedData(Library* lib, const char* name) {
   std::lock_guard<std::mutex> lock(g_data_mutex);
-  if (g_data_region == nullptr) {
-    g_data_region = static_cast<uint8_t*>(
+  if (lib->unresolved_data == nullptr) {
+    lib->unresolved_data = static_cast<uint8_t*>(
         VirtualAlloc(nullptr, kDataRegionSize, MEM_RESERVE, PAGE_NOACCESS));
-    if (g_data_region == nullptr) return nullptr;
-    AddVectoredExceptionHandler(1, UnresolvedDataHandler);
+    if (lib->unresolved_data == nullptr) return nullptr;
+    g_data_owners.push_back(lib);
+    std::call_once(g_data_handler_once, [] { AddVectoredExceptionHandler(1, UnresolvedDataHandler); });
   }
-  if (g_data_used + kDataSlot > kDataRegionSize) return nullptr;
-  g_data_names[g_data_used / kDataSlot] = name;
-  void* p = g_data_region + g_data_used;
-  g_data_used += kDataSlot;
+  const size_t used = lib->unresolved_data_names.size() * kDataSlot;
+  if (used + kDataSlot > kDataRegionSize) return nullptr;
+  void* p = lib->unresolved_data + used;
+  lib->unresolved_data_names.push_back(name);
   return p;
 }
 
@@ -452,6 +476,17 @@ ResolvedSymbol ResolveForReloc(Library* lib, const char* name) {
   const Elf64_Sym* gs = nullptr;
   if (void* a = LookupGlobalLocked(name, &gl, &gs, lib->is_aarch64 ? 1 : 0)) {
     return {a, gl, gs, true};
+  }
+  // Siblings and transitive dependencies are prepared together but are not
+  // visible through the process registry until the entire graph succeeds.
+  if (lib->load_scope != nullptr) {
+    for (Library* candidate : *lib->load_scope) {
+      if (candidate->is_aarch64 != lib->is_aarch64) continue;
+      const Elf64_Sym* s = FindDefinedSymbol(candidate, name, gh, sh);
+      if (s != nullptr && ELF64_ST_BIND(s->st_info) != STB_LOCAL) {
+        return {SymbolAddress(candidate, s), candidate, s, true};
+      }
+    }
   }
   // The bionic shim.
   if (g_resolver) {
@@ -578,6 +613,8 @@ inline bool EnsureWritable(Library* lib, const void* where, size_t n) {
   return MakeWritable(lib, a, n);
 }
 
+bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error);
+
 // Maps the PT_LOAD segments of the object into a fresh reservation. Fills
 // base, load_bias, map_size. Returns false on error.
 //
@@ -621,16 +658,21 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::st
     return false;
   }
   std::sort(pages.begin(), pages.end());
+  bool shared_pages = false;
   for (size_t i = 1; i < pages.size(); ++i) {
-    if (pages[i].first < pages[i - 1].second) can_view = false;
+    if (pages[i].first < pages[i - 1].second) shared_pages = true;
   }
+  lib->overlapping_load_pages = shared_pages;
+  if (shared_pages) can_view = false;
   min_vaddr = PageDown(min_vaddr);
   max_vaddr = PageUp(max_vaddr);
   lib->map_size = max_vaddr - min_vaddr;
 
   if (!can_view) {
-    // Copied: the whole range anonymous RW, filled, protected after
-    // relocation.
+    // Copy while writable, then give each segment its requested protection,
+    // just like file views. IFUNC resolvers can run during relocation, before
+    // the final protection pass; leaving copied code RW would make that path
+    // non-executable (including every LoadFromMemory request).
     void* reservation = mmap(nullptr, lib->map_size, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (reservation == MAP_FAILED) {
@@ -639,8 +681,6 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::st
     }
     lib->base = static_cast<uint8_t*>(reservation);
     lib->load_bias = lib->base - min_vaddr;
-    lib->writable.emplace_back(reinterpret_cast<uintptr_t>(lib->base),
-                               reinterpret_cast<uintptr_t>(lib->base) + lib->map_size);
     for (int i = 0; i < ehdr->e_phnum; ++i) {
       if (phdr[i].p_type != PT_LOAD) continue;
       uint8_t* seg = lib->load_bias + phdr[i].p_vaddr;
@@ -648,6 +688,17 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::st
         std::memcpy(seg, data + phdr[i].p_offset, phdr[i].p_filesz);
       }
       // .bss (p_memsz > p_filesz) stays zero from the anonymous mapping.
+    }
+    if (!ProtectSegments(lib, data, error)) return false;
+    // With overlapping segments the last protection wins. Do not mark a
+    // whole segment writable in that case: EnsureWritable checks each page.
+    if (!shared_pages) {
+      for (int i = 0; i < ehdr->e_phnum; ++i) {
+        if (phdr[i].p_type != PT_LOAD || !(phdr[i].p_flags & PF_W)) continue;
+        lib->writable.emplace_back(
+            reinterpret_cast<uintptr_t>(lib->load_bias + PageDown(phdr[i].p_vaddr)),
+            reinterpret_cast<uintptr_t>(lib->load_bias + PageUp(phdr[i].p_vaddr + phdr[i].p_memsz)));
+      }
     }
     return true;
   }
@@ -726,7 +777,8 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::st
   return true;
 }
 
-// After relocation, set each segment's final protection. For a guest aarch64
+// Set each segment's requested protection when copied and after relocation.
+// For a guest aarch64
 // object, executable segments are made readable but NOT executable: the host
 // never runs guest code, the translator reads it (ADR 0047).
 bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error) {
@@ -885,7 +937,7 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
       // object never calls do not stop it loading.
       if (lib->stub_unresolved &&
           (type == R_X86_64_JUMP_SLOT || ELF64_ST_TYPE(sym->st_info) == STT_FUNC)) {
-        rs->address = MakeUnresolvedStub(name);
+        rs->address = MakeUnresolvedStub(lib, name);
         rs->found = rs->address != nullptr;
         if (rs->found) {
           std::fprintf(stderr, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
@@ -895,7 +947,7 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
       }
       // An unresolved data object: an inaccessible placeholder (above).
       if (lib->stub_unresolved && (type == R_X86_64_GLOB_DAT || type == R_X86_64_64)) {
-        rs->address = MakeUnresolvedData(name);
+        rs->address = MakeUnresolvedData(lib, name);
         rs->found = rs->address != nullptr;
         if (rs->found) {
           std::fprintf(stderr,
@@ -946,8 +998,16 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
       break;
     }
     case R_X86_64_DTPOFF64: {
-      const Elf64_Sym* sym = &lib->symtab[sym_index];
-      *where = (sym_index ? sym->st_value : 0) + r.r_addend;
+      // DTPMOD64 and DTPOFF64 must describe the same defining object's TLS.
+      // An importing symbol has st_value zero even when its definition has
+      // a nonzero offset in the dependency's private initialization image.
+      uint64_t sym_value = 0;
+      if (sym_index != 0) {
+        ResolvedSymbol rs;
+        if (!resolve(&rs)) return false;
+        sym_value = rs.sym ? rs.sym->st_value : 0;
+      }
+      *where = sym_value + r.r_addend;
       break;
     }
     case R_X86_64_TPOFF64: {
@@ -1008,11 +1068,16 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
       if (lib->stub_unresolved) {
         // An unresolved import: a host stub that reports the call, bound to a
         // guest trampoline so the guest can call it.
-        void* stub = MakeUnresolvedStub(name);
-        *out = reinterpret_cast<uint64_t>(gesher::arm64::BindHostFunction(stub));
+        void* stub = MakeUnresolvedStub(lib, name);
+        void* bound = stub ? gesher::arm64::BindHostFunction(stub) : nullptr;
+        if (bound == nullptr) {
+          Fail(error, lib->name + ": cannot allocate unresolved import '" + name + "'");
+          return false;
+        }
+        *out = reinterpret_cast<uint64_t>(bound);
         std::fprintf(stderr, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
                      lib->name.c_str(), name);
-        return stub != nullptr;
+        return true;
       }
       Fail(error, lib->name + ": unresolved symbol '" + name + "'");
       return false;
@@ -1022,6 +1087,10 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
     if (is_func && rs.lib == nullptr) {
       // A host function: bind a guest trampoline the guest calls (SVC bridge).
       *out = reinterpret_cast<uint64_t>(gesher::arm64::BindHostFunction(rs.address));
+      if (*out == 0) {
+        Fail(error, lib->name + ": cannot bind host import '" + name + "'");
+        return false;
+      }
     } else {
       // A guest function, or any data object (shared address space).
       *out = reinterpret_cast<uint64_t>(rs.address);
@@ -1129,13 +1198,85 @@ bool ApplyRelr(Library* lib, std::string* error) {
 // libraries linked with --pack-dyn-relocs=android carry all their non-PLT
 // relocations here (libwaze.so: 281843; their GOT, .init_array and
 // .data.rel.ro are zeros in the file until these are applied).
-bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* out,
-                       std::string* error) {
-  const uint8_t* end = p + size;
+// Validation checks every group and encoded field without materializing its
+// relocations. The application pass may only consume that same owned, validated
+// snapshot; it reconstructs values once and calls the visitor in wire order.
+bool PackedSegmentExtent(const Library* lib, const Elf64_Phdr& ph, uintptr_t first_vaddr,
+                         size_t& start, size_t& end) {
+  if (ph.p_type != PT_LOAD || ph.p_vaddr < first_vaddr) return false;
+  const uint64_t offset = ph.p_vaddr - first_vaddr;
+  if (offset > lib->map_size || ph.p_memsz > lib->map_size - offset) return false;
+  start = offset;
+  end = offset + ph.p_memsz;
+  return true;
+}
+
+bool PackedProtectionReadable(const Library* lib, uint32_t flags) {
+  // Writable mappings are readable on Windows. LoadProt also grants read
+  // access to guest code that the translator reads as data.
+  return (LoadProt(lib, flags) & (PROT_READ | PROT_WRITE)) != 0;
+}
+
+bool PackedPageReadable(const Library* lib, uintptr_t base, uintptr_t first_vaddr, size_t page) {
+  if (lib->made_writable.count(base + page) != 0) return true;
+  // ProtectSegments applies headers in file order, so the last owner controls
+  // a copied page shared by overlapping PT_LOAD segments.
+  for (uint16_t i = lib->file_phnum; i > 0; --i) {
+    const Elf64_Phdr& ph = lib->file_phdr[i - 1];
+    size_t start, end;
+    if (PackedSegmentExtent(lib, ph, first_vaddr, start, end) &&
+        PageDown(start) <= page && page < PageUp(end)) {
+      return PackedProtectionReadable(lib, ph.p_flags);
+    }
+  }
+  return false;
+}
+
+bool ReadablePackedRange(const Library* lib, const uint8_t* data, size_t size) {
+  const uintptr_t base = reinterpret_cast<uintptr_t>(lib->base);
+  uintptr_t cursor = reinterpret_cast<uintptr_t>(data);
+  if (lib->base == nullptr || lib->map_size > UINTPTR_MAX - base ||
+      cursor < base || cursor - base > lib->map_size ||
+      size > lib->map_size - (cursor - base) || size > UINTPTR_MAX - cursor) return false;
+  const uintptr_t end = cursor + size;
+  // Work relative to the reservation, including nonzero ELF virtual bases
+  // whose load bias is represented by unsigned address subtraction.
+  const uintptr_t first_vaddr = base - reinterpret_cast<uintptr_t>(lib->load_bias);
+  while (cursor < end) {
+    uintptr_t covered = cursor;
+    // Keep writable mappings and declared readable byte extents as coverage
+    // sources. The unassigned gaps in a reservation supply no coverage.
+    for (const auto& range : lib->writable) {
+      if (range.first <= cursor && cursor < range.second) covered = std::max(covered, range.second);
+    }
+    for (uint16_t i = 0; i < lib->file_phnum; ++i) {
+      const Elf64_Phdr& ph = lib->file_phdr[i];
+      size_t start, limit;
+      if (PackedSegmentExtent(lib, ph, first_vaddr, start, limit) &&
+          base + start <= cursor && cursor < base + limit && PackedProtectionReadable(lib, ph.p_flags)) {
+        covered = std::max(covered, base + limit);
+      }
+    }
+    // A reservation alone does not make gaps between file views readable.
+    if (covered == cursor) return false;
+    if (lib->overlapping_load_pages) {
+      const size_t page = PageDown(cursor - base);
+      if (!PackedPageReadable(lib, base, first_vaddr, page)) return false;
+      const size_t page_remaining = kPageSize - (cursor - base - page);
+      covered = cursor + std::min<uintptr_t>(covered - cursor, page_remaining);
+    }
+    cursor = std::min(covered, end);
+  }
+  return true;
+}
+
+template <bool ValidateOnly, typename Visit>
+bool DecodeAndroidRela(const uint8_t* p, size_t size, Visit&& visit, std::string* error) {
   if (size < 4 || std::memcmp(p, "APS2", 4) != 0) {
     Fail(error, "DT_ANDROID_RELA is not APS2-packed");
     return false;
   }
+  const uint8_t* end = p + size;
   p += 4;
   bool ok = true;
   auto sleb = [&]() -> uint64_t {
@@ -1143,9 +1284,11 @@ bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* o
     unsigned shift = 0;
     uint8_t byte = 0;
     do {
-      if (p >= end) {
-        ok = false;
-        return 0;
+      if constexpr (ValidateOnly) {
+        if (p >= end) {
+          ok = false;
+          return 0;
+        }
       }
       byte = *p++;
       if (shift < 64) value |= static_cast<uint64_t>(byte & 0x7f) << shift;
@@ -1159,29 +1302,53 @@ bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* o
   const uint64_t count = sleb();
   Elf64_Rela r{};
   r.r_offset = sleb();
-  if (ok && count < size * 8) out->reserve(count);
-  while (ok && out->size() < count) {
+  uint64_t decoded = 0;
+  while (ok && decoded < count) {
     const uint64_t group_size = sleb();
     const uint64_t flags = sleb();
-    if (!ok || group_size == 0 || group_size > count - out->size()) {
+    if (!ok || group_size == 0 || group_size > count - decoded) {
       ok = false;
       break;
     }
     const uint64_t delta = (flags & kGroupedByOffsetDelta) ? sleb() : 0;
     if (flags & kGroupedByInfo) r.r_info = sleb();
     if ((flags & kGroupHasAddend) && (flags & kGroupedByAddend)) {
-      r.r_addend += static_cast<int64_t>(sleb());
+      r.r_addend = static_cast<int64_t>(static_cast<uint64_t>(r.r_addend) + sleb());
     } else if (!(flags & kGroupHasAddend)) {
       r.r_addend = 0;
+    }
+    if constexpr (ValidateOnly) {
+      // Each member has the same number of ungrouped SLEB128 fields. Only
+      // their terminating bytes matter to validation: no offsets or addends
+      // need to be decoded twice. Fully grouped members have no encoded
+      // fields, so even a large group is validated in constant work.
+      const uint64_t fields = !(flags & kGroupedByOffsetDelta) +
+                              !(flags & kGroupedByInfo) +
+                              ((flags & kGroupHasAddend) && !(flags & kGroupedByAddend));
+      if (fields != 0) {
+        if (group_size > static_cast<uint64_t>(end - p) / fields) {
+          ok = false;
+          break;
+        }
+        uint64_t left = group_size * fields;
+        while (left != 0 && p < end) left -= (*p++ & 0x80) == 0;
+        if (left != 0) {
+          ok = false;
+          break;
+        }
+      }
+      decoded += group_size;
+      continue;
     }
     for (uint64_t i = 0; ok && i < group_size; ++i) {
       r.r_offset += (flags & kGroupedByOffsetDelta) ? delta : sleb();
       if (!(flags & kGroupedByInfo)) r.r_info = sleb();
       if ((flags & kGroupHasAddend) && !(flags & kGroupedByAddend)) {
-        r.r_addend += static_cast<int64_t>(sleb());
+        r.r_addend = static_cast<int64_t>(static_cast<uint64_t>(r.r_addend) + sleb());
       }
-      out->push_back(r);
+      if (ok && !visit(r)) return false;
     }
+    decoded += group_size;
   }
   if (!ok) {
     Fail(error, "malformed DT_ANDROID_RELA (APS2) relocations");
@@ -1193,18 +1360,42 @@ bool DecodeAndroidRela(const uint8_t* p, size_t size, std::vector<Elf64_Rela>* o
 bool Relocate(Library* lib, std::string* error) {
   // DT_RELR is arch-neutral (load-bias add).
   if (lib->relr && !ApplyRelr(lib, error)) return false;
-  std::vector<Elf64_Rela> packed;
-  if (lib->android_rela != nullptr &&
-      !DecodeAndroidRela(lib->android_rela, lib->android_rela_size, &packed, error)) {
-    return false;
+  // Keep the original validate-before-apply and snapshot semantics. A regular
+  // RELA, packed relocation or IFUNC may overwrite mapped APS2 metadata, and a
+  // resolver may reenter this loader. Own only its compact bytes for this load;
+  // do not retain an expanded 24-byte record for every relocation.
+  std::vector<uint8_t> packed;
+  if (lib->android_rela != nullptr) {
+    // Preserve the old header-only rejection: an invalid signature must not
+    // make us copy or inspect the rest of the claimed section.
+    if (lib->android_rela_size < 4) {
+      Fail(error, "DT_ANDROID_RELA is not APS2-packed");
+      return false;
+    }
+    if (!ReadablePackedRange(lib, lib->android_rela, 4)) {
+      Fail(error, "DT_ANDROID_RELA header is outside readable load segments");
+      return false;
+    }
+    if (std::memcmp(lib->android_rela, "APS2", 4) != 0) {
+      Fail(error, "DT_ANDROID_RELA is not APS2-packed");
+      return false;
+    }
+    if (!ReadablePackedRange(lib, lib->android_rela, lib->android_rela_size)) {
+      Fail(error, "DT_ANDROID_RELA is outside readable load segments");
+      return false;
+    }
+    packed.assign(lib->android_rela, lib->android_rela + lib->android_rela_size);
+    if (!DecodeAndroidRela<true>(packed.data(), packed.size(),
+                                [](const Elf64_Rela&) { return true; }, error)) return false;
   }
   if (lib->is_aarch64) {
     for (size_t i = 0; i < lib->rela_count; ++i) {
       if (!ApplyRelaAarch64(lib, lib->rela[i], error)) return false;
     }
-    for (const Elf64_Rela& r : packed) {
-      if (!ApplyRelaAarch64(lib, r, error)) return false;
-    }
+    if (!packed.empty() &&
+        !DecodeAndroidRela<false>(packed.data(), packed.size(),
+                                 [&](const Elf64_Rela& r) { return ApplyRelaAarch64(lib, r, error); },
+                                 error)) return false;
     for (size_t i = 0; i < lib->jmprel_count; ++i) {
       if (!ApplyRelaAarch64(lib, lib->jmprel[i], error)) return false;
     }
@@ -1213,9 +1404,10 @@ bool Relocate(Library* lib, std::string* error) {
   for (size_t i = 0; i < lib->rela_count; ++i) {
     if (!ApplyRela(lib, lib->rela[i], error)) return false;
   }
-  for (const Elf64_Rela& r : packed) {
-    if (!ApplyRela(lib, r, error)) return false;
-  }
+  if (!packed.empty() &&
+      !DecodeAndroidRela<false>(packed.data(), packed.size(),
+                               [&](const Elf64_Rela& r) { return ApplyRela(lib, r, error); },
+                               error)) return false;
   for (size_t i = 0; i < lib->jmprel_count; ++i) {
     if (!ApplyRela(lib, lib->jmprel[i], error)) return false;
   }
@@ -1248,177 +1440,273 @@ void RunInit(Library* lib) {
       gesher::arm64::Call(reinterpret_cast<void*>(f), args, 3);
     };
     for (size_t i = 0; i < lib->preinit_array_count; ++i) guest_init(lib->preinit_array[i]);
+    for (Library* dep : lib->dependencies) RunInit(dep);
     guest_init(lib->init_func);
     for (size_t i = 0; i < lib->init_array_count; ++i) guest_init(lib->init_array[i]);
     return;
   }
   // An executable's DT_PREINIT_ARRAY runs before its other initializers.
   for (size_t i = 0; i < lib->preinit_array_count; ++i) CallInit(lib->preinit_array[i]);
+  for (Library* dep : lib->dependencies) RunInit(dep);
   if (lib->init_func) CallInit(lib->init_func);
   for (size_t i = 0; i < lib->init_array_count; ++i) CallInit(lib->init_array[i]);
 }
 
-// Resolves DT_NEEDED: loads a dependency from the search paths, or treats it as
-// shimmed. Returns false on a hard error.
-bool ResolveNeeded(Library* lib, const LoadOptions& options, std::string* error);
-
-// `fd` is the object's open file, whose view `data` is (its segments are
-// mapped from it), or -1 for an object in memory (they are copied).
-Library* LoadCommon(const char* name, const uint8_t* data, size_t size, int fd, std::string* error,
-                    const LoadOptions& options) {
-  if (size < sizeof(Elf64_Ehdr)) {
-    Fail(error, std::string(name) + ": too small to be ELF");
-    return nullptr;
-  }
-  const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
-  if (std::memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0 ||
-      ehdr->e_ident[EI_CLASS] != ELFCLASS64 || ehdr->e_ident[EI_DATA] != ELFDATA2LSB ||
-      (ehdr->e_machine != EM_X86_64 && ehdr->e_machine != EM_AARCH64) ||
-      ehdr->e_type != ET_DYN) {
-    Fail(error, std::string(name) + ": not an ELF64 little-endian x86-64 or aarch64 shared object");
-    return nullptr;
-  }
-  const bool aarch64 = ehdr->e_machine == EM_AARCH64;
-  if (aarch64 && !gesher::arm64::EnsureLoaded()) {
-    Fail(error, std::string(name) + ": an arm64-v8a object, but the arm64 translator (" +
-                    "gesher_arm64.dll) is not available");
-    return nullptr;
-  }
-
-
-  auto* lib = new Library();
-  lib->name = name;
-  lib->is_aarch64 = aarch64;
-  lib->stub_unresolved = options.stub_unresolved_functions;
-  // An object that fails before it is registered goes away with its mapping.
-  auto discard = [](Library* l) {
-    if (l->base != nullptr) munmap(l->base, l->map_size);
-    delete l;
-  };
-  if (!MapSegments(lib, data, size, fd, error)) {
-    discard(lib);
-    return nullptr;
-  }
-  ParseDynamic(lib, data);
-  TraceMapping(*lib);
-
-  size_t executable_tls_size = 0;
-  if (!aarch64 && options.main_executable && lib->has_interp && lib->tls.present) {
-    if (lib->text_relocations || !TlsAssignModule(&lib->tls, true)) {
-      Fail(error, std::string(name) + ": incompatible executable local-exec TLS layout or text relocations");
-      discard(lib);
-      return nullptr;
-    }
-    executable_tls_size = static_cast<size_t>(-lib->tls.tp_offset);
-  }
-  if (!aarch64) {
-    // x86-64 only: %fs accesses become %gs ones before any of the object's code
-    // runs (IFUNC resolvers run during relocation). Guest arm64 code reaches
-    // TLS through TPIDR_EL0, which the translator supplies (ADR 0047).
-    if (!RewriteFsAccesses(lib->name.c_str(), data, size, lib->load_bias, lib->base,
-                           lib->map_size, &lib->fs, error, executable_tls_size)) {
-      // A main TLS module is already registered; keep its backing object
-      // alive just as later relocation failures keep registered libraries.
-      if (lib->tls.module_id == 0) discard(lib);
-      return nullptr;
-    }
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (lib->tls.present) {
-      if (aarch64) {
-        lib->tls.tp_offset = gesher::arm64::TlsRegister(lib->tls.total_size, lib->tls.align);
-        lib->tls.is_static = lib->tls.tp_offset >= 0;
-        lib->tls.module_id = 0;  // dynamic TLS via the translator, not compat/elf
-      } else {
-        if (!TlsAssignModule(&lib->tls)) {
-          Fail(error, lib->name + ": invalid TLS alignment");
-          return nullptr;
-        }
-      }
-    }
-    Loaded().push_back(lib);
-    ++g_load_count;
-  }
-
-  // Register the guest executable segments with the translator before any guest
-  // code runs (init arrays, IFUNC resolvers).
-  if (aarch64) RegisterGuestCode(lib, data);
-
-  if (!ResolveNeeded(lib, options, error)) {
-    return nullptr;
-  }
-  if (!Relocate(lib, error)) {
-    return nullptr;
-  }
+// A pending image has never been returned to application code. Withdraw every
+// consumer of its storage before unmapping it; committed libraries retain their
+// existing process lifetime (successful dlclose/unload is a separate concern).
+void DiscardLibrary(Library* lib) {
+  if (lib == nullptr) return;
+  if (lib->guest_code_registered) gesher::arm64::RemoveCode(lib->base, lib->map_size);
   if (lib->tls.present) {
-    if (aarch64) {
-      if (lib->tls.is_static) {
-        gesher::arm64::TlsPublish(lib->tls.tp_offset, lib->tls.init_image, lib->tls.init_size,
-                                  lib->tls.total_size);
-      }
-    } else {
-      // The relocated TLS image goes into threads that already have a block.
-      TlsPublishModule(&lib->tls);
+    if (lib->is_aarch64) {
+      if (lib->tls.is_static) gesher::arm64::TlsRollback(lib->tls.tp_offset, lib->tls.total_size);
+    } else if (lib->tls.module_id != 0) {
+      TlsRollbackModule(&lib->tls);
     }
   }
-  if (!ProtectSegments(lib, data, error)) {
-    return nullptr;
+  lib->rewrite_registration.reset();
+  for (void* stub : lib->unresolved_functions) {
+    if (lib->is_aarch64) gesher::arm64::UnbindHostFunction(stub);
   }
-  // A self-unpacking object (UPX): its code is rewritten as it first runs,
-  // after its initializer has unpacked it (fs_rewrite.h, ADR 0084).
-  if (!aarch64 && lib->fs.self_unpacking &&
-      !DeferUnpackedCode(lib->name.c_str(), data, lib->load_bias, error)) {
-    return nullptr;
+  for (uint8_t* page : lib->unresolved_pages) VirtualFree(page, 0, MEM_RELEASE);
+  if (lib->unresolved_data != nullptr) {
+    {
+      std::lock_guard<std::mutex> lock(g_data_mutex);
+      g_data_owners.erase(std::remove(g_data_owners.begin(), g_data_owners.end(), lib),
+                          g_data_owners.end());
+    }
+    VirtualFree(lib->unresolved_data, 0, MEM_RELEASE);
   }
-  // Load-time state; file_phdr points into the file image, which goes away.
-  lib->writable = {};
-  lib->made_writable.clear();
-  lib->file_phdr = nullptr;
-  lib->file_phnum = 0;
-  RunInit(lib);
-  return lib;
+  if (lib->base != nullptr) munmap(lib->base, lib->map_size);
+  delete lib;
 }
 
-bool ResolveNeeded(Library* lib, const LoadOptions& options, std::string* error) {
-  for (const std::string& soname : lib->needed) {
-    {
-      std::lock_guard<std::mutex> lock(g_mutex);
-      if (Library* existing = FindLocked(soname)) {
-        lib->dependencies.push_back(existing);
-        continue;
-      }
+using PendingLibrary = std::unique_ptr<Library, decltype(&DiscardLibrary)>;
+
+// Nested IFUNC loads may load independent objects. A request for a still-pending
+// outer object gets a diagnostic instead of an incomplete public handle. This
+// is not a claim of Android's exact error behavior: the pinned Bionic path
+// reaches an unread ElfReader precondition. See docs/native-load-transactions.md.
+thread_local std::vector<const std::vector<Library*>*> g_pending_scopes;
+
+bool IsPending(const std::string& name) {
+  for (const auto* scope : g_pending_scopes) {
+    for (Library* lib : *scope) {
+      if (lib->name == name || lib->soname == name) return true;
     }
-    // Try to load it from a search path.
-    std::string found;
-    for (const std::string& dir : options.search_paths) {
-      std::string candidate = dir + "/" + soname;
-      struct stat st {};
-      if (stat(candidate.c_str(), &st) == 0) {
-        found = candidate;
-        break;
-      }
+  }
+  return false;
+}
+
+class LoadTransaction {
+ public:
+  LoadTransaction() { g_pending_scopes.push_back(&scope_); }
+  ~LoadTransaction() {
+    // Registrations are withdrawn while their FileImages and other graph nodes
+    // still exist. No finalizers run for objects whose constructors never ran.
+    for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it) (*it)->library.reset();
+    g_pending_scopes.pop_back();
+  }
+
+  Library* Load(const char* name, const uint8_t* data, size_t size, int fd,
+                const LoadOptions& options, std::string* error) {
+    Library* root = Stage(name, data, size, fd, options, error, nullptr);
+    if (root == nullptr) return nullptr;
+    for (const auto& node : nodes_) {
+      if (!Prepare(*node, error)) return nullptr;
     }
-    if (!found.empty()) {
-      FileImage image;
-      if (!OpenImage(found.c_str(), &image, error)) return false;
-      LoadOptions dependency_options = options;
-      dependency_options.main_executable = false;
-      Library* dep = LoadCommon(soname.c_str(), image.data, image.size, image.fd, error,
-                                dependency_options);
-      if (dep == nullptr) return false;
+    if (!Link(root, error)) return nullptr;
+    for (const auto& node : nodes_) {
+      Library* lib = node->library.get();
+      if (!ProtectSegments(lib, node->data, error)) return nullptr;
+      if (!lib->is_aarch64 && lib->fs.self_unpacking &&
+          !DeferUnpackedCode(lib->name.c_str(), node->data, lib->load_bias, error)) return nullptr;
+    }
+    // Reserve before publication: there is no remaining recoverable operation
+    // after TLS images become available to existing/new threads.
+    Loaded().reserve(Loaded().size() + nodes_.size());
+    for (const auto& node : nodes_) {
+      Library* lib = node->library.get();
+      if (lib->tls.present) {
+        if (lib->is_aarch64) {
+          if (lib->tls.is_static) {
+            gesher::arm64::TlsPublish(lib->tls.tp_offset, lib->tls.init_image,
+                                     lib->tls.init_size, lib->tls.total_size);
+          }
+          lib->tls.ready = true;
+        } else {
+          TlsPublishModule(&lib->tls);
+        }
+      }
+      lib->load_scope = nullptr;
+      lib->writable = {};
+      lib->made_writable.clear();
+      lib->file_phdr = nullptr;
+      lib->file_phnum = 0;
+      Loaded().push_back(lib);
+      ++g_load_count;
+    }
+    // The graph is complete before a constructor can re-enter the loader.
+    for (const auto& node : nodes_) node->library.release();
+    RunInit(root);
+    return root;
+  }
+
+ private:
+  enum class State { kMapped, kPrepared, kLinking, kLinked };
+  struct Node {
+    PendingLibrary library{nullptr, DiscardLibrary};
+    std::unique_ptr<FileImage> image;
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+    LoadOptions options;
+    State state = State::kMapped;
+  };
+  std::vector<std::unique_ptr<Node>> nodes_;
+  std::vector<Library*> scope_;
+
+  Library* FindStaged(const std::string& name) {
+    for (Library* lib : scope_) {
+      if (lib->name == name || lib->soname == name) return lib;
+    }
+    return nullptr;
+  }
+
+  Library* Stage(const char* name, const uint8_t* data, size_t size, int fd,
+                 const LoadOptions& options, std::string* error,
+                 std::unique_ptr<FileImage> image) {
+    if (IsPending(name)) {
+      Fail(error, std::string(name) + ": recursive load while relocation is unfinished");
+      return nullptr;
+    }
+    if (size < sizeof(Elf64_Ehdr)) {
+      Fail(error, std::string(name) + ": too small to be ELF");
+      return nullptr;
+    }
+    const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
+    if (std::memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0 ||
+        ehdr->e_ident[EI_CLASS] != ELFCLASS64 || ehdr->e_ident[EI_DATA] != ELFDATA2LSB ||
+        (ehdr->e_machine != EM_X86_64 && ehdr->e_machine != EM_AARCH64) ||
+        ehdr->e_type != ET_DYN) {
+      Fail(error, std::string(name) + ": not an ELF64 little-endian x86-64 or aarch64 shared object");
+      return nullptr;
+    }
+    bool aarch64 = ehdr->e_machine == EM_AARCH64;
+    if (aarch64 && !gesher::arm64::EnsureLoaded()) {
+      Fail(error, std::string(name) + ": arm64 translator is not available");
+      return nullptr;
+    }
+    auto node = std::make_unique<Node>();
+    node->library.reset(new Library());
+    Library* lib = node->library.get();
+    lib->name = name;
+    lib->is_aarch64 = aarch64;
+    lib->stub_unresolved = options.stub_unresolved_functions;
+    lib->load_scope = &scope_;
+    node->data = data;
+    node->size = size;
+    node->options = options;
+    node->image = std::move(image);
+    if (!MapSegments(lib, data, size, fd, error)) return nullptr;
+    ParseDynamic(lib, data);
+    TraceMapping(*lib);
+    nodes_.push_back(std::move(node));
+    scope_.push_back(lib);
+    // Discover every dependency before allocating TLS, rewriting code or
+    // running any resolver. A cycle finds its already-mapped private node.
+    for (const std::string& soname : lib->needed) {
+      Library* dep = FindStaged(soname);
+      if (dep == nullptr) dep = FindLocked(soname);
+      if (dep == nullptr) {
+        std::string found;
+        for (const std::string& dir : options.search_paths) {
+          std::string candidate = dir + "/" + soname;
+          struct stat st {};
+          if (stat(candidate.c_str(), &st) == 0) { found = candidate; break; }
+        }
+        if (found.empty()) {
+          if (options.allow_shimmed_needed) continue;
+          Fail(error, lib->name + ": cannot find needed library " + soname);
+          return nullptr;
+        }
+        auto child_image = std::make_unique<FileImage>();
+        if (!OpenImage(found.c_str(), child_image.get(), error)) return nullptr;
+        FileImage* source = child_image.get();
+        LoadOptions child_options = options;
+        child_options.main_executable = false;
+        dep = Stage(soname.c_str(), source->data, source->size, source->fd,
+                    child_options, error, std::move(child_image));
+        if (dep == nullptr) return nullptr;
+      }
       lib->dependencies.push_back(dep);
-      continue;
     }
-    // Otherwise the bionic shim provides its symbols (libc.so, libm.so, ...).
-    if (!options.allow_shimmed_needed) {
-      Fail(error, lib->name + ": cannot find needed library " + soname);
+    return lib;
+  }
+
+  bool Prepare(Node& node, std::string* error) {
+    Library* lib = node.library.get();
+    size_t executable_tls_size = 0;
+    if (lib->tls.present) {
+      if (lib->is_aarch64) {
+        lib->tls.tp_offset = gesher::arm64::TlsRegister(lib->tls.total_size, lib->tls.align);
+        lib->tls.is_static = lib->tls.tp_offset >= 0;
+        if (!lib->tls.is_static) {
+          Fail(error, lib->name + ": cannot reserve static ARM64 TLS");
+          return false;
+        }
+      } else {
+        bool executable = node.options.main_executable && lib->has_interp;
+        if ((executable && lib->text_relocations) || !TlsAssignModule(&lib->tls, executable)) {
+          Fail(error, lib->name + ": incompatible TLS layout or text relocations");
+          return false;
+        }
+        if (executable) executable_tls_size = static_cast<size_t>(-lib->tls.tp_offset);
+      }
+    }
+    if (lib->is_aarch64) {
+      lib->guest_code_registered = true;
+      RegisterGuestCode(lib, node.data);
+    } else if (!RewriteFsAccesses(lib->name.c_str(), node.data,
+                                  node.size, lib->load_bias,
+                                  lib->base, lib->map_size, &lib->fs, error,
+                                  executable_tls_size, &lib->rewrite_registration)) {
       return false;
     }
-    // Shimmed: its symbols come through g_resolver during relocation.
+    node.state = State::kPrepared;
+    return true;
   }
-  return true;
+
+  bool Link(Library* lib, std::string* error) {
+    Node* node = nullptr;
+    for (const auto& candidate : nodes_) {
+      if (candidate->library.get() == lib) { node = candidate.get(); break; }
+    }
+    if (node == nullptr || node->state == State::kLinked || node->state == State::kLinking)
+      return true;  // a committed dependency or an edge closing a cycle
+    node->state = State::kLinking;
+    for (Library* dep : lib->dependencies) if (!Link(dep, error)) return false;
+    if (!Relocate(lib, error)) return false;
+    if (lib->tls.present) {
+      const bool prepared = lib->is_aarch64
+          ? gesher::arm64::TlsPrepare(lib->tls.tp_offset, lib->tls.init_image,
+                                     lib->tls.init_size, lib->tls.total_size)
+          : TlsPrepareModule(&lib->tls);
+      if (!prepared) {
+        Fail(error, lib->name + ": cannot prepare relocated TLS image");
+        return false;
+      }
+    }
+    node->state = State::kLinked;
+    return true;
+  }
+
+};
+
+Library* LoadCommon(const char* name, const uint8_t* data, size_t size, int fd,
+                    std::string* error, const LoadOptions& options) {
+  LoadTransaction transaction;
+  return transaction.Load(name, data, size, fd, options, error);
 }
 
 }  // namespace
@@ -1428,7 +1716,7 @@ void SetUnresolvedHandler(UnresolvedHandler handler) { g_unresolved_handler = ha
 int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
   std::vector<PhdrInfo> infos;
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     for (Library* lib : Loaded()) {
       if (lib->is_closed || lib->phdr == nullptr) continue;
       PhdrInfo info;
@@ -1450,7 +1738,7 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
 
 bool FindAddress(const void* addr, AddressInfo* info) {
   auto a = reinterpret_cast<const uint8_t*>(addr);
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_mutex);
   for (Library* lib : Loaded()) {
     if (a < lib->base || a >= lib->base + lib->map_size) continue;
     info->soname = lib->soname.c_str();
@@ -1487,18 +1775,19 @@ bool FindAddress(const void* addr, AddressInfo* info) {
 }
 
 void SetBionicResolver(SymbolResolver resolver) {
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_mutex);
   g_resolver = std::move(resolver);
 }
 
 Library* Load(const char* path, std::string* error, const LoadOptions& options) {
+  std::lock_guard<std::recursive_mutex> operation(g_mutex);
   // Name the object by its file base name.
   const char* slash = std::strrchr(path, '/');
   const char* bslash = std::strrchr(path, '\\');
   const char* base = slash > bslash ? slash : bslash;
   std::string name = base ? base + 1 : path;
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (Library* existing = FindLocked(name)) return existing;
   }
   FileImage image;
@@ -1508,14 +1797,16 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
                         const LoadOptions& options) {
+  std::lock_guard<std::recursive_mutex> operation(g_mutex);
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (Library* existing = FindLocked(name)) return existing;
   }
   return LoadCommon(name, static_cast<const uint8_t*>(data), size, -1, error, options);
 }
 
 void* Lookup(Library* library, const char* name) {
+  std::lock_guard<std::recursive_mutex> lock(g_mutex);
   if (library == nullptr || name == nullptr) return nullptr;
   uint32_t gh = GnuHash(name), sh = SysvHash(name);
   const Elf64_Sym* sym = FindDefinedSymbol(library, name, gh, sh);
@@ -1558,29 +1849,33 @@ void* Lookup(Library* library, const char* name) {
 }
 
 void* LookupGlobal(const char* name) {
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_mutex);
   return LookupGlobalLocked(name, nullptr, nullptr);
 }
 
 bool IsAarch64(Library* library) { return library != nullptr && library->is_aarch64; }
 
-void* ResolveBionic(const char* name) { return g_resolver ? g_resolver(name) : nullptr; }
+void* ResolveBionic(const char* name) {
+  std::lock_guard<std::recursive_mutex> lock(g_mutex);
+  return g_resolver ? g_resolver(name) : nullptr;
+}
 
 Library* Find(const char* name) {
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_mutex);
   return FindLocked(name);
 }
 
 const char* Soname(Library* library) { return library ? library->soname.c_str() : ""; }
 
 void Close(Library* library) {
+  std::lock_guard<std::recursive_mutex> operation(g_mutex);
   if (library == nullptr) return;
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (library->is_closed || library->is_closing) return;
     // Finalizers may re-enter dlclose. Claim this object before calling them,
-    // keeping its symbols visible until they finish. Never keep the loader
-    // lock while running application code.
+    // keeping its symbols visible until they finish. The recursive operation
+    // lock permits same-thread finalizer reentry and excludes concurrent loads.
     library->is_closing = true;
   }
   auto finish = [library](void (SYSV* function)()) {
@@ -1596,7 +1891,7 @@ void Close(Library* library) {
   }
   finish(library->fini_func);
   {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     library->is_closed = true;
     library->is_closing = false;
   }
@@ -1616,7 +1911,7 @@ bool GetExecutableInfo(Library* library, ExecutableInfo* info) {
 }
 
 void SetInitArguments(int argc, char** argv, char** envp) {
-  std::lock_guard<std::mutex> lock(g_mutex);
+  std::lock_guard<std::recursive_mutex> lock(g_mutex);
   g_init_argc = argc;
   g_init_argv = argv;
   g_init_envp = envp;

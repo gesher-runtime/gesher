@@ -966,6 +966,20 @@ HANDLE NameTarget(uint64_t thread, uint64_t self) {
   return target;
 }
 }
+int PthreadSignalTarget(uint64_t thread, void** handle) {
+  uint64_t self = SelfId();
+  std::lock_guard<std::mutex> lock(g_threads_mutex);
+  ReapCpuClocks();
+  HANDLE target = NameTarget(thread, self);
+  if (target == nullptr) return kESRCH;
+  HANDLE retained = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), target, GetCurrentProcess(), &retained,
+                       THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) {
+    return kEAGAIN;
+  }
+  *handle = retained;
+  return 0;
+}
 int PthreadSetName(uint64_t thread, const char* name) {
   if (name == nullptr) return kEINVAL;
   if (std::strlen(name) >= 16) return kERANGE;
