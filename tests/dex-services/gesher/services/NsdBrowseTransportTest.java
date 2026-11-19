@@ -11,18 +11,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 /** Deterministic native-boundary fixtures run the production browse state machine. */
 public final class NsdBrowseTransportTest {
     private static int checks;
     private static void check(boolean ok, String message) { if (!ok) throw new AssertionError(message); checks++; }
-    private static void until(BooleanSupplier ready, String description) throws Exception {
+    private static void await(BooleanSupplier ready, String description) throws Exception {
         long deadline = System.nanoTime() + 4_000_000_000L;
         while (!ready.getAsBoolean()) {
             if (System.nanoTime() >= deadline) throw new AssertionError("Timeout " + description);
             Thread.sleep(2);
         }
+    }
+    private static void until(BooleanSupplier ready, String description) throws Exception {
+        await(ready, description);
         checks++;
     }
     private static final class Driver implements WindowsNsd.Driver {
@@ -40,6 +44,7 @@ public final class NsdBrowseTransportTest {
         long startError;
         int baseStartError;
         private RuntimeException pollError;
+        private long polls;
         String query;
         public boolean supported() { return supported; }
         public int[] interfaces() { return new int[] {7}; }
@@ -58,6 +63,7 @@ public final class NsdBrowseTransportTest {
             RuntimeException failure = pollError;
             pollError = null;
             if (failure != null) throw failure;
+            polls++;
             ArrayDeque<String[]> queue = events.get(id);
             if (queue == null) throw new AssertionError("Polling released request");
             String[] event = queue.poll();
@@ -99,6 +105,7 @@ public final class NsdBrowseTransportTest {
         synchronized int active() { return events.size(); }
         synchronized int activeBaseObservers() { return baseObservers.size(); }
         synchronized boolean settled() { return unsettled.isEmpty(); }
+        synchronized long polls() { return polls; }
     }
     private static class Callbacks implements WindowsNsd.Callback {
         final List<String> events = new ArrayList<>();
@@ -167,9 +174,14 @@ public final class NsdBrowseTransportTest {
         new WindowsNsd.Browser(badSubtype, "_gesher._tcp", "_bad.dot", badSubtype::interfaces, sc, clock::get).run();
         check(sc.copy().equals(List.of("failed 6")), "Invalid subtype preserves Android bad-parameters result");
         Driver driver = new Driver(); Callbacks cb = new Callbacks();
-        final int[][] selected = {new int[] {7, 11}};
+        AtomicReference<int[]> selected = new AtomicReference<>(new int[] {7, 11});
+        long beforeRemovalScan = 15200;
+        AtomicLong pollAtScan = new AtomicLong(-1);
         WindowsNsd.Browser browser = new WindowsNsd.Browser(driver, "_gesher._tcp.", "_printer",
-                () -> selected[0], cb, clock::get, () -> 2000000L);
+                () -> {
+                    if (clock.get() == beforeRemovalScan) pollAtScan.set(driver.polls());
+                    return selected.get();
+                }, cb, clock::get, () -> 2000000L);
         Thread worker = thread(browser);
         until(() -> cb.count("started") == 1, "start");
         check(driver.query.equals("_printer._sub._gesher._tcp.local"), "Actual subtype DNS query");
@@ -195,9 +207,15 @@ public final class NsdBrowseTransportTest {
         check(cb.lostExpiration == 2005000L, "Goodbye retains previous SRV expiration");
         driver.event(7, 0, service, 5);
         until(() -> cb.count("found 7") == 2, "positive response after goodbye is a new discovery");
-        clock.set(15200); Thread.sleep(30);
+        clock.set(beforeRemovalScan);
+        // The next driver poll proves reconciliation, deadline scheduling and
+        // expiry processing finished under the old topology and unchanged clock.
+        await(() -> {
+            long poll = pollAtScan.get();
+            return poll >= 0 && driver.polls() > poll;
+        }, "scan before removing an interface");
         check(cb.count("lost 7") == 1, "New positive record remains live");
-        selected[0] = new int[] {11}; clock.set(17000);
+        selected.set(new int[] {11}); clock.set(17000);
         until(() -> cb.count("lost 7") == 2 && driver.active() == 1, "network removal");
         check(driver.releases == 1, "Retired interface waits for cancellation then releases");
         driver.acknowledge = false;
@@ -283,12 +301,14 @@ public final class NsdBrowseTransportTest {
         until(() -> cc.count("found") == 2, "returned interface produces a new observation");
         gb.stop(); finish(gt);
         Driver lostStop = new Driver(); lostStop.cancelFailures = 1; Callbacks lostStopCallback = new Callbacks();
-        final int[][] lostScope = {new int[] {7}};
+        AtomicReference<int[]> lostScope = new AtomicReference<>(new int[] {7});
         WindowsNsd.Browser lostStopBrowser = new WindowsNsd.Browser(lostStop, "_gesher._tcp", null,
-                () -> lostScope[0], lostStopCallback, clock::get);
+                lostScope::get, lostStopCallback, clock::get);
         Thread lostStopThread = thread(lostStopBrowser);
         until(() -> lostStopCallback.count("started") == 1, "interface retirement failure start");
-        lostScope[0] = new int[0]; clock.addAndGet(1001);
+        // started() is delivered before the initial scan deadline is scheduled.
+        await(() -> lostStop.polls() > 0, "initial poll before retiring an interface");
+        lostScope.set(new int[0]); clock.addAndGet(1001);
         until(() -> lostStopCallback.count("failed 0") == 1, "interface retirement failure is explicit");
         finish(lostStopThread);
         check(lostStop.active() == 0 && lostStopCallback.count("failed") == 1,
