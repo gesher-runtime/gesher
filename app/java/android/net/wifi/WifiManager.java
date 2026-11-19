@@ -5,12 +5,14 @@
 package android.net.wifi;
 
 import android.content.Context;
+import android.content.Intent;
+import android.net.DhcpInfo;
+import com.gesher.net.WindowsWifi;
 import java.util.List;
 
 /**
- * Android API 36 compatibility for a runtime without an Android Wi-Fi controller.
- * Windows connectivity is provided separately by ConnectivityManager. This wrapper
- * exposes no scans, configured networks, radio controls, multicast or power locks.
+ * Android API 36 compatibility backed by Windows' Wi-Fi status, scan cache, and
+ * IPv4 configuration via {@link WindowsWifi}. Radio configuration mutations remain unsupported.
  */
 public class WifiManager {
     public static final int WIFI_STATE_DISABLING = 0;
@@ -30,20 +32,44 @@ public class WifiManager {
     public static final String UNKNOWN_SSID = "<unknown ssid>";
     public static final String WIFI_STATE_CHANGED_ACTION = "android.net.wifi.WIFI_STATE_CHANGED";
     public static final String SCAN_RESULTS_AVAILABLE_ACTION = "android.net.wifi.SCAN_RESULTS";
+    public static final String EXTRA_RESULTS_UPDATED = "resultsUpdated";
     public static final String NETWORK_STATE_CHANGED_ACTION = "android.net.wifi.STATE_CHANGE";
 
-    WifiManager(Context context) { }
+    private final Context mContext;
 
-    public int getWifiState() { return WIFI_STATE_DISABLED; }
+    WifiManager(Context context) {
+        mContext = context;
+    }
+
+    public int getWifiState() {
+        return WindowsWifi.isWifiEnabled() ? WIFI_STATE_ENABLED : WIFI_STATE_DISABLED;
+    }
     public int getWifiApState() { return WIFI_AP_STATE_DISABLED; }
-    public boolean isWifiEnabled() { return false; }
+    public boolean isWifiEnabled() { return WindowsWifi.isWifiEnabled(); }
     public boolean isWpa3SaeSupported() { return false; }
-    public WifiInfo getConnectionInfo() { return new WifiInfo(); }
-    public List<ScanResult> getScanResults() { return List.of(); }
-    public boolean startScan() { return false; }
+    public WifiInfo getConnectionInfo() { return WindowsWifi.connectionInfo(); }
+    public DhcpInfo getDhcpInfo() { return WindowsWifi.dhcpInfo(); }
+    public List<WifiConfiguration> getConfiguredNetworks() { return WindowsWifi.configuredNetworks(); }
+    public List<ScanResult> getScanResults() { return WindowsWifi.scanResults(); }
+    public boolean startScan() {
+        if (mContext == null) return WindowsWifi.startScan(null);
+        return WindowsWifi.startScan(updated -> {
+            try {
+                mContext.sendBroadcast(
+                        new Intent(SCAN_RESULTS_AVAILABLE_ACTION)
+                                .putExtra(EXTRA_RESULTS_UPDATED, updated));
+            } catch (RuntimeException ignored) {
+            }
+        });
+    }
     public boolean setWifiEnabled(boolean enabled) { return false; }
     public boolean enableNetwork(int networkId, boolean disableOthers) { return false; }
+    public boolean disableNetwork(int netId) { return false; }
+    public boolean disconnect() { return false; }
+    public boolean reconnect() { return false; }
     public int addNetwork(WifiConfiguration config) { return -1; }
+    public boolean removeNetwork(int netId) { return false; }
+    public boolean saveConfiguration() { return false; }
 
     /** The API 36 legacy RSSI mapping, independent of hardware availability. */
     public static int calculateSignalLevel(int rssi, int numLevels) {

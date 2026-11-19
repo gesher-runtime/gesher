@@ -205,7 +205,13 @@ public class ConnectivityManager {
         NetworkCapabilities nc = new NetworkCapabilities();
         nc.clearAll();
         switch (n.kind) {
-            case "wifi": nc.addTransportType(NetworkCapabilities.TRANSPORT_WIFI); break;
+            case "wifi":
+                nc.addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+                try {
+                    nc.setTransportInfo(com.gesher.net.WindowsWifi.connectionInfo(s));
+                } catch (Throwable ignored) {
+                }
+                break;
             case "cellular": nc.addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR); break;
             case "vpn": nc.addTransportType(NetworkCapabilities.TRANSPORT_VPN); break;
             default: nc.addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET); break;
@@ -263,7 +269,17 @@ public class ConnectivityManager {
     static NetworkInfo networkInfoOf(WindowsNetworks.Net n) {
         int type = legacyType(n);
         NetworkInfo info = new NetworkInfo(type, 0, legacyTypeName(type), "");
-        info.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null, null);
+        String extra = null;
+        if (type == TYPE_WIFI) {
+            try {
+                android.net.wifi.WifiInfo wi = com.gesher.net.WindowsWifi.connectionInfo();
+                if (wi != null && wi.getSupplicantState() == android.net.wifi.SupplicantState.COMPLETED) {
+                    extra = wi.getSSID();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        info.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null, extra);
         info.setIsAvailable(true);
         info.setRoaming(n.roaming);
         return info;
