@@ -1386,6 +1386,80 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return ActivityManager.START_SUCCESS;
     }
 
+    private int requestBluetoothState(String action, Intent intent, String callingPackage,
+            IBinder resultToToken, String resultWho, int requestCode, int callingPid) {
+        final boolean enable = !"android.bluetooth.adapter.action.REQUEST_DISABLE".equals(action);
+        final boolean discoverable =
+                "android.bluetooth.adapter.action.REQUEST_DISCOVERABLE".equals(action);
+        final int okResult = discoverable
+                ? Math.max(1, Math.min(3600, intent.getIntExtra(
+                        "android.bluetooth.adapter.extra.DISCOVERABLE_DURATION", 120)))
+                : android.app.Activity.RESULT_OK;
+        final ActivityRecord source;
+        final ProcessRecord expectedProcess;
+        synchronized (this) {
+            source = resultToToken != null ? forToken(resultToToken) : null;
+            expectedProcess = source != null ? source.app : null;
+        }
+        final boolean deliver = source != null && requestCode >= 0 && expectedProcess != null
+                && expectedProcess.pid == callingPid;
+        WindowsBluetooth.Adapter adapter = WindowsBluetooth.adapter(0);
+        if (!adapter.present) {
+            SystemServer.log("startActivity: " + action + ": no Bluetooth adapter");
+            if (deliver) {
+                deliverResult(source, new ResultInfo(resultWho, requestCode,
+                                android.app.Activity.RESULT_CANCELED, null, null),
+                        null, null, expectedProcess);
+            }
+            return ActivityManager.START_SUCCESS;
+        }
+        if (adapter.on == enable) {
+            SystemServer.log("startActivity: " + action + ": Bluetooth already "
+                    + (enable ? "on" : "off"));
+            if (deliver) {
+                deliverResult(source, new ResultInfo(resultWho, requestCode, okResult, null, null),
+                        null, null, expectedProcess);
+            }
+            return ActivityManager.START_SUCCESS;
+        }
+        final String pkg = callingPackage != null ? callingPackage
+                : (source != null ? source.info.packageName : "android");
+        Thread btThread = new Thread(() -> {
+            boolean switched = false;
+            try {
+                boolean allowed = PermissionRequests.confirm(pkg,
+                        enable ? "Turn Windows Bluetooth on" : "Turn Windows Bluetooth off");
+                if (!allowed) {
+                    SystemServer.log("bluetooth: the user did not let " + pkg
+                            + " switch the radio");
+                } else {
+                    IBinder b = android.os.ServiceManager.getService(BluetoothManagerService.NAME);
+                    if (b instanceof BluetoothManagerService) {
+                        switched = ((BluetoothManagerService) b).setEnabled(enable);
+                    } else {
+                        int hr = WindowsBluetooth.setEnabled(enable);
+                        SystemServer.log("bluetooth: turning the radio "
+                                + (enable ? "on" : "off") + ": "
+                                + WindowsBluetooth.hresult(hr));
+                        switched = hr >= 0;
+                    }
+                }
+            } catch (Throwable t) {
+                SystemServer.log("startActivity: " + action + " failed: " + t);
+            }
+            if (deliver) {
+                boolean nowOn = WindowsBluetooth.adapter(0).on == enable;
+                int resultCode = (switched || nowOn)
+                        ? okResult : android.app.Activity.RESULT_CANCELED;
+                deliverResult(source, new ResultInfo(resultWho, requestCode, resultCode, null, null),
+                        null, null, expectedProcess);
+            }
+        }, "bluetooth-request");
+        btThread.setDaemon(true);
+        btThread.start();
+        return ActivityManager.START_SUCCESS;
+    }
+
     private int start(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             ActivityRecord[] started) {
@@ -1662,6 +1736,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     picker.setDaemon(true);
                     picker.start();
                     return ActivityManager.START_SUCCESS;
+                } else if (intent.getComponent() == null
+                        && (intent.getPackage() == null
+                            || "com.android.settings".equals(intent.getPackage())
+                            || "com.android.bluetooth".equals(intent.getPackage()))
+                        && ("android.bluetooth.adapter.action.REQUEST_ENABLE".equals(action)
+                            || "android.bluetooth.adapter.action.REQUEST_DISCOVERABLE".equals(action)
+                            || "android.bluetooth.adapter.action.REQUEST_DISABLE".equals(action))) {
+                    return requestBluetoothState(action, intent, callingPackage, resultToToken,
+                            resultWho, requestCode, originalPid);
                 }
             }
             SystemServer.log("startActivity: nothing handles " + intent);
