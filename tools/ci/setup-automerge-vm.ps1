@@ -1,7 +1,8 @@
 # Run as Administrator on the always-on runner computer, after enabling Hyper-V.
 [CmdletBinding()]
-param([string]$Distribution='Ubuntu-24.04', [string]$PackagePath='', [switch]$Resume)
+param([string]$Distribution='Ubuntu-24.04', [string]$PackagePath='', [switch]$Resume, [switch]$ExpandToThree)
 $ErrorActionPreference='Stop'
+if ($Resume -and $ExpandToThree) { throw 'Choose either Resume or ExpandToThree.' }
 if (!$PackagePath) { $PackagePath=Join-Path $PSScriptRoot 'automerge-package.json' }
 $package=Get-Content -LiteralPath $PackagePath -Raw | ConvertFrom-Json
 if ($package.repository -cne 'gesher-runtime/gesher' -or $package.runner_group -cne 'gesher-automerge' -or $package.runner_group_id -le 0 -or $package.sha256 -cnotmatch '^[0-9a-f]{64}$' -or $package.download_url -cnotmatch '^https://github.com/actions/runner/releases/download/v[0-9.]+/actions-runner-linux-x64-[0-9.]+\.tar\.gz$') { throw 'Invalid public setup package.' }
@@ -16,6 +17,7 @@ $stage=Join-Path $env:TEMP 'gesher-automerge-bootstrap'
 $utf8=New-Object System.Text.UTF8Encoding($false)
 
 function Register-GuestRunner {
+    param([int[]]$Slots = @(1))
     $sshArgs=@('-o','BatchMode=yes','-o','ConnectTimeout=5','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2','-o','StrictHostKeyChecking=accept-new','-o',('UserKnownHostsFile='+(Join-Path $root 'known_hosts')),'-i',$key,'gesher-control@172.29.241.2')
     Write-Host 'Waiting for Ubuntu to complete its first boot and package installation...'
     $ready=$false
@@ -33,10 +35,10 @@ function Register-GuestRunner {
     if (!$ready) { throw 'The VM did not become ready. Open its Hyper-V console and check Ubuntu boot and cloud-init.' }
 
     $guestScript=Join-Path $PSScriptRoot 'install-automerge-runner.sh'
-    $guestCopy=Join-Path $stage 'install-automerge-runner.sh'
-    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    $guestCopy=Join-Path $root 'install-automerge-runner.sh'
+    $remoteScript='/home/gesher-control/install-automerge-runner.sh'
     [IO.File]::WriteAllText($guestCopy,(Get-Content -LiteralPath $guestScript -Raw).Replace("`r",''),$utf8)
-    & scp.exe -o ('UserKnownHostsFile='+(Join-Path $root 'known_hosts')) -i $key $guestCopy 'gesher-control@172.29.241.2:/tmp/install-automerge-runner.sh'
+    & scp.exe -o ('UserKnownHostsFile='+(Join-Path $root 'known_hosts')) -i $key $guestCopy "gesher-control@172.29.241.2:$remoteScript"
     if ($LASTEXITCODE -ne 0) { throw 'Could not copy guest installer.' }
     Write-Host 'VM is ready. Registration requires only a temporary token, not a GitHub login on this computer.'
     $secureToken=Read-Host 'Paste the short-lived organization runner registration token (hidden)' -AsSecureString
@@ -45,26 +47,51 @@ function Register-GuestRunner {
         $pointer=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
         $token=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
         if ([string]::IsNullOrWhiteSpace($token) -or $token -match '[\r\n]') { throw 'A single registration token is required.' }
-        $token | & ssh.exe @sshArgs ('sudo bash /tmp/install-automerge-runner.sh '+$package.download_url+' '+$package.sha256)
-        if ($LASTEXITCODE -ne 0) { throw 'Guest runner registration or service start failed.' }
+        foreach ($slot in $Slots) {
+            $token | & ssh.exe @sshArgs "sudo bash $remoteScript $($package.download_url) $($package.sha256) $slot"
+            if ($LASTEXITCODE -ne 0) { throw "Guest runner registration or service start failed for slot $slot." }
+        }
     } finally {
         $token=$null
         if ($pointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
         $secureToken.Dispose()
     }
-    Write-Host 'Dedicated runner installed. Leave local routing disabled until the read-only probe passes.'
+    Write-Host 'Verify the registered runner services in GitHub before restoring local routing.'
 }
 
-if ($Resume) {
+if ($Resume -or $ExpandToThree) {
     $vm=Get-VM -Name $vmName
     $adapters=@(Get-VMNetworkAdapter -VM $vm)
     $disks=@(Get-VMHardDiskDrive -VM $vm)
     if ($adapters.Count -ne 1 -or $adapters[0].SwitchName -ne $switchName -or $disks.Count -ne 1 -or $disks[0].Path -ne (Join-Path $root 'automerge.vhdx') -or !(Test-Path -LiteralPath $key -PathType Leaf)) {
         throw 'The existing VM does not match the dedicated controller setup.'
     }
-    if ($vm.State -eq 'Off') { Start-VM -VM $vm }
-    elseif ($vm.State -ne 'Running') { throw "Inspect the existing VM state before resuming: $($vm.State)" }
-    Register-GuestRunner
+    if ($vm.State -notin @('Off','Running')) { throw "Inspect the existing VM state before proceeding: $($vm.State)" }
+    if ($ExpandToThree) {
+        if (!(Test-Path -LiteralPath (Join-Path $root 'known_hosts') -PathType Leaf)) { throw 'The registered VM management SSH host key is required.' }
+        $memory=Get-VMMemory -VM $vm
+        $previous=@{DynamicMemoryEnabled=$memory.DynamicMemoryEnabled;MinimumBytes=$memory.Minimum;StartupBytes=$memory.Startup;MaximumBytes=$memory.Maximum}
+        if ($vm.ProcessorCount -lt 3 -or !$memory.DynamicMemoryEnabled -or $memory.Maximum -lt 4GB) {
+            $os=Get-CimInstance Win32_OperatingSystem
+            if ([long]$os.FreePhysicalMemory * 1KB -lt 5GB) { throw 'Keep at least 5 GiB of host memory free before resizing the VM.' }
+            $processorCount=[Math]::Max(3,[int]$vm.ProcessorCount)
+            if ($vm.State -eq 'Running') { Stop-VM -Name $vmName }
+            try {
+                Set-VMProcessor -VMName $vmName -Count $processorCount
+                Set-VMMemory -VMName $vmName -DynamicMemoryEnabled $true -MinimumBytes 1GB -StartupBytes 2GB -MaximumBytes ([Math]::Max(4GB,[long]$memory.Maximum))
+            } catch {
+                Set-VMProcessor -VMName $vmName -Count $vm.ProcessorCount
+                Set-VMMemory -VMName $vmName @previous
+                Start-VM -Name $vmName
+                throw
+            }
+        }
+        if ((Get-VM -Name $vmName).State -eq 'Off') { Start-VM -Name $vmName }
+        Register-GuestRunner -Slots @(2,3)
+    } else {
+        if ($vm.State -eq 'Off') { Start-VM -Name $vmName }
+        Register-GuestRunner
+    }
     return
 }
 

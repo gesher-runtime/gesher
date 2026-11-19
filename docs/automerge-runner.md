@@ -67,6 +67,22 @@ controller's API fixture tests. It has no write scopes and cannot approve or
 merge PRs. A real main controller event must subsequently establish live
 execution; fixture success alone is not an end-to-end merge result.
 
+## Expand an existing controller VM to three runners
+
+Use the hosted routing flag below and allow the current local jobs to drain.
+Update the two setup scripts in the public setup folder and run the installer
+with `-ExpandToThree`. It reboots the dedicated VM if it needs to increase the
+allocation to three virtual CPUs and a 4 GiB dynamic memory ceiling. The host
+must have enough spare memory for this allocation. Windows and WSL continue
+running throughout the VM restart.
+
+The same short-lived registration token is used for both new registrations.
+Each slot has a separate Linux user and work directory. Confirm all three
+services are online, restore local routing, and validate concurrent execution
+from `main` on an already-merged PR. The initial single-runner probe expects
+the original guest account and processor allocation. Compare queue latency
+and GitHub API quota failures before expanding further.
+
 ## Return to GitHub
 
 On the authenticated management computer:
