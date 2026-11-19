@@ -97,7 +97,10 @@ $utf8=New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $stage 'user-data'),$userData.Replace('__KEY__',$publicKey).Replace("`r",''),$utf8)
 [IO.File]::WriteAllText((Join-Path $stage 'network-config'),$network.Replace("`r",''),$utf8)
 [IO.File]::WriteAllText((Join-Path $stage 'meta-data'),"instance-id: gesher-automerge-v1`nlocal-hostname: gesher-automerge`n",$utf8)
-$stageLinux=((& wsl.exe -d $Distribution -- wslpath -a $stage) -join '').Trim()
+# WSL may pass commands through the Linux shell. Forward slashes prevent that
+# shell from consuming Windows backslashes in PowerShell 5.1 native arguments.
+$stageWindows=$stage.Replace('\','/')
+$stageLinux=((& wsl.exe -d $Distribution -- wslpath -u -a $stageWindows) -join '').Trim()
 if ($LASTEXITCODE -ne 0 -or $stageLinux -notmatch '^/mnt/[a-z]/' -or $stageLinux -match "['`r`n]") { throw 'Cannot resolve a safe WSL bootstrap directory.' }
 & wsl.exe -d $Distribution -u root -- apt-get update
 if ($LASTEXITCODE -ne 0) { throw 'WSL dependency update failed.' }
