@@ -205,8 +205,10 @@ jobs:
         with:
           phase: initialize
 
-      - name: Verify XSD compiler dependency acquisition
-        run: python3 -m unittest discover -s tools/tests -p test_framework_xsdc.py -v
+      - name: Verify framework compiler dependency acquisition
+        run: |
+          python3 -m unittest discover -s tools/tests -p test_framework_xsdc.py -v
+          python3 -m unittest discover -s tools/tests -p test_framework_jvm_tools.py -v
 
       - name: Cache keys
         run: echo "AOSP_KEY=aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}" >> "$GITHUB_ENV"
@@ -414,6 +416,7 @@ jobs:
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           python3 tools/test_apk_signing.py --apksig-jar "$APKSIG_JAR"
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_role_manager_contracts.py --framework-classes out/framework/classes --app-classes out/app/gesher-app-classes.jar
           tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           tests/web3-query/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
@@ -658,6 +661,7 @@ jobs:
           args=(--framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar --java-home "$JAVA_HOME")
           python3 tools/test_network_stats_bucket.py --sdk-jar work/sdk-36/android.jar --java-home "$JAVA_HOME"
+          python3 tools/test_nsd_peer_scope.py
           python3 tools/test_nsd_value_contracts.py "${args[@]}" --sdk-jar work/sdk-36/android.jar
           python3 tools/test_network_request_clear.py "${args[@]}"
           python3 tools/test_shortcut_updates.py "${args[@]}"
@@ -671,6 +675,18 @@ jobs:
           "$JAVA_HOME/bin/javac" -cp work/sdk-36/android.jar \
             -d "$RUNNER_TEMP/audio-state-sdk" \
             tests/dex-services/gesher/services/AudioStateContractTest.java
+
+      - name: SDK36 Wi-Fi configuration and enterprise value contracts
+        run: |
+          python3 tools/test_wifi_configuration_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 WifiInfo Builder, copy and redaction contracts
+        run: |
+          python3 tools/test_wifi_info_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
       - name: Collect framework artifacts
         run: |

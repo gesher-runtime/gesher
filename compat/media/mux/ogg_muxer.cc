@@ -50,7 +50,11 @@ class OggMuxer : public Muxer {
     return 0;
   }
 
-  bool Start(std::string*) override {
+  bool Start(std::string* error) override {
+    if (!AdmitFinalSize(PageSize(head_.size() < 19 ? 19 : head_.size()) + PageSize(22))) {
+      *error = "Ogg: file-size limit is too small for container headers";
+      return false;
+    }
     started_ = true;
     return true;
   }
@@ -62,7 +66,8 @@ class OggMuxer : public Muxer {
       return false;
     }
     if (flags & 2) {
-      if (head_.empty() && size >= 19) head_.assign(data, data + size);
+      if (head_.empty() && size >= 19 && AdmitFinalSize(PageSize(size) + PageSize(22)))
+        head_.assign(data, data + size);
       return true;
     }
     if (size == 0) {
@@ -70,6 +75,10 @@ class OggMuxer : public Muxer {
       *error = "Ogg: empty Opus audio packet";
       return false;
     }
+    const uint64_t headers = headers_written_ ? 0 :
+        PageSize(head_.size() < 19 ? 19 : head_.size()) + PageSize(22);
+    const uint64_t pending = pending_.empty() ? 0 : PageSize(pending_.size());
+    if (!AdmitFinalSize(static_cast<uint64_t>(bytes_) + headers + pending + PageSize(size))) return true;
     if (!headers_written_ && !WriteHeaders(error)) return false;
     // Retain one real packet so Stop can mark its page EOS without adding a
     // zero-byte packet, which an Opus decoder can interpret as packet loss.
@@ -98,6 +107,8 @@ class OggMuxer : public Muxer {
   int64_t BytesWritten() const override { return bytes_; }
 
  private:
+  bool SupportsFileSizeLimit() const override { return true; }
+  static uint64_t PageSize(size_t packet_size) { return 27 + packet_size / 255 + 1 + packet_size; }
   // 48 kHz samples in an Opus packet (its TOC byte, RFC 6716 3.1).
   static uint64_t PacketSamples(const uint8_t* p, size_t n) {
     if (n < 1) return 0;
@@ -182,6 +193,7 @@ class AdtsMuxer : public Muxer {
   bool Start(std::string*) override { return true; }
   bool WriteSample(int, const uint8_t* data, size_t size, int64_t, int flags, std::string* error) override {
     if (flags & 2) return true;
+    if (!AdmitFinalSize(static_cast<uint64_t>(bytes_) + size + 7)) return true;
     static const uint32_t kRates[] = {96000, 88200, 64000, 48000, 44100, 32000, 24000,
                                       22050, 16000, 12000, 11025, 8000,  7350};
     int index = 4;
@@ -208,6 +220,7 @@ class AdtsMuxer : public Muxer {
   int64_t BytesWritten() const override { return bytes_; }
 
  private:
+  bool SupportsFileSizeLimit() const override { return true; }
   int fd_;
   bool have_track_ = false;
   uint32_t channels_ = 1, rate_ = 44100;

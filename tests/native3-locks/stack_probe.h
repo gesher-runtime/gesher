@@ -92,10 +92,10 @@ inline HANDLE OpenOwnedForExit(DWORD tid, uint64_t expected_birth) {
   return thread;
 }
 
-// Match the original observed worker call shape using its actual bytes. An
-// unwind restores nonvolatile RSI at this frame; mov RSI,RCX immediately before
-// call [_lock_file IAT] makes that saved RSI the actual FILE argument. This is
-// a checked call-site witness, never a nearest-export or generic-RSI inference.
+// Match the two observed worker call shapes using their actual bytes. The mov
+// immediately before call [_lock_file IAT] either saves RCX in nonvolatile RSI
+// or restores RCX from RSI. The unwound RSI is the FILE argument in both cases.
+// This is a checked call-site witness, never a nearest-export or generic-RSI inference.
 inline bool ExactFileCall(DWORD64 pc, DWORD64 rsi, FILE* stream) {
   if (pc < 9 || rsi != reinterpret_cast<uintptr_t>(stream)) return false;
   HMODULE worker = GetModuleHandleW(nullptr);
@@ -105,7 +105,8 @@ inline bool ExactFileCall(DWORD64 pc, DWORD64 rsi, FILE* stream) {
   unsigned char code[9]{};
   SIZE_T copied = 0;
   if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(pc - 9), code, sizeof(code), &copied) ||
-      copied != sizeof(code) || code[0] != 0x48 || code[1] != 0x89 || code[2] != 0xce ||
+      copied != sizeof(code) || code[0] != 0x48 || code[1] != 0x89 ||
+      (code[2] != 0xce && code[2] != 0xf1) ||
       code[3] != 0xff || code[4] != 0x15) return false;
   int32_t displacement = 0;
   std::memcpy(&displacement, code + 5, sizeof(displacement));
@@ -209,7 +210,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
         static_cast<unsigned long long>(pcs[index]), Describe(pcs[index]).c_str());
     if (ExactFileCall(pcs[index], rsis[index], stream)) {
       ++exact_file_calls;
-      std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL index=%u pc=0x%llx unwound-rsi=0x%llx FILE=%p exact-mov-rsi-rcx-and-lock-file-iat=true\n",
+      std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL index=%u pc=0x%llx unwound-rsi=0x%llx FILE=%p exact-rsi-rcx-copy-and-lock-file-iat=true\n",
           index, static_cast<unsigned long long>(pcs[index]), static_cast<unsigned long long>(rsis[index]),
           static_cast<void*>(stream));
     }

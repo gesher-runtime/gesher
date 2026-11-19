@@ -214,6 +214,9 @@ final class ContentProviders {
                 result.add(info);
             }
         }
+        // AOSP ContentProviderHelper.generateApplicationProvidersLocked initializes
+        // providers in descending initOrder and preserves manifest order for ties.
+        result.sort((a, b) -> Integer.compare(b.initOrder, a.initOrder));
         if (app != null) synchronized (this) {
             if (app.exiting || app.dead || app.packageCode != p
                     || mPm.get(p.packageName) != p || mPm.isRemovalPending(p.packageName)) return List.of();

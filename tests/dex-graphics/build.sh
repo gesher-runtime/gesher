@@ -3,7 +3,9 @@
 # compiled against framework.jar's classes as app/build.sh compiles gesher-app.
 #
 #   tests/dex-graphics/build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>]
-#       --app-classes <gesher-app-classes.jar>
+#       [--app-classes <gesher-app-classes.jar>]
+# By default use the complete app classes built in the same output directory.
+# This also preserves the calling convention of pinned reusable CI workflows.
 #
 # Needs a JDK 17+ and curl; d8 comes from Google's Maven repository (R8_JAR to use a
 # local copy). Runs on Linux and in Git Bash on Windows.
@@ -13,7 +15,7 @@ R8_VERSION=9.5.26
 here=$(cd "$(dirname "$0")" && pwd)
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
-framework= core= app_classes=
+framework= core= app_classes="$out/gesher-app-classes.jar"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --framework-classes) framework=$2; shift 2 ;;
@@ -23,7 +25,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 if [[ -z $framework || -z $app_classes ]]; then
-  echo "usage: build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>] --app-classes <jar>" >&2
+  echo "usage: build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>] [--app-classes <jar>]" >&2
   exit 2
 fi
 if [[ ! -f $app_classes ]]; then

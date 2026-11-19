@@ -19,6 +19,7 @@ public final class ServiceFixtureRunner {
                 || args[0].equals("GrammaticalInflectionUnavailableTest")
                 || args[0].equals("WifiUnsupportedTest")
                 || args[0].equals("WifiScannerUnsupportedTest")
+                || args[0].equals("RoleManagerUnsupportedTest")
                 || args[0].equals("AccountVisibilityNotificationTest");
         if (!ownsBootstrap) {
             System.loadLibrary("android_runtime");
