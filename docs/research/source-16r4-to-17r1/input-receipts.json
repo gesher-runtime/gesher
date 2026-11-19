@@ -1,0 +1,198 @@
+{
+  "archives": [
+    {
+      "filename": "android16r4-core-java.tar.gz",
+      "profile": "android16r4",
+      "received": {
+        "bytes": 14206783,
+        "matches_manifest_capture": false,
+        "sha256": "04d49841cd0d83d4c239c1f5265017cf7d46934d60275aa0a54b63c21b14dc63"
+      },
+      "role": "core_java",
+      "verified_file_inventory_sha256": "31e01db070b440399527b7dee188a5c95c51cf3dfc03772dea908578035685f6",
+      "verified_git_tree": "0edfa9f43f2496a8642aa65843e1208da314f9cd"
+    },
+    {
+      "filename": "android16r4-tools-platform-compat-java.tar.gz",
+      "profile": "android16r4",
+      "received": {
+        "bytes": 37918,
+        "matches_manifest_capture": false,
+        "sha256": "9075f5f24bd96259a0569e2db2c65e3802d0ee3c264bee173d518cf6d5ddb1a0"
+      },
+      "role": "compat_processor",
+      "verified_file_inventory_sha256": "08a0d8b3c2896191be40821f139403301f7ecfd2aa30946453afb5e6e39ffcd8",
+      "verified_git_tree": "8322dc6f8007058df0418db1f841b111a19c8993"
+    },
+    {
+      "filename": "android16r4-build-release-release_configs.tar.gz",
+      "profile": "android16r4",
+      "received": {
+        "bytes": 769,
+        "matches_manifest_capture": false,
+        "sha256": "cad8c5f9cde17d57db08d8ff628c2ef1db8097c864b0d6c40e7260b8bc7b5a23"
+      },
+      "role": "release_configs",
+      "verified_file_inventory_sha256": "b381c70025daad29b39fab1df0eb2e1d7476d5b19f459202dc20b476076925e0",
+      "verified_git_tree": "368a39297253322184cfe0f21ce6aa4c2ccf7aa8"
+    },
+    {
+      "filename": "android16r4-build-release-flag_declarations.tar.gz",
+      "profile": "android16r4",
+      "received": {
+        "bytes": 30717,
+        "matches_manifest_capture": false,
+        "sha256": "3c4fa43241f80677b52d62f58944815afacc9f3aa0287f67e77b8683291abeb6"
+      },
+      "role": "flag_declarations",
+      "verified_file_inventory_sha256": "3588b1c2cfa206181f3a4ee923b0afc636e36734f7d476ad48cd2fc824bbd989",
+      "verified_git_tree": "adca5f81111244f04acd2e7942c6b7c97aea6511"
+    },
+    {
+      "filename": "android16r4-build-release-flag_values.tar.gz",
+      "profile": "android16r4",
+      "received": {
+        "bytes": 32502,
+        "matches_manifest_capture": false,
+        "sha256": "6b2037210d55911e1a52e5ff70f1ce69b9871efb03d1435e061c33f5efd5d7be"
+      },
+      "role": "flag_values",
+      "verified_file_inventory_sha256": "228948679628f3937e2462da02bf42b41f0e233084d5dc53489c176b01dcc390",
+      "verified_git_tree": "f0a1390dfc1d0a002201f87b7420a74172ac17bc"
+    },
+    {
+      "filename": "android16r4-frameworks-base-services-core-xsd-platform-compat.tar.gz",
+      "profile": "android16r4",
+      "received": {
+        "bytes": 2693,
+        "matches_manifest_capture": false,
+        "sha256": "cd23695138d40df5c8e4f501042ffde43659da76763fb286dcc6b6a197fafca8"
+      },
+      "role": "compat_schema",
+      "verified_file_inventory_sha256": "1aee9b6e44a9ce91f547f989e1c624f36ac0b102e20c7ddd21db366bec0dbda3",
+      "verified_git_tree": "60eaa672f3e86021076fd032dedd72e30b6853c8"
+    },
+    {
+      "filename": "android16r4-build-soong-cmd-release_config-release_config_lib.tar.gz",
+      "profile": "android16r4",
+      "received": {
+        "bytes": 18487,
+        "matches_manifest_capture": false,
+        "sha256": "25104f79e23ecf05a96af1f16717871f44ff78a8b0d60b460f1dc32414000e62"
+      },
+      "role": "release_resolver",
+      "verified_file_inventory_sha256": "ac0cc7410993a59dda43f8f1f9d1139fe004d2cdb423564fa2948660664ea984",
+      "verified_git_tree": "7047b35d64c0b75e6adf96a4cd4f8af54277b924"
+    },
+    {
+      "filename": "android16r4-build-soong-cmd-release_config-release_config_proto.tar.gz",
+      "profile": "android16r4",
+      "received": {
+        "bytes": 17989,
+        "matches_manifest_capture": false,
+        "sha256": "fba2716feccaaa814492418cd2a355d2d7b4382524c0e75b7705053421cc057c"
+      },
+      "role": "release_schema",
+      "verified_file_inventory_sha256": "5a976f7f150a5b5a702915fba39ef0cdddeef89bd6d52922f9937a0b0b51c81e",
+      "verified_git_tree": "daa7ee1f85c1299c6d2f2b11ae337601f4eb0c37"
+    },
+    {
+      "filename": "android17r1-core-java.tar.gz",
+      "profile": "android17r1",
+      "received": {
+        "bytes": 14939624,
+        "matches_manifest_capture": false,
+        "sha256": "d97d54d47577ab52f8fa04ea1811f6730dd60e1af09ced49a5d64acd1f8b3086"
+      },
+      "role": "core_java",
+      "verified_file_inventory_sha256": "a08ceb79704417c7611f03e660bf23847c088a6195e99f28f9dd40a6fc54edd9",
+      "verified_git_tree": "570612732d2db0069d80a2778ad4991c166530c9"
+    },
+    {
+      "filename": "android17r1-tools-platform-compat-java.tar.gz",
+      "profile": "android17r1",
+      "received": {
+        "bytes": 38473,
+        "matches_manifest_capture": false,
+        "sha256": "3f320fcc696068fdc2a052672e72bb7c06e1019604797c132137f0317282960e"
+      },
+      "role": "compat_processor",
+      "verified_file_inventory_sha256": "1a036806a98f035c4397080252afed388c45242296e8a565eac169e24258c27e",
+      "verified_git_tree": "dee7fbf8dcfb6f5555e6c66d115e663ca3f19a31"
+    },
+    {
+      "filename": "android17r1-build-release-release_configs.tar.gz",
+      "profile": "android17r1",
+      "received": {
+        "bytes": 1036,
+        "matches_manifest_capture": false,
+        "sha256": "682945e4a8032e84d0fba2c218304ae131e943b4f3ebd03f65a58e151b6bee65"
+      },
+      "role": "release_configs",
+      "verified_file_inventory_sha256": "8de74d0dea887868a7cd90f3147514a5f73550f5751980264b6c2168949ba681",
+      "verified_git_tree": "22f0d2b2ff2609f3d66014956483152bc06da59d"
+    },
+    {
+      "filename": "android17r1-build-release-flag_declarations.tar.gz",
+      "profile": "android17r1",
+      "received": {
+        "bytes": 37512,
+        "matches_manifest_capture": false,
+        "sha256": "1c98369915a9ffe90bf3ecb895b5d9304d293c59120f1bcceed48561d5b00c20"
+      },
+      "role": "flag_declarations",
+      "verified_file_inventory_sha256": "1e3ba079dbc46bee8fb7e26a8683e6adb663799a8ac3936be30ffe563691881e",
+      "verified_git_tree": "0fa7dd637cd131d41a64fb6468713246f1e3b0a4"
+    },
+    {
+      "filename": "android17r1-build-release-flag_values.tar.gz",
+      "profile": "android17r1",
+      "received": {
+        "bytes": 42338,
+        "matches_manifest_capture": false,
+        "sha256": "aba268a307b969e30726a489913542c3b00df096cdf6f2613dd3bb4d37e03c27"
+      },
+      "role": "flag_values",
+      "verified_file_inventory_sha256": "e916fb3c81fbb85c49a6111450f91af74657282417c7fbb5d25eb631ba1a9c4c",
+      "verified_git_tree": "75e74359e32ddd878c545d6817fa08735f1d9518"
+    },
+    {
+      "filename": "android17r1-frameworks-base-services-core-xsd-platform-compat.tar.gz",
+      "profile": "android17r1",
+      "received": {
+        "bytes": 2694,
+        "matches_manifest_capture": false,
+        "sha256": "dc849bac8cbe01ce82065dce029a6c0a392395bd81a673e18b94271d60f56173"
+      },
+      "role": "compat_schema",
+      "verified_file_inventory_sha256": "6e4c3cc8b40c9991aa34e257758d11013e0758ca53669bd25c16988a5f45db87",
+      "verified_git_tree": "ee0accc276dbb1c2b15e9cce8bccab259503d7c5"
+    },
+    {
+      "filename": "android17r1-build-soong-cmd-release_config-release_config_lib.tar.gz",
+      "profile": "android17r1",
+      "received": {
+        "bytes": 20315,
+        "matches_manifest_capture": false,
+        "sha256": "0c39f79485d831049b7a96b26b1ccdb2756789ce2342a5fefa07fe5d78254541"
+      },
+      "role": "release_resolver",
+      "verified_file_inventory_sha256": "a6928cb02882df6e761f9f4f59bc3e5d45dfac3207c866fd0b095e64aa3ced6e",
+      "verified_git_tree": "beb4b6778f04cb852f20bf1605e1efac70d3745f"
+    },
+    {
+      "filename": "android17r1-build-soong-cmd-release_config-release_config_proto.tar.gz",
+      "profile": "android17r1",
+      "received": {
+        "bytes": 20991,
+        "matches_manifest_capture": false,
+        "sha256": "23a137320b885ca7f473e995a2f1850049e88edd1567ca4ced8f90c1987a201b"
+      },
+      "role": "release_schema",
+      "verified_file_inventory_sha256": "e9b58874575212781a4643c47f585e54b1c1b24b086627fe26b4292ac26dd30f",
+      "verified_git_tree": "efa79300fc40b74579b218b1a41842764fe22a61"
+    }
+  ],
+  "manifest_sha256": "c89d839e21c50a67b14ac6008b4a3375da2cd09fbe02b51925df9074c0ff2d73",
+  "schema_version": 1
+}
