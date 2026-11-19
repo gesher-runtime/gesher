@@ -24,6 +24,8 @@ class DataSource {
   virtual std::string Uri() const { return std::string(); }
   // Network sources: reads may be slow (MediaPlayer reports buffering).
   virtual bool IsNetwork() const { return false; }
+  // Contiguous cached bytes after the last read, or -1 if unknown.
+  virtual int64_t CachedBytes() { return -1; }
   // Stops pending and later reads (from another thread).
   virtual void Cancel() {}
 };
