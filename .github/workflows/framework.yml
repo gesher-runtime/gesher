@@ -676,6 +676,18 @@ jobs:
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
+      - name: SDK36 SoftAP and WPS value, copy and compatibility contracts
+        run: |
+          python3 tools/test_softap_values_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 Wi-Fi Direct values, provider and copy contracts
+        run: |
+          python3 tools/test_wifi_p2p_values.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
       - name: Collect framework artifacts
         run: |
           mkdir -p dist-framework
