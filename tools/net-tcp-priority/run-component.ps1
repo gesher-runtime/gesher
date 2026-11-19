@@ -13,6 +13,8 @@ $trusted = @{
   'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
   'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
   'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
+  'tools/ci/github_read.py'='006eaf96a47049aaa5f59be744723e934647f86f'
+  'tools/ci/github_jobs.py'='c9d669313dc23f4d7d63017ecaa07f923e91932d'
 }
 foreach ($entry in $trusted.GetEnumerator()) {
   $actualHelperBlob = git hash-object $entry.Key
@@ -25,7 +27,7 @@ $sourceJson = python tools/ci/source_identity.py
 if ($LASTEXITCODE -ne 0) { throw 'Invalid CI source identity' }
 $ciSource = $sourceJson | ConvertFrom-Json
 . (Join-Path $PSScriptRoot '../ci/receipt-diagnostics.ps1')
-$jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+$jobsRaw = python tools/ci/github_jobs.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs"
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read producer jobs' }
 $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -CEQ $expectedProducer)
 Write-Host ('TCP_COHERENT_PRODUCER_INVENTORY ' + ([ordered]@{ expected_producer=$expectedProducer; selection=$selection; total_count=($jobsRaw | ConvertFrom-Json).total_count; received_count=@(($jobsRaw | ConvertFrom-Json).jobs).Count; selected_count=$jobs.Count; names=@(($jobsRaw | ConvertFrom-Json).jobs | ForEach-Object name) } | ConvertTo-Json -Depth 8 -Compress))

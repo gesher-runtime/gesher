@@ -70,3 +70,22 @@ try {
   }
   Remove-Item -LiteralPath $deepAudioRoot -Recurse -Force -ErrorAction Stop
 }
+
+$deepChannelBlockingOut = FixesRun ($dvmFixes + 'gesher.services.WifiChannelBlockingValuesContractTest') 90
+$deepChannelBlockingCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiChannelBlockingValuesParcel.ps1"
+$deepChannelBlockingWireOK = $false
+$deepChannelBlockingWireFailure = ''
+try {
+  Assert-WifiChannelBlockingValuesParcelEvidence -Output $deepChannelBlockingOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-channel-blocking-values-android-reference-2026-11-18.json')
+  $deepChannelBlockingWireOK = $true
+} catch { $deepChannelBlockingWireFailure = $_.Exception.Message }
+Check 'framework: Wi-Fi channel and blocking values with complete native readers' {
+  $global:LASTEXITCODE = $deepChannelBlockingCode
+  $deepChannelBlockingOut
+  if ($deepChannelBlockingWireOK) { 'Channel/blocking native readers match pinned Android16-r4: 16 cases' }
+  else { $global:LASTEXITCODE = 1; "Channel/blocking native Parcel evidence failed: $deepChannelBlockingWireFailure" }
+} @('WIFI_CHANNEL_BLOCKING_VALUES: PASS',
+    'WIFI_CHANNEL_BLOCKING_PROVIDERS coherent production boot graph; complete original readers',
+    'WIFI_CHANNEL_BLOCKING_PROFILE android16-r4; sdk36; declarations=27',
+    'Channel/blocking native readers match pinned Android16-r4: 16 cases')
