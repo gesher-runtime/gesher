@@ -158,6 +158,17 @@ final class UriGrants {
                     || (("secure".equals(table) || "global".equals(table))
                             && granted(target.packageName, "android.permission.WRITE_SECURE_SETTINGS"));
         }
+        if (ContactsProviderSupport.isSystemAuthority(uri.getAuthority())) {
+            if ((modes & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0
+                    && !granted(target.packageName, ContactsProviderSupport.readPermission(uri.getAuthority()))) {
+                return false;
+            }
+            if ((modes & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0
+                    && !granted(target.packageName, ContactsProviderSupport.writePermission(uri.getAuthority()))) {
+                return false;
+            }
+            return true;
+        }
         ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
         if (info == null) return false;
         if (holdsGrant(target, uri, modes, false)) return true;
@@ -175,6 +186,9 @@ final class UriGrants {
         // explicit grant identity/strength: a plain grant is neither a prefix
         // capability nor a persistable one. No persistable grants exist here.
         if ("settings".equals(uri.getAuthority())) return canAccess(target, uri, access, userId);
+        if (ContactsProviderSupport.isSystemAuthority(uri.getAuthority())) {
+            return canAccess(target, uri, access, userId);
+        }
         ProviderInfo info = ContentProviders.declaredProvider(mPm, uri.getAuthority());
         if (info == null) return false;
         if (hasDirectAccess(target, info, uri, access)) return true;
