@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace gesher {
 namespace devsvc {
@@ -101,6 +102,8 @@ long ShowToast(const std::u16string& app_id, const std::u16string& tag,
 // Removes the toast from the screen and from the notification center.
 long RemoveToast(const std::u16string& app_id, const std::u16string& tag,
                  const std::u16string& group);
+long RemoveToastIfLaunch(const std::u16string& app_id, const std::u16string& tag,
+                         const std::u16string& group, const std::u16string& launch);
 // Removes every toast of `app_id`.
 long ClearToasts(const std::u16string& app_id);
 // HKCU\Software\Classes\AppUserModelId\<app_id>: DisplayName and IconUri, which
@@ -130,6 +133,21 @@ std::u16string PickFolder(const std::u16string& title);
 
 // IFileOpenDialog: native Windows file picker dialog.
 std::u16string PickFile(const std::u16string& title);
+
+// Android SAF: mode 0=open, 1=create (IFileSaveDialog), 2=tree. The Java
+// provider atomically creates a unique file after a save location is chosen;
+// this dialog never overwrites. active is polled on the dialog's STA thread.
+struct DocumentSelection {
+  long error = 0;  // HRESULT; cancellation is an empty successful selection.
+  std::vector<std::u16string> paths;
+};
+DocumentSelection PickDocuments(int mode, const std::u16string& title,
+    const std::u16string& suggested_name, const std::u16string& initial_directory,
+    const std::u16string& filter, const std::u16string& extension, bool multiple,
+    bool local_only, uint32_t owner_pid, bool (*active)(void*), void* context);
+// False includes an unavailable/unverifiable target. Follows reparse points and
+// requires a resolved local volume and locally available data.
+bool IsLocalDocument(const std::u16string& path);
 
 }  // namespace devsvc
 }  // namespace gesher

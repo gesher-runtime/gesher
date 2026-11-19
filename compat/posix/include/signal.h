@@ -12,6 +12,11 @@
 #include <sys/types.h>
 #include <time.h>
 
+#if !defined(__MINGW32__) && !defined(_SIGSET_T_)
+typedef unsigned long long sigset_t;
+#define _SIGSET_T_
+#endif
+
 // winpthreads defines pthread_sigmask as a macro returning 0.
 #undef pthread_sigmask
 
@@ -155,6 +160,16 @@ typedef struct {
 #define CLD_CONTINUED 6
 
 typedef void (*sighandler_t)(int);
+
+#ifndef SIG_DFL
+#define SIG_DFL ((sighandler_t)0)
+#endif
+#ifndef SIG_IGN
+#define SIG_IGN ((sighandler_t)1)
+#endif
+#ifndef SIG_ERR
+#define SIG_ERR ((sighandler_t)-1)
+#endif
 
 struct sigaction {
   union {

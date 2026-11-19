@@ -239,6 +239,10 @@ jobs:
           python3 tools/test_elf_lookup_contracts.py --linux-reference
           python3 tools/test_elf_lookup_performance.py --sanitize
           python3 tools/test_elf_packed_relocations.py --sanitize
+          python3 tools/test_elf_atomic_load.py --sanitize
+          python3 tools/test_elf_tls_rollback.py --sanitize
+          python3 tools/test_arm64_pending_rollback.py --sanitize
+          python3 tools/test_arm64_native_rollback.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
@@ -270,11 +274,13 @@ jobs:
           python3 tools/test_fnmatch_performance.py --sanitize
           python3 tools/test_virtual_path_classification.py --sanitize
           python3 tools/test_binder_reply_allocations.py --sanitize
+          python3 tools/test_binder_receive_views.py --sanitize
           python3 tools/test_camera_capture_allocations.py --sanitize
           python3 tools/test_layered_bitmap_cache.py --sanitize
           python3 tools/test_camera_conversion_allocations.py --sanitize
           python3 tools/test_surface_present_allocations.py --sanitize
           python3 tools/test_d3d11_readback.py --sanitize
+          python3 tools/test_surface_frame_recycling.py --sanitize
           python3 tools/test_jni_argument_storage.py --sanitize
           python3 tools/test_art_jni_dispatch.py --sanitize
           python3 tools/test_audio_mixer_allocations.py --sanitize
@@ -403,6 +409,9 @@ jobs:
           python3 tools/i18n/check.py --check
           python3 tools/test_preferred_languages.py --sanitize
 
+      - name: App crash diagnosis and best-effort reporting contracts
+        run: python3 tools/test_app_crash_diagnostics.py
+
   build-framework-assets:
     needs: [artifact-preflight, source-identity]
     runs-on: ubuntu-24.04
@@ -507,6 +516,9 @@ jobs:
 
       - name: Cross-compile current-source Windows performance contracts
         run: |
+          python3 tools/test_toast_history_identity.py --compile-only \
+            --cc "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang" \
+            --output out/toast_history_identity_test.exe
           python3 tools/test_capture_failures.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/capture_failure_contract_test.exe \
@@ -884,6 +896,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            app/java/com/gesher/app
+            app/java/com/gesher/server
+            tests/app-crash
+            tools
             tools/package
             tools/ci
             tools/surface
@@ -1015,6 +1031,10 @@ jobs:
           $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
           Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
+          python tools/test_app_crash_diagnostics.py --launcher "$app\gesher-launch.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
+          python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
+          if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
           foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1') {
             if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) { throw "The installer left out $file" }
           }
@@ -1807,6 +1827,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/native_poll_allocations_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/toast_history_identity_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Windows SQLite guest paths, URI metadata and journal IO
         if: matrix.shard == 'native'
@@ -1986,6 +2008,7 @@ jobs:
           path: |
             results.txt
             ci-owners.json
+            dist/realtime-signals-evidence/**/*.json
           if-no-files-found: error
 
   test:

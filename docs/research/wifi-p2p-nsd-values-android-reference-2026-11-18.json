@@ -1,0 +1,758 @@
+{
+  "schema_version": 1,
+  "scope": "Ordinary complete native value readers on Android; no network/radio operations or Windows runtime qualification",
+  "wire_reference": {
+    "profile": "android16-r4",
+    "release_profile": "bp4a",
+    "aosp_wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+    "aosp_connectivity_commit": "f930245ec39a510f37a9a7dfaded96d287491a61",
+    "sdk_artifact_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "capsule_manifest_sha256": "52227974fcbad8e6f76c30a3f9084abe03d4908bb81f945aef64a8a17bb77eb1",
+    "reference_payload_sha256": "3f027785d96c395d36f9d0ac3c0f77381c8c53f038eb9c4dd8c43e8ff1128b2a",
+    "candidate_payload_sha256": "a5b9e947b314dbfc83c8e8822df32a8ba5cc700f78e4ae94dcd0883c79fed90e",
+    "full_original_readers": true,
+    "writer_only_cases": 0
+  },
+  "wire_cases": [
+    {
+      "case": "usd_config_noarg",
+      "bytes": 12,
+      "sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1",
+      "rewritten_bytes": 12,
+      "rewritten_sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1",
+      "roundtrip": true
+    },
+    {
+      "case": "usd_config_generic",
+      "bytes": 28,
+      "sha256": "a3749ff36b476cdffac48dffdf0d19212b23d8f2b6636884ed0f6bfc3c70ba36",
+      "rewritten_bytes": 28,
+      "rewritten_sha256": "a3749ff36b476cdffac48dffdf0d19212b23d8f2b6636884ed0f6bfc3c70ba36",
+      "roundtrip": true
+    },
+    {
+      "case": "usd_config_null_info",
+      "bytes": 24,
+      "sha256": "9fa883320ae95c0f57b08a7e18edd817a404aec1dd44065361c708c73dc6762d",
+      "rewritten_bytes": 24,
+      "rewritten_sha256": "9fa883320ae95c0f57b08a7e18edd817a404aec1dd44065361c708c73dc6762d",
+      "roundtrip": true
+    },
+    {
+      "case": "usd_config_empty_info",
+      "bytes": 24,
+      "sha256": "dddfc984b25168ead6128d21750cff88962b8c1c7c323c807d5602af6c6fdcd2",
+      "rewritten_bytes": 24,
+      "rewritten_sha256": "dddfc984b25168ead6128d21750cff88962b8c1c7c323c807d5602af6c6fdcd2",
+      "roundtrip": true
+    },
+    {
+      "case": "usd_config_bytes_info",
+      "bytes": 32,
+      "sha256": "8ecbd147b1e95a9eb1e0b1cf8cf71cf51a327329e61e012f69aec131828c6a17",
+      "rewritten_bytes": 32,
+      "rewritten_sha256": "8ecbd147b1e95a9eb1e0b1cf8cf71cf51a327329e61e012f69aec131828c6a17",
+      "roundtrip": true
+    },
+    {
+      "case": "request_all",
+      "bytes": 24,
+      "sha256": "1319d78cfea514aa080689605eed3fb9411515510b38e0bfbc032eb3c7ef948e",
+      "rewritten_bytes": 24,
+      "rewritten_sha256": "1319d78cfea514aa080689605eed3fb9411515510b38e0bfbc032eb3c7ef948e",
+      "roundtrip": true
+    },
+    {
+      "case": "request_vendor_upper",
+      "bytes": 36,
+      "sha256": "8cbba9c992acd40d2181c81b97e667ca67d6e3b0ff3b61a0a551d82f931f364b",
+      "rewritten_bytes": 36,
+      "rewritten_sha256": "8cbba9c992acd40d2181c81b97e667ca67d6e3b0ff3b61a0a551d82f931f364b",
+      "roundtrip": true
+    },
+    {
+      "case": "request_empty",
+      "bytes": 28,
+      "sha256": "13dbc86c58875d432fa89df6bbb8a8bf592fa6614330ab0fe564666aa1534f08",
+      "rewritten_bytes": 28,
+      "rewritten_sha256": "13dbc86c58875d432fa89df6bbb8a8bf592fa6614330ab0fe564666aa1534f08",
+      "roundtrip": true
+    },
+    {
+      "case": "request_dns_all",
+      "bytes": 24,
+      "sha256": "1d02a2d76769fbc5d6551a73ae099c864f105832fdb3a881b2f9029eee642c76",
+      "rewritten_bytes": 24,
+      "rewritten_sha256": "1d02a2d76769fbc5d6551a73ae099c864f105832fdb3a881b2f9029eee642c76",
+      "roundtrip": true
+    },
+    {
+      "case": "request_dns_ptr",
+      "bytes": 68,
+      "sha256": "219b8ecb3e70ac03cea054c29ea42800bba37a85e90e536a0cf6b522397d23fe",
+      "rewritten_bytes": 68,
+      "rewritten_sha256": "219b8ecb3e70ac03cea054c29ea42800bba37a85e90e536a0cf6b522397d23fe",
+      "roundtrip": true
+    },
+    {
+      "case": "request_dns_txt",
+      "bytes": 108,
+      "sha256": "ce8f01b710d694cd291b3ffed755f11e731e2733040bf0ffbdf0aa6148324549",
+      "rewritten_bytes": 108,
+      "rewritten_sha256": "ce8f01b710d694cd291b3ffed755f11e731e2733040bf0ffbdf0aa6148324549",
+      "roundtrip": true
+    },
+    {
+      "case": "request_upnp_all",
+      "bytes": 24,
+      "sha256": "f6deb000502d4074eb63c47911505536806d6779211cb50ad36198e8a4f02f42",
+      "rewritten_bytes": 24,
+      "rewritten_sha256": "f6deb000502d4074eb63c47911505536806d6779211cb50ad36198e8a4f02f42",
+      "roundtrip": true
+    },
+    {
+      "case": "request_upnp_target",
+      "bytes": 64,
+      "sha256": "bc164798c2c79f1972c5f8bc65d42924bb026cbab30d71b22baddec0312fd22b",
+      "rewritten_bytes": 64,
+      "rewritten_sha256": "bc164798c2c79f1972c5f8bc65d42924bb026cbab30d71b22baddec0312fd22b",
+      "roundtrip": true
+    },
+    {
+      "case": "info_dns_empty",
+      "bytes": 232,
+      "sha256": "8a769269dcb8d42eb936e32b0e22ab5415ad311445c153feb78b2e6d07561322",
+      "rewritten_bytes": 232,
+      "rewritten_sha256": "8a769269dcb8d42eb936e32b0e22ab5415ad311445c153feb78b2e6d07561322",
+      "roundtrip": true
+    },
+    {
+      "case": "info_dns_txt",
+      "bytes": 300,
+      "sha256": "4c1d6f77fa5375b39e3f1e0875fbb9e021bd92771c302f670b3eb8c8d51520c7",
+      "rewritten_bytes": 300,
+      "rewritten_sha256": "4c1d6f77fa5375b39e3f1e0875fbb9e021bd92771c302f670b3eb8c8d51520c7",
+      "roundtrip": true
+    },
+    {
+      "case": "info_upnp_base",
+      "bytes": 408,
+      "sha256": "15866eca6d676f181c81a77cfda63da8fbf914b611c31956fca270845ff081c1",
+      "rewritten_bytes": 408,
+      "rewritten_sha256": "15866eca6d676f181c81a77cfda63da8fbf914b611c31956fca270845ff081c1",
+      "roundtrip": true
+    },
+    {
+      "case": "info_upnp_services",
+      "bytes": 720,
+      "sha256": "1133cd0eb8213f31789515f729ae15a2b51defc75ab72498574c8639e8234a74",
+      "rewritten_bytes": 720,
+      "rewritten_sha256": "1133cd0eb8213f31789515f729ae15a2b51defc75ab72498574c8639e8234a74",
+      "roundtrip": true
+    },
+    {
+      "case": "info_list",
+      "bytes": 76,
+      "sha256": "405919d92dc3b92d6c4bd0baf78e9ce3816fa59057bac58f73702c44707fbc96",
+      "rewritten_bytes": 76,
+      "rewritten_sha256": "405919d92dc3b92d6c4bd0baf78e9ce3816fa59057bac58f73702c44707fbc96",
+      "roundtrip": true
+    },
+    {
+      "case": "request_usd",
+      "bytes": 176,
+      "sha256": "3fe3ec9313e5586ebae06cbeece12c34064e1603c5256ba77c30271e9a97cd72",
+      "rewritten_bytes": 176,
+      "rewritten_sha256": "3fe3ec9313e5586ebae06cbeece12c34064e1603c5256ba77c30271e9a97cd72",
+      "roundtrip": true
+    },
+    {
+      "case": "info_usd",
+      "bytes": 164,
+      "sha256": "201e4a35bcf9445759a1651c84c031a97bd5b4b3846b41eefdb3d582baff38f2",
+      "rewritten_bytes": 164,
+      "rewritten_sha256": "9ab1a6d40b7034aa1aea8d5054a8cc3df90bcf7bbe54bc224048bd1195bb32ff",
+      "roundtrip": true
+    }
+  ],
+  "profiles": {
+    "stock": {
+      "receipt": "075-p2p-nsd-v1-stock.result.json",
+      "receipt_sha256": "6b94eeb335932b55f1a0922ef46bf0cdbee21a1bd96557daeabcb247ab833101",
+      "output_sha256": "d133efd8f17341bba3d779101021a143575a69d0283c3aeb77051dda72ce10d6",
+      "exit_code": 0,
+      "seconds": 7.75,
+      "sdk": 36,
+      "uid": 2000,
+      "vm": "Dalvik",
+      "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+      "printed_checkpoints": {
+        "public": 68,
+        "extended": 91,
+        "sum_reported": 159,
+        "exhaustive_assertion_total": false,
+        "explanation": "ExtendedTest invokes ContractTest.wire after the public counter is printed; subsequent shared-helper increments are not part of these checkpoints."
+      },
+      "providers": {
+        "android.net.wifi.p2p.nsd.WifiP2pServiceInfo": "java.lang.BootClassLoader@42c58b8",
+        "android.net.wifi.p2p.nsd.WifiP2pServiceRequest": "java.lang.BootClassLoader@42c58b8",
+        "android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo": "java.lang.BootClassLoader@42c58b8",
+        "android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest": "java.lang.BootClassLoader@42c58b8",
+        "android.net.wifi.p2p.nsd.WifiP2pUpnpServiceInfo": "java.lang.BootClassLoader@42c58b8",
+        "android.net.wifi.p2p.nsd.WifiP2pUpnpServiceRequest": "java.lang.BootClassLoader@42c58b8",
+        "gesher.services.WifiP2pNsdValuesContractTest": "dalvik.system.PathClassLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/stock.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "gesher.services.WifiP2pNsdValuesExtendedTest": "dalvik.system.PathClassLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/stock.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]"
+      },
+      "provider_graph": "stock",
+      "full_original_readers": true,
+      "native_reader_cases": 13,
+      "writer_only_cases": 0,
+      "usd_qualified": false,
+      "stock_optional_presence": {
+        "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceConfig": "java.lang.BootClassLoader@42c58b8",
+        "com.android.wifi.flags.Flags": "absent"
+      },
+      "wire_cases": [
+        {
+          "case": "request_all",
+          "bytes": 24,
+          "sha256": "1319d78cfea514aa080689605eed3fb9411515510b38e0bfbc032eb3c7ef948e",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "1319d78cfea514aa080689605eed3fb9411515510b38e0bfbc032eb3c7ef948e",
+          "roundtrip": true
+        },
+        {
+          "case": "request_vendor_upper",
+          "bytes": 36,
+          "sha256": "8cbba9c992acd40d2181c81b97e667ca67d6e3b0ff3b61a0a551d82f931f364b",
+          "rewritten_bytes": 36,
+          "rewritten_sha256": "8cbba9c992acd40d2181c81b97e667ca67d6e3b0ff3b61a0a551d82f931f364b",
+          "roundtrip": true
+        },
+        {
+          "case": "request_empty",
+          "bytes": 28,
+          "sha256": "13dbc86c58875d432fa89df6bbb8a8bf592fa6614330ab0fe564666aa1534f08",
+          "rewritten_bytes": 28,
+          "rewritten_sha256": "13dbc86c58875d432fa89df6bbb8a8bf592fa6614330ab0fe564666aa1534f08",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_all",
+          "bytes": 24,
+          "sha256": "1d02a2d76769fbc5d6551a73ae099c864f105832fdb3a881b2f9029eee642c76",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "1d02a2d76769fbc5d6551a73ae099c864f105832fdb3a881b2f9029eee642c76",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_ptr",
+          "bytes": 68,
+          "sha256": "219b8ecb3e70ac03cea054c29ea42800bba37a85e90e536a0cf6b522397d23fe",
+          "rewritten_bytes": 68,
+          "rewritten_sha256": "219b8ecb3e70ac03cea054c29ea42800bba37a85e90e536a0cf6b522397d23fe",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_txt",
+          "bytes": 108,
+          "sha256": "ce8f01b710d694cd291b3ffed755f11e731e2733040bf0ffbdf0aa6148324549",
+          "rewritten_bytes": 108,
+          "rewritten_sha256": "ce8f01b710d694cd291b3ffed755f11e731e2733040bf0ffbdf0aa6148324549",
+          "roundtrip": true
+        },
+        {
+          "case": "request_upnp_all",
+          "bytes": 24,
+          "sha256": "f6deb000502d4074eb63c47911505536806d6779211cb50ad36198e8a4f02f42",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "f6deb000502d4074eb63c47911505536806d6779211cb50ad36198e8a4f02f42",
+          "roundtrip": true
+        },
+        {
+          "case": "request_upnp_target",
+          "bytes": 64,
+          "sha256": "bc164798c2c79f1972c5f8bc65d42924bb026cbab30d71b22baddec0312fd22b",
+          "rewritten_bytes": 64,
+          "rewritten_sha256": "bc164798c2c79f1972c5f8bc65d42924bb026cbab30d71b22baddec0312fd22b",
+          "roundtrip": true
+        },
+        {
+          "case": "info_dns_empty",
+          "bytes": 232,
+          "sha256": "8a769269dcb8d42eb936e32b0e22ab5415ad311445c153feb78b2e6d07561322",
+          "rewritten_bytes": 232,
+          "rewritten_sha256": "8a769269dcb8d42eb936e32b0e22ab5415ad311445c153feb78b2e6d07561322",
+          "roundtrip": true
+        },
+        {
+          "case": "info_dns_txt",
+          "bytes": 300,
+          "sha256": "4c1d6f77fa5375b39e3f1e0875fbb9e021bd92771c302f670b3eb8c8d51520c7",
+          "rewritten_bytes": 300,
+          "rewritten_sha256": "4c1d6f77fa5375b39e3f1e0875fbb9e021bd92771c302f670b3eb8c8d51520c7",
+          "roundtrip": true
+        },
+        {
+          "case": "info_upnp_base",
+          "bytes": 408,
+          "sha256": "15866eca6d676f181c81a77cfda63da8fbf914b611c31956fca270845ff081c1",
+          "rewritten_bytes": 408,
+          "rewritten_sha256": "15866eca6d676f181c81a77cfda63da8fbf914b611c31956fca270845ff081c1",
+          "roundtrip": true
+        },
+        {
+          "case": "info_upnp_services",
+          "bytes": 720,
+          "sha256": "1133cd0eb8213f31789515f729ae15a2b51defc75ab72498574c8639e8234a74",
+          "rewritten_bytes": 720,
+          "rewritten_sha256": "1133cd0eb8213f31789515f729ae15a2b51defc75ab72498574c8639e8234a74",
+          "roundtrip": true
+        },
+        {
+          "case": "info_list",
+          "bytes": 76,
+          "sha256": "405919d92dc3b92d6c4bd0baf78e9ce3816fa59057bac58f73702c44707fbc96",
+          "rewritten_bytes": 76,
+          "rewritten_sha256": "405919d92dc3b92d6c4bd0baf78e9ce3816fa59057bac58f73702c44707fbc96",
+          "roundtrip": true
+        }
+      ]
+    },
+    "pinned-r4": {
+      "receipt": "076-p2p-nsd-v1-pinned-r4.result.json",
+      "receipt_sha256": "e5c0fd60e065b23d504d060cd51698dd79b236ebdd23ecb7b3c2724ead0dc2d2",
+      "output_sha256": "5ac7b3cc284891a2be37d26f0214c84295d6a8026b52342f3f27f24ad9faa68b",
+      "exit_code": 0,
+      "seconds": 6.649,
+      "sdk": 36,
+      "uid": 2000,
+      "vm": "Dalvik",
+      "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+      "printed_checkpoints": {
+        "public": 189,
+        "extended": 127,
+        "sum_reported": 316,
+        "exhaustive_assertion_total": false,
+        "explanation": "ExtendedTest invokes ContractTest.wire after the public counter is printed; subsequent shared-helper increments are not part of these checkpoints."
+      },
+      "providers": {
+        "android.net.wifi.p2p.nsd.WifiP2pServiceInfo": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pServiceRequest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pUpnpServiceInfo": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pUpnpServiceRequest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceConfig": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceConfig$Builder": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.net.module.util.DnsSdTxtRecord": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.net.module.util.DnsSdTxtRecord$1": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.util.Environment": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.wifi.flags.Flags": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.wifi.flags.FeatureFlags": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.wifi.flags.FeatureFlagsImpl": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "gesher.services.WifiP2pNsdValuesContractTest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "gesher.services.WifiP2pNsdValuesExtendedTest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]"
+      },
+      "provider_graph": "owned",
+      "full_original_readers": true,
+      "native_reader_cases": 20,
+      "writer_only_cases": 0,
+      "usd_qualified": true,
+      "stock_optional_presence": {},
+      "wire_cases": [
+        {
+          "case": "usd_config_noarg",
+          "bytes": 12,
+          "sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1",
+          "rewritten_bytes": 12,
+          "rewritten_sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1",
+          "roundtrip": true
+        },
+        {
+          "case": "usd_config_generic",
+          "bytes": 28,
+          "sha256": "a3749ff36b476cdffac48dffdf0d19212b23d8f2b6636884ed0f6bfc3c70ba36",
+          "rewritten_bytes": 28,
+          "rewritten_sha256": "a3749ff36b476cdffac48dffdf0d19212b23d8f2b6636884ed0f6bfc3c70ba36",
+          "roundtrip": true
+        },
+        {
+          "case": "usd_config_null_info",
+          "bytes": 24,
+          "sha256": "9fa883320ae95c0f57b08a7e18edd817a404aec1dd44065361c708c73dc6762d",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "9fa883320ae95c0f57b08a7e18edd817a404aec1dd44065361c708c73dc6762d",
+          "roundtrip": true
+        },
+        {
+          "case": "usd_config_empty_info",
+          "bytes": 24,
+          "sha256": "dddfc984b25168ead6128d21750cff88962b8c1c7c323c807d5602af6c6fdcd2",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "dddfc984b25168ead6128d21750cff88962b8c1c7c323c807d5602af6c6fdcd2",
+          "roundtrip": true
+        },
+        {
+          "case": "usd_config_bytes_info",
+          "bytes": 32,
+          "sha256": "8ecbd147b1e95a9eb1e0b1cf8cf71cf51a327329e61e012f69aec131828c6a17",
+          "rewritten_bytes": 32,
+          "rewritten_sha256": "8ecbd147b1e95a9eb1e0b1cf8cf71cf51a327329e61e012f69aec131828c6a17",
+          "roundtrip": true
+        },
+        {
+          "case": "request_all",
+          "bytes": 24,
+          "sha256": "1319d78cfea514aa080689605eed3fb9411515510b38e0bfbc032eb3c7ef948e",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "1319d78cfea514aa080689605eed3fb9411515510b38e0bfbc032eb3c7ef948e",
+          "roundtrip": true
+        },
+        {
+          "case": "request_vendor_upper",
+          "bytes": 36,
+          "sha256": "8cbba9c992acd40d2181c81b97e667ca67d6e3b0ff3b61a0a551d82f931f364b",
+          "rewritten_bytes": 36,
+          "rewritten_sha256": "8cbba9c992acd40d2181c81b97e667ca67d6e3b0ff3b61a0a551d82f931f364b",
+          "roundtrip": true
+        },
+        {
+          "case": "request_empty",
+          "bytes": 28,
+          "sha256": "13dbc86c58875d432fa89df6bbb8a8bf592fa6614330ab0fe564666aa1534f08",
+          "rewritten_bytes": 28,
+          "rewritten_sha256": "13dbc86c58875d432fa89df6bbb8a8bf592fa6614330ab0fe564666aa1534f08",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_all",
+          "bytes": 24,
+          "sha256": "1d02a2d76769fbc5d6551a73ae099c864f105832fdb3a881b2f9029eee642c76",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "1d02a2d76769fbc5d6551a73ae099c864f105832fdb3a881b2f9029eee642c76",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_ptr",
+          "bytes": 68,
+          "sha256": "219b8ecb3e70ac03cea054c29ea42800bba37a85e90e536a0cf6b522397d23fe",
+          "rewritten_bytes": 68,
+          "rewritten_sha256": "219b8ecb3e70ac03cea054c29ea42800bba37a85e90e536a0cf6b522397d23fe",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_txt",
+          "bytes": 108,
+          "sha256": "ce8f01b710d694cd291b3ffed755f11e731e2733040bf0ffbdf0aa6148324549",
+          "rewritten_bytes": 108,
+          "rewritten_sha256": "ce8f01b710d694cd291b3ffed755f11e731e2733040bf0ffbdf0aa6148324549",
+          "roundtrip": true
+        },
+        {
+          "case": "request_upnp_all",
+          "bytes": 24,
+          "sha256": "f6deb000502d4074eb63c47911505536806d6779211cb50ad36198e8a4f02f42",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "f6deb000502d4074eb63c47911505536806d6779211cb50ad36198e8a4f02f42",
+          "roundtrip": true
+        },
+        {
+          "case": "request_upnp_target",
+          "bytes": 64,
+          "sha256": "bc164798c2c79f1972c5f8bc65d42924bb026cbab30d71b22baddec0312fd22b",
+          "rewritten_bytes": 64,
+          "rewritten_sha256": "bc164798c2c79f1972c5f8bc65d42924bb026cbab30d71b22baddec0312fd22b",
+          "roundtrip": true
+        },
+        {
+          "case": "info_dns_empty",
+          "bytes": 232,
+          "sha256": "8a769269dcb8d42eb936e32b0e22ab5415ad311445c153feb78b2e6d07561322",
+          "rewritten_bytes": 232,
+          "rewritten_sha256": "8a769269dcb8d42eb936e32b0e22ab5415ad311445c153feb78b2e6d07561322",
+          "roundtrip": true
+        },
+        {
+          "case": "info_dns_txt",
+          "bytes": 300,
+          "sha256": "4c1d6f77fa5375b39e3f1e0875fbb9e021bd92771c302f670b3eb8c8d51520c7",
+          "rewritten_bytes": 300,
+          "rewritten_sha256": "4c1d6f77fa5375b39e3f1e0875fbb9e021bd92771c302f670b3eb8c8d51520c7",
+          "roundtrip": true
+        },
+        {
+          "case": "info_upnp_base",
+          "bytes": 408,
+          "sha256": "15866eca6d676f181c81a77cfda63da8fbf914b611c31956fca270845ff081c1",
+          "rewritten_bytes": 408,
+          "rewritten_sha256": "15866eca6d676f181c81a77cfda63da8fbf914b611c31956fca270845ff081c1",
+          "roundtrip": true
+        },
+        {
+          "case": "info_upnp_services",
+          "bytes": 720,
+          "sha256": "1133cd0eb8213f31789515f729ae15a2b51defc75ab72498574c8639e8234a74",
+          "rewritten_bytes": 720,
+          "rewritten_sha256": "1133cd0eb8213f31789515f729ae15a2b51defc75ab72498574c8639e8234a74",
+          "roundtrip": true
+        },
+        {
+          "case": "info_list",
+          "bytes": 76,
+          "sha256": "405919d92dc3b92d6c4bd0baf78e9ce3816fa59057bac58f73702c44707fbc96",
+          "rewritten_bytes": 76,
+          "rewritten_sha256": "405919d92dc3b92d6c4bd0baf78e9ce3816fa59057bac58f73702c44707fbc96",
+          "roundtrip": true
+        },
+        {
+          "case": "request_usd",
+          "bytes": 176,
+          "sha256": "3fe3ec9313e5586ebae06cbeece12c34064e1603c5256ba77c30271e9a97cd72",
+          "rewritten_bytes": 176,
+          "rewritten_sha256": "3fe3ec9313e5586ebae06cbeece12c34064e1603c5256ba77c30271e9a97cd72",
+          "roundtrip": true
+        },
+        {
+          "case": "info_usd",
+          "bytes": 164,
+          "sha256": "201e4a35bcf9445759a1651c84c031a97bd5b4b3846b41eefdb3d582baff38f2",
+          "rewritten_bytes": 164,
+          "rewritten_sha256": "9ab1a6d40b7034aa1aea8d5054a8cc3df90bcf7bbe54bc224048bd1195bb32ff",
+          "roundtrip": true
+        }
+      ]
+    },
+    "candidate": {
+      "receipt": "077-p2p-nsd-v1-candidate.result.json",
+      "receipt_sha256": "40231126b1dadd0664e4e10863c897dd4de3594e1aa1c3f61e1b3ed04e3634b1",
+      "output_sha256": "2d1e8b2608a7276055ec89c05e328d0fbd2785b73e73f8624d14b46953c97082",
+      "exit_code": 0,
+      "seconds": 6.417,
+      "sdk": 36,
+      "uid": 2000,
+      "vm": "Dalvik",
+      "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+      "printed_checkpoints": {
+        "public": 189,
+        "extended": 127,
+        "sum_reported": 316,
+        "exhaustive_assertion_total": false,
+        "explanation": "ExtendedTest invokes ContractTest.wire after the public counter is printed; subsequent shared-helper increments are not part of these checkpoints."
+      },
+      "providers": {
+        "android.net.wifi.p2p.nsd.WifiP2pServiceInfo": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pServiceRequest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceRequest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pUpnpServiceInfo": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pUpnpServiceRequest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceConfig": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceConfig$Builder": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.net.module.util.DnsSdTxtRecord": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "com.android.net.module.util.DnsSdTxtRecord$1": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "gesher.services.WifiP2pNsdValuesContractTest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]",
+        "gesher.services.WifiP2pNsdValuesExtendedTest": "gesher.services.WifiP2pNsdValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-p2p-nsd-a5b9e947b314/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]"
+      },
+      "provider_graph": "owned",
+      "full_original_readers": true,
+      "native_reader_cases": 20,
+      "writer_only_cases": 0,
+      "usd_qualified": true,
+      "stock_optional_presence": {},
+      "wire_cases": [
+        {
+          "case": "usd_config_noarg",
+          "bytes": 12,
+          "sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1",
+          "rewritten_bytes": 12,
+          "rewritten_sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1",
+          "roundtrip": true
+        },
+        {
+          "case": "usd_config_generic",
+          "bytes": 28,
+          "sha256": "a3749ff36b476cdffac48dffdf0d19212b23d8f2b6636884ed0f6bfc3c70ba36",
+          "rewritten_bytes": 28,
+          "rewritten_sha256": "a3749ff36b476cdffac48dffdf0d19212b23d8f2b6636884ed0f6bfc3c70ba36",
+          "roundtrip": true
+        },
+        {
+          "case": "usd_config_null_info",
+          "bytes": 24,
+          "sha256": "9fa883320ae95c0f57b08a7e18edd817a404aec1dd44065361c708c73dc6762d",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "9fa883320ae95c0f57b08a7e18edd817a404aec1dd44065361c708c73dc6762d",
+          "roundtrip": true
+        },
+        {
+          "case": "usd_config_empty_info",
+          "bytes": 24,
+          "sha256": "dddfc984b25168ead6128d21750cff88962b8c1c7c323c807d5602af6c6fdcd2",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "dddfc984b25168ead6128d21750cff88962b8c1c7c323c807d5602af6c6fdcd2",
+          "roundtrip": true
+        },
+        {
+          "case": "usd_config_bytes_info",
+          "bytes": 32,
+          "sha256": "8ecbd147b1e95a9eb1e0b1cf8cf71cf51a327329e61e012f69aec131828c6a17",
+          "rewritten_bytes": 32,
+          "rewritten_sha256": "8ecbd147b1e95a9eb1e0b1cf8cf71cf51a327329e61e012f69aec131828c6a17",
+          "roundtrip": true
+        },
+        {
+          "case": "request_all",
+          "bytes": 24,
+          "sha256": "1319d78cfea514aa080689605eed3fb9411515510b38e0bfbc032eb3c7ef948e",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "1319d78cfea514aa080689605eed3fb9411515510b38e0bfbc032eb3c7ef948e",
+          "roundtrip": true
+        },
+        {
+          "case": "request_vendor_upper",
+          "bytes": 36,
+          "sha256": "8cbba9c992acd40d2181c81b97e667ca67d6e3b0ff3b61a0a551d82f931f364b",
+          "rewritten_bytes": 36,
+          "rewritten_sha256": "8cbba9c992acd40d2181c81b97e667ca67d6e3b0ff3b61a0a551d82f931f364b",
+          "roundtrip": true
+        },
+        {
+          "case": "request_empty",
+          "bytes": 28,
+          "sha256": "13dbc86c58875d432fa89df6bbb8a8bf592fa6614330ab0fe564666aa1534f08",
+          "rewritten_bytes": 28,
+          "rewritten_sha256": "13dbc86c58875d432fa89df6bbb8a8bf592fa6614330ab0fe564666aa1534f08",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_all",
+          "bytes": 24,
+          "sha256": "1d02a2d76769fbc5d6551a73ae099c864f105832fdb3a881b2f9029eee642c76",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "1d02a2d76769fbc5d6551a73ae099c864f105832fdb3a881b2f9029eee642c76",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_ptr",
+          "bytes": 68,
+          "sha256": "219b8ecb3e70ac03cea054c29ea42800bba37a85e90e536a0cf6b522397d23fe",
+          "rewritten_bytes": 68,
+          "rewritten_sha256": "219b8ecb3e70ac03cea054c29ea42800bba37a85e90e536a0cf6b522397d23fe",
+          "roundtrip": true
+        },
+        {
+          "case": "request_dns_txt",
+          "bytes": 108,
+          "sha256": "ce8f01b710d694cd291b3ffed755f11e731e2733040bf0ffbdf0aa6148324549",
+          "rewritten_bytes": 108,
+          "rewritten_sha256": "ce8f01b710d694cd291b3ffed755f11e731e2733040bf0ffbdf0aa6148324549",
+          "roundtrip": true
+        },
+        {
+          "case": "request_upnp_all",
+          "bytes": 24,
+          "sha256": "f6deb000502d4074eb63c47911505536806d6779211cb50ad36198e8a4f02f42",
+          "rewritten_bytes": 24,
+          "rewritten_sha256": "f6deb000502d4074eb63c47911505536806d6779211cb50ad36198e8a4f02f42",
+          "roundtrip": true
+        },
+        {
+          "case": "request_upnp_target",
+          "bytes": 64,
+          "sha256": "bc164798c2c79f1972c5f8bc65d42924bb026cbab30d71b22baddec0312fd22b",
+          "rewritten_bytes": 64,
+          "rewritten_sha256": "bc164798c2c79f1972c5f8bc65d42924bb026cbab30d71b22baddec0312fd22b",
+          "roundtrip": true
+        },
+        {
+          "case": "info_dns_empty",
+          "bytes": 232,
+          "sha256": "8a769269dcb8d42eb936e32b0e22ab5415ad311445c153feb78b2e6d07561322",
+          "rewritten_bytes": 232,
+          "rewritten_sha256": "8a769269dcb8d42eb936e32b0e22ab5415ad311445c153feb78b2e6d07561322",
+          "roundtrip": true
+        },
+        {
+          "case": "info_dns_txt",
+          "bytes": 300,
+          "sha256": "4c1d6f77fa5375b39e3f1e0875fbb9e021bd92771c302f670b3eb8c8d51520c7",
+          "rewritten_bytes": 300,
+          "rewritten_sha256": "4c1d6f77fa5375b39e3f1e0875fbb9e021bd92771c302f670b3eb8c8d51520c7",
+          "roundtrip": true
+        },
+        {
+          "case": "info_upnp_base",
+          "bytes": 408,
+          "sha256": "15866eca6d676f181c81a77cfda63da8fbf914b611c31956fca270845ff081c1",
+          "rewritten_bytes": 408,
+          "rewritten_sha256": "15866eca6d676f181c81a77cfda63da8fbf914b611c31956fca270845ff081c1",
+          "roundtrip": true
+        },
+        {
+          "case": "info_upnp_services",
+          "bytes": 720,
+          "sha256": "1133cd0eb8213f31789515f729ae15a2b51defc75ab72498574c8639e8234a74",
+          "rewritten_bytes": 720,
+          "rewritten_sha256": "1133cd0eb8213f31789515f729ae15a2b51defc75ab72498574c8639e8234a74",
+          "roundtrip": true
+        },
+        {
+          "case": "info_list",
+          "bytes": 76,
+          "sha256": "405919d92dc3b92d6c4bd0baf78e9ce3816fa59057bac58f73702c44707fbc96",
+          "rewritten_bytes": 76,
+          "rewritten_sha256": "405919d92dc3b92d6c4bd0baf78e9ce3816fa59057bac58f73702c44707fbc96",
+          "roundtrip": true
+        },
+        {
+          "case": "request_usd",
+          "bytes": 176,
+          "sha256": "3fe3ec9313e5586ebae06cbeece12c34064e1603c5256ba77c30271e9a97cd72",
+          "rewritten_bytes": 176,
+          "rewritten_sha256": "3fe3ec9313e5586ebae06cbeece12c34064e1603c5256ba77c30271e9a97cd72",
+          "roundtrip": true
+        },
+        {
+          "case": "info_usd",
+          "bytes": 164,
+          "sha256": "201e4a35bcf9445759a1651c84c031a97bd5b4b3846b41eefdb3d582baff38f2",
+          "rewritten_bytes": 164,
+          "rewritten_sha256": "9ab1a6d40b7034aa1aea8d5054a8cc3df90bcf7bbe54bc224048bd1195bb32ff",
+          "roundtrip": true
+        }
+      ]
+    }
+  },
+  "comparison": {
+    "candidate_matches_pinned_initial_and_rewritten_bytes": true,
+    "matching_full_reader_cases": 20,
+    "stock_legacy_matches_selected_common_cases": 13,
+    "stock_usd_qualified": false,
+    "source_preserved_normalization": "Only info_usd changes the first list-length word from -1 to 0 after the original reader; all other bytes remain identical."
+  },
+  "setup": {
+    "receipt": "074-p2p-nsd-v1-setup.result.json",
+    "receipt_sha256": "621aa31c588f8449c4cbd71304203b27068677abe40ccd2722f5d28dfdd0b7d6",
+    "completed_steps": 7,
+    "all_device_artifact_hashes": {
+      "stock.jar": "8f810b25d60b320c2037cc438dc56ebc336fba9eb8de72e26dab07c96675194e",
+      "candidate.jar": "a5b9e947b314dbfc83c8e8822df32a8ba5cc700f78e4ae94dcd0883c79fed90e",
+      "pinned-r4.jar": "3f027785d96c395d36f9d0ac3c0f77381c8c53f038eb9c4dd8c43e8ff1128b2a",
+      "launcher.jar": "07f7ce61447cc820371f00ff825174e219efc4ce884420c9a9d0f6be26d25630"
+    }
+  },
+  "cleanup": {
+    "status": "complete",
+    "receipt": "078-p2p-nsd-v1-cleanup.result.json",
+    "receipt_sha256": "7a80cf9e8458f4f790bfe2a817f5ed893efd9c7e76e77f7c2039e37c546e14fd",
+    "completed_steps": 2,
+    "all_exit_codes_zero": true,
+    "method": "remove four exact owned JAR files, then remove empty owned directory"
+  },
+  "windows": {
+    "executed": false,
+    "required": "Coherent production boot providers, exact pinned source profile, all20 original readers and both initial/rewrite hashes via Track96"
+  },
+  "execution_owner": "/root via its sole Android oracle; implementation agent parsed completed receipts only"
+}
