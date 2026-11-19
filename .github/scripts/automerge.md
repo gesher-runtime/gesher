@@ -79,7 +79,8 @@ without stopping the job, a notice is logged and reads fall back to `GITHUB_TOKE
 Same-repository `workflow_run` events reconcile the PRs GitHub names in the event
 instead of listing every open PR; fork runs still list open PRs. Native
 auto-merge cancellation reads its state from the REST pull request it already
-fetched. Registered workflow identities are read once per job. Title or body
+fetched. Registered workflow identities, paths and enabled states are reread at
+each CI evidence pass, including after App status publication. Title or body
 edits do not start the job; base changes still do.
 
 If the gate is stuck pending after CI because a controller run failed, rerun it:

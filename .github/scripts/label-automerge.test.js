@@ -844,9 +844,45 @@ test('native waiting is cancelled from REST pull request state without a GraphQL
   assert.equal(w.did('nativeCancel').length, 1);
 });
 
-test('registered workflow identity is read once per controller invocation', async () => {
-  const w = appStatusWorld();
-  await w.ciDone();
-  bothStates(w, 'success');
-  assert.equal(w.did('workflow').length, 2);
+for (const file of ['ci.yml', 'arm64-windows.yml']) {
+  for (const [name, override] of Object.entries({
+    disabled: {state: 'disabled_manually'},
+    replaced: {id: 999},
+    relocated: {path: '.github/workflows/retired.yml'},
+  })) {
+    test(`${file} workflow registration ${name} during App publication restores both pending gates`, async () => {
+      const w = appStatusWorld();
+      splitReads(w);
+      let changed = false;
+      w.hooks['app-status'] = args => {if (args.state === 'success') changed = true;};
+      const getWorkflow = w.readGithub.rest.actions.getWorkflow;
+      w.readGithub.rest.actions.getWorkflow = async args => {
+        const result = await getWorkflow(args);
+        return changed && args.workflow_id === file ?
+          {...result, data: {...result.data, ...override}} : result;
+      };
+      await w.ciDone();
+      assert.ok(changed, 'the registration changed after the prepared App success');
+      bothStates(w, 'pending');
+      assert.equal(w.did('status').some(([, args]) => args.state === 'success'), false);
+      assert.equal(w.did('app-removeLabel').length, 0);
+    });
+  }
+}
+
+test('workflow registration refresh failure after App publication revokes both gates without a reader fallback', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+  splitReads(w);
+  let changed = false;
+  w.hooks['app-status'] = args => {if (args.state === 'success') changed = true;};
+  const getWorkflow = w.readGithub.rest.actions.getWorkflow;
+  w.readGithub.rest.actions.getWorkflow = async args => {
+    if (changed) throw Object.assign(new Error('workflow read permission revoked'), {status: 403});
+    return getWorkflow(args);
+  };
+  await assert.rejects(w.ciDone(), /workflow read permission revoked/);
+  assert.ok(changed);
+  bothStates(w, 'failure');
+  assert.equal(w.did('status').some(([, args]) => args.state === 'success'), false);
+  assert.equal(w.nativeAutoMethod, null);
 });
