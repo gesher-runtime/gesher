@@ -137,6 +137,7 @@ Source: "gesher-runtime-files.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-ui.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ui-messages.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "licenses\APKSIG-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "licenses\BIONIC-GDTOA-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme; Languages: en
 Source: "README.he.txt"; DestDir: "{app}"; DestName: "README.txt"; Flags: ignoreversion isreadme; Languages: he
 Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion

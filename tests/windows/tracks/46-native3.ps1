@@ -2,6 +2,7 @@
 # checks its dynamic entry points, direct pixel aliasing, data space, callback
 # compression, errors and a PNG round trip through Java BitmapFactory.
 # 44-native2.ps1 supplies N2Run, the ABI list and APK checks in both modes.
+# The binary128 public family also runs in both NDK ABIs/modes in track44.
 
 $fontWork = Join-Path $env:RUNNER_TEMP 'native-fonts-working-אב space'
 $fontUnicode = Join-Path $env:RUNNER_TEMP 'native-fonts-root-אב space'
@@ -35,6 +36,22 @@ if (-not (Test-Path "$n2/native2-test.dex")) {
 }
 $n3Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') |
   ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+Check 'native3: binary128 parsing uses real production System V entries with exact values and sticky fenv' {
+  N2Run "$n2Dir/binary128_parsing_test.exe" @()
+} @('Binary128 production parsing:', '0 failures')
+Check 'native3: binary128 decimal/hex rounding matches an independent exact integer oracle on Windows' {
+  & python (Join-Path $PSScriptRoot '../../binary128/finite_oracle.py') "$n2Dir/binary128_records.exe"
+} @('Finite binary128:', '0 failures')
+Check 'native3: concurrent binary128 parsing preserves values, errno and thread rounding modes' {
+  N2Run "$n2Dir/binary128_concurrency.exe" @()
+} @('Binary128 concurrent parsing:', '80000 calls', '0 failures')
+Check 'native3: the numeric scope maps guest rounding and actual flags and restores the complete native environment' {
+  N2Run "$n2Dir/arm64_numeric_fenv_test.exe" @()
+} @('NUMERIC_FENV_DONE checks=192 failures=0')
+Check 'native3: ARM64 public parsers return all 128 bits and preserve scalar returns and native fenv through the production loader' {
+  N2Run "$n2Dir/arm64_numeric_return_host.exe" @("$n2/arm64-v8a/arm64_numeric_return.so")
+} @('NUMERIC_RETURN_DONE conversions=256 checks=1292 failures=0', 'NUMERIC_HOST_DONE runs=4 failures=0')
+
 $n3Unicode = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../../probes/native3/unicode/reference.json') -Raw | ConvertFrom-Json
 $n3UnicodeExpected = foreach ($property in $n3Unicode.properties.PSObject.Properties) {
   "HOST_UNICODE $($property.Name) $($property.Value)"

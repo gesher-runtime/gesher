@@ -75,6 +75,7 @@
 #include "../native/arm64_fpsr_contracts.h"
 #include "../native/arm64_env_contracts.h"
 #include "native3_wide_contracts.h"
+#include "../binary128/public_contracts.h"
 
 namespace {
 
@@ -697,6 +698,7 @@ std::vector<std::string> Symbols(const std::string& path) {
 
 #include "native3_unicode.inc"
 #include "native3_wide.inc"
+#include "native3_binary128.inc"
 #include "pthread_cpu_clock.inc"
 
 #if defined(__aarch64__)
@@ -729,7 +731,7 @@ std::string Run(const std::string& dir, const std::string& symbols) {
   Part varargs_part{"varargs"};
   varargs_part.failures = varargs.failures;
   varargs_part.notes.push_back(varargs.Summary());
-  std::vector<Part> parts = {Extras(dir), Unicode(), Wide(), Dlopen(), Files(dir), interface_part, varargs_part,
+  std::vector<Part> parts = {Extras(dir), Unicode(), Wide(), Binary128Parsing(), Dlopen(), Files(dir), interface_part, varargs_part,
                              PthreadCpuClocks()};
 #if defined(__aarch64__)
   parts.push_back(ArmFpcr());

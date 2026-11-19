@@ -214,6 +214,9 @@ jobs:
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
 
+      - name: Stream device identity across close and reopen
+        run: python3 tools/test_stream_device_lifetime.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
 
@@ -514,6 +517,7 @@ jobs:
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
           ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
+          ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -547,6 +551,7 @@ jobs:
         run: |
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
+          cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
           cp out/futex_test_module.dll dist/
           cp out/libgesher_account_crypto.so dist/
@@ -996,7 +1001,7 @@ jobs:
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'gesher-camera.apk') {
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
