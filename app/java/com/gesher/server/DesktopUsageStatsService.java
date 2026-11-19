@@ -222,8 +222,21 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
         return queryEventsForUser(begin, end, 0, caller);
     }
     @Override public UsageEvents queryEventsForPackage(long begin, long end, String caller) {
-        String actual = mCallers.requirePackage(Objects.requireNonNull(caller, "callingPackage"));
-        return events(begin, end, Set.of(actual), new int[0]);
+        mCallers.requirePackage(Objects.requireNonNull(caller, "callingPackage"));
+        ApkPackage owner = mPackages.get(caller);
+        // Android notes the operation even for self queries: denied global
+        // access still permits own events, but MODE_ERRORED must throw. Keep
+        // the authenticated requested package, including a shared-UID sibling.
+        usageAccess(caller);
+        UsageEvents result = events(begin, end, Set.of(caller), new int[0]);
+        // A false AppOps decision does not waive identity checks. Removal or
+        // replacement during policy evaluation or the snapshot retires access.
+        mCallers.requirePackage(caller);
+        if (!mCallers.isSystem() && (owner == null || mPackages.get(caller) != owner
+                || mPackages.isRemovalPending(caller))) {
+            throw new SecurityException("Usage event package identity changed");
+        }
+        return result;
     }
     @Override public UsageEvents queryEventsForUser(long begin, long end, int userId, String caller) {
         if (!usageAccess(caller)) return null;

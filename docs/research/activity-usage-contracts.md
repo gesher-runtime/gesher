@@ -163,6 +163,9 @@ for `MODE_DEFAULT`, and denies other non-allowed modes. The
 [`AppOpsManager.noteOp`](https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/core/java/android/app/AppOpsManager.java)
 errored mode raises `SecurityException`. Gesher uses its real package/UID AppOps
 ledger, rechecks package identity after policy evaluation, and retains its
-trusted control-plane exemption. App self queries authenticate their claimed package.
+trusted control-plane exemption. App self queries authenticate and filter by their
+claimed package, including an admitted shared-UID sibling. They still note the
+operation: denied global access permits own events, but `MODE_ERRORED` retains
+the Android exception.
 This repair does not implement Usage Access UI, Doze/standby administration,
 usage-limit observers, foreground-service usage or configuration/screen telemetry.

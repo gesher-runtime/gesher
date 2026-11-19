@@ -588,6 +588,14 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Persisted activity usage history contracts
+        run: |
+          "$JAVA_HOME/bin/javac" -encoding UTF-8 -d "$RUNNER_TEMP/activity-usage-classes" \
+            app/java/com/gesher/server/ActivityUsageHistory.java \
+            tests/activity-usage/ActivityUsageHistoryTest.java
+          "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/activity-usage-classes" \
+            com.gesher.server.ActivityUsageHistoryTest
+
       - name: Activity finish, null binding and public media receiver contracts
         run: |
           args=(--java-home "$JAVA_HOME" --framework-classes out/framework/classes \

@@ -798,7 +798,10 @@ final class ActivityUsageHistory implements AutoCloseable {
                         long bound = snapshot.until;
                         for (List<Interval> intervals : snapshot.intervals) {
                             for (Interval interval : intervals) {
-                                if (interval.end > bound + 1) bound = interval.end;
+                                // Even a one-millisecond wall/elapsed sampling
+                                // skew can put an event after the wall snapshot.
+                                // The decoder requires every event <= savedAt.
+                                bound = Math.max(bound, interval.end);
                             }
                         }
                         out.writeLong(bound);

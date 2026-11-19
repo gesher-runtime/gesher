@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.function.Predicate;
 import java.util.function.LongSupplier;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import sun.misc.Unsafe;
 
 /** Exercises production finish selection and lifecycle using real framework transaction objects. */
@@ -101,9 +102,13 @@ public final class ActivityFinishFixture {
         field(Activity.class, "mToken").set(activity, token(record));
         return activity;
     }
-    private static ApkPackage code() throws Exception {
-        PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(OWNER, "/fixture/finish/base.apk");
+    private static ApkPackage code(String packageName) throws Exception {
+        return code(packageName, null);
+    }
+    private static ApkPackage code(String packageName, String sharedUserId) throws Exception {
+        PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(packageName, "/fixture/finish/base.apk");
         parsed.setEnabled(true); parsed.setTargetSdkVersion(36);
+        if (sharedUserId != null) parsed.setSharedUserId(sharedUserId);
         parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
                 android.Manifest.permission.PACKAGE_USAGE_STATS, 0, java.util.Set.of()));
         // These records represent admitted activities; their synthetic package must
@@ -112,12 +117,12 @@ public final class ActivityFinishFixture {
                 "Middle", "NotChild", "Other", "OtherCode", "OtherParent", "OtherTask", "OtherWho",
                 "Parent", "Pending", "Receiver", "Resuming", "Root", "RootWithResult", "Sibling", "Top")) {
             ParsedActivityImpl activity = new ParsedActivityImpl();
-            activity.setPackageName(OWNER); activity.setName(OWNER + "." + name); activity.setEnabled(true);
+            activity.setPackageName(packageName); activity.setName(packageName + "." + name); activity.setEnabled(true);
             parsed.addActivity(activity);
         }
         parsed.hideAsFinal();
         ApkPackage code = (ApkPackage) UNSAFE.allocateInstance(ApkPackage.class);
-        set(code, "packageName", OWNER); set(code, "parsed", parsed); set(code, "mUid", UID);
+        set(code, "packageName", packageName); set(code, "parsed", parsed); set(code, "mUid", UID);
         set(code, "apkPath", "/fixture/finish/base.apk"); set(code, "mDataDir", "/fixture/finish/data");
         set(code, "sharedLibraries", field(SharedLibraryGraph.class, "EMPTY").get(null));
         set(code, "mSigningIdentityChecked", true);
@@ -188,13 +193,17 @@ public final class ActivityFinishFixture {
         final Class<?> processType = type("ActivityTaskManagerService$ProcessRecord");
         final PackageManagerService pm;
         final Object atm, process;
-        final ApkPackage apk = code();
+        final ApkPackage apk;
         final List<Object> records;
         final AppThread thread = new AppThread();
         final IActivityClientController controller;
+        Harness() throws Exception { this(null); }
         @SuppressWarnings("unchecked")
-        Harness() throws Exception {
-            pm = new PackageManagerService(List.of(apk));
+        Harness(String sharedUserId, ApkPackage... peers) throws Exception {
+            apk = code(OWNER, sharedUserId);
+            List<ApkPackage> installed = new ArrayList<>(List.of(apk));
+            installed.addAll(List.of(peers));
+            pm = new PackageManagerService(installed);
             atm = construct(atmType, new Class<?>[]{PackageManagerService.class}, pm);
             construct(type("ActivityManagerService"), new Class<?>[]{atmType,
                     PackageManagerService.class, type("NotificationManagerService")}, atm, pm, null);
@@ -995,7 +1004,13 @@ public final class ActivityFinishFixture {
 
     @SuppressWarnings("unchecked")
     private static void usageAccessModes() throws Exception {
-        Harness h = new Harness();
+        String sharedPackage = OWNER + ".shared";
+        String sharedUserId = "fixture.usage.shared";
+        String foreignPackage = OWNER + ".foreign";
+        ApkPackage foreign = code(foreignPackage);
+        set(foreign, "mUid", UID + 1);
+        // The owner and sibling represent admitted identities in the same UID.
+        Harness h = new Harness(sharedUserId, code(sharedPackage, sharedUserId), foreign);
         set(h.process, "packageCode", h.apk);
         if (!binder) {
             // Host framework classes do not include AssetManager's framework-res.
@@ -1015,9 +1030,14 @@ public final class ActivityFinishFixture {
         }
         Path directory = Files.createTempDirectory("gesher-usage-access-");
         Path file = directory.resolve("usage.bin");
+        AtomicReference<Runnable> beforeRead = new AtomicReference<>();
         IUsageStatsManager usage = (IUsageStatsManager) construct(type("DesktopUsageStatsService"),
                 new Class<?>[]{PackageManagerService.class, type("CallerIdentity"), Path.class, LongSupplier.class},
-                h.pm, get(get(h.atm, "mAm"), "mCallers"), file, (LongSupplier) () -> 100L);
+                h.pm, get(get(h.atm, "mAm"), "mCallers"), file, (LongSupplier) () -> {
+                    Runnable action = beforeRead.getAndSet(null);
+                    if (action != null) action.run();
+                    return 100L;
+                });
         Object history = get(usage, "mHistory");
         set(h.atm, "mUsageStats", usage);
         AppOpsService ops = h.pm.appOps();
@@ -1030,6 +1050,12 @@ public final class ActivityFinishFixture {
                         "DEFAULT without the Android calling permission granted Usage Access");
                 check(usage.queryEventsForPackage(100, 101, OWNER) != null,
                         "Own-package event access incorrectly requires global Usage Access");
+                check(!usage.queryEventsForPackage(100, 101, sharedPackage).hasNextEvent(),
+                        "Self query for a shared-UID package returned the process package's events");
+                try {
+                    usage.queryEventsForPackage(100, 101, foreignPackage);
+                    throw new AssertionError("Self query accepted a package belonging to another UID");
+                } catch (SecurityException expected) { checks++; }
             });
             ops.setMode(op, UID, OWNER, AppOpsManager.MODE_ALLOWED);
             h.asApp(() -> {
@@ -1055,11 +1081,17 @@ public final class ActivityFinishFixture {
                             && usage.queryConfigurationStats(0, 100, 101, OWNER) == null
                             && usage.queryEventStats(0, 100, 101, OWNER) == null,
                     "Explicit ignored mode did not override the permission grant"));
+            h.asApp(() -> check(usage.queryEventsForPackage(100, 101, OWNER) != null,
+                    "Ignored global Usage Access blocked the caller's own events"));
             ops.setMode(op, UID, OWNER, AppOpsManager.MODE_ERRORED);
             h.asApp(() -> {
                 try {
                     usage.queryUsageStats(0, 100, 101, OWNER, 0);
                     throw new AssertionError("AppOpsManager.noteOp errored-mode exception was suppressed");
+                } catch (SecurityException expected) { checks++; }
+                try {
+                    usage.queryEventsForPackage(100, 101, OWNER);
+                    throw new AssertionError("Own-package query suppressed the noteOp errored-mode exception");
                 } catch (SecurityException expected) { checks++; }
             });
             ops.setMode(op, UID, OWNER, AppOpsManager.MODE_ALLOWED);
@@ -1077,6 +1109,26 @@ public final class ActivityFinishFixture {
                     throw new AssertionError("An unregistered PID used a genuine mode for another process");
                 } catch (SecurityException expected) { checks++; }
             } finally { Binder.restoreCallingIdentity(identity); }
+            ops.setMode(op, UID, sharedPackage, AppOpsManager.MODE_IGNORED);
+            ApkPackage retiring = h.pm.get(sharedPackage);
+            var beginRemoval = PackageManagerService.class.getDeclaredMethod("beginPackageRemoval", ApkPackage.class);
+            var endRemoval = PackageManagerService.class.getDeclaredMethod("endPackageRemoval", ApkPackage.class);
+            beginRemoval.setAccessible(true); endRemoval.setAccessible(true);
+            beforeRead.set(() -> {
+                try { beginRemoval.invoke(h.pm, retiring); }
+                catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+            });
+            try {
+                h.asApp(() -> {
+                    try {
+                        usage.queryEventsForPackage(100, 101, sharedPackage);
+                        throw new AssertionError("Denied global access bypassed retirement during the self-event snapshot");
+                    } catch (SecurityException expected) { checks++; }
+                });
+            } finally {
+                beforeRead.set(null);
+                endRemoval.invoke(h.pm, retiring);
+            }
         } finally {
             ((AutoCloseable) history).close();
             Files.deleteIfExists(file);

@@ -273,6 +273,29 @@ public final class ActivityUsageHistoryTest {
         }
     }
 
+    private static void smallClockSkewRecovery(Path file) throws Exception {
+        AtomicLong wall = new AtomicLong(100), elapsed = new AtomicLong(1_000);
+        try (ActivityUsageHistory history = store(file, wall, elapsed)) {
+            Object activity = new Object();
+            history.transition(activity, "skew", "A", RESUMED);
+            // This one-millisecond sampling skew is below the RTC correction
+            // threshold. reportEvent still uses the elapsed-to-wall prediction.
+            wall.set(199); elapsed.set(1_100);
+            history.transition(activity, "skew", "A", STOPPED);
+            check(history.snapshot().events().get(1).time() == 200,
+                    "small wall-clock skew changed the elapsed event timestamp");
+        }
+        wall.set(300); elapsed.set(1_200);
+        try (ActivityUsageHistory history = store(file, wall, elapsed)) {
+            ActivityUsageHistory.Total total = summary(history, 0, 301, "skew");
+            check(total.foreground == 100 && total.visible == 100,
+                    "small clock skew made a valid checkpoint lose accumulated usage");
+            check(history.snapshot().events().size() == 2
+                    && history.snapshot().events().get(1).time() == 200,
+                    "small clock skew made a valid checkpoint lose lifecycle events");
+        }
+    }
+
     private static void legacyAndCorrupt(Path file) throws Exception {
         try (DataOutputStream out = new DataOutputStream(Files.newOutputStream(file))) {
             out.writeInt(1); out.writeLong(200); out.writeInt(3);
@@ -408,6 +431,7 @@ public final class ActivityUsageHistoryTest {
             evictionAndRecovery(directory.resolve("eviction.bin"));
             storedOrigins(directory.resolve("origins.bin"));
             clockCorrections(directory.resolve("clock.bin"));
+            smallClockSkewRecovery(directory.resolve("clock-skew.bin"));
             legacyAndCorrupt(directory.resolve("legacy.bin"));
             offlineClockWithoutAnchor(directory.resolve("offline-clock.bin"));
             readsDoNotFlush(directory.resolve("read.bin"));
