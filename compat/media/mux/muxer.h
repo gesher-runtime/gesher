@@ -45,6 +45,37 @@ class Muxer {
   virtual void SetOrientationHint(int degrees) {}
   virtual void SetLocation(int latitude_e4, int longitude_e4) {}
   virtual int64_t BytesWritten() const = 0;
+
+  // Recorder-only admission limit. A writer must account for pending samples
+  // and final metadata before it can promise a completed-file size limit.
+  // A successful WriteSample at the limit may decline the next sample; the
+  // caller then observes FileSizeLimitReached and finalizes the accepted data.
+  bool SetFileSizeLimit(int64_t bytes) {
+    if (bytes > 0 && !SupportsFileSizeLimit()) return false;
+    max_file_size_ = bytes > 0 ? static_cast<uint64_t>(bytes) : 0;
+    return true;
+  }
+  bool FileSizeLimitReached() const { return size_limit_reached_; }
+  bool FileSizeLimitApproaching() const { return size_limit_approaching_; }
+
+ protected:
+  virtual bool SupportsFileSizeLimit() const { return false; }
+  bool HasFileSizeLimit() const { return max_file_size_ != 0; }
+  bool AdmitFinalSize(uint64_t bytes, bool approaching_notification = false) {
+    if (max_file_size_ == 0) return true;
+    if (bytes >= max_file_size_) {
+      size_limit_reached_ = true;
+      return false;
+    }
+    // Use subtraction so even a valid INT64_MAX limit cannot overflow.
+    if (approaching_notification && bytes >= max_file_size_ - max_file_size_ / 10)
+      size_limit_approaching_ = true;
+    return true;
+  }
+
+ private:
+  uint64_t max_file_size_ = 0;
+  bool size_limit_reached_ = false, size_limit_approaching_ = false;
 };
 
 std::unique_ptr<Muxer> CreateMp4Muxer(int fd, bool three_gpp, std::string* error);
