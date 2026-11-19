@@ -20,7 +20,7 @@ struct AMediaFormat {
 AMediaFormat* AMediaFormat_new() { return new AMediaFormat; }
 media_status_t AMediaFormat_delete(AMediaFormat* f) { delete f; return 0; }
 void AMediaFormat_clear(AMediaFormat* f) { f->values.clear(); }
-media_status_t AMediaFormat_copy(AMediaFormat* to,AMediaFormat* from) {
+media_status_t AMediaFormat_copy(AMediaFormat* to,const AMediaFormat* from) {
   to->values=from->values; return 0;
 }
 void AMediaFormat_setInt32(AMediaFormat* f,const char* k,int32_t v) { f->values[k]=v; }
@@ -36,6 +36,8 @@ template<class T> bool Value(AMediaFormat* f,const char* k,T* out) {
 }
 bool AMediaFormat_getInt32(AMediaFormat* f,const char* k,int32_t* v) { return Value(f,k,v); }
 bool AMediaFormat_getInt64(AMediaFormat* f,const char* k,int64_t* v) { return Value(f,k,v); }
+// These startup fixtures do not publish rectangle metadata.
+bool AMediaFormat_getRect(AMediaFormat*,const char*,int32_t*,int32_t*,int32_t*,int32_t*) { return false; }
 bool AMediaFormat_getFloat(AMediaFormat* f,const char* k,float* v) { return Value(f,k,v); }
 bool AMediaFormat_getString(AMediaFormat* f,const char* k,const char** out) {
   auto i=f->values.find(k);if(i==f->values.end())return false;
@@ -70,7 +72,7 @@ struct CMediaTrack {
   media_status_t (*stop)(void*);
   media_status_t (*read)(void*, CMediaBuffer**, uint32_t, int64_t);
 };
-enum CMediaTrackReadOptions : uint32_t { SEEK = 8 };
+enum CMediaTrackReadOptions : uint32_t { SEEK = 8, SEEK_FRAME_INDEX = 4 };
 }
 
 // The actual AOSP translators are executed in the independent full-adapter QA.

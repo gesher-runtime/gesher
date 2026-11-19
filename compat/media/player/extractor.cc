@@ -48,6 +48,10 @@ bool Format::GetInt32(const char* key, int32_t* out) const {
 bool Format::GetInt64(const char* key, int64_t* out) const {
   return f_ != nullptr && AMediaFormat_getInt64(f_, key, out);
 }
+bool Format::GetRect(const char* key, int32_t* left, int32_t* top, int32_t* right,
+                     int32_t* bottom) const {
+  return f_ != nullptr && AMediaFormat_getRect(f_, key, left, top, right, bottom);
+}
 bool Format::GetFloat(const char* key, float* out) const {
   return f_ != nullptr && AMediaFormat_getFloat(f_, key, out);
 }
@@ -134,12 +138,14 @@ class AospTrackReader : public TrackReader {
 
   int StartStatus() const override { return start_status_; }
 
-  int Read(Sample* out, int64_t seek_us, SeekMode mode) override {
+  int Read(Sample* out, int64_t position, SeekMode mode) override {
+    static_assert(static_cast<uint32_t>(SeekMode::kFrameIndex) ==
+                  android::CMediaTrackReadOptions::SEEK_FRAME_INDEX);
     if (start_status_ != AMEDIA_OK) return start_status_;
     uint32_t opts = 0;
-    if (seek_us >= 0) opts = android::CMediaTrackReadOptions::SEEK | static_cast<uint32_t>(mode);
+    if (position >= 0) opts = android::CMediaTrackReadOptions::SEEK | static_cast<uint32_t>(mode);
     CMediaBuffer* buf = nullptr;
-    media_status_t err = track_->read(track_->data, &buf, opts, seek_us >= 0 ? seek_us : 0);
+    media_status_t err = track_->read(track_->data, &buf, opts, position >= 0 ? position : 0);
     if (err == AMEDIA_ERROR_END_OF_STREAM) return 1;
     if (err != AMEDIA_OK) return err;
     if (buf == nullptr) return 1;

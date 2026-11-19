@@ -34,6 +34,7 @@ class Format {
   AMediaFormat* Release() { return std::exchange(f_, nullptr); }
   bool GetInt32(const char* key, int32_t* out) const;
   bool GetInt64(const char* key, int64_t* out) const;
+  bool GetRect(const char* key, int32_t* left, int32_t* top, int32_t* right, int32_t* bottom) const;
   bool GetFloat(const char* key, float* out) const;
   bool GetString(const char* key, std::string* out) const;
   bool GetBuffer(const char* key, std::vector<uint8_t>* out) const;
@@ -55,7 +56,13 @@ struct Sample {
 };
 
 // AOSP's CMediaTrackReadOptions seek modes.
-enum class SeekMode : uint32_t { kPreviousSync = 0, kNextSync = 1, kClosestSync = 2, kClosest = 3 };
+enum class SeekMode : uint32_t {
+  kPreviousSync = 0,
+  kNextSync = 1,
+  kClosestSync = 2,
+  kClosest = 3,
+  kFrameIndex = 4,
+};
 
 class TrackReader {
  public:
@@ -64,8 +71,10 @@ class TrackReader {
   // selection must report a failed start before retaining the reader.
   virtual int StartStatus() const { return 0; }
   // The next sample. Returns 0, 1 at the end, negative on error; with
-  // seek_us >= 0, the first sample at or around that time (by mode).
-  virtual int Read(Sample* out, int64_t seek_us = -1, SeekMode mode = SeekMode::kPreviousSync) = 0;
+  // position >= 0, the first sample at or around that time in microseconds,
+  // or at a preceding sync sample for a presentation-order kFrameIndex seek.
+  virtual int Read(Sample* out, int64_t position = -1,
+                   SeekMode mode = SeekMode::kPreviousSync) = 0;
 
   // The NDK also exposes per-sample metadata. Playback readers need no copy.
   virtual void EnableSampleMetadata() {}
