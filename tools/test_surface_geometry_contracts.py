@@ -41,13 +41,14 @@ def main() -> int:
     source = (ROOT / 'tests/media/surface_geometry_host.cc.in').read_text()
     source = source.replace('@CONSTANTS@', enum).replace('@PRODUCTION@', '\n'.join(adapted))
     source = source.replace('@ASSERTIONS@', (ROOT / 'tests/media/surface_geometry_assertions.h').read_text())
+    source = source.replace('@RELEASE_ASSERTIONS@', (ROOT / 'tests/media/surface_release_assertions.h').read_text())
     print('surface geometry source SHA256 ' + hashlib.sha256('\n'.join(original).encode()).hexdigest(),
           flush=True)
     with tempfile.TemporaryDirectory(prefix='gesher-surface-geometry-') as temporary:
         work = Path(temporary)
         generated = work / 'surface.cc'
         generated.write_text(source)
-        binary = work / 'surface'
+        binary = work / ('surface.exe' if os.name == 'nt' else 'surface')
         command = shlex.split(args.cxx) + ['-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                                          '-pthread', str(generated), '-o', str(binary)]
         if args.sanitize:

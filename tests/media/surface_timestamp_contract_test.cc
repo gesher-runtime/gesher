@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <system/window.h>
+#include "surface_release_assertions.h"
 
 namespace {
 int checks = 0, failures = 0;
@@ -59,5 +60,5 @@ int main() {
   ANativeWindow_Buffer abandoned = {};
   Check(surface->lock(&abandoned, nullptr) != 0, "abandoned surface still rejects production");
   std::printf("surface timestamp contracts: %d checks, %d failures\n", checks, failures);
-  return failures != 0;
+  return surface_release_contract::Run() != 0 || failures != 0;
 }

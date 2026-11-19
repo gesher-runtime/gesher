@@ -76,7 +76,9 @@ constexpr RawCall kRawCalls[] = {
     {100, "times", 'l'},       {101, "ptrace", 'l'},       {102, "getuid", 'i'},
     {104, "getgid", 'i'},      {107, "geteuid", 'i'},      {108, "getegid", 'i'},
     {110, "getppid", 'i'},     {111, "getpgrp", 'i'},      {112, "setsid", 'i'},
-    {137, "statfs", 'i'},      {138, "fstatfs", 'i'},      {157, "prctl", 'i'},
+    {137, "statfs", 'i'},      {138, "fstatfs", 'i'},      {149, "mlock", 'i'},
+    {150, "munlock", 'i'},     {151, "mlockall", 'i'},    {152, "munlockall", 'i'},
+    {157, "prctl", 'i'},
     {186, "gettid", 'i'},
     {188, "setxattr", 'i'}, {189, "lsetxattr", 'i'}, {190, "__fsetxattr", 'i'},
     {191, "getxattr", 'l'}, {192, "lgetxattr", 'l'}, {193, "__fgetxattr", 'l'},
@@ -93,7 +95,7 @@ constexpr RawCall kRawCalls[] = {
     {281, "epoll_pwait", 'i'}, {284, "eventfd", 'i'},      {288, "accept4", 'i'},
     {290, "eventfd", 'i'},     {291, "epoll_create1", 'i'}, {292, "dup3", 'i'},
     {293, "pipe2", 'i'},       {294, "inotify_init1", 'i'}, {318, "getrandom", 'l'},
-    {319, "memfd_create", 'i'},
+    {319, "memfd_create", 'i'}, {325, "mlock2", 'i'},
 };
 
 using ShimFn6 = int64_t (BIONIC_SYSV*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
@@ -102,7 +104,7 @@ struct ResolvedCall {
   ShimFn6 fn = nullptr;
   char ret = 0;
 };
-constexpr size_t kMaxNr = 320;
+constexpr size_t kMaxNr = 326;
 
 // The shim functions, looked up once (the table is complete by the time
 // loaded code runs).

@@ -138,18 +138,27 @@ foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'
   foreach ($permission in @(@{ Suffix = ''; Allowed = $true; Name = 'allowed' },
                             @{ Suffix = '-denied'; Allowed = $false; Name = 'denied' })) {
     $apk = "$slHost/openslapp$($permission.Suffix)-$($abi.Label).apk"
-    $single = InvokeOpenSl ($slAppVm + @('com.gesher.app.Main', (NoDrive $apk)))
+    # Only the explicit permitted-input fixture uses synthetic capture. Denied
+    # calls and ordinary/native hosts keep the default-OFF production binary.
+    $recordEnvironment = @{}
+    $recordRuntime = "$slHost/dalvikvm.exe"
+    if ($permission.Allowed) {
+      $recordRuntime = "$slHost/dalvikvm-media-capture-test.exe"
+      $recordEnvironment['GESHER_AUDIO_SOURCE'] = 'null'
+    }
+    $single = InvokeOpenSl ($slAppVm + @('com.gesher.app.Main', (NoDrive $apk))) $recordEnvironment -Exe $recordRuntime
     CheckOpenSl $abi.Name "single APK $($permission.Name)" $permission.Allowed $single @(
       'OpenSlActivity onResume: all passed', 'gesher-app: done')
     $deviceRoot = Join-Path $root "media4-opensl-$($abi.Name)-$($permission.Name)-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force "$deviceRoot/data", "$deviceRoot/logs" | Out-Null
     $environment = @{ ANDROID_DATA = (NoDrive "$deviceRoot/data"); GESHER_LOGS = (NoDrive "$deviceRoot/logs") }
+    if ($permission.Allowed) { $environment['GESHER_AUDIO_SOURCE'] = 'null' }
     try {
-      $device = InvokeOpenSl ($slAppVm + @('com.gesher.app.Launcher', 'launch', (NoDrive $apk), '--headless')) $environment
+      $device = InvokeOpenSl ($slAppVm + @('com.gesher.app.Launcher', 'launch', (NoDrive $apk), '--headless')) $environment -Exe $recordRuntime
       CheckOpenSl $abi.Name "device APK $($permission.Name)" $permission.Allowed $device @(
         'OpenSlActivity onResume: all passed', 'gesher-app: app process for com.gesher.opensl')
     } finally {
-      $shutdown = InvokeOpenSl ($slAppVm + @('com.gesher.app.Launcher', 'shutdown')) $environment
+      $shutdown = InvokeOpenSl ($slAppVm + @('com.gesher.app.Launcher', 'shutdown')) $environment -Exe $recordRuntime
       if ($shutdown.Code -eq 0) {
         Write-Host "PASS  media4 opensl ($($abi.Name); $($permission.Name)): device shutdown completes"
       } else {

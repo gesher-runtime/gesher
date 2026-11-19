@@ -26,6 +26,7 @@
 #include <sys/file.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/statvfs.h>
 #include <sys/xattr.h>
 #include <unistd.h>
@@ -569,9 +570,30 @@ int BIONIC_SYSV Madvise(void* addr, size_t len, int advice) { return madvise(add
 int BIONIC_SYSV Msync(void* addr, size_t len, int flags) {
   return gesher::elf::SyncLoadedMemory(addr, len, flags);
 }
+int BIONIC_SYSV Mlock(const void* addr, size_t len) { return mlock(addr, len); }
+int BIONIC_SYSV Munlock(const void* addr, size_t len) { return munlock(addr, len); }
+int UnsupportedLockMode() {
+  struct rlimit limit;
+  getrlimit(RLIMIT_MEMLOCK, &limit);
+  return errno = (limit.rlim_cur == 0 ? kEPERM : kEOPNOTSUPP), -1;
+}
+int BIONIC_SYSV Mlock2(const void* addr, size_t len, int flags) {
+  constexpr int kMlockOnFault = 1;
+  if (flags == 0) return mlock(addr, len);
+  if (flags != kMlockOnFault) return errno = kEINVAL, -1;
+  return UnsupportedLockMode();
+}
+int BIONIC_SYSV Mlockall(int flags) {
+  constexpr int kMclOnFault = 4;
+  constexpr int kScope = MCL_CURRENT | MCL_FUTURE;
+  if ((flags & kScope) == 0 || (flags & ~(kScope | kMclOnFault)) != 0) {
+    return errno = kEINVAL, -1;
+  }
+  return UnsupportedLockMode();
+}
+int BIONIC_SYSV Munlockall() { return munlockall(); }
 int BIONIC_SYSV Zero2(const void*, size_t) { return 0; }
 int BIONIC_SYSV Zero1(int) { return 0; }
-int BIONIC_SYSV Zero0() { return 0; }
 int BIONIC_SYSV Mincore(void*, size_t len, unsigned char* vec) {
   for (size_t i = 0; i < (len + 4095) / 4096; ++i) vec[i] = 1;
   return 0;
@@ -1091,11 +1113,11 @@ void RegisterExtraSys(SymbolTable& t) {
   E("madvise", Madvise);
   E("posix_madvise", PosixMadvise);
   E("msync", Msync);
-  E("mlock", Zero2);
-  E("munlock", Zero2);
-  E("mlock2", Zero2);
-  E("mlockall", Zero1);
-  E("munlockall", Zero0);
+  E("mlock", Mlock);
+  E("munlock", Munlock);
+  E("mlock2", Mlock2);
+  E("mlockall", Mlockall);
+  E("munlockall", Munlockall);
   E("mincore", Mincore);
   E("dup3", Dup3);
   E("tgkill", Tgkill);
