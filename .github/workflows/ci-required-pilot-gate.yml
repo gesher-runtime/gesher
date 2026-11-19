@@ -1,0 +1,36 @@
+name: CI required gate pilot
+on:
+  workflow_call:
+    inputs:
+      job_results:
+        type: string
+        required: true
+      use_local_runner:
+        type: boolean
+        default: false
+permissions: {}
+jobs:
+  ci-required:
+    name: ci-required
+    timeout-minutes: 2
+    runs-on: >-
+      ${{ fromJSON(inputs.use_local_runner &&
+      github.repository == 'gesher-runtime/gesher' &&
+      github.event_name == 'pull_request' &&
+      github.base_ref == 'codex/ci-required-pilot-base-20261119' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.head_ref == 'codex/ci-required-pilot-pass-20261119' ||
+      github.head_ref == 'codex/ci-required-pilot-fail-20261119') &&
+      '{"group":"gesher-build-trial","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
+    steps:
+      - name: Require every CI job
+        env:
+          JOB_RESULTS: ${{ inputs.job_results }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['JOB_RESULTS'])
+          failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
+          if not results or failed:
+              raise SystemExit(f"Required jobs did not succeed: {failed}")
+          PY
