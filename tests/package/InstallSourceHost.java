@@ -208,6 +208,12 @@ public final class InstallSourceHost {
         as(original, () -> id[0] = sessions.createSession(params, name, null, 0));
         as(original, () -> check(sessions.openSession(id[0]) != null,
                 "Current authenticated installer owns its session"));
+        as(original, () -> {
+            check(sessions.getAllSessions(0).getList().size() == 1,
+                    "Current installer can enumerate its session");
+            check(sessions.getMySessions(name, 0).getList().size() == 1,
+                    "Current installer retains its own session inventory");
+        });
         @SuppressWarnings("unchecked") List<ActivityTaskManagerService.ProcessRecord> attached =
                 (List<ActivityTaskManagerService.ProcessRecord>)get(atm, "mProcesses");
         ActivityTaskManagerService.ProcessRecord process = attached.stream()
