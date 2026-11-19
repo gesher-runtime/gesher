@@ -4,6 +4,7 @@
 // receiver ownership, Pool state, global refs and JNI entrypoints are real.
 #pragma once
 #include <jni.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
@@ -139,16 +140,28 @@ struct Recorder {
   explicit Recorder(Listener value) : listener(std::move(value)) {}
   ~Recorder() { ++recorder_deletes; }
   RecorderConfig& config() { return settings; }
+  bool CanConfigure() const { return true; }
+  bool IsIdle() const { return true; }
+  // These are operation observers for receiver ownership only. State/error
+  // semantics are tested against the real Recorder in its separate gate.
+  bool CanSetSource(bool) const { return true; }
+  bool CanSetOutputFormat() const { return true; }
+  bool IsConfigured() const { return true; }
+  bool CanSetEncoder(bool) const { return true; }
+  bool HasStarted() const { return true; }
+  bool HasAudioInput() { return true; }
+  bool InError() const { return false; }
+  void EnterError() {}
   InputSurface* input_surface() { return &surface; }
-  bool Prepare(std::string*) { recorder_gate.Pass(); return true; }
-  bool Start(std::string*) {
+  bool Prepare(std::string*, bool* = nullptr) { recorder_gate.Pass(); return true; }
+  bool Start(std::string*, bool* = nullptr) {
     if (recorder_event_mode.load() != 0) listener(2, recorder_event_mode.load());
     return true;
   }
-  bool Stop(std::string*) { return true; }
+  bool Stop(std::string*, bool* = nullptr) { return true; }
   void Reset() { ++resets; }
-  void Pause() {}
-  void Resume() {}
+  bool Pause(std::string* = nullptr, bool* = nullptr) { return true; }
+  bool Resume(std::string* = nullptr, bool* = nullptr) { return true; }
   int MaxAmplitude() { return 0; }
 };
 }  // namespace gesher::media

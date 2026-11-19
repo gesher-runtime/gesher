@@ -121,11 +121,13 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
 # disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
 # have SOURCE retention: they are read from frameworks/base's sources (what the
-# framework build checked out, $AOSP_DIR or third_party/aosp). The Wi-Fi value
-# sources also declare target-SDK changes; keep their guards in the same table.
+# framework build checked out, $AOSP_DIR or third_party/aosp). RoleManager and
+# Wi-Fi value sources also declare target-SDK changes outside frameworks/base;
+# keep their guards in the same generated table.
 aosp=${AOSP_DIR:-$root/third_party/aosp}
 java -cp "$gencp" "$(native "$root/app/gen/CompatChangesGen.java")" "$(native "$framework")" \
   "$(native "$work/gen")" com.gesher.server.gen "$(native "$aosp/frameworks/base")" \
+  "$(native "$root/app/java/android/app/role")" \
   "$(native "$root/app/java/android/net/wifi")"
 
 mkdir -p "$work/classes"
