@@ -8,6 +8,8 @@
 #include <cstring>
 #include <cstdint>
 #include <mutex>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <fcntl.h>
@@ -106,6 +108,7 @@ static int gesher_is_device_fd(int fd) {
 }
 namespace shim {
 #define BIONIC_SYSV
+constexpr int kENOMEM = ENOMEM;
 static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
 static int read(int fd, void* buffer, unsigned int count) {
   gesher::Device device;
