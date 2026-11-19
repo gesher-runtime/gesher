@@ -138,6 +138,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         mTransientEnabled = !persistentEnabled;
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
+            checkBuiltInProviderOwner(p);
             map.put(p.packageName, p);
         }
         mPackages = map;
@@ -158,8 +159,16 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     /** Finish owner I/O before an installer commits its durable package registry. */
     synchronized void prepareAdd(ApkPackage p) {
+        checkBuiltInProviderOwner(p);
         PackageEnabledStore store = enabledStore();
         if (!p.hasEnabledState(store)) p.attachEnabledState(store, store.owner(p.packageName));
+    }
+
+    private static void checkBuiltInProviderOwner(ApkPackage pkg) {
+        try { ContactsProviderSupport.checkPackageAdmission(pkg); }
+        catch (android.content.pm.PackageParser.PackageParserException conflict) {
+            throw new IllegalArgumentException(conflict.getMessage(), conflict);
+        }
     }
 
     /** Adds or replaces a package (an install or an update). */
@@ -248,7 +257,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public boolean isPackageAvailable(String packageName, int userId) {
         if (userId != 0) return false;
-        if ("android".equals(packageName)) return true;
+        if ("android".equals(packageName) || ContactsProviderSupport.PACKAGE.equals(packageName)) return true;
         return get(packageName) != null || synthetic(packageName)
                 || BrowserPackageSupport.isBrowserPackage(packageName);
     }
@@ -262,6 +271,9 @@ public final class PackageManagerService extends IPackageManager.Default {
             info.applicationInfo = platformApplication();
             info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
             return info;
+        }
+        if (ContactsProviderSupport.PACKAGE.equals(packageName)) {
+            return ContactsProviderSupport.packageInfo(flags);
         }
         ApkPackage p = get(packageName);
         if (p != null) {
@@ -304,6 +316,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ApplicationInfo getApplicationInfo(String packageName, long flags, int userId) {
         if (userId != 0) return null;
         if ("android".equals(packageName)) return platformApplication();
+        if (ContactsProviderSupport.PACKAGE.equals(packageName)) return ContactsProviderSupport.applicationInfo();
         ApkPackage p = get(packageName);
         if (p != null) {
             return p.applicationInfo(flags);
@@ -332,6 +345,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public int getTargetSdkVersion(String packageName) {
+        if (ContactsProviderSupport.PACKAGE.equals(packageName)) return android.os.Build.VERSION.SDK_INT;
         ApkPackage p = get(packageName);
         return p == null ? -1 : p.parsed.getTargetSdkVersion();
     }
@@ -416,6 +430,8 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     /** The provider with authority {@code authority} (one of its authorities), or null. */
     synchronized ProviderInfo provider(String authority, long flags) {
+        ProviderInfo builtIn = ContactsProviderSupport.providerForAuthority(authority, flags);
+        if (builtIn != null) return builtIn;
         for (ApkPackage p : mPackages.values()) {
             if (isRemovalPending(p.packageName)) continue;
             for (ProviderInfo info : p.providers(flags)) {
@@ -486,11 +502,16 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
+        if (userId != 0) return null;
         return provider(name, flags);
     }
 
     @Override
     public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        if (userId != 0) return null;
+        if (ContactsProviderSupport.PACKAGE.equals(className.getPackageName())) {
+            return ContactsProviderSupport.providerForComponent(className.getClassName(), flags);
+        }
         if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         if (p == null) return null;
@@ -503,6 +524,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public synchronized ParceledListSlice getInstalledPackages(long flags, int userId) {
         List<PackageInfo> result = new ArrayList<>();
+        if (userId == 0) result.add(ContactsProviderSupport.packageInfo(flags));
         for (ApkPackage p : mPackages.values()) {
             result.add(installedInfo(p, flags));
         }
@@ -545,6 +567,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public synchronized ParceledListSlice getInstalledApplications(long flags, int userId) {
         List<ApplicationInfo> result = new ArrayList<>();
+        if (userId == 0) result.add(ContactsProviderSupport.applicationInfo());
         for (ApkPackage p : mPackages.values()) {
             result.add(p.applicationInfo(flags));
         }
@@ -889,7 +912,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String[] getPackagesForUid(int uid) {
-        if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
+        if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android", ContactsProviderSupport.PACKAGE};
         List<String> result = new ArrayList<>();
         for (ApkPackage pkg : mPackages.values()) if (pkg.uid() == uid) result.add(pkg.packageName);
         return result.isEmpty() ? null : result.toArray(new String[0]);
@@ -975,7 +998,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         // means an unknown package to ApplicationPackageManager, not "no groups",
         // and makes even a query about the caller's own installed app throw.
         if (userId != 0 || isRemovalPending(packageName)) return null;
-        if ("android".equals(packageName)) return new int[0];
+        if ("android".equals(packageName) || ContactsProviderSupport.PACKAGE.equals(packageName)) return new int[0];
         ApkPackage pkg = get(packageName);
         if (pkg == null || ((flags & PackageManager.MATCH_SYSTEM_ONLY) != 0 && !pkg.isSystemAddon())) {
             return null;

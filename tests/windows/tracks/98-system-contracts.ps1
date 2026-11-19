@@ -101,6 +101,13 @@ try {
     $providerOrderOut
   } @('ProviderInitOrderTest all passed')
 
+  $contactsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'ContactsCallLogContractTest') 120
+  $contactsCode = $LASTEXITCODE
+  Check 'services: CallLog and Contacts SQLite providers, permissions, observers and admission' {
+    $global:LASTEXITCODE = $contactsCode
+    $contactsOut
+  } @('ContactsCallLogContractTest all passed:')
+
   # Constructed package metadata uses the existing synthetic-fixture capability.
   $env:GESHER_MICROG_SPOOF = '1'
   $syncContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SyncManagerContractTest') 120
