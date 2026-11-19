@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const controller = require('./label-automerge.js');
-const {world, authorWorld, HEAD, OTHER, T} = require('./automerge-fixture.js');
+const {world, authorWorld, HEAD, OTHER, T, APP_BOT} = require('./automerge-fixture.js');
 
 test('label captures approval and arms native waiting even before CI starts', async () => {
   const w = world({approved: false, runs: [], checks: []});
@@ -14,6 +14,50 @@ test('label captures approval and arms native waiting even before CI starts', as
   for (const action of ['merge', 'dispatch']) assert.equal(w.did(action).length, 0);
 });
 
+test('the deployed repository requires the Gesher App before PR or status writes', async () => {
+  const w = world({approved: false, repositoryId: 1426153186});
+  await assert.rejects(w.labeled(), /Gesher GitHub App is required/);
+  assert.deepEqual(w.calls, []);
+});
+
+test('the App writes the receipt and GitHub Actions writes the verified status', async () => {
+  const w = world({approved: false, repositoryId: 1426153186});
+  w.useApp();
+  await w.labeled();
+  assert.equal(w.did('app-approve').length, 1);
+  assert.equal(w.did('approve').length, 0);
+  assert.equal(w.did('nativeWait').length, 1);
+  assert.deepEqual(w.reviews[0].user, APP_BOT);
+  assert.equal(w.did('status').at(-1)[1].state, 'success');
+});
+
+test('the App dismisses stale receipts from either trusted bot on a new head', async () => {
+  const w = world();
+  w.useApp();
+  w.seedApproval();
+  w.reviews[1].user = {...APP_BOT};
+  w.pr.head.sha = OTHER;
+  await w.pushed();
+  assert.equal(w.did('app-dismiss').length, 2);
+  assert.equal(w.did('app-removeLabel').length, 1);
+  assert.equal(w.did('dismiss').length, 0);
+  assert.equal(w.did('removeLabel').length, 0);
+  assert.equal(w.did('status').at(-1)[1].state, 'failure');
+});
+
+test('CI failure removes the label and posts the explanation as the App', async () => {
+  const w = world();
+  w.useApp();
+  Object.assign(w.runs[0], {status: 'completed', conclusion: 'failure'});
+  await w.ciDone();
+  assert.equal(w.did('app-removeLabel').length, 1);
+  assert.equal(w.did('app-comment').length, 1);
+  assert.equal(w.did('removeLabel').length, 0);
+  assert.equal(w.did('comment').length, 0);
+  assert.deepEqual(w.comments.at(-1).user, APP_BOT);
+  assert.equal(w.did('status').at(-1)[1].state, 'failure');
+});
+
 for (const [name, change] of Object.entries({
   'missing label': w => {w.pr.labels = [];},
   draft: w => {w.pr.draft = true;},
@@ -23,6 +67,8 @@ for (const [name, change] of Object.entries({
   'wrong account identity': w => {w.permissionUserId = 999;},
   'dismissed receipt': w => {w.reviews[0].state = 'DISMISSED';},
   'edited receipt': w => {w.approvalNodeOverride = {lastEditedAt: T(40)};},
+  'foreign bot receipt': w => {w.reviews[0].user = {...APP_BOT, id: 888};},
+  'non-bot receipt': w => {w.reviews[0].user = {...APP_BOT, type: 'User'};},
   'missing receipt': w => {w.reviews = [];},
   'creation-time label': w => {w.events[0].created_at = T(0);},
   'reopened PR': w => {w.events.push({id: 60, event: 'reopened', created_at: T(40)});},
