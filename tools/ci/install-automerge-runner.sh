@@ -31,6 +31,7 @@ service=$(cat .service)
 mkdir -p "/etc/systemd/system/$service.d"
 cat > "/etc/systemd/system/$service.d/resources.conf" <<'UNIT'
 [Service]
+Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 MemoryMax=768M
 CPUQuota=100%
 Nice=10

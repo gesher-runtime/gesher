@@ -23,6 +23,7 @@ preserves existing adapters; guest firewall rules reject new connections to
 private/link-local networks. Host administration keys and VM files are accessible
 only with the Windows Administrators token or SYSTEM, including through WSL
 drive mounts. The host and its administrator remain part of the trust boundary.
+Node-based actions inherit the guest's Ubuntu CA bundle for HTTPS verification.
 
 ## Install
 
