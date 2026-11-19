@@ -214,10 +214,21 @@ public final class PackageUninstallTest {
         });pendingRace.setDaemon(true);pendingRace.start();
         require(beforePendingInsert.await(5,TimeUnit.SECONDS),"Pending intent did not pause before publication");
         field(pendingType,"mBeforeRecordLock").set(pending,null);
-        Object uris=method(amType,"uriGrants").invoke(am);Class<?> grantType=Class.forName("com.gesher.server.UriGrants$Grant");
-        List<Object> grants=(List<Object>)field(uris.getClass(),"mGrants").get(uris);
-        grants.add(make(grantType,new Class<?>[]{ApkPackage.class,ApkPackage.class,android.net.Uri.class,int.class,boolean.class},
-                pm.get(name),owner,android.net.Uri.parse("content://fixture/item"),1,false));
+        com.gesher.server.UriGrants uris=(com.gesher.server.UriGrants)method(amType,"uriGrants").invoke(am);
+        ProviderInfo[] providers=pm.getPackageInfo(name,PackageManager.GET_PROVIDERS,0).providers;
+        require(providers!=null&&providers.length==1&&providers[0].grantUriPermissions,
+                "Removal fixture must declare its real grant-capable provider");
+        android.net.Uri grantedUri=android.net.Uri.parse("content://"+providers[0].authority+"/ordinary-item");
+        int uriModes=Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+        List<?> prepared=(List<?>)method(uris.getClass(),"prepareIntent",int.class,String.class,Intent.class)
+                .invoke(uris,uid,owner.packageName,new Intent().setData(grantedUri).addFlags(uriModes));
+        method(uris.getClass(),"publish",IBinder.class,List.class).invoke(uris,new Binder(),prepared);
+        method(uris.getClass(),"takePersistable",int.class,android.net.Uri.class,int.class,int.class)
+                .invoke(uris,pm.get(owner.packageName).uid(),grantedUri,Intent.FLAG_GRANT_READ_URI_PERMISSION,0);
+        uris.flush();
+        require(uris.canAccess(pm.get(owner.packageName),grantedUri,Intent.FLAG_GRANT_READ_URI_PERMISSION,0)
+                &&uris.list(owner.packageName,true,true).size()==1,
+                "Declared provider permission was not persisted before removal");
         Class<?> jobsType=Class.forName("com.gesher.server.JobSchedulerService");
         Object scheduler=make(jobsType,new Class<?>[]{amType,atmType,PackageManagerService.class},am,atm,pm);
         Class<?> jobType=Class.forName(jobsType.getName()+"$Job");
@@ -249,7 +260,9 @@ public final class PackageUninstallTest {
         require(pm.get(name)==null&&!privateData.exists()&&!deviceData.exists(),
                 "Removed package still visible or has reusable CE/DE data");
         require(!(Boolean)pendingRemoval.invoke(pm,name),"Committed removal retained barrier");
-        require(grants.isEmpty()&&jobs.isEmpty()&&!persisted.exists(),"URI or persisted job capability survived removal");
+        require(uris.list(owner.packageName,true,true).isEmpty()&&jobs.isEmpty()&&!persisted.exists(),
+                "URI or persisted job capability survived removal");
+        uris.flush();
         require(events.size()==2&&Intent.ACTION_PACKAGE_REMOVED.equals(events.get(0).getAction())
                 &&Intent.ACTION_PACKAGE_FULLY_REMOVED.equals(events.get(1).getAction()),"Missing ordered removal events");
         for(Intent event:events) require(("package:"+name).equals(event.getDataString())
@@ -264,7 +277,9 @@ public final class PackageUninstallTest {
         require(pm.get(name).uid()==uid&&!new File(privateData,"private-marker").exists()
                 &&!new File(deviceData,"private-marker").exists(),"Reinstall reused old CE/DE data or changed reserved UID");
         require((Boolean)field(held.getClass(),"canceled").get(held),"Old pending-intent capability revived");
-        require(jobs.isEmpty()&&!persisted.exists()&&grants.isEmpty(),"Same-signer reinstall revived job/URI state");
+        require(jobs.isEmpty()&&!persisted.exists()&&uris.list(owner.packageName,true,true).isEmpty()
+                &&!uris.canAccess(pm.get(owner.packageName),grantedUri,Intent.FLAG_GRANT_READ_URI_PERMISSION,0),
+                "Same-signer reinstall revived job/URI state");
         caller.set(name);rejected(oldSession::getNames,SecurityException.class);caller.set(owner.packageName);
         require(((Integer)method(permission.getClass(),"checkPermission",String.class,String.class,String.class,int.class)
                 .invoke(permission,owner.packageName,"android.permission.DELETE_PACKAGES",null,0))==PackageManager.PERMISSION_DENIED,

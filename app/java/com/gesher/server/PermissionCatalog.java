@@ -47,6 +47,7 @@ final class PermissionCatalog {
                         info.name = name;
                         info.packageName = "android";
                         info.protectionLevel = xml.getAttributeIntValue(ANDROID, "protectionLevel", 0);
+                        info.flags = xml.getAttributeIntValue(ANDROID, "permissionFlags", 0);
                         info.group = xml.getAttributeValue(ANDROID, "permissionGroup");
                         info.labelRes = xml.getAttributeResourceValue(ANDROID, "label", 0);
                         info.descriptionRes = xml.getAttributeResourceValue(ANDROID, "description", 0);
@@ -71,6 +72,22 @@ final class PermissionCatalog {
         fake.packageName = "android";
         fake.protectionLevel = PermissionInfo.PROTECTION_SIGNATURE;
         mFramework.put(fake.name, fake);
+        if (!mFramework.containsKey("android.permission.SCHEDULE_EXACT_ALARM")) {
+            PermissionInfo sea = new PermissionInfo();
+            sea.name = "android.permission.SCHEDULE_EXACT_ALARM";
+            sea.packageName = "android";
+            sea.protectionLevel = PermissionInfo.PROTECTION_SIGNATURE
+                    | PermissionInfo.PROTECTION_FLAG_PRIVILEGED | PermissionInfo.PROTECTION_FLAG_APPOP;
+            mFramework.put(sea.name, sea);
+        }
+        if (!mFramework.containsKey("android.permission.USE_EXACT_ALARM")) {
+            PermissionInfo uea = new PermissionInfo();
+            uea.name = "android.permission.USE_EXACT_ALARM";
+            uea.packageName = "android";
+            uea.protectionLevel = PermissionInfo.PROTECTION_NORMAL;
+            mFramework.put(uea.name, uea);
+        }
+        mProtectedBroadcasts.add(android.app.AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED);
         mLoaded = true;
     }
 
@@ -92,6 +109,7 @@ final class PermissionCatalog {
                 info.name = parsed.getName();
                 info.packageName = pkg.packageName;
                 info.protectionLevel = parsed.getProtectionLevel();
+                info.flags = parsed.getFlags();
                 info.group = parsed.getGroup();
                 info.labelRes = parsed.getLabelRes();
                 info.descriptionRes = parsed.getDescriptionRes();

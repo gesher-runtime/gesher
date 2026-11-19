@@ -25,6 +25,7 @@ public final class UiMessages {
         String lang = language(tags);
         String value;
         switch (key) {
+            case "intent_chooser_title": value = lang.equals("he") ? "\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d9\u05d9\u05e9\u05d5\u05dd" : "Gesher \u2014 choose an app"; break;
             case "chooser_title": value = lang.equals("he") ? "\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df" : "Gesher accounts"; break;
             case "chooser_prompt": value = lang.equals("he") ? "\u05d1\u05d7\u05e8 \u05d7\u05e9\u05d1\u05d5\u05df \u05e2\u05d1\u05d5\u05e8 \u05d9\u05d9\u05e9\u05d5\u05dd \u05d6\u05d4:" : "Choose an account for this application:"; break;
             case "chooser_select": value = lang.equals("he") ? "\u05d1\u05d7\u05d9\u05e8\u05d4" : "Select"; break;
@@ -43,6 +44,12 @@ public final class UiMessages {
             case "permission_requested": value = lang.equals("he") ? "\u05d4\u05d9\u05d9\u05e9\u05d5\u05dd \u05de\u05d1\u05e7\u05e9 \u05d0\u05ea \u05d4\u05d4\u05e8\u05e9\u05d0\u05d5\u05ea \u05d4\u05d1\u05d0\u05d5\u05ea:" : "This app is requesting the following permissions:"; break;
             case "permission_allow": value = lang.equals("he") ? "\u05dc\u05d0\u05e4\u05e9\u05e8" : "Allow"; break;
             case "permission_deny": value = lang.equals("he") ? "\u05dc\u05d0 \u05dc\u05d0\u05e4\u05e9\u05e8" : "Don't allow"; break;
+            case "exact_alarm_title": value = lang.equals("he") ? "\u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05d5\u05ea\u05d6\u05db\u05d5\u05e8\u05d5\u05ea" : "Alarms and reminders"; break;
+            case "exact_alarm_allow": value = lang.equals("he") ? "\u05dc\u05d0\u05e4\u05e9\u05e8 \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05d5\u05ea\u05d6\u05db\u05d5\u05e8\u05d5\u05ea" : "Allow alarms and reminders"; break;
+            case "exact_alarm_detail": value = lang.equals("he") ? "\u05d4\u05e8\u05e9\u05d0\u05d4 \u05dc\u05ea\u05d6\u05de\u05df \u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05d5\u05ea\u05d6\u05db\u05d5\u05e8\u05d5\u05ea \u05d1\u05d6\u05de\u05e0\u05d9\u05dd \u05de\u05d3\u05d5\u05d9\u05e7\u05d9\u05dd. \u05d1\u05d9\u05d8\u05d5\u05dc \u05d4\u05d4\u05e8\u05e9\u05d0\u05d4 \u05de\u05e4\u05e1\u05d9\u05e7 \u05d0\u05ea \u05d4\u05d9\u05d9\u05e9\u05d5\u05dd \u05d5\u05de\u05d1\u05d8\u05dc \u05d0\u05ea \u05d4\u05d4\u05ea\u05e8\u05d0\u05d5\u05ea \u05d4\u05de\u05d3\u05d5\u05d9\u05e7\u05d5\u05ea \u05e9\u05dc\u05d5." : "Allow this app to schedule alarms and reminders at precise times. Turning this off stops the app and cancels its exact alarms."; break;
+            case "exact_alarm_empty": value = lang.equals("he") ? "\u05d0\u05d9\u05df \u05d9\u05d9\u05e9\u05d5\u05de\u05d9\u05dd \u05de\u05d5\u05ea\u05e7\u05e0\u05d9\u05dd \u05d4\u05d6\u05e7\u05d5\u05e7\u05d9\u05dd \u05dc\u05d2\u05d9\u05e9\u05d4 \u05de\u05d9\u05d5\u05d7\u05d3\u05ea \u05d6\u05d5." : "No installed apps need this special access."; break;
+            case "exact_alarm_close": value = lang.equals("he") ? "\u05e1\u05d2\u05d9\u05e8\u05d4" : "Close"; break;
+            case "exact_alarm_apply": value = lang.equals("he") ? "\u05d4\u05d7\u05dc\u05d4" : "Apply"; break;
             case "permission_prefix": value = lang.equals("he") ? "\u05dc\u05d0\u05e4\u05e9\u05e8 \u05dc\u05d9\u05d9\u05e9\u05d5\u05dd Android \u200f" : "Allow the Android application "; break;
             case "permission_middle": value = lang.equals("he") ? " \u05dc\u05d4\u05e9\u05ea\u05de\u05e9 \u05d1\u05d4\u05e8\u05e9\u05d0\u05d5\u05ea \u05d4\u05d1\u05d0\u05d5\u05ea?\n\n" : " to use these permissions?\n\n"; break;
             case "account_title": value = lang.equals("he") ? "\u05d2\u05e9\u05e8 \u2014 \u05d2\u05d9\u05e9\u05d4 \u05dc\u05d7\u05e9\u05d1\u05d5\u05df" : "Gesher account access"; break;
