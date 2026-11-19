@@ -614,12 +614,17 @@ final class Installer {
                 + old.codePath + ")");
         // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
         boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
-        if (libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
+        boolean recompile = libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile();
+        if (recompile) {
             if (libraryChange) {
                 mAtm.forceStopPackage(pkg);
                 SystemServer.log("install " + pkg + ": shared-library context/content changed");
             }
             Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
+        }
+        // A cache-only rebuild leaves attached processes and session handles valid.
+        // Replacing the PM object would retire their identity without changing code.
+        if (recompile && (libraryChange || mPm.get(pkg) == null)) {
             ApkPackage installed = open(entry);
             ApkPackage previous = mPm.get(pkg);
             if (previous != null && previous.isSystemAddon()) {

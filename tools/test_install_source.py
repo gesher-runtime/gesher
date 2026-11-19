@@ -23,7 +23,7 @@ def exercise(args: argparse.Namespace, work: Path, compiler: str) -> None:
     commands = [
         [compiler, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
          "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
-         str(ROOT / "tests/location/framework_host.c"), "-o", str(library)],
+         str(ROOT / "tests/package/install_source_host.c"), "-o", str(library)],
         [str(args.java_home / "bin/javac"), "-J-XX:-UsePerfData", "-encoding", "UTF-8",
          "-cp", classpath, "-d", str(classes), str(ROOT / "tests/package/InstallSourceHost.java")],
     ]

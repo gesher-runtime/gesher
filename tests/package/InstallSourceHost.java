@@ -138,9 +138,65 @@ public final class InstallSourceHost {
         var read = Installer.class.getDeclaredMethod("readRegistry"); read.setAccessible(true);
         return ((Map<?, ?>)read.invoke(null)).get(name);
     }
+    private static String[] unchanged(Installer storage, ApkPackage pkg,
+            PackageInstallSource source) throws Exception {
+        Object entry = ((Map<?, ?>)get(storage, "mEntries")).get(pkg.packageName);
+        var method = Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
+                ApkPackage.class, entry.getClass(), PackageInstallSource.class);
+        method.setAccessible(true);
+        try {
+            synchronized (storage) {
+                return (String[])method.invoke(storage, pkg.apkPath, pkg.packageName, pkg, entry, source);
+            }
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            if (failure.getCause() instanceof Exception cause) throw cause;
+            if (failure.getCause() instanceof Error cause) throw cause;
+            throw failure;
+        }
+    }
+    private static void unchangedCompilation(PackageManagerService pm, ActivityTaskManagerService atm,
+            Installer storage, ApkPackage pkg, ApkPackage next) throws Exception {
+        var sessions = pm.getPackageInstaller();
+        var params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        int[] id = new int[1];
+        as(pkg, () -> id[0] = sessions.createSession(params, pkg.packageName, null, 0));
+        Path oat = Dexopt.oatDir(new File(pkg.apkPath).getParent()).toPath().resolve("base.odex");
+        check(!Files.exists(oat), "Cache-rebuild control has no compiled output");
+        PackageInstallSource original = pkg.installSource();
+        String[] result = unchanged(storage, pkg, null);
+        check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
+                "Cache-only rebuild preserves the current installed code identity");
+        check(pkg.installSource() == original, "Host reopen preserves original attribution");
+        as(pkg, () -> {
+            check(sessions.openSession(id[0]) != null, "Cache-only rebuild preserves existing session authority");
+            int fresh = sessions.createSession(params, pkg.packageName, null, 0);
+            check(sessions.openSession(fresh) != null, "Cache-only rebuild preserves fresh session authority");
+            sessions.abandonSession(fresh);
+        });
+        PackageInstallSource updated = PackageInstallSource.fromSession(next,
+                PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE);
+        unchanged(storage, pkg, updated);
+        check(pm.get(pkg.packageName) == pkg && pkg.installSource() == updated,
+                "Explicit same-code reinstall changes attribution without retiring code");
+        check(updated.equals(get(registryEntry(pkg.packageName), "installSource")),
+                "Same-code attribution is durable after cache-only rebuild");
+        Path registry = data.resolve("system/packages.list");
+        String stable = Files.readString(registry);
+        Path blocked = registry.resolveSibling("packages.list.tmp"); Files.createDirectory(blocked);
+        try {
+            expect(java.io.IOException.class, () -> unchanged(storage, pkg, original),
+                    "Same-code attribution reports registry failure during cache rebuild");
+            check(pm.get(pkg.packageName) == pkg && pkg.installSource() == updated
+                    && Files.readString(registry).equals(stable),
+                    "Failed same-code attribution retains current identity, memory and durable source");
+            as(pkg, () -> check(sessions.openSession(id[0]) != null,
+                    "Failed attribution persistence does not retire existing session authority"));
+        } finally { Files.delete(blocked); }
+        unchanged(storage, pkg, original);
+        as(pkg, () -> sessions.abandonSession(id[0]));
+    }
     private static void sessionIdentity(PackageManagerService pm, ActivityTaskManagerService atm,
             Installer storage) throws Exception {
-        pm.attachInstaller(atm, storage);
         var sessions = pm.getPackageInstaller();
         String name = "fixture.source.session";
         ApkPackage original = pkg(name, "v2only.apk", null, 36);
@@ -230,6 +286,8 @@ public final class InstallSourceHost {
                 + "\nfixture.legacy.row\t/unchanged/legacy\t3\t4\n");
         Installer.attachMetadata(pm, atm);
         Installer storage = (Installer)get(pm, "mInstallSourceStorage");
+        pm.attachInstaller(atm, storage);
+        unchangedCompilation(pm, atm, storage, target, next);
         PackageManager client = client(pm);
         as(old, () -> client.setInstallerPackageName(targetName, nextName));
         as(target, () -> {

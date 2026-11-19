@@ -346,7 +346,12 @@ public final class PackageInstallerSessionTest {
 
         // An identical session reinstall still updates provenance, with no new APK generation.
         id = service.createSession(params, pkg, null, 0);
-        String currentPath = ((com.gesher.server.PackageManagerService)pm).get(pkg).apkPath;
+        com.gesher.server.ApkPackage currentCode = ((com.gesher.server.PackageManagerService)pm).get(pkg);
+        String currentPath = currentCode.apkPath;
+        // Losing disposable compiled output must not retire the still-installed code.
+        File oat = (File)method(Class.forName("com.gesher.server.Dexopt"), "oatDir", String.class)
+                .invoke(null, new File(currentPath).getParent());
+        Files.deleteIfExists(new File(oat, "base.odex").toPath());
         stage(service, id, rotated, "download.apk");
         service.openSession(id).commit(receiver(result), false);
         jobs.remove(0).run();
@@ -354,6 +359,8 @@ public final class PackageInstallerSessionTest {
                 == PackageInstaller.STATUS_SUCCESS, "Identical source-attribution session failed");
         require(currentPath.equals(((com.gesher.server.PackageManagerService)pm).get(pkg).apkPath),
                 "Attribution-only reinstall manufactured a new code generation");
+        require(currentCode == ((com.gesher.server.PackageManagerService)pm).get(pkg),
+                "Cache-only compilation retired the installed package identity");
         InstallSourceInfo current = pm.getInstallSourceInfo(pkg, 0);
         require(current.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE
                 && current.getInitiatingPackageSigningInfo().getSigningCertificateHistory().length == 2,

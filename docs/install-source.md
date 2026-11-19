@@ -20,6 +20,9 @@ identities.
 Session APIs also authenticate the process's attached package code. A live process
 with a pending exit keeps its own session authority until death, but cannot create
 or open sessions using a later installation's identity or signing snapshot.
+Rebuilding missing compiled output for unchanged APK bytes retains that installed
+identity. An explicit same-code session can still update attribution durably; a
+failed registry write leaves both the current identity and attribution intact.
 
 The target can see both its current installer and its still-installed initiating
 package. Other callers filter those names independently. After the initiating package
