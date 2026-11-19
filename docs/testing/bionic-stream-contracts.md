@@ -27,6 +27,13 @@ copy before the returned formatting count. Zero capacity reports `EINVAL`;
 truncation reports `EOVERFLOW` and NUL-terminates the available prefix. Allocation
 failures inside the wide formatting entry points report `ENOMEM`.
 
+Creating host stream metadata can also fail. The stdio entry points report
+`ENOMEM` and their failure result before consuming input, writing output or
+changing pushback. `fwide` returns zero if the stream could not be oriented.
+Status and orientation queries, `clearerr`, and existing metadata do not require
+a new allocation; a failed first allocation leaves the stream available for
+retry.
+
 These contracts do not establish complete printf parity. Positional formatting,
 wide scanning, the inherited numeric conversion implementation, and other
 unimplemented conversions require their own qualification.
@@ -60,6 +67,10 @@ replace Windows file locks and descriptor-transaction admission/completion;
 Linux performs real file open/close/reopen. The pclose test counts the process
 wait boundary rather than launching a Windows child. These are neither UCRT
 slot-reuse tests nor Windows record-lock fault injection.
+The lifetime tool also injects real C++ allocation failures into the extracted
+metadata registry and stdio entry points. It verifies that failures preserve the
+live stream and return before I/O; its wide codec functions are counting
+boundaries, so this check does not establish conversion behavior.
 
 `bionic_stdio_contract_test` exercises exported Bionic symbols on Windows. It
 contains CRT lock witnesses, wide I/O, buffer errors, partial stream output,
