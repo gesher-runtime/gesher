@@ -26,9 +26,15 @@ def main():
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'c++'))
     parser.add_argument('--keep-dir', type=Path)
     args = parser.parse_args()
-    source_path = 'compat/posix/src/epoll.cc'
-    source = (subprocess.check_output(['git', 'show', args.source_ref + ':' + source_path], cwd=ROOT).decode()
-              if args.source_ref else (ROOT / source_path).read_text())
+
+    def read(path):
+        if args.source_ref:
+            return subprocess.check_output(['git', 'show', args.source_ref + ':' + path], cwd=ROOT).decode()
+        return (ROOT / path).read_text()
+
+    source = read('compat/posix/src/epoll.cc')
+    scratch_header = (read('compat/posix/src/poll_scratch.h')
+                      if '#include "poll_scratch.h"' in source else None)
     print('production epoll.cc sha256=' + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     source = re.sub(r'^#include "(?:event_internal|internal|socket_internal|record_lock_descriptors)\.h"\n', '', source, flags=re.M)
     source = source.replace('#include <windows.h>\n', '')
@@ -52,6 +58,8 @@ int main() {
     with tempfile.TemporaryDirectory(prefix='gesher-eventfd-edge-') as temporary:
         directory = args.keep_dir or Path(temporary)
         directory.mkdir(parents=True, exist_ok=True)
+        if scratch_header is not None:
+            (directory / 'poll_scratch.h').write_text(scratch_header)
         for role, content in [('reference', reference), ('production-host', host)]:
             path = directory / (role + '.cc')
             path.write_text(content)

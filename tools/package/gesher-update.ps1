@@ -16,6 +16,22 @@ function ConvertTo-GesherStableVersion([object] $Value, [switch] $AllowTagPrefix
     return $parts -join '.'
 }
 
+# Installed and installer versions: a release (X.Y.Z) or a CI build after the
+# latest release (X.Y.Z.N). [version] orders X.Y.Z below every X.Y.Z.N and
+# every X.Y.Z.N below the next release. Release tags remain strictly X.Y.Z.
+function ConvertTo-GesherBuildVersion([object] $Value) {
+    if ($Value -isnot [string]) { return $null }
+    $match = [regex]::Match($Value, '\A([^.]+\.[^.]+\.[^.]+)(?:\.([1-9][0-9]*))?\z',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if (-not $match.Success) { return $null }
+    $release = ConvertTo-GesherStableVersion $match.Groups[1].Value
+    if (-not $release) { return $null }
+    if (-not $match.Groups[2].Success) { return $release }
+    $build = 0
+    if (-not [int]::TryParse($match.Groups[2].Value, [ref] $build) -or $build -gt 65535) { return $null }
+    return $release + '.' + $build.ToString([Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Get-GesherInstalledVersion([string] $InstallDirectory) {
     try {
         $path = Join-Path $InstallDirectory 'gesher-version.ini'
@@ -38,7 +54,7 @@ function Get-GesherInstalledVersion([string] $InstallDirectory) {
             }
         }
         if ($sections -ne 1) { return $null }
-        return ConvertTo-GesherStableVersion $found
+        return ConvertTo-GesherBuildVersion $found
     } catch { return $null }
 }
 
@@ -262,7 +278,7 @@ function ConvertTo-GesherInstallerVersion([object] $Value) {
     if ($Value -isnot [string]) { return $null }
     # Inno Setup pads its fixed-size textual version resource with ASCII spaces.
     # Remove only that trailing padding; all release version rules still apply.
-    return ConvertTo-GesherStableVersion -Value $Value.TrimEnd([char]0x20)
+    return ConvertTo-GesherBuildVersion -Value $Value.TrimEnd([char]0x20)
 }
 
 function Get-GesherUpdateInstallerVersion([string] $Path) {
