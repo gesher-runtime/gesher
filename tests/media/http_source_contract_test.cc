@@ -77,6 +77,81 @@ int main(int argc, char** argv) {
     Check(source->ReadAt(kLength + kChunk, &byte, 1) == 0, "416 ends unknown resource");
     Check(source->ReadAt(INT64_MAX, &byte, 1) == 0, "highest range is representable");
   }
+  // The peer withholds its tail until a separate request releases it. This
+  // proves the first useful read does not require a complete response, without
+  // depending on an elapsed-time performance threshold.
+  {
+    auto source = Open(base, "/stream-gated");
+    if (!source) return 1;
+    Check(source->Size() == 2 * 1024 * 1024 + 13, "known length is available before gated tail");
+    uint8_t bytes[32] = {};
+    const ssize_t initial = source->ReadAt(17, bytes, sizeof(bytes));
+    bool exact = initial == sizeof(bytes);
+    for (size_t i = 0; i < sizeof(bytes); ++i) exact &= bytes[i] == ByteAt(17 + i);
+    Check(exact, "initial whole-body bytes arrive before peer releases its tail");
+    const int64_t cached_prefix = source->CachedBytes();
+    Check(cached_prefix >= 0 && cached_prefix <= 65536 - 49,
+          "whole cache reports only the received prefix before the peer releases its tail");
+    {
+      auto release = Open(base, "/release-gated");
+      uint8_t released = 0;
+      Check(release && release->ReadAt(0, &released, 1) == 1 && released == '1',
+            "explicitly release owned loopback peer");
+    }
+    Check(source->ReadAt(2 * 1024 * 1024 + 10, bytes, sizeof(bytes)) == 3,
+          "file-backed whole response supports forward seek to final bytes");
+    Check(bytes[0] == ByteAt(2 * 1024 * 1024 + 10) && bytes[2] == ByteAt(2 * 1024 * 1024 + 12),
+          "final whole-body bytes are exact");
+    Check(source->CachedBytes() == 0, "final read consumes all following whole-response cache");
+    Check(source->ReadAt(7, bytes, 2) == 2 && bytes[0] == ByteAt(7) && bytes[1] == ByteAt(8),
+          "file-backed whole response supports backward seek");
+    Check(source->CachedBytes() == 2 * 1024 * 1024 + 13 - 9,
+          "backward seek exposes the exact already-received whole-response suffix");
+    std::vector<std::thread> readers;
+    for (int t = 0; t < 4; ++t) readers.emplace_back([&, t] {
+      for (int j = 0; j < 15; ++j) {
+        const int64_t at = (t * 9901 + j * 32771) % (2 * 1024 * 1024 - 100);
+        uint8_t read[79];
+        bool valid = source->ReadAt(at, read, sizeof(read)) == sizeof(read);
+        for (size_t i = 0; i < sizeof(read); ++i) valid &= read[i] == ByteAt(at + i);
+        Check(valid, "concurrent real spool reads preserve position and bytes");
+      }
+    });
+    for (auto& reader : readers) reader.join();
+    source->Cancel();
+    Check(source->ReadAt(0, bytes, 1) == -EINTR, "whole source cancellation rejects cached reads");
+    Check(source->CachedBytes() == -1, "cancelled whole source has unavailable cache");
+  }
+  {
+    auto source = Open(base, "/stream-unknown");
+    if (!source) return 1;
+    uint8_t bytes[32] = {};
+    Check(source->ReadAt(7, bytes, sizeof(bytes)) == sizeof(bytes), "unknown 200 early read");
+    Check(source->Size() == 2 * 1024 * 1024 + 13, "unknown 200 size drains spool to real EOF");
+    Check(source->CachedBytes() == 2 * 1024 * 1024 + 13 - 39,
+          "unknown-length drain preserves the last public read position for cached bytes");
+    Check(source->ReadAt(INT64_MAX, bytes, 1) == 0, "unknown 200 maximum offset becomes EOF");
+  }
+  {
+    auto source = Open(base, "/stream-empty");
+    if (!source) return 1;
+    uint8_t byte = 99;
+    Check(source->ReadAt(0, nullptr, 0) == 0 && source->Size() == 0 &&
+              source->ReadAt(0, &byte, 1) == 0 && byte == 99, "empty whole source and zero read");
+  }
+  {
+    auto source = Open(base, "/stream-truncated");
+    if (!source) return 1;
+    uint8_t bytes[2000];
+    std::memset(bytes, 0xed, sizeof(bytes));
+    const ssize_t count = source->ReadAt(0, bytes, sizeof(bytes));
+    Check(count == -EIO || count == 1000, "truncated WinHTTP body reports error or verified prefix only");
+    bool guarded = true;
+    for (size_t i = count > 0 ? static_cast<size_t>(count) : 0; i < sizeof(bytes); ++i)
+      guarded &= bytes[i] == 0xed;
+    Check(guarded, "truncated WinHTTP body never fabricates missing bytes");
+    Check(source->ReadAt(1000, bytes, 1) == -EIO, "truncated body remains an error beyond stored prefix");
+  }
   std::printf("Windows HTTP source contracts: %d checks, %d failures\n", checks.load(), failures.load());
   return failures != 0;
 }
