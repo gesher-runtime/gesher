@@ -457,6 +457,27 @@ void MappedRanges(Relocator relocate) {
     segments[1].p_flags = 0;
     overlap.made_writable.insert(reinterpret_cast<uintptr_t>(shared.data()) + kPageSize);
     run(overlap, true, "earlier relocation may have made the affected page readable and writable");
+
+    overlap.made_writable.clear();
+    segments[0].p_flags = PF_W;
+    segments[1].p_flags = PF_W;
+    run(overlap, true, "Windows writable segments supply readable packed metadata");
+    segments[1].p_flags = 0;
+    run(overlap, false, "later denied page still overrides a writable metadata extent");
+    segments[0].p_flags = PF_X;
+    segments[1].p_flags = PF_X;
+    run(overlap, arch, "only translated execute-only segments supply readable metadata");
+    overlap.overlapping_load_pages = false;
+    segments[1] = {};
+    run(overlap, arch, "the same translated protection applies without overlapping pages");
+
+    overlap.overlapping_load_pages = true;
+    overlap.android_rela = shared.data() + 16;
+    segments[0] = {PT_LOAD, PF_W, 16, 3};
+    segments[1] = {PT_LOAD, PF_W, 19, 3};
+    run(overlap, true, "adjacent writable byte extents cover metadata on a shared page");
+    segments[1] = {PT_LOAD, PF_W, 20, 2};
+    run(overlap, false, "a readable shared page cannot authorize an undeclared byte gap");
   }
 }
 

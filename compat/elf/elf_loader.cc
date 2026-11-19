@@ -1211,6 +1211,12 @@ bool PackedSegmentExtent(const Library* lib, const Elf64_Phdr& ph, uintptr_t fir
   return true;
 }
 
+bool PackedProtectionReadable(const Library* lib, uint32_t flags) {
+  // Writable mappings are readable on Windows. LoadProt also grants read
+  // access to guest code that the translator reads as data.
+  return (LoadProt(lib, flags) & (PROT_READ | PROT_WRITE)) != 0;
+}
+
 bool PackedPageReadable(const Library* lib, uintptr_t base, uintptr_t first_vaddr, size_t page) {
   if (lib->made_writable.count(base + page) != 0) return true;
   // ProtectSegments applies headers in file order, so the last owner controls
@@ -1220,7 +1226,7 @@ bool PackedPageReadable(const Library* lib, uintptr_t base, uintptr_t first_vadd
     size_t start, end;
     if (PackedSegmentExtent(lib, ph, first_vaddr, start, end) &&
         PageDown(start) <= page && page < PageUp(end)) {
-      return (LoadProt(lib, ph.p_flags) & (PROT_READ | PROT_WRITE)) != 0;
+      return PackedProtectionReadable(lib, ph.p_flags);
     }
   }
   return false;
@@ -1246,8 +1252,8 @@ bool ReadablePackedRange(const Library* lib, const uint8_t* data, size_t size) {
     for (uint16_t i = 0; i < lib->file_phnum; ++i) {
       const Elf64_Phdr& ph = lib->file_phdr[i];
       size_t start, limit;
-      if ((ph.p_flags & PF_R) && PackedSegmentExtent(lib, ph, first_vaddr, start, limit) &&
-          base + start <= cursor && cursor < base + limit) {
+      if (PackedSegmentExtent(lib, ph, first_vaddr, start, limit) &&
+          base + start <= cursor && cursor < base + limit && PackedProtectionReadable(lib, ph.p_flags)) {
         covered = std::max(covered, base + limit);
       }
     }
