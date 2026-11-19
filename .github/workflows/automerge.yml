@@ -76,8 +76,9 @@ jobs:
           # Empty input is omitted by the pinned action. Phase 1 installations
           # do not need Statuses permission until the shadow gate is enabled.
           permission-statuses: ${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}
-      # Evidence reads use the App installation's own API quota. Without these
-      # read permissions the step fails and reads fall back to GITHUB_TOKEN.
+      # Evidence reads use the App installation's own API quota. Issue events and
+      # comments on PRs are readable with pull-requests access. Without these read
+      # permissions the step fails and reads fall back to GITHUB_TOKEN.
       - name: Create read-only bot token
         id: gesher-read
         if: vars.GESHER_BOT_APP_ID != ''
@@ -90,7 +91,6 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-actions: read
           permission-checks: read
-          permission-issues: read
           permission-metadata: read
           permission-pull-requests: read
       - uses: actions/github-script@v7

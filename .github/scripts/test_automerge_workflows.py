@@ -139,7 +139,7 @@ class QueueWorkflows(unittest.TestCase):
         self.assertEqual({key: value for key, value in reader['with'].items()
                           if key.startswith('permission-')},
                          {'permission-actions': 'read', 'permission-checks': 'read',
-                          'permission-issues': 'read', 'permission-metadata': 'read',
+                          'permission-metadata': 'read',
                           'permission-pull-requests': 'read'})
         for key in ['app-id', 'private-key', 'owner', 'repositories']:
             self.assertEqual(reader['with'][key], token['with'][key])

@@ -67,8 +67,8 @@ there is no automatic second full CI run simply for merging.
 ## API quota
 
 Every controller event rereads labels, reviews, permission and CI evidence. These
-reads use a separate read-only Gesher App token (`actions`, `checks`, `issues`,
-`metadata` and `pull-requests` read), so they count against the App installation's
+reads use a separate read-only Gesher App token (`actions`, `checks`, `metadata`
+and `pull-requests` read; PR issue events and comments need no `issues` access), so they count against the App installation's
 quota rather than the repository's shared `GITHUB_TOKEN` quota. Exhausting that
 shared quota previously left `qa/label-approval` pending after CI succeeded.
 The required `qa/label-approval` status and its readback still use
