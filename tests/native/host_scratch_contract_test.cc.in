@@ -282,6 +282,17 @@ void edit_entry(int epfd, int fd, uint32_t flags, uint64_t value, bool remove = 
   else ep->entries[fd] = {flags, {.u64 = value}, ep->next_id++, true, {}};
   ep->NotifyLocked();
 }
+template <typename EpollState>
+bool waiters_empty(EpollState& ep) {
+  // Older production sources keep the waiter registry directly in Epoll.
+  if constexpr (requires { ep.wake; }) {
+    std::lock_guard<std::mutex> lock(ep.wake->mutex);
+    return ep.wake->waiters.empty();
+  } else {
+    std::lock_guard<std::mutex> lock(ep.mutex);
+    return ep.waiters.empty();
+  }
+}
 int run_poll(pollfd* fds, size_t count, int timeout = 0) {
   return gesher::PollFds(fds, count, timeout, nullptr, nullptr);
 }
@@ -442,7 +453,7 @@ void epoll_mutation_and_errors() {
   const int handles = live_handles.load();
   fail_create = true;
   check("EpollWaiter event creation failure preserved", EpollWaitImpl(ep, &out, 1, 0, nullptr, nullptr) == -1 && errno == ENOMEM);
-  check("event creation failure does not register or leak waiter", live_handles == handles && gesher::LookupEpoll(ep)->waiters.empty());
+  check("event creation failure does not register or leak waiter", live_handles == handles && waiters_empty(*gesher::LookupEpoll(ep)));
   erase_fd(ep); erase_fd(event); erase_fd(replacement);
 }
 void oversize() {
@@ -486,7 +497,7 @@ void concurrent_waiters() {
   for (auto& worker : workers) worker.join();
   check("concurrent waiter scratch and one-shot delivery independent", count[0] == 1 && count[1] == 1 &&
         delivered[0] != delivered[1] && delivered[0] + delivered[1] == 3);
-  check("concurrent waiter handles removed before thread exit", gesher::LookupEpoll(ep)->waiters.empty());
+  check("concurrent waiter handles removed before thread exit", waiters_empty(*gesher::LookupEpoll(ep)));
   erase_fd(ep); erase_fd(first); erase_fd(second);
 }
 void start_plan(std::initializer_list<WaitStep> plan) {

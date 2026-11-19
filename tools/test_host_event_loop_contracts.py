@@ -55,6 +55,9 @@ def main():
     scratch_header = (read('compat/posix/src/poll_scratch.h')
                       if 'PollScratchLease' in fd or 'PollScratchLease' in epoll else '')
     socket_header = read('compat/posix/src/socket_internal.h')
+    eventfd_namespace = 'namespace gesher {\n\n'
+    # Include the producer wake channels and watches declared before EventFd.
+    eventfd_state = between(epoll, eventfd_namespace, '\nnamespace {\n\nstruct Epoll;')
     pieces = {
         'epoll': {
             '@EPOLL_STATE@': between(epoll, 'struct Epoll;\n', 'class EpollWaiter {'),
@@ -69,7 +72,7 @@ def main():
         },
         'select': {'@SELECT_SOURCE@': re.sub(r'^#include[^\n]*\n', '', select, flags=re.M)},
         'scratch': {
-            '@EVENTFD_STATE@': between(epoll, 'struct EventFd {', '\nnamespace {\n\nstruct Epoll;'),
+            '@EVENTFD_STATE@': eventfd_state.removeprefix(eventfd_namespace),
             '@EPOLL_STATE@': between(epoll, 'struct Epoll;\n', '// fd -> object,'),
             '@EPOLL_CONVERSION@': between(epoll, '// epoll\'s event bits below', '// Linux permits at most five'),
             '@POLL_EVENTFD@': between(epoll, 'short PollEventFd(', '\nbool IsNonBlocking('),
