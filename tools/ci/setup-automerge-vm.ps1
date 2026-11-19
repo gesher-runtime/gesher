@@ -101,7 +101,7 @@ $stageLinux=((& wsl.exe -d $Distribution -- wslpath -a $stage) -join '').Trim()
 if ($LASTEXITCODE -ne 0 -or $stageLinux -notmatch '^/mnt/[a-z]/' -or $stageLinux -match "['`r`n]") { throw 'Cannot resolve a safe WSL bootstrap directory.' }
 & wsl.exe -d $Distribution -u root -- apt-get update
 if ($LASTEXITCODE -ne 0) { throw 'WSL dependency update failed.' }
-& wsl.exe -d $Distribution -u root -- env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends qemu-utils cloud-image-utils ca-certificates curl
+& wsl.exe -d $Distribution -u root -- env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends qemu-utils cloud-image-utils genisoimage ca-certificates curl
 if ($LASTEXITCODE -ne 0) { throw 'WSL image utility installation failed.' }
 $imageScript=@'
 set -euo pipefail
