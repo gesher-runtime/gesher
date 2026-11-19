@@ -34,10 +34,12 @@ typedef void* pthread_t;
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
+#include <new>
 
-// winpthreads' own, which gesher_pthread_kill calls; <pthread.h> routes
-// everyone else to gesher_pthread_kill.
+// The underlying winpthreads functions; callers use the POSIX adapters.
+#undef pthread_create
 #undef pthread_kill
 
 extern "C" int gesher_kill_other(pid_t pid, int sig);
@@ -61,28 +63,60 @@ State& state() {
   return *s;
 }
 
-thread_local sigset_t thread_mask = 0;
 thread_local stack_t alt_stack = {nullptr, SS_DISABLE, 0};
 
-// Self-directed pthread signals belong to this thread, not to the process's
-// arbitrary waiter. The intrusive registry permits SIG_IGN to flush all of
-// the actual thread queues without a second allocation or a lifetime handle.
+// The registry owns no thread references. Each registered queue is linked
+// until that thread exits, even if the thread is detached or cancelled.
 struct LocalPending {
   gesher::signals::Pending<siginfo_t> pending;
+  sigset_t mask = 0;
+  pthread_t thread{};
   LocalPending* next = nullptr;
-  LocalPending() {
-    std::lock_guard<std::mutex> guard(state().lock);
-    next = state().local_pending;
-    state().local_pending = this;
+  bool registered = false;
+
+  void RegisterLocked(State& state, pthread_t id) {
+    thread = id;
+    next = state.local_pending;
+    state.local_pending = this;
+    registered = true;
   }
   ~LocalPending() {
+    if (!registered) return;
     std::lock_guard<std::mutex> guard(state().lock);
     auto** entry = &state().local_pending;
     while (*entry != this) entry = &(*entry)->next;
     *entry = next;
   }
 };
+
+struct ThreadStart {
+  void* (*start)(void*);
+  void* argument;
+  LocalPending signals;
+};
+thread_local std::unique_ptr<ThreadStart> thread_start;
 thread_local LocalPending local_pending;
+
+LocalPending& CurrentPending() {
+  if (thread_start) return thread_start->signals;
+  if (!local_pending.registered) {
+    const pthread_t self = pthread_self();
+    State& current = state();
+    std::lock_guard<std::mutex> guard(current.lock);
+    local_pending.RegisterLocked(current, self);
+  }
+  return local_pending;
+}
+
+void* StartThread(void* argument) {
+  {
+    // The creator still owns the allocation until it publishes the returned
+    // pthread identity and its inherited mask. User code may start after that.
+    std::lock_guard<std::mutex> guard(state().lock);
+    thread_start.reset(static_cast<ThreadStart*>(argument));
+  }
+  return thread_start->start(thread_start->argument);
+}
 
 bool Valid(int signum) { return signum >= 1 && signum <= kMaxSignal; }
 sigset_t Bit(int signum) { return static_cast<sigset_t>(1) << (signum - 1); }
@@ -106,6 +140,17 @@ void PopSignalLocked(gesher::signals::Pending<siginfo_t>& queue, int signum, sig
   if (!queue.Pop(signum, info) && info != nullptr) info->si_signo = signum;
 }
 
+bool PushSignalLocked(gesher::signals::Pending<siginfo_t>& queue, int signum, int code,
+                      const union sigval* value) {
+  siginfo_t info = {};
+  info.si_signo = signum;
+  info.si_code = code;
+  info.si_pid = getpid();
+  info.si_uid = getuid();
+  if (value != nullptr) info.si_value = *value;
+  return queue.Push(signum, code, info);
+}
+
 // Makes `signum` pending for the process. Signal 0 only checks the target.
 int Send(pid_t pid, int signum, int code, const union sigval* value, bool to_thread = false) {
   if (signum != 0 && !Valid(signum)) return errno = EINVAL, -1;
@@ -118,22 +163,16 @@ int Send(pid_t pid, int signum, int code, const union sigval* value, bool to_thr
     return gesher_kill_other(pid, signum);
   }
   if (signum == 0) return 0;
-  auto* directed = to_thread ? &local_pending.pending : nullptr;
+  auto& own = CurrentPending();
   State& s = state();
   {
     std::lock_guard<std::mutex> guard(s.lock);
     // A blocked ignored signal remains waitable; installing SIG_IGN below
     // flushes pending instances irrespective of the mask.
-    if ((thread_mask & Bit(signum)) == 0 && Ignored(s.actions[signum], signum)) return 0;
-    if ((thread_mask & Bit(signum)) == 0 && s.actions[signum].sa_handler == SIG_DFL &&
+    if ((own.mask & Bit(signum)) == 0 && Ignored(s.actions[signum], signum)) return 0;
+    if ((own.mask & Bit(signum)) == 0 && s.actions[signum].sa_handler == SIG_DFL &&
         DefaultStops(signum)) return errno = ENOSYS, -1;
-    siginfo_t info = {};
-    info.si_signo = signum;
-    info.si_code = code;
-    info.si_pid = getpid();
-    info.si_uid = getuid();
-    if (value != nullptr) info.si_value = *value;
-    if (!(directed != nullptr ? *directed : s.pending).Push(signum, code, info)) return errno = EAGAIN, -1;
+    if (!PushSignalLocked(to_thread ? own.pending : s.pending, signum, code, value)) return errno = EAGAIN, -1;
   }
   s.sent.notify_all();
   return 0;
@@ -144,7 +183,7 @@ int Send(pid_t pid, int signum, int code, const union sigval* value, bool to_thr
 int Take(const sigset_t* set, siginfo_t* info,
          const std::chrono::steady_clock::time_point* deadline) {
   State& s = state();
-  auto& own = local_pending.pending;
+  auto& own = CurrentPending().pending;
   std::unique_lock<std::mutex> guard(s.lock);
   auto ready = [&] { return ((own.Mask() | s.pending.Mask()) & *set) != 0; };
   if (deadline == nullptr) {
@@ -233,15 +272,17 @@ int gesher_sigaction_raw(int signum, const struct sigaction* act, struct sigacti
 }
 
 int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset) {
-  if (oldset != nullptr) *oldset = thread_mask;
+  auto& own = CurrentPending();
+  std::lock_guard<std::mutex> guard(state().lock);
+  if (oldset != nullptr) *oldset = own.mask;
   if (set == nullptr) return 0;
   switch (how) {
-    case SIG_BLOCK: thread_mask |= *set; break;
-    case SIG_UNBLOCK: thread_mask &= ~*set; break;
-    case SIG_SETMASK: thread_mask = *set; break;
+    case SIG_BLOCK: own.mask |= *set; break;
+    case SIG_UNBLOCK: own.mask &= ~*set; break;
+    case SIG_SETMASK: own.mask = *set; break;
     default: return EINVAL;
   }
-  thread_mask &= ~(Bit(SIGKILL) | Bit(SIGSTOP));
+  own.mask &= ~(Bit(SIGKILL) | Bit(SIGSTOP));
   return 0;
 }
 
@@ -272,9 +313,9 @@ int sigaltstack(const stack_t* ss, stack_t* old_ss) {
 
 int sigpending(sigset_t* set) {
   State& s = state();
-  auto& own = local_pending.pending;
+  auto& own = CurrentPending();
   std::lock_guard<std::mutex> guard(s.lock);
-  *set = (own.Mask() | s.pending.Mask()) & thread_mask;
+  *set = (own.pending.Mask() | s.pending.Mask()) & own.mask;
   return 0;
 }
 
@@ -288,13 +329,48 @@ int tgkill(pid_t tgid, pid_t tid, int sig) {
   return Send(tgid, sig, SI_TKILL, nullptr, true);
 }
 
+int gesher_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
+                         void* (*start)(void*), void* argument) {
+  // Thread masks are written only by their own thread. An empty inherited
+  // mask needs no private state until the new thread actually uses signals.
+  const sigset_t inherited = thread_start ? thread_start->signals.mask : local_pending.mask;
+  if (inherited == 0) return gesher_errno_from_crt(pthread_create(thread, attr, start, argument));
+  std::unique_ptr<ThreadStart> context(new (std::nothrow) ThreadStart{start, argument, {}});
+  if (!context) return EAGAIN;
+  context->signals.mask = inherited;
+  State& s = state();
+  std::lock_guard<std::mutex> guard(s.lock);
+  const int error = pthread_create(thread, attr, StartThread, context.get());
+  if (error != 0) return gesher_errno_from_crt(error);
+  context->signals.RegisterLocked(s, *thread);
+  context.release();
+  return 0;
+}
+
 int gesher_pthread_kill(pthread_t thread, int sig) {
   // winpthreads checks that the thread exists (and handles signal 0).
-  int rc = pthread_kill(thread, 0);
+  const int rc = gesher_errno_from_crt(pthread_kill(thread, 0));
   if (rc != 0 || sig == 0) return rc;
   if (!Valid(sig)) return EINVAL;
-  if (!pthread_equal(thread, pthread_self())) return ENOSYS;
-  return Send(getpid(), sig, SI_TKILL, nullptr, true) == 0 ? 0 : errno;
+  if (pthread_equal(thread, pthread_self())) return Send(getpid(), sig, SI_TKILL, nullptr, true) == 0 ? 0 : errno;
+
+  State& s = state();
+  {
+    std::unique_lock<std::mutex> guard(s.lock);
+    auto* target = s.local_pending;
+    while (target && !pthread_equal(target->thread, thread)) target = target->next;
+    if (!target) {
+      guard.unlock();
+      const int status = gesher_errno_from_crt(pthread_kill(thread, 0));
+      return status == 0 ? ENOSYS : status;
+    }
+    // Asynchronous delivery needs the target's machine frame. A blocked
+    // signal can be queued now, even before its target starts sigwaitinfo.
+    if ((target->mask & Bit(sig)) == 0) return ENOSYS;
+    if (!PushSignalLocked(target->pending, sig, SI_TKILL, nullptr)) return EAGAIN;
+  }
+  s.sent.notify_all();
+  return 0;
 }
 
 int sigqueue(pid_t pid, int sig, const union sigval value) {
@@ -321,15 +397,15 @@ int sigwait(const sigset_t* set, int* sig) {
 int sigsuspend(const sigset_t* mask) {
   if (mask == nullptr) return errno = EFAULT, -1;
 
-  sigset_t old_mask = thread_mask;
+  auto& local = CurrentPending();
   sigset_t temp_mask = *mask & ~(Bit(SIGKILL) | Bit(SIGSTOP));
-  thread_mask = temp_mask;
-
   sigset_t unmasked = ~temp_mask;
 
   State& s = state();
-  auto& own = local_pending.pending;
+  auto& own = local.pending;
   std::unique_lock<std::mutex> guard(s.lock);
+  sigset_t old_mask = local.mask;
+  local.mask = temp_mask;
 
   siginfo_t delivered_info = {};
   struct sigaction delivered_act = {};
@@ -360,19 +436,19 @@ int sigsuspend(const sigset_t* mask) {
       // Check if signal action is default terminate
       if (act.sa_handler == SIG_DFL) {
         if (DefaultStops(candidate)) {
-          thread_mask = old_mask;
+          local.mask = old_mask;
           return errno = ENOSYS, -1;
         }
         PopSignalLocked(queue, candidate, &delivered_info);
+        local.mask = old_mask;
         guard.unlock();
-        thread_mask = old_mask;
         ExitProcess(128 + static_cast<UINT>(candidate));
       }
 
       // Action is a user-defined handler
       if ((act.sa_flags & SA_SIGINFO) != 0 ||
           ((act.sa_flags & SA_ONSTACK) != 0 && (alt_stack.ss_flags & SS_DISABLE) == 0)) {
-        thread_mask = old_mask;
+        local.mask = old_mask;
         return errno = ENOSYS, -1;
       }
       PopSignalLocked(queue, candidate, &delivered_info);
@@ -387,13 +463,12 @@ int sigsuspend(const sigset_t* mask) {
     s.sent.wait(guard);
   }
 
-  guard.unlock();
-
   sigset_t handler_mask = temp_mask | delivered_act.sa_mask;
   if ((delivered_act.sa_flags & SA_NODEFER) == 0) {
     handler_mask |= Bit(delivered_sig);
   }
-  thread_mask = handler_mask;
+  local.mask = handler_mask;
+  guard.unlock();
 
   if (delivered_act.sa_handler != nullptr &&
       delivered_act.sa_handler != SIG_DFL &&
@@ -401,7 +476,8 @@ int sigsuspend(const sigset_t* mask) {
     delivered_act.sa_handler(delivered_sig);
   }
 
-  thread_mask = old_mask;
+  guard.lock();
+  local.mask = old_mask;
   return errno = EINTR, -1;
 }
 

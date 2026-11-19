@@ -55,7 +55,7 @@ an invented sender or payload. A failing RT sigqueue reports EAGAIN instead.
 | Stop this process through an unsupported local default-stop action | ENOSYS; a pending blocked stop remains available to synchronous waiting | It never becomes ExitProcess |
 | Terminate through a terminating default action | Existing actual termination remains; no core-file or wait-status claim is added | Complete core/status semantics remain a separate reference gap |
 | Host pthread_kill(pthread_self()) or tgkill of the current process/thread | Private thread queue; another waiter cannot take its record | Required self-target case |
-| Host pthread_kill of a different live thread | Nonzero delivery returns ENOSYS after liveness validation; signal zero retains the existing actual liveness check | No conversion to process delivery |
+| Host pthread_kill of a different live thread | A blocked signal enters the exact target's private pending queue. An unblocked signal requiring asynchronous delivery returns ENOSYS. Signal zero probes the actual thread. | ART's shutdown SIGQUIT is available before the catcher calls sigwaitinfo |
 | Guest pthread_kill of a registered live thread | Existing retained-identity routing and its private pending queue remain | Required self-target case includes a blocked other-thread send |
 | Remote RT kill or nonzero remote sigqueue | ENOSYS before entering the legacy bitmap mailbox | RT multiplicity or queued payload is never silently discarded by these sends |
 | Ordinary remote kill, including signal zero | Existing Windows backend remains available | Required owned-child existence and termination case |
@@ -85,10 +85,13 @@ resource enforcement; it is not Android's cross-process, real-UID-wide quota.
 The existing configured-limit report and removal of the arbitrary 32-record cap
 are retained without claiming complete Linux resource authority.
 
-Host self-directed queues are thread-local objects in an intrusive registry.
-Their actual thread-local destruction unlinks the queue and frees its records;
-SIG_IGN can flush every registered queue under the same state lock. No extra
-kernel lifetime handle is needed for this host self-only path.
+The host pthread adapter inherits the creator's blocked signal mask. The
+creator publishes the new pthread identity and its nonempty mask before the
+thread can run user code. Its private queue accepts a blocked signal even
+before the target waits. Thread-local destruction unlinks the queue and frees
+its records. SIG_IGN can flush registered queues under the same state lock.
+The Windows native fixture sends ART's shutdown signal before the target waits
+and checks that another blocked waiter cannot consume it.
 
 Each guest ThreadState owns a retained kernel thread handle and a one-shot
 Windows thread-exit wait. Registration must succeed before state is published;

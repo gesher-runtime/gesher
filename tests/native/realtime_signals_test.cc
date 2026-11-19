@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <sys/resource.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -347,6 +348,74 @@ static void TestConfiguredQueueLimit() {
   Check("restore mask", pthread_sigmask(SIG_SETMASK, &oldset, nullptr) == 0);
 }
 
+#ifdef _WIN32
+struct DirectedWaiter {
+  sigset_t set{};
+  std::atomic<unsigned> phase{0};
+  bool inherited = false;
+  bool unblocked = false;
+  int signal = -1;
+  siginfo_t info{};
+};
+
+static bool AwaitPhase(const DirectedWaiter& waiter, unsigned phase) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (waiter.phase.load(std::memory_order_acquire) < phase) {
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    std::this_thread::yield();
+  }
+  return true;
+}
+
+static void* WaitForDirectedQuit(void* argument) {
+  auto& waiter = *static_cast<DirectedWaiter*>(argument);
+  sigset_t inherited{};
+  waiter.inherited = pthread_sigmask(0, nullptr, &inherited) == 0 && sigismember(&inherited, SIGQUIT) == 1;
+  if (!AwaitPhase(waiter, 1)) return nullptr;
+  const struct timespec timeout = {0, 250000000};
+  waiter.signal = sigtimedwait(&waiter.set, &waiter.info, &timeout);
+  waiter.unblocked = pthread_sigmask(SIG_UNBLOCK, &waiter.set, nullptr) == 0;
+  waiter.phase.store(2, std::memory_order_release);
+  AwaitPhase(waiter, 3);
+  return nullptr;
+}
+
+static void TestDirectedThreadSignal() {
+  DirectedWaiter waiter;
+  sigset_t original{};
+  sigemptyset(&waiter.set);
+  sigaddset(&waiter.set, SIGQUIT);
+  const int mask = pthread_sigmask(SIG_BLOCK, &waiter.set, &original);
+  Check("parent blocks the same shutdown signal as ART", mask == 0);
+  if (mask != 0) return;
+
+  pthread_t worker{};
+  const int created = pthread_create(&worker, nullptr, WaitForDirectedQuit, &waiter);
+  Check("create actual pthread with inherited shutdown mask", created == 0);
+  if (created == 0) {
+    Check("signal zero probes the live target", pthread_kill(worker, 0) == 0);
+    Check("directed SIGQUIT queued before target enters sigwait", pthread_kill(worker, SIGQUIT) == 0);
+    const struct timespec immediate = {0, 0};
+    Check("an unrelated blocked waiter cannot take directed SIGQUIT",
+          sigtimedwait(&waiter.set, nullptr, &immediate) == -1 && errno == EAGAIN);
+    waiter.phase.store(1, std::memory_order_release);
+    const bool waiting = AwaitPhase(waiter, 2);
+    Check("directed waiter returns under its own deadline", waiting);
+    if (waiting) {
+      Check("other-thread unblocked delivery reports ENOSYS",
+            waiter.unblocked && pthread_kill(worker, SIGQUIT) == ENOSYS);
+    }
+    waiter.phase.store(3, std::memory_order_release);
+    Check("join the actual catcher thread", pthread_join(worker, nullptr) == 0);
+    Check("catcher inherited a blocked signal without changing its own mask", waiter.inherited);
+    Check("only catcher received SIGQUIT with directed sender metadata",
+          waiter.signal == SIGQUIT && waiter.info.si_signo == SIGQUIT && waiter.info.si_code == SI_TKILL &&
+              waiter.info.si_pid == getpid() && waiter.info.si_uid == getuid());
+  }
+  Check("restore original thread mask after directed shutdown", pthread_sigmask(SIG_SETMASK, &original, nullptr) == 0);
+}
+#endif
+
 int main() {
   printf("Running realtime_signals_test...\n");
   TestRealtimeNonCoalescedFIFO();
@@ -356,6 +425,9 @@ int main() {
   TestSigsuspend();
   TestSigsuspendRealtime();
   TestConfiguredQueueLimit();
+#ifdef _WIN32
+  TestDirectedThreadSignal();
+#endif
 
   printf("realtime_signals: %d assertions, %d failures\n", assertions, failures);
   return failures ? 1 : 0;
