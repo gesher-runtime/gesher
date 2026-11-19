@@ -28,9 +28,11 @@ import java.util.function.Consumer;
  * {@code RoleManager} (e.g. caller-ID / dialer / browser role checks) failed with
  * {@link NoClassDefFoundError}.
  *
- * <p>No Android roles are available or held on Gesher. After argument and permission
- * checks, queries return {@code false}, {@code null}, or empty lists. Mutations with
- * a result report failure; void mutations throw {@link UnsupportedOperationException}.
+ * <p>No Android roles are available or held on Gesher. Profile-group active-user
+ * operations report their unavailable capability with {@link IllegalStateException}.
+ * Other queries return {@code false}, {@code null}, or empty lists after argument
+ * and permission checks. Mutations with a result report failure; other void
+ * mutations throw {@link UnsupportedOperationException}.
  * {@link #createRequestRoleIntent(String)} builds the documented request-role
  * {@link Intent}. Registered as {@code role} by
  * {@link RoleFrameworkInitializer}.
@@ -161,8 +163,7 @@ public final class RoleManager {
     /** @hide */
     public UserHandle getActiveUserForRole(String roleName) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
-        enforceActiveUserPermissions();
-        return null;
+        throw profileGroupUnavailable();
     }
 
     /** @hide */
@@ -270,8 +271,7 @@ public final class RoleManager {
     public void setActiveUserForRole(String roleName, UserHandle user, int flags) {
         Preconditions.checkStringNotEmpty(roleName, "roleName cannot be null or empty");
         Objects.requireNonNull(user, "user cannot be null");
-        enforceActiveUserPermissions();
-        throw unavailable();
+        throw profileGroupUnavailable();
     }
 
     /** @hide */
@@ -379,14 +379,6 @@ public final class RoleManager {
         }
     }
 
-    private void enforceActiveUserPermissions() {
-        enforceUser(mContext.getUserId(), false);
-        // Profile-group operations require this even when the context user is the caller.
-        enforcePermission(Manifest.permission.INTERACT_ACROSS_USERS_FULL);
-        enforceAnyPermission(Manifest.permission.MANAGE_ROLE_HOLDERS,
-                Manifest.permission.MANAGE_DEFAULT_APPLICATIONS);
-    }
-
     private void enforceController() {
         enforceUser(getContextUserIdIfAppropriate(), false);
         enforcePermission(MANAGE_ROLES_FROM_CONTROLLER);
@@ -416,6 +408,13 @@ public final class RoleManager {
 
     private static UnsupportedOperationException unavailable() {
         return new UnsupportedOperationException("Role management is unavailable on this runtime");
+    }
+
+    private static IllegalStateException profileGroupUnavailable() {
+        // Android 16 RoleService checks profile-group capability before role-domain,
+        // user and permission admission. This runtime has no role controller or
+        // profile-group role state, so the active-user operation is unavailable.
+        return new IllegalStateException("Profile-group roles are unavailable on this runtime");
     }
 
     private static void checkCallback(Executor executor, Consumer<Boolean> callback) {

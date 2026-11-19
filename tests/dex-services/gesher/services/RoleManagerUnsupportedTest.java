@@ -136,8 +136,9 @@ public final class RoleManagerUnsupportedTest {
                 "Role holder getters fabricated holders");
         require(!roleManager.setBrowserRoleHolder("com.example.browser", userId),
                 "setBrowserRoleHolder reported success");
-        require(roleManager.getActiveUserForRole(RoleManager.ROLE_WALLET) == null,
-                "getActiveUserForRole fabricated an active user");
+        expect(IllegalStateException.class,
+                () -> roleManager.getActiveUserForRole(RoleManager.ROLE_WALLET),
+                "Unavailable profile-group query reported an empty active-user result");
         OnRoleHoldersChangedListener listener = (roleName, changedUser) -> {
             throw new AssertionError("Unavailable roles emitted a change");
         };
@@ -164,12 +165,10 @@ public final class RoleManagerUnsupportedTest {
                 () -> denied.isBypassingRoleQualification(),
                 () -> denied.isRoleFallbackEnabled(RoleManager.ROLE_SMS),
                 () -> denied.isRoleVisibleForTest(TEST_ROLE),
-                () -> denied.getActiveUserForRole(RoleManager.ROLE_WALLET),
                 () -> denied.addRoleHolderFromController(RoleManager.ROLE_SMS, PACKAGE),
                 () -> denied.removeRoleHolderFromController(RoleManager.ROLE_SMS, PACKAGE),
                 () -> denied.addOnRoleHoldersChangedListenerAsUser(Runnable::run, listener, user),
                 () -> denied.removeOnRoleHoldersChangedListenerAsUser(listener, user),
-                () -> denied.setActiveUserForRole(RoleManager.ROLE_WALLET, user, 0),
                 () -> denied.setBypassingRoleQualification(true),
                 () -> denied.setDefaultHoldersForTest(TEST_ROLE, List.of(PACKAGE)),
                 () -> denied.setRoleFallbackEnabled(RoleManager.ROLE_SMS, true),
@@ -181,6 +180,13 @@ public final class RoleManagerUnsupportedTest {
         for (int i = 0; i < privilegedCalls.length; ++i) {
             expect(SecurityException.class, privilegedCalls[i], "Unprivileged call admitted: " + i);
         }
+        // The profile-group capability check precedes service permission admission.
+        expect(IllegalStateException.class,
+                () -> denied.getActiveUserForRole(RoleManager.ROLE_WALLET),
+                "Unavailable active-user query checked permissions before capability");
+        expect(IllegalStateException.class,
+                () -> denied.setActiveUserForRole(RoleManager.ROLE_WALLET, user, 0),
+                "Unavailable active-user setter checked permissions before capability");
         require(deniedContext.permissionChecks > 0 && grantedContext.permissionChecks > 0,
                 "Role APIs did not consult the supplied Context permission boundary");
 
@@ -215,8 +221,10 @@ public final class RoleManagerUnsupportedTest {
                     "Authorized unsupported call must report false exactly once");
         }
 
-        Runnable[] unavailableMutations = {
+        expect(IllegalStateException.class,
                 () -> roleManager.setActiveUserForRole(RoleManager.ROLE_WALLET, user, 0),
+                "Unavailable profile-group setter returned or used the generic void-mutation error");
+        Runnable[] unavailableMutations = {
                 () -> roleManager.setBypassingRoleQualification(true),
                 () -> roleManager.setBypassingRoleQualification(false),
                 () -> roleManager.setDefaultHoldersForTest(TEST_ROLE, List.of(PACKAGE)),
@@ -250,8 +258,9 @@ public final class RoleManagerUnsupportedTest {
                 "Role holder read permission admitted default-app management");
 
         RoleManager manageOnly = manager(new PermissionContext(userId, Manifest.permission.MANAGE_ROLE_HOLDERS));
-        expect(SecurityException.class, () -> manageOnly.getActiveUserForRole(RoleManager.ROLE_WALLET),
-                "Active-user query omitted the full cross-user permission");
+        expect(IllegalStateException.class,
+                () -> manageOnly.getActiveUserForRole(RoleManager.ROLE_WALLET),
+                "Unavailable profile-group query entered cross-user permission admission");
         expect(SecurityException.class, () -> manageOnly.setBypassingRoleQualification(true),
                 "Holder management permission admitted qualification bypass");
         expect(SecurityException.class, () -> manageOnly.setRoleNamesFromController(List.of()),
@@ -286,11 +295,43 @@ public final class RoleManagerUnsupportedTest {
         RoleManager defaultsAndCrossUser = manager(new PermissionContext(userId,
                 Manifest.permission.MANAGE_DEFAULT_APPLICATIONS,
                 Manifest.permission.INTERACT_ACROSS_USERS_FULL));
-        require(defaultsAndCrossUser.getActiveUserForRole(RoleManager.ROLE_WALLET) == null,
-                "Active-user query rejected the default-app permission alternative");
-        expect(UnsupportedOperationException.class,
+        expect(IllegalStateException.class,
+                () -> defaultsAndCrossUser.getActiveUserForRole(RoleManager.ROLE_WALLET),
+                "Default-app permission fabricated profile-group capability");
+        expect(IllegalStateException.class,
                 () -> defaultsAndCrossUser.setActiveUserForRole(RoleManager.ROLE_WALLET, user, 0),
-                "Active-user setter rejected authorized default-app management");
+                "Default-app permission admitted an unavailable profile-group setter");
+
+        // Unknown, ordinary and profile-group role names all meet the same
+        // unavailable-capability boundary. No role definition or successful
+        // empty result may be invented while profile-group support is absent.
+        for (PermissionContext permissionContext : new PermissionContext[] {
+                grantedContext, deniedContext}) {
+            RoleManager unavailableGroup = manager(permissionContext);
+            for (String role : new String[] {"example.UNKNOWN_ROLE", RoleManager.ROLE_SMS,
+                    RoleManager.ROLE_WALLET, TEST_ROLE}) {
+                int before = permissionContext.permissionChecks;
+                expect(IllegalStateException.class,
+                        () -> unavailableGroup.getActiveUserForRole(role),
+                        "Unavailable active-user query returned for " + role);
+                expect(IllegalStateException.class,
+                        () -> unavailableGroup.setActiveUserForRole(role, otherUser, 0),
+                        "Unavailable active-user setter entered role/user admission for " + role);
+                require(permissionContext.permissionChecks == before,
+                        "Unavailable profile-group operation consulted permissions");
+            }
+            expectInvalidRole(() -> unavailableGroup.getActiveUserForRole(null),
+                    "Unavailable query skipped the client's null-role validation");
+            expectInvalidRole(() -> unavailableGroup.getActiveUserForRole(""),
+                    "Unavailable query skipped the client's empty-role validation");
+            expectInvalidRole(() -> unavailableGroup.setActiveUserForRole(null, user, 0),
+                    "Unavailable setter skipped the client's null-role validation");
+            expectInvalidRole(() -> unavailableGroup.setActiveUserForRole("", user, 0),
+                    "Unavailable setter skipped the client's empty-role validation");
+            expect(NullPointerException.class,
+                    () -> unavailableGroup.setActiveUserForRole(RoleManager.ROLE_WALLET, null, 0),
+                    "Unavailable setter skipped the client's required-user validation");
+        }
 
         RoleManager observer = manager(new PermissionContext(userId,
                 Manifest.permission.OBSERVE_ROLE_HOLDERS));
