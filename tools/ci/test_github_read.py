@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import os
+import re
 from pathlib import Path
 import runpy
 import subprocess
@@ -17,16 +18,20 @@ from github_jobs import get_jobs
 
 
 ENDPOINT = 'repos/gesher-runtime/gesher/actions/runs/42444051868/attempts/1/jobs?per_page=100'
-COMMAND = ['gh', 'api', '--method', 'GET', '--', ENDPOINT]
+COMMAND = ['gh', 'api', '--method', 'GET', '--include', '--', ENDPOINT]
 DIAL_TIMEOUT = ('Get "https://api.github.com/' + ENDPOINT
                 + '": dial tcp 20.29.134.17:443: i/o timeout')
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def response(value=None, *, code=0, stderr='', raw=None):
-    return subprocess.CompletedProcess(
-        COMMAND, code, stdout=json.dumps(value).encode() if raw is None else raw,
-        stderr=stderr.encode())
+    body = json.dumps(value).encode() if raw is None else raw
+    statuses = re.findall(r'\(HTTP ([1-5][0-9]{2})\)', stderr)
+    # gh --include prints the final status and headers before the body. A
+    # transport failure before a response has no HTTP framing or JSON output.
+    output = b'' if code and not statuses else (
+        f'HTTP/2.0 {statuses[-1] if statuses else 200}\nContent-Type: application/json\r\n\r\n'.encode() + body)
+    return subprocess.CompletedProcess(COMMAND, code, stdout=output, stderr=stderr.encode())
 
 
 class GitHubReadTest(unittest.TestCase):
@@ -165,7 +170,7 @@ class GitHubReadTest(unittest.TestCase):
         endpoint = '--method=POST'
         self.run.return_value = response({})
         self.assertEqual(get_json(endpoint), {})
-        self.run.assert_called_once_with(['gh', 'api', '--method', 'GET', '--', endpoint],
+        self.run.assert_called_once_with(['gh', 'api', '--method', 'GET', '--include', '--', endpoint],
                                          capture_output=True, timeout=60)
 
     def test_cli_outputs_only_complete_json_with_retry_diagnostics_on_stderr(self):
@@ -226,7 +231,7 @@ class ReceiptIntegrationTest(unittest.TestCase):
     def _invoke(self, command, **kwargs):
         if command[0] == 'gh':
             self.commands.append(command)
-            self.assertEqual(command[:5], ['gh', 'api', '--method', 'GET', '--'])
+            self.assertEqual(command[:6], ['gh', 'api', '--method', 'GET', '--include', '--'])
             return self.responses.pop(0)
         self.downloads.append(command)
         self.assertEqual(command[:2], [sys.executable, 'tools/surface/download-verified-artifact.py'])
