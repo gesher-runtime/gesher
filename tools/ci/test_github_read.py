@@ -18,6 +18,8 @@ from github_jobs import get_jobs
 
 ENDPOINT = 'repos/gesher-runtime/gesher/actions/runs/42444051868/attempts/1/jobs?per_page=100'
 COMMAND = ['gh', 'api', '--method', 'GET', '--', ENDPOINT]
+DIAL_TIMEOUT = ('Get "https://api.github.com/' + ENDPOINT
+                + '": dial tcp 20.29.134.17:443: i/o timeout')
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -64,9 +66,22 @@ class GitHubReadTest(unittest.TestCase):
                 self.assertEqual(self.run.call_count, 2)
                 self.sleep.assert_called_once_with(1)
 
+    def test_https_dial_timeout_retries_the_exact_get(self):
+        for error in (DIAL_TIMEOUT, 'gh: ' + DIAL_TIMEOUT.replace('20.29.134.17', '[2606:50c0::154]')):
+            with self.subTest(error=error):
+                self.run.reset_mock()
+                self.sleep.reset_mock()
+                self.run.side_effect = [response({'partial': True}, code=1, stderr=error + '\r\n'),
+                                        response({'complete': True})]
+                self.assertEqual(get_json(ENDPOINT), {'complete': True})
+                self.assertEqual(self.run.call_args_list,
+                                 [call(COMMAND, capture_output=True, timeout=60)] * 2)
+                self.sleep.assert_called_once_with(1)
+
     def test_four_attempts_exhaust_with_exact_bounded_backoff(self):
-        self.run.side_effect = [response(code=1, stderr=f'gh: Server Error (HTTP {status})')
-                                for status in (502, 503, 504, 502)]
+        self.run.side_effect = [response(code=1, stderr=error) for error in
+                                ('gh: Server Error (HTTP 502)', DIAL_TIMEOUT,
+                                 'gh: Server Error (HTTP 504)', DIAL_TIMEOUT)]
         with self.assertRaisesRegex(GitHubReadError, r'after 4 attempt\(s\)'):
             get_json(ENDPOINT)
         self.assertEqual(self.run.call_args_list,
@@ -90,7 +105,12 @@ class GitHubReadTest(unittest.TestCase):
                    'stream error: stream ID 0; CANCEL; received from peer',
                    'stream error: stream ID 1; CANCEL; unexpected trailing message',
                    'gh: rejected (HTTP 403)\nstream error: stream ID 1; CANCEL; received from peer',
-                   'gh: rejected (HTTP 401)\ngh: Server Error (HTTP 502)', '']
+                   'gh: rejected (HTTP 401)\ngh: Server Error (HTTP 502)',
+                   'i/o timeout', 'net/http: TLS handshake timeout',
+                   DIAL_TIMEOUT.replace('dial tcp', 'read tcp'),
+                   DIAL_TIMEOUT.replace(':443:', ':80:'),
+                   DIAL_TIMEOUT.replace('i/o timeout', 'connect: connection refused'),
+                   DIAL_TIMEOUT + ' (HTTP 403)', 'gh: HTTP 403\r\n' + DIAL_TIMEOUT, '']
         for error in errors:
             with self.subTest(error=error):
                 self.run.reset_mock()
@@ -217,12 +237,14 @@ class ReceiptIntegrationTest(unittest.TestCase):
         runpy.run_path(str(ROOT / 'tools/ci/artifact_receipt.py'), run_name='__main__')
 
     def test_actual_receipt_recovers_and_preserves_paths_and_verified_download(self):
-        self.responses = [response(self.run_value), response(code=1, stderr='gh: Server Error (HTTP 502)'),
+        timeout = DIAL_TIMEOUT.replace(ENDPOINT, self.endpoints[1])
+        self.responses = [response(self.run_value), response(code=1, stderr=timeout),
+                          response(code=1, stderr='gh: Server Error (HTTP 502)'),
                           response(self.jobs), response(self.inventory)]
         self._receipt()
         self.assertEqual([command[-1] for command in self.commands],
-                         [self.endpoints[0], self.endpoints[1], self.endpoints[1], self.endpoints[2]])
-        self.sleep.assert_called_once_with(1)
+                         [self.endpoints[0], *([self.endpoints[1]] * 3), self.endpoints[2]])
+        self.assertEqual(self.sleep.call_args_list, [call(1), call(2)])
         self.assertEqual(self.downloads, [[sys.executable, 'tools/surface/download-verified-artifact.py',
             '--id', '10', '--digest', 'sha256:' + 'c' * 64, '--destination', 'supplier']])
 
