@@ -32,3 +32,7 @@ target_compile_options(gesher_bionic PRIVATE -Wall -Wextra -Werror)
 # regcomp/regexec over std::regex, which reports a bad pattern by throwing.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/syscall_bionic.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")
+# Wide formatting and stream metadata translate allocator failures to errno.
+# Catch them before returning across the guest's C ABI.
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/stdio_bionic.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Execute unchanged public-API enabled-state fixtures against supplied production classes.
+"""Exercise public package enabled-state and, in the full suite, searchable visibility.
 
-The --app-classes argument can point at an unmodified baseline for behavioral
-negative controls; no new production helper is referenced by the fixture.
+For enabled-state negative controls, --app-classes can point at an unmodified
+baseline because those fixtures call only public APIs.
 """
 from __future__ import annotations
 import argparse
@@ -11,6 +11,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+
+from test_searchable import run_searchable
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,6 +50,9 @@ def main() -> None:
             if args.group == "all":
                 subprocess.run(command + ["write"], env=env, check=True, timeout=90)
                 subprocess.run(command + ["read"], env=env, check=True, timeout=90)
+
+    if args.group == "all":
+        run_searchable(java_home=args.java_home, classpath=classpath, cc=cc)
 
 
 if __name__ == "__main__":
