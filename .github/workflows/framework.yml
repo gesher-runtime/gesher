@@ -664,6 +664,18 @@ jobs:
             -d "$RUNNER_TEMP/audio-state-sdk" \
             tests/dex-services/gesher/services/AudioStateContractTest.java
 
+      - name: SDK36 Wi-Fi configuration and enterprise value contracts
+        run: |
+          python3 tools/test_wifi_configuration_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 WifiInfo Builder, copy and redaction contracts
+        run: |
+          python3 tools/test_wifi_info_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
       - name: Collect framework artifacts
         run: |
           mkdir -p dist-framework
