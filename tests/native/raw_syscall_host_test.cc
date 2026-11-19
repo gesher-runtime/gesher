@@ -3,8 +3,10 @@
 #include "shim_internal.h"
 #include <gesher/elf_loader.h>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace {
 int failures;
@@ -97,7 +99,266 @@ int main() {
   match = {-1, 3};
   Check("negative range rejected", execute(&re, "x42y", 1, &match, 4) == 16);
   free_regex(&re);
-  Check("unsupported newline mode rejected", compile(&re, "^x$", 1 | 8) == 16);
+  Check("REG_NEWLINE matches per-line anchors",
+        compile(&re, "^x$", 1 | 8) == 0 && execute(&re, "a\nx\nb", 0, nullptr, 0) == 0 &&
+            execute(&re, "a\nx\nb", 0, nullptr, 1 | 2) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE matches trailing empty line and respects offsets",
+        compile(&re, "^$", 1 | 8) == 0 &&
+            execute(&re, "a\n", 1, &match, 0) == 0 && match.begin == 2 && match.end == 2);
+  free_regex(&re);
+  Check("REG_NEWLINE excludes newline from dot and negated class",
+        compile(&re, "a.b", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) != 0 &&
+            execute(&re, "axb", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE excludes newline from negated bracket expressions",
+        compile(&re, "a[^x]b", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) != 0 &&
+            execute(&re, "ayb", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE negated bracket with trailing dash still excludes newline",
+        compile(&re, "a[^a-]b", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) != 0 &&
+            execute(&re, "a-b", 0, nullptr, 0) != 0 && execute(&re, "axb", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  Check("REG_NEWLINE positive character classes still match newline",
+        compile(&re, "a[[:space:]]b", 1 | 8) == 0 &&
+            ((match = {0, 0}), execute(&re, "a\nb", 1, &match, 0) == 0) &&
+            match.begin == 0 && match.end == 3);
+  free_regex(&re);
+  Check("REG_NEWLINE positive cntrl class matches newline",
+        compile(&re, "a[[:cntrl:]]b", 1 | 8) == 0 &&
+            ((match = {0, 0}), execute(&re, "a\nb", 1, &match, 0) == 0) &&
+            match.begin == 0 && match.end == 3);
+  free_regex(&re);
+  Check("REG_NEWLINE anchored multiline positive class matches",
+        compile(&re, "^a[[:space:]]b$", 1 | 8) == 0 &&
+            ((match = {0, 0}), execute(&re, "z\na\nb\nw", 1, &match, 0) == 0) &&
+            match.begin == 2 && match.end == 5);
+  free_regex(&re);
+  Check("REG_NEWLINE with REG_STARTEND keeps offsets relative to base",
+        compile(&re, "^cd$", 1 | 8) == 0 &&
+            ((match = {1, 6}), execute(&re, "ab\ncd\n", 1, &match, 4) == 0) &&
+            match.begin == 3 && match.end == 5);
+  free_regex(&re);
+  Check("REG_NEWLINE with REG_STARTEND and REG_NOTBOL honors preceding newline",
+        compile(&re, "^x$", 1 | 8) == 0 &&
+            ((match = {2, 3}), execute(&re, "a\nx", 1, &match, 1 | 4) == 0) &&
+            match.begin == 2 && match.end == 3);
+  free_regex(&re);
+  Check("REG_NEWLINE with REG_NOTBOL without preceding newline rejects start",
+        compile(&re, "^x$", 1 | 8) == 0 && execute(&re, "x\ny", 0, nullptr, 1) != 0);
+  free_regex(&re);
+  Check("REG_NEWLINE extended handles escaped ordinary slash and escaped bracket",
+        compile(&re, "^\\|[0-9]{2}\\/[0-9]{5}\\^$", 1 | 8) == 0 &&
+            execute(&re, "|11/11111^", 0, nullptr, 0) == 0 &&
+            execute(&re, "|11x11111^", 0, nullptr, 0) != 0);
+  free_regex(&re);
+  Check("escaped bracket stays literal outside character class",
+        compile(&re, "a\\[b\\/c\\]", 1) == 0 && execute(&re, "a[b/c]", 0, nullptr, 0) == 0 &&
+            execute(&re, "ab", 0, nullptr, 0) != 0);
+  free_regex(&re);
+  Check("REG_NEWLINE matches literal newline in pattern",
+        compile(&re, "a\nb", 1 | 8) == 0 && execute(&re, "a\nb", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  for (const char* pat : {"a$\nb", "a\n^b", "^a$\n^b$", "^a\\\nb$"}) {
+    match = {0, 0};
+    Check("REG_NEWLINE internal newline anchor/escaped LF matches",
+          compile(&re, pat, 1 | 8) == 0 && execute(&re, "a\nb", 1, &match, 0) == 0 &&
+              match.begin == 0 && match.end == 3);
+    free_regex(&re);
+  }
+  Match sub[3]{};
+  Check("POSIX leftmost-longest captures (a|ab)(b|bc)",
+        compile(&re, "(a|ab)(b|bc)", 1) == 0 && execute(&re, "abc", 3, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 3 && sub[1].begin == 0 && sub[1].end == 1 &&
+            sub[2].begin == 1 && sub[2].end == 3);
+  free_regex(&re);
+  Check("AOSP submatch preference (foo|foobar)(bar)?",
+        compile(&re, "(foo|foobar)(bar)?", 1) == 0 && execute(&re, "foobar", 3, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 6 && sub[1].begin == 0 && sub[1].end == 6 &&
+            sub[2].begin == -1 && sub[2].end == -1);
+  free_regex(&re);
+  Check("BRE backreference matches repeated group",
+        compile(&re, "\\(ab\\)\\1", 0) == 0 && execute(&re, "xxababzz", 2, sub, 0) == 0 &&
+            sub[0].begin == 2 && sub[0].end == 6 && sub[1].begin == 2 && sub[1].end == 4);
+  free_regex(&re);
+  // Expected results were checked against android-16.0.0_r4 bionic's
+  // upstream-netbsd regex sources, with the Android libc_netbsd build flags.
+  Check("top-level alternative uses its compiled entry",
+        compile(&re, "a|bb", 1) == 0 && execute(&re, "bb", 1, &match, 0) == 0 &&
+            match.begin == 0 && match.end == 2);
+  free_regex(&re);
+  Check("top-level alternative chooses longest match",
+        compile(&re, "a|aa", 1) == 0 && execute(&re, "aa", 1, &match, 0) == 0 &&
+            match.begin == 0 && match.end == 2);
+  free_regex(&re);
+  for (const char* pat : {"a*b", "a?b", "a{0}b", "a{0,2}b"}) {
+    Check("nullable leading expression uses its compiled entry",
+          compile(&re, pat, 1) == 0 && execute(&re, "b", 1, &match, 0) == 0 &&
+              match.begin == 0 && match.end == 1);
+    free_regex(&re);
+  }
+  Check("BRE backreference executor uses its compiled entry",
+        compile(&re, "a*\\(b\\)\\1", 0) == 0 &&
+            execute(&re, "bb", 1, &match, 0) == 0 && match.begin == 0 && match.end == 2);
+  free_regex(&re);
+  sub[0] = {11, 12};
+  sub[1] = {21, 22};
+  sub[2] = {31, 32};
+  Check("REG_NOSUB retains internal backreferences and leaves caller results alone",
+        compile(&re, "\\(ab\\)\\1", 4) == 0 && re.count == 1 &&
+            execute(&re, "abab", 3, sub, 0) == 0 &&
+            execute(&re, "abac", 0, nullptr, 0) == 1 &&
+            sub[0].begin == 11 && sub[0].end == 12 &&
+            sub[1].begin == 21 && sub[1].end == 22 &&
+            sub[2].begin == 31 && sub[2].end == 32);
+  free_regex(&re);
+  Check("empty captured BRE backreference matches an empty input",
+        compile(&re, "\\(a*\\)\\1", 0) == 0 && execute(&re, "", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 0 && sub[1].begin == 0 && sub[1].end == 0);
+  free_regex(&re);
+  Check("REG_ICASE preserves AOSP byte-exact backreferences",
+        compile(&re, "\\(a\\)\\1", 2) == 0 && execute(&re, "aA", 0, nullptr, 0) == 1 &&
+            execute(&re, "AA", 2, sub, 0) == 0 && sub[0].begin == 0 && sub[0].end == 2);
+  free_regex(&re);
+  Check("BRE backreference cannot name an outer group still open",
+        compile(&re, "\\(\\(a\\)\\1\\)", 0) == 6);
+  for (const char* pat : {"", "a|", "|a", "(a|)", "a{0}"}) {
+    Check("AOSP rejects an empty expression or alternative", compile(&re, pat, 1) == 14);
+  }
+  Check("AOSP permits an explicitly empty group",
+        compile(&re, "()", 1) == 0 && execute(&re, "", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 0 && sub[1].begin == 0 && sub[1].end == 0);
+  free_regex(&re);
+  Check("AOSP rejects unsupported alphabetic escapes", compile(&re, "\\d", 1) == 5);
+  Check("BRE unmatched closing group reports REG_EPAREN", compile(&re, "\\)", 0) == 8);
+  Check("BRE repeated quantifier reports REG_BADRPT", compile(&re, "a**", 0) == 13);
+  Check("ERE nonnumeric repetition reports REG_BADRPT", compile(&re, "a{x}", 1) == 13);
+  Check("AOSP named collating elements preserve positive-class LF",
+        compile(&re, "[[.newline.]]", 1 | 8) == 0 &&
+            execute(&re, "x\ny", 1, &match, 0) == 0 && match.begin == 1 && match.end == 2);
+  free_regex(&re);
+  Check("AOSP bracket word boundaries match",
+        compile(&re, "[[:<:]]a[[:>:]]", 1) == 0 &&
+            execute(&re, " a!", 1, &match, 0) == 0 && match.begin == 1 && match.end == 2);
+  free_regex(&re);
+  Check("AOSP rejects a range following a completed range", compile(&re, "[a-c-e]", 1) == 11);
+  Check("AOSP rejects a named class as a range endpoint", compile(&re, "[[:alpha:]-_]", 1) == 11);
+  Check("AOSP malformed named class reports REG_ECTYPE", compile(&re, "[[:a]]", 1) == 4);
+  for (const char* pat : {"(a|aa)*", "(aa|a)*"}) {
+    Check("AOSP repeated alternation picks greedy final capture",
+          compile(&re, pat, 1) == 0 && execute(&re, "aaa", 3, sub, 0) == 0 &&
+              sub[0].begin == 0 && sub[0].end == 3 && sub[1].begin == 2 && sub[1].end == 3 &&
+              sub[2].begin == -1 && sub[2].end == -1);
+    free_regex(&re);
+  }
+  Check("AOSP nested star matches empty capture on empty input",
+        compile(&re, "(a*)*", 1) == 0 && execute(&re, "", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 0 && sub[1].begin == 0 && sub[1].end == 0);
+  free_regex(&re);
+  Check("AOSP nested star settles group 1 at trailing empty pass",
+        compile(&re, "(a*)*", 1) == 0 && execute(&re, "a", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 1 && sub[1].begin == 1 && sub[1].end == 1);
+  free_regex(&re);
+  Check("AOSP nested BRE star with backref settles group 1 at trailing empty pass",
+        compile(&re, "\\(a*\\)*\\1", 0) == 0 && execute(&re, "aa", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 2 && sub[1].begin == 2 && sub[1].end == 2);
+  free_regex(&re);
+  Check("AOSP nested plus dissects only final iteration inner group",
+        compile(&re, "(a(b)|a)+", 1) == 0 && execute(&re, "aba", 3, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 3 && sub[1].begin == 2 && sub[1].end == 3 &&
+            sub[2].begin == -1 && sub[2].end == -1);
+  free_regex(&re);
+  Check("AOSP bounded optional repeat keeps trailing empty group capture",
+        compile(&re, "(a*){1,2}", 1) == 0 && execute(&re, "a", 2, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 1 && sub[1].begin == 1 && sub[1].end == 1);
+  free_regex(&re);
+  for (const char* input : {"a", "aa"}) {
+    const auto length = static_cast<int64_t>(std::strlen(input));
+    Check("AOSP bounded BRE choice preserves branch-local backreference capture",
+          compile(&re, "\\(a*\\)\\{1,2\\}\\1", 0) == 0 &&
+              execute(&re, input, 2, sub, 0) == 0 &&
+              sub[0].begin == 0 && sub[0].end == length &&
+              sub[1].begin == 0 && sub[1].end == length);
+    free_regex(&re);
+  }
+  for (int flags : {0, 4}) {
+    Check("Bounded BRE cannot skip a required backreference, including REG_NOSUB",
+          compile(&re, "\\(a\\)\\{1,2\\}\\1", flags) == 0 &&
+              execute(&re, "a", 2, sub, 0) == 1);
+    free_regex(&re);
+    Check("Bounded BRE cannot skip a required suffix, including REG_NOSUB",
+          compile(&re, "\\(a\\)\\{1,2\\}\\1b", flags) == 0 &&
+              execute(&re, "aa", 2, sub, 0) == 1);
+    free_regex(&re);
+    Check("Nullable bounded BRE still requires the whole expression",
+          compile(&re, "\\(a*\\)\\{1,2\\}\\1b", flags) == 0 &&
+              execute(&re, "aa", 2, sub, 0) == 1);
+    free_regex(&re);
+  }
+  Check("BRE whole-pattern filter retains nested referenced group language",
+        compile(&re, "\\(a\\)\\(\\1b\\)\\2", 0) == 0 &&
+            execute(&re, "aabab", 3, sub, 0) == 0 &&
+            sub[0].begin == 0 && sub[0].end == 5 &&
+            sub[1].begin == 0 && sub[1].end == 1 &&
+            sub[2].begin == 1 && sub[2].end == 3);
+  free_regex(&re);
+  for (const char* pattern : {"\\<a\\>", "[[:<:]]a[[:>:]]"}) {
+    match = {1, 2};
+    Check("REG_STARTEND starts a word region despite a preceding word byte",
+          compile(&re, pattern, 1) == 0 && execute(&re, "ba", 1, &match, 4) == 0 &&
+              match.begin == 1 && match.end == 2);
+    match = {1, 2};
+    Check("REG_STARTEND REG_NOTBOL retains the preceding word byte",
+          execute(&re, "ba", 1, &match, 4 | 1) == 1);
+    match = {1, 2};
+    Check("REG_STARTEND REG_NOTBOL permits a preceding nonword byte",
+          execute(&re, " a", 1, &match, 4 | 1) == 0 &&
+              match.begin == 1 && match.end == 2);
+    free_regex(&re);
+  }
+  sub[0] = {1, 3};
+  Check("BRE backreference respects the REG_STARTEND word-region beginning",
+        compile(&re, "\\<\\(a\\)\\1", 0) == 0 && execute(&re, "baa", 2, sub, 4) == 0 &&
+            sub[0].begin == 1 && sub[0].end == 3 &&
+            sub[1].begin == 1 && sub[1].end == 2);
+  sub[0] = {1, 3};
+  Check("BRE REG_NOTBOL keeps REG_STARTEND inside the preceding word",
+        execute(&re, "baa", 2, sub, 4 | 1) == 1);
+  free_regex(&re);
+  Check("AOSP word boundary honors REG_NOTBOL and REG_NOTEOL at edges",
+        compile(&re, "\\<foo\\>", 1) == 0 &&
+            execute(&re, "foo", 0, nullptr, 1) != 0 &&
+            execute(&re, "foo", 0, nullptr, 2) != 0 &&
+            execute(&re, "foo", 0, nullptr, 0) == 0);
+  free_regex(&re);
+  {
+    Regex re_space{};
+    Regex re_alpha{};
+    bool compiled = compile(&re_space, "^a[[:space:]]b$", 1 | 8) == 0 &&
+                    compile(&re_alpha, "^[[:alpha:]]+$", 1 | 8) == 0;
+    bool scaling_ok = compiled;
+    for (int lines : {100, 200, 400, 800}) {
+      std::string in_x, in_d;
+      in_x.reserve(static_cast<size_t>(lines) * 2);
+      in_d.reserve(static_cast<size_t>(lines) * 4);
+      for (int i = 0; i < lines; ++i) {
+        in_x += "x\n";
+        in_d += "123\n";
+      }
+      auto t0 = std::chrono::steady_clock::now();
+      bool miss = execute(&re_space, in_x.c_str(), 1, &match, 0) != 0 &&
+                  execute(&re_alpha, in_d.c_str(), 1, &match, 0) != 0;
+      auto dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t0)
+                       .count();
+      scaling_ok = scaling_ok && miss && dt_ms < 500;
+    }
+    Check("REG_NEWLINE multiline scaling stays bounded", scaling_ok);
+    if (compiled) {
+      free_regex(&re_space);
+      free_regex(&re_alpha);
+    }
+  }
   Check("REG_PEND needs an end pointer", compile(&re, "x", 32) == 16);
   std::printf("raw syscall contracts: %d failures\n", failures);
   return failures != 0;

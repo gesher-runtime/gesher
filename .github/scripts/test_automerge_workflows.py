@@ -76,9 +76,25 @@ class QueueWorkflows(unittest.TestCase):
         script = (ROOT / '.github/scripts/label-automerge.js').read_text()
         self.assertNotIn('pulls.merge(', script)
         self.assertIn('expectedHeadOid: $head', script)
-        self.assertIn('pull_request.head.repo.id == github.event.pull_request.base.repo.id', doc['jobs']['automerge']['if'])
         rules = json.loads((ROOT / '.github/automerge-ruleset.json').read_text())
         self.assertNotIn('merge_queue', [rule['type'] for rule in rules['rules']])
+
+    def test_app_write_events_are_skipped_before_the_shared_job_queue(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
+        self.assertIn('dismissed', doc[True]['pull_request_review']['types'])
+        self.assertIn('unlabeled', doc[True]['pull_request_target']['types'])
+        self.assertNotIn('concurrency', doc)
+        job = doc['jobs']['automerge']
+        self.assertEqual(job['concurrency']['queue'], 'max')
+        self.assertIn('github.event.pull_request.number', job['concurrency']['group'])
+        self.assertFalse(job['concurrency'].get('cancel-in-progress', False))
+        self.assertEqual(' '.join(job['if'].split()),
+                         "(github.event_name != 'pull_request_review' || "
+                         "(github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id && "
+                         "!(github.event.sender.id == 358279050 && "
+                         "(github.event.action == 'submitted' || github.event.action == 'dismissed')))) && "
+                         "!(github.event_name == 'pull_request_target' && github.event.action == 'unlabeled' && "
+                         "github.event.sender.id == 358279050 && github.event.label.name == 'automerge')")
 
     def test_workflow_credential_is_separate_from_required_status_identity(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
@@ -93,14 +109,15 @@ class QueueWorkflows(unittest.TestCase):
                          {'permission-contents': 'write', 'permission-pull-requests': 'write',
                           'permission-workflows': 'write'})
         self.assertNotIn('skip-token-revoke', token['with'])
-        self.assertEqual(controller['env']['AUTOMERGE_WORKFLOWS_TOKEN'],
-                         '${{ steps.gesher-bot.outputs.token || secrets.AUTOMERGE_WORKFLOWS_TOKEN }}')
-        # The main github client must remain GITHUB_TOKEN for app-bound statuses
-        # and github-actions[bot] receipts. Only the native mutation client differs.
+        self.assertEqual(controller['env']['GESHER_BOT_TOKEN'], '${{ steps.gesher-bot.outputs.token }}')
+        self.assertEqual(controller['env']['GESHER_BOT_SLUG'], '${{ steps.gesher-bot.outputs.app-slug }}')
+        self.assertEqual(controller['env']['AUTOMERGE_WORKFLOWS_TOKEN'], '${{ secrets.AUTOMERGE_WORKFLOWS_TOKEN }}')
+        # The main github client must remain GITHUB_TOKEN for app-bound statuses.
         self.assertNotIn('github-token', controller['with'])
         self.assertIn('new github.constructor', controller['with']['script'])
         self.assertIn('auth: token', controller['with']['script'])
-        self.assertIn('run({github, context, core, mergeGithub})', controller['with']['script'])
+        self.assertIn('process.env.GESHER_BOT_SLUG !== run.APP_SLUG', controller['with']['script'])
+        self.assertIn('prGithub: appToken ? mergeGithub : undefined', controller['with']['script'])
 
 
 if __name__ == '__main__':
