@@ -1,8 +1,7 @@
 name: ci
 
 on:
-  push:
-    branches: [main]
+  # Temporarily pause CI on main pushes; restore push: branches: [main] to resume.
   pull_request:
   workflow_dispatch:
     inputs:
@@ -263,6 +262,8 @@ jobs:
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
           python3 tools/test_directory_rename_contracts.py --sanitize
+          python3 tools/test_inotify_records.py --sanitize
+          python3 -m unittest discover -s tools/tests -p test_sqlite_source_download.py
           python3 tools/test_sqlite_paths.py --fetch --sanitize --negative-control
           python3 tools/test_media_source_contracts.py --sanitize
           python3 tools/test_media_callback_state.py --sanitize
@@ -326,6 +327,7 @@ jobs:
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
           python3 tools/test_install_metadata_comparison.py --java-home "$JAVA_HOME"
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
+          python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
 
@@ -437,6 +439,9 @@ jobs:
           python3 tools/test_binder_reply_allocations.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/binder_reply_allocations_test.exe
+          python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/binder_lifetime_test.exe
           python3 tools/test_layered_bitmap_cache.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/layered_bitmap_cache_test.exe
@@ -1663,6 +1668,7 @@ jobs:
         with:
           sparse-checkout: |
             tests
+            docs/research
             tools/ci
             tools/surface
             tools/symbolize.py
