@@ -819,6 +819,10 @@ if ($state) { foreach ($n in DeviceAlive $state) { Stop-Process -Id ([int]($n -s
 if ($failed -ne $failedBefore) { DeviceLogs }
 Remove-Item Env:GESHER_APP_WINDOW -ErrorAction SilentlyContinue
 
+# Actual persistent owner, installed application identity, independent binary
+# wire peer, immediate reuse, process death/uninstall and native retirement.
+. (Join-Path $PSScriptRoot '../run-nsd-registration-contract.ps1')
+
 # Manager construction and software-service completion contracts need no running
 # device, installed app, UI, or hardware. Keep their state separate from the
 # lifecycle fixtures above and never inherit a Binder device name.
@@ -844,11 +848,15 @@ try {
     ($dvmContracts + 'gesher.services.ServiceRegistrationCallbackTest') @('ServiceRegistrationCallbackTest all passed') 30
   CheckTimed 'services: actual storage volumes, capacity, credential state and file allocation' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.StorageQueryContractTest') @('StorageQueryContractTest all passed:') 45
+  CheckTimed 'services: DNS-SD state, cache expiry and cancellation ownership' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.NsdBrowseTransportTest') @('NsdBrowseTransportTest all passed: 189') 30
+  . (Join-Path $PSScriptRoot '../run-nsd-browse-contract.ps1')
+  . (Join-Path $PSScriptRoot '../run-nsd-resolve-contract.ps1')
   $canonicalChecks = @(
     @{ Class = 'UserManagerProfilesTest'; Count = 49; Name = 'single-user profile, serial, identity and restriction contracts' },
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
     @{ Class = 'BlobStoreContractTest'; Count = 25; Name = 'empty shared-blob queries, zero quota and unsupported storage' },
-    @{ Class = 'NsdContractTest'; Count = 37; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
+    @{ Class = 'NsdContractTest'; Count = 60; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
     @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
     @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' }
   )

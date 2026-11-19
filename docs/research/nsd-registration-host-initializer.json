@@ -1,0 +1,22 @@
+{
+  "genuineNativeSource": "libcore/luni/src/main/native/android_system_OsConstantsHolder.cpp",
+  "sourceSha256": "0bf2cb69e0a1d93a8c875bac0e3eb99a2c14a79f16bf58d52f1e3cf45be1530c",
+  "sourceJava": "libcore/luni/src/main/java/android/system/OsConstantsHolder.java",
+  "sourceJavaSha256": "12a068cab1357da1534a877463af35ce77d924950199613c7deb1fa6d36df477",
+  "actualProvider": "selected genuine coremod/android/system/OsConstantsHolder.class",
+  "actualProviderSha256": "868e5e555cde3a898fe6e1aa444d919cac8884d9907c96b3c8b71b490419cbce",
+  "testAdapter": "tests/nsd/registration_os_constants_host.cc",
+  "testAdapterSha256": "6b2e03997ccc957b422f7d0244a3a53c5c175e6520da98e5adcf458748b26589",
+  "completeInitializerBodySha256": "3d65bd39085e56952a2d83ce896781a54640022013c51427028a6a06df6a5b67",
+  "bodyChanges": false,
+  "exactHolderFieldCount": 121,
+  "exactProviderFieldOrderMatchesSource": true,
+  "adaptations": [
+    "Only necessary actual Linux/JNI includes",
+    "Export the genuine private native body through standard host JNI naming"
+  ],
+  "productionLinked": false,
+  "runtimeFeatureFlagsChanged": false,
+  "purpose": "Only initializes the actual host-dependent libc constants when running genuine Android core classes on the Linux test JVM. The complete121-field native body is unchanged. IFA_F_TEMPORARY is initialized by the genuine Java class itself, never overridden.",
+  "qualification": "Test-only Linux native initialization; no production library or runtime flag replacement, no Windows behavior or native socket claim."
+}

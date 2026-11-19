@@ -54,6 +54,9 @@ public final class ActivityManagerService extends IActivityManager.Default {
     private final ActiveServices mServices;
     private final BroadcastController mBroadcasts;
     private final ContentProviders mProviders;
+    private final java.util.List<java.util.function.Consumer<
+            ActivityTaskManagerService.ProcessRecord>> mProcessDeathObservers =
+            new java.util.ArrayList<>();
     private ApplicationSharedMemory mSharedMemory;  // created on the first bind
     private final PendingIntents mPendingIntents;
 
@@ -85,6 +88,14 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     CallerIdentity callers() { return mCallers; }
 
+    /** Server-local owners subscribe before accepting work from application processes. */
+    void onProcessDeath(java.util.function.Consumer<
+            ActivityTaskManagerService.ProcessRecord> observer) {
+        synchronized (mProcessDeathObservers) {
+            mProcessDeathObservers.add(java.util.Objects.requireNonNull(observer));
+        }
+    }
+
     void setAccountManager(AccountManagerService accounts) { mAtm.setAccountManager(accounts); }
 
     void invalidatePermissionCaches() {
@@ -107,6 +118,20 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     /** An app process is gone: its services, receivers and providers too. */
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
+        // ATM has already retired this exact record and released its monitor. Do
+        // not invoke an owner while holding either lifecycle or observer locks.
+        java.util.List<java.util.function.Consumer<
+                ActivityTaskManagerService.ProcessRecord>> observers;
+        synchronized (mProcessDeathObservers) {
+            observers = new java.util.ArrayList<>(mProcessDeathObservers);
+        }
+        for (java.util.function.Consumer<ActivityTaskManagerService.ProcessRecord> observer
+                : observers) {
+            try { observer.accept(app); }
+            catch (RuntimeException failure) {
+                SystemServer.log("process death observer failed: " + failure);
+            }
+        }
         mServices.processDied(app);
         mBroadcasts.processDied(app);
         // Providers it used: their processes may have no other client left.

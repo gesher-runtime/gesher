@@ -1,0 +1,108 @@
+{
+  "tag": "android-16.0.0_r4",
+  "source_directory_tree": "962d7104587c3edd6935d9c296d230111cc29abf",
+  "inputs": {
+    "MdnsRecordRepository.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsRecordRepository.java?format=TEXT",
+      "git_blob": "741550ae66188a5f1dd78b090046380ba1a37512",
+      "sha256": "73d0e796371d2c684c53e6b7581a1490441ee6fc1a6dca81db8424ac3592eb1e",
+      "lines": 1560
+    },
+    "MdnsAdvertisingOptions.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsAdvertisingOptions.java?format=TEXT",
+      "git_blob": "3e47c0bbbe5f4fb54cd7a8ac54f8b74b6f4f3f3f",
+      "sha256": "418b67d6898499b58484b1fca080fa910880169021e8c9209f1941855b170a91",
+      "lines": 214
+    },
+    "MdnsReplyInfo.java": {
+      "path": "MdnsReplyInfo.java",
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsReplyInfo.java?format=TEXT",
+      "git_blob_sha1": "8747f67e83ee58dcfaa954f685a46a1a1b247671",
+      "sha256": "9f50f9300e63d4ac9400ca94e3241f65dc112360db9d176465390e3c28960b48",
+      "lines": 63
+    },
+    "NameConflictException.java": {
+      "path": "NameConflictException.java",
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/NameConflictException.java?format=TEXT",
+      "git_blob_sha1": "c123d02715ea48d310e1d2eebaa2b68fb8227e6e",
+      "sha256": "1222245fe3dd694b3608f7fc43e2a94475fb35caa1c442901b368dcfd156c8fc",
+      "lines": 30
+    },
+    "MdnsProber.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsProber.java?format=TEXT",
+      "git_blob": "4a44fffa4f8f6c6118175d7f86018f58bdd0b021",
+      "sha256": "9cc6ab92a7487edecbf413ca29bdda5829d2caebceff1f5585316ab42b998212",
+      "lines": 153
+    },
+    "MdnsAnnouncer.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsAnnouncer.java?format=TEXT",
+      "git_blob": "5812797b7176f551b87794cfabe42952646a62e5",
+      "sha256": "0052c8ef650ac9115ad1a82b07273e66420570f80b8a88a53de402d1dfe0abc9",
+      "lines": 118
+    },
+    "MdnsPacketRepeater.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsPacketRepeater.java?format=TEXT",
+      "git_blob": "cfd8e9a75c238b26d396e650573ed7e97fa56e60",
+      "sha256": "45df6d87b895893feeae2d03e2d0da488b90e4bb84018eb4bdbeb09d6e0e0231",
+      "lines": 184
+    },
+    "MdnsUtils.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/util/MdnsUtils.java?format=TEXT",
+      "git_blob": "12650e27b1583c40e11d60cb180d0d9a1e03f90c",
+      "sha256": "1833e523d663bd292f595474832914973afe56114776b39bdead0eb0610d2202",
+      "lines": 427
+    }
+  },
+  "outputs": {
+    "MdnsAdvertisingOptions.java": {
+      "sha256": "83508f5800f26daf8590ef8b31c3943d44b2112c06da80da97bba8a59626569e",
+      "source_inputs": [
+        "MdnsAdvertisingOptions.java"
+      ]
+    },
+    "MdnsReplyInfo.java": {
+      "sha256": "aaf658ae2aa5c405ea264b9b9e72a32c5a731e31afda3de54ab4edf9395dfd24",
+      "source_inputs": [
+        "MdnsReplyInfo.java"
+      ]
+    },
+    "NameConflictException.java": {
+      "sha256": "e0004832e3f9e8b535e2629385f6a35fb2f3c4221b60323ef531503294ec8449",
+      "source_inputs": [
+        "NameConflictException.java"
+      ]
+    },
+    "MdnsRecordRepository.java": {
+      "sha256": "fe26423f61be99af4447968495a258a1901fde0af3a253bc3e02f573f37585aa",
+      "source_inputs": [
+        "MdnsRecordRepository.java"
+      ]
+    },
+    "MdnsAdvertisingPacket.java": {
+      "sha256": "3c79bbd49d6ddccf65b92973e7d53f1fbbe3c1feaff0a286890e092513ab2a95",
+      "source_inputs": [
+        "MdnsProber.java",
+        "MdnsAnnouncer.java",
+        "MdnsPacketRepeater.java",
+        "MdnsUtils.java"
+      ]
+    }
+  },
+  "transform": "tools/nsd_registration_imports.py",
+  "transform_sha256": "92c47d4744b58ca81329a2ea37d3aaf855b148f30c75489aa65ea1b84afd87df",
+  "adaptations": [
+    "private package relocation",
+    "remove unused Looper constructor/field dependency",
+    "inline genuine constructFullSubtype composition",
+    "complete pure Prober/Announcer packet value declarations under a distinct private name",
+    "scheduler/interface class names only in imports or documentation",
+    "complete pure writeMdnsPacket/createRawDnsPacket method bodies from pinned MdnsUtils",
+    "add explicit updateWindowsAddresses accessor derived from complete original updateAddresses, preserving the original method byte-for-byte; actual InetAddress/family/IFA flags determine identical PTR/A/AAAA records without synthesizing an unavailable prefix"
+  ],
+  "windows_address_accessor": {
+    "original_method_sha256": "8ea6dc800fea8901d36efeb13f68d630fa6fe5b767fc2b80bf481c2082e4da56",
+    "original_method_unchanged": true,
+    "adapter_method_sha256": "fb57a6235325294feb5288666300b5566e7f68f43d2852c836400e7b9be8f0e7",
+    "routing_boundary": "Actual native prefix metadata remains unchanged. Unknown prefixes disallow on-link unicast/QU eligibility; multicast records use actual addresses. No Linux temporary flag is inferred from Windows suffix/transient metadata."
+  }
+}

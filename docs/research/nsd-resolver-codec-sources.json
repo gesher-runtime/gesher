@@ -1,0 +1,85 @@
+{
+  "tag": "android-16.0.0_r4",
+  "package": "com.gesher.net.mdns",
+  "adaptations": [
+    "Relocate com.android.server.connectivity.mdns to com.gesher.net.mdns",
+    "Remove unavailable androidx.annotation.VisibleForTesting and ChecksSdkIntAtLeast build annotations only"
+  ],
+  "files": {
+    "MdnsAnyRecord.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsAnyRecord.java?format=TEXT",
+      "upstream_sha256": "aea7edcb42de6ab5208ef30e9aedbcfd482189ed4d09524b5c02a49e35bfac54",
+      "adapted_sha256": "ac26ff861552b5d6471a398b0a8e30c53735e1e38184567f94f19ff3990ff9bc"
+    },
+    "MdnsConstants.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsConstants.java?format=TEXT",
+      "upstream_sha256": "e1d2c64d1ccba764b2c66cbfde6611c393e312bf9845bf36e22ac27c66959c19",
+      "adapted_sha256": "88f7c655a7b742a57961df7e61764600f0a3aa4ba7deba4b251791038786fbba"
+    },
+    "MdnsFeatureFlags.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsFeatureFlags.java?format=TEXT",
+      "upstream_sha256": "3a05683744b0aace0573039c6d1d6b855f3bf17c76710cb05c1d92a689ec0747",
+      "adapted_sha256": "0e7ff9a7de0642d2ae92967e1709caca9bbfa535dc97af24546f2f44e931c60d"
+    },
+    "MdnsInetAddressRecord.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsInetAddressRecord.java?format=TEXT",
+      "upstream_sha256": "8c3ee3a0988a303e2932428c97500208825ad853147e7ce8c9039327ba840525",
+      "adapted_sha256": "bd041fc565ac76df4d5a201fd807117e551e1e558030bceb36806507f99b1d3a"
+    },
+    "MdnsKeyRecord.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsKeyRecord.java?format=TEXT",
+      "upstream_sha256": "f8a71f66ea2865dd18e1f2295d72946d447bd098040fbef15f7e399e6c38b8f8",
+      "adapted_sha256": "7a0e75ab13da9a0c865d9c10fdbabab711d477e360a8c175c7cddd324ed31455"
+    },
+    "MdnsNsecRecord.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsNsecRecord.java?format=TEXT",
+      "upstream_sha256": "b436de75d0be93bbebbc37368b2eec918481bb65a31f42e6be6ee4c498283b4d",
+      "adapted_sha256": "aced37421677eea8008240bc969fe06ad55bb740cea5c763eb2616928a78028c"
+    },
+    "MdnsPacket.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsPacket.java?format=TEXT",
+      "upstream_sha256": "75cc15efaaba86265e48ae383b95c227353821f78faea81d5dd170fa0062abe6",
+      "adapted_sha256": "2fdaec89a5e33069306d598827f3beb64880200c5b29748b7517df64bd633f49"
+    },
+    "MdnsPacketReader.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsPacketReader.java?format=TEXT",
+      "upstream_sha256": "b5ee2094e59c32d63ea88c93cc8f27b67a3ececff4560d965942ec3fe5e70884",
+      "adapted_sha256": "82eeaa6bf5fe1e7cbb9f2344d628206b9b05626b9ea6e2644e8ecc13cec4e854"
+    },
+    "MdnsPacketWriter.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsPacketWriter.java?format=TEXT",
+      "upstream_sha256": "679fe153d759d0b262235419db0270b7a3421e9a0192a8a3653931cbcd0e464d",
+      "adapted_sha256": "07dab88d4d1b843dde107da5cae312ea7a22c23ca661883867d9aa354476f51f"
+    },
+    "MdnsPointerRecord.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsPointerRecord.java?format=TEXT",
+      "upstream_sha256": "faad5f0513938fcaf48a037aa2b9247f10c7e4f2e9aaaec98a78cd3826c3ec45",
+      "adapted_sha256": "5ecff77957938a92454df34d69c7ea1b6be2f017544e3392644c95b37165c687"
+    },
+    "MdnsRecord.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsRecord.java?format=TEXT",
+      "upstream_sha256": "e33d89020da90c1d6e6234a14d68a91758d4e021125bbd94a9bfd4dc1ab9c4d6",
+      "adapted_sha256": "28f416fa163ca7c477ffeae5c2f12c3a8be2003450ac1db4df588b52f7c7d96f"
+    },
+    "MdnsResponseErrorCode.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsResponseErrorCode.java?format=TEXT",
+      "upstream_sha256": "cd60cdf69dab462618ef7d87fa0fbaaf7f16b2f99503e855b74136294eb132cf",
+      "adapted_sha256": "86460f78fd555bf4cede69dd3321d9c5acdfce3479880e3fe69189596bf362de"
+    },
+    "MdnsServiceInfo.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsServiceInfo.java?format=TEXT",
+      "upstream_sha256": "286245fd0bfa1314559c072f9daadcba85eb1ab6c0d1df78bb54e31779db9061",
+      "adapted_sha256": "073324e7f85487a92c1b7326e8ea1e315cc028bfa4854803825fa59be64528bb"
+    },
+    "MdnsServiceRecord.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsServiceRecord.java?format=TEXT",
+      "upstream_sha256": "4cd6bc1ae618e4d0e7ebd179184957ddff8a2e426175c502b494cb312cd9cd26",
+      "adapted_sha256": "a4f46de9da07bc49477485cccd3a10a0bfbcb5b24c30d9cbd031c836e63081e8"
+    },
+    "MdnsTextRecord.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsTextRecord.java?format=TEXT",
+      "upstream_sha256": "549735800ccbc8d63f0c9e5d8fd5439dc8c49575a123392b3a0cf6462a8290a1",
+      "adapted_sha256": "38f96b0115ca638b3f79bffd6355de683145bef7750ad235c07a53817b29cc72"
+    }
+  }
+}

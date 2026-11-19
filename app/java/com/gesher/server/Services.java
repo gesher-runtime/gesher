@@ -41,6 +41,7 @@ import com.android.internal.view.IInputMethodManager;
 
 import com.gesher.app.DeviceProfile;
 import com.gesher.app.input.VirtualKeyboard;
+import com.gesher.net.INsdRegistration;
 
 import java.lang.reflect.Field;
 import java.util.Collection;
@@ -94,6 +95,11 @@ public final class Services {
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         sLast = new Created(pm, atm, am);
+        // In the isolated device this owner lives in SystemServer and can finish
+        // value-only goodbyes after an application dies. The collapsed profile
+        // shares the application's process and cannot promise that lifetime.
+        services.put(INsdRegistration.SERVICE_NAME,
+                new NsdRegistrationService(pm, atm, am, persistentAccounts));
         services.put("uri_grants", StandIn.of(android.app.IUriGrantsManager.class,
                 new UriGrantsManagerService(pm, atm, am)).asBinder());
         services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());
