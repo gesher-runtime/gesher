@@ -202,6 +202,7 @@ struct Library {
   std::set<uintptr_t> made_writable;
   const Elf64_Phdr* file_phdr = nullptr;  // the program headers in the file image
   uint16_t file_phnum = 0;
+  bool overlapping_load_pages = false;
 
   std::vector<std::string> needed;
   std::vector<Library*> dependencies;
@@ -661,6 +662,7 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::st
   for (size_t i = 1; i < pages.size(); ++i) {
     if (pages[i].first < pages[i - 1].second) shared_pages = true;
   }
+  lib->overlapping_load_pages = shared_pages;
   if (shared_pages) can_view = false;
   min_vaddr = PageDown(min_vaddr);
   max_vaddr = PageUp(max_vaddr);
@@ -1199,6 +1201,31 @@ bool ApplyRelr(Library* lib, std::string* error) {
 // Validation checks every group and encoded field without materializing its
 // relocations. The application pass may only consume that same owned, validated
 // snapshot; it reconstructs values once and calls the visitor in wire order.
+bool PackedSegmentExtent(const Library* lib, const Elf64_Phdr& ph, uintptr_t first_vaddr,
+                         size_t& start, size_t& end) {
+  if (ph.p_type != PT_LOAD || ph.p_vaddr < first_vaddr) return false;
+  const uint64_t offset = ph.p_vaddr - first_vaddr;
+  if (offset > lib->map_size || ph.p_memsz > lib->map_size - offset) return false;
+  start = offset;
+  end = offset + ph.p_memsz;
+  return true;
+}
+
+bool PackedPageReadable(const Library* lib, uintptr_t base, uintptr_t first_vaddr, size_t page) {
+  if (lib->made_writable.count(base + page) != 0) return true;
+  // ProtectSegments applies headers in file order, so the last owner controls
+  // a copied page shared by overlapping PT_LOAD segments.
+  for (uint16_t i = lib->file_phnum; i > 0; --i) {
+    const Elf64_Phdr& ph = lib->file_phdr[i - 1];
+    size_t start, end;
+    if (PackedSegmentExtent(lib, ph, first_vaddr, start, end) &&
+        PageDown(start) <= page && page < PageUp(end)) {
+      return (LoadProt(lib, ph.p_flags) & (PROT_READ | PROT_WRITE)) != 0;
+    }
+  }
+  return false;
+}
+
 bool ReadablePackedRange(const Library* lib, const uint8_t* data, size_t size) {
   const uintptr_t base = reinterpret_cast<uintptr_t>(lib->base);
   uintptr_t cursor = reinterpret_cast<uintptr_t>(data);
@@ -1206,27 +1233,32 @@ bool ReadablePackedRange(const Library* lib, const uint8_t* data, size_t size) {
       cursor < base || cursor - base > lib->map_size ||
       size > lib->map_size - (cursor - base) || size > UINTPTR_MAX - cursor) return false;
   const uintptr_t end = cursor + size;
+  // Work relative to the reservation, including nonzero ELF virtual bases
+  // whose load bias is represented by unsigned address subtraction.
+  const uintptr_t first_vaddr = base - reinterpret_cast<uintptr_t>(lib->load_bias);
   while (cursor < end) {
     uintptr_t covered = cursor;
-    // The copied-image path has one readable/writable reservation; the
-    // file-view path records only the segments that were actually mapped.
+    // Keep writable mappings and declared readable byte extents as coverage
+    // sources. The unassigned gaps in a reservation supply no coverage.
     for (const auto& range : lib->writable) {
       if (range.first <= cursor && cursor < range.second) covered = std::max(covered, range.second);
     }
     for (uint16_t i = 0; i < lib->file_phnum; ++i) {
       const Elf64_Phdr& ph = lib->file_phdr[i];
-      // Work relative to the reservation, including nonzero ELF virtual bases
-      // whose load bias is represented by unsigned address subtraction.
-      const uintptr_t first_vaddr = base - reinterpret_cast<uintptr_t>(lib->load_bias);
-      if (ph.p_type != PT_LOAD || !(ph.p_flags & PF_R) || ph.p_vaddr < first_vaddr) continue;
-      const uint64_t offset = ph.p_vaddr - first_vaddr;
-      if (offset > lib->map_size || ph.p_memsz > lib->map_size - offset) continue;
-      const uintptr_t start = base + offset;
-      const uintptr_t limit = start + ph.p_memsz;
-      if (start <= cursor && cursor < limit) covered = std::max(covered, limit);
+      size_t start, limit;
+      if ((ph.p_flags & PF_R) && PackedSegmentExtent(lib, ph, first_vaddr, start, limit) &&
+          base + start <= cursor && cursor < base + limit) {
+        covered = std::max(covered, base + limit);
+      }
     }
     // A reservation alone does not make gaps between file views readable.
     if (covered == cursor) return false;
+    if (lib->overlapping_load_pages) {
+      const size_t page = PageDown(cursor - base);
+      if (!PackedPageReadable(lib, base, first_vaddr, page)) return false;
+      const size_t page_remaining = kPageSize - (cursor - base - page);
+      covered = cursor + std::min<uintptr_t>(covered - cursor, page_remaining);
+    }
     cursor = std::min(covered, end);
   }
   return true;
