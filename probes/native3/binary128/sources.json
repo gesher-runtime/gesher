@@ -1,0 +1,19 @@
+{
+  "repository": "https://android.googlesource.com/platform/bionic",
+  "tag": "android-16.0.0_r4",
+  "commit": "f22516cbc67e81c13cf943ce02f01b8929a98726",
+  "tree": "2785efe04f43333ae6aaa11719321cf18f535398",
+  "files": {
+    "libc/upstream-openbsd/lib/libc/gdtoa/strtorQ.c": "a68df9bff3bfcd7f5e72ae1d0cd12331e4691ad5e22b52ad7f01a6904661fab6",
+    "libc/upstream-openbsd/lib/libc/gdtoa/strtodg.c": "ff64601a4b23fefdf5459f72195616935c742c21d47bcdbcffb0a3b104c3f30a",
+    "libc/upstream-openbsd/lib/libc/gdtoa/gethex.c": "fb2b02844289f804e202826919119f48c10a25df2b268b8b0bf2ad47b5be69b2",
+    "libc/upstream-openbsd/lib/libc/gdtoa/hexnan.c": "982f08614289beaa17172cb1ae85d2a95035bbbcdbb73817eb7896da16eda2dd",
+    "libc/upstream-openbsd/lib/libc/gdtoa/hd_init.c": "5d787a46e06719178356de20ccc4e9f65961e723351b5c8a43a63b95832c7247",
+    "libc/upstream-openbsd/lib/libc/gdtoa/misc.c": "d46dbbca1d088d227a1b4a60dfd8fbf3ba09856ab9b976a5a8f4d49d0d323a98",
+    "libc/upstream-openbsd/lib/libc/gdtoa/smisc.c": "0f1a095daf34407d8b2ef5b55d6e25c49f896b9a64d6e2fc32ecf5e0e1b0d371",
+    "libc/upstream-openbsd/lib/libc/gdtoa/gmisc.c": "39a52bd7651ae5281bc9a1e7b3d2a81f51ade634593772cd7f9237d6057902d8",
+    "libc/upstream-openbsd/lib/libc/gdtoa/sum.c": "cdc1aed326017dbbaa84f0476e48035efd8355d8bfbdb2c45599132a882ef6c1",
+    "libc/upstream-openbsd/lib/libc/gdtoa/gdtoa.h": "7368ce941c118180fc14e698e17d66ad47a52abb80d19d1fadf02afcdf26eca4",
+    "libc/upstream-openbsd/lib/libc/gdtoa/gdtoaimp.h": "52dd8c7aab3fb314b2bb63cbcf10a40d18d293beb5e45e29a53d592bc4aab2d4"
+  }
+}

@@ -14,6 +14,7 @@
 //  - setjmp/longjmp: they save and restore registers, so they must be guest
 //    code (AArch64, emitted here), not the host's;
 //  - the floating-point environment (FPCR/FPSR, fenv_t, FE_* values);
+//  - strtold-family conversions use that guest rounding/exception environment;
 //  - four O_* open flags (O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE);
 //  - localeconv's CHAR_MAX sentinels (unsigned char on Android arm64);
 //  - DNS bitstring rendering's plain-char promotion (unsigned on arm64);
@@ -23,6 +24,7 @@
 // The loader asks guest_symbol(name) before binding a guest import to the shim.
 
 #include "translator.h"
+#include "numeric_fenv.h"
 #include <gesher/symbol_table.h>
 
 #include <windows.h>
@@ -636,6 +638,42 @@ int GESHER_SYSV FeRaiseexcept(int excepts) {
   return FeSetexceptflag(&flag, excepts);
 }
 
+// The shim represents Android LP64 long double as a 128-bit vector returned
+// in XMM0; the Windows C++ long double type has a different representation.
+typedef int32_t QuadResult __attribute__((vector_size(16)));
+using StrtoldFn = QuadResult(GESHER_SYSV*)(const char*, char**);
+using StrtoldLFn = QuadResult(GESHER_SYSV*)(const char*, char**, void*);
+using WcstoldFn = QuadResult(GESHER_SYSV*)(const uint32_t*, uint32_t**);
+using WcstoldLFn = QuadResult(GESHER_SYSV*)(const uint32_t*, uint32_t**, void*);
+StrtoldFn g_strtold = nullptr;
+StrtoldLFn g_strtold_l = nullptr;
+WcstoldFn g_wcstold = nullptr;
+WcstoldLFn g_wcstold_l = nullptr;
+
+template <typename Fn, typename... Args>
+QuadResult ParseWithGuestFenv(Fn fn, Args... args) {
+  NumericFenvScope numeric_fenv{GuestFpcr()};
+  const QuadResult result = fn(args...);
+  // Keep every prior guest status bit, including IDC and QC. Copy exceptions
+  // actually raised by the conversion, not flags inferred from its result:
+  // Bionic's gdtoa does not raise IEEE flags for every rounded value.
+  SetGuestFpsr(GuestFpsr() | numeric_fenv.RaisedArmExceptions());
+  return result;
+}
+
+QuadResult GESHER_SYSV GuestStrtold(const char* text, char** end) {
+  return ParseWithGuestFenv(g_strtold, text, end);
+}
+QuadResult GESHER_SYSV GuestStrtoldL(const char* text, char** end, void* locale) {
+  return ParseWithGuestFenv(g_strtold_l, text, end, locale);
+}
+QuadResult GESHER_SYSV GuestWcstold(const uint32_t* text, uint32_t** end) {
+  return ParseWithGuestFenv(g_wcstold, text, end);
+}
+QuadResult GESHER_SYSV GuestWcstoldL(const uint32_t* text, uint32_t** end, void* locale) {
+  return ParseWithGuestFenv(g_wcstold_l, text, end, locale);
+}
+
 struct Fallback {
   const char* name;
   void* fn;
@@ -778,6 +816,14 @@ void InitGuestLibc() {
   if (g_dlsym) Override("dlsym", reinterpret_cast<void*>(&GuestDlsym));
 
   for (const Fallback& f : kFenv) Override(f.name, f.fn);
+  g_strtold = reinterpret_cast<StrtoldFn>(Host("strtold"));
+  g_strtold_l = reinterpret_cast<StrtoldLFn>(Host("strtold_l"));
+  g_wcstold = reinterpret_cast<WcstoldFn>(Host("wcstold"));
+  g_wcstold_l = reinterpret_cast<WcstoldLFn>(Host("wcstold_l"));
+  if (g_strtold) Override("strtold", reinterpret_cast<void*>(&GuestStrtold));
+  if (g_strtold_l) Override("strtold_l", reinterpret_cast<void*>(&GuestStrtoldL));
+  if (g_wcstold) Override("wcstold", reinterpret_cast<void*>(&GuestWcstold));
+  if (g_wcstold_l) Override("wcstold_l", reinterpret_cast<void*>(&GuestWcstoldL));
   // Data imports and dlsym must return the ARM object itself, never a callable
   // trampoline or the common host shim's different x86 environment layout.
   g_overrides["__fe_dfl_env"] = const_cast<ArmFenv*>(&kArmDefaultEnv);
