@@ -1,0 +1,346 @@
+{
+  "aosp_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+  "integration": {
+    "WifiNetworkSuggestion.java": {
+      "raw_sha256": "5071e5a930f6ffd88789d60f2c7f62cbdc1e069990fa1a419f5439442c47ae05",
+      "production_sha256": "4fe66e230087916764fbd212855c58a8fe468246efe79dae1503c95047eab86a",
+      "explicit_nested_loaders": 2
+    },
+    "hotspot2/PasspointConfiguration.java": {
+      "raw_sha256": "9365ab973f327a3e98f5cc8ff007feedd2e02b51f69fdcda228f844c13a6d828",
+      "production_sha256": "b05527698f9bbabf3cb1d6fd74e071a527e89d76103363a64d1afc8414084b95",
+      "explicit_nested_loaders": 5
+    },
+    "hotspot2/pps/HomeSp.java": {
+      "raw_sha256": "c23bbb343a86d36a05d5f415f634b6ef8b8209a8e70a6b863f049d507eca1ac6",
+      "production_sha256": "c23bbb343a86d36a05d5f415f634b6ef8b8209a8e70a6b863f049d507eca1ac6",
+      "explicit_nested_loaders": 0
+    },
+    "hotspot2/pps/Credential.java": {
+      "raw_sha256": "cef9ef27bc19398273281e11b7430fd793aacc3a3034a67e45d079ee77d357ee",
+      "production_sha256": "866e726b83ea5c82e01a515e0a7a9bc2a00e2a18e8074b022588c2724b901a23",
+      "explicit_nested_loaders": 3
+    },
+    "hotspot2/pps/Policy.java": {
+      "raw_sha256": "fd29aa4823f808a4c4a26c4d9fc8b872ef93fd3da8c259ecb7e86f77bb9c964c",
+      "production_sha256": "3adffabab0b1650c47e63ed4af32164a6630b8a4bda6e149e57d189ec3ba5be9",
+      "explicit_nested_loaders": 2
+    },
+    "hotspot2/pps/UpdateParameter.java": {
+      "raw_sha256": "5b4001226a297395d6f1bb2be326eef68d930d9952957283e8274917ade7cbb1",
+      "production_sha256": "5b4001226a297395d6f1bb2be326eef68d930d9952957283e8274917ade7cbb1",
+      "explicit_nested_loaders": 0
+    },
+    "util/BuildProperties.java": {
+      "raw_sha256": "0f7925a9afba3da2f06d6b986d544da41fbb131625b4df31ac55c9f39a218c95",
+      "production_sha256": "0f7925a9afba3da2f06d6b986d544da41fbb131625b4df31ac55c9f39a218c95",
+      "explicit_nested_loaders": 0
+    },
+    "EAPConstants.java": {
+      "raw_sha256": "e56e17a3d4f77d39960be406cad7533c3b109e92aede3f9af23e134394454f96",
+      "production_sha256": "e56e17a3d4f77d39960be406cad7533c3b109e92aede3f9af23e134394454f96",
+      "explicit_nested_loaders": 0
+    }
+  },
+  "unchanged_writers": {
+    "WifiNetworkSuggestion.java": {
+      "upstream_raw_sha256": "5071e5a930f6ffd88789d60f2c7f62cbdc1e069990fa1a419f5439442c47ae05",
+      "reference_source_sha256": "7bdbcc149bfd0615e27c483ec05b077a91cb3d707ab8ececea9aa5202d63ecb4",
+      "public_write_to_parcel_bodies": 1,
+      "writer_body_sha256": [
+        "f90d61fb5e270dd887eb1b3eb593448d9354ef992ceff9a55a23ffa571f09aac"
+      ]
+    },
+    "hotspot2/PasspointConfiguration.java": {
+      "upstream_raw_sha256": "9365ab973f327a3e98f5cc8ff007feedd2e02b51f69fdcda228f844c13a6d828",
+      "reference_source_sha256": "868f6988e19f59c3e41ef67d3639f106c1c4ed2f706b537eed4b342ecff49c22",
+      "public_write_to_parcel_bodies": 1,
+      "writer_body_sha256": [
+        "3e00cf86c869a268d0207c72c195b634075af33da8098cd1a5ba4c9f7c34b6cb"
+      ]
+    },
+    "hotspot2/pps/HomeSp.java": {
+      "upstream_raw_sha256": "c23bbb343a86d36a05d5f415f634b6ef8b8209a8e70a6b863f049d507eca1ac6",
+      "reference_source_sha256": "c23bbb343a86d36a05d5f415f634b6ef8b8209a8e70a6b863f049d507eca1ac6",
+      "public_write_to_parcel_bodies": 1,
+      "writer_body_sha256": [
+        "c27fe385080e34f60a539662a791cf365eba4cc4a50976df357fb55da5de82d6"
+      ]
+    },
+    "hotspot2/pps/Credential.java": {
+      "upstream_raw_sha256": "cef9ef27bc19398273281e11b7430fd793aacc3a3034a67e45d079ee77d357ee",
+      "reference_source_sha256": "c771b9b169ee2f9a6866cb3ae1c95558dfe1de379a7c231d7ac5e780ef9372c1",
+      "public_write_to_parcel_bodies": 4,
+      "writer_body_sha256": [
+        "0be5ac4d125c5670ea5a325e5f580501052c4aac470f8df10b0a179de720bb46",
+        "208053df3a9c3ec3b54e72f12f5673b9ae8f1aa2eaad17346a92b3944f18273d",
+        "d00db2bc0418a781d0ab54074b378325acc0bfe7ab1ebff213a7b0d73b544002",
+        "23c2a27dc49973a6c1d80ffeef3f9a9c487c8a63696ccc36d90375dc5266ea04"
+      ]
+    },
+    "hotspot2/pps/Policy.java": {
+      "upstream_raw_sha256": "fd29aa4823f808a4c4a26c4d9fc8b872ef93fd3da8c259ecb7e86f77bb9c964c",
+      "reference_source_sha256": "45a3f86b4ee1a36ae60e0c611257d5b3ffd67c3f0aeb2c5094250d8cb7cc1e0b",
+      "public_write_to_parcel_bodies": 2,
+      "writer_body_sha256": [
+        "ffcab24d53c2d0a6a0f4a33c0d301451e5d4c937bbc46eb4162a4b18e7f7e1cb",
+        "9f756cce87323362f10f564515ac020895efe144a30f456fc69e6fd1094f6005"
+      ]
+    },
+    "hotspot2/pps/UpdateParameter.java": {
+      "upstream_raw_sha256": "5b4001226a297395d6f1bb2be326eef68d930d9952957283e8274917ade7cbb1",
+      "reference_source_sha256": "5b4001226a297395d6f1bb2be326eef68d930d9952957283e8274917ade7cbb1",
+      "public_write_to_parcel_bodies": 1,
+      "writer_body_sha256": [
+        "1ce609c689dd4ad07fbe7656077700a16c461169ee4a944441f3ef959b5c7911"
+      ]
+    },
+    "EAPConstants.java": {
+      "upstream_raw_sha256": "e56e17a3d4f77d39960be406cad7533c3b109e92aede3f9af23e134394454f96",
+      "reference_source_sha256": "e56e17a3d4f77d39960be406cad7533c3b109e92aede3f9af23e134394454f96",
+      "public_write_to_parcel_bodies": 0,
+      "writer_body_sha256": []
+    },
+    "util/BuildProperties.java": {
+      "upstream_raw_sha256": "0f7925a9afba3da2f06d6b986d544da41fbb131625b4df31ac55c9f39a218c95",
+      "reference_source_sha256": "0f7925a9afba3da2f06d6b986d544da41fbb131625b4df31ac55c9f39a218c95",
+      "public_write_to_parcel_bodies": 0,
+      "writer_body_sha256": []
+    },
+    "WifiConfiguration.java": {
+      "upstream_raw_sha256": "d1585fa9ab0ca3a9c4837920fd7e471df691fd9e0aae522b8c30f7fd9a75dac1",
+      "reference_source_sha256": "b13de873958e1dabcfa2a49ae74d7f1e62bf2e299e0e5c4c1871e8d996884141",
+      "public_write_to_parcel_bodies": 2,
+      "writer_body_sha256": [
+        "97f7ca5308377b4e8cbed7e387fbca60dc9f1b5bc59508c2b178d2d6d2103255",
+        "2a4f8a17b7b4a71275b6b00d1139707e60e483d4db9b30efea54fbf337b34ec2"
+      ]
+    },
+    "SecurityParams.java": {
+      "upstream_raw_sha256": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060",
+      "reference_source_sha256": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060",
+      "public_write_to_parcel_bodies": 1,
+      "writer_body_sha256": [
+        "4ec176657f969a4c245af56c2a76fd5c8652a42b65a40426c2cd5c32229d1cf4"
+      ]
+    },
+    "util/Environment.java": {
+      "upstream_raw_sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d",
+      "reference_source_sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d",
+      "public_write_to_parcel_bodies": 0,
+      "writer_body_sha256": []
+    }
+  },
+  "selected_distribution": {
+    "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "distribution": {
+      "framework.jar": {
+        "manifest": {
+          "source_id": "framework.jar",
+          "role": "boot",
+          "name": "framework.jar",
+          "sha256": "fed525b7fd92cfe2b82ac547172d545dd2f4073a6bb67740906b15ec7c8c1bb7",
+          "archive_bytes": 17040072,
+          "entries": 1183,
+          "uncompressed_bytes": 44464732,
+          "class_definitions": 34764,
+          "selected_members": 5,
+          "versions": {
+            "dex_039": 5
+          },
+          "encoded_member_definitions": 456490
+        },
+        "providers": {}
+      },
+      "gesher-app.jar": {
+        "manifest": {
+          "source_id": "gesher-app.jar",
+          "role": "boot",
+          "name": "gesher-app.jar",
+          "sha256": "6ea29dee02b9ac9239a043bdf169aff73ead17dd10f5fd060792acc4a691441a",
+          "archive_bytes": 1392310,
+          "entries": 1,
+          "uncompressed_bytes": 3350044,
+          "class_definitions": 2403,
+          "selected_members": 1,
+          "versions": {
+            "dex_039": 1
+          },
+          "encoded_member_definitions": 29851
+        },
+        "providers": {}
+      }
+    },
+    "scope": "Selected actual distributed framework.jar and gesher-app.jar DEX; not complete bootpath census"
+  },
+  "baseline_commit": "d733cc0ffbff9e51892914c726c85b0da5f3c53c",
+  "baseline_tree": "b5ddb5f5cba80e0394eb92cac9905db45dbfd4b6",
+  "negative_controls": {
+    "baseline_revision": "d733cc0ffbff9e51892914c726c85b0da5f3c53c",
+    "controls": [
+      {
+        "mode": "suggestion",
+        "missing": "android.net.wifi.WifiNetworkSuggestion$Builder",
+        "exit_code": 1
+      },
+      {
+        "mode": "passpoint",
+        "missing": "android.net.wifi.hotspot2.PasspointConfiguration",
+        "exit_code": 1
+      }
+    ],
+    "provider_policy": "Source absent; strict findClass forbids compilation-stub fallback"
+  },
+  "selected_provider_closure": {
+    "scope": "Actual selected DEX archives; all eight new top-level provider families including nested classes; not complete boot path",
+    "selected_top_level": [
+      "android.net.wifi.WifiNetworkSuggestion",
+      "android.net.wifi.hotspot2.PasspointConfiguration",
+      "android.net.wifi.hotspot2.pps.HomeSp",
+      "android.net.wifi.hotspot2.pps.Credential",
+      "android.net.wifi.hotspot2.pps.Policy",
+      "android.net.wifi.hotspot2.pps.UpdateParameter",
+      "android.net.wifi.EAPConstants",
+      "android.net.wifi.util.BuildProperties"
+    ],
+    "archives": {
+      "framework.jar": {
+        "manifest": {
+          "source_id": "framework.jar",
+          "role": "boot",
+          "name": "framework.jar",
+          "sha256": "fed525b7fd92cfe2b82ac547172d545dd2f4073a6bb67740906b15ec7c8c1bb7",
+          "archive_bytes": 17040072,
+          "entries": 1183,
+          "uncompressed_bytes": 44464732,
+          "class_definitions": 34764,
+          "selected_members": 5,
+          "versions": {
+            "dex_039": 5
+          },
+          "encoded_member_definitions": 456490
+        },
+        "matching_definitions": {}
+      },
+      "gesher-app.jar": {
+        "manifest": {
+          "source_id": "gesher-app.jar",
+          "role": "boot",
+          "name": "gesher-app.jar",
+          "sha256": "6ea29dee02b9ac9239a043bdf169aff73ead17dd10f5fd060792acc4a691441a",
+          "archive_bytes": 1392310,
+          "entries": 1,
+          "uncompressed_bytes": 3350044,
+          "class_definitions": 2403,
+          "selected_members": 1,
+          "versions": {
+            "dex_039": 1
+          },
+          "encoded_member_definitions": 29851
+        },
+        "matching_definitions": {}
+      }
+    }
+  },
+  "r1_source_comparison": {
+    "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/android-16.0.0_r1/framework/java/android/net/wifi/WifiNetworkSuggestion.java?format=TEXT",
+    "sha256": "5fb11539377b45db493f4170649e3904150fd725b1520bf92986f650bf47108f",
+    "qualification": "Android16 r1 source comparison only; exact image source identity is not asserted"
+  },
+  "r1_passpoint_comparison": {
+    "hotspot2/PasspointConfiguration.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/android-16.0.0_r1/framework/java/android/net/wifi/hotspot2/PasspointConfiguration.java?format=TEXT",
+      "sha256": "9365ab973f327a3e98f5cc8ff007feedd2e02b51f69fdcda228f844c13a6d828",
+      "runtime_diff_lines": 0
+    },
+    "hotspot2/pps/HomeSp.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/android-16.0.0_r1/framework/java/android/net/wifi/hotspot2/pps/HomeSp.java?format=TEXT",
+      "sha256": "c23bbb343a86d36a05d5f415f634b6ef8b8209a8e70a6b863f049d507eca1ac6",
+      "runtime_diff_lines": 0
+    },
+    "hotspot2/pps/Credential.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/android-16.0.0_r1/framework/java/android/net/wifi/hotspot2/pps/Credential.java?format=TEXT",
+      "sha256": "83a97829eda2ba653351fd00249d50b9b1f9ead74e2f9c8f9cc065944f4d30b2",
+      "runtime_diff_lines": 36
+    },
+    "hotspot2/pps/Policy.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/android-16.0.0_r1/framework/java/android/net/wifi/hotspot2/pps/Policy.java?format=TEXT",
+      "sha256": "fd29aa4823f808a4c4a26c4d9fc8b872ef93fd3da8c259ecb7e86f77bb9c964c",
+      "runtime_diff_lines": 0
+    },
+    "hotspot2/pps/UpdateParameter.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/android-16.0.0_r1/framework/java/android/net/wifi/hotspot2/pps/UpdateParameter.java?format=TEXT",
+      "sha256": "5b4001226a297395d6f1bb2be326eef68d930d9952957283e8274917ade7cbb1",
+      "runtime_diff_lines": 0
+    }
+  },
+  "compile_only_reference_scope": {
+    "scope": "Compile-only declarations for the explicitly adapted independent reference; no all-hidden-path runtime claim",
+    "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "selected_sdk_declarations": 163,
+    "upstream_configuration_url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/WifiConfiguration.java",
+    "upstream_configuration_sha256": "d1585fa9ab0ca3a9c4837920fd7e471df691fd9e0aae522b8c30f7fd9a75dac1",
+    "direct_flags_call": [
+      {
+        "declaration": "public int getCreatorUserIdInternal();",
+        "descriptor": "()I",
+        "instruction": "11: invokestatic  #1203               // Method com/android/wifi/flags/Flags.multiUserWifiEnhancement:()Z"
+      }
+    ],
+    "transitive_callers": [
+      {
+        "declaration": "public int getCreatorUserId();",
+        "descriptor": "()I",
+        "instruction": "15: invokevirtual #1212               // Method getCreatorUserIdInternal:()I"
+      }
+    ],
+    "affected_declarations": [
+      {
+        "owner": "android.net.wifi.WifiConfiguration",
+        "name": "getCreatorUserIdInternal",
+        "descriptor": "()I",
+        "source_annotations": [
+          "@hide"
+        ],
+        "sdk36_declared": false,
+        "selected_corpus": false
+      },
+      {
+        "owner": "android.net.wifi.WifiConfiguration",
+        "name": "getCreatorUserId",
+        "descriptor": "()I",
+        "source_annotations": [
+          "@hide",
+          "@SystemApi",
+          "@RequiresApi(37)",
+          "@FlaggedApi(Flags.FLAG_MULTI_USER_WIFI_ENHANCEMENT)"
+        ],
+        "sdk36_declared": false,
+        "selected_corpus": false
+      }
+    ],
+    "flags_declared_in_official_sdk36": false,
+    "payload_exclusions": [
+      "android/net/wifi/WifiManager.class",
+      "com/android/wifi/flags/Flags.class"
+    ],
+    "manager_field": "Real Android boot WifiManager.ALL_ZEROS_MAC_ADDRESS and its MacAddress identity/value asserted by the executed pinned launcher",
+    "limitation": "Flags.multiUserWifiEnhancement() is not supplied or runtime-qualified. Its hidden direct caller and transitive getCreatorUserId path were not executed; class exclusion alone does not establish their runtime linkage. Candidate reuses the published PR129 Configuration implementation unchanged.",
+    "prepare_tool_documentation_only_change": {
+      "frozen_v2_sha256": "7c946b87f15fc01e37343a3771064473031fd808cf3c750dbc819f07ef3874bc",
+      "final_sha256": "001102fea71604441c6907efecd13308bbdefbca474b84e20cb6dc17b619d0f2",
+      "ast_identical": true,
+      "change": "Comment names exact hidden methods and states remaining runtime-linkage limit; no code, Java, class or DEX change"
+    },
+    "bytecode_command": [
+      "/workspace/scratch/1b0b1d85480f/tooling/jdk21/jdk-21.0.13+9/bin/javap",
+      "-classpath",
+      "/workspace/scratch/e0c0a146099b/validation/wifi-suggestion/android-v2/pinned-r4-classes.jar",
+      "-c",
+      "-p",
+      "-s",
+      "android.net.wifi.WifiConfiguration"
+    ],
+    "bytecode_receipt_sha256": "fc7227636d5e2f365345846b1fe6ee602fbaf3b98f202e30b43f5bfb1458da8f"
+  }
+}

@@ -30,6 +30,24 @@ Check 'framework: WifiInfo Builder, MLO, redaction and native Parcelable contrac
   else { $global:LASTEXITCODE = 1; "WifiInfo native Parcel evidence failed: $deepWifiInfoWireFailure" }
 } @('WifiInfoContractTest all passed:', 'parcel=true', 'WifiInfo native Parcel bytes match Android reference: 9 cases')
 
+$deepSuggestionOut = FixesRun ($dvmFixes + 'gesher.services.WifiSuggestionValuesNativeTest', '--require-parcel') 90
+$deepSuggestionCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiSuggestionValuesParcel.ps1"
+$deepSuggestionWireOK = $false
+$deepSuggestionWireFailure = ''
+try {
+  Assert-WifiSuggestionValuesParcelEvidence -Output $deepSuggestionOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-suggestion-android-reference-2026-11-18.json')
+  $deepSuggestionWireOK = $true
+} catch { $deepSuggestionWireFailure = $_.Exception.Message }
+Check 'framework: suggestion and Passpoint values, copy ownership and native Parcelable contracts' {
+  $global:LASTEXITCODE = $deepSuggestionCode
+  $deepSuggestionOut
+  if ($deepSuggestionWireOK) { 'Suggestion/Passpoint native Parcel bytes match pinned Android16-r4: 24 cases' }
+  else { $global:LASTEXITCODE = 1; "Suggestion/Passpoint native Parcel evidence failed: $deepSuggestionWireFailure" }
+} @('Wifi suggestion values:', 'parcel=true', 'WIFI_SUGGESTION_NATIVE_PARCEL_REQUIRED_OK',
+    'Suggestion/Passpoint dependency parameter and return identities verified',
+    'Suggestion/Passpoint native Parcel bytes match pinned Android16-r4: 24 cases')
+
 $deepNetworkOut = FixesRun ($dvmFixes + 'gesher.services.NetworkSnapshotContractTest') 90
 $deepNetworkCode = $LASTEXITCODE
 Check 'framework: network route, address, snapshot and proxy contracts with native Parcel' {

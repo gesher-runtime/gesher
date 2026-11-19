@@ -761,10 +761,11 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     needs: [artifact-preflight]
-    # This immutable policy, not PR-controlled workflow YAML, may use the runner.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7
+    # This immutable policy includes the current contract gates and quota-safe route.
+    # Keep it hosted until separately authorized by the restricted runner group.
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@3c40de3e81c55ca867779024f82e4b728dcfd45c
     with:
-      local-runner: true
+      local-runner: false
 
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
