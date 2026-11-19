@@ -5,7 +5,6 @@
 package com.gesher.server;
 
 import android.app.AppOpsManager;
-import android.app.ISearchManager;
 import android.app.SyncNotedAppOp;
 import android.app.admin.IDevicePolicyManager;
 import android.app.trust.ITrustManager;
@@ -136,22 +135,6 @@ final class DeviceServices {
         @Override
         public int getMaxBitmapMemory() {
             return 6 * 1080 * 2400;
-        }
-    }
-
-    /**
-     * {@code search}: no searchable activities and no global search (Activity's
-     * getSystemService(SEARCH_SERVICE) throws without the service; NoNonsense Notes).
-     */
-    static final class SearchService extends ISearchManager.Default {
-        @Override
-        public java.util.List<android.app.SearchableInfo> getSearchablesInGlobalSearch() {
-            return new java.util.ArrayList<>();
-        }
-
-        @Override
-        public java.util.List<android.content.pm.ResolveInfo> getGlobalSearchActivities() {
-            return new java.util.ArrayList<>();
         }
     }
 
