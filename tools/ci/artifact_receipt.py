@@ -1,11 +1,11 @@
 """CI-only current-run supplier receipt and fail-closed archive verification."""
 import argparse
-import datetime
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+from artifact_candidates import read_artifacts, select_artifact
 from github_read import get_json
 from github_jobs import get_jobs
 from receipt_identity import (exact_run, failed_installer_allowed, installer_uploaded,
@@ -58,23 +58,18 @@ identity_record('producer', {'run_id': run_id, 'attempt': attempt, 'source': hea
 if len(rows) != 1:
     raise RuntimeError('Producer job missing or ambiguous')
 job = rows[0]
-if job['conclusion'] not in allowed or job['head_sha'] != head or str(job['run_id']) != run_id or str(job['run_attempt']) != attempt:
+if (job['status'] != 'completed' or job['conclusion'] not in allowed or job['head_sha'] != head
+        or str(job['run_id']) != run_id or str(job['run_attempt']) != attempt):
     raise RuntimeError('Producer source/attempt/conclusion mismatch')
 if a.allow_failed_producer:
     if not installer_uploaded(job):
         raise RuntimeError('Installer upload did not complete successfully')
-inventory = api(f'actions/runs/{run_id}/artifacts?per_page=100')
+inventory = read_artifacts(f'repos/{repo}/actions/runs/{run_id}/artifacts', name=a.name)
 identity_record('artifact_inventory', {'name': a.name, 'run_id': run_id, 'source': head,
                 'repository_id': repo_id, 'head_repository_id': head_repo,
-                'total_count_max': 100}, {'total_count': inventory.get('total_count'),
-                'received_count': len(inventory.get('artifacts', [])),
-                'names': [item.get('name') for item in inventory.get('artifacts', [])]}, 'observed')
-if inventory['total_count'] > 100:
-    raise RuntimeError('Incomplete artifact inventory')
-rows = [x for x in inventory['artifacts'] if x['name'] == a.name]
-if len(rows) != 1:
-    raise RuntimeError('Artifact missing or ambiguous')
-item = rows[0]
+                'total_count_max': 100}, {'total_count': len(inventory), 'received_count': len(inventory),
+                'names': [item['name'] for item in inventory]}, 'observed')
+item = select_artifact(inventory, a.name, job, run_id=run_id, repo_id=repo_id, head_repo_id=head_repo, head=head)
 identity_record('artifact', {'name': a.name, 'run_id': run_id, 'attempt': attempt, 'source': head,
                 'repository_id': repo_id, 'head_repository_id': head_repo, 'expired': False,
                 'digest_pattern': 'sha256:[0-9a-f]{64}', 'size_min': 1,
@@ -83,12 +78,5 @@ identity_record('artifact', {'name': a.name, 'run_id': run_id, 'attempt': attemp
                 {**{key: item.get(key) for key in ('id', 'name', 'digest', 'expired', 'size_in_bytes', 'created_at')},
                  'workflow_run': {key: (item.get('workflow_run') or {}).get(key) for key in
                                   ('id', 'head_sha', 'repository_id', 'head_repository_id')}}, 'observed')
-import re
-if item['expired'] or item['size_in_bytes'] <= 0 or not re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('digest') or '') or str(item['workflow_run']['id']) != run_id or item['workflow_run']['head_sha'] != head or str(item['workflow_run']['repository_id']) != repo_id or str(item['workflow_run']['head_repository_id']) != head_repo:
-    raise RuntimeError('Artifact identity or digest mismatch')
-def timestamp(s):
-    return datetime.datetime.fromisoformat(s.replace('Z', '+00:00'))
-if not timestamp(job['started_at']) <= timestamp(item['created_at']) <= timestamp(job['completed_at']):
-    raise RuntimeError('Artifact outside producer attempt')
 subprocess.run([sys.executable, 'tools/surface/download-verified-artifact.py', '--id', str(item['id']), '--digest', item['digest'], '--destination', a.destination], check=True)
 print(f"CI_ARTIFACT_RECEIPT name={a.name} id={item['id']} digest={item['digest']} producer={job['name']} producer_id={job['id']} conclusion={job['conclusion']} source={head} checkout={checkout} run={run_id} attempt={attempt}", flush=True)
