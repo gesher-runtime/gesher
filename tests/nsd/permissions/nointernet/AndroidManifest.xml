@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="gesher.qa.nsdpermissions.nointernet">
+<uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36"/>
+<application android:label="Owned NSD permission reference" android:allowBackup="false" android:debuggable="false">
+<receiver android:name="gesher.qa.nsdpermissions.ControlReceiver" android:exported="true"/>
+</application></manifest>
