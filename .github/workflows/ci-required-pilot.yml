@@ -1,0 +1,32 @@
+name: ci-required runner pilot
+on:
+  pull_request:
+    branches:
+      - codex/ci-required-pilot-base-20261119
+permissions: {}
+jobs:
+  prerequisite:
+    name: Pilot prerequisite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Produce the selected dependency result
+        env:
+          INJECT_FAILURE: ${{ github.head_ref == 'codex/ci-required-pilot-fail-20261119' }}
+        shell: bash
+        run: test "$INJECT_FAILURE" = false
+  ci-required:
+    name: ci-required
+    needs: [prerequisite]
+    if: always()
+    uses: gesher-runtime/gesher/.github/workflows/ci-required-pilot-gate.yml@b83c275d6e89ac0318a63873e3bb3c953d92431c
+    with:
+      job_results: ${{ toJSON(needs) }}
+      use_local_runner: true
+  hosted-control:
+    name: hosted-control
+    needs: [prerequisite]
+    if: always()
+    uses: gesher-runtime/gesher/.github/workflows/ci-required-pilot-gate.yml@b83c275d6e89ac0318a63873e3bb3c953d92431c
+    with:
+      job_results: ${{ toJSON(needs) }}
