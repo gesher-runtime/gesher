@@ -89,7 +89,7 @@ final class BroadcastController {
         ReceiverFilter(IntentFilter filter, String permission, int flags) {
             this.filter = new IntentFilter(filter);
             this.permission = permission;
-            exported = (flags & Context.RECEIVER_NOT_EXPORTED) == 0;
+            exported = (flags & Context.RECEIVER_EXPORTED) != 0;
         }
     }
 
@@ -264,7 +264,7 @@ final class BroadcastController {
                         || !receiverPermissions(rl.packageName, required, excluded, excludedPackages)) continue;
                 ReceiverFilter best = null;
                 for (ReceiverFilter filter : rl.filters) {
-                    if (componentAllowed(origin, rl.packageName, filter.exported, filter.permission)
+                    if (registeredAllowed(origin, rl, filter)
                             && filter.filter.match(snapshot.getAction(), resolvedType != null
                                     ? resolvedType : snapshot.getType(), snapshot.getScheme(),
                                     snapshot.getData(), snapshot.getCategories(), "gesher") >= 0
@@ -341,7 +341,7 @@ final class BroadcastController {
     }
 
     private void validateBroadcastSender(Sender sender, Intent intent) {
-        if (GmsSignatureSpoofing.isEnabled() && !sender.system && mPm.isProtectedBroadcast(intent.getAction())) {
+        if (!sender.system && mPm.isProtectedBroadcast(intent.getAction())) {
             throw new SecurityException("Only the system can send a protected broadcast");
         }
         enforcePushSender(sender, intent);
@@ -391,8 +391,7 @@ final class BroadcastController {
             return mRegistered.get(rl.receiver.asBinder()) == rl && !rl.app.exiting
                     && mAtm.callerProcess(rl.app.pid) == rl.app
                     && !mTimedOut.contains(rl.app)
-                    && componentAllowed(chain.sender, rl.packageName,
-                            target.filter.exported, target.filter.permission);
+                    && registeredAllowed(chain.sender, rl, target.filter);
         }
         ActivityInfo fresh = mPm.getReceiverInfo(new android.content.ComponentName(
                 target.info.packageName, target.info.name), PackageManager.GET_META_DATA, 0);
@@ -684,9 +683,6 @@ final class BroadcastController {
             IIntentReceiver receiver, IntentFilter filter, int callingPid,
             String requiredPermission, int flags) {
         if (filter == null) throw new IllegalArgumentException("Missing receiver filter");
-        if ((flags & Context.RECEIVER_EXPORTED) != 0 && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
-            throw new IllegalArgumentException("Conflicting receiver export flags");
-        }
         Sender sender = sender(callerPackage, callingPid);
         ActivityTaskManagerService.ProcessRecord app = mAtm.callerProcess(callingPid);
         if (!mCallers.isSystem()) {
@@ -695,6 +691,7 @@ final class BroadcastController {
             }
         }
         // A query for sticky broadcasts (devsvc: the system's, StickyBroadcasts).
+        flags = receiverExportFlags(receiver, filter, flags, sender.uid);
         if (receiver == null) return StickyBroadcasts.match(filter);
         if (app == null) {
             SystemServer.log("registerReceiver from pid " + callingPid
@@ -702,6 +699,10 @@ final class BroadcastController {
             return null;
         }
         synchronized (this) {
+            // Filtering and catalog loading may race process death or package replacement.
+            // Check under the same lock as processDied's removal, before publishing state.
+            if (!sender.acceptance.getAsBoolean() || app.exiting
+                    || mAtm.callerProcess(callingPid) != app) return null;
             ReceiverList rl = mRegistered.get(receiver.asBinder());
             if (rl == null) {
                 rl = new ReceiverList(receiver, app, sender.packageName, mPm.get(sender.packageName));
@@ -730,6 +731,46 @@ final class BroadcastController {
             }
         }
         return sticky;
+    }
+
+    /** Android 16 BroadcastController, change 161145287 (enabled since target SDK 34). */
+    private int receiverExportFlags(IIntentReceiver receiver, IntentFilter filter, int flags, int uid) {
+        if ((flags & Context.RECEIVER_EXPORTED) != 0 && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
+            throw new IllegalArgumentException("Conflicting receiver export flags");
+        }
+        // CompatChanges.isChangeEnabled(change, uid) requires the change to be enabled
+        // for every package sharing the UID. Gesher has no runtime compat overrides.
+        // PlatformCompat defaults this non-disabled change to enabled for an empty UID.
+        boolean requireExplicit = true;
+        for (ApkPackage pkg : mPm.packages()) {
+            if (pkg.uid() != uid) continue;
+            if (pkg.parsed.getTargetSdkVersion() < 34) {
+                requireExplicit = false;
+                break;
+            }
+        }
+        if (requireExplicit && (flags & Context.RECEIVER_VISIBLE_TO_INSTANT_APPS) != 0
+                && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
+            throw new IllegalArgumentException("A non-exported receiver cannot be visible to instant apps");
+        }
+        boolean onlyProtected = filter.countActions() != 0;
+        for (int i = 0; onlyProtected && i < filter.countActions(); i++) {
+            // A failed catalog denies unknown senders, but cannot prove this exemption.
+            onlyProtected = mPm.permissions().isKnownProtectedBroadcast(filter.getAction(i));
+        }
+        boolean explicit = (flags & (Context.RECEIVER_EXPORTED | Context.RECEIVER_NOT_EXPORTED)) != 0;
+        if (!onlyProtected) {
+            if (receiver == null && !explicit) {
+                flags |= Context.RECEIVER_EXPORTED;
+            } else if (requireExplicit && !explicit) {
+                throw new SecurityException("Specify RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED for non-system broadcasts");
+            } else if (!requireExplicit && (flags & Context.RECEIVER_NOT_EXPORTED) == 0) {
+                flags |= Context.RECEIVER_EXPORTED;
+            }
+        } else if ((flags & Context.RECEIVER_NOT_EXPORTED) == 0) {
+            flags |= Context.RECEIVER_EXPORTED;
+        }
+        return flags;
     }
 
     void unregisterReceiver(IIntentReceiver receiver) {
@@ -783,8 +824,7 @@ final class BroadcastController {
                     if (!receiverPermissions(rl.packageName, requiredPermissions,
                             excludePermissions, excludePackages)) continue;
                     for (ReceiverFilter registeredFilter : rl.filters) {
-                        if (!componentAllowed(sender, rl.packageName,
-                                registeredFilter.exported, registeredFilter.permission)) continue;
+                        if (!registeredAllowed(sender, rl, registeredFilter)) continue;
                         if (registeredFilter.filter.match(intent.getAction(), resolvedType != null ? resolvedType
                                 : intent.getType(), intent.getScheme(), intent.getData(),
                                 intent.getCategories(), "gesher") >= 0) {
@@ -945,6 +985,17 @@ final class BroadcastController {
         if (sender.system || owner.equals(sender.packageName)) return true;
         return exported && (permission == null || permission.isEmpty()
                 || mPm.permissions().checkPermission(sender.packageName, permission) == PackageManager.PERMISSION_GRANTED);
+    }
+
+    /** Dynamic export admission and sender permission are separate AOSP checks. */
+    private boolean registeredAllowed(Sender sender, ReceiverList receiver, ReceiverFilter filter) {
+        if (!sender.lifetime.getAsBoolean() || receiver.owner == null
+                || mPm.get(receiver.packageName) != receiver.owner
+                || mPm.isRemovalPending(receiver.packageName)) return false;
+        if (sender.system) return true;
+        if (!filter.exported && sender.uid != receiver.owner.uid()) return false;
+        return filter.permission == null || mPm.checkUidPermission(filter.permission, sender.uid)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private void enforcePushSender(Sender sender, Intent intent) {
