@@ -354,9 +354,12 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
     }
   }
   if ($Context -eq 'host-posix') {
+    if ($text -notmatch '(?m)^TCP_PRIORITY_OWNER_CLASSIFIER default_pool=1 ordinary_thread_rejected=1 exact_retirement=1\r?$') { throw 'Missing HOST calibrated pool and ordinary-thread negative control' }
     foreach ($mode in 0..3) {
       if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" }
-      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=([0-9]+)/\2\r?$") { throw "Missing HOST repeated physical owner census $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=[0-9]+/[0-9]+\r?$") { throw "Missing HOST exact process handle census $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_IDENTITIES mode=$mode entries=([1-9][0-9]*)/\1 pool=[0-9]+/[0-9]+ matched=1\r?$") { throw "Missing HOST exact non-pool thread identities $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_REFS mode=$mode operation=0 description=0\r?$") { throw "Missing HOST expired product owner references $mode" }
       if ($text -notmatch "(?m)^TCP_PRIORITY_LEGACY_LEASE mode=$mode fd_reused=1 old_call_rc=-1 old_call_errno=9 close_rc=[0-9]+ global_progress=1 replacement_error=0\r?$") { throw "Missing HOST exact legacy lease context $mode" }
     }
   }

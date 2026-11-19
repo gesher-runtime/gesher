@@ -99,8 +99,9 @@ New-Item -ItemType Directory -Path $work | Out-Null
 try {
     Assert-Update ((ConvertTo-GesherInstallerVersion '0.2.0') -ceq '0.2.0') 'Canonical installer version was changed'
     Assert-Update ((ConvertTo-GesherInstallerVersion ('0.2.0' + (' ' * 43))) -ceq '0.2.0') 'Inno Setup ASCII version padding was not removed'
+    Assert-Update ((ConvertTo-GesherInstallerVersion ('0.2.0.526' + (' ' * 39))) -ceq '0.2.0.526') 'CI build installer version was rejected'
     foreach ($invalid in @($null, '', 42, ' 0.2.0', "0.2.0`t", "0.2.0`r`n", '0 .2.0',
-        '0.2.0.0   ', '01.2.0 ', 'v0.2.0 ', '0.2.0-beta ', '0.2.65536 ')) {
+        '0.2.0.0   ', '0.2.0.01 ', '0.2.0.65536 ', '0.2.0.1.2 ', '01.2.0 ', 'v0.2.0 ', '0.2.0-beta ', '0.2.65536 ')) {
         Assert-Update ($null -eq (ConvertTo-GesherInstallerVersion $invalid)) "Invalid padded installer version accepted: $invalid"
     }
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
@@ -128,7 +129,7 @@ public static class GesherInstallerVersionFixture {}
     $unknown = Get-GesherUpdate -InstallDirectory $install
     Assert-Update ($unknown.Status -eq 'UnknownVersion') 'Unversioned installation was offered an upgrade'
     Assert-Update ($script:MetadataCalls -eq 0) 'Unversioned installation made a redundant network request'
-    foreach ($invalid in '0.1', '01.2.3', '0.1.2.3', '0.2.0-beta', '0.2.0+build', '1.2.65536', 'v0.2.0', 'garbage') {
+    foreach ($invalid in '0.1', '01.2.3', '0.1.2.0', '0.1.2.03', '0.1.2.65536', '0.1.2.3.4', '0.1.2.', '0.2.0-beta', '0.2.0+build', '1.2.65536', 'v0.2.0', 'garbage') {
         [IO.File]::WriteAllText($versionPath, "[Gesher]`r`nVersion=$invalid`r`n")
         Assert-Update ($null -eq (Get-GesherInstalledVersion -InstallDirectory $install)) "Invalid installed version accepted: $invalid"
     }
@@ -140,6 +141,9 @@ public static class GesherInstallerVersionFixture {}
     }
     [IO.File]::WriteAllText($versionPath, "[Gesher]`r`nVersion=0.1.9`r`n")
     Assert-Update ((Get-GesherInstalledVersion -InstallDirectory $install) -ceq '0.1.9') 'Installed version was not read from the Gesher section'
+    [IO.File]::WriteAllText($versionPath, "[Gesher]`r`nVersion=0.2.0.526`r`n")
+    Assert-Update ((Get-GesherInstalledVersion -InstallDirectory $install) -ceq '0.2.0.526') 'CI build installed version was not read'
+    [IO.File]::WriteAllText($versionPath, "[Gesher]`r`nVersion=0.1.9`r`n")
     $metadata = New-ReleaseMetadata
     $release = ConvertTo-GesherUpdateRelease -Metadata $metadata
     Assert-Update ($release.Version -ceq '0.2.0' -and $release.Tag -ceq 'v0.2.0') 'Stable release identity was not preserved'
@@ -187,7 +191,12 @@ public static class GesherInstallerVersionFixture {}
         @{ Installed = '0.1.9'; Latest = '0.1.10'; Status = 'Available' },
         @{ Installed = '0.1.10'; Latest = '0.1.10'; Status = 'Current' },
         @{ Installed = '0.2.0'; Latest = '0.1.10'; Status = 'Current' },
-        @{ Installed = '1.0.0'; Latest = '0.65535.65535'; Status = 'Current' })) {
+        @{ Installed = '1.0.0'; Latest = '0.65535.65535'; Status = 'Current' },
+        # A CI build after a release (X.Y.Z.N) is newer than X.Y.Z and older than the next release.
+        @{ Installed = '0.2.0.526'; Latest = '0.2.0'; Status = 'Current' },
+        @{ Installed = '0.2.0.526'; Latest = '0.2.1'; Status = 'Available' },
+        @{ Installed = '0.1.9.65535'; Latest = '0.1.10'; Status = 'Available' },
+        @{ Installed = '0.0.0.640'; Latest = '0.2.0'; Status = 'Available' })) {
         [IO.File]::WriteAllText($versionPath, "[Gesher]`nVersion=$($case.Installed)`n")
         $script:MetadataJson = New-ReleaseMetadata $case.Latest | ConvertTo-Json -Depth 8
         $result = Get-GesherUpdate -InstallDirectory $install
@@ -251,6 +260,9 @@ public static class GesherInstallerVersionFixture {}
     $script:InstallerVersion = '0.3.0'
     Assert-UpdateThrows { Start-GesherUpdateInstaller -Download $download -InstallDirectory $install } 'Installer ProductVersion mismatch reached process launch'
     Assert-Update ($script:ProcessCalls -eq 1) 'Wrong-version installer was launched'
+    $script:InstallerVersion = '0.2.0.526'
+    Assert-UpdateThrows { Start-GesherUpdateInstaller -Download $download -InstallDirectory $install } 'A CI build installer was accepted as the release installer'
+    Assert-Update ($script:ProcessCalls -eq 1) 'CI build installer was launched for a release'
     $script:InstallerVersion = '0.2.0'
     [IO.File]::WriteAllBytes($download.Path, [byte[]]::new($script:Payload.Length))
     Assert-UpdateThrows { Start-GesherUpdateInstaller -Download $download -InstallDirectory $install } 'Modified installer passed the final integrity check'
