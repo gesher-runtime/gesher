@@ -6,12 +6,14 @@ package com.gesher.videoapp;
 
 import android.app.Activity;
 import android.content.res.AssetFileDescriptor;
+import android.graphics.Bitmap;
 import android.media.Image;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -75,6 +77,7 @@ public class VideoActivity extends Activity {
                 surfaces();
                 if (!surfacesOnly) {
                     retriever();
+                    retrieverIndexedFrames();
                     player();
                     videoView();
                     // The software decoders (and WebM's audio) through MediaPlayer and
@@ -663,6 +666,45 @@ public class VideoActivity extends Activity {
         say("retriever frames: video " + w + "x" + h + " " + hasVideo + ", at 1.25 s closest "
                 + describe(closest) + ", at 1.6 s previous sync " + describe(sync)
                 + ", scaled at 0.25 s " + describe(scaled));
+    }
+
+    void retrieverIndexedFrames() throws Exception {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(clipFile().getPath());
+            String count = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT);
+            MediaMetadataRetriever.BitmapParams params = new MediaMetadataRetriever.BitmapParams();
+            params.setPreferredConfig(Bitmap.Config.RGB_565);
+
+            List<Bitmap> frames = retriever.getFramesAtIndex(14, 3, params);
+            ArrayList<String> colors = new ArrayList<>();
+            boolean rgb565 = params.getActualConfig() == Bitmap.Config.RGB_565;
+            for (Bitmap frame : frames) {
+                rgb565 &= frame.getConfig() == Bitmap.Config.RGB_565;
+                colors.add(describe(frame));
+            }
+
+            Bitmap last = retriever.getFrameAtIndex(59);
+            Bitmap time = retriever.getFrameAtTime(1250000, MediaMetadataRetriever.OPTION_CLOSEST, params);
+            boolean timeConfig = time != null && time.getConfig() == Bitmap.Config.RGB_565
+                    && params.getActualConfig() == Bitmap.Config.RGB_565;
+            params.setPreferredConfig(Bitmap.Config.ALPHA_8);
+            Bitmap scaled = retriever.getScaledFrameAtTime(
+                    250000, MediaMetadataRetriever.OPTION_CLOSEST, 160, 160, params);
+            boolean fallback = scaled != null && scaled.getConfig() == Bitmap.Config.ARGB_8888
+                    && params.getActualConfig() == Bitmap.Config.ARGB_8888;
+            boolean invalid = false;
+            try {
+                retriever.getFramesAtIndex(59, 2);
+            } catch (IllegalArgumentException expected) {
+                invalid = true;
+            }
+            say("retriever indexed: " + count + " frames, " + colors + ", last " + describe(last)
+                    + ", RGB565 " + rgb565 + ", timed RGB565 " + timeConfig
+                    + ", fallback " + fallback + " " + describe(scaled) + ", invalid " + invalid);
+        } finally {
+            retriever.release();
+        }
     }
 
     static String describe(android.graphics.Bitmap b) {

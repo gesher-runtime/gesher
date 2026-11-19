@@ -75,6 +75,11 @@ final class PackageVisibility {
 
     int uid(String name) { return mPackages.get(name).uid; }
 
+    ApkPackage apk(String name) {
+        Entry entry = mPackages.get(name);
+        return entry == null ? null : entry.apk;
+    }
+
     /** Legacy Binder uses one compatibility UID for unrelated installed APKs. */
     boolean canSeeFromPackage(String sourceName, String targetName) {
         Entry source = mPackages.get(sourceName);

@@ -15,6 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "epoll_eventfd_edge_test.inc"
+
 struct loop_waiter_contract {
   int ep;
   unsigned seen;
@@ -309,6 +311,7 @@ static void test_host_select_contract(void) {
 
 static void test_event_loop_contracts(void) {
   test_epoll_fairness_contract();
+  test_epoll_eventfd_edges();
   test_writev_event_contract();
   test_host_select_contract();
 }

@@ -1,12 +1,15 @@
 // Production sections are inserted unchanged. Windows device data, CRT path
 // encoding and lock transactions are explicit host-only test boundaries.
 #include <atomic>
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <mutex>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <fcntl.h>
@@ -105,6 +108,7 @@ static int gesher_is_device_fd(int fd) {
 }
 namespace shim {
 #define BIONIC_SYSV
+constexpr int kENOMEM = ENOMEM;
 static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
 static int read(int fd, void* buffer, unsigned int count) {
   gesher::Device device;
@@ -118,8 +122,11 @@ static int read(int fd, void* buffer, unsigned int count) {
 static size_t _fread_nolock(void* buffer, size_t size, size_t count, FILE* stream) {
   return std::fread(buffer, size, count, stream);
 }
-size_t ReadStream(void*, size_t, size_t, FILE*, bool = false);
+static int _getc_nolock(FILE* stream) { return getc_unlocked(stream); }
+@STREAM_STATE@
 @READ_STREAM@
+@GETC_UNLOCKED@
+@FREAD_UNLOCKED@
 @FGETC@
 @FREAD@
 }
