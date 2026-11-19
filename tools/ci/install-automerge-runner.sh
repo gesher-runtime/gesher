@@ -32,7 +32,7 @@ cd actions-runner
 if [[ ! -f .runner ]]; then
   install -d -m 0700 /var/cache/gesher-automerge
   archive=/var/cache/gesher-automerge/$digest.tar.gz
-  if ! printf '%s  %s\n' "$digest" "$archive" | sha256sum --check --status; then
+  if [[ ! -f $archive ]] || ! printf '%s  %s\n' "$digest" "$archive" | sha256sum --check --status; then
     download=$(mktemp /var/cache/gesher-automerge/download.XXXXXX)
     trap 'rm -f -- "$download"' EXIT
     curl -fL --retry 3 --connect-timeout 20 --max-time 900 "$url" -o "$download"
@@ -51,7 +51,12 @@ if [[ ! -f .runner ]]; then
       --runnergroup gesher-automerge --name "$1" --labels automerge --work _work
   ' bash "$runner"
 fi
-sudo -Hu "$account" python3 -c 'import json, sys; settings = json.load(open(".runner")); sys.exit(settings.get("agentName", settings.get("AgentName")) != sys.argv[1])' "$runner"
+sudo -Hu "$account" python3 - "$runner" <<'PY'
+import json, sys
+with open('.runner', encoding='utf-8-sig') as stream:
+    settings = json.load(stream)
+sys.exit(settings.get('agentName', settings.get('AgentName')) != sys.argv[1])
+PY
 if [[ ! -f .service ]]; then
   ./svc.sh install "$account"
 fi
