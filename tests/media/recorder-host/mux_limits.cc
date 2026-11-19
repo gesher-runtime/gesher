@@ -215,5 +215,26 @@ int main(int argc, char** argv) {
     assert(mux->Stop(&error));
     close(fd);
   }
+  // Preserve metadata budgets when composing with Recorder's A/V admission
+  // controls. Supplying the limit before or after the track has identical output.
+  for (bool limit_first : {false, true}) {
+    const std::string path = work + (limit_first ? "/metadata-limit-first.mp4" : "/metadata-limit-last.mp4");
+    int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600); assert(fd >= 0);
+    std::string error;
+    auto mux = Muxer::Create(fd, MuxerFormat::kMpeg4, &error); assert(mux);
+    if (limit_first) assert(mux->SetFileSizeLimit(4096));
+    Format metadata; metadata.get()->mime = "application/octet-stream";
+    int track = mux->AddTrack(metadata, &error); assert(track >= 0);
+    if (!limit_first) assert(mux->SetFileSizeLimit(4096));
+    assert(mux->Start(&error));
+    const uint8_t payload[] = {1, 2, 3};
+    assert(mux->WriteSample(track, payload, sizeof(payload), 0, 0, &error));
+    assert(mux->Stop(&error));
+    struct stat info {}; assert(fstat(fd, &info) == 0 && info.st_size > 0 && info.st_size < 4096);
+    assert(mux->BytesWritten() == info.st_size && !mux->FileSizeLimitReached());
+    close(fd);
+  }
+  assert(Read(work + "/metadata-limit-first.mp4") == Read(work + "/metadata-limit-last.mp4"));
+  std::cout << "Recorder metadata limit-order controls passed\n";
   std::cout << "Recorder completed-container budgets passed\n";
 }

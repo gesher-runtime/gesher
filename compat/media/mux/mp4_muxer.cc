@@ -249,7 +249,7 @@ class Mp4Muxer : public Muxer {
     ftyp.End();
     // mdat with a 64-bit size, filled in at the end.
     static const uint8_t kMdat[16] = {0, 0, 0, 1, 'm', 'd', 'a', 't', 0, 0, 0, 0, 0, 0, 0, 0};
-    if (!AdmitFinalSize(ftyp.bytes().size() + sizeof(kMdat) + MoovSize())) {
+    if (HasFileSizeLimit() && !AdmitFinalSize(ftyp.bytes().size() + sizeof(kMdat) + MoovSize())) {
       *error = "MPEG-4: file-size limit is too small for container metadata";
       return false;
     }
@@ -290,7 +290,9 @@ class Mp4Muxer : public Muxer {
                 return false;
               }
               t.last_duration_ticks = static_cast<int64_t>(ticks);
-              if (!AdmitFinalSize(pos_ + MoovSize(), true)) t.last_duration_ticks = -1;
+              if (HasFileSizeLimit() && !AdmitFinalSize(pos_ + MoovSize(), true)) {
+                t.last_duration_ticks = -1;
+              }
             }
           }
           t.ended = true;
@@ -325,7 +327,7 @@ class Mp4Muxer : public Muxer {
         }
         const uint64_t old_entry_size = t.sample_entry_bytes;
         UpdateSampleEntrySize(t);
-        if (!AdmitFinalSize(pos_ + MoovSize(), true)) {
+        if (HasFileSizeLimit() && !AdmitFinalSize(pos_ + MoovSize(), true)) {
           t.csd.clear();
           t.sample_entry_bytes = old_entry_size;
         }
@@ -365,7 +367,7 @@ class Mp4Muxer : public Muxer {
       n = converted.size();
     }
     if (t.csd.size() != old_csd_count) UpdateSampleEntrySize(t);
-    const uint64_t metadata = MoovSize(index, time_us, (flags & 1) != 0);
+    const uint64_t metadata = HasFileSizeLimit() ? MoovSize(index, time_us, (flags & 1) != 0) : 0;
     if (n > UINT64_MAX - pos_ || metadata > UINT64_MAX - pos_ - n) {
       *error = "MPEG-4: completed file size is not representable";
       return false;
