@@ -184,6 +184,11 @@ jobs:
           python3 tools/test_utc_time_contracts.py --sanitize
           python3 tools/test_sleep_contracts.py --sanitize
 
+      - name: Compiler for original data-only AArch64 ELF contract fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang lld
+
       - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
         run: |
           python3 tools/test_bionic_key_contracts.py --sanitize
@@ -201,6 +206,15 @@ jobs:
           python3 tools/test_elf_lookup_contracts.py --sanitize
           python3 tools/test_elf_lookup_contracts.py --linux-reference
           python3 tools/test_elf_lookup_performance.py --sanitize
+          python3 tools/test_elf_atomic_load.py --sanitize
+          python3 tools/test_elf_versions.py --sanitize
+          python3 tools/test_elf_unavailable_tls.py --sanitize
+          python3 tools/test_elf_dlvsym_shim.py --sanitize
+          python3 tools/test_arm64_dlvsym_dispatch.py --sanitize
+          python3 tools/test_elf_tls_rollback.py --sanitize
+          python3 tools/test_arm64_pending_rollback.py --sanitize
+          python3 tools/test_arm64_native_rollback.py --sanitize
+          python3 tools/test_arm64_tls_address.py --sanitize
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize

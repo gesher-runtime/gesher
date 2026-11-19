@@ -56,6 +56,7 @@ def main() -> None:
         command = shlex.split(args.cxx) + ["-std=c++20", "-O2", "-g", "-Wall", "-Wextra", "-Werror",
                                          "-fno-exceptions", "-static", "-pthread", "-I", str(ROOT / "compat/arm64/include"),
                                          "-I", str(ROOT / "compat/arm64/dll"),
+                                         "-DHAS_TLS_ADDRESS=" + str(int("void* ApiTlsAddress(" in source)),
                                          str(cpp), "-o", str(executable), "-lpsapi"]
         subprocess.run(command, check=True, timeout=120)
         if args.compile_only:

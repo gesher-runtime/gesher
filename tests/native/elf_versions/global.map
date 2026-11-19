@@ -1,0 +1,2 @@
+/* Unlisted exports intentionally remain VER_NDX_GLOBAL, not GV_OTHER. */
+GV_OTHER { global: gv_tagged; };

@@ -17,7 +17,7 @@
 //  - four O_* open flags (O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE);
 //  - localeconv's CHAR_MAX sentinels (unsigned char on Android arm64);
 //  - DNS bitstring rendering's plain-char promotion (unsigned on arm64);
-//  - dlsym: returns these definitions for those names;
+//  - dlsym/dlvsym: return these definitions for selected shim symbols;
 //  - the shim's va_list functions (vsnprintf...): registered so the guest's
 //    AAPCS64 va_list is converted to System V when the guest calls them.
 // The loader asks guest_symbol(name) before binding a guest import to the shim.
@@ -533,6 +533,7 @@ int64_t GESHER_SYSV GuestSyscall(int64_t nr, int64_t a0, int64_t a1, int64_t a2,
 // answered here first. The host function pointers the shim returns are called
 // by the guest directly (the translator's host-pointer path).
 void* g_dlsym = nullptr;
+void* g_dlvsym = nullptr;
 
 void* GESHER_SYSV GuestDlsym(void* handle, const char* name) {
   if (name == nullptr) return nullptr;
@@ -540,6 +541,19 @@ void* GESHER_SYSV GuestDlsym(void* handle, const char* name) {
   return g_dlsym != nullptr
              ? reinterpret_cast<void*(GESHER_SYSV*)(void*, const char*)>(g_dlsym)(handle, name)
              : nullptr;
+}
+
+void* GESHER_SYSV GuestDlvsym(void* handle, const char* name, const char* version) {
+  // Keep the host's version/provider selection and error storage. Only its
+  // actual unversioned shim definition needs this ABI's representation; a
+  // real ELF definition with the same name must retain its selected address.
+  void* selected = g_dlvsym != nullptr
+      ? reinterpret_cast<void*(GESHER_SYSV*)(void*, const char*, const char*)>(g_dlvsym)(handle, name, version)
+      : nullptr;
+  if (selected != nullptr && name != nullptr && selected == Host(name)) {
+    if (void* guest = GuestSymbol(name)) return guest;
+  }
+  return selected;
 }
 
 // --- setjmp / longjmp (guest code) -------------------------------------------------
@@ -776,6 +790,8 @@ void InitGuestLibc() {
 
   g_dlsym = Host("dlsym");
   if (g_dlsym) Override("dlsym", reinterpret_cast<void*>(&GuestDlsym));
+  g_dlvsym = Host("dlvsym");
+  if (g_dlvsym) Override("dlvsym", reinterpret_cast<void*>(&GuestDlvsym));
 
   for (const Fallback& f : kFenv) Override(f.name, f.fn);
   // Data imports and dlsym must return the ARM object itself, never a callable

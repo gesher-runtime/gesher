@@ -86,7 +86,15 @@ void AddCode(const void* start, size_t size, const char* name) {
   if (g_api) g_api->add_code(start, size, name);
 }
 
+void RemoveCode(const void* mapping_base, size_t mapping_size) {
+  if (g_api) g_api->remove_code(mapping_base, mapping_size);
+}
+
 void* BindHostFunction(void* host_fn) { return g_bind ? g_bind(host_fn) : nullptr; }
+
+void UnbindHostFunction(void* host_fn) {
+  if (g_api) g_api->unbind_host_function(host_fn);
+}
 
 void* HostEntry(const void* fn) { return g_api ? g_api->host_entry(fn) : nullptr; }
 
@@ -98,8 +106,20 @@ int64_t TlsRegister(size_t total_size, size_t align) {
   return g_api ? g_api->tls_register(total_size, align) : -1;
 }
 
+bool TlsPrepare(int64_t offset, const void* image, size_t image_size, size_t total_size) {
+  return g_api && g_api->tls_prepare(offset, image, image_size, total_size) != 0;
+}
+
 void TlsPublish(int64_t offset, const void* image, size_t image_size, size_t total_size) {
   if (g_api) g_api->tls_publish(offset, image, image_size, total_size);
+}
+
+bool TlsRollback(int64_t offset, size_t total_size) {
+  return g_api && g_api->tls_rollback(offset, total_size) != 0;
+}
+
+void* TlsAddress(int64_t module_offset, size_t symbol_offset) {
+  return g_api && g_api->tls_address ? g_api->tls_address(module_offset, symbol_offset) : nullptr;
 }
 
 void AddVaListFunction(const void* fn, int index) {
@@ -115,6 +135,10 @@ uint64_t RunProgram(const void* entry, const uint64_t* block, size_t words) {
 void* GuestSymbol(const char* name) { return g_api ? g_api->guest_symbol(name) : nullptr; }
 
 void* TlsDescStatic() { return g_api ? g_api->tlsdesc_static() : nullptr; }
+
+void* TlsDescUnresolvedWeak() {
+  return g_api && g_api->tlsdesc_unresolved_weak ? g_api->tlsdesc_unresolved_weak() : nullptr;
+}
 
 uint64_t CallIfuncResolver(const void* resolver) {
   // bionic's arm64 IFUNC resolvers take (hwcap | _IFUNC_ARG_HWCAP, &arg), with

@@ -951,30 +951,60 @@ void* DlOpenImpl(const char* filename) {
 }
 // dlsym: the shim's own symbols stand in for the libraries it implements, as
 // bionic's search reaches libc.so & co. through a library's dependencies.
-void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
+void* DlSymImpl(void* handle, const char* symbol, const char* version) {
   void* p = nullptr;
+  using gesher::elf::LookupStatus;
+  LookupStatus status = LookupStatus::kNotFound;
   if (symbol == nullptr) {
     t_dlerror = "dlsym: null symbol name";
     t_has_dlerror = true;
     return nullptr;
   }
   if (IsPlatformLibraryHandle(handle)) {
+    // These existing virtual providers have no ELF version table. Bionic's
+    // check_symbol_version allows their actual unversioned exports to match
+    // a version request; this does not declare any named version supported.
     p = LookupBionicSymbol(symbol);
+    if (p) status = LookupStatus::kResolved;
   } else if (handle == nullptr || handle == reinterpret_cast<void*>(-1) ||
              handle == reinterpret_cast<void*>(-2)) {
     // RTLD_DEFAULT is 0 and RTLD_NEXT -1 on bionic LP64; -2 is dlopen(NULL).
-    p = gesher::elf::LookupGlobal(symbol);
-    if (p == nullptr) p = LookupBionicSymbol(symbol);
+    p = gesher::elf::LookupGlobalVersion(symbol, version, &status);
+    if (status == LookupStatus::kNotFound) {
+      p = LookupBionicSymbol(symbol);
+      if (p) status = LookupStatus::kResolved;
+    }
   } else {
-    p = gesher::elf::Lookup(static_cast<gesher::elf::Library*>(handle), symbol);
-    if (p == nullptr) p = LookupBionicSymbol(symbol);
+    auto* library = static_cast<gesher::elf::Library*>(handle);
+    p = gesher::elf::LookupVersion(library, symbol, version, &status);
+    if (status == LookupStatus::kNotFound) {
+      p = LookupBionicSymbol(symbol);
+      if (p) status = LookupStatus::kResolved;
+    }
   }
-  if (p == nullptr) {
-    t_dlerror = std::string("undefined symbol: ") + symbol;
+  // A selected IFUNC can return zero successfully. Do not replace its result
+  // with an unrelated builtin or overwrite the caller's pending dlerror.
+  // A selected TLS definition still fails if its current-thread storage is
+  // unavailable. Keep that failure separate from absence and null IFUNC success.
+  if (status != LookupStatus::kResolved) {
+    t_dlerror = std::string(status == LookupStatus::kUnavailable
+        ? "symbol address unavailable: " : "undefined symbol: ") + symbol;
+    if (version != nullptr) t_dlerror += std::string(", version ") + version;
     t_has_dlerror = true;
-    if (TraceDl()) std::fprintf(stderr, "gesher dl: dlsym(%p, \"%s\") = null\n", handle, symbol);
+    if (TraceDl()) {
+      if (version == nullptr)
+        std::fprintf(stderr, "gesher dl: dlsym(%p, \"%s\") = null\n", handle, symbol);
+      else
+        std::fprintf(stderr, "gesher dl: dlvsym(%p, \"%s\", \"%s\") = null\n", handle, symbol, version);
+    }
   }
   return p;
+}
+void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
+  return DlSymImpl(handle, symbol, nullptr);
+}
+void* BIONIC_SYSV DlVSym(void* handle, const char* symbol, const char* version) {
+  return DlSymImpl(handle, symbol, version);
 }
 int BIONIC_SYSV DlClose(void*) { return 0; }
 const char* BIONIC_SYSV DlError() {
@@ -1292,7 +1322,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("dlopen", DlOpen);
   ENTRY("android_dlopen_ext", DlOpen);
   ENTRY("dlsym", DlSym);
-  ENTRY("dlvsym", DlSym);
+  ENTRY("dlvsym", DlVSym);
   ENTRY("dlclose", DlClose);
   ENTRY("dlerror", DlError);
   ENTRY("dladdr", DlAddr);
@@ -1341,7 +1371,9 @@ void AddBionicSymbol(const char* name, void* address) { Table()[name] = address;
 
 void InstallBionicShim() {
   Table();
-  gesher::elf::SetBionicResolver([](const char* name) { return LookupBionicSymbol(name); });
+  gesher::elf::SetBionicResolver(
+      [](const char* name) { return LookupBionicSymbol(name); },
+      [](const char* soname) { return PlatformLibraryHandle(soname) != nullptr; });
   gesher::elf::SetUnresolvedHandler(ReportUnresolved);
   gesher::elf::SetRawSyscallHandler(RawSyscallX64);
   InstallSignalHook(false);

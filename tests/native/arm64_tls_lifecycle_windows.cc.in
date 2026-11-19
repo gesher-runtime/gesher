@@ -134,7 +134,19 @@ void TestMethods() {
   CheckStackPublication(active, publications, "first attachment publishes its actual stack and guard");
   Check(g_tls_blocks.size() == 1 && g_envs.size() == 1, "publish only attached Env");
   active->tls_block_[0] = 0x73;
+#if HAS_TLS_ADDRESS
+  auto* initial_address = static_cast<uint8_t*>(ApiTlsAddress(first, 0));
+#endif
   auto* old = ThreadEnv();
+#if HAS_TLS_ADDRESS
+  Check(initial_address == old->tls_block_ + first && initial_address[0] == image1[0],
+        "TLS lookup attaches the real thread Env before any guest call");
+  initial_address[0] = 0xa5;
+  Check(ApiTlsAddress(first, 0) == initial_address && initial_address[0] == 0xa5,
+        "TLS lookup preserves the existing Env's mutations");
+  Check(ApiTlsAddress(first, 8192) == nullptr && ApiTlsAddress(-1, 0) == nullptr,
+        "TLS lookup rejects unknown modules and one-past offsets");
+#endif
   CheckStackPublication(old, ++publications, "another Env publishes its own distinct stack");
   Check(ThreadEnv() == old, "existing attachment retains its Env");
   CheckStackPublication(old, publications, "existing attachment does not republish");
@@ -228,6 +240,8 @@ extern "C" __attribute__((sysv_abi)) uint64_t Nested(uint64_t) { return api->cal
 struct Result { uint8_t* tls = nullptr; HANDLE ready = nullptr, release = nullptr; bool dirty = false; int64_t first = 0, second = 0; };
 DWORD WINAPI Worker(void* context) {
   auto& result = *static_cast<Result*>(context);
+  auto* symbol = static_cast<uint8_t*>(api->tls_address(result.first, 0));
+  Check(symbol != nullptr && symbol[0] == 0x41, "actual TLS lookup initializes this thread before guest execution");
   uint64_t args[3] = {0, 0, reinterpret_cast<uint64_t>(trampoline)};
   int* errno_slot = reinterpret_cast<int*>(api->call(errno_trampoline, nullptr, 0));
   Check(errno_slot == &host_errno && *errno_slot == 0, "guest errno bridge belongs to the new host thread");
@@ -239,9 +253,19 @@ DWORD WINAPI Worker(void* context) {
           "actual guest stack pointer belongs to this thread's published allocation");
   }
   result.tls = reinterpret_cast<uint8_t*>(api->call(outer_function, args, 3));
+  Check(symbol == result.tls + result.first, "actual lookup pointer equals guest TP plus module offset");
   Check(result.tls == reinterpret_cast<uint8_t*>(api->call(tls_function, nullptr, 0)), "nested callback shares correct thread TLS");
+  for (uint64_t addend : {uint64_t{0}, uint64_t{23}}) {
+    uint64_t descriptor[] = {0, addend};
+    uint64_t descriptor_argument = reinterpret_cast<uint64_t>(descriptor);
+    const uint64_t displacement = api->call(api->tlsdesc_unresolved_weak(), &descriptor_argument, 1);
+    Check(displacement + reinterpret_cast<uint64_t>(result.tls) == addend,
+          "actual weak TLSDESC returns addend minus this guest thread's TP");
+  }
   if (result.dirty) {
     std::memset(result.tls, 0x92, fixture::kTlsBlockSize);
+    Check(api->tls_address(result.first, 0) == symbol && symbol[0] == 0x92,
+          "actual lookup retains writes through the guest TLS block");
     *errno_slot = 77;
   } else {
     for (size_t i = 0; i < fixture::kTcbSize; ++i) Check(result.tls[i] == 0, "real fresh thread TCB");
@@ -263,6 +287,8 @@ void TestDll(const char* path) {
   gesher_arm64_host host{GESHER_ARM64_API_VERSION, Resolve, Describe};
   api = init(&host);
   Check(api != nullptr, "initialize actual translator");
+  Check(api->tls_address && api->tlsdesc_unresolved_weak && api->tlsdesc_unresolved_weak(),
+        "current API supplies real TLS lookup and weak descriptor operations");
   uint32_t instructions[] = {0xd53bd040, 0xd65f03c0, 0xd10043ff, 0xf90003fe, 0xaa0203f0,
                              0xd63f0200, 0xf94003fe, 0x910043ff, 0xd65f03c0,
                              0x910003e0, 0xd65f03c0};  // mov x0, sp; ret
@@ -281,6 +307,7 @@ void TestDll(const char* path) {
   const int64_t first_offset = api->tls_register(8192, 64);
   api->tls_publish(first_offset, first, sizeof(first), 8192);
   Result result;
+  result.first = first_offset;
   result.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   result.release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   Check(result.ready && result.release, "create actual worker events");
@@ -289,6 +316,7 @@ void TestDll(const char* path) {
   Check(worker && WaitForSingleObject(result.ready, 30000) == WAIT_OBJECT_0, "actual initial TLS worker");
   uint8_t* original = result.tls;
   Result active;
+  active.first = first_offset;
   active.dirty = true;
   active.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   active.release = CreateEventW(nullptr, TRUE, FALSE, nullptr);

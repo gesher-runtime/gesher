@@ -1,0 +1,110 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Extracted production dispatch; explicit host lookup and BindHost seams.
+#include <gesher/arm64_translator.h>
+#include <gesher/symbol_table.h>
+#include <cstdio>
+#include <cstdlib>
+#if defined(__x86_64__)
+#define GESHER_SYSV __attribute__((sysv_abi))
+#else
+#define GESHER_SYSV
+#endif
+namespace {
+gesher::SymbolTable host_symbols, g_overrides;
+const gesher_arm64_host* g_host;
+void* HostLookup(const char* name) {
+  auto found = host_symbols.find(name);
+  return found == host_symbols.end() ? nullptr : found->second;
+}
+@HOST_LOOKUP@
+@GUEST_LOOKUP@
+void* BindHost(void* function, int) { return function; }
+@OVERRIDE@
+@DISPATCH@
+void RegisterDispatch() {
+@REGISTRATION@
+}
+int checks, host_calls, null_names;
+const char* pending_error;
+void* seen_handle;
+const char* seen_name;
+const char* seen_version;
+void* selected;
+void Check(bool ok, const char* description) {
+  ++checks;
+  if (!ok) {
+    std::fprintf(stderr, "FAIL ARM dlvsym dispatch: %s (check %d)\n", description, checks);
+    std::exit(1);
+  }
+}
+void* GESHER_SYSV HostDlsym(void*, const char*) { return selected; }
+const char* GESHER_SYSV HostDlerror() {
+  const char* error = pending_error;
+  pending_error = nullptr;
+  return error;
+}
+void* GESHER_SYSV HostDlvsym(void* handle, const char* name, const char* version) {
+  ++host_calls;
+  seen_handle = handle; seen_name = name; seen_version = version;
+  if (!name) { ++null_names; return nullptr; }
+  return selected;
+}
+using VersionedLookup = void*(GESHER_SYSV*)(void*, const char*, const char*);
+void* Entry(const char* name) {
+  if (void* guest = GuestSymbol(name)) return guest;
+  return Host(name);
+}
+}  // namespace
+int main() {
+  gesher_arm64_host api{};
+  api.resolve = HostLookup; g_host = &api;
+  host_symbols["dlsym"] = reinterpret_cast<void*>(&HostDlsym);
+  host_symbols["dlvsym"] = reinterpret_cast<void*>(&HostDlvsym);
+  host_symbols["dlerror"] = reinterpret_cast<void*>(&HostDlerror);
+  RegisterDispatch();
+  auto lookup = reinterpret_cast<VersionedLookup>(Entry("dlvsym"));
+  Check(lookup != nullptr, "a three-argument entry is available");
+  int host_env = 31, arm_env = 41, elf_env = 51;
+  host_symbols["__fe_dfl_env"] = &host_env;
+  g_overrides["__fe_dfl_env"] = &arm_env;
+  selected = &host_env;
+  Check(lookup(nullptr, "__fe_dfl_env", "LIBC") == &arm_env,
+        "selected shim data retains its ARM representation");
+  Check(host_calls == 1, "override selection still invokes version lookup once");
+  Check(GuestSymbol("dlsym") != nullptr, "ordinary dlsym remains registered");
+  int host_open = 61, arm_open = 71, elf_open = 81, ordinary = 91;
+  host_symbols["open"] = &host_open; g_overrides["open"] = &arm_open;
+  for (const char* version : {static_cast<const char*>(nullptr), "", "GV_1", "GV_2"}) {
+    for (void* handle : {static_cast<void*>(nullptr), reinterpret_cast<void*>(-1),
+                        reinterpret_cast<void*>(-2), static_cast<void*>(&ordinary)}) {
+      selected = &host_open;
+      const char* name = "open";
+      const int before = host_calls;
+      Check(lookup(handle, name, version) == &arm_open, "selected shim function uses ARM wrapper");
+      Check(host_calls == before + 1 && seen_handle == handle && seen_name == name && seen_version == version,
+            "handle, name and version pointers reach host unchanged");
+    }
+  }
+  selected = &elf_open;
+  Check(lookup(&ordinary, "open", "GV_GUEST") == &elf_open, "genuine ELF function is not replaced");
+  selected = &elf_env;
+  Check(lookup(&ordinary, "__fe_dfl_env", "GV_GUEST") == &elf_env, "genuine ELF data is not replaced");
+  selected = &ordinary;
+  Check(lookup(&ordinary, "plain", "GV_1") == &ordinary, "ordinary definition passes through");
+  selected = nullptr;
+  Check(lookup(&ordinary, "open", "GV_missing") == nullptr, "host failure cannot become override success");
+  pending_error = "earlier unconsumed error";
+  const int before_null = host_calls;
+  Check(lookup(&ordinary, "open", "GV_NULL") == nullptr,
+        "successful host null selection does not become the same-name ARM override");
+  Check(host_calls == before_null + 1 && pending_error != nullptr,
+        "null forwarding neither repeats host selection nor consumes error state");
+  Check(lookup(&ordinary, nullptr, "GV_1") == nullptr && null_names == 1 && seen_name == nullptr,
+        "null names reach host error path");
+  selected = reinterpret_cast<void*>(&HostDlvsym);
+  Check(lookup(nullptr, "dlvsym", "LIBC") == reinterpret_cast<void*>(lookup), "dlvsym lookup retains guest dispatch");
+  host_symbols.erase("dlvsym"); g_overrides.clear(); RegisterDispatch();
+  Check(GuestSymbol("dlvsym") == nullptr && Entry("dlvsym") == nullptr, "missing host export is not fabricated");
+  std::printf("ARM dlvsym dispatch: %d checks passed\n", checks);
+}

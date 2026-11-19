@@ -60,6 +60,12 @@ jobs:
           cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${ANDROID_API}-clang"
           mkdir -p dist-native
           bash tests/native/build-lookup-graph.sh "$cc" dist-native
+          bash tests/native/build-load-transaction-graph.sh \
+            "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
+            dist-native/elf-load-transaction
+          bash tests/native/build-elf-versions.sh \
+            "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
+            dist-native/elf-versions
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang" \
             -std=c11 -O2 -Wall -Wextra -Werror tests/native/aaudio_builder_contract_test.c \
             -laaudio -ldl -o dist-native/aaudio_builder_x64

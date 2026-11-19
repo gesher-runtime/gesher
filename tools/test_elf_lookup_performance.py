@@ -25,6 +25,12 @@ def section(text: str, begin: str, end: str) -> str:
     return text[text.index(begin):text.index(end)]
 
 
+def lookup_section(source: str) -> str:
+    begin = ("void* LookupVersion(Library* library, const char* name, const char* version"
+             if "void* LookupVersion(" in source else "void* Lookup(Library* library, const char* name) {")
+    return section(source, begin, "void* LookupGlobal(")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
@@ -40,16 +46,21 @@ def main() -> None:
         return (ROOT / path).read_text(encoding="utf-8")
 
     source = read("compat/elf/elf_loader.cc")
-    lookup = section(source, "void* Lookup(Library* library, const char* name) {", "void* LookupGlobal(")
+    lookup = lookup_section(source)
     hashes = source[source.index("uint32_t GnuHash(const char* name) {"):source.index("\n}  // namespace")]
     symbols = section(source, "bool SymbolDefined(const Elf64_Sym* sym) {", "// Resolves an IFUNC:")
     # Observe helper calls without changing their hashing/probing logic.
     hashes = hashes.replace("uint32_t GnuHash(const char* name) {", "uint32_t GnuHash(const char* name) { ++gnu_hash_calls;")
     hashes = hashes.replace("uint32_t SysvHash(const char* name) {", "uint32_t SysvHash(const char* name) { ++sysv_hash_calls;")
-    marker = "                                   uint32_t sysv_hash) {"
+    versioned = "const SymbolVersion* version = nullptr" in symbols
+    marker = ("const SymbolVersion* version = nullptr) {" if versioned
+              else "                                   uint32_t sysv_hash) {")
     if symbols.count(marker) != 1:
         raise ValueError("ELF symbol observation boundary changed")
-    symbols = symbols.replace(marker, marker + "\n  if (tracing) visited.push_back(const_cast<Library*>(lib));")
+    # Keep the default argument in the shared declaration only; the function
+    # body is unchanged apart from the existing visit observation.
+    declaration = marker.replace(" = nullptr", "")
+    symbols = symbols.replace(marker, declaration + "\n  if (tracing) visited.push_back(const_cast<Library*>(lib));")
     fixture = (ROOT / "tests/native/elf_lookup_performance_host.cc.in").read_text(encoding="utf-8")
     fixture = fixture.replace("@HASHES@", hashes).replace("@SYMBOLS@", symbols)
     with tempfile.TemporaryDirectory(prefix="gesher-elf-lookup-performance-") as temporary:
@@ -59,7 +70,7 @@ def main() -> None:
         (work / "contract.cc").write_text(fixture, encoding="utf-8")
         (work / "lookup.cc").write_text('#include "envelope.h"\n' + lookup, encoding="utf-8")
         flags = ["-std=c++20", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-pthread",
-                 f"-DHAS_REFERENCE={int(bool(args.compare_ref))}"]
+                 f"-DHAS_REFERENCE={int(bool(args.compare_ref))}", f"-DHAS_VERSIONS={int(versioned)}"]
         compiler = shlex.split(args.cxx)
         # Bound normal optimized lookup storage independently of sanitizer
         # red zones, spills and frame-pointer decisions. The instrumented
@@ -78,8 +89,10 @@ def main() -> None:
         inputs = ["contract.cc", "lookup.o"]
         if args.compare_ref:
             old = read("compat/elf/elf_loader.cc", args.compare_ref)
-            reference = section(old, "void* Lookup(Library* library, const char* name) {", "void* LookupGlobal(")
-            (work / "reference.cc").write_text('#include "envelope.h"\n' + reference.replace("void* Lookup(", "void* ReferenceLookup(", 1), encoding="utf-8")
+            reference = lookup_section(old)
+            reference = reference.replace("LookupVersion(", "ReferenceLookupVersion(")
+            reference = reference.replace("void* Lookup(", "void* ReferenceLookup(", 1)
+            (work / "reference.cc").write_text('#include "envelope.h"\n' + reference, encoding="utf-8")
             inputs += ["reference.cc"]
         executable = work / ("test.exe" if os.name == "nt" else "test")
         command = compiler + flags + inputs + ["-o", str(executable)]

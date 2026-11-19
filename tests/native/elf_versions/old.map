@@ -1,0 +1,1 @@
+GV_1 { global: gv_value; gv_data; gv_optional; local: *; };

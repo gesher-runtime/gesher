@@ -1,0 +1,9 @@
+GV_1 {
+  global: gv_value; gv_data; gv_hidden; gv_weak; gv_ifunc;
+};
+GV_2 {
+  global: gv_value; gv_data; gv_weak; gv_ifunc; gv_optional; gv_bA; gv_ab; gv_aQ;
+          gv_null; getpid; gv_null_resolutions;
+} GV_1;
+GV_bA { global: gv_hash_value; };
+GV_aQ { global: gv_hash_value; local: *; } GV_bA;

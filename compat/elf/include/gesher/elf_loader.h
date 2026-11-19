@@ -28,11 +28,15 @@ struct Library;
 // its dependency graph define: the bionic shim's libc/libm/libdl/liblog/...
 // symbols. Returns the address, or nullptr if unknown.
 using SymbolResolver = std::function<void*(const char* name)>;
+// Identifies existing virtual libraries supplied by the unversioned resolver.
+// This validates VERNEED provider identity; it does not advertise named ABI
+// versions. Bionic permits versioned references to unversioned definitions.
+using LibraryProvider = std::function<bool(const char* soname)>;
 
 // Registers the process-wide resolver for symbols not found among loaded ELF
 // objects (compat/bionic installs it). Without one, only self-contained
 // objects load.
-void SetBionicResolver(SymbolResolver resolver);
+void SetBionicResolver(SymbolResolver resolver, LibraryProvider library_provider = {});
 
 // Options for a load.
 struct LoadOptions {
@@ -65,13 +69,24 @@ Library* LoadFromMemory(const char* name, const void* data, size_t size, std::st
                         const LoadOptions& options = {});
 
 // The address of exported symbol `name` in `library` (and its dependencies),
-// or nullptr. STT_GNU_IFUNC symbols are resolved to their target.
+// or nullptr. STT_GNU_IFUNC symbols are resolved to their target; STT_TLS
+// symbols identify the calling thread's instance of the selected object.
 void* Lookup(Library* library, const char* name);
+
+// Explicit version lookup (dlvsym). nullptr version is ordinary lookup;
+// non-default/hidden definitions can be selected by their exact version name.
+// Selection and address availability are separate: an IFUNC may successfully
+// resolve to nullptr, while missing current-thread TLS storage is unavailable.
+// A selected-but-unavailable symbol must not fall back to another provider.
+enum class LookupStatus { kNotFound, kResolved, kUnavailable };
+void* LookupVersion(Library* library, const char* name, const char* version,
+                    LookupStatus* status = nullptr);
 
 // Looks up `name` across every loaded ELF object (for RTLD_DEFAULT-style
 // lookup, and for the bionic resolver to find symbols one object exports to
 // another). nullptr if not found.
 void* LookupGlobal(const char* name);
+void* LookupGlobalVersion(const char* name, const char* version, LookupStatus* status = nullptr);
 
 // Resolves `name` through the bionic resolver (SetBionicResolver) alone: the
 // host (shim) definition, or nullptr. The arm64 translator wraps some of them.

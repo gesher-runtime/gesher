@@ -23,6 +23,25 @@ Check 'ELF loader: load a trivial .so and call it' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
 } @('elf_load_test all passed')
 
+# Public loading/lookup/iteration on real ELF dependency graphs. The second
+# executable changes only the test copy's protection primitive for one failure.
+foreach ($transactionExe in 'elf_load_transaction_test.exe', 'elf_load_transaction_failure_test.exe') {
+  Check "ELF loader: graph rollback, retry, cycles, constructors and concurrent publication ($transactionExe)" {
+    & "$Dir/$transactionExe" (NoDrive "$Dir/elf-load-transaction")
+  } @('elf_load_transaction_test all passed')
+}
+
+# Each version case uses a fresh process so alternate providers with the same
+# SONAME cannot be satisfied by an earlier scenario's retained library.
+foreach ($versionCase in 'lookup-gnu', 'lookup-sysv', 'required', 'weak', 'weak-present', 'unversioned', 'global', 'virtual', 'tls', 'tls-weak', 'tls-weak-present') {
+  Check "ELF versions: real provider and relocation contracts ($versionCase)" {
+    & "$Dir/elf_versions_test.exe" (NoDrive "$Dir/elf-versions") $versionCase
+  } @('elf_versions_test all passed')
+}
+Check 'ELF versions: actual dlvsym ABI, version selection and thread-local errors' {
+  & "$Dir/elf_dlvsym_test.exe" (NoDrive "$Dir/elf-versions")
+} @('elf_dlvsym_test all passed')
+
 # textrel.so contains dynamic relocations into a read-only pointer table.
 # Its constructor and selftest both require the relocated pointers to work.
 Check 'ELF loader: TEXTREL pages relocate before constructors and selftest' {

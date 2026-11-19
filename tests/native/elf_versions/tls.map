@@ -1,0 +1,2 @@
+GV_1 { global: gv_tls; };
+GV_2 { global: gv_tls; local: *; } GV_1;

@@ -2,6 +2,7 @@
 // Hashing and symbol-table probing are extracted unchanged from elf_loader.cc.
 #pragma once
 #include <algorithm>
+#include <mutex>
 #include <cstdint>
 #include <cstring>
 #include <set>
@@ -9,6 +10,10 @@
 #include <vector>
 #include "elf_types.h"
 
+inline std::recursive_mutex g_mutex;
+
+enum class LookupStatus { kNotFound, kResolved, kUnavailable };
+struct SymbolVersion { uint32_t hash; const char* name; const char* provider; };
 struct Library {
   std::vector<Library*> dependencies;
   bool has_gnu_hash = false, has_sysv_hash = false;
@@ -20,6 +25,9 @@ struct Library {
   const uint32_t* sysv_chain = nullptr;
   const Elf64_Sym* symtab = nullptr;
   const char* strtab = nullptr;
+  const Elf64_Half* versym = nullptr;
+  size_t versym_capacity = 0;
+  std::vector<std::pair<Elf64_Half, SymbolVersion>> version_definitions;
   std::vector<Elf64_Sym> symbols = std::vector<Elf64_Sym>(1);
   std::string strings = std::string(1, '\0');
   std::vector<uint32_t> gnu_chains, sysv_chains;
@@ -30,8 +38,15 @@ struct Library {
 
 uint32_t GnuHash(const char* name);
 uint32_t SysvHash(const char* name);
-const Elf64_Sym* FindDefinedSymbol(const Library* library, const char* name, uint32_t gh, uint32_t sh);
+const Elf64_Sym* FindDefinedSymbol(const Library* library, const char* name, uint32_t gh, uint32_t sh
+#if HAS_VERSIONS
+                                  , const SymbolVersion* version = nullptr
+#endif
+                                  );
 void* SymbolAddress(const Library* library, const Elf64_Sym* symbol);
+inline void* LookupSymbolAddress(const Library* library, const Elf64_Sym* symbol) {
+  return SymbolAddress(library, symbol);
+}
 void* Lookup(Library* library, const char* name);
 #if HAS_REFERENCE
 void* ReferenceLookup(Library* library, const char* name);

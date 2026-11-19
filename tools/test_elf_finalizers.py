@@ -6,6 +6,7 @@ by the existing Windows ELF loader fixtures using tests/native/trivial.c.
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -22,6 +23,11 @@ def main():
     args = parser.parse_args()
     source = args.source.read_text()
     template = (ROOT / "tests/native/elf_finalizers_host_test.cc.in").read_text()
+    declarations = re.findall(r"void\* LookupGlobalVersion\([^{}]+\) \{", source)
+    if len(declarations) > 1:
+        raise ValueError("Ambiguous versioned lookup declaration")
+    template = template.replace("@LOOKUP_VERSION_DECLARATION@",
+                                declarations[0][:-2] + ";" if declarations else "")
     for placeholder, start, end in [
         ("@CLOSE_IMPLEMENTATION@", "void Close(Library* library) {", "bool SetupThreadTls()"),
         ("@LOOKUP_GLOBAL_LOCKED_IMPLEMENTATION@", "void* LookupGlobalLocked(const char* name,",
