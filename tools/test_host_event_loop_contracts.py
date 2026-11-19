@@ -8,6 +8,11 @@ virtual-object write checks, with Linux I/O behind declared CRT/device boundarie
 The select host compiles every production function with a controlled monotonic
 clock and poll boundary. Actual public calls also run in Windows POSIX and both
 ELF guest fixtures. --source-ref is the same-harness old-source control.
+
+The scratch host compiles the actual outer poll, EpollWaiter and nested epoll
+sampling/delivery with Linux eventfds/poll behind the Win32/Winsock seams. It
+checks ownership, recursion, deadlines and allocation budgets without claiming
+Windows scheduling, whole-application memory or native WSAPoll performance.
 """
 import argparse
 import hashlib
@@ -33,7 +38,9 @@ def main():
     parser.add_argument('--source-ref')
     parser.add_argument('--sanitize', action='store_true')
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'c++'))
-    parser.add_argument('--case', choices=['epoll', 'vector', 'select'])
+    parser.add_argument('--case', choices=['epoll', 'vector', 'select', 'scratch'])
+    parser.add_argument('--measure', action='store_true',
+                        help='report scratch allocation counts without requiring the new allocation budget')
     args = parser.parse_args()
 
     def read(path):
@@ -45,6 +52,12 @@ def main():
     system = read('compat/posix/src/system.cc')
     fd = read('compat/posix/src/fd.cc')
     select = read('compat/posix/src/select.cc')
+    scratch_header = (read('compat/posix/src/poll_scratch.h')
+                      if 'PollScratchLease' in fd or 'PollScratchLease' in epoll else '')
+    socket_header = read('compat/posix/src/socket_internal.h')
+    eventfd_namespace = 'namespace gesher {\n\n'
+    # Include the producer wake channels and watches declared before EventFd.
+    eventfd_state = between(epoll, eventfd_namespace, '\nnamespace {\n\nstruct Epoll;')
     pieces = {
         'epoll': {
             '@EPOLL_STATE@': between(epoll, 'struct Epoll;\n', 'class EpollWaiter {'),
@@ -58,14 +71,30 @@ def main():
             '@VIRTUAL_WRITE@': between(epoll, 'bool WriteEventObject(', '\nbool ForgetEventObject('),
         },
         'select': {'@SELECT_SOURCE@': re.sub(r'^#include[^\n]*\n', '', select, flags=re.M)},
+        'scratch': {
+            '@EVENTFD_STATE@': eventfd_state.removeprefix(eventfd_namespace),
+            '@EPOLL_STATE@': between(epoll, 'struct Epoll;\n', '// fd -> object,'),
+            '@EPOLL_CONVERSION@': between(epoll, '// epoll\'s event bits below', '// Linux permits at most five'),
+            '@POLL_EVENTFD@': between(epoll, 'short PollEventFd(', '\nbool IsNonBlocking('),
+            '@POLL_EPOLL@': between(epoll, 'bool PollEpoll(', '\nstd::shared_ptr<EventFd> LookupEventFd('),
+            '@POLL_FDS@': between(fd, '// --- poll ', '\nextern "C" int poll('),
+            '@EPOLL_WAIT@': between(epoll, 'static int EpollWaitImpl(', '\nint epoll_wait('),
+            '@HAS_SCRATCH@': '#define HAS_POLL_SCRATCH 1' if 'PollScratchLease<FdPollScratch>' in fd else '',
+        },
     }
     # The old source has no vector permission helper. It never calls this
     # declaration; keeping it absent preserves the old behavior control.
     for path, source in [('epoll.cc', epoll), ('system.cc', system), ('fd.cc', fd), ('select.cc', select)]:
         print(path, hashlib.sha256(source.encode()).hexdigest(), flush=True)
+    if scratch_header:
+        print('poll_scratch.h', hashlib.sha256(scratch_header.encode()).hexdigest(), flush=True)
     failed = []
     with tempfile.TemporaryDirectory(prefix='gesher-host-event-loop-') as directory:
         work = Path(directory)
+        # Quoted includes resolve beside the generated source. An older source
+        # with no scratch header sees an empty one, not the current helper.
+        (work / 'poll_scratch.h').write_text(scratch_header)
+        (work / 'socket_internal.h').write_text(socket_header)
         for name, replacements in pieces.items():
             if args.case and args.case != name:
                 continue
@@ -79,11 +108,13 @@ def main():
             source.write_text(content)
             command = shlex.split(args.cxx) + [
                 '-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
-                '-pthread', '-I', str(ROOT / 'tests/native'), str(source), '-o', str(output)]
+                '-pthread', '-I', str(ROOT / 'tests/native'), '-I', str(ROOT / 'compat/posix/src'),
+                str(source), '-o', str(output)]
             if args.sanitize:
                 command += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-fno-sanitize-recover=all']
             subprocess.run(command, check=True, timeout=120)
-            result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30)
+            run = [str(output)] + (['measure'] if args.measure and name == 'scratch' else [])
+            result = subprocess.run(run, capture_output=True, text=True, timeout=60)
             print(result.stdout, end='', flush=True)
             if result.returncode:
                 failed.append(name)

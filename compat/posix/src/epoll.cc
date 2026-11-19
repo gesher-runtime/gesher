@@ -29,6 +29,7 @@
 
 #include "event_internal.h"
 #include "internal.h"
+#include "poll_scratch.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
 
@@ -151,6 +152,16 @@ struct Epoll {
   Epoll() { epoll_count.fetch_add(1, std::memory_order_release); }
   ~Epoll() {
     epoll_count.fetch_sub(1, std::memory_order_release);
+  }
+};
+
+struct EpollPollScratch {
+  std::vector<pollfd> fds;
+  std::vector<uint64_t> ids;
+
+  void Reset() {
+    ClearPollScratch(ids);
+    ClearPollScratch(fds);
   }
 };
 
@@ -379,8 +390,9 @@ bool PollEpoll(int fd, short events, short* ready) {
     size_t& depth;
     ~Leave() { --depth; }
   } leave{depth};
-  std::vector<pollfd> fds;
-  std::vector<uint64_t> ids;
+  PollScratchLease<EpollPollScratch> lease;
+  auto& fds = lease.get().fds;
+  auto& ids = lease.get().ids;
   {
     std::lock_guard<std::mutex> lock(ep->mutex);
     for (const auto& [watched, entry] : ep->entries) {
@@ -650,8 +662,9 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
   gesher::EpollWaiter waiter(ep);
   if (waiter.changed() == nullptr) return gesher::FailWithLastError();
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
-  std::vector<pollfd> fds;
-  std::vector<uint64_t> ids;
+  gesher::PollScratchLease<gesher::EpollPollScratch> lease;
+  auto& fds = lease.get().fds;
+  auto& ids = lease.get().ids;
   for (;;) {
     fds.clear();
     ids.clear();
