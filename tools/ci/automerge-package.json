@@ -1,0 +1,12 @@
+{
+    "schema_version":  1,
+    "repository":  "gesher-runtime/gesher",
+    "runner_group":  "gesher-automerge",
+    "runner_group_id":  5,
+    "allowed_workflows":  [
+                              "gesher-runtime/gesher/.github/workflows/automerge.yml@refs/heads/main",
+                              "gesher-runtime/gesher/.github/workflows/automerge-runner-probe.yml@4dfafa4c61d9e25728c57f5a4e9b6f87b994bbe0"
+                          ],
+    "download_url":  "https://github.com/actions/runner/releases/download/v2.338.2/actions-runner-linux-x64-2.338.2.tar.gz",
+    "sha256":  "baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40"
+}

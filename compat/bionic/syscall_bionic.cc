@@ -17,22 +17,25 @@
 // expect); attaching to or peeking at another process fails with EPERM, and
 // any other request with ESRCH (no such tracee).
 //
-// regcomp/regexec/regerror/regfree: bionic's (BSD) regex ABI over std::regex
-// with its POSIX basic and extended grammars, which match leftmost-longest as
-// POSIX requires. regex_t holds the compiled expression in re_g.
+// regcomp/regexec/regerror/regfree: bionic's (BSD) regex ABI over
+// posix_regex::Program (POSIX BRE/ERE with leftmost-longest whole-match selection,
+// NetBSD/Android REG_NEWLINE anchor/bracket rules, and bounded NFA matching).
 
 #include "shim_internal.h"
 
+#include "posix_regex.h"
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 
 #include <errno.h>
 #include <string.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <regex>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace gesher::bionic {
 namespace {
@@ -76,7 +79,9 @@ constexpr RawCall kRawCalls[] = {
     {100, "times", 'l'},       {101, "ptrace", 'l'},       {102, "getuid", 'i'},
     {104, "getgid", 'i'},      {107, "geteuid", 'i'},      {108, "getegid", 'i'},
     {110, "getppid", 'i'},     {111, "getpgrp", 'i'},      {112, "setsid", 'i'},
-    {137, "statfs", 'i'},      {138, "fstatfs", 'i'},      {157, "prctl", 'i'},
+    {137, "statfs", 'i'},      {138, "fstatfs", 'i'},      {149, "mlock", 'i'},
+    {150, "munlock", 'i'},     {151, "mlockall", 'i'},    {152, "munlockall", 'i'},
+    {157, "prctl", 'i'},
     {186, "gettid", 'i'},      {200, "tkill", 'i'},        {201, "time", 'l'},
     {204, "sched_getaffinity", 'i'}, {228, "clock_gettime", 'i'}, {229, "clock_getres", 'i'},
     {230, "clock_nanosleep", 'e'}, {231, "_exit", 'i'},    {232, "epoll_wait", 'i'},
@@ -88,7 +93,7 @@ constexpr RawCall kRawCalls[] = {
     {281, "epoll_pwait", 'i'}, {284, "eventfd", 'i'},      {288, "accept4", 'i'},
     {290, "eventfd", 'i'},     {291, "epoll_create1", 'i'}, {292, "dup3", 'i'},
     {293, "pipe2", 'i'},       {294, "inotify_init1", 'i'}, {318, "getrandom", 'l'},
-    {319, "memfd_create", 'i'},
+    {319, "memfd_create", 'i'}, {325, "mlock2", 'i'},
 };
 
 using ShimFn6 = int64_t (BIONIC_SYSV*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
@@ -97,7 +102,7 @@ struct ResolvedCall {
   ShimFn6 fn = nullptr;
   char ret = 0;
 };
-constexpr size_t kMaxNr = 320;
+constexpr size_t kMaxNr = 326;
 
 // The shim functions, looked up once (the table is complete by the time
 // loaded code runs).
@@ -193,60 +198,51 @@ struct BionicRegmatch {
 };
 
 constexpr int32_t kRegMagic = 0xf265;
-constexpr int kRegExtended = 1, kRegIcase = 2, kRegNosub = 4, kRegPend = 32;
-constexpr int kRegNotbol = 1, kRegNoteol = 2, kRegStartend = 4;
-constexpr int kRegNomatch = 1, kRegBadpat = 2, kRegEspace = 12, kRegInvarg = 16;
 
-struct CompiledRegex {
-  std::regex re;
-  bool nosub;
-};
-
-int RegexError(std::regex_constants::error_type code) {
-  using namespace std::regex_constants;
-  switch (code) {
-    case error_collate: return 3;
-    case error_ctype: return 4;
-    case error_escape: return 5;
-    case error_backref: return 6;
-    case error_brack: return 7;
-    case error_paren: return 8;
-    case error_brace: return 9;
-    case error_badbrace: return 10;
-    case error_range: return 11;
-    case error_space: return kRegEspace;
-    case error_badrepeat: return 13;
-    case error_complexity: return kRegEspace;
-    case error_stack: return kRegEspace;
-    default: return kRegBadpat;
-  }
-}
+using posix_regex::Compiler;
+using posix_regex::kRegBadpat;
+using posix_regex::kRegEspace;
+using posix_regex::kRegExtended;
+using posix_regex::kRegIcase;
+using posix_regex::kRegInvarg;
+using posix_regex::kRegNewline;
+using posix_regex::kRegNomatch;
+using posix_regex::kRegNosub;
+using posix_regex::kRegNotbol;
+using posix_regex::kRegNoteol;
+using posix_regex::kRegOk;
+using posix_regex::kRegPend;
+using posix_regex::kRegStartend;
+using posix_regex::Matcher;
+using posix_regex::Program;
 
 int BIONIC_SYSV Regcomp(BionicRegex* preg, const char* pattern, int cflags) {
   if (preg == nullptr || pattern == nullptr) return kRegInvarg;
-  // std::regex's POSIX grammars cannot express REG_NEWLINE's internal line
-  // anchors. Reject unsupported modes instead of reporting a compiled regex
-  // that silently uses different matching rules.
-  constexpr int supported = kRegExtended | kRegIcase | kRegNosub | kRegPend;
+  constexpr int supported = kRegExtended | kRegIcase | kRegNosub | kRegNewline | kRegPend;
   if ((cflags & ~supported) != 0 ||
       ((cflags & kRegPend) != 0 &&
        (preg->re_endp == nullptr || reinterpret_cast<uintptr_t>(preg->re_endp) <
-                                     reinterpret_cast<uintptr_t>(pattern)))) return kRegInvarg;
-  std::regex::flag_type flags =
-      (cflags & kRegExtended) != 0 ? std::regex::extended : std::regex::basic;
-  if ((cflags & kRegIcase) != 0) flags |= std::regex::icase;
-  if ((cflags & kRegNosub) != 0) flags |= std::regex::nosubs;
+                                        reinterpret_cast<uintptr_t>(pattern)))) {
+    return kRegInvarg;
+  }
+  const bool extended = (cflags & kRegExtended) != 0;
+  const bool icase = (cflags & kRegIcase) != 0;
+  const bool nosub = (cflags & kRegNosub) != 0;
+  const bool newline = (cflags & kRegNewline) != 0;
   try {
-    std::string text = (cflags & kRegPend) != 0 && preg->re_endp != nullptr
-                           ? std::string(pattern, preg->re_endp)
-                           : std::string(pattern);
-    auto* compiled = new CompiledRegex{std::regex(text, flags), (cflags & kRegNosub) != 0};
+    std::string raw = (cflags & kRegPend) != 0 && preg->re_endp != nullptr
+                          ? std::string(pattern, preg->re_endp)
+                          : std::string(pattern);
+    auto compiled = std::make_unique<Program>();
+    Compiler compiler(raw, extended, icase, nosub, newline);
+    int err = compiler.Compile(*compiled);
+    if (err != kRegOk) {
+      return err;
+    }
     preg->re_magic = kRegMagic;
-    preg->re_nsub = compiled->re.mark_count();
-    preg->re_g = compiled;
+    preg->re_nsub = compiled->nsub;
+    preg->re_g = compiled.release();
     return 0;
-  } catch (const std::regex_error& e) {
-    return RegexError(e.code());
   } catch (...) {
     return kRegEspace;
   }
@@ -256,41 +252,44 @@ int BIONIC_SYSV Regexec(const BionicRegex* preg, const char* string, size_t nmat
                         BionicRegmatch* pmatch, int eflags) {
   if (preg == nullptr || preg->re_magic != kRegMagic || preg->re_g == nullptr) return kRegBadpat;
   if (string == nullptr) return kRegInvarg;
-  const auto* compiled = static_cast<const CompiledRegex*>(preg->re_g);
+  const auto* compiled = static_cast<const Program*>(preg->re_g);
   const char* begin = string;
   const char* end;
   if ((eflags & kRegStartend) != 0) {
     // REG_STARTEND accepts a bounded byte sequence, including embedded NULs;
     // it must not first scan for a terminator outside that sequence.
-    if (pmatch == nullptr || pmatch[0].rm_so < 0 || pmatch[0].rm_eo < pmatch[0].rm_so)
+    if (pmatch == nullptr || pmatch[0].rm_so < 0 || pmatch[0].rm_eo < pmatch[0].rm_so) {
       return kRegInvarg;
+    }
     begin = string + pmatch[0].rm_so;
     end = string + pmatch[0].rm_eo;
   } else {
     end = string + std::strlen(string);
   }
-  auto mflags = std::regex_constants::match_default;
-  if ((eflags & kRegNotbol) != 0) mflags |= std::regex_constants::match_not_bol;
-  if ((eflags & kRegNoteol) != 0) mflags |= std::regex_constants::match_not_eol;
-  std::cmatch m;
-  bool found;
   try {
-    found = std::regex_search(begin, end, m, compiled->re, mflags);
+    Matcher matcher(*compiled, string, begin, end, eflags, nmatch);
+    std::vector<int32_t> caps;
+    int32_t match_start = 0;
+    int32_t match_end = 0;
+    int rc = matcher.Execute(caps, match_start, match_end);
+    if (rc != kRegOk) return rc;
+    if (!compiled->nosub && pmatch != nullptr && nmatch > 0) {
+      const int64_t base_offset = static_cast<int64_t>(begin - string);
+      pmatch[0].rm_so = base_offset + match_start;
+      pmatch[0].rm_eo = base_offset + match_end;
+      for (size_t i = 1; i < nmatch; ++i) {
+        if (i <= compiled->nsub && 2 * i + 1 < caps.size() && caps[2 * i] >= 0) {
+          pmatch[i].rm_so = base_offset + caps[2 * i];
+          pmatch[i].rm_eo = base_offset + caps[2 * i + 1];
+        } else {
+          pmatch[i].rm_so = pmatch[i].rm_eo = -1;
+        }
+      }
+    }
+    return 0;
   } catch (...) {
     return kRegEspace;
   }
-  if (!found) return kRegNomatch;
-  if (!compiled->nosub && pmatch != nullptr) {
-    for (size_t i = 0; i < nmatch; ++i) {
-      if (i < m.size() && m[i].matched) {
-        pmatch[i].rm_so = m[i].first - string;
-        pmatch[i].rm_eo = m[i].second - string;
-      } else {
-        pmatch[i].rm_so = pmatch[i].rm_eo = -1;
-      }
-    }
-  }
-  return 0;
 }
 
 size_t BIONIC_SYSV Regerror(int errcode, const BionicRegex*, char* errbuf, size_t errbuf_size) {
@@ -319,7 +318,7 @@ size_t BIONIC_SYSV Regerror(int errcode, const BionicRegex*, char* errbuf, size_
 
 void BIONIC_SYSV Regfree(BionicRegex* preg) {
   if (preg == nullptr || preg->re_magic != kRegMagic) return;
-  delete static_cast<CompiledRegex*>(preg->re_g);
+  delete static_cast<Program*>(preg->re_g);
   preg->re_g = nullptr;
   preg->re_magic = 0;
 }

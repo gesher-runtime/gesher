@@ -202,7 +202,7 @@ class DownloadControls(unittest.TestCase):
         self.assertIsNone(module.NoRedirect().redirect_request(result.api[0], None, 302, '', {}, self.signed))
 
     def test_transient_api_statuses_retry_with_bound(self):
-        for status in (429, 500, 502, 503, 504):
+        for status in (500, 502, 503, 504):
             with self.subTest(status=status):
                 result = self.simulate(api=(status, 302))
                 self.assertIsNone(result.error)
@@ -210,14 +210,14 @@ class DownloadControls(unittest.TestCase):
                 self.assertEqual(len(result.storage), 1)
                 self.assertEqual([call.args for call in result.sleeps], [(1,)])
                 self.assertIn('reason=api-http-' + str(status), result.logs)
-        result = self.simulate(api=(429, 429, 429))
-        self.assertIn('reason=api-http-429 attempts=3', str(result.error))
+        result = self.simulate(api=(503, 503, 503))
+        self.assertIn('reason=api-http-503 attempts=3', str(result.error))
         self.assertEqual(len(result.api), 3)
         self.assertEqual([call.args for call in result.sleeps], [(1,), (3,)])
         self.assertFalse(result.destination.exists())
 
     def test_permanent_http_statuses_do_not_retry(self):
-        for status in (401, 403, 404, 501, 505):
+        for status in (401, 403, 404, 429, 501, 505):
             with self.subTest(status=status):
                 result = self.simulate(api=(status,))
                 self.assertIn('reason=api-http-' + str(status) + ' attempts=1', str(result.error))

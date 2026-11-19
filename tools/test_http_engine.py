@@ -9,6 +9,7 @@ fixtures. All engine/request/upload/callback code is production code.
 import argparse
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,9 +71,12 @@ def main():
                             '-cp', str(work), '-d', str(work), str(wrapper), str(policy), str(annotation), str(logger),
                             *map(str, framing), str(ROOT / 'tests/net/Http2DeviceSmoke.java')],
                            check=True, timeout=60)
-            for mode in args.http2_mode or ['', 'unary', 'gzip', 'gzip-headers', 'early-read', 'readonly-write']:
+            for mode in args.http2_mode or ['', 'unary', 'gzip', 'gzip-headers', 'early-read', 'readonly-write', 'disabled']:
                 subprocess.run([str(args.java_home / 'bin/java'), '-cp', str(work), 'Http2DeviceSmoke',
                                 *([mode] if mode else [])], check=True, timeout=35)
+            subprocess.run([sys.executable, str(ROOT / 'tools/test_http_engine_policy.py'),
+                            '--java-home', str(args.java_home), '--okhttp-source', str(args.okhttp_source)],
+                           check=True, timeout=180)
 
 
 if __name__ == '__main__':

@@ -7,6 +7,29 @@ Check 'framework: Wi-Fi data APIs and real native Parcelable round trips' {
   $deepWifiOut
 } @('WifiDataContractTest all passed:', 'parcel=true')
 
+$deepWifiConfigurationOut = FixesRun ($dvmFixes + 'gesher.services.WifiConfigurationContractTest') 90
+$deepWifiConfigurationCode = $LASTEXITCODE
+Check 'framework: Wi-Fi configuration, enterprise certificates and native Parcelable contracts' {
+  $global:LASTEXITCODE = $deepWifiConfigurationCode
+  $deepWifiConfigurationOut
+} @('WifiConfigurationContractTest all passed:', 'parcel=true')
+
+$deepWifiInfoOut = FixesRun ($dvmFixes + 'gesher.services.WifiInfoContractTest') 90
+$deepWifiInfoCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiInfoParcel.ps1"
+$deepWifiInfoWireOK = $false
+$deepWifiInfoWireFailure = ''
+try {
+  Assert-WifiInfoParcelEvidence -Output $deepWifiInfoOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-info-android-reference-2026-11-17.json')
+  $deepWifiInfoWireOK = $true
+} catch { $deepWifiInfoWireFailure = $_.Exception.Message }
+Check 'framework: WifiInfo Builder, MLO, redaction and native Parcelable contracts' {
+  $global:LASTEXITCODE = $deepWifiInfoCode
+  $deepWifiInfoOut
+  if ($deepWifiInfoWireOK) { 'WifiInfo native Parcel bytes match Android reference: 9 cases' }
+  else { $global:LASTEXITCODE = 1; "WifiInfo native Parcel evidence failed: $deepWifiInfoWireFailure" }
+} @('WifiInfoContractTest all passed:', 'parcel=true', 'WifiInfo native Parcel bytes match Android reference: 9 cases')
+
 $deepNetworkOut = FixesRun ($dvmFixes + 'gesher.services.NetworkSnapshotContractTest') 90
 $deepNetworkCode = $LASTEXITCODE
 Check 'framework: network route, address, snapshot and proxy contracts with native Parcel' {
@@ -20,6 +43,13 @@ Check 'graphics: actual QueueSurface and Win32Surface geometry and damage contra
   $global:LASTEXITCODE = $deepSurfaceCode
   $deepSurfaceOut
 } @('surface geometry contracts:', 'native window dispatch contracts:', 'checks, 0 failures')
+
+$deepSurfaceFramesOut = RunTimed "$Dir/media_surface_frame_recycling_test.exe" @() 90
+$deepSurfaceFramesCode = $LASTEXITCODE
+Check 'graphics: actual QueueSurface frame allocation and immutable-reader lifetimes' {
+  $global:LASTEXITCODE = $deepSurfaceFramesCode
+  $deepSurfaceFramesOut
+} @('native surface frame recycling:', 'checks, 0 failures')
 
 $deepAudioEnvironment = @{}
 foreach ($name in 'ANDROID_DATA', 'GESHER_AUDIO') {
