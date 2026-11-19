@@ -152,6 +152,9 @@ function Start-ReadyServiceManager([Diagnostics.Process] $Broker, [string] $Devi
 
 # The driver's ABI across processes: binderd, a context manager and a client
 # with nested calls, objects passed both ways, and a death notification.
+CheckTimed 'binder: native process/thread lifetime and pipe churn' "$Dir/binder_lifetime_test.exe" @() @(
+  'retained allocations=0 bytes=0')
+
 CheckTimed 'binder: /dev/binder across processes (binderd, raw ioctls)' "$Dir/binder_probe.exe" @() @(
   'binder probe: all passed')
 
