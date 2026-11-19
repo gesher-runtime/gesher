@@ -42,6 +42,7 @@ import com.android.internal.view.IInputMethodManager;
 import com.gesher.app.DeviceProfile;
 import com.gesher.app.input.VirtualKeyboard;
 import com.gesher.net.INsdRegistration;
+import com.gesher.net.INsdSubscription;
 
 import java.lang.reflect.Field;
 import java.util.Collection;
@@ -100,6 +101,8 @@ public final class Services {
         // shares the application's process and cannot promise that lifetime.
         services.put(INsdRegistration.SERVICE_NAME,
                 new NsdRegistrationService(pm, atm, am, persistentAccounts));
+        services.put(INsdSubscription.SERVICE_NAME,
+                new NsdSubscriptionService(pm, atm, am, persistentAccounts));
         services.put("uri_grants", StandIn.of(android.app.IUriGrantsManager.class,
                 new UriGrantsManagerService(pm, atm, am)).asBinder());
         services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());

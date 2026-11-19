@@ -6,6 +6,7 @@ These are host checks of the actual helper and peer entry points, not execution
 of the Windows provider. The live peer independently requires provider readback.
 """
 import argparse
+from contextlib import nullcontext
 import importlib
 from pathlib import Path
 import socket
@@ -25,6 +26,8 @@ from build_nsd_permission_reference import VARIANTS, validate_badging
 PEERS = [(windows_peer, '_gs0123456789ab._tcp')]
 if (ROOT / 'tests/nsd/resolver_peer.py').is_file():
     PEERS.append((importlib.import_module('resolver_peer'), '_gr0123456789ab._tcp'))
+if (ROOT / 'tests/nsd/subscription_peer.py').is_file():
+    PEERS.append((importlib.import_module('subscription_peer'), '_gr0123456789ab._tcp'))
 
 
 class SocketBoundary:
@@ -149,15 +152,22 @@ class PeerOwnershipTest(unittest.TestCase):
             return sock
 
         with tempfile.TemporaryDirectory(prefix='nsd-peer-scope-') as temporary:
-            control = Path(temporary)
-            (control / 'command').write_text('1 quit')
+            subscription = module.__name__ == 'subscription_peer'
+            # Subscription requires a fresh control directory. Expire its finite
+            # deadline after readiness rather than weakening that directory rule.
+            control = Path(temporary) / 'peer' if subscription else Path(temporary)
+            if not subscription:
+                (control / 'command').write_text('1 quit')
+            clock = (mock.patch.object(module.time, 'monotonic', side_effect=(0.0, 91.0))
+                     if subscription else nullcontext())
             args = argparse.Namespace(control=control, type=service_type, instance='Owned fixture',
                     index=0 if loopback else 42, family=family, loopback=loopback,
                     address=('127.0.0.1' if family == 4 else '::1') if loopback else
                             ('192.0.2.1' if family == 4 else '2001:db8::1'))
             with mock.patch.object(module.socket, 'socket', side_effect=create), \
                     mock.patch.object(peer_scope.sys, 'platform', platform), \
-                    mock.patch.object(module.select, 'select', side_effect=AssertionError('unexpected receive loop')):
+                    mock.patch.object(module.select, 'select', side_effect=AssertionError('unexpected receive loop')), \
+                    clock:
                 error = None
                 try:
                     module.serve(args)
@@ -196,9 +206,9 @@ class PeerOwnershipTest(unittest.TestCase):
 
     @unittest.skipUnless((ROOT / 'tests/nsd/resolver_peer.py').is_file(),
                          'Resolver peer is introduced by the resolver PR')
-    def test_explicit_resolver_loopback_stays_platform_independent(self):
+    def test_explicit_peer_loopback_stays_platform_independent(self):
         for module, service_type in PEERS:
-            if module.__name__ != 'resolver_peer':
+            if module.__name__ not in ('resolver_peer', 'subscription_peer'):
                 continue
             for family in (4, 6):
                 with self.subTest(family=family):
@@ -208,6 +218,17 @@ class PeerOwnershipTest(unittest.TestCase):
                     self.assertTrue(ready)
                     self.assertFalse(any(event[1] in ('enable', 'add', 'read-enabled', 'read-list')
                                          for event in events))
+
+    @unittest.skipUnless((ROOT / 'tests/nsd/subscription_peer.py').is_file(),
+                         'Subscription peer is introduced by the subscription PR')
+    def test_subscription_requires_new_control_directory_before_opening_sockets(self):
+        module = importlib.import_module('subscription_peer')
+        with tempfile.TemporaryDirectory(prefix='nsd-subscription-scope-') as temporary:
+            args = argparse.Namespace(control=Path(temporary), type='_gr0123456789ab._tcp',
+                    instance='Owned fixture', index=0, family=4, loopback=True, address='127.0.0.1')
+            with mock.patch.object(module.socket, 'socket', side_effect=AssertionError('unexpected socket')):
+                with self.assertRaises(FileExistsError):
+                    module.serve(args)
 
 
 class PermissionFixtureTest(unittest.TestCase):

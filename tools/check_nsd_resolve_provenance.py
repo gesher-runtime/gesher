@@ -84,9 +84,19 @@ def main():
     native_rows = native_table('kMethods')
     declared = {item.name: item.descriptor for item in
                 application['com.gesher.net.WindowsNsdResolver'].members.values()
-                if item.flags & members.NATIVE and item.flags & members.STATIC}
+                if item.flags & members.NATIVE and item.flags & members.STATIC
+                and not item.name.startswith('nativeSubscription')}
     assert len(native_rows) == len(declared) == 8
     assert {name: descriptor for name, descriptor, _ in native_rows} == declared
+    # Continuous observation has its own JNI/provider qualification. Keep its
+    # declarations separate from the unchanged one-shot eight-method denominator.
+    subscription_rows = native_table('kSubscriptionMethods')
+    subscription_declared = {item.name: item.descriptor for item in
+                            application['com.gesher.net.WindowsNsdResolver'].members.values()
+                            if item.flags & members.NATIVE and item.flags & members.STATIC
+                            and item.name.startswith('nativeSubscription')}
+    assert len(subscription_rows) == len(subscription_declared) == 8
+    assert {name: descriptor for name, descriptor, _ in subscription_rows} == subscription_declared
     assert ('method', '<init>', '(JIII[B)V') in application['com.gesher.net.WindowsNsdResolver$Packet'].members
     assert '"(JIII[B)V"' in native.read_text(), 'native Packet constructor descriptor'
     advertiser_rows = native_table('kAdvertiserMethods')
@@ -143,6 +153,8 @@ def main():
         'codec_imports': verified, 'sdk_sha256': digest(args.android_jar),
         'sdk_selected_declarations': selected, 'native_source_sha256': digest(native),
         'native_signatures': [{'name': n, 'descriptor': d, 'function': f} for n, d, f in native_rows],
+        'separate_subscription_native_signatures': [{'name': n, 'descriptor': d, 'function': f}
+                                                   for n, d, f in subscription_rows],
         'advertiser_native_signatures': [{'name': n, 'descriptor': d, 'function': f}
                                          for n, d, f in advertiser_rows],
         'advertiser_constructor_descriptors': advertiser_constructors,

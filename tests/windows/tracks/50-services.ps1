@@ -846,6 +846,7 @@ try {
     ($dvmContracts + 'gesher.services.NsdBrowseTransportTest') @('NsdBrowseTransportTest all passed: 189') 30
   . (Join-Path $PSScriptRoot '../run-nsd-browse-contract.ps1')
   . (Join-Path $PSScriptRoot '../run-nsd-resolve-contract.ps1')
+  . (Join-Path $PSScriptRoot '../run-nsd-subscription-contract.ps1')
   $canonicalChecks = @(
     @{ Class = 'UserManagerProfilesTest'; Count = 49; Name = 'single-user profile, serial, identity and restriction contracts' },
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },

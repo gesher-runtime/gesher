@@ -297,6 +297,21 @@ pinned Android 16 r4 source, candidate runtime, ordinary APK permission evidence
 and the pending Windows gate. Its complete scope is recorded in the
 [registration research note](../../docs/research/nsd-windows-registration-2026-11-18.md).
 
+## Continuing service-info subscriptions
+
+The separate [subscription instructions](README-subscription.md) cover genuine
+full-artifact host checks, deterministic pinned-source/provider audits, the
+ordinary SDK36 reference APK and the explicit real Windows transport gate. Their
+results keep host seams, stock Android and candidate Windows execution separate.
+
+`subscription_peer.py` uses the same verified Windows receive-interface allowlist
+for its own multicast sockets. Both TCP and UDP sockets remain owned across all
+setup failures. The scope suite exercises its actual setup and preserves its
+requirement for a new control directory; packet generation and explicit Linux
+loopback remain available. Subscription source receipts include `peer_scope.py`.
+The separate subscription-reference APK retains debugging because its maintained
+builder uses `run-as` to retrieve the private result file.
+
 ## Native Windows import/link regression
 
 The normal native build also builds `nsd_windows_link_test`. It links the complete

@@ -1,0 +1,101 @@
+{
+  "tag": "android-16.0.0_r4",
+  "source_directory_tree": "962d7104587c3edd6935d9c296d230111cc29abf",
+  "inputs": {
+    "MdnsResponse.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsResponse.java?format=TEXT",
+      "sha256": "bdf31e1b76f0b6ecbcc8534bc4451497514871c26921473a5a87f967fee1c7e4",
+      "git_blob": "b3dcb6629c5d03a6a7db1eeed6be9ba95b3424a1",
+      "bytes": 15737
+    },
+    "MdnsResponseDecoder.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsResponseDecoder.java?format=TEXT",
+      "sha256": "90e248c603512d48a0bab9c163a1fab4e8e39108593bd4a4132f1b086cbf547c",
+      "git_blob": "57449de76974a23c55332a9db15217e19094f0bb",
+      "bytes": 14163
+    },
+    "MdnsQueryScheduler.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsQueryScheduler.java?format=TEXT",
+      "sha256": "af11629d0ea28efac6e62d1cf34acc3ab1c6fddb18dfbd9f27b17d8b6e0489d4",
+      "git_blob": "7495aec253dbeb868a2fd9f4cdb26c8e86091c3d",
+      "bytes": 11714
+    },
+    "QueryTaskConfig.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/QueryTaskConfig.java?format=TEXT",
+      "sha256": "5ffc1be2aaebae1e580064cc2a706b91625e59297b0bb7be2a43c17a81d246eb",
+      "git_blob": "2ac5b747bf7409c5e718c01846c47f47874a4269",
+      "bytes": 2281
+    },
+    "MdnsConfigs.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsConfigs.java?format=TEXT",
+      "sha256": "b7b0fa28ae1cb4d3efbca1e178c04d1d1924073a1abbfb305fec8357f86f24ce",
+      "git_blob": "bf049c9419cf2acc3dd1c95dae2eb00ad95d65a8",
+      "bytes": 2268
+    },
+    "MdnsSearchOptions.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/MdnsSearchOptions.java?format=TEXT",
+      "sha256": "44e9fbddea027c045af2b022c1e4dba30e98ae3716d3f164532a37ad4a5c70b6",
+      "git_blob": "73405ab453f8ca35cb2c1e01746b44ba47528287",
+      "bytes": 11139
+    },
+    "MdnsUtils.java": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Connectivity/+/refs/tags/android-16.0.0_r4/service-t/src/com/android/server/connectivity/mdns/util/MdnsUtils.java?format=TEXT",
+      "sha256": "1833e523d663bd292f595474832914973afe56114776b39bdead0eb0610d2202",
+      "git_blob": "12650e27b1583c40e11d60cb180d0d9a1e03f90c",
+      "bytes": 18334
+    }
+  },
+  "outputs": {
+    "MdnsResponse.java": {
+      "sha256": "3d8e18e0351813cbf10dbd8ada84ded16a25182ec7f2c8d04def419d36a0d34a",
+      "source_inputs": [
+        "MdnsResponse.java"
+      ]
+    },
+    "MdnsResponseDecoder.java": {
+      "sha256": "a1f63fef19f4d88c8344bb9031e1dab7f9a93c3687d84e5be92b8240c6d2c19d",
+      "source_inputs": [
+        "MdnsResponseDecoder.java"
+      ]
+    },
+    "MdnsQueryScheduler.java": {
+      "sha256": "fdea4fa6249d7ed03d93a8f9d4a15577c84fa0295d062458fcfc99c77582297b",
+      "source_inputs": [
+        "MdnsQueryScheduler.java"
+      ]
+    },
+    "QueryTaskConfig.java": {
+      "sha256": "031c67713b392d88a84dfab9b97809a7e6a05b0199ebb652453f7cb77438b36c",
+      "source_inputs": [
+        "QueryTaskConfig.java"
+      ]
+    },
+    "MdnsConfigs.java": {
+      "sha256": "8dc0d05d4952f82fc4f7bb0bbff6387c443a87f3d6bc7a7cb4f7cd8eb0b00c07",
+      "source_inputs": [
+        "MdnsConfigs.java"
+      ]
+    },
+    "MdnsSearchOptions.java": {
+      "sha256": "eeeb6aa3e59b185fe281f086b7f15e48b4b2d138ad66c2062c4f4cc3acadc61f",
+      "source_inputs": [
+        "MdnsSearchOptions.java"
+      ]
+    },
+    "MdnsSubscriptionUtils.java": {
+      "sha256": "c917010f0fac09a85651bbd6ae4ff9a21a7b5e4a72b9c0bcce34053559965839",
+      "source_inputs": [
+        "MdnsUtils.java"
+      ]
+    }
+  },
+  "transform": "tools/nsd_subscription_imports.py",
+  "transform_sha256": "3a76ee5d7d4940626ab44bb2102a7c9311afea576eabd9587a626a49b7470f57",
+  "block_helper": "tools/nsd_registration_imports.py",
+  "block_helper_sha256": "92c47d4744b58ca81329a2ea37d3aaf855b148f30c75489aa65ea1b84afd87df",
+  "adaptations": [
+    "private package relocation only for six complete files",
+    "rename required utility references to the explicit MdnsSubscriptionUtils adapter",
+    "three complete utility declarations; unchanged SDK-dependent collection selection and SystemClock"
+  ]
+}

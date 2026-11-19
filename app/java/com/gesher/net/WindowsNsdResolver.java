@@ -75,6 +75,16 @@ public final class WindowsNsdResolver {
         }
     }
 
+    /** An actual interface scope and its request-owned, observed continuity identifier. */
+    public static final class SubscriptionScope {
+        public final Interface scope;
+        public final long lifetime;
+        public SubscriptionScope(Interface scope, long lifetime) {
+            this.scope = scope;
+            this.lifetime = lifetime;
+        }
+    }
+
     /** An owned UDP payload, with receiving-interface metadata supplied by the transport. */
     public static final class Packet {
         public final long generation;
@@ -95,6 +105,10 @@ public final class WindowsNsdResolver {
         boolean send(int index, byte[] query) throws IOException;
         /** True only after sockets and both change-notification registrations are released. */
         boolean close();
+        /** Null means a concurrent snapshot must be retried, never an empty network set. */
+        default SubscriptionScope[] subscriptionInterfaces() throws IOException {
+            throw new IOException("DNS-SD subscription continuity is unavailable");
+        }
         default boolean current(Interface scope) throws IOException {
             if (generation() != scope.generation) return false;
             for (Interface present : interfaces()) {
@@ -148,6 +162,78 @@ public final class WindowsNsdResolver {
         }
     }
 
+    /** Kept separate so one-shot resolution never acquires subscription lifetime semantics. */
+    private static final class NativeSubscriptionDriver implements Driver {
+        private long handle;
+        NativeSubscriptionDriver() throws IOException {
+            System.loadLibrary("gesher_nsd_resolve");
+            // A partially initialized native owner is retained until close succeeds.
+            handle = nativeSubscriptionOpen();
+        }
+        @Override public SubscriptionScope[] subscriptionInterfaces() throws IOException {
+            long generation = nativeSubscriptionGeneration(handle);
+            long[] rows = nativeSubscriptionInterfaces(handle);
+            if (rows == null) return null;
+            if (rows.length % 7 != 0) throw new IOException("Invalid DNS-SD subscription snapshot");
+            WindowsNetworks.Snapshot mapped = WindowsNetworks.parse(WindowsNetworks.snapshot());
+            SubscriptionScope[] out = new SubscriptionScope[rows.length / 7];
+            for (int at = 0; at < out.length; ++at) {
+                int start = at * 7;
+                if (rows[start + 4] != generation) return null;
+                if (rows[start + 6] <= 0) {
+                    throw new IOException("Unobserved DNS-SD interface continuity");
+                }
+                int index = (int) rows[start];
+                WindowsNetworks.Net network = mapped.byNetId(index + 100);
+                Interface scope = new Interface(index, (int) rows[start + 1],
+                        (int) rows[start + 2], rows[start + 3], rows[start + 4],
+                        (int) rows[start + 5], network == null ? 0 : network.netId());
+                out[at] = new SubscriptionScope(scope, rows[start + 6]);
+            }
+            return nativeSubscriptionGeneration(handle) == generation ? out : null;
+        }
+        @Override public Interface[] interfaces() throws IOException {
+            SubscriptionScope[] snapshot = subscriptionInterfaces();
+            if (snapshot == null) throw new IOException("DNS-SD subscription snapshot changed");
+            Interface[] out = new Interface[snapshot.length];
+            for (int at = 0; at < out.length; ++at) out[at] = snapshot[at].scope;
+            return out;
+        }
+        @Override public boolean configure(Interface[] scopes) throws IOException {
+            long[] rows = new long[scopes.length * 6];
+            for (int at = 0; at < scopes.length; ++at) {
+                Interface value = scopes[at]; int start = at * 6;
+                rows[start] = value.index; rows[start + 1] = value.ipv4Index;
+                rows[start + 2] = value.ipv6Index; rows[start + 3] = value.luid;
+                rows[start + 4] = value.generation; rows[start + 5] = value.families;
+            }
+            return nativeSubscriptionConfigure(handle, rows);
+        }
+        @Override public long generation() throws IOException {
+            return nativeSubscriptionGeneration(handle);
+        }
+        @Override public Packet poll(int timeout) throws IOException {
+            return nativeSubscriptionPoll(handle, timeout);
+        }
+        @Override public boolean send(int index, byte[] query) throws IOException {
+            return nativeSubscriptionSend(handle, index, query);
+        }
+        @Override public boolean close() {
+            if (handle == 0) return true;
+            if (!nativeSubscriptionClose(handle)) return false;
+            handle = 0;
+            return true;
+        }
+    }
+
+    static DriverFactory subscriptionDrivers() { return NativeSubscriptionDriver::new; }
+
+    /** Requests, sockets, watches, in-flight callbacks, polled requests, actual sent datagrams. */
+    static int[] subscriptionNativeState() {
+        System.loadLibrary("gesher_nsd_resolve");
+        return nativeSubscriptionActive();
+    }
+
     public static Factory factory() {
         return (request, callback) -> {
             Resolver session = new Resolver(NativeDriver::new, request, callback,
@@ -166,6 +252,15 @@ public final class WindowsNsdResolver {
     private static native boolean nativeSend(long id, int index, byte[] query) throws IOException;
     private static native boolean nativeClose(long id);
     private static native int[] nativeActive();
+
+    private static native long nativeSubscriptionOpen() throws IOException;
+    private static native long[] nativeSubscriptionInterfaces(long id) throws IOException;
+    private static native boolean nativeSubscriptionConfigure(long id, long[] scopes) throws IOException;
+    private static native long nativeSubscriptionGeneration(long id) throws IOException;
+    private static native Packet nativeSubscriptionPoll(long id, int timeoutMillis) throws IOException;
+    private static native boolean nativeSubscriptionSend(long id, int index, byte[] query) throws IOException;
+    private static native boolean nativeSubscriptionClose(long id);
+    private static native int[] nativeSubscriptionActive();
 
     private static final String LABEL = "_[a-zA-Z0-9_-]{1,61}[a-zA-Z0-9]";
     private static final String SUBTYPE = "_[\\x20-\\x2B\\x2D\\x2F-\\x7E]{1,62}";

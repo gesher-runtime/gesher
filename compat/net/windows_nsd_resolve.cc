@@ -1,7 +1,8 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
-// Binary-preserving DNS-SD query/advertising transport. Windows callbacks only invalidate
-// interface generations; the Java worker owns socket I/O and terminal cleanup.
+// Binary-preserving DNS-SD query, advertising and subscription transport. The
+// Java worker owns socket I/O and cleanup; subscriber callbacks additionally
+// record real per-interface continuity under their separate state mutex.
 #define FD_SETSIZE 128
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -11,6 +12,7 @@
 #include <netioapi.h>
 #include <gesher/builtin_library.h>
 #include <gesher/inet.h>
+#include <gesher/nsd_subscription_lifetimes.h>
 #include <jni.h>
 #include <nativehelper/jni_macros.h>
 
@@ -105,7 +107,12 @@ struct Channel {
   LPFN_WSARECVMSG receive = nullptr;
   std::vector<Address> addresses;
 };
-enum class Mode : unsigned { Resolver, Advertiser };
+enum class Mode : unsigned { Resolver, Advertiser, Subscriber };
+struct SubscriptionState {
+  std::mutex lock;
+  gesher::nsd::SubscriptionSnapshotFence fence;
+  gesher::nsd::SubscriptionLifetimes lifetimes;
+};
 struct Endpoint {
   uint64_t luid = 0, generation = 0;
   ULONG index = 0, interface_index = 0;
@@ -115,8 +122,10 @@ struct Endpoint {
   bool operator==(const Endpoint&) const = default;
 };
 struct Request {
-  explicit Request(Mode value) : mode(value) {}
+  explicit Request(Mode value) : mode(value), subscription(value == Mode::Subscriber
+      ? std::make_unique<SubscriptionState>() : nullptr) {}
   const Mode mode;
+  const std::unique_ptr<SubscriptionState> subscription;
   std::mutex lock;
   std::mutex retirement_lock;
   std::atomic<uint64_t> generation{1};
@@ -141,8 +150,8 @@ struct Registry {
   std::mutex lock;
   std::map<uintptr_t, std::shared_ptr<Request>> requests;
   uintptr_t next_id = 1;
-  std::atomic<size_t> sockets{0}; // Shared real socket budget across both providers.
-  Counters modes[2];
+  std::atomic<size_t> sockets{0}; // Shared real socket budget across all providers.
+  Counters modes[3];
 };
 // Only the empty registry shell is process-owned. A failed cancellation keeps
 // its bounded request entry until a worker observes actual cancellation success.
@@ -174,6 +183,130 @@ void CALLBACK interface_changed(void* context, PMIB_IPINTERFACE_ROW, MIB_NOTIFIC
 }
 void CALLBACK address_changed(void* context, PMIB_UNICASTIPADDRESS_ROW, MIB_NOTIFICATION_TYPE) {
   changed(context);
+}
+
+// A callback owns only the request's small continuity state. Its lease begins
+// before it waits for that state, so a concurrent snapshot cannot overlook it.
+struct SubscriptionObservation {
+  std::shared_ptr<Request> request;
+  explicit SubscriptionObservation(void* context)
+      : request(find_mode(reinterpret_cast<uintptr_t>(context), Mode::Subscriber)) {
+    if (!request) return;
+    ++counters(*request).callbacks;
+    request->subscription->fence.begin(request->generation);
+  }
+  ~SubscriptionObservation() {
+    if (!request) return;
+    request->subscription->fence.end(request->generation);
+    --counters(*request).callbacks;
+  }
+};
+unsigned subscription_family(ADDRESS_FAMILY family) {
+  return family == AF_INET ? 1 : family == AF_INET6 ? 2 : 0;
+}
+
+// The callback row contains identifiers only. Query real complete operational
+// state; neither Connected nor any other partial-row state is trusted.
+bool subscription_interface(Request& request, uint64_t luid, ULONG index,
+    ADDRESS_FAMILY family, ULONG* current_index) {
+  auto& observed = request.subscription->lifetimes;
+  MIB_IF_ROW2 actual{};
+  actual.InterfaceLuid.Value = luid;
+  actual.InterfaceIndex = index;
+  DWORD error = GetIfEntry2(&actual);
+  if (error == ERROR_FILE_NOT_FOUND) { observed.interface_absent(luid); return false; }
+  if (error || actual.InterfaceLuid.Value != luid) { observed.unavailable(luid); return false; }
+  if (actual.OperStatus != IfOperStatusUp || actual.Type == IF_TYPE_SOFTWARE_LOOPBACK) {
+    observed.interface_absent(luid);
+    return false;
+  }
+  MIB_IPINTERFACE_ROW ip{};
+  InitializeIpInterfaceEntry(&ip);
+  ip.Family = family;
+  ip.InterfaceLuid.Value = luid;
+  ip.InterfaceIndex = index;
+  error = GetIpInterfaceEntry(&ip);
+  if (error == ERROR_FILE_NOT_FOUND) { observed.interface_absent(luid); return false; }
+  if (error == ERROR_NOT_FOUND) {
+    observed.interface_changed(luid, subscription_family(family), index, false);
+    return false;
+  }
+  if (error || ip.InterfaceLuid.Value != luid || ip.Family != family || !ip.InterfaceIndex) {
+    observed.unavailable(luid);
+    return false;
+  }
+  *current_index = ip.InterfaceIndex;
+  observed.interface_changed(luid, subscription_family(family), ip.InterfaceIndex, true);
+  return true;
+}
+
+void CALLBACK subscription_interface_changed(void* context, PMIB_IPINTERFACE_ROW row,
+    MIB_NOTIFICATION_TYPE type) {
+  SubscriptionObservation lease(context);
+  const auto& request = lease.request;
+  if (!request || request->retiring || !row || type == MibInitialNotification) return;
+  std::lock_guard<std::mutex> guard(request->subscription->lock);
+  auto& observed = request->subscription->lifetimes;
+  const uint64_t luid = row->InterfaceLuid.Value;
+  if (!luid) { observed.unavailable(); return; }
+  if (!observed.contains(luid)) return; // no earlier lifetime exists to preserve
+  unsigned family = subscription_family(row->Family);
+  if (!family || !row->InterfaceIndex) { observed.unavailable(luid); return; }
+  if (type == MibDeleteInstance) {
+    observed.interface_changed(luid, family, row->InterfaceIndex, false);
+    return;
+  }
+  if (type != MibAddInstance && type != MibParameterNotification) {
+    observed.unavailable(luid);
+    return;
+  }
+  ULONG current_index = 0;
+  subscription_interface(*request, luid, row->InterfaceIndex, row->Family, &current_index);
+}
+
+void CALLBACK subscription_address_changed(void* context, PMIB_UNICASTIPADDRESS_ROW row,
+    MIB_NOTIFICATION_TYPE type) {
+  SubscriptionObservation lease(context);
+  const auto& request = lease.request;
+  if (!request || request->retiring || !row || type == MibInitialNotification) return;
+  std::lock_guard<std::mutex> guard(request->subscription->lock);
+  auto& observed = request->subscription->lifetimes;
+  const uint64_t luid = row->InterfaceLuid.Value;
+  if (!luid) { observed.unavailable(); return; }
+  if (!observed.contains(luid)) return;
+  ADDRESS_FAMILY family = row->Address.si_family;
+  gesher::nsd::SubscriptionLifetimes::Address address;
+  address.family = subscription_family(family);
+  if (!address.family || !row->InterfaceIndex) { observed.unavailable(luid); return; }
+  if (family == AF_INET) std::memcpy(address.bytes.data(), &row->Address.Ipv4.sin_addr, 4);
+  else std::memcpy(address.bytes.data(), &row->Address.Ipv6.sin6_addr, 16);
+  if (type == MibDeleteInstance) {
+    observed.address_changed(luid, row->InterfaceIndex, address, false);
+    return;
+  }
+  if (type != MibAddInstance && type != MibParameterNotification) {
+    observed.unavailable(luid);
+    return;
+  }
+  ULONG current_index = 0;
+  if (!subscription_interface(*request, luid, row->InterfaceIndex, family, &current_index)) return;
+  MIB_UNICASTIPADDRESS_ROW actual{};
+  InitializeUnicastIpAddressEntry(&actual);
+  actual.InterfaceLuid.Value = luid;
+  actual.InterfaceIndex = current_index;
+  actual.Address = row->Address;
+  DWORD error = GetUnicastIpAddressEntry(&actual);
+  if (error == ERROR_FILE_NOT_FOUND) { observed.interface_absent(luid); return; }
+  if (error == ERROR_NOT_FOUND) {
+    observed.address_changed(luid, current_index, address, false);
+    return;
+  }
+  if (error || actual.InterfaceLuid.Value != luid || actual.InterfaceIndex != current_index) {
+    observed.unavailable(luid);
+    return;
+  }
+  observed.address_changed(luid, current_index, address,
+      actual.DadState == IpDadStatePreferred || actual.DadState == IpDadStateDeprecated);
 }
 
 void throw_error(JNIEnv* env, const char* type, const std::string& message) {
@@ -385,12 +518,14 @@ jlong open_mode(JNIEnv* env, Mode mode) {
     if (!request->initialization_error) request->winsock = true;
   }
   if (!request->initialization_error) {
-    request->initialization_error = NotifyIpInterfaceChange(AF_UNSPEC, interface_changed,
+    request->initialization_error = NotifyIpInterfaceChange(AF_UNSPEC,
+        mode == Mode::Subscriber ? subscription_interface_changed : interface_changed,
         reinterpret_cast<void*>(id), FALSE, &request->interface_watch);
     if (!request->initialization_error) ++counters(*request).watches;
   }
   if (!request->initialization_error) {
-    request->initialization_error = NotifyUnicastIpAddressChange(AF_UNSPEC, address_changed,
+    request->initialization_error = NotifyUnicastIpAddressChange(AF_UNSPEC,
+        mode == Mode::Subscriber ? subscription_address_changed : address_changed,
         reinterpret_cast<void*>(id), FALSE, &request->address_watch);
     if (!request->initialization_error) ++counters(*request).watches;
   }
@@ -400,6 +535,59 @@ jlong open_mode(JNIEnv* env, Mode mode) {
 }
 jlong open_request(JNIEnv* env, jclass) { return open_mode(env, Mode::Resolver); }
 jlong advertiser_open(JNIEnv* env, jclass) { return open_mode(env, Mode::Advertiser); }
+jlong subscription_open(JNIEnv* env, jclass) { return open_mode(env, Mode::Subscriber); }
+jlongArray subscription_interfaces(JNIEnv* env, jclass, jlong id) {
+  if (!internet(env)) return nullptr;
+  auto request = find_mode(static_cast<uintptr_t>(id), Mode::Subscriber);
+  if (!usable(env, request)) return nullptr;
+  std::lock_guard<std::mutex> guard(request->lock);
+  if (!usable(env, request)) return nullptr;
+  auto& state = *request->subscription;
+  uint64_t generation = request->generation.load();
+  if (!state.fence.stable(request->generation, generation)) return nullptr;
+  std::vector<Adapter> rows;
+  std::vector<Address> addresses;
+  DWORD error = adapters(&rows, generation, false, &addresses);
+  if (!state.fence.stable(request->generation, generation)) return nullptr;
+  if (error) { io_error(env, "Cannot observe DNS-SD subscription scopes", error); return nullptr; }
+  using Lifetimes = gesher::nsd::SubscriptionLifetimes;
+  std::vector<Lifetimes::Scope> scopes;
+  for (const auto& row : rows) {
+    Lifetimes::Scope scope{row.luid, row.index, row.ipv4_index, row.ipv6_index, row.families, {}};
+    for (const auto& address : addresses) {
+      if (address.adapter == row) {
+        scope.addresses.push_back({subscription_family(static_cast<ADDRESS_FAMILY>(address.family)),
+            address.bytes});
+      }
+    }
+    scopes.push_back(std::move(scope));
+  }
+  std::vector<uint64_t> lifetimes;
+  Lifetimes::Result result;
+  {
+    std::lock_guard<std::mutex> observation(state.lock);
+    if (!state.fence.stable(request->generation, generation)) return nullptr;
+    result = state.lifetimes.snapshot(scopes, &lifetimes);
+  }
+  if (!state.fence.stable(request->generation, generation)) return nullptr;
+  if (result == Lifetimes::Result::Retry) return nullptr;
+  if (result != Lifetimes::Result::Ready) {
+    error = result == Lifetimes::Result::Capacity ? ERROR_NOT_ENOUGH_MEMORY
+        : result == Lifetimes::Result::Exhausted ? ERROR_ARITHMETIC_OVERFLOW : ERROR_NOT_READY;
+    io_error(env, "DNS-SD subscription continuity is unavailable", error);
+    return nullptr;
+  }
+  std::vector<jlong> values;
+  for (size_t at = 0; at < rows.size(); ++at) {
+    const auto& row = rows[at];
+    values.insert(values.end(), {row.index, row.ipv4_index, row.ipv6_index,
+        static_cast<jlong>(row.luid), static_cast<jlong>(row.generation), row.families,
+        static_cast<jlong>(lifetimes[at])});
+  }
+  auto out = env->NewLongArray(static_cast<jsize>(values.size()));
+  if (out && !values.empty()) env->SetLongArrayRegion(out, 0, values.size(), values.data());
+  return out;
+}
 jlongArray interfaces_mode(JNIEnv* env, jlong id, Mode mode) {
   if (!internet(env)) return nullptr;
   auto request = find_mode(static_cast<uintptr_t>(id), mode);
@@ -515,6 +703,9 @@ jboolean configure(JNIEnv* env, jclass, jlong id, jlongArray input) {
 jboolean advertiser_configure(JNIEnv* env, jclass, jlong id, jlongArray input) {
   return configure_mode(env, id, input, Mode::Advertiser);
 }
+jboolean subscription_configure(JNIEnv* env, jclass, jlong id, jlongArray input) {
+  return configure_mode(env, id, input, Mode::Subscriber);
+}
 jlong generation_mode(JNIEnv* env, jlong id, Mode mode) {
   if (!internet(env)) return -1;
   auto request = find_mode(static_cast<uintptr_t>(id), mode);
@@ -523,6 +714,7 @@ jlong generation_mode(JNIEnv* env, jlong id, Mode mode) {
 }
 jlong generation(JNIEnv* env, jclass, jlong id) { return generation_mode(env, id, Mode::Resolver); }
 jlong advertiser_generation(JNIEnv* env, jclass, jlong id) { return generation_mode(env, id, Mode::Advertiser); }
+jlong subscription_generation(JNIEnv* env, jclass, jlong id) { return generation_mode(env, id, Mode::Subscriber); }
 jboolean send(JNIEnv* env, jclass, jlong id, jint index, jbyteArray input) {
   if (!internet(env)) return false;
   auto request = find_mode(static_cast<uintptr_t>(id), Mode::Resolver);
@@ -562,6 +754,60 @@ jboolean send(JNIEnv* env, jclass, jlong id, jint index, jbyteArray input) {
     request->sent_query = true;
   }
   return sent;
+}
+
+jboolean subscription_send(JNIEnv* env, jclass, jlong id, jint index, jbyteArray input) {
+  if (!internet(env)) return false;
+  auto request = find_mode(static_cast<uintptr_t>(id), Mode::Subscriber);
+  if (!usable(env, request)) return false;
+  if (!input || env->GetArrayLength(input) < 12 || env->GetArrayLength(input) > 1500) {
+    io_error(env, "Invalid DNS-SD subscription query size", ERROR_INVALID_PARAMETER); return false;
+  }
+  std::vector<char> bytes(env->GetArrayLength(input));
+  env->GetByteArrayRegion(input, 0, bytes.size(), reinterpret_cast<jbyte*>(bytes.data()));
+  if (env->ExceptionCheck()) return false;
+  std::lock_guard<std::mutex> guard(request->lock);
+  if (!usable(env, request)) return false;
+  uint64_t generation = request->generation.load();
+  unsigned expected = 0, present = 0;
+  for (const auto& channel : request->channels) {
+    if (channel.adapter.index != static_cast<ULONG>(index)) continue;
+    unsigned family = subscription_family(static_cast<ADDRESS_FAMILY>(channel.family));
+    if (!family || channel.socket == INVALID_SOCKET || channel.adapter.generation != generation ||
+        (expected && expected != channel.adapter.families) || (present & family)) return false;
+    expected = channel.adapter.families;
+    present |= family;
+  }
+  // Successful transmission means every actual configured family was sent.
+  // No channel or a missing family cannot be reported as success.
+  if (!expected || present != expected) return false;
+  unsigned sent = 0;
+  for (const auto& channel : request->channels) {
+    if (channel.adapter.index != static_cast<ULONG>(index)) continue;
+    if (request->retiring || request->generation.load() != generation) return false;
+    SOCKADDR_STORAGE storage{};
+    int length;
+    if (channel.family == AF_INET) {
+      auto* target = reinterpret_cast<sockaddr_in*>(&storage);
+      target->sin_family = AF_INET; target->sin_port = htons(5353);
+      std::memcpy(&target->sin_addr, kGroup4, sizeof(kGroup4)); length = sizeof(*target);
+    } else {
+      auto* target = reinterpret_cast<sockaddr_in6*>(&storage);
+      target->sin6_family = AF_INET6; target->sin6_port = htons(5353);
+      target->sin6_scope_id = channel.interface_index;
+      std::memcpy(&target->sin6_addr, kGroup6, sizeof(kGroup6)); length = sizeof(*target);
+    }
+    int result = winsock_api().sendto(channel.socket, bytes.data(), bytes.size(), 0,
+        reinterpret_cast<sockaddr*>(&storage), length);
+    if (result != static_cast<int>(bytes.size())) {
+      DWORD error = result == SOCKET_ERROR ? WSAGetLastError() : WSAEMSGSIZE;
+      if (request->generation.load() != generation || error == WSAEWOULDBLOCK) return false;
+      io_error(env, "Cannot send DNS-SD subscription query", error); return false;
+    }
+    ++request->sent_datagrams;
+    sent |= subscription_family(static_cast<ADDRESS_FAMILY>(channel.family));
+  }
+  return sent == expected && !request->retiring && request->generation.load() == generation;
 }
 
 bool unicast_address(const std::array<unsigned char, 16>& bytes, int family) {
@@ -764,7 +1010,7 @@ jobject poll_mode(JNIEnv* env, jlong id, jint timeout, Mode mode) {
         : reinterpret_cast<sockaddr_in6*>(&source)->sin6_port;
     USHORT source_port = ntohs(port);
     bool response = (static_cast<unsigned char>(bytes[2]) & 0x80) != 0;
-    if ((mode == Mode::Resolver || response) && source_port != 5353) continue;
+    if ((mode != Mode::Advertiser || response) && source_port != 5353) continue;
     if (mode == Mode::Advertiser && source_port == 0) continue;
     ULONG incoming_index = 0; DWORD hops = 0; bool multicast = false, hop_known = false;
     std::array<unsigned char, 16> received_destination{}, source_address{};
@@ -801,7 +1047,7 @@ jobject poll_mode(JNIEnv* env, jlong id, jint timeout, Mode mode) {
       }
     }
     if (incoming_index != channel.interface_index || channel.adapter.generation != request->generation.load()) continue;
-    if (mode == Mode::Resolver) {
+    if (mode != Mode::Advertiser) {
       if (!multicast || hops != 255) continue;
     } else {
       if (multicast && (!hop_known || hops != 255)) continue;
@@ -814,13 +1060,13 @@ jobject poll_mode(JNIEnv* env, jlong id, jint timeout, Mode mode) {
     auto payload = env->NewByteArray(received);
     if (!payload) return nullptr;
     env->SetByteArrayRegion(payload, 0, received, reinterpret_cast<const jbyte*>(bytes.data()));
-    jclass cls = env->FindClass(mode == Mode::Resolver ? "com/gesher/net/WindowsNsdResolver$Packet"
+    jclass cls = env->FindClass(mode != Mode::Advertiser ? "com/gesher/net/WindowsNsdResolver$Packet"
         : "com/gesher/net/WindowsNsdAdvertiser$Packet");
-    jmethodID constructor = cls ? env->GetMethodID(cls, "<init>", mode == Mode::Resolver
+    jmethodID constructor = cls ? env->GetMethodID(cls, "<init>", mode != Mode::Advertiser
         ? "(JIII[B)V" : "(JIII[BIZI[B)V") : nullptr;
     jobject out = nullptr;
     if (constructor && !env->ExceptionCheck()) {
-      if (mode == Mode::Resolver) out = env->NewObject(cls, constructor,
+      if (mode != Mode::Advertiser) out = env->NewObject(cls, constructor,
           static_cast<jlong>(channel.adapter.generation), static_cast<jint>(channel.adapter.index),
           channel.family == AF_INET ? 4 : 6, static_cast<jint>(incoming_index), payload);
       else {
@@ -844,6 +1090,10 @@ jobject poll_mode(JNIEnv* env, jlong id, jint timeout, Mode mode) {
         }
       }
     }
+    if (mode == Mode::Subscriber && out &&
+        (channel.adapter.generation != request->generation.load() || request->retiring)) {
+      env->DeleteLocalRef(out); out = nullptr;
+    }
     if (cls) env->DeleteLocalRef(cls);
     env->DeleteLocalRef(payload);
     return out;
@@ -853,6 +1103,9 @@ jobject poll_mode(JNIEnv* env, jlong id, jint timeout, Mode mode) {
 jobject poll(JNIEnv* env, jclass, jlong id, jint timeout) { return poll_mode(env, id, timeout, Mode::Resolver); }
 jobject advertiser_poll(JNIEnv* env, jclass, jlong id, jint timeout) {
   return poll_mode(env, id, timeout, Mode::Advertiser);
+}
+jobject subscription_poll(JNIEnv* env, jclass, jlong id, jint timeout) {
+  return poll_mode(env, id, timeout, Mode::Subscriber);
 }
 
 jboolean close_mode(jlong id, Mode mode) {
@@ -870,15 +1123,23 @@ jboolean close_mode(jlong id, Mode mode) {
   }
   // Never call cancellation from the callback or under a lock it could need.
   // Registry leases also keep callbacks that already entered alive across erase.
-  if (request->interface_watch) {
-    if (CancelMibChangeNotify2(request->interface_watch) == NO_ERROR) {
-      request->interface_watch = nullptr; --counters(*request).watches;
-    } else closed = false;
-  }
-  if (request->address_watch) {
-    if (CancelMibChangeNotify2(request->address_watch) == NO_ERROR) {
-      request->address_watch = nullptr; --counters(*request).watches;
-    } else closed = false;
+  if (mode == Mode::Subscriber) {
+    bool watches = gesher::nsd::retire_subscription_watches(
+        request->interface_watch, request->address_watch,
+        [](HANDLE watch) { return CancelMibChangeNotify2(watch) == NO_ERROR; },
+        [&] { --counters(*request).watches; });
+    closed = watches && closed;
+  } else {
+    if (request->interface_watch) {
+      if (CancelMibChangeNotify2(request->interface_watch) == NO_ERROR) {
+        request->interface_watch = nullptr; --counters(*request).watches;
+      } else closed = false;
+    }
+    if (request->address_watch) {
+      if (CancelMibChangeNotify2(request->address_watch) == NO_ERROR) {
+        request->address_watch = nullptr; --counters(*request).watches;
+      } else closed = false;
+    }
   }
   if (!closed) return false;
   if (request->winsock) {
@@ -891,6 +1152,7 @@ jboolean close_mode(jlong id, Mode mode) {
 }
 jboolean close_request(JNIEnv*, jclass, jlong id) { return close_mode(id, Mode::Resolver); }
 jboolean advertiser_close(JNIEnv*, jclass, jlong id) { return close_mode(id, Mode::Advertiser); }
+jboolean subscription_close(JNIEnv*, jclass, jlong id) { return close_mode(id, Mode::Subscriber); }
 jintArray active_mode(JNIEnv* env, Mode mode) {
   std::lock_guard<std::mutex> guard(registry().lock);
   jint owned = 0, polled = 0;
@@ -904,7 +1166,7 @@ jintArray active_mode(JNIEnv* env, Mode mode) {
   }
   const auto& count = registry().modes[static_cast<unsigned>(mode)];
   // Same six-field shape; resolver progress retains its original boolean-per-
-  // request semantics. Advertiser field 5 counts completed datagrams of live
+  // request semantics. Advertiser/subscriber field 5 counts completed datagrams of live
   // requests (saturating at jint's limit), not planned bursts or callbacks.
   jint values[] = {owned, static_cast<jint>(count.sockets.load()), static_cast<jint>(count.watches.load()),
       static_cast<jint>(count.callbacks.load()), polled, static_cast<jint>(std::min<uint64_t>(sent, INT_MAX))};
@@ -914,6 +1176,7 @@ jintArray active_mode(JNIEnv* env, Mode mode) {
 }
 jintArray active(JNIEnv* env, jclass) { return active_mode(env, Mode::Resolver); }
 jintArray advertiser_active(JNIEnv* env, jclass) { return active_mode(env, Mode::Advertiser); }
+jintArray subscription_active(JNIEnv* env, jclass) { return active_mode(env, Mode::Subscriber); }
 
 const JNINativeMethod kMethods[] = {
   {"nativeOpen", "()J", NATIVEHELPER_SYSV_JNI_ENTRY(open_request)},
@@ -924,6 +1187,16 @@ const JNINativeMethod kMethods[] = {
   {"nativeSend", "(JI[B)Z", NATIVEHELPER_SYSV_JNI_ENTRY(send)},
   {"nativeClose", "(J)Z", NATIVEHELPER_SYSV_JNI_ENTRY(close_request)},
   {"nativeActive", "()[I", NATIVEHELPER_SYSV_JNI_ENTRY(active)},
+};
+const JNINativeMethod kSubscriptionMethods[] = {
+  {"nativeSubscriptionOpen", "()J", NATIVEHELPER_SYSV_JNI_ENTRY(subscription_open)},
+  {"nativeSubscriptionInterfaces", "(J)[J", NATIVEHELPER_SYSV_JNI_ENTRY(subscription_interfaces)},
+  {"nativeSubscriptionConfigure", "(J[J)Z", NATIVEHELPER_SYSV_JNI_ENTRY(subscription_configure)},
+  {"nativeSubscriptionGeneration", "(J)J", NATIVEHELPER_SYSV_JNI_ENTRY(subscription_generation)},
+  {"nativeSubscriptionPoll", "(JI)Lcom/gesher/net/WindowsNsdResolver$Packet;", NATIVEHELPER_SYSV_JNI_ENTRY(subscription_poll)},
+  {"nativeSubscriptionSend", "(JI[B)Z", NATIVEHELPER_SYSV_JNI_ENTRY(subscription_send)},
+  {"nativeSubscriptionClose", "(J)Z", NATIVEHELPER_SYSV_JNI_ENTRY(subscription_close)},
+  {"nativeSubscriptionActive", "()[I", NATIVEHELPER_SYSV_JNI_ENTRY(subscription_active)},
 };
 const JNINativeMethod kAdvertiserMethods[] = {
   {"nativeOpen", "()J", NATIVEHELPER_SYSV_JNI_ENTRY(advertiser_open)},
@@ -942,6 +1215,8 @@ jint on_load(JavaVM* vm, void*) {
   jclass cls = env->FindClass("com/gesher/net/WindowsNsdResolver");
   if (!cls) return JNI_ERR;
   int status = env->RegisterNatives(cls, kMethods, sizeof(kMethods) / sizeof(kMethods[0]));
+  if (status == JNI_OK) status = env->RegisterNatives(cls, kSubscriptionMethods,
+      sizeof(kSubscriptionMethods) / sizeof(kSubscriptionMethods[0]));
   env->DeleteLocalRef(cls);
   if (status != JNI_OK) return JNI_ERR;
   cls = env->FindClass("com/gesher/net/WindowsNsdAdvertiser");

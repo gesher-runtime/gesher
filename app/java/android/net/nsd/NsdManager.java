@@ -14,6 +14,7 @@ import com.gesher.net.WindowsNsd;
 import com.gesher.net.WindowsNsdResolver;
 import com.gesher.net.NsdRegistrationClient;
 import com.gesher.net.NsdRegistrationContract;
+import com.gesher.net.NsdSubscriptionClient;
 
 import java.io.IOException;
 import java.util.IdentityHashMap;
@@ -25,7 +26,8 @@ import java.util.concurrent.RejectedExecutionException;
 /**
  * Android 16 NSD browsing, registration and one-shot resolution over actual
  * Windows networks. Registration is owned by the system service process; raw
- * DNS packets preserve binary TXT. Service-info subscriptions remain unavailable.
+ * DNS packets preserve binary TXT. Continuing service-info subscriptions have
+ * request-owned sockets in the system service process.
  */
 public final class NsdManager {
     public static final String ACTION_NSD_STATE_CHANGED = "android.net.nsd.STATE_CHANGED";
@@ -92,11 +94,20 @@ public final class NsdManager {
     private final WindowsNsd.Factory mBackend;
     private final WindowsNsdResolver.Factory mResolverBackend;
     private final NsdRegistrationClient.Factory mRegistrationBackend;
+    private final NsdSubscriptionClient.Factory mSubscriptionBackend;
     private final Context mContext;
     private final Map<DiscoveryListener, Discovery> mDiscoveries = new IdentityHashMap<>();
     // All listener identity maps use mDiscoveries as their common lock.
     private final Map<ResolveListener, Resolution> mResolutions = new IdentityHashMap<>();
     private final Map<RegistrationListener, Registration> mRegistrations = new IdentityHashMap<>();
+    private final Map<ServiceInfoCallback, Subscription> mSubscriptions = new IdentityHashMap<>();
+
+    private static final class Subscription {
+        final Executor executor;
+        NsdSubscriptionClient.Session session;
+        boolean stopPending, stopSent, terminalDelivered;
+        Subscription(Executor executor) { this.executor = executor; }
+    }
 
     private static final class Registration {
         NsdServiceInfo original;
@@ -168,6 +179,7 @@ public final class NsdManager {
         mBackend = WindowsNsd.factory();
         mResolverBackend = WindowsNsdResolver.factory();
         mRegistrationBackend = NsdRegistrationClient.factory();
+        mSubscriptionBackend = NsdSubscriptionClient.factory();
     }
 
     // Explicit fixture injection; ordinary construction always selects WindowsNsd.
@@ -187,11 +199,20 @@ public final class NsdManager {
     private NsdManager(Context context, Executor serviceExecutor, WindowsNsd.Factory backend,
             WindowsNsdResolver.Factory resolverBackend,
             NsdRegistrationClient.Factory registrationBackend) {
+        this(context, serviceExecutor, backend, resolverBackend, registrationBackend,
+                NsdSubscriptionClient.factory());
+    }
+
+    private NsdManager(Context context, Executor serviceExecutor, WindowsNsd.Factory backend,
+            WindowsNsdResolver.Factory resolverBackend,
+            NsdRegistrationClient.Factory registrationBackend,
+            NsdSubscriptionClient.Factory subscriptionBackend) {
         mContext = context;
         mServiceExecutor = Objects.requireNonNull(serviceExecutor);
         mBackend = Objects.requireNonNull(backend);
         mResolverBackend = Objects.requireNonNull(resolverBackend);
         mRegistrationBackend = Objects.requireNonNull(registrationBackend);
+        mSubscriptionBackend = Objects.requireNonNull(subscriptionBackend);
     }
 
     // --- registering ---------------------------------------------------------------
@@ -241,7 +262,7 @@ public final class NsdManager {
                 registration.executor = executor;
             } else {
                 if (registration != null || mDiscoveries.containsKey(listener)
-                        || mResolutions.containsKey(listener)) {
+                        || mResolutions.containsKey(listener) || mSubscriptions.containsKey(listener)) {
                     throw new IllegalArgumentException("listener already in use");
                 }
                 registration = new Registration(original, executor);
@@ -249,7 +270,8 @@ public final class NsdManager {
             }
             // The service owns the registration/retained-update portion of the
             // quota; it must not trust this caller to under-report those entries.
-            other = mDiscoveries.size() + mResolutions.size();
+            other = mDiscoveries.size() + mResolutions.size() + mSubscriptions.size()
+                    + mSubscriptionBackend.retainedCount();
             if (update) registration.commands.addLast(new RegistrationCommand(owned, other));
         }
         if (update) {
@@ -441,7 +463,9 @@ public final class NsdManager {
             // tracker reaches ConnectivityManager's permission check. Do not
             // reserve a new listener if that permission check then fails.
             if (mDiscoveries.containsKey(listener) || mResolutions.containsKey(listener)
-                    || mRegistrations.containsKey(listener)) throw new IllegalArgumentException("listener already in use");
+                    || mRegistrations.containsKey(listener) || mSubscriptions.containsKey(listener)) {
+                throw new IllegalArgumentException("listener already in use");
+            }
         }
         if (request != null && mContext != null) {
             mContext.enforcePermission("android.permission.ACCESS_NETWORK_STATE",
@@ -452,11 +476,14 @@ public final class NsdManager {
         synchronized (mDiscoveries) {
             // Another thread may have registered it during permission checking.
             if (mDiscoveries.containsKey(listener) || mResolutions.containsKey(listener)
-                    || mRegistrations.containsKey(listener)) throw new IllegalArgumentException("listener already in use");
+                    || mRegistrations.containsKey(listener) || mSubscriptions.containsKey(listener)) {
+                throw new IllegalArgumentException("listener already in use");
+            }
             // The service applies discovery's quota to the whole active client
             // request map. The Java one-shot resolve path has no such admission
             // check, but its active requests still count when discovery starts.
             overLimit = mDiscoveries.size() + mResolutions.size() + mRegistrations.size()
+                    + mSubscriptions.size() + mSubscriptionBackend.retainedCount()
                     + mRegistrationBackend.retainedCount() >= 200;
             mDiscoveries.put(listener, discovery);
         }
@@ -590,7 +617,7 @@ public final class NsdManager {
         Resolution resolution = new Resolution(serviceInfo, executor);
         synchronized (mDiscoveries) {
             if (mDiscoveries.containsKey(listener) || mResolutions.containsKey(listener)
-                    || mRegistrations.containsKey(listener)) {
+                    || mRegistrations.containsKey(listener) || mSubscriptions.containsKey(listener)) {
                 throw new IllegalArgumentException("listener already in use");
             }
             mResolutions.put(listener, resolution);
@@ -653,12 +680,103 @@ public final class NsdManager {
         checkServiceInfo(serviceInfo);
         Objects.requireNonNull(executor, "executor cannot be null");
         Objects.requireNonNull(listener, "listener cannot be null");
-        mServiceExecutor.execute(() -> executor.execute(() ->
-                listener.onServiceInfoCallbackRegistrationFailed(FAILURE_INTERNAL_ERROR)));
+        NsdServiceInfo selector = NsdRegistrationContract.copyForTransport(serviceInfo);
+        Subscription subscription = new Subscription(executor);
+        synchronized (mDiscoveries) {
+            if (mSubscriptions.containsKey(listener) || mDiscoveries.containsKey(listener)
+                    || mRegistrations.containsKey(listener) || mResolutions.containsKey(listener)) {
+                throw new IllegalArgumentException("listener already in use");
+            }
+            // The pinned service has no separate subscription admission quota.
+            // Its active entry still counts for discovery/registration admission.
+            mSubscriptions.put(listener, subscription);
+        }
+        try {
+            NsdSubscriptionClient.Session session = mSubscriptionBackend.start(selector,
+                    new NsdSubscriptionClient.Callback() {
+                        public void updated(NsdServiceInfo info) {
+                            subscriptionEvent(listener, subscription, false, () -> listener.onServiceUpdated(info));
+                        }
+                        public void lost() {
+                            subscriptionEvent(listener, subscription, false, listener::onServiceLost);
+                        }
+                        public void failed(int error) {
+                            subscriptionEvent(listener, subscription, true,
+                                    () -> listener.onServiceInfoCallbackRegistrationFailed(error));
+                        }
+                        public void unregistered() {
+                            subscriptionEvent(listener, subscription, true,
+                                    listener::onServiceInfoCallbackUnregistered);
+                        }
+                    });
+            synchronized (mDiscoveries) { subscription.session = session; }
+            stopSubscription(subscription);
+        } catch (RuntimeException | Error failure) {
+            retireSubscription(listener, subscription);
+            throw failure;
+        }
     }
 
     public void unregisterServiceInfoCallback(ServiceInfoCallback listener) {
         Objects.requireNonNull(listener, "listener cannot be null");
+        Subscription subscription;
+        synchronized (mDiscoveries) {
+            subscription = mSubscriptions.get(listener);
+            if (subscription == null) throw new IllegalArgumentException("listener not registered");
+            subscription.stopPending = true;
+        }
+        stopSubscription(subscription);
+    }
+
+    private void stopSubscription(Subscription subscription) {
+        NsdSubscriptionClient.Session session;
+        synchronized (mDiscoveries) {
+            if (!subscription.stopPending || subscription.stopSent || subscription.session == null) return;
+            subscription.stopSent = true;
+            session = subscription.session;
+        }
+        session.stop();
+    }
+
+    private void retireSubscription(ServiceInfoCallback listener, Subscription subscription) {
+        synchronized (mDiscoveries) {
+            mSubscriptions.remove(listener, subscription);
+            subscription.stopPending = true;
+        }
+        stopSubscription(subscription);
+    }
+
+    private void subscriptionEvent(ServiceInfoCallback listener, Subscription subscription,
+            boolean terminal, Runnable callback) {
+        try {
+            mServiceExecutor.execute(() -> {
+                synchronized (mDiscoveries) {
+                    if (mSubscriptions.get(listener) != subscription || !terminal && subscription.stopPending) return;
+                    if (terminal) mSubscriptions.remove(listener);
+                }
+                try {
+                    subscription.executor.execute(() -> {
+                        synchronized (mDiscoveries) {
+                            // Recheck at execution, not merely submission: an app
+                            // executor can hold an update across cancel and reuse.
+                            if (!terminal && (subscription.stopPending
+                                    || mSubscriptions.get(listener) != subscription)) return;
+                            if (terminal) {
+                                if (subscription.terminalDelivered) return;
+                                subscription.terminalDelivered = true;
+                            }
+                        }
+                        callback.run();
+                    });
+                } catch (RejectedExecutionException rejected) {
+                    if (!terminal) retireSubscription(listener, subscription);
+                    throw rejected;
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            retireSubscription(listener, subscription);
+            throw rejected;
+        }
     }
 
     // --- checks ----------------------------------------------------------------------
