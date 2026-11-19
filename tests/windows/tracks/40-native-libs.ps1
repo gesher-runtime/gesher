@@ -139,6 +139,10 @@ Check 'bionic shim: ftruncate rights, cursor and same-size final-page invalidati
   & "$Dir/bionic_ftruncate_test.exe"
 } @('bionic_ftruncate_test all passed')
 
+Check 'bionic shim: shared CRT stream ownership and wide stdio' {
+  & "$Dir/bionic_stdio_contract_test.exe"
+} @('bionic_stdio_contract_test all passed')
+
 # Step 4, the JNI path: dalvikvm runs gesher.JniTest (tests/native/java), whose
 # System.load of jni_test.so goes through ART's host libnativeloader path to
 # gesher-base's dlopen, the ELF loader and the JNI bridge
