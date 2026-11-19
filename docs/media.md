@@ -233,6 +233,10 @@ loopback fixtures require the separately named capture-test binaries built with
 See [capture failure contracts](capture-failure-contracts.md) for API mappings,
 source evidence and validation boundaries.
 
+The [recorder contracts](media-recorder-contracts.md) pin lifecycle/error behavior,
+requested codec handling, complete-container size admission, callback ordering
+and the exact boundaries of host and Windows validation.
+
 ## Status and next steps
 
 - Native OpenSL full ci **40477536464** is GREEN at **e5693412**, attempt1:

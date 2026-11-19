@@ -260,20 +260,23 @@ int main(int argc, char** argv) {
     recorder_fixture::Recorder recorder; recorder.capture_ = Open();
     fixture::start_ok = false; std::string error; bool invalid_state = true;
     Check(!recorder.Start(&error, &invalid_state) && !invalid_state && !recorder.started_, "recorder reports backend start failure");
-    Check(recorder.muxer_->starts == 0 && !recorder.audio_thread_.joinable(), "failed capture start admits no muxer or recorder thread");
-    fixture::start_ok = true; recorder.muxer_->success = false;
-    Check(!recorder.Start(&error) && !recorder.capture_->started(), "muxer failure rolls back admitted capture");
-    recorder.prepared_ = false;
+    Check(recorder_fixture::muxer_starts == 0 && !recorder.audio_thread_.joinable() && !recorder.capture_,
+          "failed capture start admits no muxer or recorder thread and releases the stream");
     Check(!recorder.Start(&error, &invalid_state) && invalid_state, "recorder preserves invalid-state distinction");
+    fixture::start_ok = true;
+    recorder_fixture::Recorder next; next.capture_ = Open();
+    auto capture = next.capture_; next.muxer_->success = false;
+    Check(!next.Start(&error) && !capture->started() && !next.capture_, "muxer failure rolls back admitted capture");
   } else if (!std::strcmp(test, "recorder-disconnect")) {
     recorder_fixture::Recorder recorder; recorder.capture_ = Open();
-    std::atomic<int> errors{0}; recorder.listener_ = [&](int event, int code) { if (event == 1 && code == 1) ++errors; };
     std::string error; fixture::pull_ok = false;
     Check(recorder.Start(&error), "recorder starts before source loss");
-    Check(Await([&] { return errors == 1; }), "recorder publishes terminal capture error");
+    Check(Await([&] { return recorder.finished_.load(); }), "recorder reaches shared completion after capture loss");
     recorder.audio_thread_.join();
-    Check(recorder.capture_failed_ && !recorder.running_ && recorder.finished_, "capture loss retires recorder feeding");
-    Check(errors == 1, "recorder reports one failure without busy-looping");
+    Check(recorder.stop_reason_ == recorder_fixture::Recorder::StopReason::kError && !recorder.running_,
+          "capture loss forwards ERROR and retires recorder feeding");
+    Check(recorder.error_requests_ == 1 && recorder.completion_requests_ == 1,
+          "recorder forwards one failure/completion request without busy-looping");
   } else if (!std::strcmp(test, "jni-read")) {
     auto stream = Open(); audio_record_fixture::stream = stream;
     Check(stream->Start() == 0, "AudioRecord boundary starts real capture stream");

@@ -61,24 +61,46 @@ void Destroy(Object* object) {
 namespace recorder_fixture {
 using namespace gesher::media;
 inline constexpr int kInfoMaxDuration = 800;
+inline int muxer_starts = 0;
 struct EncodedPacket {};
 struct Encoder {
   bool Encode(const int16_t*, size_t, int64_t, std::vector<EncodedPacket>*) { return true; }
-  void Drain(std::vector<EncodedPacket>*) {}
+  bool Drain(std::vector<EncodedPacket>*) { return true; }
 };
 struct Muxer {
-  int starts = 0; bool success = true;
-  bool Start(std::string* error) { ++starts; if (!success) *error = "test mux failure"; return success; }
+  bool success = true;
+  bool Start(std::string* error) { ++muxer_starts; if (!success) *error = "test mux failure"; return success; }
 };
 class Recorder {
  public:
+  enum class StopReason { kNone, kManual, kDuration, kSize, kError };
   bool Start(std::string*, bool* invalid_state = nullptr);
   void AudioLoop();
   void VideoLoop() { std::abort(); }
   int64_t NowUs() { return 0; }
-  void Finish(int) {}
+  // Explicit helper observers: this adapter gate tests unchanged Start and
+  // AudioLoop against the real capture engine. Full Recorder finalization,
+  // callback ordering and public error/reset state run in the separate
+  // recorder-lifecycle and checked-JNI state gates.
+  void ReleasePipeline() {
+    if (capture_) capture_->Release();
+    capture_.reset(); muxer_.reset(); audio_enc_.reset(); video_enc_.reset();
+  }
+  void RequestStop(StopReason reason, std::string = {}) {
+    std::lock_guard<std::mutex> lock(mu_);
+    stop_reason_ = reason; running_ = false;
+    if (reason == StopReason::kError) ++error_requests_;
+    if (capture_) capture_->Stop();
+    cv_.notify_all();
+  }
+  bool ShouldDrain() { return stop_reason_ == StopReason::kManual || stop_reason_ == StopReason::kDuration; }
+  void CompleteWorker() { ++completion_requests_; finished_ = true; }
   bool Write(int, const std::vector<EncodedPacket>&, int64_t*) { return true; }
-  bool prepared_ = true, started_ = false, running_ = false, paused_ = false, finished_ = false, capture_failed_ = false;
+  bool prepared_ = true, started_ = false, running_ = false, paused_ = false, error_state_ = false;
+  std::atomic<bool> finished_{false};
+  int error_requests_ = 0, completion_requests_ = 0;
+  unsigned audio_epoch_ = 0, active_workers_ = 0;
+  StopReason stop_reason_ = StopReason::kNone;
   std::mutex mu_; std::condition_variable cv_;
   std::shared_ptr<CaptureStream> capture_;
   std::unique_ptr<Muxer> muxer_ = std::make_unique<Muxer>();

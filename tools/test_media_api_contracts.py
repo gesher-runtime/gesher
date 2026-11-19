@@ -44,8 +44,15 @@ def main() -> int:
     audio = read("compat/media/ndk/aaudio.cc")
     extractor = read("compat/media/jni/media_extractor_jni.cc")
     yuv = read("compat/hwui/surfaces/yuv_image.cc")
-    audio_start = ("int64_t StreamDeadline(" if "int64_t StreamDeadline(" in audio
-                   else "aaudio_result_t SYSV WaitForStateChange(")
+    audio_disconnect = ("bool SetInputDisconnectedLocked(", "aaudio_result_t CheckInputDisconnectLocked(")
+    has_input_disconnect = audio_disconnect[0] in audio
+    if not args.source_ref and not has_input_disconnect:
+        raise ValueError("current AAudio source is missing its disconnect contract")
+    # Only an explicitly selected historical source may omit the later input
+    # disconnect contract. The ordinary current-source gate must exercise it.
+    audio_disconnect_implementation = (
+        "#define HAS_INPUT_DISCONNECT " + str(int(has_input_disconnect)) + "\n"
+        + (section(audio, *audio_disconnect) if has_input_disconnect else ""))
     extractor_start = ("ReceiverLease<JniExtractor> GetForDataSource(" if
                        "ReceiverLease<JniExtractor> GetForDataSource(" in extractor else
                        "JniExtractor* GetForDataSource(" if "JniExtractor* GetForDataSource(" in extractor
@@ -55,11 +62,8 @@ def main() -> int:
     yuv_rows_start = ("size_t JpegRowBytes(" if "size_t JpegRowBytes(" in yuv
                       else "void Nv21Rows(")
     sources = {
-        "aaudio": ("#define HAS_INPUT_DISCONNECT " + str(int("bool SetInputDisconnectedLocked(" in audio)) + "\n")
-                   + ((section(audio, "bool SetInputDisconnectedLocked(", "aaudio_result_t CheckInputDisconnectLocked(")
-                    + section(audio, "int32_t SYSV GetState(", "// A timeout is a duration"))
-                   if "bool SetInputDisconnectedLocked(" in audio else "")
-                   + section(audio, audio_start, "aaudio_result_t SYSV SetBufferSizeInFrames("),
+        "aaudio": audio_disconnect_implementation
+        + section(audio, "int32_t SYSV GetState(", "aaudio_result_t SYSV SetBufferSizeInFrames("),
         "extractor": section(extractor, extractor_start, "void JNICALL ME_setDataSourcePath("),
         "yuv": section(yuv, yuv_start, "jboolean JNICALL YuvImage_compressToJpegR("),
         "yuv_rows": section(yuv, yuv_rows_start, "bool Encode("),
