@@ -13,6 +13,8 @@ import socket
 import struct
 import time
 
+from peer_scope import bind_windows_multicast
+
 
 def name(labels):
     out = bytearray()
@@ -59,19 +61,28 @@ def main():
     p.add_argument('--address', required=True)
     p.add_argument('--family', type=int, choices=(4, 6), required=True)
     args = p.parse_args()
+    serve(args)
+
+
+def serve(args):
     if not re.fullmatch(r'_gs[0-9a-f]{12}\._tcp', args.type):
         raise ValueError('fixture requires an owned unique service type')
     args.control.mkdir(parents=True, exist_ok=True)
     family = socket.AF_INET if args.family == 4 else socket.AF_INET6
-    service = socket.socket(family, socket.SOCK_STREAM)
+    # Own both sockets before setup, including a rejected bind/option/readback.
+    with socket.socket(family, socket.SOCK_STREAM) as service, \
+            socket.socket(family, socket.SOCK_DGRAM) as sock:
+        run_peer(args, service, sock)
+
+
+def run_peer(args, service, sock):
     service.bind((args.address, 0) if args.family == 4 else
                  (args.address.split('%')[0], 0, 0, args.index))
     service.listen(1)
     port = service.getsockname()[1]
-    sock = socket.socket(family, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     if args.family == 4:
-        sock.bind(('', 5353))
+        bind_windows_multicast(sock, args.family, args.index)
         local = socket.inet_aton(args.address)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, local)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
@@ -81,7 +92,7 @@ def main():
         destination = ('224.0.0.251', 5353)
     else:
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-        sock.bind(('::', 5353))
+        bind_windows_multicast(sock, args.family, args.index)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, args.index)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 255)
         sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 1)
@@ -95,45 +106,41 @@ def main():
     next_send = 0
     started = time.monotonic()
     (args.control / 'ready').write_text('ready', encoding='utf-8')
-    try:
-        while time.monotonic() - started < 150:
-            command_file = args.control / 'command'
-            command = command_file.read_text(encoding='utf-8').strip() if command_file.exists() else ''
-            if command and command != current:
-                current = command
-                serial, mode = command.split(' ', 1)
-                if mode not in ('announce', 'announce-long', 'announce-subtype-long', 'announce-base-only-long',
-                                'silent', 'goodbye', 'base-goodbye', 'quit'):
-                    raise ValueError('unknown fixture command')
-                if mode == 'announce':
-                    current_type, current_instance, positive_ttl = args.type, args.instance, 2
-                elif mode == 'announce-long':
-                    current_type, current_instance, positive_ttl = args.type.replace('_gs', '_gl', 1), args.instance + '-long', 120
-                elif mode in ('announce-subtype-long', 'announce-base-only-long'):
-                    current_type, current_instance, positive_ttl = args.type.replace('_gs', '_gu', 1), args.instance + '-sub-long', 120
-                query_name = name(current_type.split('.') + ['local'])
-                if mode.startswith('announce') or mode in ('goodbye', 'base-goodbye'):
-                    sock.sendto(packet(current_type, current_instance, positive_ttl if mode.startswith('announce') else 0,
-                                       port, args.address, args.family, mode == 'base-goodbye',
-                                       mode == 'announce-base-only-long'), destination)
-                    next_send = time.monotonic() + 0.5
-                (args.control / 'ack').write_text(serial, encoding='utf-8')
-                if mode == 'quit':
-                    return
-            now = time.monotonic()
-            readable, _, _ = select.select([sock], [], [], 0.05)
-            asked = False
-            if readable:
-                data, _ = sock.recvfrom(9000)
-                # Respond only to this fixture type; never enumerate another peer.
-                asked = len(data) >= 12 and not (data[2] & 0x80) and query_name in data
-            if mode.startswith('announce') and (now >= next_send or asked):
-                sock.sendto(packet(current_type, current_instance, positive_ttl, port, args.address,
-                                   args.family, base_only=mode == 'announce-base-only-long'), destination)
-                next_send = now + 0.5
-    finally:
-        sock.close()
-        service.close()
+    while time.monotonic() - started < 150:
+        command_file = args.control / 'command'
+        command = command_file.read_text(encoding='utf-8').strip() if command_file.exists() else ''
+        if command and command != current:
+            current = command
+            serial, mode = command.split(' ', 1)
+            if mode not in ('announce', 'announce-long', 'announce-subtype-long', 'announce-base-only-long',
+                            'silent', 'goodbye', 'base-goodbye', 'quit'):
+                raise ValueError('unknown fixture command')
+            if mode == 'announce':
+                current_type, current_instance, positive_ttl = args.type, args.instance, 2
+            elif mode == 'announce-long':
+                current_type, current_instance, positive_ttl = args.type.replace('_gs', '_gl', 1), args.instance + '-long', 120
+            elif mode in ('announce-subtype-long', 'announce-base-only-long'):
+                current_type, current_instance, positive_ttl = args.type.replace('_gs', '_gu', 1), args.instance + '-sub-long', 120
+            query_name = name(current_type.split('.') + ['local'])
+            if mode.startswith('announce') or mode in ('goodbye', 'base-goodbye'):
+                sock.sendto(packet(current_type, current_instance, positive_ttl if mode.startswith('announce') else 0,
+                                   port, args.address, args.family, mode == 'base-goodbye',
+                                   mode == 'announce-base-only-long'), destination)
+                next_send = time.monotonic() + 0.5
+            (args.control / 'ack').write_text(serial, encoding='utf-8')
+            if mode == 'quit':
+                return
+        now = time.monotonic()
+        readable, _, _ = select.select([sock], [], [], 0.05)
+        asked = False
+        if readable:
+            data, _ = sock.recvfrom(9000)
+            # Respond only to this fixture type; never enumerate another peer.
+            asked = len(data) >= 12 and not (data[2] & 0x80) and query_name in data
+        if mode.startswith('announce') and (now >= next_send or asked):
+            sock.sendto(packet(current_type, current_instance, positive_ttl, port, args.address,
+                               args.family, base_only=mode == 'announce-base-only-long'), destination)
+            next_send = now + 0.5
 
 
 if __name__ == '__main__':

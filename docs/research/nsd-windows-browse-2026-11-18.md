@@ -163,10 +163,12 @@ All nine acquisition/ordinary-discovery/NetworkRequest cases completed without t
 These ordinary-app measurements support the constructor and request-boundary permission
 checks. They are distinct from the shell/system-context discovery probe, and they do
 not establish ordinary-APK permission enforcement on Gesher/Windows.
-The unchanged source and manifests are included under `tests/nsd/permissions`.
+The unchanged receiver source is included under `tests/nsd/permissions`. The three
+manifests now disable debugging without changing the measured permission matrix.
 `tools/build_nsd_permission_reference.py` parameterizes SDK/JDK/output paths and rebuilt
-the identical frozen DEX. Its new locally signed APKs were verified but not executed;
-their hashes are not substituted for the original measured APKs.
+the identical frozen DEX. Its revised locally signed APKs were verified but have not
+been executed on an Android device; their hashes are not substituted for the original
+measured APKs, and the measurements above remain tied to those original artifacts.
 
 ### Required Windows execution
 

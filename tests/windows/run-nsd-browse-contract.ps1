@@ -1,15 +1,17 @@
 # Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0
 # Dot-sourced from the required services track. Missing APIs/peers/callbacks fail.
 $nsdPython = (Get-Command python -ErrorAction Stop).Source
+& $nsdPython (Join-Path $PSScriptRoot '../../tools/test_nsd_peer_scope.py')
+if ($LASTEXITCODE -ne 0) { throw 'NSD peer receive-interface and permission-fixture checks failed' }
 $nsdAdapter = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
   Where-Object { $_.AddressState -eq 'Preferred' -and $_.IPAddress -ne '127.0.0.1' -and
     (Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4).ConnectionState -eq 'Connected' } |
   Select-Object -First 1
 if ($null -eq $nsdAdapter) { throw 'NSD production gate requires a real IPv4 interface' }
-$nsdFamilies = @(@{ Family = 4; Address = $nsdAdapter.IPAddress })
-$nsdV6 = Get-NetIPAddress -InterfaceIndex $nsdAdapter.InterfaceIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+$nsdFamilies = @(@{ Family = 4; Address = $nsdAdapter.IPAddress; Index = $nsdAdapter.InterfaceIndex })
+$nsdV6 = Get-NetIPAddress -InterfaceAlias $nsdAdapter.InterfaceAlias -AddressFamily IPv6 -ErrorAction SilentlyContinue |
   Where-Object { $_.AddressState -eq 'Preferred' -and $_.IPAddress -ne '::1' } | Select-Object -First 1
-if ($null -ne $nsdV6) { $nsdFamilies += @{ Family = 6; Address = $nsdV6.IPAddress } }
+if ($null -ne $nsdV6) { $nsdFamilies += @{ Family = 6; Address = $nsdV6.IPAddress; Index = $nsdV6.InterfaceIndex } }
 else { Write-Host 'NSD IPv6 not exercised: selected interface has no preferred IPv6 address' }
 foreach ($nsdFamily in $nsdFamilies) {
   $nsdNonce = [Guid]::NewGuid().ToString('N').Substring(0, 12)
@@ -20,7 +22,7 @@ foreach ($nsdFamily in $nsdFamilies) {
   $nsdInfo = [Diagnostics.ProcessStartInfo]::new($nsdPython)
   $nsdInfo.UseShellExecute = $false
   $nsdArguments = @((Join-Path $PSScriptRoot '../nsd/windows_peer.py'), '--control', $nsdControl,
-    '--type', $nsdType, '--instance', $nsdInstance, '--index', [string]$nsdAdapter.InterfaceIndex,
+    '--type', $nsdType, '--instance', $nsdInstance, '--index', [string]$nsdFamily.Index,
     '--address', [string]$nsdFamily.Address, '--family', [string]$nsdFamily.Family)
   foreach ($nsdArgument in $nsdArguments) { $nsdInfo.ArgumentList.Add($nsdArgument) }
   $nsdPeer = [Diagnostics.Process]::Start($nsdInfo)

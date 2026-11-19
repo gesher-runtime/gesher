@@ -35,6 +35,18 @@ def executable(directory, name):
     return path
 
 
+def validate_badging(name, badging, permissions):
+    """Check flags from the built APK, not just the source manifest."""
+    package = 'gesher.qa.nsdpermissions.' + name
+    if "package: name='" + package + "'" not in badging or "targetSdkVersion:'36'" not in badging:
+        raise RuntimeError('Unexpected APK package/target: ' + name)
+    if 'application-debuggable' in badging:
+        raise RuntimeError('Permission-reference APK must not be debuggable: ' + name)
+    for permission in ('android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE'):
+        if ("uses-permission: name='" + permission + "'" in badging) != (permission in permissions):
+            raise RuntimeError('Unexpected APK permission: ' + name + ' ' + permission)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--java-home', type=Path, required=True)
@@ -68,7 +80,7 @@ def main():
             raise RuntimeError(name + ' failed; see ' + str(out / (name + '.log')))
         return result.stdout
 
-    # This generated key is only for the three owned debug fixtures. It is neither
+    # This generated key is only for the three owned permission fixtures. It is neither
     # an application signing credential nor a checked-in private key.
     key, password = out / 'fixture.p12', 'owned-nsd-fixture-only'
     if not key.exists():
@@ -105,14 +117,11 @@ def main():
             run(name + '-verify', [java, '-XX:-UsePerfData', '-jar', signer,
                                   'verify', '--verbose', '--print-certs', apk])
             badging = run(name + '-badging', [aapt, 'dump', 'badging', apk])
-            if "package: name='" + package + "'" not in badging or "targetSdkVersion:'36'" not in badging:
-                raise RuntimeError('Unexpected APK package/target: ' + name)
-            for permission in ('android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE'):
-                if ("uses-permission: name='" + permission + "'" in badging) != (permission in permissions):
-                    raise RuntimeError('Unexpected APK permission: ' + name + ' ' + permission)
-            apks.append({'name': name, 'package': package, 'permissions': permissions,
+            validate_badging(name, badging, permissions)
+            apks.append({'name': name, 'package': package, 'permissions': permissions, 'debuggable': False,
                          'apk': str(apk), 'sha256': sha(apk), 'manifest': str(manifest),
                          'manifest_sha256': sha(manifest),
+                         'badging_sha256': sha(out / (name + '-badging.log')),
                          'device_apk': '/data/local/tmp/gesher-nsd-perm-' + name + '-' + sha(apk)[:12] + '.apk'})
 
     receipt = {'identity': 'ordinary owned SDK APK process; target36; no system-context callsites',
