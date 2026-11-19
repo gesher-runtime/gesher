@@ -383,6 +383,10 @@ class MfAacEncoder : public AudioEncoder {
   std::string Name() const override { return "mf aac encoder"; }
 
   bool Init(const AudioEncoderParams& p, std::string* error) {
+    if (p.aac_profile != 2) {
+      *error = "Media Foundation AAC encoder implements LC only";
+      return false;
+    }
     p_ = p;
     if (p.sample_rate != 44100 && p.sample_rate != 48000) {
       *error = "Media Foundation's AAC encoder takes 44100 or 48000 Hz, not " + std::to_string(p.sample_rate);

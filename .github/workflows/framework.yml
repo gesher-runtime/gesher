@@ -502,6 +502,12 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
 
+      - name: Unsupported connectionless handwriting callback contracts
+        run: |
+          python3 tools/test_handwriting_unavailable.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Durable package enabled-state public manager contracts
         run: |
           python3 tools/test_package_enabled_state.py --java-home "$JAVA_HOME" \
@@ -509,6 +515,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
           python3 tools/test_package_enabled_lifecycle.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Dynamic receiver export contracts against the built framework
+        run: |
+          python3 tools/test_receiver_exports.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
@@ -650,6 +663,18 @@ jobs:
           "$JAVA_HOME/bin/javac" -cp work/sdk-36/android.jar \
             -d "$RUNNER_TEMP/audio-state-sdk" \
             tests/dex-services/gesher/services/AudioStateContractTest.java
+
+      - name: SDK36 Wi-Fi configuration and enterprise value contracts
+        run: |
+          python3 tools/test_wifi_configuration_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 WifiInfo Builder, copy and redaction contracts
+        run: |
+          python3 tools/test_wifi_info_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
       - name: Collect framework artifacts
         run: |
