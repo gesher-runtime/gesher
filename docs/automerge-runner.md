@@ -42,7 +42,10 @@ drive mounts. The host and its administrator remain part of the trust boundary.
    Canonical generic cloud image and NoCloud ISO. Azure-specific images are
    not used. The controller then runs in its own Hyper-V VM, independently of WSL.
    It refuses an existing VM/switch, existing NAT or conflicting address range;
-   inspect partial installation rather than overwriting those objects.
+   inspect partial installation before proceeding. If the dedicated VM and disk
+   already exist and setup stopped while waiting for first-boot SSH, add `-Resume`
+   to the install command. This skips image preparation and resumes registration
+   with that VM and its existing management key.
 4. When the installer reaches registration, obtain a short-lived organization
    runner registration token on the authenticated management computer:
 

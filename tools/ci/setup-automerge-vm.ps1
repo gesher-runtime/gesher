@@ -1,6 +1,6 @@
 # Run as Administrator on the always-on runner computer, after enabling Hyper-V.
 [CmdletBinding()]
-param([string]$Distribution='Ubuntu-24.04', [string]$PackagePath='')
+param([string]$Distribution='Ubuntu-24.04', [string]$PackagePath='', [switch]$Resume)
 $ErrorActionPreference='Stop'
 if (!$PackagePath) { $PackagePath=Join-Path $PSScriptRoot 'automerge-package.json' }
 $package=Get-Content -LiteralPath $PackagePath -Raw | ConvertFrom-Json
@@ -11,6 +11,63 @@ $vmName='Gesher-Automerge'
 $switchName='Gesher-Automerge-Private'
 $natName='Gesher-Automerge-NAT'
 $root=Join-Path $env:ProgramData 'Gesher/AutomergeRunner'
+$key=Join-Path $root 'management-key'
+$stage=Join-Path $env:TEMP 'gesher-automerge-bootstrap'
+$utf8=New-Object System.Text.UTF8Encoding($false)
+
+function Register-GuestRunner {
+    $sshArgs=@('-o','BatchMode=yes','-o','ConnectTimeout=5','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2','-o','StrictHostKeyChecking=accept-new','-o',('UserKnownHostsFile='+(Join-Path $root 'known_hosts')),'-i',$key,'gesher-control@172.29.241.2')
+    Write-Host 'Waiting for Ubuntu to complete its first boot and package installation...'
+    $ready=$false
+    for ($attempt=0;$attempt -lt 120;$attempt++) {
+        $sshExit= & {
+            # Windows PowerShell 5.1 turns even redirected native stderr into
+            # a terminating error under Stop. During startup, retry by exit code.
+            $ErrorActionPreference='Continue'
+            $null = & ssh.exe @sshArgs 'test -f /var/lib/gesher-automerge-ready' 2>$null
+            $LASTEXITCODE
+        }
+        if ($sshExit -eq 0) { $ready=$true; break }
+        Start-Sleep -Seconds 5
+    }
+    if (!$ready) { throw 'The VM did not become ready. Open its Hyper-V console and check Ubuntu boot and cloud-init.' }
+
+    $guestScript=Join-Path $PSScriptRoot 'install-automerge-runner.sh'
+    $guestCopy=Join-Path $stage 'install-automerge-runner.sh'
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    [IO.File]::WriteAllText($guestCopy,(Get-Content -LiteralPath $guestScript -Raw).Replace("`r",''),$utf8)
+    & scp.exe -o ('UserKnownHostsFile='+(Join-Path $root 'known_hosts')) -i $key $guestCopy 'gesher-control@172.29.241.2:/tmp/install-automerge-runner.sh'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not copy guest installer.' }
+    Write-Host 'VM is ready. Registration requires only a temporary token, not a GitHub login on this computer.'
+    $secureToken=Read-Host 'Paste the short-lived organization runner registration token (hidden)' -AsSecureString
+    $pointer=[IntPtr]::Zero
+    try {
+        $pointer=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+        $token=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+        if ([string]::IsNullOrWhiteSpace($token) -or $token -match '[\r\n]') { throw 'A single registration token is required.' }
+        $token | & ssh.exe @sshArgs ('sudo bash /tmp/install-automerge-runner.sh '+$package.download_url+' '+$package.sha256)
+        if ($LASTEXITCODE -ne 0) { throw 'Guest runner registration or service start failed.' }
+    } finally {
+        $token=$null
+        if ($pointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+        $secureToken.Dispose()
+    }
+    Write-Host 'Dedicated runner installed. Leave local routing disabled until the read-only probe passes.'
+}
+
+if ($Resume) {
+    $vm=Get-VM -Name $vmName
+    $adapters=@(Get-VMNetworkAdapter -VM $vm)
+    $disks=@(Get-VMHardDiskDrive -VM $vm)
+    if ($adapters.Count -ne 1 -or $adapters[0].SwitchName -ne $switchName -or $disks.Count -ne 1 -or $disks[0].Path -ne (Join-Path $root 'automerge.vhdx') -or !(Test-Path -LiteralPath $key -PathType Leaf)) {
+        throw 'The existing VM does not match the dedicated controller setup.'
+    }
+    if ($vm.State -eq 'Off') { Start-VM -VM $vm }
+    elseif ($vm.State -ne 'Running') { throw "Inspect the existing VM state before resuming: $($vm.State)" }
+    Register-GuestRunner
+    return
+}
+
 if (Get-VM -Name $vmName -ErrorAction SilentlyContinue) { throw 'VM exists; inspect it instead of rerunning installation.' }
 if (Get-VMSwitch -Name $switchName -ErrorAction SilentlyContinue) { throw 'Dedicated switch exists; inspect partial installation.' }
 if (Get-NetNat) { throw 'Review existing host NAT before adding the dedicated private network.' }
@@ -30,7 +87,6 @@ foreach ($identity in @($admins,$system)) {
     $acl.AddAccessRule($rule)
 }
 Set-Acl -LiteralPath $root -AclObject $acl
-$key=Join-Path $root 'management-key'
 if (!(Test-Path -LiteralPath $key)) {
     $keygen=Get-Command ssh-keygen.exe -ErrorAction Stop
     $keyInfo=New-Object System.Diagnostics.ProcessStartInfo
@@ -44,7 +100,6 @@ if (!(Test-Path -LiteralPath $key)) {
 }
 $publicKey=(Get-Content -LiteralPath ($key+'.pub') -Raw).Trim()
 if ($publicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+(?: .*)?$') { throw 'Unexpected SSH public key.' }
-$stage=Join-Path $env:TEMP 'gesher-automerge-bootstrap'
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 $userData=@'
 #cloud-config
@@ -93,7 +148,6 @@ ethernets:
     routes: [{to: default, via: 172.29.241.1}]
     nameservers: {addresses: [1.1.1.1, 8.8.8.8]}
 '@
-$utf8=New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText((Join-Path $stage 'user-data'),$userData.Replace('__KEY__',$publicKey).Replace("`r",''),$utf8)
 [IO.File]::WriteAllText((Join-Path $stage 'network-config'),$network.Replace("`r",''),$utf8)
 [IO.File]::WriteAllText((Join-Path $stage 'meta-data'),"instance-id: gesher-automerge-v1`nlocal-hostname: gesher-automerge`n",$utf8)
@@ -138,31 +192,4 @@ Set-VMFirmware -VMName $vmName -EnableSecureBoot On -SecureBootTemplate Microsof
 Add-VMDvdDrive -VMName $vmName -Path $seed | Out-Null
 Set-VM -Name $vmName -AutomaticStartAction Start -AutomaticStartDelay 30 -AutomaticStopAction ShutDown -CheckpointType Disabled
 Start-VM -Name $vmName
-$sshArgs=@('-o','BatchMode=yes','-o','ConnectTimeout=5','-o','StrictHostKeyChecking=accept-new','-o',('UserKnownHostsFile='+(Join-Path $root 'known_hosts')),'-i',$key,'gesher-control@172.29.241.2')
-$ready=$false
-for ($attempt=0;$attempt -lt 120;$attempt++) {
-    & ssh.exe @sshArgs 'test -f /var/lib/gesher-automerge-ready' 2>$null
-    if ($LASTEXITCODE -eq 0) { $ready=$true; break }
-    Start-Sleep -Seconds 5
-}
-if (!$ready) { throw 'VM is not ready yet; inspect cloud-init before registering the runner.' }
-$guestScript=Join-Path $PSScriptRoot 'install-automerge-runner.sh'
-$guestCopy=Join-Path $stage 'install-automerge-runner.sh'
-[IO.File]::WriteAllText($guestCopy,(Get-Content -LiteralPath $guestScript -Raw).Replace("`r",''),$utf8)
-& scp.exe -o ('UserKnownHostsFile='+(Join-Path $root 'known_hosts')) -i $key $guestCopy 'gesher-control@172.29.241.2:/tmp/install-automerge-runner.sh'
-if ($LASTEXITCODE -ne 0) { throw 'Could not copy guest installer.' }
-Write-Host 'VM is ready. Registration requires only a temporary token, not a GitHub login on this computer.'
-$secureToken=Read-Host 'Paste the short-lived organization runner registration token (hidden)' -AsSecureString
-$pointer=[IntPtr]::Zero
-try {
-    $pointer=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
-    $token=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-    if ([string]::IsNullOrWhiteSpace($token) -or $token -match '[\r\n]') { throw 'A single registration token is required.' }
-    $token | & ssh.exe @sshArgs ('sudo bash /tmp/install-automerge-runner.sh '+$package.download_url+' '+$package.sha256)
-    if ($LASTEXITCODE -ne 0) { throw 'Guest runner registration or service start failed.' }
-} finally {
-    $token=$null
-    if ($pointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
-    $secureToken.Dispose()
-}
-Write-Host 'Dedicated runner installed. Leave local routing disabled until the read-only probe passes.'
+Register-GuestRunner
