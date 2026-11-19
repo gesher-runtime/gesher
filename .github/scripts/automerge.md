@@ -121,6 +121,73 @@ The required status and both CI contexts retain the ruleset's GitHub Actions
 integration ID. Keep the App key and installation token in the trusted controller
 workflow. Ordinary build/test workers use their existing credentials.
 
+### Optional App QA status: migration phase 2
+
+`GESHER_APP_QA_STATUS` is off when absent or set to anything other than the exact
+string `true`. Merge this phase with the variable unset. No ruleset or default
+workflow-permission change is part of this implementation.
+
+When explicitly enabled, the controller also writes
+`qa/gesher-label-approval` with the App token. The workflow then requests
+Statuses write permission, in addition to its existing three permissions. The
+pinned token action omits an empty permission input, so installations without
+Statuses access continue to work while this feature is off. Verify the actual
+installation grant before enabling it; a missing grant fails the run, without
+falling back to Actions or a PAT for the App status.
+
+The enabled writer requires App ID `5816428`, installation ID `183304638`, and
+the separate App client. The workflow retains the App-slug check. Each App status
+response and readback must match the exact repository, head, context, state,
+numeric status ID, and bot identity (`gesher-runtime-automation[bot]`, user
+`358279050`, account type `Bot`). A missing, replaced, pending, failed, or foreign
+status cannot release the existing Actions gate. The readback uses the Actions
+client and paginates current combined-status contexts, avoiding full history
+scans without trusting a partial page.
+
+Pending and failure are published to both contexts. The controller attempts both
+revocations even if one write fails. For success, it first keeps the Actions gate
+pending, publishes and reads back the App success, rechecks the current label,
+review, permission, source and both registered CI workflows, then reads back the
+same App status again before releasing the Actions gate. Changes or API errors
+after the App write cause conservative revocation; a newer pending CI attempt
+restores pending. Guarded label cleanup still preserves newer label events and
+run attempts. API operations are separate requests, not an atomic transaction;
+live event reconciliation and GitHub's required checks remain necessary.
+
+The App status is initially a shadow signal. The existing ruleset continues to
+require `qa/label-approval`, `ci-required` and `arm64-required`, all from GitHub
+Actions integration `15368`. Local tests do not prove the App installation's
+permissions, live source attribution or branch-protection enforcement.
+
+Deployment evidence must be collected in this order:
+
+1. Verify a live canonical App `APPROVED` receipt bound to the reviewed head and
+   current label event, with the existing `qa/label-approval` green. Only after
+   that phase-1 proof may the temporary repository/organization permission for
+   Actions to approve reviews be restored; leave both default token permissions
+   at read.
+2. Merge phase 2 through the normal protected PR path while
+   `GESHER_APP_QA_STATUS` is unset. Verify the main commit and drain/reconcile
+   queued runs that use older workflow YAML.
+3. Grant and verify Statuses write for installation `183304638`, then set
+   `GESHER_APP_QA_STATUS=true`. Reconcile a reviewed canary with its exact current
+   receipt; `workflow_dispatch` only checks an existing approval and cannot
+   create one. Retain the already useful CI evidence.
+4. Record live success with the exact head, label, approval, workflow attempt and
+   both status identities. Use genuine canary transitions to demonstrate missing
+   or revoked approval and missing/pending/failed status cases remaining blocked.
+   Do not manufacture a green status or reuse evidence from another head to
+   demonstrate a negative case. Keep fixture results and live observations
+   separately attributed.
+5. Only after that proof, add `qa/gesher-label-approval` bound to integration
+   `5816428` to ruleset `27482394`, alongside the old QA gate and both CI gates.
+   Read the rule back and prove the live dual gate. Do not remove the old gate
+   as part of this phase.
+
+Phase 3 requires its own reviewed change, live dual-gate proof and drainage of
+old runs before removing only the legacy QA requirement. Keep this flag enabled
+while the App context is required; disabling it is not a migration procedure.
+
 Other repository deployments without the App retain the built-in token behavior.
 That requires Allow GitHub Actions to create and approve pull requests. For native
 auto-merge on workflow changes, those deployments can use the

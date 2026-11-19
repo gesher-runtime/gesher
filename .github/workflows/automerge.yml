@@ -52,6 +52,13 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: .github/scripts
+      - name: Read App QA status feature flag
+        id: app-qa-flag
+        uses: actions/github-script@v7
+        env:
+          GESHER_APP_QA_STATUS: ${{ vars.GESHER_APP_QA_STATUS }}
+        with:
+          script: core.setOutput('enabled', process.env.GESHER_APP_QA_STATUS === 'true');
       - name: Create repository bot token
         id: gesher-bot
         if: vars.GESHER_BOT_APP_ID != ''
@@ -64,10 +71,16 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
+          # Empty input is omitted by the pinned action. Phase 1 installations
+          # do not need Statuses permission until the shadow gate is enabled.
+          permission-statuses: ${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}
       - uses: actions/github-script@v7
         env:
           GESHER_BOT_TOKEN: ${{ steps.gesher-bot.outputs.token }}
           GESHER_BOT_SLUG: ${{ steps.gesher-bot.outputs.app-slug }}
+          GESHER_BOT_APP_ID: ${{ vars.GESHER_BOT_APP_ID }}
+          GESHER_BOT_INSTALLATION_ID: ${{ steps.gesher-bot.outputs.installation-id }}
+          GESHER_APP_QA_STATUS: ${{ steps.app-qa-flag.outputs.enabled }}
           AUTOMERGE_WORKFLOWS_TOKEN: ${{ secrets.AUTOMERGE_WORKFLOWS_TOKEN }}
         with:
           script: |
@@ -81,4 +94,7 @@ jobs:
             const mergeGithub = token ? new github.constructor({
               auth: token, baseUrl: process.env.GITHUB_API_URL
             }) : github;
-            await run({github, context, core, mergeGithub, prGithub: appToken ? mergeGithub : undefined});
+            await run({github, context, core, mergeGithub, prGithub: appToken ? mergeGithub : undefined,
+              appQaStatus: process.env.GESHER_APP_QA_STATUS === 'true',
+              appId: Number(process.env.GESHER_BOT_APP_ID),
+              appInstallationId: Number(process.env.GESHER_BOT_INSTALLATION_ID)});

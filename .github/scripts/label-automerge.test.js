@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const controller = require('./label-automerge.js');
+const appStatus = require('./app-qa-status.js');
 const {world, authorWorld, HEAD, OTHER, T, APP_BOT} = require('./automerge-fixture.js');
 
 test('label captures approval and arms native waiting even before CI starts', async () => {
@@ -465,4 +466,311 @@ test('invalid targeted reconciliation is rejected before any API call', async ()
   const w = world();
   await assert.rejects(w.fire('workflow_dispatch', {inputs: {pull_request_number: '7;other'}}));
   assert.equal(w.calls.length, 0);
+});
+
+function appStatusWorld(over = {}) {
+  const w = world({repositoryId: 1426153186, appQaStatus: true,
+    appId: appStatus.APP_ID, appInstallationId: appStatus.INSTALLATION_ID, ...over});
+  w.useApp();
+  return w;
+}
+
+function lastStatus(w, context) {
+  return w.statuses.filter(s => s.context === context).sort((a, b) => b.id - a.id)[0];
+}
+
+function bothStates(w, state) {
+  assert.equal(lastStatus(w, appStatus.STATUS)?.state, state);
+  assert.equal(lastStatus(w, appStatus.APP_STATUS)?.state, state);
+}
+
+for (const flag of [undefined, false]) {
+  test('App status is opt-in; disabled value ' + flag + ' retains the Actions gate only', async () => {
+    const w = appStatusWorld({appQaStatus: flag, appId: undefined, appInstallationId: undefined});
+    w.prGithub.rest.repos.createCommitStatus = () => assert.fail('disabled App status wrote');
+    await w.ciDone();
+    assert.equal(w.did('app-status').length, 0);
+    assert.equal(w.did('statuses').length, 0);
+    assert.equal(lastStatus(w, appStatus.STATUS).state, 'success');
+    assert.equal(lastStatus(w, appStatus.STATUS).creator.id, 41898282);
+  });
+}
+
+for (const [name, change] of Object.entries({
+  'wrong App': w => {w.appId = 15368;},
+  'wrong installation': w => {w.appInstallationId = 1;},
+  'missing App': w => {w.prGithub = undefined;},
+  'Actions client substituted for App': w => {w.prGithub = w.github;},
+  'missing status capability': w => {delete w.prGithub.rest.repos.createCommitStatus;},
+  'nonboolean flag': w => {w.appQaStatus = 'true';},
+})) {
+  test('App status configuration rejects ' + name + ' before writes', async () => {
+    const w = appStatusWorld(); change(w);
+    await assert.rejects(w.ciDone(), /Gesher GitHub App|verified App|explicit boolean/);
+    assert.deepEqual(w.calls, []);
+  });
+}
+
+test('verified App success precedes the unchanged Actions gate and is read back', async () => {
+  const w = appStatusWorld({approved: false});
+  await w.labeled();
+  bothStates(w, 'success');
+  assert.equal(w.did('app-approve').length, 1);
+  assert.equal(w.did('approve').length, 0);
+  assert.deepEqual(lastStatus(w, appStatus.APP_STATUS).creator, APP_BOT);
+  assert.equal(lastStatus(w, appStatus.STATUS).creator.id, 41898282);
+  const writes = w.calls.filter(([name]) => ['status', 'app-status'].includes(name));
+  assert.deepEqual(writes.map(([name, a]) => [name, a.context, a.state]), [
+    ['status', appStatus.STATUS, 'pending'], ['app-status', appStatus.APP_STATUS, 'pending'],
+    ['app-status', appStatus.APP_STATUS, 'success'], ['status', appStatus.STATUS, 'success'],
+  ]);
+  assert.ok(writes.every(([, a]) => a.sha === HEAD && a.owner === 'o' && a.repo === 'r'));
+  assert.ok(w.did('statuses').length >= 3);
+  assert.equal(w.did('nativeWait')[0][1].head, HEAD);
+  assert.equal(w.did('merge').length, 0);
+});
+
+for (const [name, change] of Object.entries({
+  missing: w => {w.runs = [];},
+  pending: w => {w.runs[0].status = 'in_progress'; w.runs[0].conclusion = null;},
+  'approval required': w => {w.runs[0].conclusion = 'action_required';},
+  cancelled: w => {w.runs[0].conclusion = 'cancelled';},
+  'wrong CI source': w => {w.runs[0].head_repository.id = 99;},
+  'wrong check source': w => {w.checks[0].app.id = appStatus.APP_ID;},
+  'missing aggregate check': w => {w.checks = [];},
+  'wrong aggregate suite': w => {w.checks[0].check_suite.id = 99;},
+})) {
+  test('App shadow remains pending for ' + name + ' CI evidence', async () => {
+    const w = appStatusWorld(); change(w); await w.ciDone();
+    bothStates(w, 'pending');
+    assert.equal(w.did('app-status').filter(([, a]) => a.state === 'success').length, 0);
+  });
+}
+
+for (const [name, change] of Object.entries({
+  'missing label': w => {w.pr.labels = [];},
+  draft: w => {w.pr.draft = true;},
+  'wrong base': w => {w.pr.base.ref = 'other';},
+  'missing receipt': w => {w.reviews = [];},
+  'dismissed receipt': w => {w.reviews[0].state = 'DISMISSED';},
+  'edited receipt': w => {w.approvalNodeOverride = {lastEditedAt: T(40)};},
+  'wrong receipt actor': w => {w.reviews[0].user = {...APP_BOT, id: 1};},
+  'revoked permission': w => {w.permission = 'read';},
+  'force push': w => {w.events.push({id: 60, event: 'head_ref_force_pushed', created_at: T(40)});},
+})) {
+  test('App shadow fails closed for ' + name, async () => {
+    const w = appStatusWorld({nativeAutoMethod: 'SQUASH'}); change(w); await w.ciDone();
+    bothStates(w, 'failure');
+    assert.equal(w.did('app-status').filter(([, a]) => a.state === 'success').length, 0);
+    assert.equal(w.nativeAutoMethod, null);
+  });
+}
+
+test('App status mirrors CI failure without changing guarded label removal or the failure receipt', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH'}); w.runs[0].conclusion = 'failure';
+  await w.ciDone();
+  bothStates(w, 'failure');
+  assert.equal(w.did('app-removeLabel').length, 1);
+  assert.equal(w.did('app-comment').length, 1);
+  assert.match(w.comments.at(-1).body, /"label":50,"run":100,"attempt":1/);
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+for (const [name, change] of Object.entries({
+  missing: w => {w.statuses = w.statuses.filter(s => s.context !== appStatus.APP_STATUS);},
+  pending: w => {lastStatus(w, appStatus.APP_STATUS).state = 'pending';},
+  failed: w => {lastStatus(w, appStatus.APP_STATUS).state = 'failure';},
+  'foreign source': w => {lastStatus(w, appStatus.APP_STATUS).creator.id = 41898282;},
+  'wrong account type': w => {lastStatus(w, appStatus.APP_STATUS).creator.type = 'User';},
+  'wrong head': w => {lastStatus(w, appStatus.APP_STATUS).url = 'https://api.github.com/repos/o/r/statuses/' + OTHER;},
+  'replaced status': w => {w.statuses.unshift({...lastStatus(w, appStatus.APP_STATUS), id: w.nextStatusId++});},
+})) {
+  test('App success readback ' + name + ' cannot release the existing gate', async () => {
+    const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+    let changed = false;
+    w.hooks.statuses = () => {
+      if (!changed && lastStatus(w, appStatus.APP_STATUS)?.state === 'success') {changed = true; change(w);}
+    };
+    await assert.rejects(w.ciDone(), /App QA status/);
+    assert.ok(changed);
+    assert.equal(w.did('status').filter(([, a]) => a.state === 'success').length, 0);
+    bothStates(w, 'failure');
+    assert.equal(w.nativeAutoMethod, null);
+  });
+}
+
+for (const [name, override] of Object.entries({
+  'Actions writer': {creator: {login: 'github-actions[bot]', id: 41898282, type: 'Bot'}},
+  'wrong context': {context: 'qa/something-else'},
+  'wrong repository': {url: 'https://api.github.com/repos/other/r/statuses/' + HEAD},
+  'invalid ID': {id: 0},
+})) {
+  test('App status response rejects ' + name + ' without an identity fallback', async () => {
+    const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+    w.statusResponseOverride = {'app-status': override};
+    await assert.rejects(w.ciDone(), /identity mismatch/);
+    assert.equal(lastStatus(w, appStatus.STATUS).state, 'failure');
+    assert.equal(w.did('status').filter(([, a]) => a.state === 'success').length, 0);
+    assert.equal(w.nativeAutoMethod, null);
+  });
+}
+
+test('missing App statuses permission revokes the legacy gate and cancels native waiting', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+  w.statusErrors = {'app-status': new Error('statuses write permission denied')};
+  await assert.rejects(w.ciDone(), /permission denied/);
+  assert.equal(lastStatus(w, appStatus.STATUS).state, 'failure');
+  assert.equal(w.did('app-status').at(-1)[1].state, 'failure');
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+test('a failing Actions credential still attempts to revoke the App status', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+  w.statusErrors = {status: new Error('Actions statuses denied')};
+  await assert.rejects(w.ciDone(), /Actions statuses denied/);
+  assert.equal(lastStatus(w, appStatus.APP_STATUS).state, 'failure');
+  assert.equal(w.did('status').at(-1)[1].state, 'failure');
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+for (const [name, revoke] of Object.entries({
+  label: w => {w.pr.labels = [];},
+  review: w => {w.reviews[0].state = 'DISMISSED';},
+  permission: w => {w.permission = 'read';},
+  'review edit': w => {w.approvalNodeOverride = {lastEditedAt: T(40)};},
+})) {
+  test('a ' + name + ' revocation during App success publication is rechecked', async () => {
+    const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+    w.hooks['app-status'] = a => {if (a.state === 'success') revoke(w);};
+    await w.ciDone();
+    bothStates(w, 'failure');
+    assert.equal(w.did('status').filter(([, a]) => a.state === 'success').length, 0);
+    assert.equal(w.nativeAutoMethod, null);
+  });
+}
+
+test('a push during App publication never writes success to the new head', async () => {
+  const w = appStatusWorld();
+  w.hooks['app-status'] = a => {if (a.state === 'success') w.pr.head.sha = OTHER;};
+  await w.ciDone();
+  bothStates(w, 'failure');
+  assert.ok(w.calls.filter(([name]) => ['status', 'app-status'].includes(name)).every(([, a]) => a.sha === HEAD));
+  assert.equal(w.did('status').filter(([, a]) => a.state === 'success').length, 0);
+});
+
+for (const conclusion of [null, 'failure']) {
+  test('a new CI attempt during App publication restores ' + (conclusion ? 'failure' : 'pending'), async () => {
+    const w = appStatusWorld();
+    w.hooks['app-status'] = a => {
+      if (a.state === 'success') Object.assign(w.runs[0], {run_attempt: 2,
+        status: conclusion ? 'completed' : 'in_progress', conclusion});
+    };
+    await w.ciDone();
+    bothStates(w, conclusion ? 'failure' : 'pending');
+    assert.equal(w.did('status').filter(([, a]) => a.state === 'success').length, 0);
+  });
+}
+
+test('a late CI failure cannot retain prepared App success when a rerun defeats label cleanup', async () => {
+  const w = appStatusWorld();
+  w.hooks['app-status'] = a => {if (a.state === 'success') w.runs[0].conclusion = 'failure';};
+  w.hooks.runDetails = () => {
+    if (w.did('runDetails').length === 4)
+      Object.assign(w.runs[0], {run_attempt: 2, status: 'in_progress', conclusion: null});
+  };
+  await w.ciDone();
+  bothStates(w, 'failure');
+  assert.equal(w.did('app-removeLabel').length, 0);
+  assert.equal(w.did('status').filter(([, a]) => a.state === 'success').length, 0);
+});
+
+test('a replaced App status during final approval reads is checked again before legacy success', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+  let replaced = false;
+  w.hooks.approvalNode = () => {
+    if (!replaced && lastStatus(w, appStatus.APP_STATUS)?.state === 'success') {
+      replaced = true;
+      w.statuses.unshift({...lastStatus(w, appStatus.APP_STATUS), id: w.nextStatusId++, state: 'pending'});
+    }
+  };
+  await assert.rejects(w.ciDone(), /App QA status is missing, replaced/);
+  bothStates(w, 'failure');
+  assert.equal(w.did('status').filter(([, a]) => a.state === 'success').length, 0);
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+test('App readback paginates unrelated status history rather than trusting a partial page', async () => {
+  const w = appStatusWorld({statuses: Array.from({length: 120}, (_, i) => ({id: i + 1, context: 'unrelated/' + i}))});
+  await w.ciDone();
+  bothStates(w, 'success');
+  assert.ok(w.did('statuses').some(([, a]) => a.page === 2));
+});
+
+test('combined status from another head cannot authorize App success', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH', statusReadbackHead: OTHER});
+  await assert.rejects(w.ciDone(), /readback head mismatch/);
+  bothStates(w, 'failure');
+  assert.equal(w.did('status').some(([, a]) => a.state === 'success'), false);
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+test('manual App reconciliation requires an existing receipt and cannot manufacture one', async () => {
+  const w = appStatusWorld({approved: false});
+  await w.fire('workflow_dispatch', {inputs: {pull_request_number: '7'}});
+  bothStates(w, 'failure');
+  assert.equal(w.did('app-approve').length, 0);
+  assert.equal(w.did('nativeWait').length, 0);
+});
+
+test('the App shadow retains exact-head author COMMENT QA before the first label', async () => {
+  const w = appStatusWorld({approved: false});
+  w.pr.user = {id: 42, login: 'maintainer'};
+  w.seedQa();
+  await w.labeled();
+  bothStates(w, 'success');
+  assert.equal(w.did('app-approve').length, 1);
+});
+
+test('missing author COMMENT QA cannot be replaced by a green App status', async () => {
+  const w = appStatusWorld({approved: false});
+  w.pr.user = {id: 42, login: 'maintainer'};
+  await w.labeled();
+  bothStates(w, 'failure');
+  assert.equal(w.did('app-approve').length, 0);
+  assert.equal(w.did('app-status').some(([, a]) => a.state === 'success'), false);
+});
+
+test('author COMMENT edited during App publication revokes both statuses', async () => {
+  const w = appStatusWorld();
+  w.pr.user = {id: 42, login: 'maintainer'};
+  w.seedQa();
+  w.hooks['app-status'] = a => {if (a.state === 'success') w.reviewNodeOverride = {lastEditedAt: T(40)};};
+  await w.ciDone();
+  bothStates(w, 'failure');
+  assert.equal(w.did('status').some(([, a]) => a.state === 'success'), false);
+});
+
+test('source repository changed during App publication cannot release either gate', async () => {
+  const w = appStatusWorld();
+  w.hooks['app-status'] = a => {if (a.state === 'success') w.pr.head.repo.id = 20;};
+  await w.ciDone();
+  bothStates(w, 'failure');
+  assert.equal(w.did('status').some(([, a]) => a.state === 'success'), false);
+});
+
+test('a CI metadata error after App success attempts both revocations and cancellation', async () => {
+  const w = appStatusWorld({nativeAutoMethod: 'SQUASH'});
+  w.hooks.runs = () => {
+    if (lastStatus(w, appStatus.APP_STATUS)?.state === 'success') throw new Error('CI metadata unavailable');
+  };
+  await assert.rejects(w.ciDone(), /CI metadata unavailable/);
+  bothStates(w, 'failure');
+  assert.equal(w.nativeAutoMethod, null);
+});
+
+test('fork review events do not write the App shadow with a read-only event token', async () => {
+  const w = appStatusWorld();
+  w.pr.head.repo.id = 20;
+  await w.fire('pull_request_review', {action: 'edited', pull_request: w.pr});
+  assert.deepEqual(w.calls, []);
 });
