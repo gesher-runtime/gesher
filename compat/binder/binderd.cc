@@ -40,6 +40,7 @@
 #include <condition_variable>
 #include <list>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -161,11 +162,10 @@ struct Buffer {
 
 struct Transaction : Work {
   int debug_id = 0;
-  Thread* from = nullptr;
+  std::shared_ptr<Thread> from;
   int from_pid = 0;
   Transaction* from_parent = nullptr;
-  Proc* to_proc = nullptr;
-  Thread* to_thread = nullptr;
+  std::shared_ptr<Thread> to_thread;
   Transaction* to_parent = nullptr;
   bool need_reply = false;
   uint32_t code = 0;
@@ -175,8 +175,8 @@ struct Transaction : Work {
   Transaction() : Work(WorkType::kTransaction) {}
 };
 
-struct Thread {
-  Proc* proc = nullptr;
+struct Thread : std::enable_shared_from_this<Thread> {
+  std::shared_ptr<Proc> proc;
   int tid = 0;
   uint32_t looper = 0;
   bool looper_need_return = true;
@@ -213,10 +213,11 @@ struct Proc {
 
 // Every object is guarded by one lock, as the driver's are by its locks; the
 // broker's threads only block on their thread's condition variable, which
-// releases it. Procs and threads are never freed (transactions may still
-// name them after they die); nodes, refs, transactions and buffers are.
+// releases it. Connection scopes own threads and processes; transactions pin
+// their caller/receiver threads, and each thread pins its process. Registry
+// lists remain non-owning and are detached under this lock before destruction.
 std::mutex g_lock;
-std::map<uint32_t, Proc*> g_procs;
+std::map<uint32_t, std::shared_ptr<Proc>> g_procs;
 Node* g_context_mgr_node = nullptr;
 uint32_t g_next_proc_id = 1;
 uint64_t g_next_buffer_id = 1;
@@ -558,7 +559,7 @@ void PopTransaction(Thread* target_thread, Transaction* t) {
 // that its call failed.
 void SendFailedReply(Transaction* t, uint32_t error_code) {
   for (;;) {
-    Thread* target_thread = t->from;
+    Thread* target_thread = t->from.get();
     if (target_thread != nullptr && !target_thread->is_dead) {
       PopTransaction(target_thread, t);
       if (target_thread->reply_error.cmd == BR_OK) {
@@ -759,20 +760,20 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
       Log("proc %u thread %d: reply with no transaction stack", proc->id, thread->tid);
       return fail(BR_FAILED_REPLY);
     }
-    if (in_reply_to->to_thread != thread) {
+    if (in_reply_to->to_thread.get() != thread) {
       Log("proc %u thread %d: reply to a transaction of another thread", proc->id, thread->tid);
       in_reply_to = nullptr;
       return fail(BR_FAILED_REPLY);
     }
     thread->transaction_stack = in_reply_to->to_parent;
-    target_thread = in_reply_to->from;
+    target_thread = in_reply_to->from.get();
     if (target_thread == nullptr || target_thread->is_dead) return fail(BR_DEAD_REPLY);
     if (target_thread->transaction_stack != in_reply_to) {
       Log("proc %u: reply out of order", proc->id);
       in_reply_to = nullptr;
       return fail(BR_FAILED_REPLY);
     }
-    target_proc = target_thread->proc;
+    target_proc = target_thread->proc.get();
   } else {
     Node* node;
     if (tr.target.handle != 0) {
@@ -797,7 +798,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
     }
     if ((tr.flags & TF_ONE_WAY) == 0 && thread->transaction_stack != nullptr) {
       Transaction* tmp = thread->transaction_stack;
-      if (tmp->to_thread != thread) {
+      if (tmp->to_thread.get() != thread) {
         Log("proc %u thread %d: new transaction not at the top of its stack", proc->id,
             thread->tid);
         return fail(BR_FAILED_REPLY);
@@ -805,8 +806,8 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
       // A nested call goes to the thread of the target process that waits
       // for this thread's (or an outer) call.
       while (tmp != nullptr) {
-        Thread* from = tmp->from;
-        if (from != nullptr && from->proc == target_proc) {
+        Thread* from = tmp->from.get();
+        if (from != nullptr && from->proc.get() == target_proc) {
           target_thread = from;
           break;
         }
@@ -823,11 +824,10 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
 
   Transaction* t = new Transaction;
   t->debug_id = g_next_debug_id++;
-  t->from = (!reply && (tr.flags & TF_ONE_WAY) == 0) ? thread : nullptr;
+  t->from = (!reply && (tr.flags & TF_ONE_WAY) == 0) ? thread->shared_from_this() : nullptr;
   t->from_pid = proc->pid;
   t->sender_euid = proc->uid;
-  t->to_proc = target_proc;
-  t->to_thread = target_thread;
+  t->to_thread = target_thread != nullptr ? target_thread->shared_from_this() : nullptr;
   t->code = tr.code;
   t->flags = tr.flags;
 
@@ -936,12 +936,12 @@ void CloseStagingFds(Buffer* buffer) {
 // Roll back a delivery the receiver could not publish. A synchronous caller
 // gets a genuine failed reply; oneway queue ownership is released normally.
 int FinishBuffer(Thread* thread, uint64_t id, bool accepted) {
-  Proc* proc = thread->proc;
+  Proc* proc = thread->proc.get();
   auto found = proc->buffers.find(id);
   if (id == 0 || thread->pending_buffer != id || found == proc->buffers.end()) return -EINVAL;
   Buffer* buffer = found->second;
   Transaction* transaction = buffer->transaction;
-  if (transaction != nullptr && (transaction->to_thread != thread || thread->transaction_stack != transaction)) {
+  if (transaction != nullptr && (transaction->to_thread.get() != thread || thread->transaction_stack != transaction)) {
     return -EINVAL;
   }
   if (accepted && !thread->pending_buffer_claimed) return -EINVAL;
@@ -966,7 +966,7 @@ int FinishBuffer(Thread* thread, uint64_t id, bool accepted) {
 void ThreadRelease(Thread* thread) {
   if (thread->is_dead) return;
   if (thread->pending_buffer != 0) FinishBuffer(thread, thread->pending_buffer, false);
-  Proc* proc = thread->proc;
+  Proc* proc = thread->proc.get();
   proc->threads.remove(thread);
   if (thread->waiting) {
     proc->waiting_threads.remove(thread);
@@ -974,14 +974,13 @@ void ThreadRelease(Thread* thread) {
   }
   Transaction* t = thread->transaction_stack;
   Transaction* send_reply = nullptr;
-  if (t != nullptr && t->to_thread == thread) send_reply = t;
+  if (t != nullptr && t->to_thread.get() == thread) send_reply = t;
   thread->is_dead = true;
   while (t != nullptr) {
-    if (t->to_thread == thread) {
-      t->to_proc = nullptr;
+    if (t->to_thread.get() == thread) {
       t->to_thread = nullptr;
       t = t->to_parent;
-    } else if (t->from == thread) {
+    } else if (t->from.get() == thread) {
       t->from = nullptr;
       t = t->from_parent;
     } else {
@@ -1459,7 +1458,7 @@ retry:
           cmd == BR_REPLY ? "reply" : "transaction", t->debug_id);
     if (cmd != BR_REPLY && (t->flags & TF_ONE_WAY) == 0) {
       t->to_parent = thread->transaction_stack;
-      t->to_thread = thread;
+      t->to_thread = thread->shared_from_this();
       thread->transaction_stack = t;
     } else {
       FreeTransaction(t);
@@ -1535,14 +1534,15 @@ uint64_t RandomKey() {
 void ServeProc(HANDLE pipe, In in) {
   uint32_t version, pid, uid;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
-  Proc* proc = new Proc;
+  auto proc_owner = std::make_shared<Proc>();
+  Proc* proc = proc_owner.get();
   {
     std::lock_guard<std::mutex> lock(g_lock);
     proc->id = g_next_proc_id++;
     proc->key = RandomKey();
     proc->pid = static_cast<int>(pid);
     proc->uid = uid;
-    g_procs[proc->id] = proc;
+    g_procs[proc->id] = proc_owner;
   }
   TRACE("proc %u: pid %u opened the device", proc->id, pid);
   WireReply reply;
@@ -1611,22 +1611,32 @@ void ServeThread(HANDLE pipe, In in) {
       !in.Get(&tid)) {
     return;
   }
+  std::shared_ptr<Thread> thread_owner;
+  std::shared_ptr<Proc> proc_owner;
   Thread* thread = nullptr;
   Proc* proc = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_lock);
     auto it = g_procs.find(proc_id);
     if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
-      proc = it->second;
-      thread = new Thread;
-      thread->proc = proc;
+      proc_owner = it->second;
+      proc = proc_owner.get();
+      thread_owner = std::make_shared<Thread>();
+      thread = thread_owner.get();
+      thread->proc = proc_owner;
       thread->tid = static_cast<int>(tid);
       proc->threads.push_back(thread);
     }
   }
   WireReply hello;
   hello.Put<int32_t>(thread != nullptr ? 0 : -ESRCH);
-  if (!WriteMessage(pipe, hello) || thread == nullptr) return;
+  if (!WriteMessage(pipe, hello) || thread == nullptr) {
+    if (thread != nullptr) {
+      std::lock_guard<std::mutex> lock(g_lock);
+      ThreadRelease(thread);
+    }
+    return;
+  }
 
   std::vector<uint8_t> msg;
   while (ReadMessage(pipe, &msg)) {

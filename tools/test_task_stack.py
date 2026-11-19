@@ -22,7 +22,8 @@ def main() -> None:
     for name in ("java-home", "framework-classes", "core-classes", "app-classes", "apksig"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--source-ref")
-    parser.add_argument("--case", choices=("all", "history", "validation", "tasks", "attach", "visibility", "permissions", "pending"), default="all")
+    parser.add_argument("--case", choices=("all", "history", "validation", "tasks", "recents",
+                                          "attach", "visibility", "permissions", "pending"), default="all")
     args = parser.parse_args()
     compiler = shutil.which("cc")
     if not compiler:
