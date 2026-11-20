@@ -243,6 +243,12 @@ target_compile_options(media_surface_frame_recycling_test PRIVATE
 target_link_libraries(media_surface_frame_recycling_test PRIVATE hostgraphics)
 gesher_graphics_cxx(media_surface_frame_recycling_test)
 
+# I420 rows to RGBA (compat/media/video/yuv_rgba.h): every Y, U, V against the
+# reference formula, generic and AVX2 (38-media.ps1).
+add_executable(media_yuv_rgba_test "${CMAKE_SOURCE_DIR}/tests/media/yuv_rgba_test.cc")
+target_include_directories(media_yuv_rgba_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_yuv_rgba_test PRIVATE -Wall -Wextra -Werror)
+
 # The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
 target_sources(hwui PRIVATE
