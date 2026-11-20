@@ -281,6 +281,46 @@ Check 'native libs: the same EGL/GLES window surfaces on WARP' {
 } @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device', 'readpixels=ok, swap=ok',
     'gl_window_test: GL windows read back from Windows', 'gl_window_test all passed')
 
+# AHardwareBuffer, the EGL native buffer/fence extensions and ASurfaceControl
+# (ADR 0089): surface_control_test.so (tests/native/surface_control_test.c)
+# checks buffers (CPU locks, ids, errors), images of buffers drawn by the GPU
+# and read by the CPU and the other way round, native fences, and a
+# SurfaceControl tree whose transactions complete in order with their stats;
+# surface_control_host_test.exe reads the composed frame back from its window
+# (PrintWindow) and the empty frame once the layers leave. With a binderd of
+# the test's own, a buffer also travels over an AF_UNIX socket (SCM_RIGHTS);
+# without one that send fails. Then the same on WARP.
+Check 'native libs: AHardwareBuffer, EGL images and native fences, and ASurfaceControl composed into a Gesher window' {
+  $device = 'ahb-' + [guid]::NewGuid().ToString('N')
+  $broker = Start-Process -FilePath "$Dir/binderd.exe" -ArgumentList $device -PassThru -WindowStyle Hidden
+  try {
+    Start-Sleep -Milliseconds 500
+    $env:GESHER_BINDER = $device
+    & "$Dir/surface_control_host_test.exe" (NoDrive "$Dir/surface_control_test.so")
+  } finally {
+    Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
+    Stop-Process -Id $broker.Id -Force -ErrorAction SilentlyContinue
+  }
+} @('surface_control: ok: send/recvHandleFromUnixSocket: 0, 0',
+    'surface_control: ok: what the receiver writes, the sender reads (shared memory)',
+    'surface_control: ok: a CPU lock after the fence reads what the GPU drew (0 wrong)',
+    'surface_control: ok: transactions complete in the order applied',
+    'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
+    'ok: the window after its layers left: 0 pixel(s) not black',
+    'surface_control_test all passed')
+
+Check 'native libs: the same AHardwareBuffer and ASurfaceControl checks on WARP, without a descriptor broker' {
+  $env:GESHER_EGL_DEVICE = 'warp'
+  try {
+    & "$Dir/surface_control_host_test.exe" (NoDrive "$Dir/surface_control_test.so")
+  } finally {
+    Remove-Item Env:GESHER_EGL_DEVICE -ErrorAction SilentlyContinue
+  }
+} @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device',
+    'surface_control: ok: sendHandleToUnixSocket without a descriptor broker fails',
+    'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
+    'surface_control_test all passed')
+
 # Through gesher-app: glapp.apk's Activity makes windows with gesher-app's
 # NativeWindow and passes their android.view.Surface to the library, which
 # takes the ANativeWindow with ANativeWindow_fromSurface; the Activity reads

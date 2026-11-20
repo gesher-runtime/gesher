@@ -111,6 +111,9 @@ jobs:
           "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libunix_credentials_test.so -o dist-native/unix_credentials_test.so tests/native/unix_credentials_test.c
           # SCM_RIGHTS through binderd's descriptor broker (ADR 0088 phase 2).
           "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libunix_rights_test.so -o dist-native/unix_rights_test.so tests/native/unix_rights_test.c
+          # AHardwareBuffer, the EGL native buffer/fence extensions and
+          # ASurfaceControl (ADR 0089), for tests/native/surface_control_host_test.cc.
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android31-clang" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libsurface_control_test.so -o dist-native/surface_control_test.so tests/native/surface_control_test.c -landroid -lEGL -lGLESv3 -ldl
           echo "--- fs_test29.so ---"
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d -r -l dist-native/fs_test29.so
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"             -d dist-native/fs_test29.so | grep '%fs:' | head -40 || true
