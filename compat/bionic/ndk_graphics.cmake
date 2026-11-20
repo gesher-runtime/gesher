@@ -22,6 +22,8 @@ foreach(h EGL/egl.h EGL/eglext.h GLES3/gl32.h GLES3/gl31.h GLES3/gl3.h GLES2/gl2
     GLES2/gl2ext.h GLES/gl.h GLES/glext.h)
   list(APPEND _gl_headers ${_gl_include}/${h})
 endforeach()
+# ANGLE's own extensions (GL_ANGLE_*, GL_CHROMIUM_*), at the DLLs' commit.
+list(APPEND _gl_headers ${CMAKE_CURRENT_LIST_DIR}/third_party/angle/GLES2/gl2ext_angle.h)
 add_custom_command(OUTPUT ${_gl_gen}/gl_thunks.inc
   COMMAND ${CMAKE_COMMAND} -E make_directory ${_gl_gen}
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/gen_gl_thunks.py
@@ -50,3 +52,10 @@ target_include_directories(gl_window_test PRIVATE ${CMAKE_SOURCE_DIR}/compat/hwu
 target_link_libraries(gl_window_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
   gesher_window_surface graphics_native_headers user32 gdi32)
 target_compile_options(gl_window_test PRIVATE -Wall -Wextra -Werror)
+
+# A GL test library's gesher_selftest() with the same EGL/GLES
+# (tests/native/gl_extension_test.cc; gl_extension_procs_test.so in CI).
+add_executable(gl_extension_test ${CMAKE_SOURCE_DIR}/tests/native/gl_extension_test.cc)
+target_link_libraries(gl_extension_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
+  gesher_window_surface graphics_native_headers user32 gdi32)
+target_compile_options(gl_extension_test PRIVATE -Wall -Wextra -Werror)

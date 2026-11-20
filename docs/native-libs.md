@@ -252,7 +252,17 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     thunk to ANGLE's `libEGL.dll`/`libGLESv2.dll` (loaded from the
     executable's directory on first use; a function ANGLE lacks aborts naming
     itself), so an app's `libEGL.so`/`libGLESv1_CM.so`/`libGLESv2.so`/
-    `libGLESv3.so` imports and `eglGetProcAddress` all resolve.
+    `libGLESv3.so` imports and `eglGetProcAddress` all resolve. The
+    extensions ANGLE adds to `GL_EXTENSIONS` beyond those headers
+    (`GL_ANGLE_*`, `GL_CHROMIUM_*`) get thunks too, from ANGLE's own
+    `gl2ext_angle.h` at the DLLs' commit (`compat/bionic/third_party/angle`):
+    a client calls the functions of an extension it sees advertised
+    (WebRender calls `glProvokingVertexANGLE` for `GL_ANGLE_provoking_vertex`;
+    Firefox's GPU process panicked, "gles function was not loaded", while
+    `eglGetProcAddress` returned null for it). `gl_extension_procs_test.so`
+    checks every advertised extension's entry points; only
+    `glBlobCacheCallbacksANGLE` (`GL_ANGLE_blob_cache`), which takes callbacks,
+    is not provided.
     `EGL_DEFAULT_DISPLAY` is ANGLE's Direct3D 11 display on the hardware
     adapter, else WARP (`GESHER_EGL_DEVICE=warp` forces WARP; the choice is
     printed as `gesher EGL: default display: ...`). `eglCreateWindowSurface`

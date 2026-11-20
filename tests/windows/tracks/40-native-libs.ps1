@@ -295,6 +295,16 @@ Check 'native libs: the same EGL/GLES window surfaces on WARP' {
 } @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device', 'readpixels=ok, swap=ok',
     'gl_window_test: GL windows read back from Windows', 'gl_window_test all passed')
 
+# eglGetProcAddress and dlsym return the functions of every GL extension the
+# context advertises, ANGLE's own (gl2ext_angle.h) included: WebRender calls
+# glProvokingVertexANGLE for GL_ANGLE_provoking_vertex, and Firefox's GPU
+# process panicked when it was null. The provoking vertex set through the
+# returned pointer is read back.
+Check 'native libs: the entry points of every advertised GL extension from an NDK .so' {
+  & "$Dir/gl_extension_test.exe" (NoDrive "$Dir/gl_extension_procs_test.so")
+} @('GL_ANGLE_provoking_vertex: glProvokingVertexANGLE', 'is read back',
+    'gl_extension_procs: all passed', 'gl_extension_test all passed')
+
 # Through gesher-app: glapp.apk's Activity makes windows with gesher-app's
 # NativeWindow and passes their android.view.Surface to the library, which
 # takes the ANativeWindow with ANativeWindow_fromSurface; the Activity reads
