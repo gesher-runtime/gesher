@@ -82,24 +82,20 @@ for (const [name, change] of Object.entries({
   });
 }
 
-test('author first label retains exact-head QA proof', async () => {
-  const w = authorWorld({approved: false}); w.seedQa();
+test('author first label after opening approves without a QA review', async () => {
+  const w = authorWorld({approved: false});
   await w.labeled();
   assert.equal(w.did('nativeWait').length, 1);
-  assert.equal(w.did('reviewNode').length > 0, true);
+  assert.equal(w.did('reviewNode').length, 0);
+  assert.equal(w.did('removeLabel').length + w.did('app-removeLabel').length, 0);
 });
 
 for (const [name, change] of Object.entries({
-  absent: w => {w.reviews = w.reviews.filter(r => r.state !== 'COMMENTED');},
-  edited: w => {w.reviewNodeOverride = {lastEditedAt: T(25)};},
-  'wrong head': w => {w.reviews.at(-1).commit_id = OTHER;},
-  'same-second as label': w => {w.reviews.at(-1).submitted_at = T(30);},
-  'wrong actor': w => {w.reviews.at(-1).user.id = 90;},
-  'duplicate proof': w => {w.seedQa();},
-  'extra marker field': w => {w.reviews.at(-1).body = w.reviews.at(-1).body.replace('"base":"main"', '"base":"main","extra":1');},
+  'creation-time': w => {w.events[0].created_at = T(0);},
+  'before the opening boundary': w => {w.events[0].created_at = T(1);},
 })) {
-  test('author QA ' + name + ' fails closed', async () => {
-    const w = authorWorld(); w.seedQa(); change(w);
+  test('author ' + name + ' label cannot authorize the queue', async () => {
+    const w = authorWorld(); change(w);
     assert.equal(await controller.approved(w.github, 'o', 'r', w.pr), false);
   });
 }
@@ -439,14 +435,6 @@ test('fork review events need no write token; CI completion rechecks QA', async 
   assert.equal(w.did('status').at(-1)[1].state, 'failure');
 });
 
-test('proof revoked during CI reads cannot release the pending gate', async () => {
-  const w = authorWorld(); w.seedQa();
-  w.hooks.checks = () => {w.reviewNodeOverride = {lastEditedAt: T(40)};};
-  await w.ciDone();
-  assert.equal(w.did('status').at(-1)[1].state, 'failure');
-  assert.equal(w.nativeAutoMethod, null);
-});
-
 test('a preexisting merge-method request is replaced with squash while the gate is pending', async () => {
   const w = world({nativeAutoMethod: 'MERGE'}); await w.ciDone();
   assert.equal(w.did('nativeCancel').length, 1);
@@ -724,32 +712,12 @@ test('manual App reconciliation requires an existing receipt and cannot manufact
   assert.equal(w.did('nativeWait').length, 0);
 });
 
-test('the App shadow retains exact-head author COMMENT QA before the first label', async () => {
+test('the App shadow accepts an author first label after opening', async () => {
   const w = appStatusWorld({approved: false});
   w.pr.user = {id: 42, login: 'maintainer'};
-  w.seedQa();
   await w.labeled();
   bothStates(w, 'success');
   assert.equal(w.did('app-approve').length, 1);
-});
-
-test('missing author COMMENT QA cannot be replaced by a green App status', async () => {
-  const w = appStatusWorld({approved: false});
-  w.pr.user = {id: 42, login: 'maintainer'};
-  await w.labeled();
-  bothStates(w, 'failure');
-  assert.equal(w.did('app-approve').length, 0);
-  assert.equal(w.did('app-status').some(([, a]) => a.state === 'success'), false);
-});
-
-test('author COMMENT edited during App publication revokes both statuses', async () => {
-  const w = appStatusWorld();
-  w.pr.user = {id: 42, login: 'maintainer'};
-  w.seedQa();
-  w.hooks['app-status'] = a => {if (a.state === 'success') w.reviewNodeOverride = {lastEditedAt: T(40)};};
-  await w.ciDone();
-  bothStates(w, 'failure');
-  assert.equal(w.did('status').some(([, a]) => a.state === 'success'), false);
 });
 
 test('source repository changed during App publication cannot release either gate', async () => {

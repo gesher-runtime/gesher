@@ -16,8 +16,7 @@ async function approved(github, owner, repo, pr) {
   if (!event || event.invalidated || !event.unambiguous ||
       !await p.authorized(github, owner, repo, event)) return false;
   const boundary = await p.openingBoundary(github, owner, repo, pr);
-  const qa = await p.authorQa(github, owner, repo, pr, event, boundary);
-  if (!p.explicitApplication(pr, event, boundary, qa) ||
+  if (!p.explicitApplication(pr, event, boundary) ||
       !await p.approval(github, owner, repo, pr, event)) return false;
   const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
   const latest = await p.labelEvent(github, owner, repo, pr.number);
@@ -423,9 +422,8 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
       const event = await p.labelEvent(github, owner, repo, number, payload.pull_request.updated_at);
       if (event) {
         const boundary = await p.openingBoundary(github, owner, repo, pr);
-        const qa = await p.authorQa(github, owner, repo, pr, event, boundary);
-        if (!p.explicitApplication(pr, event, boundary, qa) || event.invalidated) {
-          await p.removeLabel(github, prGithub, owner, repo, pr, event, 'fresh label/QA required', core);
+        if (!p.explicitApplication(pr, event, boundary) || event.invalidated) {
+          await p.removeLabel(github, prGithub, owner, repo, pr, event, 'creation-time or invalidated label', core);
         } else if (p.sameTarget(pr, payload.pull_request) && event.unambiguous &&
             event.deliveryMatches && event.actor?.id === payload.sender?.id &&
             await p.authorized(github, owner, repo, event)) {
