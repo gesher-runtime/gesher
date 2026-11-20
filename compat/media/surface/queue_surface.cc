@@ -153,6 +153,37 @@ void QueueSurface::Abandon() {
   if (!locked_) buffer_ = nullptr;
 }
 
+bool QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* pixels,
+                             int64_t timestamp_ns) {
+  if (width <= 0 || height <= 0 || stride < width || pixels == nullptr) return false;
+  // The copy is made unlocked: a large frame does not hold up this surface's
+  // own producer or its readers.
+  auto f = std::make_shared<RecycledFrame>(frame_pool_, width, height);
+  f->width = width;
+  f->height = height;
+  f->pixels.resize(static_cast<size_t>(width) * height);
+  if (stride == width) {
+    memcpy(f->pixels.data(), pixels, f->pixels.size() * sizeof(uint32_t));
+  } else {
+    for (int y = 0; y < height; y++) {
+      memcpy(&f->pixels[static_cast<size_t>(y) * width], pixels + static_cast<size_t>(y) * stride,
+             static_cast<size_t>(width) * 4);
+    }
+  }
+  f->timestamp_ns = timestamp_ns == NATIVE_WINDOW_TIMESTAMP_AUTO
+                        ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns;
+  std::function<void()> listener;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (abandoned_) return false;
+    f->number = ++frames_;
+    latest_ = std::move(f);
+    listener = listener_;
+  }
+  if (listener) listener();
+  return true;
+}
+
 void QueueSurface::Size(int* width, int* height) const {
   if (requested_width_ > 0 && requested_height_ > 0) {
     *width = requested_width_;

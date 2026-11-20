@@ -18,6 +18,8 @@
 //  - android.view.Surface's nativeCreateFromSurfaceTexture and
 //    nativeGetFromBlastBufferQueue, which the host's android_view_Surface.cpp
 //    leaves out.
+//  - The surfaces' side of android.view.Surface in Parcels
+//    (compat/framework/surface_parcel.cc, surface_parcel_bridge.h).
 //
 // Registered from register_gesher_media (after hwui's and the device
 // stand-ins' tables, which these replace in part). Compiled into hwui.
@@ -49,13 +51,13 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
 
 #include "frame_invalidation.h"
 #include "queue_surface.h"
+#include "surface_parcel_bridge.h"
 
 #if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
@@ -826,76 +828,66 @@ int register_gesher_media_surfaces(JNIEnv* env) {
   return 0;
 }
 
-// --- Surfaces in Parcels (surface_parcel.cc) ----------------------------------------
+// --- Surfaces in Parcels (compat/framework/surface_parcel.cc) -------------------------
 //
 // android.view.Surface crosses processes as a producer endpoint (Chromium's GPU
 // process draws into the browser's SurfaceView). surface_parcel.cc, which has
-// libbinder, does the Binder side through these; a Surface's native object is
-// an android::Surface*, as mNativeObject holds it.
+// libbinder, does the Binder side through these (surface_parcel_bridge.h).
 
-// The QueueSurface behind a Surface's native object, and its default size; false
-// for any other surface (a window's).
-extern "C" bool gesher_surface_queue_size(jlong native_object, int* width, int* height) {
+namespace {
+
+QueueSurface* QueueOf(jlong native_object) {
   auto* surface = reinterpret_cast<android::Surface*>(native_object);
-  QueueSurface* queue = surface != nullptr ? QueueSurface::From(surface) : nullptr;
+  return surface != nullptr ? QueueSurface::From(surface) : nullptr;
+}
+
+}  // namespace
+
+extern "C" bool gesher_surface_queue_size(jlong native_object, int* width, int* height) {
+  QueueSurface* queue = QueueOf(native_object);
   if (queue == nullptr) return false;
-  queue->query(NATIVE_WINDOW_DEFAULT_WIDTH, width);
-  queue->query(NATIVE_WINDOW_DEFAULT_HEIGHT, height);
+  // The consumer's size (BufferQueue's default size), not a producer's user
+  // dimensions: NATIVE_WINDOW_WIDTH, as libgui's Surface asks its BufferQueue.
+  queue->query(NATIVE_WINDOW_WIDTH, width);
+  queue->query(NATIVE_WINDOW_HEIGHT, height);
   return true;
 }
 
-extern "C" void gesher_surface_acquire(jlong native_object, const void* id) {
-  reinterpret_cast<android::Surface*>(native_object)->incStrong(id);
-}
-
-extern "C" void gesher_surface_release(jlong native_object, const void* id) {
-  reinterpret_cast<android::Surface*>(native_object)->decStrong(id);
-}
-
-// Queues a frame (RGBA_8888, `stride` pixels per row) to a QueueSurface as its
-// producer would; false if it cannot take one (abandoned).
 extern "C" bool gesher_surface_post(jlong native_object, int width, int height, int stride,
-                                    const uint32_t* pixels) {
-  auto* surface = reinterpret_cast<android::Surface*>(native_object);
-  ANativeWindow* window = surface;
-  if (ANativeWindow_setBuffersGeometry(window, width, height, WINDOW_FORMAT_RGBA_8888) != 0) {
-    return false;
-  }
-  ANativeWindow_Buffer buffer;
-  if (ANativeWindow_lock(window, &buffer, nullptr) != 0) return false;
-  const int rows = buffer.height < height ? buffer.height : height;
-  const int columns = buffer.width < width ? buffer.width : width;
-  for (int y = 0; y < rows; ++y) {
-    memcpy(static_cast<uint32_t*>(buffer.bits) + static_cast<size_t>(y) * buffer.stride,
-           pixels + static_cast<size_t>(y) * stride, static_cast<size_t>(columns) * 4);
-  }
-  return ANativeWindow_unlockAndPost(window) == 0;
+                                    int64_t timestamp_ns, const uint32_t* pixels) {
+  QueueSurface* queue = QueueOf(native_object);
+  return queue != nullptr && queue->PostFrame(width, height, stride, pixels, timestamp_ns);
 }
 
-// A new QueueSurface (one strong reference, for the Surface's mNativeObject)
-// whose every frame is handed to `on_frame` on the producer's thread.
-using GesherSurfaceFrameFn = void (*)(void* context, int width, int height,
-                                      const uint32_t* pixels);
 extern "C" jlong gesher_surface_create_forwarding(int width, int height,
-                                                  GesherSurfaceFrameFn on_frame, void* context) {
-  android::sp<QueueSurface> surface = new QueueSurface(width, height);
+                                                  GesherSurfaceFrameFn on_frame,
+                                                  GesherSurfaceReleaseFn release, void* context) {
+  android::sp<QueueSurface> surface = android::sp<QueueSurface>::make(width, height);
   QueueSurface* raw = surface.get();
-  surface->SetListener([raw, on_frame, context] {
+  const jlong self = reinterpret_cast<jlong>(static_cast<android::Surface*>(raw));
+  // The listener owns the context: Publish calls a copy of it, so the context
+  // stays while a frame is being handed over, and goes with the last copy once
+  // the surface is destroyed or abandoned (which drops its listener).
+  std::shared_ptr<void> owner(context, release);
+  surface->SetListener([raw, self, on_frame, owner] {
     std::shared_ptr<const SurfaceFrame> frame = raw->Latest();
-    if (frame != nullptr) on_frame(context, frame->width, frame->height, frame->pixels.data());
+    if (frame != nullptr) {
+      on_frame(owner.get(), self, frame->width, frame->height, frame->timestamp_ns,
+               frame->pixels.data());
+    }
   });
-  auto* result = static_cast<android::Surface*>(raw);
-  result->incStrong(reinterpret_cast<void*>(&gesher_surface_create_forwarding));
-  return reinterpret_cast<jlong>(result);
+  raw->incStrong(reinterpret_cast<void*>(&gesher_surface_create_forwarding));
+  return self;
 }
 
 extern "C" void gesher_surface_set_default_size(jlong native_object, int width, int height) {
-  auto* surface = reinterpret_cast<android::Surface*>(native_object);
-  QueueSurface* queue = surface != nullptr ? QueueSurface::From(surface) : nullptr;
-  if (queue != nullptr) queue->SetDefaultSize(width, height);
+  if (QueueSurface* queue = QueueOf(native_object)) queue->SetDefaultSize(width, height);
 }
 
-// The RefBase of a Surface's native object, for weak references to it.
+extern "C" void gesher_surface_abandon(jlong native_object) {
+  if (QueueSurface* queue = QueueOf(native_object)) queue->Abandon();
+}
+
 extern "C" android::RefBase* gesher_surface_refbase(jlong native_object) {
   return static_cast<android::RefBase*>(reinterpret_cast<android::Surface*>(native_object));
 }

@@ -336,11 +336,14 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   parent. No vsync (`debug.choreographer.vsync=false`: frames timed by
   messages).
 - **Surface natives missing on the host**: core/jni's host
-  `android_view_Surface.cpp` has no `nativeCreateFromSurfaceControl`,
-  `nativeGetFromSurfaceControl`, `nativeGetFromBlastBufferQueue`,
-  `nativeReadFromParcel`/`nativeWriteToParcel` (`#ifdef __ANDROID__`).
-  `Surface.copyFrom(SurfaceControl)` and the BLAST paths that call them
-  throw UnsatisfiedLinkError.
+  `android_view_Surface.cpp` has no `nativeCreateFromSurfaceControl` or
+  `nativeGetFromSurfaceControl` (`#ifdef __ANDROID__`): `Surface.copyFrom(SurfaceControl)`
+  throws UnsatisfiedLinkError. Gesher supplies the others it leaves out:
+  `nativeCreateFromSurfaceTexture` and `nativeGetFromBlastBufferQueue`
+  (`compat/media/surface/surface_jni.cc`), and `nativeReadFromParcel`/`nativeWriteToParcel`
+  (`compat/framework/surface_parcel.cc`, "Surfaces in Parcels" below). Only a QueueSurface
+  (a SurfaceView's, SurfaceTexture's or ImageReader's) travels; a window's Surface is
+  written as no surface and reads as an invalid one.
 - **CPU drawing only**: hwui's CPU pipeline (Skia raster); hwui's GL
   pipeline over ANGLE is not wired up.
 - **System fonts** come from the fonts track (docs/fonts.md: fonts.xml in
@@ -534,6 +537,31 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   now goes through a Surface over the SurfaceTexture (LegacyCamera).
 - **Bitmap parcels** (`compat/hwui/surfaces/bitmap_parcel.cc`) and **YuvImage**
   (`compat/hwui/surfaces/yuv_image.cc`), registered after hwui's tables.
+- **Surfaces in Parcels** (`compat/framework/surface_parcel.cc`, the QueueSurface side in
+  `compat/media/surface/surface_parcel_bridge.h`): on a device a parceled Surface is its
+  IGraphicBufferProducer. Here a QueueSurface's parcel is a producer endpoint, a binder in
+  the consumer's process, and the consumer's size. Read in another process (Chromium's
+  GPU process given the browser's SurfaceView), it is a forwarding QueueSurface: each
+  frame queued goes to the endpoint in a memfd the producer reuses (one per producer,
+  grown when a frame is larger), with its size and time stamp, in a synchronous
+  transaction; the endpoint queues it to the consumer's QueueSurface
+  (`QueueSurface::PostFrame`, which leaves the consumer's own producer state alone) and
+  answers with the consumer's current size, which becomes the producer's default size
+  (libgui takes it from each queueBuffer's output the same way). Once the consumer is gone
+  (released, abandoned, its process dead) the answer says so and the producer is
+  abandoned: its next lock or dequeue fails (`lockCanvas` throws IllegalArgumentException),
+  as on an abandoned BufferQueue. Read in the consumer's own process, the parcel is the
+  consumer's Surface itself; read into a Surface that already forwards to the same
+  endpoint, that Surface stays (as the same IGraphicBufferProducer does); otherwise the
+  Java Surface's previous native surface is released. The producer side goes with its
+  Surface (its memfd closed); received descriptors belong to the Parcel. Unlike a device,
+  the producer learns of a new consumer size, and of a consumer that is gone, with the
+  frame it queues after the change (a device's next dequeue sees both), a frame lost to a
+  consumer that is gone does not fail its queueBuffer, and Surfaces read from parcels of
+  one consumer may all produce at once (a BufferQueue takes one connected producer).
+  Tested by `tests/dex-services/gesher/services/SurfaceParcelTest.java` (services track:
+  one process, and two processes over binderd: pixels, time stamps, sizes, release,
+  abandonment and memfd counts).
 
 Status and next steps (2026-10-26):
 
