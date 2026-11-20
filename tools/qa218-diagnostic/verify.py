@@ -29,7 +29,9 @@ def main():
  if not a.check_only:
   assert os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('GITHUB_REPOSITORY')=='gesher-runtime/gesher'
   assert head==os.environ['GITHUB_SHA'] and os.environ['GITHUB_REF']==BRANCH
- assert git('rev-parse','HEAD^').decode().strip()==BASE
+ # Preserve the first published diagnostic as the additive correction parent.
+ assert git('rev-parse','HEAD^^').decode().strip()==BASE
+ assert git('rev-parse','HEAD^'+'^{tree}').decode().strip()=='896b7d007470fb9290605f16ce2fddd074214c87'
  assert not git('status','--porcelain=v1','--untracked-files=no')
  changed=set(git('diff','--name-only',BASE,head).decode().splitlines())
  assert changed==OVERLAYS|ADDED, sorted(changed)

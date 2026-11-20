@@ -15,12 +15,15 @@ jobs:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    env:
-      GESHER_QA218_RESULTS: ${{ runner.temp }}/qa218-preload-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
+      - name: Set the owned observation directory on the runner
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP ('qa218-preload-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT + '-${{ matrix.os }}')
+          "GESHER_QA218_RESULTS=$path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Verify unchanged product and explicit observation sources
         shell: pwsh
         run: python tools/qa218-diagnostic/verify.py
