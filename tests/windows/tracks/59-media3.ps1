@@ -236,6 +236,18 @@ if (Test-Path "$Dir/recordapp.apk") {
   Write-Host "INFO  media3: $((($recOut -split "`n") | Where-Object { $_ -match 'GesherMedia.*(encoders:|capture:)|RecordTest codec list encoders' } | Select-Object -First 4 | ForEach-Object { $_.Trim() }) -join '; ')"
   RecordChecks 'single process' $recOut $recCode
 
+  $savedVideoEncoders = [Environment]::GetEnvironmentVariable('GESHER_VIDEO_ENCODERS')
+  try {
+    $env:GESHER_VIDEO_ENCODERS = 'soft'
+    $env:GESHER_TEST_CODEC_CONTROLS = '1'
+    CheckTimed 'media3: a live AVC encoder changes output rate and requests sync frames while preserving metrics and stream continuity' `
+      "$Dir/dalvikvm.exe" @($dvmRec + @('com.gesher.app.Main', (NoDrive "$Dir/recordapp.apk"))) `
+      @('RecordTest codec controls: live AVC rate and sync controls, ordered output, surface retirement, isolated metrics, and lifecycle passed') 120
+  } finally {
+    [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedVideoEncoders)
+    Remove-Item Env:GESHER_TEST_CODEC_CONTROLS -ErrorAction SilentlyContinue
+  }
+
   # The Gesher device: the app in a process of its own (logs/com.gesher.recordapp.log), its
   # environment the device's (GESHER_AUDIO_SOURCE, GESHER_CAMERA_TEST).
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-device'

@@ -12,6 +12,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -116,6 +117,9 @@ class Codec {
   bool configured_ = true, fatal_ = false, failed_ = false, async_ = false;
   bool quit_ = false, worker_running_ = false, flushed_ = false, flush_requested_ = false;
   bool surface_eos_ = false, enc_eos_sent_ = false, output_known_ = false, format_pending_ = false;
+  bool force_key_ = false;
+  std::optional<int> pending_bitrate_, target_bitrate_;
+  int64_t last_out_us_ = 0;
   uint64_t wait_generation_ = 0, execution_generation_ = 0, fatal_generation_ = 0;
   std::condition_variable cv_, done_cv_;
   std::thread worker_;
