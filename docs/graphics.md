@@ -527,9 +527,20 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   position, size, scrolling and clipping follow the view tree. `setZOrderOnTop`: the
   frame is drawn by a drawable in the root view's overlay, over every view (patch 0300,
   `GesherOverlay`).
-- **EGL/GLES into it** (SDL, games): an ANativeWindow without an HWND gets a hidden
-  helper window for ANGLE's swap chain; before each eglSwapBuffers the frame is read
-  back and posted to the ANativeWindow, paced at 60 Hz (`compat/bionic/egl_child_surface.cc`).
+- **EGL/GLES into it** (SDL, games, Firefox's compositor in its GPU process): an
+  ANativeWindow without an HWND gets a hidden helper window for ANGLE's window surface;
+  at each eglSwapBuffers the frame is read back and posted to the ANativeWindow, paced
+  at 60 Hz on a high-resolution waitable timer (`compat/bionic/egl_child_surface.cc`).
+  The helper is never shown, so its swap chain is not presented: ANGLE's swap is made
+  only when the window's size changed (where ANGLE resizes the surface), with swap
+  interval 0 (eglSwapInterval with such a surface current keeps 0). Presenting it with
+  the default interval waited for the vertical blank in every swap (18 to 21 ms on
+  average, up to 35), and the next glReadPixels waited up to half a second at a time,
+  several times a minute, for Windows to take a presented buffer; with
+  `std::this_thread::sleep_for` the 16.7 ms pacing waits overslept by 8 to 18 ms
+  (scheduler ticks). Firefox's compositor went from 25 to 31 frames a second with
+  freezes of 0.3 to 0.5 s to 58 frames a second without them (docs/media.md,
+  "Measuring playback").
 - **TextureView / SurfaceTexture**: the media track's TextureLayer and SurfaceTexture
   natives; TextureView.lockCanvas now draws into the SurfaceTexture's producer.
 - **SurfaceTexture in OpenGL ES** (`compat/media/surface/surface_texture_gl.{h,cc}`):

@@ -472,7 +472,7 @@ EGLBoolean BIONIC_SYSV DestroySurface(EGLDisplay dpy, EGLSurface surface) {
 
 // surfaces track: a child surface's frame goes to its ANativeWindow before ANGLE swaps.
 EGLBoolean BIONIC_SYSV SwapBuffers(EGLDisplay dpy, EGLSurface surface) {
-  ChildSurfaceBeforeSwap(dpy, surface);
+  if (!ChildSurfaceBeforeSwap(dpy, surface)) return EGL_TRUE;  // a child surface's frame, posted
   static gesher::perf::Site site("EGL: ANGLE's eglSwapBuffers");
   const int64_t start = gesher::perf::Now();
   const EGLBoolean swapped = MS(eglSwapBuffers)(dpy, surface);
@@ -480,9 +480,20 @@ EGLBoolean BIONIC_SYSV SwapBuffers(EGLDisplay dpy, EGLSurface surface) {
   return swapped;
 }
 
+// A child surface's swap chain keeps interval 0 (egl_child_surface.h).
+EGLBoolean SwapIntervalMs(EGLDisplay dpy, EGLint interval) {
+  EGLBoolean result = EGL_FALSE;
+  if (ChildSurfaceSwapInterval(dpy, &result)) return result;
+  return MS(eglSwapInterval)(dpy, interval);
+}
+
+EGLBoolean BIONIC_SYSV SwapInterval(EGLDisplay dpy, EGLint interval) {
+  return SwapIntervalMs(dpy, interval);
+}
+
 EGLBoolean BIONIC_SYSV SwapBuffersWithDamageKhr(EGLDisplay dpy, EGLSurface surface,
                                                 const EGLint* rects, EGLint n_rects) {
-  ChildSurfaceBeforeSwap(dpy, surface);
+  if (!ChildSurfaceBeforeSwap(dpy, surface)) return EGL_TRUE;  // a child surface's frame, posted
   static gesher::perf::Site site("EGL: ANGLE's eglSwapBuffersWithDamageKHR");
   const int64_t start = gesher::perf::Now();
   const EGLBoolean swapped = MS(eglSwapBuffersWithDamageKHR)(dpy, surface, rects, n_rects);
@@ -492,7 +503,7 @@ EGLBoolean BIONIC_SYSV SwapBuffersWithDamageKhr(EGLDisplay dpy, EGLSurface surfa
 
 EGLBoolean BIONIC_SYSV SwapBuffersWithDamageExt(EGLDisplay dpy, EGLSurface surface,
                                                 const EGLint* rects, EGLint n_rects) {
-  ChildSurfaceBeforeSwap(dpy, surface);
+  if (!ChildSurfaceBeforeSwap(dpy, surface)) return EGL_TRUE;  // a child surface's frame, posted
   static gesher::perf::Site site("EGL: ANGLE's eglSwapBuffersWithDamageEXT");
   const int64_t start = gesher::perf::Now();
   const EGLBoolean swapped = MS(eglSwapBuffersWithDamageEXT)(dpy, surface, rects, n_rects);
@@ -605,6 +616,7 @@ const GlThunk kHandwritten[] = {
     {"eglCreatePlatformWindowSurfaceEXT", reinterpret_cast<void*>(&CreatePlatformWindowSurfaceExt)},
     {"eglDestroySurface", reinterpret_cast<void*>(&DestroySurface)},
     {"eglSwapBuffers", reinterpret_cast<void*>(&SwapBuffers)},
+    {"eglSwapInterval", reinterpret_cast<void*>(&SwapInterval)},
     {"eglSwapBuffersWithDamageKHR", reinterpret_cast<void*>(&SwapBuffersWithDamageKhr)},
     {"eglSwapBuffersWithDamageEXT", reinterpret_cast<void*>(&SwapBuffersWithDamageExt)},
     {"eglDebugMessageControlKHR", reinterpret_cast<void*>(&DebugMessageControlKhr)},
@@ -682,8 +694,12 @@ extern "C" unsigned gesher_egl_destroy_surface(void* display, void* surface) {
   return gesher::bionic::gl::DestroySurface(display, surface);
 }
 
-extern "C" void gesher_egl_before_swap(void* display, void* surface) {
-  gesher::bionic::gl::ChildSurfaceBeforeSwap(display, surface);
+extern "C" unsigned gesher_egl_swap_interval(void* display, int32_t interval) {
+  return gesher::bionic::gl::SwapIntervalMs(display, interval);
+}
+
+extern "C" unsigned gesher_egl_before_swap(void* display, void* surface) {
+  return gesher::bionic::gl::ChildSurfaceBeforeSwap(display, surface) ? 1u : 0u;
 }
 
 extern "C" void* gesher_egl_surface_hwnd(void* surface) {
