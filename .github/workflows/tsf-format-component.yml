@@ -72,7 +72,8 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
+    timeout-minutes: 25
     env:
       GH_TOKEN: ${{ github.token }}
     steps:

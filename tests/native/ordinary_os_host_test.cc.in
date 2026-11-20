@@ -31,6 +31,7 @@ struct WaitAction {
   int64_t wall_change_ns;
   bool interrupted;
   int64_t handler_ns = 0;
+  int error = 0;
 };
 static std::vector<WaitAction> actions;
 static std::vector<uint32_t> waits;
@@ -62,7 +63,8 @@ LinuxTimespec RealtimeNow() {
   return {now.tv_sec, now.tv_nsec};
 }
 bool TestSleep(uint32_t milliseconds, uint32_t* left_ms,
-               void (*observe)(void*), void* context) {
+               void (*observe)(void*), void* context, int* error) {
+  if (error != nullptr) *error = 0;
   if (!controlled_clock) {
     timespec request{milliseconds / 1000, static_cast<long>(milliseconds % 1000) * 1000000};
     timespec remain{};
@@ -70,6 +72,7 @@ bool TestSleep(uint32_t milliseconds, uint32_t* left_ms,
     if (left_ms != nullptr)
       *left_ms = static_cast<uint32_t>(remain.tv_sec * 1000 + remain.tv_nsec / 1000000);
     const bool interrupted = result == -1 && errno == EINTR;
+    if (result == -1 && !interrupted && error != nullptr) *error = errno;
     if (interrupted && observe != nullptr) observe(context);
     return interrupted;
   }
@@ -78,6 +81,10 @@ bool TestSleep(uint32_t milliseconds, uint32_t* left_ms,
   waits.push_back(milliseconds);
   WaitAction action = index < actions.size() ? actions[index] :
       WaitAction{static_cast<int64_t>(milliseconds) * 1000000, 0, false};
+  if (action.error != 0) {
+    if (error != nullptr) *error = action.error;
+    return false;
+  }
   monotonic_ns += action.advance_ns;
   realtime_ns += action.advance_ns + static_cast<__int128>(action.wall_change_ns);
   if (left_ms != nullptr) *left_ms = 0;
@@ -87,18 +94,21 @@ bool TestSleep(uint32_t milliseconds, uint32_t* left_ms,
   errno = ERANGE;  // Witness Android's errno-restoring wrapper.
   return action.interrupted;
 }
-bool InterruptibleSleep(uint32_t milliseconds, uint32_t* left_ms) {
-  return TestSleep(milliseconds, left_ms, nullptr, nullptr);
+bool InterruptibleSleep(uint32_t milliseconds, uint32_t* left_ms, int* error = nullptr) {
+  return TestSleep(milliseconds, left_ms, nullptr, nullptr, error);
 }
-bool InterruptibleSleepObserved(uint32_t milliseconds, void (*observe)(void*), void* context) {
-  return TestSleep(milliseconds, nullptr, observe, context);
+bool InterruptibleSleepObserved(uint32_t milliseconds, void (*observe)(void*), void* context,
+                                int* error = nullptr) {
+  return TestSleep(milliseconds, nullptr, observe, context, error);
 }
 int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context) {
   const int64_t left = deadline - gesher::BoottimeNanos();
   if (left <= 0) return 0;
   const auto milliseconds = static_cast<uint32_t>(std::min<int64_t>(
       left / 1000000 + (left % 1000000 != 0), 0x7ffffffe));
-  return TestSleep(milliseconds, nullptr, observe, context) ? kEINTR : 0;
+  int error = 0;
+  const bool interrupted = TestSleep(milliseconds, nullptr, observe, context, &error);
+  return error != 0 ? error : interrupted ? kEINTR : 0;
 }
 // Kept for --source baseline rejection: the old function used raw Sleep.
 [[maybe_unused]] static void Sleep(DWORD milliseconds) { InterruptibleSleep(milliseconds, nullptr); }
@@ -182,6 +192,14 @@ static void test_clock_validation() {
           result == EOPNOTSUPP && errno == EDOM);
   }
   check("validation and zero waits never enter Windows wait", waits.empty());
+  for (int clock : {0, 1, 7}) {
+    reset_clock();
+    actions.push_back({0, 0, false, 0, ENOMEM});
+    timespec request{1, 0}, remain{111, 222};
+    check("wait registration failure propagates without success or changed remainder",
+          public_clock_sleep(clock, 0, &request, &remain) == ENOMEM &&
+          errno == EDOM && remain.tv_sec == 111 && remain.tv_nsec == 222 && waits.size() == 1);
+  }
 }
 static void test_clock_budgets() {
   timespec request{0, 5000000}, remain{111, 222};

@@ -21,7 +21,11 @@
 #include <sys/eventfd.h>
 #include "../../compat/posix/src/socket_internal.h"
 namespace gesher::test { int NativeUdpErrorControl(bool blocking); void NativeSupplierRetirement(); void DumpOwnHandleTypes(int mode, uintptr_t caller = 0, uintptr_t observer = 0); }
-namespace gesher::test { void ObserveOwnerThreads(int mode, bool failed); }
+namespace gesher::test {
+void ObserveOwnerThreads(int mode, bool failed);
+bool CalibrateOwnerThreads();
+bool QualifiedOwnerThreadsMatch(int mode);
+}
 #endif
 
 static void require(bool ok, const char* what) {
@@ -332,6 +336,7 @@ static void* submission_connect(void* raw) {
   window.connect_error = errno; window.elapsed = millis() - start; return nullptr;
 }
 static void owned_wait_controls() {
+  require(gesher::test::CalibrateOwnerThreads(), "classify the actual Windows pool and reject a retained ordinary thread");
   gesher::ws::OwnerCensus baseline{};
   for (int mode = 0; mode != 4; ++mode) {
     SubmitWindow window{}; window.mode = mode;
@@ -373,11 +378,13 @@ static void owned_wait_controls() {
     require(close(reserved) == 0 && pthread_cond_destroy(&window.condition) == 0 && pthread_mutex_destroy(&window.mutex) == 0, "owned wait gate cleanup");
     window.operation.reset();  // all caller context handles retire before census
     printf("TCP_PRIORITY_OWNED_REFS mode=%d operation=%ld description=%ld\n", mode, retired_operation.use_count(), retired_description.use_count()); fflush(stdout);
+    require(retired_operation.expired() && retired_description.expired(), "all product owner references retire after last close");
     gesher::ws::OwnerCensus actual{}; require(gesher::ws::ReadConnectOwnerCensus(&actual), "actual production owner handle/thread census");
     if (mode == 0) baseline = actual;
     printf("TCP_PRIORITY_OWNER_CENSUS mode=%d handles=%u/%u threads=%u/%u\n", mode, actual.handles, baseline.handles, actual.threads, baseline.threads); fflush(stdout);
-    gesher::test::ObserveOwnerThreads(mode, actual.handles != baseline.handles || actual.threads != baseline.threads);
-    require(actual.handles == baseline.handles && actual.threads == baseline.threads, "repeated real ownership returns to warm handle and thread baseline");
+    const bool owners_match = gesher::test::QualifiedOwnerThreadsMatch(mode);
+    gesher::test::ObserveOwnerThreads(mode, actual.handles != baseline.handles || !owners_match);
+    require(actual.handles == baseline.handles && owners_match, "repeated real ownership returns to warm handles and exact non-pool thread identities");
   }
   puts("PASS TCP priority: real owned mode flips cancellation send deadline and native owner retirement");
 }

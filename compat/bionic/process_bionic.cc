@@ -577,7 +577,9 @@ int CollectOne(int pid, int* status, int options) {
     }
     if ((options & kWNOHANG) != 0) return 0;
     // Block until a child exits (the watcher sets `exited`), then re-scan.
-    InterruptibleSleep(20, nullptr);
+    int error = 0;
+    InterruptibleSleep(20, nullptr, &error);
+    if (error != 0) return errno = error, -1;
   }
 }
 
@@ -654,9 +656,19 @@ int BIONIC_SYSV Pclose(void* stream) {
     auto it = g_popen.find(stream);
     if (it == g_popen.end()) return errno = EINVAL, -1;
     pid = it->second;
-    g_popen.erase(it);
   }
-  std::fclose(static_cast<FILE*>(stream));
+  int retired = 0;
+  CloseBionicStream(static_cast<FILE*>(stream), &retired);
+  // The descriptor transaction can fail before closing the pipe. Preserve
+  // the child association so the caller can retry, and do not wait on a child
+  // that may still be waiting for EOF from this live pipe.
+  if (!retired) return -1;
+  {
+    std::lock_guard<std::mutex> lock(g_popen_mutex);
+    auto it = g_popen.find(stream);
+    // The CRT slot may already have been reused by a new popen.
+    if (it != g_popen.end() && it->second == pid) g_popen.erase(it);
+  }
   int status = 0;
   if (CollectOne(pid, &status, 0) < 0) return -1;
   return status;

@@ -274,15 +274,17 @@ try {
 
   $out = LocaleRun ($single + '.SetLocalesActivity', (NoDrive $localeApk))
   $code = $LASTEXITCODE
-  $problems = @()
+  $line = LocaleLine $out 'SetLocalesActivity recreated (he-IL) '
+  $problems = @(LocaleStateProblems $line $heWant | ForEach-Object { "recreated: $_" })
   foreach ($want in @('SetLocalesActivity setApplicationLocales(he-IL): getApplicationLocales he-IL',
       'locale: configuration change in this process (app locales he-IL): he-IL,',
       'localeapp: LocaleApp onConfigurationChanged he-IL,',
-      'SetLocalesActivity is not recreated in a single process')) {
+      'SetLocalesActivity relaunching for configuration changes ',
+      'SetLocalesActivity onDestroy (changing configurations true)')) {
     if (-not $out.Contains($want)) { $problems += "missing '$want'" }
   }
   if ($code -ne 0) { $problems += "exit $code" }
-  LocaleCheck 'LocaleManager.setApplicationLocales(he-IL) changes the process''s configuration at once (Application.onConfigurationChanged; the activity is not relaunched in a single process)' $problems $out
+  LocaleCheck 'LocaleManager.setApplicationLocales(he-IL) changes the process''s configuration at once (Application.onConfigurationChanged) and relaunches the activity, which does not handle locale changes, with its saved state (single process)' $problems $out
 
   $out = LocaleRun ($single + '.MainActivity', (NoDrive $localeApk))
   $code = $LASTEXITCODE
@@ -334,7 +336,7 @@ try {
           ("$(& $readLog)" -split "`n" | Select-String -Pattern 'locale: |onConfigurationChanged') | Out-Host
           return $problems } `
         @('HandlesActivity onCreate', 'locale: Windows'' settings changed: ', 'LocaleApp onConfigurationChanged ',
-          'HandlesActivity onConfigurationChanged (it handles the change)', 'HandlesActivity onConfigurationChanged #2', 'gesher-app: done')
+          'HandlesActivity onConfigurationChanged #1', 'HandlesActivity onConfigurationChanged #2', 'gesher-app: done')
     } finally {
       LocaleSetFormat $win.format
     }
