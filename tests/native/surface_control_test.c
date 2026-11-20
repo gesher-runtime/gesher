@@ -258,6 +258,8 @@ static PFNEGLWAITSYNCKHRPROC p_wait_sync;
 static PFNEGLCLIENTWAITSYNCKHRPROC p_client_wait;
 static PFNEGLGETSYNCATTRIBKHRPROC p_sync_attrib;
 
+static EGLConfig g_config;
+
 static int SetUpEgl(void) {
   g_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
   if (g_display == EGL_NO_DISPLAY || !eglInitialize(g_display, NULL, NULL)) return 0;
@@ -267,6 +269,7 @@ static int SetUpEgl(void) {
   EGLConfig config;
   EGLint n = 0;
   if (!eglChooseConfig(g_display, config_attribs, &config, 1, &n) || n < 1) return 0;
+  g_config = config;
   const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
   g_context = eglCreateContext(g_display, config, EGL_NO_CONTEXT, context_attribs);
   const EGLint surface_attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
@@ -499,6 +502,166 @@ static void TestEgl(void) {
   }
 }
 
+// --- contexts current on two threads -------------------------------------------------------------
+//
+// Android's EGL lets each thread keep its own context current and use it
+// while other threads use theirs (Chromium's GPU main thread and its display
+// compositor thread do). The threads take turns so that the second context
+// draws between two draws of the first, which changes only a uniform in
+// between: each context's draws must land in its own framebuffer, with its
+// own program.
+
+typedef struct {
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  int turn;  // 0: the test's thread, 1: the other one
+} Turns;
+
+static Turns g_turns = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0};
+
+static void WaitTurn(int who) {
+  pthread_mutex_lock(&g_turns.mutex);
+  while (g_turns.turn != who) pthread_cond_wait(&g_turns.cond, &g_turns.mutex);
+  pthread_mutex_unlock(&g_turns.mutex);
+}
+
+static void GiveTurn(int to) {
+  pthread_mutex_lock(&g_turns.mutex);
+  g_turns.turn = to;
+  pthread_cond_broadcast(&g_turns.cond);
+  pthread_mutex_unlock(&g_turns.mutex);
+}
+
+// An 8x8 RGBA8 texture as the bound framebuffer's color.
+static void MakeFramebuffer(GLuint* texture, GLuint* framebuffer) {
+  glGenTextures(1, texture);
+  glBindTexture(GL_TEXTURE_2D, *texture);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+  glGenFramebuffers(1, framebuffer);
+  glBindFramebuffer(GL_FRAMEBUFFER, *framebuffer);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texture, 0);
+  glViewport(0, 0, 8, 8);
+}
+
+static uint32_t Pixel(void) {
+  uint32_t px = 0;
+  glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &px);
+  return px;
+}
+
+// A program filling the viewport with the uniform `color` (a triangle made
+// from gl_VertexID, no buffers); 0 on failure.
+static GLuint ColorProgram(GLint* color) {
+  static const char* vs =
+      "#version 300 es\n"
+      "void main() {\n"
+      "  gl_Position = vec4(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0, 0.0, 1.0);\n"
+      "}\n";
+  static const char* fs =
+      "#version 300 es\n"
+      "precision mediump float;\n"
+      "uniform vec4 color;\n"
+      "out vec4 o;\n"
+      "void main() { o = color; }\n";
+  GLuint v = glCreateShader(GL_VERTEX_SHADER), f = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(v, 1, &vs, NULL);
+  glCompileShader(v);
+  glShaderSource(f, 1, &fs, NULL);
+  glCompileShader(f);
+  GLuint program = glCreateProgram();
+  glAttachShader(program, v);
+  glAttachShader(program, f);
+  glLinkProgram(program);
+  glDeleteShader(v);
+  glDeleteShader(f);
+  GLint linked = 0;
+  glGetProgramiv(program, GL_LINK_STATUS, &linked);
+  if (!linked) {
+    glDeleteProgram(program);
+    return 0;
+  }
+  glUseProgram(program);
+  *color = glGetUniformLocation(program, "color");
+  return program;
+}
+
+static void DrawColor(GLint color, float r, float g, float b) {
+  glUniform4f(color, r, g, b, 1);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+static uint32_t g_other_px;
+static int g_other_ready;
+
+static void* OtherContextThread(void* arg) {
+  (void)arg;
+  const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+  EGLContext context = eglCreateContext(g_display, g_config, EGL_NO_CONTEXT, context_attribs);
+  const EGLint surface_attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+  EGLSurface surface = eglCreatePbufferSurface(g_display, g_config, surface_attribs);
+  g_other_ready = context != EGL_NO_CONTEXT && surface != EGL_NO_SURFACE &&
+                  eglMakeCurrent(g_display, surface, surface, context);
+  WaitTurn(1);
+  GLuint texture = 0, framebuffer = 0, program = 0;
+  GLint color = -1;
+  if (g_other_ready) {
+    MakeFramebuffer(&texture, &framebuffer);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    program = ColorProgram(&color);
+    g_other_ready = program != 0;
+    if (program != 0) DrawColor(color, 0, 0, 1);  // blue, between the other context's two draws
+  }
+  GiveTurn(0);
+  WaitTurn(1);
+  if (g_other_ready) g_other_px = Pixel();
+  if (context != EGL_NO_CONTEXT && surface != EGL_NO_SURFACE) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &texture);
+    if (program != 0) glDeleteProgram(program);
+    eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+  }
+  if (surface != EGL_NO_SURFACE) eglDestroySurface(g_display, surface);
+  if (context != EGL_NO_CONTEXT) eglDestroyContext(g_display, context);
+  GiveTurn(0);
+  return NULL;
+}
+
+static void TestTwoThreads(void) {
+  if (g_display == EGL_NO_DISPLAY || g_context == EGL_NO_CONTEXT) return;
+  g_turns.turn = 0;
+  pthread_t other;
+  if (pthread_create(&other, NULL, OtherContextThread, NULL) != 0) {
+    CHECK(0, "a second thread for a second context");
+    return;
+  }
+  GLuint texture = 0, framebuffer = 0;
+  MakeFramebuffer(&texture, &framebuffer);
+  glClearColor(0, 0, 0, 1);
+  glClear(GL_COLOR_BUFFER_BIT);
+  GLint color = -1;
+  GLuint program = ColorProgram(&color);
+  if (program != 0) DrawColor(color, 1, 0, 0);  // red: this framebuffer and program in the device state
+  GiveTurn(1);
+  WaitTurn(0);
+  if (program != 0) DrawColor(color, 0, 1, 0);  // green: only the uniform changed in this context
+  const uint32_t mine = Pixel();
+  GiveTurn(1);
+  WaitTurn(0);
+  pthread_join(other, NULL);
+  glUseProgram(0);
+  if (program != 0) glDeleteProgram(program);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glDeleteFramebuffers(1, &framebuffer);
+  glDeleteTextures(1, &texture);
+  CHECK(program != 0 && g_other_ready, "a second ES 3 context current on a second thread, a program in each");
+  CHECK(mine == GREEN && g_other_px == BLUE,
+        "contexts current on two threads draw into their own framebuffers (0x%08x and 0x%08x; want 0x%08x and "
+        "0x%08x)",
+        mine, g_other_px, GREEN, BLUE);
+}
+
 // --- SurfaceControl ------------------------------------------------------------------------------
 
 typedef struct {
@@ -726,6 +889,7 @@ int sc_test_run(ANativeWindow* window, char* out, size_t n) {
   g_failures = 0;
   TestBuffers();
   TestEgl();
+  TestTwoThreads();
   TestSurfaceControl(window);
   snprintf(out, n, "%d failure(s)", g_failures);
   return g_failures;

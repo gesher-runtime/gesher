@@ -284,8 +284,10 @@ Check 'native libs: the same EGL/GLES window surfaces on WARP' {
 # AHardwareBuffer, the EGL native buffer/fence extensions and ASurfaceControl
 # (ADR 0089): surface_control_test.so (tests/native/surface_control_test.c)
 # checks buffers (CPU locks, ids, errors), images of buffers drawn by the GPU
-# and read by the CPU and the other way round, native fences, and a
-# SurfaceControl tree whose transactions complete in order with their stats;
+# and read by the CPU and the other way round (RGBA and RGBX), native fences,
+# GLES contexts current on two threads drawing in turns (ANGLE's
+# angle_force_context_check_every_call), and a SurfaceControl tree whose
+# transactions complete in order with their stats;
 # surface_control_host_test.exe reads the composed frame back from its window
 # (PrintWindow) and the empty frame once the layers leave. With a binderd of
 # the test's own, a buffer also travels over an AF_UNIX socket (SCM_RIGHTS);
@@ -304,6 +306,8 @@ Check 'native libs: AHardwareBuffer, EGL images and native fences, and ASurfaceC
 } @('surface_control: ok: send/recvHandleFromUnixSocket: 0, 0',
     'surface_control: ok: what the receiver writes, the sender reads (shared memory)',
     'surface_control: ok: a CPU lock after the fence reads what the GPU drew (0 wrong)',
+    'surface_control: ok: the GPU reads an RGBX buffer with alpha 1 (0 wrong)',
+    'surface_control: ok: contexts current on two threads draw into their own framebuffers',
     'surface_control: ok: transactions complete in the order applied',
     'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
     'ok: the window after its layers left: 0 pixel(s) not black',

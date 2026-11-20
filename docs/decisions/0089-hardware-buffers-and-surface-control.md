@@ -191,6 +191,30 @@ routes input by Win32 window, so no receiver can be granted: the functions
 return null (logged once). Chromium treats that as a failed creation and keeps
 handling input in the browser process, as before.
 
+### 6. GLES contexts current on different threads
+
+Chromium's GPU process keeps two GLES contexts current on two threads for
+good: the GPU main thread's (raster) and the display compositor's (DrDc),
+each in a share group of its own, exchanging AHardwareBuffers. Android's EGL
+allows that, and Gesher's hwui RenderThread draws on the same ANGLE display
+as every app thread's context (`compat/hwui/gl/angle_gl.cc`). ANGLE's
+Direct3D 11 back end has one device context and one state cache per display; with its default options a context's GL calls
+take only that context's mutex (contexts of different share groups run
+concurrently), and the cache is reset only by `eglMakeCurrent`. A context
+that draws after another context drew, with no state change of its own in
+between, then draws with the other context's framebuffer and program
+(`tests/native/surface_control_test.c` draws that way from two threads: with
+ANGLE's default options the first context's draw went to the second one's
+framebuffer).
+
+`compat/angle/args.gn` sets `angle_force_context_check_every_call = true`,
+ANGLE's option for this: every GL call takes the global EGL mutex, and a
+context that is not the one that made the previous call marks all of its
+state dirty before the call, so its own state is applied before it draws.
+The cost is the global lock per call (contexts on different threads no
+longer run GL calls concurrently, which the single device context could not
+do safely anyway) and a full state resync when the calling context changes.
+
 ## Consequences
 
 - Chromium's GPU process loads its SurfaceControl set and presents through it:
@@ -200,6 +224,8 @@ handling input in the browser process, as before.
   existing forwarding copies per frame, the same order of cost as the EGL
   child surfaces of ADR 0056.
 - Native fences cost CPU/GPU overlap (section 3).
+- GL calls of all contexts in a process are serialized, and switching between
+  contexts resyncs their whole state (section 6).
 - The window's own buffers and its layers are not composed together: frames
   the app posts to the same ANativeWindow directly and the layer tree's frames
   replace each other. Applications use one or the other.
