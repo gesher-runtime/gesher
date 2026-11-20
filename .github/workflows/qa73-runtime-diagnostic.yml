@@ -1,0 +1,91 @@
+name: qa73-runtime-diagnostic
+on:
+  push:
+    branches: ['qa/diagnostic-pr73-runtime-20261120']
+    paths:
+      - '.github/workflows/qa73-runtime-diagnostic.yml'
+      - 'tools/qa73-diagnostic/**'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: qa73-runtime-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch and verify the exact production compiler and pinned AOSP inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/qa73-toolchain"
+          curl --fail --location --connect-timeout 20 --max-time 180 \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" \
+            -o "$RUNNER_TEMP/qa73-toolchain/compiler.tar.xz"
+          printf '%s  %s\n' "$LLVM_MINGW_SHA256" "$RUNNER_TEMP/qa73-toolchain/compiler.tar.xz" | sha256sum --check --strict
+          tar -xJf "$RUNNER_TEMP/qa73-toolchain/compiler.tar.xz" -C "$RUNNER_TEMP/qa73-toolchain"
+          python3 tools/pipe-component/prepare-inputs.py "$RUNNER_TEMP/qa73-aosp"
+      - name: Build actual POSIX and process providers with unchanged original tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tools/qa73-diagnostic -B "$RUNNER_TEMP/qa73-build" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/toolchain-llvm-mingw.cmake" \
+            -DLLVM_MINGW="$RUNNER_TEMP/qa73-toolchain/$LLVM_MINGW_NAME" \
+            -DAOSP_DIR="$RUNNER_TEMP/qa73-aosp" -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build "$RUNNER_TEMP/qa73-build" --parallel 4 --target \
+            pipe_job_runner stdio_ofd_test stdio_ofd_observed ofd_spawn_original \
+            ofd_spawn_observed ofd_native_child native_child_observed puzzles_pipe_probe binder_observer
+          python3 tools/qa73-diagnostic/diagnostic.py package --build "$RUNNER_TEMP/qa73-build" \
+            --inputs "$RUNNER_TEMP/qa73-aosp" --toolchain "$RUNNER_TEMP/qa73-toolchain/$LLVM_MINGW_NAME" \
+            --archive "$RUNNER_TEMP/qa73-toolchain/compiler.tar.xz" --out "$RUNNER_TEMP/qa73-controls"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qa73-controls-${{ github.sha }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qa73-controls/
+          if-no-files-found: error
+          retention-days: 7
+  windows:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify current producer and exact historical failed control
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/artifact_receipt.py --name "qa73-controls-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT" --producer build --destination qa73-controls
+          if ($LASTEXITCODE -ne 0) { throw 'Current producer/archive verification failed' }
+          python tools/qa73-diagnostic/diagnostic.py verify --out qa73-controls
+          if ($LASTEXITCODE -ne 0) { throw 'Current source/output verification failed' }
+          python tools/qa73-diagnostic/diagnostic.py historical --out qa73-controls/historical
+          if ($LASTEXITCODE -ne 0) { throw 'Historical producer/archive verification failed' }
+      - name: Observe original assertions, actual bytes, child status and root retirement
+        shell: pwsh
+        run: tools/qa73-diagnostic/run.ps1 -Dir qa73-controls
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa73-results-${{ matrix.os }}-${{ github.sha }}-a${{ github.run_attempt }}
+          path: qa73-controls/results/
+          if-no-files-found: error
+          retention-days: 7
