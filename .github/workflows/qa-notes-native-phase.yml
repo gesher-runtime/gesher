@@ -1,0 +1,84 @@
+name: qa-notes-native-phase
+on:
+  push:
+    branches: ['qa/diagnostic-notes-native-phase-20261120']
+    paths:
+      - '.github/workflows/qa-notes-native-phase.yml'
+      - 'tools/qa-notes-native-phase/**'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: qa-notes-native-phase-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare pinned product toolchain
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/llvm-mingw.tar.xz"
+          curl --fail --location --retry 2 --output "$archive" https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz
+          echo "5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4  $archive" | sha256sum --check
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          echo "LLVM_MINGW=$RUNNER_TEMP/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64" >> "$GITHUB_ENV"
+      - name: Build unchanged and insertion-only observed native bridges
+        run: python tools/qa-notes-native-phase/build.py --out "$RUNNER_TEMP/notes-phase-build"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes-native-phase-bridges
+          path: ${{ runner.temp }}/notes-phase-build/package/
+          if-no-files-found: error
+          retention-days: 7
+  notes:
+    needs: build
+    name: notes (${{ matrix.os }}, ${{ matrix.mode }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        mode: [original, rebuilt, trace]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify historical package and exact current bridge producer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'notes-native-phase'
+          "QA_NOTES_OUT=$out" >> $env:GITHUB_ENV
+          python tools/qa-notes-native-phase/diagnostic.py input --out $out
+          if ($LASTEXITCODE -ne 0) { throw 'Exact source/producer/archive validation failed' }
+      - name: Prepare unchanged Android SDK APK identity collector
+        shell: pwsh
+        run: ./tests/e2e/prepare-identity-sdk.ps1
+      - name: Run original default Notes with the selected native bridge
+        shell: pwsh
+        run: |
+          ./tools/qa-notes-native-phase/run.ps1 -Mode '${{ matrix.mode }}' -Out $env:QA_NOTES_OUT
+          exit $LASTEXITCODE
+      - name: Preserve original result, rendering evidence and actual native phases
+        if: always()
+        shell: pwsh
+        run: |
+          python tools/qa-notes-native-phase/diagnostic.py summarize --out $env:QA_NOTES_OUT --mode '${{ matrix.mode }}' --os '${{ matrix.os }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Original result or exact diagnostic evidence failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notes-native-phase-${{ matrix.os }}-${{ matrix.mode }}-${{ github.sha }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/notes-native-phase/results/
+          if-no-files-found: error
+          retention-days: 7
