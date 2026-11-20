@@ -33,14 +33,18 @@
 #include <jni.h>
 #include <stdint.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <ctime>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #include <binder/Binder.h>
 #include <binder/IBinder.h>
@@ -94,10 +98,11 @@ class SurfaceSink : public BBinder {
  protected:
   ~SurfaceSink() override { weak_->decWeak(this); }
 
-  // kFrame: int32 width, int32 height, int64 time stamp, the memfd with the
-  // pixels (RGBA_8888, width pixels a row). Answered with int32 status (OK;
-  // NO_INIT: the consumer is gone; BAD_VALUE: not a frame) and the consumer's
-  // current size.
+  // kFrame: int32 width, int32 height, int64 time stamp, uint64 the memfd's id
+  // (its producer's: a new memfd has a new one), the memfd with the pixels
+  // (RGBA_8888, width pixels a row). Answered with int32 status (OK; NO_INIT:
+  // the consumer is gone; BAD_VALUE: not a frame) and the consumer's current
+  // size.
   status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags) override {
     if (code != kFrame) return BBinder::onTransact(code, data, reply, flags);
     if (!data.enforceInterface(Descriptor())) return PERMISSION_DENIED;
@@ -116,36 +121,86 @@ class SurfaceSink : public BBinder {
   }
 
  private:
-  static status_t Queue(jlong surface, const Parcel& data) {
+  // A producer's memfd, mapped (read-only) for as long as frames keep coming
+  // in it: mapping and unmapping it for each frame cost more than copying the
+  // frame (every page of a new view faults on first read).
+  struct Mapping {
+    uint64_t id = 0;
+    void* pixels = nullptr;
+    size_t size = 0;
+    ~Mapping() {
+      if (pixels != nullptr) munmap(pixels, size);
+    }
+  };
+  // The memfds of the last producers to queue here (usually one).
+  static constexpr size_t kMappings = 2;
+
+  // The mapping of memfd `id`, from the cache or made from `fd` (which holds
+  // at least `bytes`); null with *status BAD_VALUE (no memfd, or one shorter
+  // than the frame) or NO_MEMORY (it cannot be mapped).
+  std::shared_ptr<Mapping> MappingFor(uint64_t id, int fd, size_t bytes, status_t* status) {
+    {
+      std::lock_guard<std::mutex> lock(mappings_mutex_);
+      for (size_t i = 0; i < mappings_.size(); i++) {
+        if (mappings_[i]->id == id && mappings_[i]->size >= bytes) {
+          std::shared_ptr<Mapping> m = mappings_[i];
+          mappings_.erase(mappings_.begin() + static_cast<std::ptrdiff_t>(i));
+          mappings_.insert(mappings_.begin(), m);  // most recent first
+          return m;
+        }
+      }
+    }
+    struct stat st {};
+    // A memfd shorter than the frame would fault where the mapping passes its end.
+    if (fd < 0 || fstat(fd, &st) != 0 || st.st_size < 0 ||
+        static_cast<uint64_t>(st.st_size) < bytes) {
+      *status = BAD_VALUE;
+      return nullptr;
+    }
+    auto m = std::make_shared<Mapping>();
+    m->id = id;
+    m->size = static_cast<size_t>(st.st_size);
+    void* pixels = mmap(nullptr, m->size, PROT_READ, MAP_SHARED, fd, 0);
+    if (pixels == MAP_FAILED) {
+      *status = NO_MEMORY;
+      return nullptr;
+    }
+    m->pixels = pixels;
+    std::lock_guard<std::mutex> lock(mappings_mutex_);
+    // Another memfd of the same id (its producer replaced it): this one now.
+    std::erase_if(mappings_, [id](const auto& other) { return other->id == id; });
+    mappings_.insert(mappings_.begin(), m);
+    if (mappings_.size() > kMappings) mappings_.pop_back();  // unmapped once no frame reads it
+    return m;
+  }
+
+  status_t Queue(jlong surface, const Parcel& data) {
     int32_t width = 0, height = 0;
     int64_t timestamp = 0;
+    uint64_t id = 0;
     if (data.readInt32(&width) != OK || data.readInt32(&height) != OK ||
-        data.readInt64(&timestamp) != OK || width <= 0 || height <= 0 || width > kMaxSide ||
-        height > kMaxSide) {
+        data.readInt64(&timestamp) != OK || data.readUint64(&id) != OK || width <= 0 ||
+        height <= 0 || width > kMaxSide || height > kMaxSide) {
       return BAD_VALUE;
     }
     // The Parcel's descriptor (it closes it).
     const int fd = data.readFileDescriptor();
     const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-    // A memfd shorter than the frame would fault where the mapping passes its end.
-    struct stat st {};
-    if (fd < 0 || fstat(fd, &st) != 0 || st.st_size < 0 ||
-        static_cast<uint64_t>(st.st_size) < bytes) {
-      return BAD_VALUE;
-    }
-    static gesher::perf::Site site("surface sink: map + post a forwarded frame");
+    static gesher::perf::Site site("surface sink: post a forwarded frame");
     const int64_t start = gesher::perf::Now();
-    void* pixels = mmap(nullptr, bytes, PROT_READ, MAP_SHARED, fd, 0);
-    if (pixels == MAP_FAILED) return NO_MEMORY;
+    status_t status = OK;
+    std::shared_ptr<Mapping> m = MappingFor(id, fd, bytes, &status);
+    if (m == nullptr) return status;
     const bool queued = gesher_surface_post(surface, width, height, width, timestamp,
-                                            static_cast<const uint32_t*>(pixels));
-    munmap(pixels, bytes);
+                                            static_cast<const uint32_t*>(m->pixels));
     site.Add(gesher::perf::Now() - start);
     return queued ? OK : NO_INIT;
   }
 
   const jlong surface_;
   RefBase::weakref_type* const weak_;
+  std::mutex mappings_mutex_;
+  std::vector<std::shared_ptr<Mapping>> mappings_;
 };
 
 std::mutex gSinksMutex;
@@ -190,10 +245,31 @@ struct Forwarder {
   // One frame at a time: the memfd is the consumer's to read until it answers.
   std::mutex mutex;
   int fd = -1;
+  uint64_t id = 0;  // the memfd's (MemfdId), sent with each frame in it
   size_t capacity = 0;
   void* map = nullptr;
   bool warned = false;
 };
+
+// An id for a new memfd of this process, which no other memfd of any process
+// has had: consumers keep a producer's memfd mapped while frames come in the
+// memfd of the same id, so an id never names two memfds. A random half per
+// process (a process of the same pid later gets another), a count the other.
+uint64_t MemfdId() {
+  static const uint64_t process = [] {
+    uint64_t r = 0;
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+      if (read(fd, &r, sizeof r) != static_cast<ssize_t>(sizeof r)) r = 0;
+      close(fd);
+    }
+    // Without /dev/urandom: the pid and the time, still unlike other processes'.
+    if (r == 0) r = (static_cast<uint64_t>(getpid()) << 20) ^ static_cast<uint64_t>(time(nullptr));
+    return r << 32;
+  }();
+  static std::atomic<uint32_t> count{0};
+  return process | (count.fetch_add(1, std::memory_order_relaxed) + 1);
+}
 
 std::mutex gForwardersMutex;
 // A Surface read from a Parcel -> its producer side, while it has one.
@@ -227,6 +303,7 @@ bool Reserve(Forwarder* f, size_t bytes) {
     if (map != MAP_FAILED) {
       f->map = map;
       f->capacity = bytes;
+      f->id = MemfdId();
       return true;
     }
   }
@@ -260,6 +337,7 @@ void Forward(void* context, jlong surface, int width, int height, int64_t timest
     data.writeInt32(width);
     data.writeInt32(height);
     data.writeInt64(timestamp);
+    data.writeUint64(f->id);
     data.writeFileDescriptor(f->fd);
     const status_t transport = f->sink->transact(kFrame, data, &reply);
     transact_site.Add(gesher::perf::Now() - copied);

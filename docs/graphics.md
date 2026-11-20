@@ -577,8 +577,12 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   the consumer's process, and the consumer's size. Read in another process (Chromium's
   GPU process given the browser's SurfaceView), it is a forwarding QueueSurface: each
   frame queued goes to the endpoint in a memfd the producer reuses (one per producer,
-  grown when a frame is larger), with its size and time stamp, in a synchronous
-  transaction; the endpoint queues it to the consumer's QueueSurface
+  grown when a frame is larger), with its size, time stamp and the memfd's id (new for
+  each memfd, unique across processes), in a synchronous transaction; the endpoint
+  keeps the memfds of its last two producers mapped while frames keep coming in them
+  (mapping and unmapping a 1280x720 frame's memfd for each frame cost 1 to 3 ms in page
+  faults, against 0.2 to 0.7 ms to post it from a mapping kept) and queues the frame to
+  the consumer's QueueSurface
   (`QueueSurface::PostFrame`, which leaves the consumer's own producer state alone) and
   answers with the consumer's current size, which becomes the producer's default size
   (libgui takes it from each queueBuffer's output the same way). Once the consumer is gone
