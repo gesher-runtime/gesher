@@ -17,6 +17,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <link.h>
 #include <math.h>
 #include <mntent.h>
@@ -112,6 +113,21 @@ static void test_strings(void) {
   check("strtol returns a 64-bit long", big == 9000000000L);
   check("strtoul hex", strtoul("ffffffffff", NULL, 16) == 0xffffffffffUL);
   check("atoi", atoi("-42") == -42);
+}
+
+// fnmatch with bionic's flag values (FNM_NOESCAPE 0x01, FNM_PATHNAME 0x02),
+// each flag on its own, so swapped values would fail (Opera's libopera.so).
+static void test_fnmatch(void) {
+  check("fnmatch matches and reports FNM_NOMATCH",
+        fnmatch("*.so", "libopera.so", 0) == 0 && fnmatch("*.so", "libopera.a", 0) == FNM_NOMATCH);
+  check("fnmatch FNM_PATHNAME: '*' does not cross '/'",
+        fnmatch("lib/*", "lib/x86_64/a.so", FNM_PATHNAME) == FNM_NOMATCH &&
+        fnmatch("lib/*", "lib/x86_64/a.so", 0) == 0);
+  check("fnmatch FNM_NOESCAPE: '\\' is an ordinary character",
+        fnmatch("a\\*", "a\\x", FNM_NOESCAPE) == 0 && fnmatch("a\\*", "a*", FNM_NOESCAPE) == FNM_NOMATCH &&
+        fnmatch("a\\*", "a*", 0) == 0);
+  check("fnmatch FNM_PERIOD and FNM_CASEFOLD",
+        fnmatch("*", ".hidden", FNM_PERIOD) == FNM_NOMATCH && fnmatch("*.SO", "a.so", FNM_CASEFOLD) == 0);
 }
 
 // bionic's ctype table, read directly by code built for an old API level
@@ -849,6 +865,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_sleep_contracts();
   test_timerfd_syscalls();
   test_strings();
+  test_fnmatch();
   test_ctype_table();
   test_urandom_stdio();
   test_stream_device_contracts();
