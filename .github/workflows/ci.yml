@@ -48,3 +48,5 @@ jobs:
             throw "Seeded owned input-handle leak was not detected at the original resource assertion (exit=$negativeExit)"
           }
           Write-Host "NEGATIVE_OWNED_HANDLE_LEAK positive=$positiveExit expected-resource-failure=$negativeExit"
+          # Both strict guards passed; the negative executable's exit1 is expected.
+          exit 0
