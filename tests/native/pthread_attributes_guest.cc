@@ -39,6 +39,15 @@ bool DescriptorPageReadable(pthread_t thread) {
   }
   return true;
 }
+// pthread_internal_t: next and prev links, then tid and the 31-bit cached
+// pid. Call only after DescriptorPageReadable() accepted the address.
+bool DescriptorFieldsMatch(pthread_t thread) {
+  uintptr_t address = static_cast<uintptr_t>(thread);
+  uintptr_t fields = address + 2 * sizeof(void*);
+  int32_t tid = *reinterpret_cast<const volatile int32_t*>(fields);
+  uint32_t pid = *reinterpret_cast<const volatile uint32_t*>(fields + sizeof(int32_t));
+  return tid == gettid() && static_cast<pid_t>(pid & 0x7fffffffu) == getpid();
+}
 #endif
 struct Worker {
   std::atomic<bool> ready{false}, stop{false}, leaving{false};
@@ -49,6 +58,7 @@ struct Worker {
 #if defined(__BIONIC__)
   pthread_t self = 0;
   bool self_readable = false;
+  bool self_fields = false;
 #endif
 };
 void* Run(void* raw) {
@@ -60,6 +70,7 @@ void* Run(void* raw) {
 #if defined(__BIONIC__)
   worker.self = current;
   worker.self_readable = DescriptorPageReadable(current);
+  worker.self_fields = worker.self_readable && DescriptorFieldsMatch(current);
 #endif
   worker.result = pthread_getattr_np(current, &self);
   if (worker.result == 0) {
@@ -106,7 +117,8 @@ int main() {
   Check(pthread_attr_setstack(&attr, reinterpret_cast<void*>(0x100001), 16384) == EINVAL &&
             pthread_attr_setstack(&attr, reinterpret_cast<void*>(0x100000), 16385) == EINVAL,
         "Android supplied stack alignment");
-  Check(DescriptorPageReadable(pthread_self()), "main thread descriptor page is readable");
+  Check(DescriptorPageReadable(pthread_self()) && DescriptorFieldsMatch(pthread_self()),
+        "main thread descriptor is readable with Bionic tid and pid");
 #endif
   pthread_attr_destroy(&attr);
   int caller = 0;
@@ -133,6 +145,7 @@ int main() {
 #if defined(__BIONIC__)
     Check(pthread_equal(worker.self, target) != 0 && worker.self_readable,
           "worker pthread_self matches peer handle and descriptor page is readable");
+    Check(worker.self_fields, "worker descriptor holds gettid() and getpid() at Bionic offsets");
 #endif
     if (kind == 2) Check(pthread_detach(target) == 0, "public detach running target");
     Check(pthread_getattr_np(target, &peer) == 0 &&
