@@ -66,6 +66,7 @@
 #include <windows.h>
 
 #include "egl_child_surface.h"  // surfaces track: windows without an HWND
+#include "egl_native_buffer.h"  // ADR 0089: native buffers and fences
 
 #ifndef EGL_PLATFORM_ANGLE_ANGLE
 #define EGL_PLATFORM_ANGLE_ANGLE 0x3202
@@ -619,6 +620,8 @@ void Register() {
   };
   for (const GlThunk& t : kGlThunks) add(t.name, t.thunk);
   for (const GlThunk& t : kHandwritten) add(t.name, t.thunk);
+  // AHardwareBuffer images, native fences, the extension string (ADR 0089).
+  RegisterNativeBufferEgl(add);
   add("eglGetProcAddress", reinterpret_cast<void*>(&EglGetProcAddress));
 }
 

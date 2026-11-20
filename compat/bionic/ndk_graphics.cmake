@@ -16,7 +16,12 @@ set(_gl_handwritten eglGetDisplay eglGetPlatformDisplay eglGetPlatformDisplayEXT
   eglDebugMessageControlKHR eglSetBlobCacheFuncsANDROID glDebugMessageCallback
   glDebugMessageCallbackKHR
   # surfaces track (egl_child_surface.cc): a child surface's frame is posted before the swap.
-  eglSwapBuffers eglSwapBuffersWithDamageKHR eglSwapBuffersWithDamageEXT)
+  eglSwapBuffers eglSwapBuffersWithDamageKHR eglSwapBuffersWithDamageEXT
+  # ADR 0089 (egl_native_buffer.cc): AHardwareBuffer images, native fences, the extensions.
+  eglGetNativeClientBufferANDROID eglCreateImageKHR eglCreateImage eglDestroyImageKHR
+  eglDestroyImage eglCreateSyncKHR eglCreateSync eglDestroySyncKHR eglDestroySync
+  eglClientWaitSyncKHR eglClientWaitSync eglWaitSyncKHR eglWaitSync eglGetSyncAttribKHR
+  eglGetSyncAttrib eglSignalSyncKHR eglDupNativeFenceFDANDROID eglQueryString)
 set(_gl_headers)
 foreach(h EGL/egl.h EGL/eglext.h GLES3/gl32.h GLES3/gl31.h GLES3/gl3.h GLES2/gl2.h
     GLES2/gl2ext.h GLES/gl.h GLES/glext.h)
@@ -34,6 +39,11 @@ add_library(gesher_ndk_graphics OBJECT
   ${CMAKE_CURRENT_LIST_DIR}/libandroid_window.cc
   ${CMAKE_CURRENT_LIST_DIR}/egl_gles.cc
   ${CMAKE_CURRENT_LIST_DIR}/egl_child_surface.cc
+  # ADR 0089: AHardwareBuffer, ASurfaceControl, their EGL half, the GPU thread.
+  ${CMAKE_CURRENT_LIST_DIR}/gpu_interop.cc
+  ${CMAKE_CURRENT_LIST_DIR}/hardware_buffer.cc
+  ${CMAKE_CURRENT_LIST_DIR}/surface_control.cc
+  ${CMAKE_CURRENT_LIST_DIR}/egl_native_buffer.cc
   ${_gl_gen}/gl_thunks.inc)
 target_include_directories(gesher_ndk_graphics PRIVATE ${CMAKE_CURRENT_LIST_DIR} ${_gl_gen}
   ${_gl_include} ${CMAKE_SOURCE_DIR}/compat/hwui/window)

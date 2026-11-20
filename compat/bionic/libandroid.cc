@@ -34,6 +34,7 @@
 #include "extra_bionic.h"
 #include "jni_bridge.h"
 #include "shim_internal.h"
+#include "surface_control.h"
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
@@ -58,6 +59,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -464,6 +466,38 @@ jobject BIONIC_SYSV WindowToSurface(JNIEnv* env, ANativeWindow* window) {
   return ANativeWindow_toSurface(RealJniEnv(env), window);
 }
 
+// ASurfaceControl_fromJava (API 34): the layer standing for a Java
+// SurfaceControl, by its native object (surface_control.cc keeps the layers;
+// ADR 0089). As on Android, a null or released SurfaceControl is fatal.
+ASurfaceControl* BIONIC_SYSV SurfaceControlFromJava(JNIEnv* env, jobject surface_control) {
+  JNIEnv* real = RealJniEnv(env);
+  if (surface_control == nullptr) {
+    std::fprintf(stderr, "gesher libandroid: ASurfaceControl_fromJava: null SurfaceControl\n");
+    std::abort();
+  }
+  jclass c = real->FindClass("android/view/SurfaceControl");
+  jfieldID native_field = c != nullptr ? real->GetFieldID(c, "mNativeObject", "J") : nullptr;
+  jfieldID name_field = c != nullptr ? real->GetFieldID(c, "mName", "Ljava/lang/String;") : nullptr;
+  if (real->ExceptionCheck()) real->ExceptionClear();
+  const jlong native_object = native_field != nullptr ? real->GetLongField(surface_control, native_field) : 0;
+  if (native_object == 0) {
+    std::fprintf(stderr, "gesher libandroid: ASurfaceControl_fromJava: the SurfaceControl is not valid\n");
+    std::abort();
+  }
+  std::string name = "java";
+  if (name_field != nullptr) {
+    if (auto s = static_cast<jstring>(real->GetObjectField(surface_control, name_field))) {
+      if (const char* utf = real->GetStringUTFChars(s, nullptr)) {
+        name = utf;
+        real->ReleaseStringUTFChars(s, utf);
+      }
+      real->DeleteLocalRef(s);
+    }
+  }
+  if (c != nullptr) real->DeleteLocalRef(c);
+  return sc::ForJavaSurfaceControl(native_object, name.c_str());
+}
+
 // --- the table ---------------------------------------------------------------------------------------
 
 void Register() {
@@ -575,6 +609,8 @@ void Register() {
       // Surfaces (the rest of ANativeWindow_*: libandroid_window.cc).
       E("ANativeWindow_fromSurface", WindowFromSurface),
       E("ANativeWindow_toSurface", WindowToSurface),
+      // The rest of ASurfaceControl_*: surface_control.cc.
+      E("ASurfaceControl_fromJava", SurfaceControlFromJava),
       // ANativeActivity_*: native_activity.cc.
   };
 #undef CFG
