@@ -11,6 +11,8 @@ on:
   workflow_run:
     workflows: [ci, arm64-windows]
     types: [completed]
+  repository_dispatch:
+    types: [gesher-automerge-reconcile]
   # Recovery only: reconcile labeled PRs whose CI finished while the QA gate
   # stayed pending, for example after a controller run hit an API quota.
   schedule:
@@ -46,7 +48,9 @@ jobs:
       !(github.event_name == 'pull_request_target' && github.event.action == 'edited' &&
         github.event.changes.base == null)
     concurrency:
-      group: merge-approval-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha || github.run_id }}
+      # App-mode bulk/fork jobs only enqueue work. Every job that can publish
+      # success or arm native waiting has the same per-PR concurrency key.
+      group: merge-approval-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.client_payload.pull_request_number || inputs.pull_request_number || github.event.workflow_run.head_sha || github.run_id }}
       queue: max
     # Only the trusted main workflow can use the privileged controller pool.
     # Review-event YAML from a PR remains hosted; the group also pins main.

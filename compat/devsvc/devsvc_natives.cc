@@ -8,7 +8,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits>
 #include <string>
+#include <cstdio>
 
 #include "core_jni_helpers.h"
 #include "devsvc_win32.h"
@@ -130,6 +132,7 @@ namespace dev = gesher::devsvc;
 std::u16string Str(JNIEnv* env, jstring s) {
   if (s == nullptr) return std::u16string();
   const jchar* chars = env->GetStringChars(s, nullptr);
+  if (chars == nullptr) return std::u16string();
   std::u16string result(reinterpret_cast<const char16_t*>(chars), env->GetStringLength(s));
   env->ReleaseStringChars(s, chars);
   return result;
@@ -187,6 +190,8 @@ jint WindowsHost_alarmWait(JNIEnv*, jclass, jlong utcMillis, jboolean wakeup, ji
 
 void WindowsHost_alarmKick(JNIEnv*, jclass) { dev::AlarmKick(); }
 
+jint WindowsHost_appsUseLightTheme(JNIEnv*, jclass) { return gesher::devsvc::AppsUseLightTheme(); }
+
 jintArray WindowsHost_powerStatus(JNIEnv* env, jclass) {
   int status[4];
   if (!dev::PowerStatus(status)) return nullptr;
@@ -234,6 +239,12 @@ jint WindowsHost_clearToasts(JNIEnv* env, jclass, jstring appId) {
   return static_cast<jint>(dev::ClearToasts(Str(env, appId)));
 }
 
+jint WindowsHost_removeToastIfLaunch(JNIEnv* env, jclass, jstring appId, jstring tag,
+                                     jstring group, jstring launch) {
+  return static_cast<jint>(dev::RemoveToastIfLaunch(Str(env, appId), Str(env, tag),
+                                                   Str(env, group), Str(env, launch)));
+}
+
 jint WindowsHost_registerAppId(JNIEnv* env, jclass, jstring appId, jstring displayName,
                                jstring icon) {
   return static_cast<jint>(
@@ -268,6 +279,75 @@ jstring WindowsHost_pickFile(JNIEnv* env, jclass, jstring title) {
   std::u16string t = title != nullptr ? Str(env, title) : std::u16string();
   std::u16string path = dev::PickFile(t);
   return path.empty() ? nullptr : JStr(env, path);
+}
+
+struct DocumentActivity {
+  JNIEnv* env;
+  jobject active;
+  jmethodID get;
+};
+
+bool DocumentIsActive(void* context) {
+  auto* activity = static_cast<DocumentActivity*>(context);
+  if (activity->env->ExceptionCheck()) return false;
+  bool result = activity->env->CallBooleanMethod(activity->active, activity->get) == JNI_TRUE;
+  return !activity->env->ExceptionCheck() && result;
+}
+
+jobjectArray WindowsHost_pickDocuments(JNIEnv* env, jclass, jint mode, jstring title,
+    jstring name, jstring initial, jstring filter, jstring extension, jboolean multiple,
+    jboolean local_only, jint owner_pid, jobject active) {
+  if (!active) { ThrowNullPointerException(env, "Document picker lifetime is required"); return nullptr; }
+  jclass cls = env->GetObjectClass(active);
+  if (!cls) return nullptr;
+  jmethodID get = env->GetMethodID(cls, "getAsBoolean", "()Z");
+  env->DeleteLocalRef(cls);
+  if (!get) return nullptr;
+  DocumentActivity activity{env, active, get};
+  auto text = Str(env, title);
+  if (env->ExceptionCheck()) return nullptr;
+  auto suggested = Str(env, name);
+  if (env->ExceptionCheck()) return nullptr;
+  auto directory = Str(env, initial);
+  if (env->ExceptionCheck()) return nullptr;
+  auto pattern = Str(env, filter);
+  if (env->ExceptionCheck()) return nullptr;
+  auto suffix = Str(env, extension);
+  if (env->ExceptionCheck()) return nullptr;
+  auto selection = dev::PickDocuments(mode, text, suggested, directory, pattern, suffix,
+      multiple == JNI_TRUE, local_only == JNI_TRUE, owner_pid, DocumentIsActive, &activity);
+  if (env->ExceptionCheck()) return nullptr;
+  if (selection.error) {
+    char message[96];
+    std::snprintf(message, sizeof(message), "Windows document dialog failed (HRESULT 0x%08lx)",
+        static_cast<unsigned long>(selection.error));
+    ThrowIoException(env, message); return nullptr;
+  }
+  if (selection.paths.empty()) return nullptr;
+  if (selection.paths.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+    ThrowIoException(env, "Document selection cannot be represented by a Java array");
+    return nullptr;
+  }
+  cls = env->FindClass("java/lang/String");
+  if (!cls) return nullptr;
+  jobjectArray result = env->NewObjectArray(static_cast<jsize>(selection.paths.size()), cls, nullptr);
+  env->DeleteLocalRef(cls);
+  if (!result) return nullptr;
+  for (size_t i = 0; i < selection.paths.size(); ++i) {
+    jstring path = JStr(env, selection.paths[i]);
+    if (!path) return nullptr;
+    env->SetObjectArrayElement(result, static_cast<jsize>(i), path);
+    env->DeleteLocalRef(path);
+    if (env->ExceptionCheck()) return nullptr;
+  }
+  return result;
+}
+
+jboolean WindowsHost_isLocalDocument(JNIEnv* env, jclass, jstring path) {
+  if (!path) { ThrowNullPointerException(env, "Document path is required"); return JNI_FALSE; }
+  auto value = Str(env, path);
+  if (env->ExceptionCheck()) return JNI_FALSE;
+  return dev::IsLocalDocument(value) ? JNI_TRUE : JNI_FALSE;
 }
 
 // Defined JNIEXPORT ... JNICALL (clipboard_bridge.cc, notifications.cc): System V
@@ -307,6 +387,7 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeClipboardSequence", "()I", GESHER_JNI(WindowsHost_clipboardSequence)},
     {"nativeAlarmWait", "(JZI)I", GESHER_JNI(WindowsHost_alarmWait)},
     {"nativeAlarmKick", "()V", GESHER_JNI(WindowsHost_alarmKick)},
+    {"nativeAppsUseLightTheme", "()I", GESHER_JNI(WindowsHost_appsUseLightTheme)},
     {"nativePowerStatus", "()[I", GESHER_JNI(WindowsHost_powerStatus)},
     {"nativeKeepAwake", "(" DEVSVC_STRING "ZZ)Z", GESHER_JNI(WindowsHost_keepAwake)},
     {"nativeIdleMillis", "()J", GESHER_JNI(WindowsHost_idleMillis)},
@@ -318,6 +399,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
      GESHER_JNI(WindowsHost_showToast)},
     {"nativeRemoveToast", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING ")I",
      GESHER_JNI(WindowsHost_removeToast)},
+    {"nativeRemoveToastIfLaunch", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING ")I",
+     GESHER_JNI(WindowsHost_removeToastIfLaunch)},
     {"nativeClearToasts", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_clearToasts)},
     {"nativeShowNotificationBridge",
      "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "I)I",
@@ -331,6 +414,9 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeOpenUrl", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_openUrl)},
     {"nativePickFolder", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFolder)},
     {"nativePickFile", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_pickFile)},
+    {"nativePickDocuments", "(I" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING
+        DEVSVC_STRING "ZZILjava/util/function/BooleanSupplier;)[Ljava/lang/String;", GESHER_JNI(WindowsHost_pickDocuments)},
+    {"nativeIsLocalDocument", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_isLocalDocument)},
     {"nativeIanaZone", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_ianaZone)},
     {"nativeRegisterActivator", "(Z)I", GESHER_JNI(WindowsHost_registerActivator)},
     {"nativeRevokeActivator", "()V", GESHER_JNI(WindowsHost_revokeActivator)},

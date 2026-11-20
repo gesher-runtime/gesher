@@ -7,6 +7,16 @@ const APP_ID = 5816428;
 const INSTALLATION_ID = 183304638;
 const BOT_ID = 358279050;
 
+function trustedStatus(value, owner, repo, sha, context, state) {
+  const writer = context === APP_STATUS ? {id: BOT_ID, login: APP_SLUG + '[bot]'} :
+    context === STATUS ? {id: 41898282, login: 'github-actions[bot]'} : null;
+  return writer !== null && Number.isSafeInteger(value?.id) && value.id > 0 &&
+    value.context === context && value.state === state &&
+    value.creator?.id === writer.id && value.creator.type === 'Bot' &&
+    value.creator.login === writer.login &&
+    value.url === `https://api.github.com/repos/${owner}/${repo}/statuses/${sha}`;
+}
+
 // During migration the Actions context remains required. Never release it
 // before the independently authenticated App status has been read back.
 // appRequired() resolves true only when the live branch ruleset requires the App
@@ -33,13 +43,7 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
       return null;
     }
   };
-  const valid = (value, sha, state) => {
-    return Number.isSafeInteger(value?.id) && value.id > 0 &&
-      value.context === APP_STATUS && value.state === state &&
-      value.creator?.id === BOT_ID && value.creator.type === 'Bot' &&
-      value.creator.login === APP_SLUG + '[bot]' &&
-      value.url === `https://api.github.com/repos/${owner}/${repo}/statuses/${sha}`;
-  };
+  const valid = (value, sha, state) => trustedStatus(value, owner, repo, sha, APP_STATUS, state);
   const current = async (sha, receipt) => {
     // Combined status returns the current row per context, avoiding a growing
     // full history scan on every controller event. Still paginate contexts.
@@ -64,14 +68,16 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
   };
   return {
     enabled,
-    // Attempt both revocations even if one credential fails. A failed shadow
-    // write must not leave the existing required gate green.
+    // Attempt both revocations even if one credential fails. Revoke the App
+    // first: if native disarming failed, a legacy write must not wake native
+    // evaluation while a previously successful sole required App gate is green.
     async set(sha, ok) {
       if (ok !== false && ok !== null) throw new Error('QA success requires two-phase publication');
       if (!enabled) return legacy(sha, ok);
-      const results = await Promise.allSettled([legacy(sha, ok), app(sha, ok)]);
-      const rejected = results.find(r => r.status === 'rejected');
-      if (rejected) throw rejected.reason;
+      const errors = [];
+      try { await app(sha, ok); } catch (error) { errors.push(error); }
+      try { await legacy(sha, ok); } catch (error) { errors.push(error); }
+      if (errors.length) throw errors[0];
     },
     async prepareSuccess(sha) {
       return enabled ? app(sha, true) : null;
@@ -79,6 +85,9 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
     async finishSuccess(sha, receipt) {
       if (enabled) await current(sha, receipt);
       await legacy(sha, true);
+    },
+    async verifySuccess(sha, receipt) {
+      if (enabled) await current(sha, receipt);
     },
   };
 };
@@ -89,4 +98,5 @@ async function appRequiredByRuleset(github, owner, repo) {
     (rule.parameters?.required_status_checks || []).some(check =>
       check?.context === APP_STATUS && check.integration_id === APP_ID));
 }
-Object.assign(module.exports, {STATUS, APP_STATUS, APP_ID, INSTALLATION_ID, appRequiredByRuleset});
+Object.assign(module.exports, {STATUS, APP_STATUS, APP_ID, INSTALLATION_ID,
+  appRequiredByRuleset, trustedStatus});

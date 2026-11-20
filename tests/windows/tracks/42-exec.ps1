@@ -4,6 +4,13 @@
 # artifact): libexectest.so, an NDK-built PIE executable with a DT_NEEDED
 # libexechelper.so, and exec-test.dex (gesher.ExecTest).
 
+# Actual NDK x64 and ARM64 programs use ordinary guest signal entry points,
+# local queue/capability boundaries. The full cross-process/frame/job-control
+# reference corpus also runs and preserves its unfinished observations.
+& "$PSScriptRoot/../realtime-signals-contracts.ps1" -Dir $Dir -GuestOnly `
+  -EvidenceDirectory (Join-Path $Dir 'realtime-signals-evidence/guest')
+if ($LASTEXITCODE -ne 0) { $failed++ }
+
 if (-not (Test-Path "$Dir/libexectest.so")) {
   Write-Host 'FAIL  exec: the exec artifact (libexectest.so) is missing'
   $failed++

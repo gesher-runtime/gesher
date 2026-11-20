@@ -4,6 +4,7 @@
 const p = require('./merge-approval.js');
 const qaStatuses = require('./app-qa-status.js');
 const {STATUS} = qaStatuses;
+const RECONCILE_EVENT = 'gesher-automerge-reconcile';
 // Fork CI awaiting maintainer approval can be completed/action_required without
 // executing a job. Keep approval pending until an actual CI result is available.
 const FAILED_CI = new Set(['failure', 'timed_out', 'startup_failure']);
@@ -33,15 +34,25 @@ async function cancel(github, owner, repo, pr, mergeGithub = github) {
   }`, {id: pr.node_id});
 }
 
-// Registered workflow identity does not change within one controller job.
-const workflowIdentity = new WeakMap();
-async function registeredWorkflow(github, owner, repo, file) {
-  let cache = workflowIdentity.get(github);
-  if (!cache) workflowIdentity.set(github, cache = new Map());
-  const key = owner + '/' + repo + '/' + file;
-  if (!cache.has(key)) cache.set(key, github.rest.actions.getWorkflow({owner, repo, workflow_id: file})
-    .then(({data}) => data, (error) => { cache.delete(key); throw error; }));
-  return cache.get(key);
+async function disarm(github, mergeGithub, owner, repo, pr) {
+  let {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
+  if (current.state !== 'open' || !p.sameTarget(pr, current)) return false;
+  if (current.auto_merge) {
+    await mergeGithub.graphql(`mutation($id: ID!) {
+      disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId }
+    }`, {id: pr.node_id});
+    ({data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number}));
+    if (current.state !== 'open' || !p.sameTarget(pr, current)) return false;
+    if (current.auto_merge) throw new Error('Native auto-merge remained armed during QA publication');
+  }
+  return true;
+}
+
+async function enable(mergeGithub, pr) {
+  await mergeGithub.graphql(`mutation($id: ID!, $head: GitObjectID!) {
+    enablePullRequestAutoMerge(input: {pullRequestId: $id, expectedHeadOid: $head,
+      mergeMethod: SQUASH}) { clientMutationId }
+  }`, {id: pr.node_id, head: pr.head.sha});
 }
 
 async function ciEvidence(github, owner, repo, pr) {
@@ -51,7 +62,9 @@ async function ciEvidence(github, owner, repo, pr) {
     {owner, repo, ref: pr.head.sha, filter: 'latest'}, 'check_runs');
   let ready = true;
   for (const [file, name] of [['ci.yml', 'ci-required'], ['arm64-windows.yml', 'arm64-required']]) {
-    const workflow = await registeredWorkflow(github, owner, repo, file);
+    // Registration can change while publishing the App status. Every evidence
+    // pass must revalidate its current identity, path and enabled state.
+    const {data: workflow} = await github.rest.actions.getWorkflow({owner, repo, workflow_id: file});
     if (!Number.isSafeInteger(workflow.id) || workflow.id <= 0 ||
         workflow.state !== 'active' || workflow.path !== '.github/workflows/' + file) return {ready: false};
     const matching = runs.filter(r => r.workflow_id === workflow.id && r.path === workflow.path &&
@@ -104,25 +117,47 @@ async function failedCI(github, prGithub, owner, repo, pr, event, run, core, mer
     body: 'CI failed; removed `automerge`. Fix/rerun CI, then reapply the label. [Run](' + link + ').\n\n' + marker});
 }
 
-// A labeled PR is stuck when its gate is still pending (or missing) although
-// both registered CI workflows already reached a result for the exact head.
-// A failure gate is also rechecked: in App mode a transient API error during
-// reconciliation revokes to failure although the label and CI remain valid.
-// Reconciliation re-derives everything, so an invalid label stays failed.
+// Pending/failed gates need recovery after CI completes. A green gate is only
+// settled while its writer, exact head, current CI and approval remain valid.
+// In particular a same-head rerun can invalidate an earlier trusted success.
+async function currentGate(statusReader, owner, repo, pr, gate) {
+  const values = await p.list(async args => {
+    const response = await statusReader.rest.repos.getCombinedStatusForRef(args);
+    if (response.data.sha !== pr.head.sha) throw new Error('QA recovery status head mismatch');
+    return response;
+  }, {owner, repo, ref: pr.head.sha}, 'statuses');
+  const matching = values.filter(s => s.context === gate);
+  const latest = matching.sort((a, b) => b.id - a.id)[0];
+  return {matching, latest};
+}
+
 async function stuck(github, statusReader, owner, repo, pr, gate) {
-  const values = await p.list(statusReader.rest.repos.getCombinedStatusForRef,
-    {owner, repo, ref: pr.head.sha}, 'statuses');
-  const state = values.filter(s => s.context === gate).sort((a, b) => b.id - a.id)[0]?.state;
-  if (state === 'success') return false;
+  const {matching, latest} = await currentGate(statusReader, owner, repo, pr, gate);
   const evidence = await ciEvidence(github, owner, repo, pr);
+  if (latest?.state === 'success') {
+    if (matching.some(s => !Number.isSafeInteger(s.id) || s.id <= 0) ||
+        !qaStatuses.trustedStatus(latest, owner, repo, pr.head.sha, gate, 'success') ||
+        !evidence.ready) return true;
+    if (!await approved(github, owner, repo, pr)) return true;
+    // A previous controller can stop after publishing success but before its
+    // final native enable. Green alone must not strand that recoverable PR.
+    const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
+    return !p.sameTarget(pr, current) || current.state !== 'open' || current.draft ||
+      !p.hasLabel(current) || current.auto_merge?.merge_method !== 'squash';
+  }
   return evidence.ready || Boolean(evidence.failed);
 }
 
-async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses) {
+async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses, expectedHead) {
   const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
-  if (pr.state !== 'open') return;
+  if (pr.state !== 'open' || (expectedHead && pr.head.sha !== expectedHead)) return;
   let approvalChecked = false;
   try {
+    // An old green gate may already have native waiting armed. Disarm before
+    // any status write, including revocation of an invalid approval: even a
+    // legacy status write can wake native evaluation of the existing App gate.
+    if (statuses.enabled && !await disarm(github, mergeGithub, owner, repo, pr))
+      return await statuses.set(pr.head.sha, false);
     const ok = await approved(github, owner, repo, pr);
     approvalChecked = true;
     if (!ok) {
@@ -132,15 +167,16 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
     // This gate stays pending until CI is done. In particular fork review events
     // have read-only tokens; the privileged CI-completion event rechecks QA then.
     await statuses.set(pr.head.sha, null);
-    const {node} = await github.graphql(`query($id: ID!) {
-      node(id: $id) { ... on PullRequest { autoMergeRequest { mergeMethod } } }
-    }`, {id: pr.node_id});
-    if (node?.autoMergeRequest?.mergeMethod !== 'SQUASH') {
-      if (node?.autoMergeRequest) await cancel(github, owner, repo, pr, mergeGithub);
-      await mergeGithub.graphql(`mutation($id: ID!, $head: GitObjectID!) {
-        enablePullRequestAutoMerge(input: {pullRequestId: $id, expectedHeadOid: $head,
-          mergeMethod: SQUASH}) { clientMutationId }
-      }`, {id: pr.node_id, head: pr.head.sha});
+    if (!statuses.enabled) {
+      // Preserve legacy-only early waiting: the required legacy context stays
+      // pending until the final status write, with no later release checks.
+      const {node} = await github.graphql(`query($id: ID!) {
+        node(id: $id) { ... on PullRequest { autoMergeRequest { mergeMethod } } }
+      }`, {id: pr.node_id});
+      if (node?.autoMergeRequest?.mergeMethod !== 'SQUASH') {
+        if (node?.autoMergeRequest) await cancel(github, owner, repo, pr, mergeGithub);
+        await enable(mergeGithub, pr);
+      }
     }
     const event = await p.labelEvent(github, owner, repo, number);
     const evidence = await ciEvidence(github, owner, repo, pr);
@@ -174,6 +210,30 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
       }
     }
     await statuses.finishSuccess(pr.head.sha, receipt);
+    if (statuses.enabled) {
+      // The legacy write/readback is another asynchronous boundary too. Native
+      // waiting is still off, even when both contexts have become green.
+      if (!await approved(github, owner, repo, pr)) {
+        await statuses.set(pr.head.sha, false);
+        return await cancel(github, owner, repo, pr, mergeGithub);
+      }
+      const finalEvent = await p.labelEvent(github, owner, repo, number);
+      const finalEvidence = await ciEvidence(github, owner, repo, pr);
+      if (finalEvidence.failed) {
+        await statuses.set(pr.head.sha, false);
+        return await failedCI(github, prGithub, owner, repo, pr,
+          finalEvent, finalEvidence.failed, core, mergeGithub, statuses);
+      }
+      if (!finalEvidence.ready) return await statuses.set(pr.head.sha, null);
+      if (!await approved(github, owner, repo, pr)) {
+        await statuses.set(pr.head.sha, false);
+        return await cancel(github, owner, repo, pr, mergeGithub);
+      }
+      await statuses.verifySuccess(pr.head.sha, receipt);
+      // This exact-head mutation is the release point. Do not perform further
+      // required checks after it: GitHub may merge before the response arrives.
+      await enable(mergeGithub, pr);
+    }
   } catch (error) {
     if (!statuses.enabled && approvalChecked) throw error;
     // Read/write failures cannot retain a previously successful gate. Try both
@@ -207,6 +267,22 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
   const statuses = qaStatuses({github: actionsGithub, readGithub: github, appGithub: prGithub, owner, repo,
     enabled: appQaStatus, appId, installationId: appInstallationId, appRequired, core});
   prGithub ??= github;
+  // A bulk/fork event has no single PR concurrency key. It only enqueues work;
+  // the dispatched job joins that PR's queue before any approval/status/native
+  // mutation. The already-granted App contents:write permission is sufficient.
+  const enqueue = async pr => {
+    if (pr.state !== 'open' || !Number.isSafeInteger(pr.number) ||
+        pr.number <= 0 || !p.SHA.test(pr.head.sha)) return;
+    await prGithub.rest.repos.createDispatchEvent({owner, repo, event_type: RECONCILE_EVENT,
+      client_payload: {pull_request_number: pr.number, head_sha: pr.head.sha}});
+  };
+  if (context.eventName === 'repository_dispatch') {
+    if (payload.action !== RECONCILE_EVENT || !appQaStatus) return;
+    const {pull_request_number: number, head_sha: head} = payload.client_payload ?? {};
+    if (!Number.isSafeInteger(number) || number <= 0 || !p.SHA.test(head))
+      throw new Error('Invalid queued PR reconciliation');
+    return reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses, head);
+  }
   if (context.eventName === 'workflow_run') {
     const run = payload.workflow_run;
     if (run.event !== 'pull_request' || !p.SHA.test(run.head_sha) || !run.head_repository?.id) return;
@@ -216,7 +292,11 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     const prs = named.length ? named :
       await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
     for (const pr of prs.filter(x => x.head.sha === run.head_sha && x.head.repo?.id === run.head_repository.id)) {
-      await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses);
+      if (appQaStatus && pr.number !== run.pull_requests?.[0]?.number) {
+        const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
+        if (current.head.sha === run.head_sha && current.head.repo?.id === run.head_repository.id)
+          await enqueue(current);
+      } else await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses);
     }
     return;
   }
@@ -225,11 +305,19 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     // The read token requests statuses access only while the App status is on.
     const statusReader = appQaStatus ? github : actionsGithub;
     const prs = await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
-    for (const pr of prs.filter(x => !x.draft && p.hasLabel(x) && p.SHA.test(x.head.sha))) {
+    for (const pr of prs.filter(x => !x.draft && (p.hasLabel(x) || appQaStatus) && p.SHA.test(x.head.sha))) {
       try {
-        if (!await stuck(github, statusReader, owner, repo, pr, gate)) continue;
-        core.info('#' + pr.number + ': CI finished without a successful QA gate; reconciling');
-        await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses);
+        if (p.hasLabel(pr)) {
+          if (!await stuck(github, statusReader, owner, repo, pr, gate)) continue;
+        } else if (!pr.auto_merge) {
+          // Recover missed unlabel deliveries too. Without native waiting,
+          // only a leftover green App context needs revocation; no CI scan.
+          const {latest} = await currentGate(statusReader, owner, repo, pr, gate);
+          if (latest?.state !== 'success') continue;
+        }
+        core.info('#' + pr.number + ': QA gate needs current-evidence reconciliation');
+        if (appQaStatus) await enqueue(pr);
+        else await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses);
       } catch (error) { core.warning('#' + pr.number + ': ' + error.message); }
     }
     return;
@@ -245,7 +333,10 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     }
     const prs = await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
     for (const pr of prs) {
-      try { await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses); }
+      try {
+        if (appQaStatus) await enqueue(pr);
+        else await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses);
+      }
       catch (error) { core.warning('#' + pr.number + ': ' + error.message); }
     }
     return;
@@ -256,6 +347,16 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     if (['labeled', 'unlabeled'].includes(payload.action) && payload.label?.name !== 'automerge') return;
     const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
     if (pr.state !== 'open') return;
+    if (statuses.enabled) {
+      // A newly recorded native approval can also release an old green gate.
+      // Secure the request before label handling writes any review receipt.
+      try {
+        if (!await disarm(github, mergeGithub, owner, repo, pr)) return;
+      } catch (error) {
+        await statuses.set(pr.head.sha, false);
+        throw error;
+      }
+    }
     if (payload.action === 'synchronize') {
       await p.dismissStaleApprovals(github, prGithub, owner, repo, pr);
       // A delayed push must never remove a fresh opt-in for a newer head.

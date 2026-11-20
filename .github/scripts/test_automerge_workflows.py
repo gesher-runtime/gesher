@@ -99,6 +99,45 @@ class QueueWorkflows(unittest.TestCase):
                          "!(github.event_name == 'pull_request_target' && github.event.action == 'edited' && "
                          "github.event.changes.base == null)")
 
+    def test_app_publication_uses_one_queue_per_pr_across_event_identities(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
+        concurrency = doc['jobs']['automerge']['concurrency']
+        self.assertEqual(concurrency['group'],
+                         "merge-approval-${{ github.event.pull_request.number || "
+                         "github.event.workflow_run.pull_requests[0].number || "
+                         "github.event.client_payload.pull_request_number || inputs.pull_request_number || "
+                         "github.event.workflow_run.head_sha || github.run_id }}")
+        self.assertEqual(doc[True]['repository_dispatch'], {'types': ['gesher-automerge-reconcile']})
+        # No cancellation can interrupt a run after it publishes success but
+        # before the final authorization checks and native release mutation.
+        self.assertEqual(concurrency['queue'], 'max')
+        self.assertFalse(concurrency.get('cancel-in-progress', False))
+        # Evaluate the configured OR expression with the event shapes GitHub
+        # supplies. Read-only bulk/fork jobs may have fallback keys; their
+        # dispatched worker must share the label/review/CI PR-number key.
+        import copy
+        import os
+        base = {'github': {'run_id': 900, 'event': {'pull_request': {},
+                'workflow_run': {'pull_requests': [{}]}, 'client_payload': {}}}, 'inputs': {}}
+        cases = []
+        for kind, number in [('pull', 7), ('ci', 7), ('queued', 7), ('manual', '7'),
+                             ('queued', 8), ('bulk', None), ('fork', None)]:
+            item = copy.deepcopy(base)
+            event = item['github']['event']
+            if kind == 'pull': event['pull_request']['number'] = number
+            if kind == 'ci': event['workflow_run']['pull_requests'][0]['number'] = number
+            if kind == 'queued': event['client_payload']['pull_request_number'] = number
+            if kind == 'manual': item['inputs']['pull_request_number'] = number
+            if kind == 'fork': event['workflow_run']['head_sha'] = 'a' * 40
+            cases.append(item)
+        expression = concurrency['group'].split('${{', 1)[1].rsplit('}}', 1)[0]
+        script = 'const key = ({github, inputs}) => "merge-approval-" + (' + expression + ');\n'
+        script += 'console.log(JSON.stringify(JSON.parse(process.env.QA_QUEUE_CASES).map(key)));'
+        result = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True,
+                                env=dict(os.environ, QA_QUEUE_CASES=json.dumps(cases)))
+        self.assertEqual(json.loads(result.stdout), ['merge-approval-7'] * 4 +
+                         ['merge-approval-8', 'merge-approval-900', 'merge-approval-' + 'a' * 40])
+
     def test_workflow_credential_is_separate_from_required_status_identity(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
         checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']

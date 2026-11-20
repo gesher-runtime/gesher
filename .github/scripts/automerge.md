@@ -37,8 +37,10 @@ Android-visible contract requirements in CONTRIBUTING.md.
 
 ## One PR CI run and final QA
 
-The label records approval and enables native SQUASH waiting pinned to that head.
-`qa/label-approval` remains pending while required CI runs. A small metadata-only
+The label records approval for that head. In legacy-only mode it also enables
+native SQUASH waiting while `qa/label-approval` remains pending. With the App
+status enabled, native waiting stays disarmed through status publication and
+verification, and is enabled only as the final release action. A small metadata-only
 workflow, triggered when ci or arm64-windows completes, verifies the registered
 workflow IDs/paths, pull_request event, exact head/branch, target/source repository
 IDs and successful aggregate check suites from GitHub Actions. Display-name
@@ -67,7 +69,7 @@ there is no automatic second full CI run simply for merging.
 
 ## API quota
 
-Every controller event rereads labels, reviews, permission and CI evidence. These
+Every reconciliation rereads labels, reviews, permission and CI evidence. These
 reads use a separate read-only Gesher App token (`actions`, `checks`, `metadata`
 and `pull-requests` read; PR issue events and comments need no `issues` access), so they count against the App installation's
 quota rather than the repository's shared `GITHUB_TOKEN` quota. Exhausting that
@@ -77,27 +79,42 @@ The required `qa/label-approval` status and its readback still use
 If the installation lacks one of those read permissions, token creation fails
 without stopping the job, a notice is logged and reads fall back to `GITHUB_TOKEN`.
 
-Same-repository `workflow_run` events reconcile the PRs GitHub names in the event
-instead of listing every open PR; fork runs still list open PRs. Native
+Same-repository `workflow_run` events use the PRs GitHub names in the event
+instead of listing every open PR; fork runs still list open PRs. In App mode,
+only the first named PR shares that event's concurrency key; any other matched
+PR is routed to its own metadata job as described below. Native
 auto-merge cancellation reads its state from the REST pull request it already
-fetched. Registered workflow identities are read once per job. Title or body
+fetched. Registered workflow identities, paths and enabled states are reread at
+each CI evidence pass, including after App status publication. Title or body
 edits do not start the job; base changes still do.
 
 ### Recovery schedule
 
 A controller run that fails after CI completion, for example on an exhausted API
 quota, would otherwise leave a labeled PR pending (or a failed PR labeled) with no
-further event. Every 20 minutes (`7,27,47 * * * *`) the controller lists open
-labeled PRs and reconciles only those whose QA gate is not green (pending,
-missing or failure) while both registered CI workflows already reached a result
-for the exact head. A failure gate is included because, with the App status on, a
+further event. Every 20 minutes (`7,27,47 * * * *`) the controller lists open PRs
+and reconciles labeled pending, missing or failed gates when the registered
+CI workflows reach a result for the exact head. A failure gate is included because, with the App status on, a
 transient API error during reconciliation revokes to failure although the label
 and CI remain valid; an invalid label is re-derived and stays failed.
 The gate checked is `qa/gesher-label-approval` while the App status is enabled,
 otherwise `qa/label-approval` (read with the Actions token, since the App read
-token requests Statuses access only while the App status is on). Green gates,
-running CI, drafts and unlabeled PRs cost one combined-status read at most and are
-not reconciled. Schedule payloads carry no repository object, so the job derives
+token requests Statuses access only while the App status is on). A green gate is
+settled only if its numeric writer identity, bot type, context, repository/head
+URL, current CI and ordinary approval validation all remain valid. A foreign
+same-name success cannot suppress recovery. A failed same-head rerun removes
+the stale label; a pending rerun restores pending rather than keeping old green.
+Recovery also resumes a valid green PR if a controller stopped after publication
+but before the final native SQUASH enable. A valid green gate with native SQUASH
+waiting needs no status rewrites or native mutations. Each labeled
+candidate has one current combined-status scan and a CI evidence pass; settled
+green candidates also recheck approval and current native waiting. Scans paginate
+current contexts rather than full status history. Drafts are skipped. In App
+mode, an unlabeled PR with native waiting or leftover green is also recovered,
+so a missed unlabel delivery cannot keep old authorization indefinitely. An
+unlabeled PR without native waiting costs only a current-context scan and no CI
+or approval reads; without old green, it is left alone. Legacy-only recovery
+still skips unlabeled PRs. Schedule payloads carry no repository object, so the job derives
 the repository name for App token scoping from `GITHUB_REPOSITORY` and the App
 requirement from `GITHUB_REPOSITORY_ID`. Reconciliation
 applies exactly the event path's checks; it never creates an approval. A failure
@@ -115,6 +132,47 @@ the failure become a warning; the App status, written and read back with the App
 credentials, is then the gate. Otherwise, including an unreadable ruleset or the
 context bound to another integration, the failure stays fatal exactly as before.
 The ruleset is never read while legacy writes succeed.
+
+#### Per-PR publication ordering
+
+App-mode schedule and bulk manual jobs only select and enqueue candidates.
+Fork CI completions without a trusted PR-number concurrency key do the same.
+They send `gesher-automerge-reconcile` repository dispatches using the App's
+existing `contents: write`; no additional token permission or CI run is needed.
+The default-branch worker uses the same PR-number concurrency key as label,
+review, named CI and targeted manual events. It checks the supplied number/head,
+fetches current state and performs the ordinary approval and CI checks. A stale
+head is skipped. Dispatch payloads never authorize approval or label removal.
+Thus another controller cannot rearm the same PR during status publication,
+while unrelated PRs retain independent queues.
+
+GitHub's [`queue: max`](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+permits up to 100 pending jobs per group, then rejects new arrivals. It orders
+admitted jobs by when they begin waiting on the group, not webhook dispatch
+order. This is bounded admission, not unlimited or guaranteed event delivery.
+The controller never relies on delivery order: it rereads current evidence.
+The schedule retries incomplete work and detects missed review, permission,
+CI and unlabel invalidation. Rejected or delayed jobs can postpone recovery;
+there is no exact recovery deadline. A missing original approval receipt stays
+failed and requires the normal fresh label/QA route rather than being invented.
+Per-PR errors stay isolated, and the dispatcher itself never publishes success
+or changes native waiting.
+
+Repository dispatch runs only the configured default-branch metadata workflow;
+see GitHub's [event semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#repository_dispatch)
+and [required permission](https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event).
+
+App-only gating uses the same disarmed publication protocol as dual gating.
+An existing native request is cancelled and its removal verified before any
+status publication or new native approval receipt. The controller authenticates the App success, checks
+approval and CI again, writes the legacy success, then rechecks current approval,
+registered CI and the exact App receipt before enabling native SQUASH pinned to
+the reviewed head. That final mutation can immediately merge the PR; there are
+no further required controller checks after it. If cancellation is rejected or
+cannot be confirmed, no success is published. Failures before release revoke
+both contexts and attempt native cancellation.
+App-enabled controller jobs use the per-PR ordering above through the complete
+publication sequence. Legacy-only publication behavior remains unchanged.
 
 Operational order: complete migration phase 2 step 5 (dual gate), merge this
 change, then remove only the legacy `qa/label-approval` requirement from ruleset
@@ -203,19 +261,25 @@ the separate App client. The workflow retains the App-slug check. Each App statu
 response and readback must match the exact repository, head, context, state,
 numeric status ID, and bot identity (`gesher-runtime-automation[bot]`, user
 `358279050`, account type `Bot`). A missing, replaced, pending, failed, or foreign
-status cannot release the existing Actions gate. The readback uses the Actions
-client and paginates current combined-status contexts, avoiding full history
-scans without trusting a partial page.
+status cannot release the existing Actions gate or native waiting. The readback
+uses the configured read-only App client, with the Actions fallback, and
+paginates current combined-status contexts, avoiding full history scans without
+trusting a partial page.
 
-Pending and failure are published to both contexts. The controller attempts both
-revocations even if one write fails. For success, it first keeps the Actions gate
-pending, publishes and reads back the App success, rechecks the current label,
-review, permission, source and both registered CI workflows, then reads back the
-same App status again before releasing the Actions gate. Changes or API errors
-after the App write cause conservative revocation; a newer pending CI attempt
-restores pending. Guarded label cleanup still preserves newer label events and
-run attempts. API operations are separate requests, not an atomic transaction;
-live event reconciliation and GitHub's required checks remain necessary.
+Pending and failure are published to both contexts, with the App revocation
+attempted first. A successful App revocation also blocks an old green App gate
+when native cancellation fails. The controller attempts both revocations even if one write fails.
+Success publication runs with native waiting
+disarmed, including requests that existed before this reconciliation. The App
+success and its authenticated readback do not themselves release an armed PR.
+Current label, review, permission, source and both workflow registrations are
+rechecked after the App write and again after legacy publication. The exact App
+receipt is read back once more before the final expected-head native enable.
+Changes or API errors before release cause conservative revocation; a newer
+pending CI attempt restores pending. Guarded label cleanup still preserves
+newer label events and run attempts. API operations are separate requests, not
+an atomic transaction; live event reconciliation and GitHub's required checks
+remain necessary.
 
 The App status is initially a shadow signal. The existing ruleset continues to
 require `qa/label-approval`, `ci-required` and `arm64-required`, all from GitHub
