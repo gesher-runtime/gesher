@@ -54,12 +54,12 @@ jobs:
           printf '%s  compiler.tar.xz\n' 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4 | sha256sum --check --strict
           tar -xJf compiler.tar.xz
           mkdir toast-audit-payload
-          "$toolchain_name/bin/x86_64-w64-mingw32-clang" -std=c11 -Wall -Wextra -Werror tools/toast-identity-audit.c -o toast-audit-payload/toast-identity-audit.exe -lole32 -ladvapi32 -luuid
+          "$toolchain_name/bin/x86_64-w64-mingw32-clang" -std=c11 -Wall -Wextra -Werror tools/toast-migration-audit.c -o toast-audit-payload/toast-migration-audit.exe -lole32 -ladvapi32 -luuid
           python3 - <<'PYCODE'
           import hashlib,json,os,pathlib,re,subprocess
-          paths=['compat/devsvc/devsvc_toast.c','compat/devsvc/devsvc_toast.h','tools/toast-identity-audit.c']
+          paths=['compat/devsvc/devsvc_toast.c','compat/devsvc/devsvc_toast.h','tools/toast-migration-audit.c']
           hashes={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths}
-          data=pathlib.Path('toast-audit-payload/toast-identity-audit.exe').read_bytes()
+          data=pathlib.Path('toast-audit-payload/toast-migration-audit.exe').read_bytes()
           record={'source':os.environ['GITHUB_SHA'],'checkout':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'producer':'toast-build','inputs':hashes,'blobs':{p:subprocess.check_output(['git','hash-object','--',p],text=True).strip() for p in paths},'exe_sha256':hashlib.sha256(data).hexdigest(),'compiler_archive_sha256':'5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4','purpose':'real WinRT diagnosis only, not final PR199 qualification'}
           assert record['source']==record['checkout']
           pathlib.Path('toast-audit-payload/receipt.json').write_text(json.dumps(record,indent=2))
@@ -84,7 +84,7 @@ jobs:
         with:
           name: toast-audit-${{ github.sha }}
           path: toast-audit-payload
-      - name: Real native setter/getter, Show and actual Windows history
+      - name: Actual full-bit Windows history and old/new per-tag cancellation
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -94,7 +94,7 @@ jobs:
             $actual = (& git hash-object -- $p.Name).Trim()
             if ($LASTEXITCODE -ne 0 -or $actual -cne $p.Value) { throw "Input mismatch: $($p.Name)" }
           }
-          if ((Get-FileHash toast-audit-payload/toast-identity-audit.exe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $r.exe_sha256) { throw 'Executable digest mismatch' }
+          if ((Get-FileHash toast-audit-payload/toast-migration-audit.exe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $r.exe_sha256) { throw 'Executable digest mismatch' }
           $r | ConvertTo-Json -Depth 10 | Write-Host
-          & .\toast-audit-payload\toast-identity-audit.exe 2>&1 | Tee-Object -FilePath toast-identity-audit.log
+          & .\toast-audit-payload\toast-migration-audit.exe 2>&1 | Tee-Object -FilePath toast-migration-audit.log
           if ($LASTEXITCODE -ne 0) { throw "Real WinRT identity audit failed: $LASTEXITCODE" }
