@@ -183,6 +183,8 @@ final class ContentProviders {
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
     CallerIdentity callers() { return mCallers; }
 
+    SettingsProvider settingsProvider() { return mSettings; }
+
     static boolean hasAuthority(ProviderInfo info, String authority) {
         if (info == null || info.authority == null || authority == null) return false;
         for (String declared : info.authority.split(";")) if (authority.equals(declared)) return true;
