@@ -170,6 +170,9 @@ int gesher_selftest(void) {
     check("raw uname", raw3(SYS_uname, (long)&uts, 0, 0) == 0 && uname(&libc_uts) == 0 &&
                            strcmp(uts.sysname, libc_uts.sysname) == 0 &&
                            strcmp(uts.machine, "x86_64") == 0);
+    // Android's kernel is Linux; the release names no kernel, so version checks fail.
+    check("uname sysname is Linux", strcmp(libc_uts.sysname, "Linux") == 0 &&
+                                        strncmp(libc_uts.release, "0.", 2) == 0);
     struct timespec ts = {0, 0};
     check("raw clock_gettime", raw3(SYS_clock_gettime, CLOCK_MONOTONIC, (long)&ts, 0) == 0 &&
                                    (ts.tv_sec != 0 || ts.tv_nsec != 0));

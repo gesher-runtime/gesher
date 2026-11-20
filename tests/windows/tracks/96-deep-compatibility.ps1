@@ -16,6 +16,13 @@ Check 'framework: android.safetycenter values on the boot class path, no Safety 
   'SafetyCenterContractTest: values build, validate and round-trip through Parcel',
   'SafetyCenterContractTest all passed:')
 
+$deepOsIdentityOut = FixesRun ($dvmFixes + 'gesher.services.OsIdentityContractTest') 60
+$deepOsIdentityCode = $LASTEXITCODE
+Check 'framework: os.name and Os.uname() report Linux; the release claims no kernel version' {
+  $global:LASTEXITCODE = $deepOsIdentityCode
+  $deepOsIdentityOut
+} @('OsIdentityContractTest: os.name=Linux', 'OsIdentityContractTest all passed:')
+
 $deepWifiConfigurationOut = FixesRun ($dvmFixes + 'gesher.services.WifiConfigurationContractTest') 90
 $deepWifiConfigurationCode = $LASTEXITCODE
 Check 'framework: Wi-Fi configuration, enterprise certificates and native Parcelable contracts' {
