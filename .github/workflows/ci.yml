@@ -39,3 +39,62 @@ jobs:
         run: |
           & .\document-dialog-audit.exe 2>&1 | Tee-Object -FilePath document-dialog-audit.log
           if ($LASTEXITCODE -ne 0) { throw "Native dialog audit failed: $LASTEXITCODE" }
+
+  toast-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the exact production WinRT boundary with diagnostic output
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain_name=llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$toolchain_name.tar.xz" -o compiler.tar.xz
+          printf '%s  compiler.tar.xz\n' 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4 | sha256sum --check --strict
+          tar -xJf compiler.tar.xz
+          mkdir toast-audit-payload
+          "$toolchain_name/bin/x86_64-w64-mingw32-clang" -std=c11 -Wall -Wextra -Werror tools/toast-identity-audit.c -o toast-audit-payload/toast-identity-audit.exe -lole32 -ladvapi32 -luuid
+          python3 - <<'PYCODE'
+          import hashlib,json,os,pathlib,re,subprocess
+          paths=['compat/devsvc/devsvc_toast.c','compat/devsvc/devsvc_toast.h','tools/toast-identity-audit.c']
+          hashes={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths}
+          data=pathlib.Path('toast-audit-payload/toast-identity-audit.exe').read_bytes()
+          record={'source':os.environ['GITHUB_SHA'],'checkout':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'producer':'toast-build','inputs':hashes,'blobs':{p:subprocess.check_output(['git','hash-object','--',p],text=True).strip() for p in paths},'exe_sha256':hashlib.sha256(data).hexdigest(),'compiler_archive_sha256':'5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4','purpose':'real WinRT diagnosis only, not final PR199 qualification'}
+          assert record['source']==record['checkout']
+          pathlib.Path('toast-audit-payload/receipt.json').write_text(json.dumps(record,indent=2))
+          print(json.dumps(record))
+          PYCODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toast-audit-${{ github.sha }}
+          path: toast-audit-payload
+          retention-days: 5
+  toast-audit:
+    needs: toast-build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: toast-audit-${{ github.sha }}
+          path: toast-audit-payload
+      - name: Real native setter/getter, Show and actual Windows history
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $r = Get-Content toast-audit-payload/receipt.json -Raw | ConvertFrom-Json
+          if ($r.source -cne $env:GITHUB_SHA -or $r.checkout -cne $env:GITHUB_SHA -or $r.run -cne $env:GITHUB_RUN_ID -or $r.attempt -cne $env:GITHUB_RUN_ATTEMPT -or $r.producer -cne 'toast-build') { throw 'Producer/source mismatch' }
+          foreach ($p in $r.blobs.PSObject.Properties) {
+            $actual = (& git hash-object -- $p.Name).Trim()
+            if ($LASTEXITCODE -ne 0 -or $actual -cne $p.Value) { throw "Input mismatch: $($p.Name)" }
+          }
+          if ((Get-FileHash toast-audit-payload/toast-identity-audit.exe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $r.exe_sha256) { throw 'Executable digest mismatch' }
+          $r | ConvertTo-Json -Depth 10 | Write-Host
+          & .\toast-audit-payload\toast-identity-audit.exe 2>&1 | Tee-Object -FilePath toast-identity-audit.log
+          if ($LASTEXITCODE -ne 0) { throw "Real WinRT identity audit failed: $LASTEXITCODE" }

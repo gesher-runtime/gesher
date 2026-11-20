@@ -450,11 +450,20 @@ static long ShowUnlocked(const wchar_t* app_id, const wchar_t* tag, const wchar_
   if (SUCCEEDED(hr)) {
     hr = HsChecked(tag, &h);
     if (SUCCEEDED(hr)) hr = toast2->lpVtbl->put_Tag(toast2, h);
+    /* DIAGNOSTIC_ONLY_SETTER_BEGIN */
+    fprintf(stderr, "TOAST_SET tagResult=0x%08lx", (unsigned long)hr);
+    TraceToastHString("tagArgument", h); fputc('\n', stderr);
+    TraceToastObject("after-tag-only", toast, toast2, tag, L"");
+    /* DIAGNOSTIC_ONLY_SETTER_END */
     HsFree(h);
   }
   if (SUCCEEDED(hr)) {
     hr = HsChecked(group, &h);
     if (SUCCEEDED(hr)) hr = toast2->lpVtbl->put_Group(toast2, h);
+    /* DIAGNOSTIC_ONLY_SETTER_BEGIN */
+    fprintf(stderr, "TOAST_SET groupResult=0x%08lx", (unsigned long)hr);
+    TraceToastHString("groupArgument", h); fputc('\n', stderr);
+    /* DIAGNOSTIC_ONLY_SETTER_END */
     HsFree(h);
   }
   if (TraceToastEnabled()) {
