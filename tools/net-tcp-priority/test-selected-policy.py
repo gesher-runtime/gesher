@@ -240,16 +240,26 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 '''
 # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
 # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
-# derivations below still verify the checkpoint's bytes; each file's current
-# bytes are pinned exactly, so any further change fails here as before.
+# pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
+# the checkpoint's file: every current file must be its checkpoint bytes with
+# exactly those hunks applied, and the derivations below still verify the
+# checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
-REVIEWED_PINS={
- 'compat/posix/src/fd.cc':'b503078a80a724a8b549848f6f938e8cbdf4fe3016c326b70360a112a88bb1a5',
- 'compat/posix/src/socket.cc':'af046f6cd225ef0e77e8e54b7d94b858bd151c260c4d2599303128dcf5e2963d',
- 'compat/posix/src/socket_internal.h':'4f6e0b3229b861a0797172c62f340759adc539d994b61da8b1beac35033750e8',
- 'compat/posix/src/system.cc':'0842e11270220b7f99c5186fbef1df694e44f29d1f83b419983dfec52c567fe0',
- 'compat/posix/src/winsock.cc':'860ba46886f941e490eb994925cd322a87192a29904dff5e0a3ee08e0d859de4',
-}
+REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
+REVIEWED_PATCH_SHA256='5724ba64d08b68b8900c1442f6302f3fcadc4ef6b584c52d2055b0bb6c04e441'
+def reviewed(path,actual):
+ raw=(ROOT/REVIEWED_PATCH).read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
+ patch=json.loads(raw)
+ assert patch['checkpoint']==REVIEWED_CHECKPOINT and sorted(patch['hunks'])==sorted(REVIEWED_PATHS),REVIEWED_PATCH
+ base=subprocess.check_output(['git','-C',str(ROOT),'show',REVIEWED_CHECKPOINT+':'+path])
+ lines=base.decode('utf-8').splitlines(keepends=True);rebuilt=[];cursor=0
+ for start,before,after in patch['hunks'][path]:
+  assert start>=cursor and lines[start:start+len(before)]==before and before!=after,path
+  rebuilt+=lines[cursor:start]+after;cursor=start+len(before)
+ assert ''.join(rebuilt+lines[cursor:]).encode('utf-8')==actual,path
+ return base
+REVIEWED_PATHS=('compat/posix/src/fd.cc','compat/posix/src/socket.cc','compat/posix/src/socket_internal.h','compat/posix/src/system.cc','compat/posix/src/winsock.cc')
 def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
 def check():
  assert hashlib.sha256((ROOT/OWNER_THREAD_DIAGNOSTIC_PATH).read_bytes()).hexdigest()==OWNER_THREAD_DIAGNOSTIC_SHA256,OWNER_THREAD_DIAGNOSTIC_PATH
@@ -263,9 +273,7 @@ def check():
          CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
   expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
   actual=(ROOT/path).read_bytes()
-  if path in REVIEWED_PINS:
-   assert hashlib.sha256(actual).hexdigest()==REVIEWED_PINS[path],path
-   actual=subprocess.check_output(['git','-C',str(ROOT),'show',REVIEWED_CHECKPOINT+':'+path])
+  if path in REVIEWED_PATHS:actual=reviewed(path,actual)
   if path=='compat/posix/src/winsock.cc':
    assert actual==expected and hashlib.sha256(actual).hexdigest()==WINSOCK_SHA256,path
    original=old(path)
