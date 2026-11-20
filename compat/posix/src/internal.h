@@ -155,4 +155,27 @@ void RegisterDevice(int fd, Device device);
 // flush error); a still-open descriptor keeps its marker.
 void ForgetStreamDevice(int fd, bool closed_or_replaced);
 
+// memfd seals (memfd_seals.cc): stored on the file, so every descriptor of it,
+// in any process, shares them. Descriptors known to be memfds are registered.
+bool InitMemfdSeals(HANDLE file, bool allow_sealing);
+void RegisterMemfd(int fd);
+void ForgetMemfd(int fd);
+// After receiving a descriptor from another process (Binder): registers it if
+// its file carries seals.
+void RegisterMemfdIfSealed(int fd, HANDLE file);
+// dup/dup2/F_DUPFD: `to` is a memfd exactly when `from` is.
+void CopyMemfdRegistration(int from, int to);
+// fcntl F_GET_SEALS / F_ADD_SEALS: -1 with errno (EINVAL for another file).
+int GetMemfdSeals(int fd);
+int AddMemfdSeals(int fd, unsigned seals);
+// 0, or the errno (EPERM) the file's seals give a write of `length` bytes at
+// `offset` (or at the descriptor's position), or a resize to `new_size`.
+int MemfdWriteError(int fd, bool at_position, uint64_t offset, uint64_t length);
+int MemfdResizeError(int fd, uint64_t new_size);
+// fallocate up to `end`: EPERM only when it would grow an F_SEAL_GROW memfd.
+int MemfdGrowError(int fd, uint64_t end);
+// A MAP_SHARED mapping of fd: EPERM when writable and write-sealed; sets
+// *deny_write when a write seal must keep the mapping from becoming writable.
+int MemfdSharedMapError(int fd, bool writable, bool* deny_write);
+
 }  // namespace gesher

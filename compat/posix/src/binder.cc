@@ -346,6 +346,8 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
                         0, FALSE, DUPLICATE_SAME_ACCESS)) {
       fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
       if (fd < 0) CloseHandle(owned);
+      // A memfd keeps its seals on the file; this process must obey them too.
+      else gesher::RegisterMemfdIfSealed(fd, owned);
     }
     if (fd < 0) ok = false;
     obj.pad_binder = 0;

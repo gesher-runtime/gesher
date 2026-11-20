@@ -156,6 +156,9 @@ struct Region {
   size_t physical_extent = 0;
   size_t view_padding = 0;
   bool shared = false;        // views: MAP_SHARED
+  // A shared view of a memfd mapped after a write seal: mprotect may never make
+  // it writable (Linux clears its VM_MAYWRITE; memfd_seals.cc).
+  bool deny_write = false;
   std::vector<bool> live;     // one entry per page
   std::vector<Origin> origins;  // logical origin; independent of Kind/MEM_PRIVATE
   size_t live_pages = 0;
@@ -1533,7 +1536,22 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
       gesher::SetBinderMapping(fd, result, length);
     }
   } else {
+    // A memfd's write seals (memfd_seals.cc): no writable shared mapping, and a
+    // shared mapping made after the seal can never become writable.
+    bool deny_write = false;
+    if (type != MAP_PRIVATE) {
+      if (const int sealed = gesher::MemfdSharedMapError(fd, (prot & PROT_WRITE) != 0, &deny_write)) {
+        errno = sealed;
+        return MAP_FAILED;
+      }
+    }
     result = MapFile(s, addr, length, prot, flags, fd, offset);
+    if (result != MAP_FAILED && deny_write) {
+      const uintptr_t begin_view = reinterpret_cast<uintptr_t>(result);
+      for (auto it = FindRegion(s, begin_view); it != s.regions.end() && it->first < begin_view + length; ++it) {
+        it->second.deny_write = true;
+      }
+    }
   }
   TRACE("mmap(%p, 0x%zx, prot=%d, flags=0x%x, fd=%d, offset=0x%llx) = %p\n", addr, length, prot,
         flags, fd, static_cast<unsigned long long>(offset), result);
@@ -1678,6 +1696,13 @@ int mprotect(void* addr, size_t length, int prot) {
   if (length == 0) return 0;
   State& s = state();
   std::lock_guard<std::mutex> registry_guard(s.lock);
+  if ((prot & PROT_WRITE) != 0) {
+    // A shared view mapped after its memfd's write seal stays read-only.
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+    for (auto it = FindRegion(s, begin); it != s.regions.end() && it->first < begin + length; ++it) {
+      if (it->second.deny_write) return errno = EACCES, -1;
+    }
+  }
   InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
   const DWORD protection = PageProtection(prot);
   const bool ok = ForEachRun(addr, length, [&](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {
