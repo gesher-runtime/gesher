@@ -231,16 +231,17 @@ static void fault_tests() {
   }
   reset_boundaries(); Fixture f;
   ::lseek(f.in(), 13, SEEK_SET);
-  write_plan = {7}; commit_error_call = 1; commit_error = 132;
+  // The canonical descriptor lseek boundary already returns Linux errno.
+  write_plan = {7}; commit_error_call = 1; commit_error = EOVERFLOW;
   errno = 0;
   ssize_t result = guest_sendfile(f.out(), f.in(), nullptr, 31);
   check("failed cursor commit reports bytes already owned by output", result == 7 && errno == EOVERFLOW);
   check("failed cursor commit does not repeat output write", write_calls == 1 && commit_calls == 1 &&
         ::lseek(f.in(), 0, SEEK_CUR) == 13 && ::lseek(f.out(), 0, SEEK_CUR) == 7 &&
         sendfile_contract_contents(f.out(), 0, f.payload.data() + 13, 7));
-  reset_boundaries(); query_error = 132; errno = 0;
+  reset_boundaries(); query_error = EOVERFLOW; errno = 0;
   result = guest_sendfile(f.out(), f.in(), nullptr, 31);
-  check("CRT query error is translated before any data movement",
+  check("descriptor query error is preserved before any data movement",
         result == -1 && errno == EOVERFLOW && read_calls == 0 && write_calls == 0);
 }
 

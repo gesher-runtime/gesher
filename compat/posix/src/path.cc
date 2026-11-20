@@ -158,16 +158,30 @@ DWORD Access(int flags) {
 // The CRT fd for a new handle; closes the handle if there is none.
 int FdFromHandle(HANDLE h, int flags) {
   record_locks::DescriptorGuard descriptor_guard;
-  int crt_flags = _O_BINARY | ((flags & O_APPEND) != 0 ? _O_APPEND : 0) |
+  int crt_flags = _O_BINARY |
                   ((flags & O_ACCMODE) == O_RDONLY ? _O_RDONLY : 0) |
                   ((flags & O_CLOEXEC) != 0 ? _O_NOINHERIT : 0);
   int fd = CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h), crt_flags));
-  if (fd < 0) CloseHandle(h);
+  if (fd < 0) {
+    CloseHandle(h);
+    return -1;
+  }
+  if (RegisterOfd(fd, flags) < 0) {
+    int saved = errno;
+    _close(fd);
+    return errno = saved, -1;
+  }
   return fd;
 }
 
 int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   if ((flags & O_TMPFILE) == O_TMPFILE) return errno = EOPNOTSUPP, -1;
+  // This filesystem backend has no direct-I/O implementation. Linux permits
+  // EINVAL for O_DIRECT on such a filesystem; never report buffered I/O as
+  // direct I/O. O_PATH ignores I/O flags because it opens no data access.
+  if ((flags & O_DIRECT) != 0 && (flags & O_PATH) == 0) return errno = EINVAL, -1;
+  if ((flags & O_NOATIME) != 0 && (flags & O_PATH) == 0) return errno = EOPNOTSUPP, -1;
+  if ((flags & O_PATH) == 0) flags |= O_LARGEFILE;
   DWORD disposition;
   if ((flags & O_PATH) != 0) {
     disposition = OPEN_EXISTING;
@@ -227,6 +241,9 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
 
 // /dev/null, and /dev/zero and /dev/random over it.
 int OpenDevice(PathKind kind, int flags) {
+  record_locks::DescriptorGuard descriptors;
+  if ((flags & O_PATH) == 0 && (flags & O_DIRECT) != 0) return errno = EINVAL, -1;
+  if ((flags & O_PATH) == 0 && (flags & O_NOATIME) != 0) return errno = EOPNOTSUPP, -1;
   if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
   if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return errno = EEXIST, -1;
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & O_CLOEXEC) == 0};

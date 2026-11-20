@@ -51,8 +51,6 @@ def main() -> int:
         "@HOST_PARSE_MODE@": section(host, "bool ParseMode(", "// Random characters"),
         "@HOST_FCLOSE@": section(host, "int gesher_fclose_state(", "// The stream is reopened"),
         "@HOST_FREOPEN@": section(host, "FILE* gesher_freopen_state(", "char* mkdtemp("),
-        "@GUEST_CRT_MODE@": section(guest, "std::string CrtMode(", "}  // namespace\n\nint CloseBionicStream"),
-        "@GUEST_CLOSE@": section(guest, "int CloseBionicStream(FILE* stream, int* retired_out)", "namespace {\n\n// /dev/zero"),
         "@GUEST_FREOPEN@": guest_reopen,
     }
     template = (ROOT / "tests/native/freopen_mode_host_test.cc.in").read_text(encoding="utf-8")

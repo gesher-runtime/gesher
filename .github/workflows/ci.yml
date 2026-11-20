@@ -237,6 +237,9 @@ jobs:
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
+          python3 tools/test_ofd_transfer_contracts.py --sanitize
+          python3 tools/test_file_io_contracts.py --sanitize
+          python3 tools/test_pipe_io_contracts.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
@@ -289,6 +292,9 @@ jobs:
 
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
+
+      - name: Descriptor-backed stdio and stream lifetime contracts
+        run: python3 tools/test_stdio_contracts.py --sanitize
 
       - name: MediaPlayer PCM priming and playback lifecycle contracts
         run: python3 tools/test_media_player_priming.py --sanitize

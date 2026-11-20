@@ -23,8 +23,11 @@
 // error=2, No such file or directory".
 
 #include <fcntl.h>
+#include <errno.h>
+#include <gesher/file_description.h>
 #include <io.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include <jni.h>
 #include <nativehelper/JNIHelp.h>
@@ -87,19 +90,6 @@ std::vector<std::string> Strings(const std::string& block, int count) {
   return out;
 }
 
-HANDLE Inheritable(HANDLE h) {
-  HANDLE dup = nullptr;
-  if (h == nullptr || h == INVALID_HANDLE_VALUE ||
-      !DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &dup, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
-    // No usable handle behind the fd (a GUI process's missing console): NUL.
-    SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
-    dup = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
-                      0, nullptr);
-    if (dup == INVALID_HANDLE_VALUE) dup = nullptr;
-  }
-  return dup;
-}
-
 void CloseIf(HANDLE* h) {
   if (*h != nullptr && *h != INVALID_HANDLE_VALUE) CloseHandle(*h);
   *h = nullptr;
@@ -142,10 +132,13 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
   env->GetIntArrayRegion(std_fds, 0, 3, fds);
   HANDLE child[3] = {nullptr, nullptr, nullptr};
   HANDLE parent[3] = {nullptr, nullptr, nullptr};
+  int parent_fds[3] = {-1, -1, -1};
+  gesher::DescriptorSnapshotPtr descriptions[3];
   auto cleanup = [&] {
     for (int i = 0; i < 3; ++i) {
       CloseIf(&child[i]);
       CloseIf(&parent[i]);
+      if (parent_fds[i] >= 0) { close(parent_fds[i]); parent_fds[i] = -1; }
     }
   };
   for (int i = 0; i < 3; ++i) {
@@ -159,15 +152,42 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
       }
       child[i] = i == 0 ? read_end : write_end;
       parent[i] = i == 0 ? write_end : read_end;
-      SetHandleInformation(child[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+      descriptions[i] = gesher::CaptureFileHandle(child[i]);
+      auto parent_description = gesher::CaptureFileHandle(parent[i]);
+      if (!descriptions[i] || !parent_description ||
+          gesher::InitializePipeDescription(descriptions[i], i == 0 ? O_RDONLY : O_WRONLY) < 0 ||
+          gesher::InitializePipeDescription(parent_description, i == 0 ? O_WRONLY : O_RDONLY) < 0 ||
+          (parent_fds[i] = gesher::AttachFileDescription(parent_description, true)) < 0) {
+        int e = errno;
+        cleanup();
+        return ThrowIOException(env, e), -1;
+      }
     } else {
-      child[i] = Inheritable(reinterpret_cast<HANDLE>(_get_osfhandle(fds[i])));
+      // Capture the native object AND its open description under the descriptor
+      // transaction. Reconstructing from a lone DuplicateHandle later could
+      // lose status/lifecycle metadata if the original fd closes or is reused.
+      descriptions[i] = gesher::CaptureDescriptor(fds[i]);
+    }
+    if (!descriptions[i]) {
+      int e = errno;
+      cleanup();
+      return ThrowIOException(env, e), -1;
     }
   }
 
+  std::vector<ex::ChildFd> child_fds;
+  child_fds.reserve(3);
+  for (int i = 0; i < 3; ++i) {
+    auto snapshot = descriptions[i == 2 && redirect_error_stream ? 1 : i];
+    child_fds.push_back({i, snapshot->handle, std::move(snapshot)});
+  }
   PROCESS_INFORMATION pi = {};
-  DWORD spawn_error = ex::Spawn(launch, environment.empty() ? nullptr : environment.c_str(), cwd, child[0],
-                                child[1], redirect_error_stream ? child[1] : child[2], &pi);
+  DWORD spawn_error = ex::SpawnWithFds(launch, environment.empty() ? nullptr : environment.c_str(),
+                                       cwd, child_fds, &pi);
+  // No launcher-owned snapshot may keep a pipe endpoint alive while Java waits
+  // for EOF. SpawnWithFds explicitly transferred the child's references.
+  child_fds.clear();
+  for (auto& snapshot : descriptions) snapshot.reset();
   for (HANDLE& h : child) CloseIf(&h);
   if (spawn_error != 0) {
     cleanup();
@@ -180,17 +200,12 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
     g_children[pid] = pi.hProcess;
   }
 
-  // The parent's ends become fds that FileInputStream/FileOutputStream own.
+  // Descriptor allocation happened before launch, so a failure cannot leave
+  // a running child with missing Java streams. Transfer the prepared slots.
   for (int i = 0; i < 3; ++i) {
-    if (parent[i] == nullptr) {
-      fds[i] = -1;
-      continue;
-    }
-    int fd = _open_osfhandle(reinterpret_cast<intptr_t>(parent[i]),
-                             (i == 0 ? _O_WRONLY : _O_RDONLY) | _O_BINARY | _O_NOINHERIT);
-    if (fd < 0) CloseIf(&parent[i]);
-    fds[i] = fd;
-    parent[i] = nullptr;
+    fds[i] = parent_fds[i];
+    parent_fds[i] = -1;
+    CloseIf(&parent[i]);
   }
   env->SetIntArrayRegion(std_fds, 0, 3, fds);
   fprintf(stderr, "gesher: exec %s (%s) started as pid %d\n", program.c_str(), launch.kind.c_str(),

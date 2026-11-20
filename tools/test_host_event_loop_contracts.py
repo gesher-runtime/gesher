@@ -11,8 +11,12 @@ ELF guest fixtures. --source-ref is the same-harness old-source control.
 
 The scratch host compiles the actual outer poll, EpollWaiter and nested epoll
 sampling/delivery with Linux eventfds/poll behind the Win32/Winsock seams. It
-checks ownership, recursion, deadlines and allocation budgets without claiming
-Windows scheduling, whole-application memory or native WSAPoll performance.
+also compiles the actual pipe admission/readiness and descriptor guard bodies.
+Its descriptor capture seam owns a real Linux duplicate; the native pipe query
+uses Linux kernel state. It checks ownership, recursion, deadlines and allocation
+budgets without claiming Windows scheduling, OFD publication, whole-application
+memory or native WSAPoll performance. The separate OFD host exercises the full
+production snapshot implementation.
 """
 import argparse
 import hashlib
@@ -52,6 +56,10 @@ def main():
     system = read('compat/posix/src/system.cc')
     fd = read('compat/posix/src/fd.cc')
     select = read('compat/posix/src/select.cc')
+    has_pipe_snapshot = 'gesher::PollPipeHandle(' in fd
+    pipe = read('compat/posix/src/pipe_io.cc') if has_pipe_snapshot else ''
+    descriptor_header = read('compat/posix/src/record_lock_descriptors.h') if has_pipe_snapshot else ''
+    descriptors = read('compat/posix/src/record_lock_descriptors.cc') if has_pipe_snapshot else ''
     scratch_header = (read('compat/posix/src/poll_scratch.h')
                       if 'PollScratchLease' in fd or 'PollScratchLease' in epoll else '')
     socket_header = read('compat/posix/src/socket_internal.h')
@@ -67,7 +75,10 @@ def main():
         'vector': {
             '@VECTOR_HELPERS@': between(system, '// readv/writev on a socket fd:', '}  // namespace\n\nssize_t readv('),
             '@WRITEV@': between(system, 'ssize_t writev(', '\nssize_t preadv('),
-            '@SCALAR_WRITE@': between(fd, 'int write(int fd,', '\nint dup('),
+            '@PWRITEV@': between(system, 'ssize_t pwritev(', '\nssize_t process_vm_readv('),
+            '@SCALAR_WRITE@': (
+                between(fd, 'void ReleaseCanceledSnapshot(', '// The caller owns an exact native object')
+                if 'void ReleaseCanceledSnapshot(' in fd else '') + between(fd, 'int write(int fd,', '\nint dup('),
             '@VIRTUAL_WRITE@': between(epoll, 'bool WriteEventObject(', '\nbool ForgetEventObject('),
         },
         'select': {'@SELECT_SOURCE@': re.sub(r'^#include[^\n]*\n', '', select, flags=re.M)},
@@ -80,6 +91,15 @@ def main():
             '@POLL_FDS@': between(fd, '// --- poll ', '\nextern "C" int poll('),
             '@EPOLL_WAIT@': between(epoll, 'static int EpollWaitImpl(', '\nint epoll_wait('),
             '@HAS_SCRATCH@': '#define HAS_POLL_SCRATCH 1' if 'PollScratchLease<FdPollScratch>' in fd else '',
+            '@HAS_PIPE_SNAPSHOT@': '#define HAS_OFD_PIPE_POLL 1' if has_pipe_snapshot else '',
+            '@DESCRIPTOR_GUARD_DECLARATION@': between(descriptor_header, 'class DescriptorGuard {',
+                '\n// POSIX result/errno') if has_pipe_snapshot else '',
+            '@DESCRIPTOR_GUARD_BODY@': between(descriptors, 'DescriptorGuard::DescriptorGuard()',
+                '\nint DescriptorFcntl(') if has_pipe_snapshot else '',
+            '@PIPE_ADMISSION@': between(pipe, 'class PipeAdmission {',
+                '\n// I/O stays on the calling thread.') if has_pipe_snapshot else '',
+            '@PIPE_POLL@': between(pipe, 'int PollPipeHandle(', '\nint PipeBytesAvailable(')
+                if has_pipe_snapshot else '',
         },
     }
     # The old source has no vector permission helper. It never calls this
@@ -88,6 +108,10 @@ def main():
         print(path, hashlib.sha256(source.encode()).hexdigest(), flush=True)
     if scratch_header:
         print('poll_scratch.h', hashlib.sha256(scratch_header.encode()).hexdigest(), flush=True)
+    for path, source in [('pipe_io.cc', pipe), ('record_lock_descriptors.h', descriptor_header),
+                         ('record_lock_descriptors.cc', descriptors)]:
+        if source:
+            print(path, hashlib.sha256(source.encode()).hexdigest(), flush=True)
     failed = []
     with tempfile.TemporaryDirectory(prefix='gesher-host-event-loop-') as directory:
         work = Path(directory)

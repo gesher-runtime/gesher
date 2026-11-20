@@ -21,7 +21,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -53,6 +55,15 @@
 #endif
 #ifndef O_PATH
 #define O_PATH 0x200000
+#endif
+#ifndef O_DIRECT
+#define O_DIRECT 0x4000
+#endif
+#ifndef O_NOATIME
+#define O_NOATIME 0x40000
+#endif
+#ifndef O_LARGEFILE
+#define O_LARGEFILE 0
 #endif
 #ifndef O_DIRECTORY
 #define O_DIRECTORY 0x400000
@@ -92,7 +103,7 @@ static inline int open(const char* p, int f, int m = 0) {
 }
 #pragma clang diagnostic pop
 
-static inline int fcntl(int fd, int /*cmd*/, int /*arg*/) {
+[[maybe_unused]] static inline int fcntl(int fd, int /*cmd*/, int /*arg*/) {
   return _dup(fd);
 }
 
@@ -137,6 +148,31 @@ static inline int gesher_errno_from_crt(int e) {
 }
 
 static inline void FailWithLastError() {}
+static inline int ErrnoFromWin32(DWORD error) {
+  return error == ERROR_ACCESS_DENIED ? EACCES : error == ERROR_INVALID_HANDLE ? EBADF : EIO;
+}
+// This fixture tests procfs contents and actual native access reduction. The
+// canonical OFD table is exercised by its separate production transfer suite.
+static inline int RegisterOfd(int, int) { return 0; }
+struct DescriptorSnapshot {
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  ~DescriptorSnapshot() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+};
+static std::unique_ptr<DescriptorSnapshot> CaptureDescriptor(int fd) {
+  auto snapshot = std::unique_ptr<DescriptorSnapshot>(new (std::nothrow) DescriptorSnapshot);
+  if (!snapshot) { errno = ENOMEM; return nullptr; }
+  if (!DuplicateHandle(GetCurrentProcess(), HandleFromFd(fd), GetCurrentProcess(),
+          &snapshot->handle, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+    snapshot->handle = INVALID_HANDLE_VALUE;
+    errno = ErrnoFromWin32(GetLastError());
+    return nullptr;
+  }
+  return snapshot;
+}
+namespace record_locks {
+static std::recursive_mutex descriptor_mutex;
+struct DescriptorGuard { std::lock_guard<std::recursive_mutex> lock{descriptor_mutex}; };
+}
 
 namespace procfs {
 struct Entry {
@@ -164,7 +200,9 @@ static inline unsigned int getuid() { return 10000; }
 static inline unsigned int getgid() { return 10000; }
 static inline int getppid() { return 1; }
 
+#define close _close
 @PROCFS_SOURCE@
+#undef close
 
 static unsigned g_checks = 0;
 static unsigned g_failed = 0;

@@ -92,22 +92,40 @@ inline HANDLE OpenOwnedForExit(DWORD tid, uint64_t expected_birth) {
   return thread;
 }
 
-// Match the two observed worker call shapes using their actual bytes. The mov
-// immediately before call [_lock_file IAT] either saves RCX in nonvolatile RSI
-// or restores RCX from RSI. The unwound RSI is the FILE argument in both cases.
-// This is a checked call-site witness, never a nearest-export or generic-RSI inference.
-inline bool ExactFileCall(DWORD64 pc, DWORD64 rsi, FILE* stream) {
-  if (pc < 9 || rsi != reinterpret_cast<uintptr_t>(stream)) return false;
+// A real public fclose call, with its actual argument retained in a nonvolatile
+// register for the unwinder. This wrapper contains no wait, readiness latch or
+// replacement lock. The verifier checks the generated call bytes and target;
+// an unsupported compiler shape fails rather than guessing a register's meaning.
+__attribute__((noinline)) int Close(FILE* stream) {
+  register FILE* retained __asm__("r12") = stream;
+  __asm__ __volatile__("" : "+r"(retained));
+  int result = std::fclose(retained);
+  __asm__ __volatile__("" : : "r"(retained) : "memory");
+  return result;
+}
+
+inline bool CallShape(const unsigned char (&code)[9], bool* indirect) {
+  *indirect = code[0] == 0x4c && code[1] == 0x89 && code[2] == 0xe1 &&
+      code[3] == 0xff && code[4] == 0x15;
+  return *indirect || (code[1] == 0x4c && code[2] == 0x89 && code[3] == 0xe1 && code[4] == 0xe8);
+}
+
+inline bool ExactFileCall(DWORD64 pc, DWORD64 r12, FILE* stream) {
+  if (pc < 9 || r12 != reinterpret_cast<uintptr_t>(stream)) return false;
   HMODULE worker = GetModuleHandleW(nullptr);
   MEMORY_BASIC_INFORMATION instruction{}, import_region{};
   if (!VirtualQuery(reinterpret_cast<const void*>(pc - 9), &instruction, sizeof(instruction)) ||
       instruction.Type != MEM_IMAGE || instruction.AllocationBase != worker) return false;
+  DWORD64 image = 0;
+  auto* function = RtlLookupFunctionEntry(reinterpret_cast<uintptr_t>(&Close), &image, nullptr);
+  if (!function || function->BeginAddress >= function->EndAddress ||
+      image > UINT64_MAX - function->EndAddress ||
+      pc <= image + function->BeginAddress || pc >= image + function->EndAddress) return false;
   unsigned char code[9]{};
   SIZE_T copied = 0;
+  bool indirect = false;
   if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(pc - 9), code, sizeof(code), &copied) ||
-      copied != sizeof(code) || code[0] != 0x48 || code[1] != 0x89 ||
-      (code[2] != 0xce && code[2] != 0xf1) ||
-      code[3] != 0xff || code[4] != 0x15) return false;
+      copied != sizeof(code) || !CallShape(code, &indirect)) return false;
   int32_t displacement = 0;
   std::memcpy(&displacement, code + 5, sizeof(displacement));
   uintptr_t slot = 0;
@@ -119,12 +137,25 @@ inline bool ExactFileCall(DWORD64 pc, DWORD64 rsi, FILE* stream) {
     if (pc > UINTPTR_MAX - static_cast<unsigned>(displacement)) return false;
     slot = pc + static_cast<unsigned>(displacement);
   }
+  if (!indirect) return slot == reinterpret_cast<uintptr_t>(&std::fclose);
   if (!VirtualQuery(reinterpret_cast<const void*>(slot), &import_region, sizeof(import_region)) ||
       import_region.Type != MEM_IMAGE || import_region.AllocationBase != worker) return false;
   uintptr_t target = 0;
   copied = 0;
   return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(slot), &target, sizeof(target), &copied) &&
-      copied == sizeof(target) && target == reinterpret_cast<uintptr_t>(&_lock_file);
+      copied == sizeof(target) && target == reinterpret_cast<uintptr_t>(&std::fclose);
+}
+
+inline bool RejectsUnsupportedCall(DWORD64 pc) {
+  if (pc < 9) return false;
+  unsigned char code[9]{};
+  SIZE_T copied = 0;
+  bool indirect = false;
+  if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(pc - 9), code, sizeof(code), &copied) ||
+      copied != sizeof(code) || !CallShape(code, &indirect)) return false;
+  // Change an owned copy of the observed argument-move opcode only.
+  code[indirect ? 0 : 1] ^= 1;
+  return !CallShape(code, &indirect);
 }
 
 // Reuse the established Rtl unwind pattern on this exact owned thread. Only
@@ -152,7 +183,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
     return false;
   }
   DWORD64 pcs[32]{};
-  DWORD64 rsis[32]{};
+  DWORD64 r12s[32]{};
   unsigned count = 0;
   CONTEXT context{};
   context.ContextFlags = CONTEXT_FULL;
@@ -160,7 +191,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   DWORD error = captured ? ERROR_SUCCESS : GetLastError();
   while (captured && count < 32 && context.Rip != 0) {
     pcs[count] = context.Rip;
-    rsis[count++] = context.Rsi;
+    r12s[count++] = context.R12;
     DWORD64 image_base = 0;
     PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
     if (function) {
@@ -194,7 +225,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   HMODULE modules[32]{};
   unsigned module_count = 0;
   unsigned exact_file_calls = 0;
-  unsigned other_file_calls = 0, enter_frames = 0;
+  unsigned other_file_calls = 0, enter_frames = 0, rejected_code_copies = 0;
   FARPROC enter = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "EnterCriticalSection");
   DWORD64 enter_image = 0;
   PRUNTIME_FUNCTION enter_function = enter ? RtlLookupFunctionEntry(reinterpret_cast<uintptr_t>(enter), &enter_image, nullptr) : nullptr;
@@ -208,13 +239,15 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   for (unsigned index = 0; index < count; ++index) {
     std::fprintf(stderr, "ACTUAL_CLOSER_FRAME index=%u pc=0x%llx nearest-export=%s\n", index,
         static_cast<unsigned long long>(pcs[index]), Describe(pcs[index]).c_str());
-    if (ExactFileCall(pcs[index], rsis[index], stream)) {
+    if (ExactFileCall(pcs[index], r12s[index], stream)) {
       ++exact_file_calls;
-      std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL index=%u pc=0x%llx unwound-rsi=0x%llx FILE=%p exact-rsi-rcx-copy-and-lock-file-iat=true\n",
-          index, static_cast<unsigned long long>(pcs[index]), static_cast<unsigned long long>(rsis[index]),
-          static_cast<void*>(stream));
+      bool rejected = RejectsUnsupportedCall(pcs[index]);
+      rejected_code_copies += rejected;
+      std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL index=%u pc=0x%llx unwound-r12=0x%llx FILE=%p exact-r12-rcx-copy-and-public-fclose=true unsupported-code-copy=%s\n",
+          index, static_cast<unsigned long long>(pcs[index]), static_cast<unsigned long long>(r12s[index]),
+          static_cast<void*>(stream), rejected ? "reject" : "accept");
     }
-    if (other_live_stream && ExactFileCall(pcs[index], rsis[index], other_live_stream)) ++other_file_calls;
+    if (other_live_stream && ExactFileCall(pcs[index], r12s[index], other_live_stream)) ++other_file_calls;
     if (enter_bounds && pcs[index] >= enter_begin && pcs[index] < enter_end) {
       ++enter_frames;
       std::fprintf(stderr, "ACTUAL_CLOSER_ENTER_FRAME index=%u pc=0x%llx named-entry=%p unwind-begin=0x%llx unwind-end=0x%llx\n",
@@ -238,7 +271,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   }
   std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL_SUMMARY matches=%u required=1 enter-frames=%u other-FILE=%p other-matches=%u\n",
       exact_file_calls, enter_frames, static_cast<void*>(other_live_stream), other_file_calls);
-  return captured && count > 0 && closed && previous == 0 && resumed == 1 && exact_file_calls == 1 &&
+  return captured && count > 0 && closed && previous == 0 && resumed == 1 && exact_file_calls == 1 && rejected_code_copies == 1 &&
       enter_frames == 1 && other_live_stream && other_live_stream != stream && other_file_calls == 0;
 }
 
