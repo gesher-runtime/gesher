@@ -1,8 +1,7 @@
 # 0089: AHardwareBuffer, ASurfaceControl and EGL native buffers on Windows
 
 Status: accepted for implementation, 2026-11-20. Verified locally with the NDK
-test library and its host runner (section 6); the browsers are the end-to-end
-evidence.
+test library and its host runner, and end to end with Opera (Verification).
 
 ## Context
 
@@ -256,3 +255,11 @@ do safely anyway) and a full state resync when the calling context changes.
 `tests/native/surface_control_host_test.cc` (its runner with a Gesher window),
 run by `tests/windows/tracks/40-native-libs.ps1` on ANGLE's hardware device
 with a descriptor broker and on WARP without one.
+
+End to end (locally, by hand): Opera (com.opera.browser) through
+`gesher-app.cmd view` loads its SurfaceControl set, composes every frame of
+its display compositor into the browser's SurfaceView and shows
+https://example.com/ and a Wikipedia article (text, images, scrolling with
+the mouse wheel), checked by screenshots of its window. That needs ANGLE
+built with section 6's option; with the CI build of the same commit before
+it, the page area stayed white (only the page background was composed).
