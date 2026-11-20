@@ -4,7 +4,8 @@
 // extensions; Android apps (Chromium's GPU process) need them with
 // AHardwareBuffer. They are implemented here, for Android's default display:
 //  - EGL_ANDROID_get_native_client_buffer: eglGetNativeClientBufferANDROID
-//    gives the AHardwareBuffer itself as the EGLClientBuffer;
+//    gives the buffer's ANativeWindowBuffer, 16 bytes into it, as on Android
+//    (hardware_buffer.cc: code in apps relies on that layout);
 //  - EGL_ANDROID_image_native_buffer: eglCreateImageKHR / eglCreateImage with
 //    EGL_NATIVE_BUFFER_ANDROID give the buffer's EGLImage (hardware_buffer.h:
 //    an ANGLE image of the GPU thread's texture, so whatever the app draws
@@ -126,7 +127,7 @@ EGLClientBuffer BIONIC_SYSV GetNativeClientBuffer(const AHardwareBuffer* buffer)
     SetError(EGL_BAD_PARAMETER);
     return nullptr;
   }
-  return reinterpret_cast<EGLClientBuffer>(const_cast<AHardwareBuffer*>(buffer));
+  return static_cast<EGLClientBuffer>(ahb::ClientBuffer(b));
 }
 
 EGLImageKHR NativeBufferImage(EGLDisplay dpy, EGLContext ctx, EGLClientBuffer buffer,
@@ -135,7 +136,7 @@ EGLImageKHR NativeBufferImage(EGLDisplay dpy, EGLContext ctx, EGLClientBuffer bu
     SetError(EGL_BAD_CONTEXT);
     return EGL_NO_IMAGE_KHR;
   }
-  ahb::Buffer* b = ahb::FromApp(buffer);
+  ahb::Buffer* b = ahb::FromClientBuffer(buffer);
   if (b == nullptr) {
     SetError(EGL_BAD_PARAMETER);
     return EGL_NO_IMAGE_KHR;
@@ -147,6 +148,14 @@ EGLImageKHR NativeBufferImage(EGLDisplay dpy, EGLContext ctx, EGLClientBuffer bu
       case EGL_PROTECTED_CONTENT_EXT:
         if (attribs[i + 1] != EGL_FALSE) {  // no buffer is protected
           SetError(EGL_BAD_ACCESS);
+          return EGL_NO_IMAGE_KHR;
+        }
+        break;
+      case EGL_GL_COLORSPACE_KHR:
+        // The texture is sampled as stored (linear); there is no sRGB view
+        // (EGL_EXT_image_gl_colorspace is not offered).
+        if (attribs[i + 1] != EGL_GL_COLORSPACE_LINEAR_KHR) {
+          SetError(EGL_BAD_PARAMETER);
           return EGL_NO_IMAGE_KHR;
         }
         break;

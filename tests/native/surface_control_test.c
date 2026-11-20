@@ -357,6 +357,24 @@ static void TestEgl(void) {
 
   AHardwareBuffer* b = Allocate(64, 32, kCpu | kGpu);
   if (b == NULL) return;
+  // As on Android (an AHardwareBuffer is a GraphicBuffer), the client buffer
+  // is its ANativeWindowBuffer 16 bytes in, which code such as ANGLE reads.
+  const char* nb = (const char*)p_get_client_buffer(b);
+  int magic = 0, width = 0, height = 0, format = 0;
+  uintptr_t layers = 0;
+  uint64_t usage = 0;
+  if (nb != NULL) {
+    memcpy(&magic, nb, 4);
+    memcpy(&width, nb + 56, 4);
+    memcpy(&height, nb + 60, 4);
+    memcpy(&format, nb + 68, 4);
+    memcpy(&layers, nb + 80, sizeof layers);
+    memcpy(&usage, nb + 104, 8);
+  }
+  CHECK(nb == (const char*)b + 16 && magic == (('_' << 24) | ('b' << 16) | ('f' << 8) | 'r') && width == 64 &&
+            height == 32 && format == 1 && layers == 1 && usage == (kCpu | kGpu),
+        "eglGetNativeClientBufferANDROID: the ANativeWindowBuffer 16 bytes into the buffer (%dx%d format %d)",
+        width, height, format);
   CHECK(Fill(b, Pattern1) == 0, "GPU buffer: CPU contents before the import");
   Target t;
   CHECK(Attach(b, &t), "eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID), glEGLImageTargetTexture2DOES, a complete "

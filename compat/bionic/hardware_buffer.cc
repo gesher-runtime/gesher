@@ -208,7 +208,56 @@ struct GpuState {
   int app_images = 0;  // app references to `image`
 };
 
+// What an AHardwareBuffer* points to on Android is a GraphicBuffer: its
+// RefBase (a vtable and mRefs) and then its ANativeWindowBuffer, 16 bytes in,
+// which eglGetNativeClientBufferANDROID gives as the EGLClientBuffer. Code
+// in apps relies on that layout: ANGLE (bundled with Chromium, running on the
+// system's GLES) computes the client buffer as the buffer + 16 and reads the
+// ANativeWindowBuffer's magic, size, format, layer count and usage
+// (angle/src/common/android_util.cpp). A buffer here starts with the same
+// layout, the ANativeWindowBuffer filled in as GraphicBuffer fills it.
+struct NativeHandle {  // native_handle_t with one fd
+  int version = static_cast<int>(3 * sizeof(int));
+  int num_fds = 1;
+  int num_ints = 0;
+  int fd = -1;
+};
+
+// <nativebase/nativebase.h>'s ANativeWindowBuffer (LP64).
+struct NativeWindowBuffer {
+  int magic;
+  int version;
+  void* reserved[4];
+  void (*inc_ref)(void* base);  // the app's (System V) code calls these
+  void (*dec_ref)(void* base);
+  int width;
+  int height;
+  int stride;
+  int format;
+  int usage_deprecated;
+  uintptr_t layer_count;
+  void* reserved1[1];
+  const NativeHandle* handle;
+  uint64_t usage;
+  void* reserved_proc[7];
+};
+static_assert(sizeof(NativeWindowBuffer) == 168, "ANativeWindowBuffer's LP64 size");
+static_assert(offsetof(NativeWindowBuffer, width) == 56 && offsetof(NativeWindowBuffer, layer_count) == 80 &&
+                  offsetof(NativeWindowBuffer, handle) == 96 && offsetof(NativeWindowBuffer, usage) == 104,
+              "ANativeWindowBuffer's LP64 layout");
+
+struct GraphicBufferHead {
+  const void* vtable = nullptr;  // GraphicBuffer's; never called
+  void* refs = nullptr;          // RefBase::mRefs
+  NativeWindowBuffer native;
+};
+static_assert(offsetof(GraphicBufferHead, native) == 16, "ANativeWindowBuffer 16 bytes into a GraphicBuffer");
+
+constexpr int kNativeBufferMagic = ('_' << 24) | ('b' << 16) | ('f' << 8) | 'r';
+
 struct Buffer {
+  GraphicBufferHead head;  // first: an AHardwareBuffer* is the buffer's address
+  NativeHandle handle;
   uint32_t magic = kMagic;
   std::atomic<int> refs{1};
   AHardwareBuffer_Desc desc{};
@@ -472,6 +521,12 @@ void Destroy(Buffer* b) {
   });
 }
 
+Buffer* BufferOfNative(void* base) {
+  return reinterpret_cast<Buffer*>(static_cast<char*>(base) - offsetof(GraphicBufferHead, native));
+}
+void BIONIC_SYSV NativeIncRef(void* base) { BufferOfNative(base)->refs.fetch_add(1, std::memory_order_relaxed); }
+void BIONIC_SYSV NativeDecRef(void* base);
+
 Buffer* Create(const AHardwareBuffer_Desc& desc, int fd, size_t size, uint64_t id, bool foreign,
                int* error) {
   void* map = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -482,6 +537,21 @@ Buffer* Create(const AHardwareBuffer_Desc& desc, int fd, size_t size, uint64_t i
   auto* b = new Buffer();
   b->desc = desc;
   b->format = FindFormat(desc.format);
+  NativeWindowBuffer& n = b->head.native;
+  std::memset(&n, 0, sizeof n);
+  n.magic = kNativeBufferMagic;
+  n.version = static_cast<int>(sizeof(NativeWindowBuffer));
+  n.inc_ref = reinterpret_cast<void (*)(void*)>(&NativeIncRef);
+  n.dec_ref = reinterpret_cast<void (*)(void*)>(&NativeDecRef);
+  n.width = static_cast<int>(desc.width);
+  n.height = static_cast<int>(desc.height);
+  n.stride = static_cast<int>(desc.stride);
+  n.format = static_cast<int>(desc.format);  // the HAL pixel format's value
+  n.usage_deprecated = static_cast<int>(desc.usage & 0xffffffffu);
+  n.layer_count = desc.layers;
+  n.usage = desc.usage;  // gralloc's bits have the same values
+  b->handle.fd = fd;
+  n.handle = &b->handle;
   b->id = id;
   b->fd = fd;
   b->data = static_cast<uint8_t*>(map);
@@ -519,6 +589,17 @@ Buffer* FromApp(const void* p) {
 }
 
 void Acquire(Buffer* b) { b->refs.fetch_add(1, std::memory_order_relaxed); }
+
+Buffer* FromClientBuffer(const void* client_buffer) {
+  if (client_buffer == nullptr) return nullptr;
+  return FromApp(static_cast<const char*>(client_buffer) - offsetof(GraphicBufferHead, native));
+}
+
+void* ClientBuffer(Buffer* b) { return &b->head.native; }
+
+namespace {
+void BIONIC_SYSV NativeDecRef(void* base) { Release(BufferOfNative(base)); }
+}  // namespace
 
 void Release(Buffer* b) {
   if (b->refs.fetch_sub(1, std::memory_order_acq_rel) == 1) Destroy(b);

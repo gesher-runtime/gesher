@@ -38,6 +38,11 @@ inline AHardwareBuffer* ToApp(Buffer* b) { return reinterpret_cast<AHardwareBuff
 
 void Acquire(Buffer* b);
 void Release(Buffer* b);
+
+// eglGetNativeClientBufferANDROID's EGLClientBuffer for a buffer (its
+// ANativeWindowBuffer, as on Android), and the buffer of one (null if none).
+void* ClientBuffer(Buffer* b);
+Buffer* FromClientBuffer(const void* client_buffer);
 const AHardwareBuffer_Desc& Desc(const Buffer* b);
 
 // --- the GPU side (each runs on the GPU thread; callable from any thread) ----
