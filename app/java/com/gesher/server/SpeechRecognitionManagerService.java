@@ -30,6 +30,7 @@ import android.speech.RecognitionService;
 import android.speech.RecognitionSupport;
 import android.speech.SpeechRecognizer;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -192,7 +193,10 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
         final IBinder processDeathLink;
         final IBinder.DeathRecipient clientDeath;
         final List<IRecognitionServiceManagerCallback> callbacks = new ArrayList<>();
+        // Callback lifetime is independent of dispatch lifetime. Long-running
+        // downloads must not make every later command scan all previous calls.
         final Set<Request> requests = new LinkedHashSet<>();
+        final ArrayDeque<Request> pendingRequests = new ArrayDeque<>();
         Binding binding;
         Recognition recognition;
         boolean delivered;
@@ -261,7 +265,8 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
                 disconnect(SpeechRecognizer.ERROR_SERVER_DISCONNECTED);
                 return;
             }
-            for (Request request : List.copyOf(requests)) {
+            Request request;
+            while ((request = pendingRequests.pollFirst()) != null) {
                 if (!request.dispatch(provider)) {
                     disconnect(SpeechRecognizer.ERROR_SERVER_DISCONNECTED);
                     return;
@@ -291,6 +296,7 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
                 call(() -> request.error(error));
             }
             requests.clear();
+            pendingRequests.clear();
         }
 
         void close() {
@@ -302,6 +308,7 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             callbacks.clear();
             for (Request request : requests) request.retire();
             requests.clear();
+            pendingRequests.clear();
             cancelRecognition(true);
             if (binding != null) {
                 Binding previous = binding;
@@ -382,6 +389,7 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
                     return;
                 }
                 requests.add(request);
+                pendingRequests.addLast(request);
                 connect();
                 dispatch();
             });

@@ -31,23 +31,43 @@
 // state in xmm6..xmm15 across the callbacks that end up here).
 	.globl gesher_call_host_sysv
 	.p2align 4
+	.seh_proc gesher_call_host_sysv
 gesher_call_host_sysv:
 	push rbp
-	mov  rbp, rsp
+	.seh_pushreg rbp
 	push rbx
+	.seh_pushreg rbx
 	push rsi
+	.seh_pushreg rsi
 	push rdi
+	.seh_pushreg rdi
 	sub  rsp, 168                    // xmm6..xmm15 (160) + 8: rsp 16-aligned
+	.seh_stackalloc 168
+	// Keep the same RBP value, but establish it after the fixed allocation.
+	// Unwind save offsets are relative to RBP-192, above the variable args.
+	lea  rbp, [rsp + 192]
+	.seh_setframe rbp, 192
 	movdqu xmmword ptr [rsp + 0], xmm6
+	.seh_savexmm xmm6, 0
 	movdqu xmmword ptr [rsp + 16], xmm7
+	.seh_savexmm xmm7, 16
 	movdqu xmmword ptr [rsp + 32], xmm8
+	.seh_savexmm xmm8, 32
 	movdqu xmmword ptr [rsp + 48], xmm9
+	.seh_savexmm xmm9, 48
 	movdqu xmmword ptr [rsp + 64], xmm10
+	.seh_savexmm xmm10, 64
 	movdqu xmmword ptr [rsp + 80], xmm11
+	.seh_savexmm xmm11, 80
 	movdqu xmmword ptr [rsp + 96], xmm12
+	.seh_savexmm xmm12, 96
 	movdqu xmmword ptr [rsp + 112], xmm13
+	.seh_savexmm xmm13, 112
 	movdqu xmmword ptr [rsp + 128], xmm14
+	.seh_savexmm xmm14, 128
 	movdqu xmmword ptr [rsp + 144], xmm15
+	.seh_savexmm xmm15, 144
+	.seh_endprologue
 	mov  rbx, rcx                    // the HostCall*, kept across the call
 	// Reserve and fill the host stack arguments (16-byte aligned at the call).
 	mov  r10, qword ptr [rbx + 24]   // stack ptr
@@ -105,6 +125,7 @@ gesher_call_host_sysv:
 	pop  rbx
 	pop  rbp
 	ret
+	.seh_endproc
 
 // void gesher_guest_entry_shim(): entered (System V) by a host_entry stub with
 // the guest function pointer in r10, as if called directly by the host caller.
@@ -123,10 +144,15 @@ gesher_call_host_sysv:
 // arguments start at [rbp+32] and are copied to the guest stack.
 	.globl gesher_guest_entry_shim
 	.p2align 4
+	.seh_proc gesher_guest_entry_shim
 gesher_guest_entry_shim:
 	push rbp
-	mov  rbp, rsp
+	.seh_pushreg rbp
 	sub  rsp, 160
+	.seh_stackalloc 160
+	lea  rbp, [rsp + 160]
+	.seh_setframe rbp, 160
+	.seh_endprologue
 	mov  qword ptr [rsp + 0], rdi
 	mov  qword ptr [rsp + 8], rsi
 	mov  qword ptr [rsp + 16], rdx
@@ -160,3 +186,4 @@ gesher_guest_entry_shim:
 	add  rsp, 160
 	pop  rbp
 	ret
+	.seh_endproc

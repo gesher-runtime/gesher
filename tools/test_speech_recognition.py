@@ -28,6 +28,7 @@ def main():
     for argument in ('java-home', 'framework-classes', 'core-classes', 'app-classes'):
         parser.add_argument('--' + argument, type=Path, required=True)
     parser.add_argument('--unpatched-aosp-base', type=Path)
+    parser.add_argument('--source-ref', help='Use an older broker as a dispatch-work negative control')
     args = parser.parse_args()
     classpath = os.pathsep.join(str(p.resolve()) for p in
                                 (args.app_classes, args.framework_classes, args.core_classes))
@@ -40,11 +41,26 @@ def main():
         looper = work / 'libspeech_looper_host.so'
         build_native(cc, args.java_home, 'scheduler', binder)
         build_native(cc, args.java_home, 'cookie-callbacks', looper)
-        sources = [ROOT / path for path in (
-            'app/java/com/gesher/server/SpeechRecognitionManagerService.java',
+        broker_path = 'app/java/com/gesher/server/SpeechRecognitionManagerService.java'
+        broker_text = (subprocess.run(['git', 'show', args.source_ref + ':' + broker_path],
+                                     cwd=ROOT, capture_output=True, text=True, check=True).stdout
+                       if args.source_ref else (ROOT / broker_path).read_text())
+        # Count actual visits to request dispatch in the complete production
+        # broker, without shipping test counters or relying on host timing.
+        counter_anchor = '    private static final int MAX_CONNECTIONS_PER_UID = 10;'
+        dispatch_anchor = '            final boolean dispatch(IRecognitionService provider) {'
+        if broker_text.count(counter_anchor) != 1 or broker_text.count(dispatch_anchor) != 1:
+            raise RuntimeError('Cannot instrument speech request dispatch unambiguously')
+        broker_text = broker_text.replace(counter_anchor,
+                counter_anchor + '\n    public volatile long testRequestDispatchVisits;')
+        broker_text = broker_text.replace(dispatch_anchor,
+                dispatch_anchor + '\n                testRequestDispatchVisits++;')
+        broker = work / 'SpeechRecognitionManagerService.java'
+        broker.write_text(broker_text)
+        sources = [broker, *[ROOT / path for path in (
             'tests/dex-services/com/gesher/server/SpeechRecognitionContractTest.java',
             'tests/dex-services/gesher/services/SpeechRecognizerConnectionTest.java',
-            'tests/cookie-callbacks/PerfettoTrace.java')]
+            'tests/cookie-callbacks/PerfettoTrace.java')]]
         if args.unpatched_aosp_base:
             client = work / CLIENT
             client.parent.mkdir(parents=True)
@@ -61,7 +77,8 @@ def main():
         java = [str(args.java_home / 'bin/java'), '-XX:+UnlockDiagnosticVMOptions',
                 '-XX:-BytecodeVerificationRemote', '--patch-module',
                 'jdk.unsupported=' + str(work / 'cleaner'), '-cp', str(work) + os.pathsep + classpath]
-        subprocess.run([*java, 'com.gesher.server.SpeechRecognitionContractTest', str(binder)],
+        subprocess.run([*java, '-Dgesher.test.speech.dispatch-budget=true',
+                        'com.gesher.server.SpeechRecognitionContractTest', str(binder)],
                        check=True, timeout=45)
         subprocess.run([*java, 'gesher.services.SpeechRecognizerConnectionTest', str(binder), str(looper)],
                        check=True, timeout=45)

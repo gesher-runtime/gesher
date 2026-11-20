@@ -414,13 +414,17 @@ jobs:
           printf '%s  %s\n' 3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad "$R8_JAR.download" | sha256sum --check --strict
           mv "$R8_JAR.download" "$R8_JAR"
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          python3 tools/test_uia_cache.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_apk_signing.py --apksig-jar "$APKSIG_JAR"
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_role_manager_contracts.py --framework-classes out/framework/classes --app-classes out/app/gesher-app-classes.jar
-          tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           tests/web3-query/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/exitstatusapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/crashnotice" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/sharedlibraryapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
@@ -505,6 +509,13 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/gmsapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
 
+      - name: Package UID admission, permission and interruption contracts
+        run: |
+          python3 tools/test_package_uid_isolation.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Unsupported connectionless handwriting callback contracts
         run: |
           python3 tools/test_handwriting_unavailable.py --java-home "$JAVA_HOME" \
@@ -518,6 +529,21 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
           python3 tools/test_package_enabled_lifecycle.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: AppOps and permission data delivery contracts
+        run: |
+          python3 tools/test_appops.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Android UI mode policy, persistence and activity configuration contracts
+        run: |
+          python3 tools/test_ui_mode_native.py
+          python3 tools/test_ui_mode.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
@@ -556,6 +582,12 @@ jobs:
           path: work/sdk-36/android.jar
           key: sdk-public-api-36-r02-d9eb9da824d9
 
+      - name: Speech recognition dispatch and client lifecycle contracts
+        run: |
+          python3 tools/test_speech_recognition.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Durable Settings provider contracts
         run: |
           python3 tools/test_settings_provider.py --java-home "$JAVA_HOME" \
@@ -563,12 +595,31 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: SAF provider, picker lifecycle and grant restart contracts
+        run: |
+          python3 tools/test_saf_documents.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Application storage public API and system-package policy contracts
         run: |
           python3 tools/test_app_storage_public.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Notification delegation ownership and durable policy contracts
+        run: |
+          python3 tools/test_notification_delegation.py --with-storage --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_notification_channel_groups.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+          "$JAVA_HOME/bin/javac" --release 11 -cp work/sdk-36/android.jar \
+            -d "$RUNNER_TEMP/notification-delegation-sdk" \
+            tests/notification-delegation/sdk/java/gesher/notificationdelegation/ControlReceiver.java
 
       - name: Activity finish, null binding and public media receiver contracts
         run: |
@@ -595,6 +646,12 @@ jobs:
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
+      - name: Notification storage identity and legacy migration contracts
+        run: |
+          python3 tools/test_notification_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Audio effect capability and constructor contracts
         run: |
           python3 tools/test_audio_effect_contracts.py --java-home "$JAVA_HOME" \
@@ -604,6 +661,12 @@ jobs:
         run: |
           python3 tools/test_media_routing_contracts.py \
             --framework-classes out/framework/classes --core-classes out/coremod
+
+      - name: Account authentication session lifetimes and deadlines
+        run: |
+          python3 tools/test_account_session_lifetime.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
 
       - name: Sync admission, results and adapter lifecycle contracts
         run: |
@@ -680,6 +743,18 @@ jobs:
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
+      - name: SDK36 SoftAP and WPS value, copy and compatibility contracts
+        run: |
+          python3 tools/test_softap_values_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 Wi-Fi Direct values, provider and copy contracts
+        run: |
+          python3 tools/test_wifi_p2p_values.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
       - name: Collect framework artifacts
         run: |
           mkdir -p dist-framework
@@ -712,6 +787,7 @@ jobs:
             out/app/packageevents-observer.apk out/app/packageevents-control.dex dist-framework/
           cp out/app/icon-base.apk out/app/icon-density.apk out/app/icon-bundle.apks out/app/icon-bundle.xapk dist-framework/
           cp out/app/exitstatusapp.apk dist-framework/
+          cp out/app/crashnotice.apk dist-framework/
           cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibraryafter.apk out/app/sharedlibraryafterdlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
           cp out/app/graphics-tests.dex out/app/web3-query-tests.dex dist-framework/
           ls -la dist-framework

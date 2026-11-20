@@ -33,17 +33,6 @@ async function cancel(github, owner, repo, pr, mergeGithub = github) {
   }`, {id: pr.node_id});
 }
 
-// Registered workflow identity does not change within one controller job.
-const workflowIdentity = new WeakMap();
-async function registeredWorkflow(github, owner, repo, file) {
-  let cache = workflowIdentity.get(github);
-  if (!cache) workflowIdentity.set(github, cache = new Map());
-  const key = owner + '/' + repo + '/' + file;
-  if (!cache.has(key)) cache.set(key, github.rest.actions.getWorkflow({owner, repo, workflow_id: file})
-    .then(({data}) => data, (error) => { cache.delete(key); throw error; }));
-  return cache.get(key);
-}
-
 async function ciEvidence(github, owner, repo, pr) {
   const runs = await p.list(github.rest.actions.listWorkflowRunsForRepo,
     {owner, repo, head_sha: pr.head.sha}, 'workflow_runs');
@@ -51,7 +40,9 @@ async function ciEvidence(github, owner, repo, pr) {
     {owner, repo, ref: pr.head.sha, filter: 'latest'}, 'check_runs');
   let ready = true;
   for (const [file, name] of [['ci.yml', 'ci-required'], ['arm64-windows.yml', 'arm64-required']]) {
-    const workflow = await registeredWorkflow(github, owner, repo, file);
+    // Registration can change while publishing the App status. Every evidence
+    // pass must revalidate its current identity, path and enabled state.
+    const {data: workflow} = await github.rest.actions.getWorkflow({owner, repo, workflow_id: file});
     if (!Number.isSafeInteger(workflow.id) || workflow.id <= 0 ||
         workflow.state !== 'active' || workflow.path !== '.github/workflows/' + file) return {ready: false};
     const matching = runs.filter(r => r.workflow_id === workflow.id && r.path === workflow.path &&

@@ -144,7 +144,7 @@ public final class SpeechRecognitionContractTest {
 
     private record Listening(Intent intent, IRecognitionListener listener, AttributionSource source) {}
 
-    private static final class Engine extends IRecognitionService.Stub {
+    private static class Engine extends IRecognitionService.Stub {
         final BlockingQueue<Listening> starts = new LinkedBlockingQueue<>();
         final BlockingQueue<IRecognitionListener> stops = new LinkedBlockingQueue<>();
         final BlockingQueue<IRecognitionListener> cancels = new LinkedBlockingQueue<>();
@@ -431,6 +431,123 @@ public final class SpeechRecognitionContractTest {
         check(!SpeechRecognitionManagerService.isProvider(service), "disabled package cannot be an engine");
     }
 
+    // The host runner instruments the complete production source. Ordinary ART
+    // runs exercise the same behavior without adding counters to shipped code.
+    private static long dispatchWork(SpeechRecognitionManagerService manager) throws Exception {
+        if (!Boolean.getBoolean("gesher.test.speech.dispatch-budget")) return -1;
+        return manager.getClass().getField("testRequestDispatchVisits").getLong(manager);
+    }
+
+    private static void pendingRequestDispatch() throws Exception {
+        Backend backend = new Backend();
+        SpeechRecognitionManagerService manager = new SpeechRecognitionManagerService(backend, 2000);
+        Lifetime token = new Lifetime();
+        Admission admission = new Admission();
+        manager.createSession(SERVICE, token, false, admission);
+        IServiceConnection link = take(backend.bindings);
+        Engine engine = new Engine();
+        link.connected(SERVICE, engine, null, false);
+        IRecognitionService client = (IRecognitionService) take(admission.events);
+        AttributionSource attribution = backend.attribution();
+
+        int count = 128;
+        long before = dispatchWork(manager);
+        List<Model> models = new ArrayList<>();
+        List<IModelDownloadListener> downloads = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            Model model = new Model();
+            models.add(model);
+            client.triggerModelDownload(INTENT, attribution, model);
+        }
+        for (int i = 0; i < count; i++) downloads.add(take(engine.downloads));
+        Support support = new Support();
+        client.checkRecognitionSupport(INTENT, attribution, support);
+        IRecognitionSupportCallback supportCallback = take(engine.support);
+        supportCallback.onError(SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE);
+        check(take(support.events).equals(SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)
+                && downloads.size() == count, "support is forwarded while every download callback remains live");
+        if (before >= 0) {
+            long visits = dispatchWork(manager) - before;
+            System.out.println("speech request dispatch visits: " + visits + " for " + (count + 1) + " calls");
+            check(visits == count + 1, "dispatch work grows with new calls, not outstanding callbacks");
+        }
+        for (int i = 0; i < count; i++) {
+            downloads.get(i).onProgress(i);
+            downloads.get(i).onSuccess();
+            downloads.get(i).onError(SpeechRecognizer.ERROR_SERVER);
+        }
+        for (int i = 0; i < count; i++) {
+            check(take(models.get(i).events).equals(i)
+                    && take(models.get(i).events).equals("loaded"), "each outstanding download retains its callback");
+        }
+
+        link.connected(SERVICE, null, null, true);
+        check(take(backend.unbindings) == link, "completed operations permit a clean reconnect");
+        client.triggerModelDownload(INTENT, attribution, null);
+        IServiceConnection pending = take(backend.bindings);
+        Support first = new Support(), second = new Support();
+        client.checkRecognitionSupport(new Intent(INTENT).putExtra("order", 1), attribution, first);
+        client.checkRecognitionSupport(new Intent(INTENT).putExtra("order", 2), attribution, second);
+        BlockingQueue<Integer> order = new LinkedBlockingQueue<>();
+        Engine replacement = new Engine() {
+            @Override public void triggerModelDownload(Intent intent, AttributionSource source,
+                    IModelDownloadListener listener) {
+                order.add(0);
+                super.triggerModelDownload(intent, source, listener);
+            }
+            @Override public void checkRecognitionSupport(Intent intent, AttributionSource source,
+                    IRecognitionSupportCallback callback) {
+                order.add(intent.getIntExtra("order", -1));
+                super.checkRecognitionSupport(intent, source, callback);
+            }
+        };
+        pending.connected(SERVICE, replacement, null, false);
+        check(take(order) == 0 && take(order) == 1 && take(order) == 2 && order.isEmpty(),
+                "reconnection drains queued calls once in admission order, including a no-callback download");
+        take(replacement.downloadsWithoutCallback);
+        IRecognitionSupportCallback firstCallback = take(replacement.support);
+        IRecognitionSupportCallback secondCallback = take(replacement.support);
+        pending.connected(SERVICE, null, null, true);
+        check(take(backend.unbindings) == pending
+                && take(first.events).equals(SpeechRecognizer.ERROR_SERVER_DISCONNECTED)
+                && take(second.events).equals(SpeechRecognizer.ERROR_SERVER_DISCONNECTED),
+                "provider loss retires every dispatched pending callback");
+        firstCallback.onError(SpeechRecognizer.ERROR_CLIENT);
+        secondCallback.onError(SpeechRecognizer.ERROR_CLIENT);
+
+        Support failed = new Support();
+        Model unsent = new Model();
+        client.checkRecognitionSupport(INTENT, attribution, failed);
+        IServiceConnection failing = take(backend.bindings);
+        client.triggerModelDownload(INTENT, attribution, unsent);
+        Engine rejecting = new Engine() {
+            @Override public void checkRecognitionSupport(Intent intent, AttributionSource source,
+                    IRecognitionSupportCallback callback) {
+                throw new IllegalStateException("fixture provider invocation failed");
+            }
+        };
+        failing.connected(SERVICE, rejecting, null, false);
+        check(take(backend.unbindings) == failing
+                && take(failed.events).equals(SpeechRecognizer.ERROR_SERVER_DISCONNECTED)
+                && take(unsent.events).equals(SpeechRecognizer.ERROR_SERVER_DISCONNECTED),
+                "failed provider dispatch retires both the failing and not-yet-dispatched requests");
+        check(rejecting.downloads.isEmpty(), "failure cannot dispatch later queued work to a failed provider");
+
+        client.checkRecognitionSupport(INTENT, attribution, support);
+        IServiceConnection cancelled = take(backend.bindings);
+        client.cancel(null, true);
+        check(take(backend.unbindings) == cancelled && token.detached() && backend.process.detached(),
+                "destroy releases commands awaiting a provider and all death links");
+        cancelled.connected(SERVICE, replacement, null, false);
+        Admission barrier = new Admission();
+        manager.createSession(null, new Lifetime(), false, barrier);
+        take(barrier.events);
+        check(replacement.support.isEmpty() && first.events.isEmpty() && second.events.isEmpty()
+                && support.events.isEmpty() && failed.events.isEmpty() && unsent.events.isEmpty()
+                && models.stream().allMatch(model -> model.events.isEmpty()),
+                "late publication and retired callbacks cannot replay any discarded operation");
+    }
+
     private static void connectionQuota() throws Exception {
         QuotaBackend backend = new QuotaBackend();
         SpeechRecognitionManagerService manager = new SpeechRecognitionManagerService(backend, 2000);
@@ -572,6 +689,7 @@ public final class SpeechRecognitionContractTest {
         lifecycle();
         supportAndDeath();
         unavailableAndShared();
+        pendingRequestDispatch();
         java.lang.System.out.println("SpeechRecognitionContractTest all passed: " + checks + " checks");
     }
 }
