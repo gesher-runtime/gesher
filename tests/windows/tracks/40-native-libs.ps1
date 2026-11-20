@@ -143,6 +143,13 @@ Check 'native libs: getenv results outlive later setenv/putenv/unsetenv from a .
 } @('the first result keeps its bytes after putenv', 'environment_lifetime: all passed',
     'elf_load_test all passed')
 
+# The NDK's MediaDrm/MediaCrypto with no DRM plugin: no scheme is supported and
+# no object is created, as Android answers for an unsupported scheme.
+Check 'native libs: MediaDrm/MediaCrypto report no crypto scheme from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/media_drm_test.so")
+} @('AMediaDrm_isCryptoSchemeSupported is false for every scheme', 'media_drm: all passed',
+    'elf_load_test all passed')
+
 Check 'native libs: a UPX-packed .so unpacks itself with raw syscalls and runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/raw_syscall_upx.so")
 } @('unpacks its code at run time (UPX)', 'code unpacked at run time: yes',

@@ -113,6 +113,8 @@ jobs:
           "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libunix_rights_test.so -o dist-native/unix_rights_test.so tests/native/unix_rights_test.c
           # getenv results outlive setenv/putenv/unsetenv, as bionic's do.
           "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libenvironment_lifetime_test.so -o dist-native/environment_lifetime_test.so tests/native/environment_lifetime_test.c
+          # The NDK's MediaDrm/MediaCrypto without a DRM plugin.
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libmedia_drm_test.so -o dist-native/media_drm_test.so tests/native/media_drm_test.c -lmediandk -ldl
           echo "--- fs_test29.so ---"
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d -r -l dist-native/fs_test29.so
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"             -d dist-native/fs_test29.so | grep '%fs:' | head -40 || true
