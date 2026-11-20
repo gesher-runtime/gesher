@@ -1165,7 +1165,43 @@ ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, A
   }
 }
 
+// SCM_RIGHTS on an AF_UNIX stream pair (ADR 0088): after `bytes` were read at
+// this end, the descriptor groups whose first byte was among them, into
+// `rights` or discarded. Every read, from any process holding the end, keeps
+// its position, so that a group is never delivered with bytes sent before it.
+void StreamReceived(Socket s, SocketDescription& description, size_t bytes,
+                    std::vector<int>* rights) {
+  const int saved = errno;
+  uint16_t local, peer;
+  if (StreamPorts(s, description, &local, &peer)) {
+    const uint64_t end = gesher::AdvanceStream(local, false, bytes);
+    if (gesher::RightsDue(local, end)) {
+      gesher::TakeRights(static_cast<uint64_t>(local) << 16 | peer, end, rights);
+    }
+  }
+  errno = saved;
+}
+
 }  // namespace
+
+bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint16_t* peer) {
+  uint32_t ports = description.stream_ports.load();
+  if (ports == 0) {
+    Address self, other;
+    if (GetSockName(s, &self) < 0 || GetPeerName(s, &other) < 0) return false;
+    if (self.family != Family::kInet || other.family != Family::kInet || self.data_len < 2 ||
+        other.data_len < 2) {
+      return errno = EOPNOTSUPP, false;
+    }
+    // The port of sockaddr_in, in network order, follows the family field.
+    ports = static_cast<uint32_t>((self.data[0] << 8) | self.data[1]) << 16 |
+            static_cast<uint32_t>((other.data[0] << 8) | other.data[1]);
+    description.stream_ports.store(ports);
+  }
+  *local = static_cast<uint16_t>(ports >> 16);
+  *peer = static_cast<uint16_t>(ports);
+  return true;
+}
 
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
@@ -1173,19 +1209,34 @@ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, co
   if (description->unix_datagram_pair.load()) {
     return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);
   }
-  return SendOwnedRaw(s, buffers, count, flags, to, description, dont_wait);
+  const ptrdiff_t sent = SendOwnedRaw(s, buffers, count, flags, to, description, dont_wait);
+  if (sent > 0 && description->unix_stream_pair.load()) {
+    const int saved = errno;
+    uint16_t local, peer;
+    if (StreamPorts(s, *description, &local, &peer)) {
+      gesher::AdvanceStream(local, true, static_cast<uint64_t>(sent));
+    }
+    errno = saved;
+  }
+  return sent;
 }
 
 ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
-                    int* result_flags, UnixCredentials* credentials, RightsToken* rights) {
+                    int* result_flags, UnixCredentials* credentials, RightsToken* rights,
+                    std::vector<int>* stream_rights) {
   if (description->unix_datagram_pair.load()) {
     return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
                             credentials, rights);
   }
   if (rights != nullptr) *rights = {};
   if (credentials != nullptr) *credentials = {};
-  return RecvOwnedRaw(s, buffers, count, flags, from, description, dont_wait, result_flags);
+  const ptrdiff_t n =
+      RecvOwnedRaw(s, buffers, count, flags, from, description, dont_wait, result_flags);
+  if (n > 0 && (flags & kMsgPeek) == 0 && description->unix_stream_pair.load()) {
+    StreamReceived(s, *description, static_cast<size_t>(n), stream_rights);
+  }
+  return n;
 }
 
 int UnixDatagramPayload(int available) {

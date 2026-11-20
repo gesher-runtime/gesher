@@ -345,6 +345,15 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
       end.description->peer_gid = self.gid;
       end.description->unix_datagram_pair.store(ws_type == ws::Type::kDgram);
       end.description->unix_stream_pair.store(ws_type == ws::Type::kStream);
+      // A stream pair's ends start at stream position 0 (binder_wire.h): their
+      // loopback ports are this connection's while it lives.
+      uint16_t local, peer;
+      const int saved = errno;
+      if (ws_type == ws::Type::kStream &&
+          ws::StreamPorts(end.socket, *end.description, &local, &peer)) {
+        gesher::StartStream(local);
+      }
+      errno = saved;
     }
   }
   fds[0] = fd_a;
@@ -452,33 +461,10 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
                        state.description, (flags & MSG_DONTWAIT) != 0, rights);
 }
 
-// A stream pair's two loopback ports (SocketDescription::stream_ports), which
-// key its descriptor queue at the broker; false with errno if unknown.
-bool StreamPorts(const SocketFd& state, uint16_t* local, uint16_t* peer) {
-  uint32_t ports = state.description->stream_ports.load();
-  if (ports == 0) {
-    ws::Address self, other;
-    if (ws::GetSockName(state.socket, &self) < 0 || ws::GetPeerName(state.socket, &other) < 0) {
-      return false;
-    }
-    if (self.family != ws::Family::kInet || other.family != ws::Family::kInet ||
-        self.data_len < 2 || other.data_len < 2) {
-      return errno = EOPNOTSUPP, false;
-    }
-    // The port of sockaddr_in, in network order, follows the family field.
-    ports = static_cast<uint32_t>((self.data[0] << 8) | self.data[1]) << 16 |
-            static_cast<uint32_t>((other.data[0] << 8) | other.data[1]);
-    state.description->stream_ports.store(ports);
-  }
-  *local = static_cast<uint16_t>(ports >> 16);
-  *peer = static_cast<uint16_t>(ports);
-  return true;
-}
-
 ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockaddr* addr,
                     socklen_t* addrlen, int* result_flags = nullptr,
                     ws::UnixCredentials* credentials = nullptr, bool* pass_credentials = nullptr,
-                    std::vector<int>* rights = nullptr, bool take_stream_rights = false) {
+                    std::vector<int>* rights = nullptr) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   // There is no error queue: Linux reports EAGAIN when it is empty.
@@ -490,23 +476,13 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   }
   ws::Address from;
   ws::RightsToken token;
+  // SCM_RIGHTS (ADR 0088): a stream pair's groups come with the read that
+  // returns their first byte (RecvOwned), a datagram's with its token.
   ssize_t n = ws::RecvOwned(state.socket, buffers, count, ToMsgFlags(flags),
                        addr != nullptr ? &from : nullptr, state.description,
                             (flags & MSG_DONTWAIT) != 0, result_flags, credentials,
-                            rights != nullptr ? &token : nullptr);
-  if (n >= 0 && rights != nullptr) {
-    // SCM_RIGHTS (ADR 0088): a datagram's group, or what waits in a stream
-    // pair's queue once bytes sent after it have arrived.
-    if (token.count != 0) {
-      gesher::ClaimRights(token, rights);
-    } else if (n > 0 && (flags & MSG_PEEK) == 0 && take_stream_rights &&
-               state.description->unix_stream_pair.load()) {
-      uint16_t local, peer;
-      if (StreamPorts(state, &local, &peer) && gesher::RightsWaiting(local)) {
-        gesher::TakeRights(static_cast<uint64_t>(local) << 16 | peer, rights);
-      }
-    }
-  }
+                            rights != nullptr ? &token : nullptr, rights);
+  if (n >= 0 && rights != nullptr && token.count != 0) gesher::ClaimRights(token, rights);
   if (n >= 0 && addr != nullptr) {
     sockaddr_storage local = {};
     socklen_t actual = sizeof(local), capacity = 0;
@@ -619,7 +595,8 @@ ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
   if (!ToBuffers(&local, &buffers)) return -1;
   // SCM_RIGHTS: the descriptors go to the broker first. A datagram carries the
   // group's token; on a stream pair the group waits in the connection's queue
-  // before its bytes are written, so the receiver finds it when they arrive.
+  // before its bytes are written, at the position where they begin, so the
+  // read that returns their first byte takes it (RecvOwned).
   // As on Linux, a stream message without bytes carries no descriptors.
   ws::RightsToken token;
   if (!rights.empty()) {
@@ -628,11 +605,12 @@ ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
     size_t total = 0;
     for (const ws::Buffer& b : buffers) total += b.len;
     if (state.description->unix_datagram_pair.load()) {
-      if (!gesher::DepositRights(rights, 0, &token)) return -1;
+      if (!gesher::DepositRights(rights, 0, 0, &token)) return -1;
     } else if (total != 0) {
       uint16_t own, peer;
-      if (!StreamPorts(state, &own, &peer) ||
-          !gesher::DepositRights(rights, static_cast<uint64_t>(peer) << 16 | own, &token)) {
+      if (!ws::StreamPorts(state.socket, *state.description, &own, &peer) ||
+          !gesher::DepositRights(rights, static_cast<uint64_t>(peer) << 16 | own,
+                                 gesher::StreamPosition(own, true), &token)) {
         return -1;
       }
     }
@@ -670,8 +648,9 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   int result_flags = 0;
   ws::UnixCredentials credentials;
   bool pass_credentials = false;
-  // Descriptors are taken only into a control buffer with room for one; a
-  // datagram's are otherwise discarded (Linux), a stream queue's left waiting.
+  // The descriptors that came with the bytes read go into the control buffer,
+  // as many as fit; the others are closed and the message is MSG_CTRUNC, as on
+  // Linux (also with no control buffer at all).
   const size_t capacity = local.msg_control != nullptr ? local.msg_controllen : 0;
   std::vector<int> rights;
   ssize_t n;
@@ -679,8 +658,7 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
                  static_cast<sockaddr*>(local.msg_name),
                  local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags,
-                 &credentials, &pass_credentials, &rights,
-                 capacity >= CMSG_LEN(sizeof(int)));
+                 &credentials, &pass_credentials, &rights);
   pthread_cleanup_pop(0);
   if (n >= 0) {
     local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;

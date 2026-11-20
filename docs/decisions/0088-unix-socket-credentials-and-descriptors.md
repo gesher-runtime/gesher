@@ -162,15 +162,24 @@ Each phase is a PR with contract tests:
   stream `send`'s partial-write result without buffering bytes Gesher would
   then have to flush by itself. Instead, a stream pair's descriptors wait in
   a queue at the broker, keyed by the connection's two loopback ports, and are
-  queued before the bytes sent with them are written. `recvmsg` takes the queue
-  after it has read bytes, when the broker's doorbell (a shared counter per
-  receiving port) says something waits. Differences from Linux, which no
-  known user depends on (Mojo and Gecko's IPC keep received descriptors in
-  arrival order):
-  - descriptors can arrive with a read that returns bytes sent before them,
-    and a read can return the descriptors of several messages;
-  - a read without room for descriptors leaves them queued for the next
-    `recvmsg`, instead of discarding them.
+  queued before the bytes sent with them are written, at the position of
+  their first byte in the stream. Each end's positions (bytes sent from it and
+  read at it) are kept in a section the broker owns, by the end's loopback
+  port, by every process that holds the end, so they follow it through
+  Binder, `SCM_RIGHTS` and `exec`. A read takes the groups whose first byte it
+  returned, when the broker's doorbell (the lowest waiting position per
+  receiving port) says one is due: into the control buffer, as many as fit,
+  with `MSG_CTRUNC` for the rest; a read without control data (`read`,
+  `recv`, `recvmsg` without room) discards them, as on Linux. Descriptors
+  therefore never arrive with bytes sent before them. That is a contract
+  Gecko's IPC checks: a channel that holds descriptors when its input ends at
+  a message boundary is closed as a rogue sender (`ipc_channel_posix.cc`).
+  When descriptors arrived early, Firefox's content-to-GPU channel was closed
+  that way under load, and the page stayed white. Differences from Linux:
+  - a read can return the descriptors of several messages; Linux ends a read
+    after the first chunk that carries descriptors;
+  - two threads or processes writing on one end at once can make a group's
+    position precede bytes written concurrently with it.
 - **Not done:** descriptors in flight are not released when the receiving end
   closes (they stay in binderd, within its limit of 65536). `SCM_RIGHTS` on
   named `AF_UNIX` sockets and on `AF_INET` sockets still fails with

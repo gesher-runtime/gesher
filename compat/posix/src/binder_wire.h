@@ -62,10 +62,12 @@ enum Op : uint32_t {
   // The descriptor broker (ADR 0088 section 3): SCM_RIGHTS on Gesher's AF_UNIX
   // socketpairs. A process opens one connection for it; the broker knows the
   // caller by the pipe's client process id, not by anything it claims.
-  // -> {magic, version}; <- {status}
+  // -> {magic, kRightsVersion}; <- {status}
   kHelloRights = 7,
   // Hands descriptors to the broker, which duplicates their handles into itself.
-  // -> {queue (u64): 0, or a stream connection's key; count (u32);
+  // -> {queue (u64): 0, or a stream connection's key; position (u64): with a
+  //     queue, where the bytes sent with the group begin in that direction of
+  //     the connection (kStreamPositionsPrefix); count (u32);
   //     count x {handle (u64), metadata (u32)}}
   // <- {status, token (2 x u64)}. With a queue, the group also waits in that
   // connection's queue (kRightsTake), in order.
@@ -73,21 +75,44 @@ enum Op : uint32_t {
   // Moves a deposited group into the caller (closing the broker's handles).
   // -> {token}; <- {status, count, count x {handle, metadata}}
   kRightsClaim = 9,
-  // Moves every group waiting in a stream connection's queue into the caller.
-  // -> {queue}; <- {status, count, count x {handle, metadata}}
+  // Moves the groups waiting in a stream connection's queue whose position is
+  // below `limit` (what the receiver has read) into the caller, in order; the
+  // others keep waiting.
+  // -> {queue, limit (u64)}; <- {status, count, count x {handle, metadata}}
   kRightsTake = 10,
   // Takes a group back out of its queue (its sendmsg failed) and closes it.
   // -> {token}; <- {status}: -ENOENT if a receiver already took it.
   kRightsCancel = 11,
 };
 
+// The descriptor broker's protocol version (kHelloRights), apart from kVersion:
+// binderd and the processes that send or receive descriptors must agree on it;
+// other binder clients need not.
+constexpr uint32_t kRightsVersion = 3;
+
 // The broker's doorbell for stream queues: a shared section named
-// kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint32 counters, one
-// per receiving loopback port (a queue's key >> 16). A counter is the number
-// of descriptors waiting for that port; recvmsg asks the broker only when it is
-// not zero.
+// kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint64 values, one
+// per receiving loopback port (a queue's key >> 16): 0 when no group waits for
+// that port, else 1 + the lowest position of the groups that wait. Only the
+// broker writes it; a read asks the broker only once it has read past such a
+// position.
 constexpr const wchar_t kRightsDoorbellPrefix[] = L"Local\\gesher-unix-rights-";
 constexpr uint32_t kRightsDoorbellSlots = 65536;
+// Stream positions: a shared section named kStreamPositionsPrefix + device, of
+// kRightsDoorbellSlots {sent, received} uint64 pairs, one per stream pair end,
+// by its local loopback port: the bytes written into the connection from that
+// end, and the bytes read from it there. Every process that holds the end
+// keeps them, so they survive the end's moves between processes (Binder,
+// SCM_RIGHTS, exec); socketpair starts both ends at 0, and the broker keeps the
+// section while it runs. A stream group's position is its sender's `sent`
+// before the bytes sent with it, and the read whose `received` passes that
+// position takes it: Linux delivers descriptors with the first byte sent with
+// them, never before.
+constexpr const wchar_t kStreamPositionsPrefix[] = L"Local\\gesher-unix-streams-";
+struct StreamPositions {
+  uint64_t sent;
+  uint64_t received;
+};
 // Linux's SCM_MAX_FD, and the broker's limit of descriptors in flight.
 constexpr uint32_t kRightsMaxPerMessage = 253;
 constexpr uint32_t kRightsMaxInFlight = 65536;
