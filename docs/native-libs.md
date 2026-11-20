@@ -105,7 +105,9 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   ([0008](decisions/0008-linux-abi.md)). `InstallBionicShim()` registers it
   with the loader.
   - `shim.cc`: memory (CRT malloc; over-aligned blocks from
-    `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them),
+    `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them;
+    `mallinfo` walks that heap and fills the fields bionic's jemalloc fills:
+    mapped, allocated, free),
     strings, FORTIFY `__*_chk`, ctype, `long`-returning functions widened to
     64 bits (`strtol`, `lseek`, `sysconf`, `lround`...), `__errno` (the CRT's
     errno, which gesher-base keeps in Linux numbering), time (`clock_gettime`

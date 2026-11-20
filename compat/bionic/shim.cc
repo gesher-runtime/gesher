@@ -199,6 +199,45 @@ size_t BIONIC_SYSV MallocUsableSize(const void* p) {
   return _msize(const_cast<void*>(p));
 }
 
+// bionic's struct mallinfo (also mallinfo2): ten size_t fields.
+struct BionicMallinfo {
+  size_t arena, ordblks, smblks, hblks, hblkhd, usmblks, fsmblks, uordblks, fordblks, keepcost;
+};
+static_assert(sizeof(BionicMallinfo) == 80, "bionic's LP64 struct mallinfo");
+
+// mallinfo(3), filled as bionic's allocators fill it (jemalloc's je_mallinfo,
+// scudo's): hblkhd and usmblks are the bytes the allocator has mapped,
+// uordblks those allocated, fordblks the difference, the rest 0. malloc here
+// is the CRT's heap. HeapSummary leaves out its large blocks (each its own
+// VirtualAlloc), so the heap is walked, as jemalloc walks its arenas: mapped
+// is the regions' committed bytes plus the large blocks, allocated every busy
+// block.
+BionicMallinfo BIONIC_SYSV Mallinfo() {
+  BionicMallinfo info = {};
+  const HANDLE heap = reinterpret_cast<HANDLE>(_get_heap_handle());
+  if (!HeapLock(heap)) return info;
+  size_t mapped = 0, allocated = 0;
+  uintptr_t region_lo = 0, region_hi = 0;
+  PROCESS_HEAP_ENTRY entry = {};
+  while (HeapWalk(heap, &entry)) {
+    const uintptr_t at = reinterpret_cast<uintptr_t>(entry.lpData);
+    if ((entry.wFlags & PROCESS_HEAP_REGION) != 0) {
+      mapped += entry.Region.dwCommittedSize;
+      region_lo = reinterpret_cast<uintptr_t>(entry.Region.lpFirstBlock);
+      region_hi = reinterpret_cast<uintptr_t>(entry.Region.lpLastBlock);
+    } else if ((entry.wFlags & PROCESS_HEAP_ENTRY_BUSY) != 0) {
+      allocated += entry.cbData;
+      if (at < region_lo || at >= region_hi) mapped += entry.cbData + entry.cbOverhead;
+    }
+  }
+  HeapUnlock(heap);
+  info.hblkhd = mapped;
+  info.usmblks = mapped;
+  info.uordblks = allocated;
+  info.fordblks = mapped > allocated ? mapped - allocated : 0;
+  return info;
+}
+
 // --- strings and numbers with `long` --------------------------------------
 
 int64_t BIONIC_SYSV Strtol(const char* s, char** end, int base) { return std::strtoll(s, end, base); }
@@ -1142,6 +1181,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("memalign", Memalign);
   ENTRY("aligned_alloc", AlignedAllocC11);
   ENTRY("malloc_usable_size", MallocUsableSize);
+  ENTRY("mallinfo", Mallinfo);
   // mem/str.
   SELF(memcpy);
   SELF(memmove);

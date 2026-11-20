@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <link.h>
+#include <malloc.h>
 #include <math.h>
 #include <mntent.h>
 #include <pthread.h>
@@ -100,6 +101,20 @@ static void test_memory(void) {
   a = realloc(a, 2000);
   check("realloc of aligned memory", a != NULL && ((unsigned char*)a)[999] == 1);
   free(a);
+  // mallinfo: what the allocator has mapped and allocated; a live 4 MiB block
+  // is counted, and the allocated bytes fit in the mapped ones. (The block
+  // escapes through a volatile, so the compiler keeps the allocation.)
+  static char* volatile live_block;
+  struct mallinfo before = mallinfo();
+  char* big = malloc(4 << 20);
+  memset(big, 1, 4 << 20);
+  live_block = big;
+  struct mallinfo during = mallinfo();
+  check("mallinfo counts allocated bytes",
+        during.uordblks >= before.uordblks + (4u << 20) - (64u << 10) && during.uordblks > 0);
+  check("mallinfo: allocated fit in mapped, the rest is free",
+        during.hblkhd >= during.uordblks && during.fordblks == during.hblkhd - during.uordblks);
+  free(big);
 }
 
 static void test_strings(void) {
