@@ -59,6 +59,8 @@ jobs:
             .github/scripts
             .github/workflows
             .github/actions/runner-route
+            .github/actions/local-build-cache
+            .github/actions/setup-build
             tools/ci
       - uses: actions/setup-node@v4
         with:
@@ -72,6 +74,7 @@ jobs:
           python3 -m pip install PyYAML==6.0.3
           python3 .github/scripts/test_automerge_workflows.py
           python3 tools/ci/test_release_workflows.py
+          python3 -m unittest discover -s tools/ci -p test_cache_policy.py
   app-identity-restart:
     needs: [source-identity]
     strategy:
@@ -174,14 +177,16 @@ jobs:
         shell: pwsh
         run: tests/windows/test-process-reader-handles.ps1
   union-tsf:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/tsf-format-component.yml
   union-services:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/services-geocoder-worker-component.yml
   union-native-blocking:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native3-locks-blocking.yml
+  # Host-only contract tests. Builds no longer wait for them: they run
+  # alongside the build jobs and ci-required still requires them to pass.
   artifact-preflight:
     needs: [source-identity, reader-ownership]
     runs-on: ubuntu-24.04
@@ -202,6 +207,7 @@ jobs:
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/ci -p test_wait_for_job.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
@@ -432,13 +438,23 @@ jobs:
         run: python3 tools/test_app_crash_diagnostics.py
 
   build-framework-assets:
-    needs: [artifact-preflight, source-identity]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Only main saves; other refs restore main's entry (see .github/actions/setup-build).
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -493,7 +509,7 @@ jobs:
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [artifact-preflight, source-identity, build-framework-assets]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     env:
       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
@@ -615,10 +631,15 @@ jobs:
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: framework-assets
-          path: dist
+      # The framework assets are needed only from here on. Compiling above
+      # overlaps build-framework-assets instead of waiting for it via needs:;
+      # the receipt still requires that exact producer to have succeeded.
+      - name: Wait for and verify the framework assets producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/wait_for_job.py --job build-framework-assets --timeout 1800
+          python3 tools/ci/artifact_receipt.py --name framework-assets --producer build-framework-assets --destination dist
 
       - name: Collect artifacts
         run: |
@@ -727,7 +748,7 @@ jobs:
           if-no-files-found: error
 
   native3-locks-reference:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -792,7 +813,7 @@ jobs:
   # tools/framework/build.py): .github/workflows/framework.yml, which also
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     # This immutable policy, not PR-controlled workflow YAML, may use the runner.
     uses: gesher-runtime/gesher/.github/workflows/framework.yml@7a45c2468c270bfe68ee5f854aa9d4feaf2208b3
     with:
@@ -801,56 +822,56 @@ jobs:
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
   native-libs:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native-libs.yml
 
   # The Bluetooth backend's probe (docs/bluetooth.md): built on the Linux
   # runner, run against Windows' real APIs (no radio) and the test radio.
   bluetooth:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/bluetooth.yml
 
   # Android ELF executables run as processes (docs/exec.md): the NDK test
   # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
   exec:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/exec.yml
 
   # The core libraries' own unit tests (AOSP's cc_test modules), built for
   # the test job: .github/workflows/libs.yml.
   libs:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/libs.yml
 
   # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
   # (dynarmic) dalvikvm LoadLibrary()s for arm64-v8a apps (docs/arm64.md,
   # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
   arm64:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/arm64.yml
 
   # The native2 track's NDK test programs (shim extras, platform dlopen,
   # popular NDK libraries' self-tests): .github/workflows/native2.yml.
   native2:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native2.yml
 
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/posix.yml
 
   # Skia, hwui and the graphics probes (docs/graphics.md):
   # .github/workflows/graphics.yml, which also runs on its own.
   graphics:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/graphics.yml
 
   # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
   # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
   angle:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/angle.yml
 
   # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
@@ -877,18 +898,28 @@ jobs:
   # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
   # .github/workflows/surfaces.yml.
   surfaces:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/surfaces.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Only main saves; other refs restore main's entry (see .github/actions/setup-build).
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -1749,7 +1780,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
-        shard: [native, desktop, services, compilation]
+        shard: [native, desktop, services, media, compilation]
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
     timeout-minutes: 120
@@ -1909,7 +1940,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Assemble isolated capture hosts for explicit synthetic media fixtures
-        if: matrix.shard == 'services'
+        if: matrix.shard == 'media'
         shell: pwsh
         run: |
           python tools/ci/artifact_receipt.py --name media-capture-test --producer "build" --destination ci-suppliers/media_capture_test
@@ -1952,7 +1983,7 @@ jobs:
 
       - name: Upload media output captures
         uses: actions/upload-artifact@v4
-        if: ${{ always() && matrix.shard == 'services' }}
+        if: ${{ always() && matrix.shard == 'media' }}
         with:
           name: media-output-${{ matrix.os }}
           path: |
@@ -2072,7 +2103,7 @@ jobs:
   # Ordinary Binder scope is mandatory and separate from production installer
   # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
   binder2-sg-fixtures:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/binder2-sg-full-fixtures.yml
 
   binder2-sg-regression:
@@ -2164,7 +2195,7 @@ jobs:
           python3 tools/host-pthread-authority/minimum_receipt.py selftest
       - uses: ./.github/actions/setup-build
         with:
-          ccache-key: runtime
+          ccache-key: selected-minimum
       - name: Cache dynarmic, fmt and Boost headers
         id: deps
         uses: actions/cache@v4
