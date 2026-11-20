@@ -92,7 +92,8 @@ struct SocketDescription {
   std::atomic<bool> pass_credentials{false};  // SO_PASSCRED
   // A stream pair (SOCK_STREAM): SCM_RIGHTS goes through the broker's queue for
   // the connection, keyed by both loopback ports (stream_ports: local << 16 |
-  // peer, 0 until first needed).
+  // peer, 0 until first needed), at stream positions that SendOwned and
+  // RecvOwned keep (binder_wire.h's kStreamPositionsPrefix).
   std::atomic<bool> unix_stream_pair{false};
   std::atomic<uint32_t> stream_ports{0};
   bool has_peer_credentials = false;  // SO_PEERCRED: the pair's creator, as on Linux
@@ -175,12 +176,19 @@ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, co
 // On an AF_UNIX datagram pair (SocketDescription::unix_datagram_pair) both add
 // and remove the framing header: callers see only the payload. RecvOwned
 // stores the sender's credentials in `credentials` when it is not null.
+// On an AF_UNIX stream pair both keep the end's stream position, and a read
+// (not a peek) takes the descriptors sent with the bytes it returns, those whose
+// first byte is among them: into `stream_rights`, or, when that is null,
+// discards them as Linux does for a reader without control data.
 ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait = false,
                     int* result_flags = nullptr, UnixCredentials* credentials = nullptr,
-                    RightsToken* rights = nullptr);
+                    RightsToken* rights = nullptr, std::vector<int>* stream_rights = nullptr);
 // Bytes of the next datagram's payload on an AF_UNIX datagram pair (FIONREAD).
 int UnixDatagramPayload(int available);
+// A stream pair end's loopback ports (SocketDescription::stream_ports, cached
+// there); false with errno if they cannot be known.
+bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint16_t* peer);
 
 int GetOption(Socket s, Option option, int* value);
 int SetOption(Socket s, Option option, int value);
@@ -328,17 +336,29 @@ int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver o
 // returns false with errno set; EOPNOTSUPP when there is no broker.
 bool UnixRightsAvailable();
 // Deposits fds' descriptors; `queue` is 0 for a datagram (the token travels in
-// it) or a stream connection's key (local port << 16 | peer port, the receiver's).
-bool DepositRights(const std::vector<int>& fds, uint64_t queue, ws::RightsToken* token);
+// it) or a stream connection's key (local port << 16 | peer port, the
+// receiver's), where they wait at `position`, the sender's StreamPosition
+// before the bytes sent with them.
+bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t position,
+                   ws::RightsToken* token);
 // The deposited descriptors as new fds here (-1 for one that could not be
 // adopted). With `fds` null, the descriptors are discarded.
 bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds);
-bool TakeRights(uint64_t queue, std::vector<int>* fds);
+// The groups of a stream connection's queue whose position is below `limit`.
+bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds);
 // A sender's deposit whose message was not sent: discarded, if still queued.
 void CancelRights(const ws::RightsToken& token);
-// Whether descriptors wait in the queue of a connection whose receiving end is
-// loopback `port` (the broker's doorbell): a cheap check before TakeRights.
-bool RightsWaiting(uint16_t port);
+// Whether a group waits in the queue of a connection whose receiving end is
+// loopback `port` at a position below `end` (the broker's doorbell): a cheap
+// check before TakeRights.
+bool RightsDue(uint16_t port, uint64_t end);
+// Stream positions (binder_wire.h): the bytes the stream pair end at loopback
+// `port` has sent (`sent`) or received. StartStream sets both to 0 for a new
+// pair; AdvanceStream adds `bytes` and returns the new position. Without a
+// broker they are 0 and stay so.
+void StartStream(uint16_t port);
+uint64_t StreamPosition(uint16_t port, bool sent);
+uint64_t AdvanceStream(uint16_t port, bool sent, uint64_t bytes);
 
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set
 // (the socket is then closed).

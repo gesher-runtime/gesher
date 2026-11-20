@@ -121,7 +121,9 @@ Check 'native libs: AF_UNIX socketpair credentials (SO_PEERCRED, SO_PASSCRED, SC
 } @('unix_credentials: all passed', 'elf_load_test all passed')
 
 # SCM_RIGHTS (ADR 0088 phase 2): pipes, memfds and sockets sent on SOCK_SEQPACKET
-# and SOCK_STREAM pairs through a binderd of the test's own, and without one.
+# and SOCK_STREAM pairs through a binderd of the test's own, and without one. On
+# a SOCK_STREAM pair descriptors come with the read that returns the first byte
+# sent with them, never before it, also after the receiving end has moved.
 Check 'native libs: SCM_RIGHTS through the descriptor broker from a .so' {
   $device = 'rights-' + [guid]::NewGuid().ToString('N')
   $broker = Start-Process -FilePath "$Dir/binderd.exe" -ArgumentList $device -PassThru -WindowStyle Hidden
@@ -134,7 +136,8 @@ Check 'native libs: SCM_RIGHTS through the descriptor broker from a .so' {
     Stop-Process -Id $broker.Id -Force -ErrorAction SilentlyContinue
   }
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_rights_test.so")
-} @('unix_rights: all passed', 'unix_rights: all passed (without a broker)', 'elf_load_test all passed')
+} @('a read of the ten bytes gets no descriptor', 'the moved end reads the byte before it without a descriptor',
+    'unix_rights: all passed', 'unix_rights: all passed (without a broker)', 'elf_load_test all passed')
 
 # What getenv returned and what environ pointed at keep their bytes after the
 # variable is putenv()ed, setenv()ed or unsetenv()ed again, as bionic's

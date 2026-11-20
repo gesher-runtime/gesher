@@ -4,10 +4,12 @@
 // A sender deposits the Windows handles behind its descriptors with the broker
 // and gets a token; a datagram carries the token in its header
 // (winsock.cc). On a stream pair the group also waits in the connection's
-// queue at the broker, before the bytes it was sent with are written, so a
-// receiver that reads those bytes finds it there; the broker's doorbell tells
-// recvmsg when to look. Received handles become new descriptors of the same
-// open files and sockets.
+// queue at the broker, before the bytes it was sent with are written, at the
+// position of their first byte in the stream; the read that returns that byte
+// takes it, as Linux delivers descriptors with the first byte sent with them
+// (Gecko's IPC closes a channel that has descriptors left over at a message
+// boundary). The broker's doorbell tells a read when to look. Received handles
+// become new descriptors of the same open files and sockets.
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
@@ -100,7 +102,7 @@ HANDLE Connect() {
   Request hello;
   hello.Put<uint32_t>(wire::kHelloRights);
   hello.Put<uint32_t>(wire::kMagic);
-  hello.Put<uint32_t>(wire::kVersion);
+  hello.Put<uint32_t>(wire::kRightsVersion);
   const uint32_t len = static_cast<uint32_t>(hello.bytes.size() - 4);
   memcpy(hello.bytes.data(), &len, 4);
   uint32_t reply_len = 0;
@@ -157,19 +159,37 @@ bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt) {
   return true;
 }
 
-volatile LONG* Doorbell() {
-  static volatile LONG* doorbell = [] () -> volatile LONG* {
-    const std::string device = Device();
-    if (device.empty()) return nullptr;
-    const std::wstring name = std::wstring(wire::kRightsDoorbellPrefix) + Widen(device.c_str());
-    HANDLE section = OpenFileMappingW(FILE_MAP_READ, FALSE, name.c_str());
-    if (section == nullptr) return nullptr;
-    void* view = MapViewOfFile(section, FILE_MAP_READ, 0, 0,
-                               wire::kRightsDoorbellSlots * sizeof(LONG));
-    CloseHandle(section);  // the view keeps the section
-    return static_cast<volatile LONG*>(view);
-  }();
+// A view of one of the broker's sections (binder_wire.h), or null.
+void* MapBrokerSection(const wchar_t* prefix, DWORD access, size_t size) {
+  const std::string device = Device();
+  if (device.empty()) return nullptr;
+  const std::wstring name = std::wstring(prefix) + Widen(device.c_str());
+  HANDLE section = OpenFileMappingW(access, FALSE, name.c_str());
+  if (section == nullptr) return nullptr;
+  void* view = MapViewOfFile(section, access, 0, 0, size);
+  CloseHandle(section);  // the view keeps the section
+  return view;
+}
+
+volatile LONG64* Doorbell() {
+  static volatile LONG64* doorbell = static_cast<volatile LONG64*>(MapBrokerSection(
+      wire::kRightsDoorbellPrefix, FILE_MAP_READ, wire::kRightsDoorbellSlots * sizeof(LONG64)));
   return doorbell;
+}
+
+volatile wire::StreamPositions* Positions() {
+  static volatile wire::StreamPositions* positions =
+      static_cast<volatile wire::StreamPositions*>(MapBrokerSection(
+          wire::kStreamPositionsPrefix, FILE_MAP_READ | FILE_MAP_WRITE,
+          wire::kRightsDoorbellSlots * sizeof(wire::StreamPositions)));
+  return positions;
+}
+
+volatile LONG64* PositionOf(uint16_t port, bool sent) {
+  volatile wire::StreamPositions* positions = Positions();
+  if (positions == nullptr) return nullptr;
+  return reinterpret_cast<volatile LONG64*>(sent ? &positions[port].sent
+                                                 : &positions[port].received);
 }
 
 }  // namespace
@@ -206,14 +226,33 @@ int AdoptTransferred(HANDLE owned, uint32_t metadata) {
 }
 
 bool UnixRightsAvailable() {
-  return Doorbell() != nullptr;
+  return Doorbell() != nullptr && Positions() != nullptr;
 }
 
-bool DepositRights(const std::vector<int>& fds, uint64_t queue, ws::RightsToken* token) {
+void StartStream(uint16_t port) {
+  for (bool sent : {true, false}) {
+    if (volatile LONG64* p = PositionOf(port, sent)) InterlockedExchange64(p, 0);
+  }
+}
+
+uint64_t StreamPosition(uint16_t port, bool sent) {
+  volatile LONG64* p = PositionOf(port, sent);
+  return p != nullptr ? static_cast<uint64_t>(*p) : 0;
+}
+
+uint64_t AdvanceStream(uint16_t port, bool sent, uint64_t bytes) {
+  volatile LONG64* p = PositionOf(port, sent);
+  if (p == nullptr) return 0;
+  return static_cast<uint64_t>(InterlockedExchangeAdd64(p, static_cast<LONG64>(bytes))) + bytes;
+}
+
+bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t position,
+                   ws::RightsToken* token) {
   if (fds.empty() || fds.size() > wire::kRightsMaxPerMessage) return errno = EINVAL, false;
   Request request;
   request.Put<uint32_t>(wire::kRightsDeposit);
   request.Put<uint64_t>(queue);
+  request.Put<uint64_t>(position);
   request.Put<uint32_t>(static_cast<uint32_t>(fds.size()));
   for (int fd : fds) {
     uintptr_t handle;
@@ -244,13 +283,14 @@ bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds) {
   return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr);
 }
 
-bool TakeRights(uint64_t queue, std::vector<int>* fds) {
+bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds) {
   Request request;
   request.Put<uint32_t>(wire::kRightsTake);
   request.Put<uint64_t>(queue);
+  request.Put<uint64_t>(limit);
   std::lock_guard<std::mutex> lock(g_mutex);
   Reply reply;
-  return Call(request, &reply) && ReadDelivered(reply, fds, true);
+  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr);
 }
 
 void CancelRights(const ws::RightsToken& token) {
@@ -263,9 +303,11 @@ void CancelRights(const ws::RightsToken& token) {
   Call(request, &reply);
 }
 
-bool RightsWaiting(uint16_t port) {
-  volatile LONG* doorbell = Doorbell();
-  return doorbell != nullptr && doorbell[port] > 0;
+bool RightsDue(uint16_t port, uint64_t end) {
+  volatile LONG64* doorbell = Doorbell();
+  if (doorbell == nullptr) return false;
+  const uint64_t slot = static_cast<uint64_t>(doorbell[port]);
+  return slot != 0 && slot - 1 < end;
 }
 
 }  // namespace gesher
