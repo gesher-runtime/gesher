@@ -67,16 +67,65 @@ function DevsvcCheck([string] $Name, [string[]] $Problems, [string] $Details) {
   }
 }
 
+# Keep diagnostic projection reads out of the assertion output. Native trace and
+# these records compare the same real history object; neither supplies fallback XML.
+$projectionScript = Join-Path $root 'devsvc-toast-projection.ps1'
+$historyTrace = Join-Path $root 'devsvc-toast-history-projection.jsonl'
+$xmlTrace = Join-Path $root 'devsvc-toast-xml-projection.jsonl'
+Set-Content -Path $projectionScript -Encoding UTF8 -Value @'
+function Write-ToastProjectionTrace([object] $Toast, [string] $TracePath, [string] $ExpectedTag = '') {
+  if (-not $TracePath -or $env:GESHER_TRACE_TOAST_IDENTITY -ne '1') { return }
+  $record = [ordered]@{ utc = [DateTime]::UtcNow.ToString('o'); expectedTag = $ExpectedTag }
+  try {
+    $dynamicTag = [string] $Toast.Tag
+    $dynamicGroup = [string] $Toast.Group
+    [Windows.UI.Notifications.ToastNotification] $typed = $Toast
+    $typedTag = [string] $typed.Tag
+    $typedGroup = [string] $typed.Group
+    $record['dynamicTag'] = $dynamicTag
+    $record['dynamicTagLength'] = $dynamicTag.Length
+    $record['dynamicGroup'] = $dynamicGroup
+    $record['dynamicGroupLength'] = $dynamicGroup.Length
+    $record['typedTag'] = $typedTag
+    $record['typedTagLength'] = $typedTag.Length
+    $record['typedGroup'] = $typedGroup
+    $record['typedGroupLength'] = $typedGroup.Length
+    $record['runtimeType'] = $Toast.GetType().FullName
+    if (-not $dynamicTag -or $dynamicTag -cne $typedTag -or $dynamicGroup -cne $typedGroup -or
+        ($ExpectedTag -and $dynamicTag -cne $ExpectedTag)) {
+      $actualXml = [string] $typed.Content.GetXml()
+      $record['actualXmlLength'] = $actualXml.Length
+      $record['actualXml'] = $actualXml.Substring(0, [Math]::Min(4096, $actualXml.Length))
+      $record['xmlTruncated'] = $actualXml.Length -gt 4096
+    }
+  } catch { $record['readError'] = $_.Exception.ToString() }
+  [IO.File]::AppendAllText($TracePath, (($record | ConvertTo-Json -Compress -Depth 4) + [Environment]::NewLine),
+      [Text.UTF8Encoding]::new($false))
+}
+'@
+function Show-ToastProjectionTrace([string] $Path) {
+  if ($env:GESHER_TRACE_TOAST_IDENTITY -eq '1' -and (Test-Path $Path)) {
+    foreach ($line in Get-Content $Path -Tail 16) { Write-Host "TOAST_PROJECTION $line" }
+  }
+}
+
 # Windows' toast history for the app (WinRT: Windows PowerShell 5.1 has the
 # projection, PowerShell 7 does not): the tags, one per line.
 $historyScript = Join-Path $root 'devsvc-toast-history.ps1'
 Set-Content -Path $historyScript -Encoding UTF8 -Value @'
-param([string] $AppId)
+param([string] $AppId, [string] $ProjectionScript, [string] $TracePath)
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) { 'tag=' + $t.Tag + ' group=' + $t.Group }
+[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+. $ProjectionScript
+foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) {
+  Write-ToastProjectionTrace $t $TracePath
+  'tag=' + $t.Tag + ' group=' + $t.Group
+}
 '@
 function ToastTags {
-  $lines = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $historyScript -AppId $devsvcAppId 2>&1 | Out-String
+  $lines = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $historyScript -AppId $devsvcAppId `
+    -ProjectionScript $projectionScript -TracePath $historyTrace 2>&1 | Out-String
+  Show-ToastProjectionTrace $historyTrace
   return $lines
 }
 
@@ -562,9 +611,14 @@ public static class GesherToastActivation {
 }
 $xmlScript = Join-Path $root 'devsvc-toast-xml.ps1'
 Set-Content -Path $xmlScript -Encoding UTF8 -Value @'
-param([string] $AppId, [string] $Tag)
+param([string] $AppId, [string] $Tag, [string] $ProjectionScript, [string] $TracePath)
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) { if ($t.Tag -eq $Tag) { $t.Content.GetXml() } }
+[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+. $ProjectionScript
+foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) {
+  Write-ToastProjectionTrace $t $TracePath $Tag
+  if ($t.Tag -eq $Tag) { $t.Content.GetXml() }
+}
 '@
 $mark = (DevsvcText $devsvcLog).Length
 $t = DevsvcLaunch 'ClickActivity'
@@ -573,7 +627,9 @@ $out = WaitTimed $t 120
 Start-Sleep 2
 $customActivator = (Get-ItemProperty "HKCU:\Software\Classes\AppUserModelId\$devsvcAppId" -ErrorAction SilentlyContinue).CustomActivator
 $clickToastTag = DevsvcToastTag 21
-$xml = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $xmlScript -AppId $devsvcAppId -Tag $clickToastTag 2>&1 | Out-String
+$xml = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $xmlScript -AppId $devsvcAppId -Tag $clickToastTag `
+  -ProjectionScript $projectionScript -TracePath $xmlTrace 2>&1 | Out-String
+Show-ToastProjectionTrace $xmlTrace
 $launchArgs = if ($xml -match '<toast[^>]* launch="([^"]+)"') { [Net.WebUtility]::HtmlDecode($Matches[1]) } else { '' }
 $buttonArgs = if ($xml -match '<action[^>]* arguments="([^"]+)"') { [Net.WebUtility]::HtmlDecode($Matches[1]) } else { '' }
 $stateBefore = DeviceState

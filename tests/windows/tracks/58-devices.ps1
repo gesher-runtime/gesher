@@ -4,7 +4,7 @@
 # the single-process mode and on the Gesher device.
 
 # Runs a program with a time limit, killing it and what it started on time-out.
-function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300, [string] $WorkingDirectory = '') {
+function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300, [string] $WorkingDirectory = '', [hashtable] $Environment = @{}) {
   $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
   foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
   if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
@@ -14,6 +14,7 @@ function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300
   # The 2022 shutdown crash can exit inside ART's fatal handler. Keep its
   # bounded pre-handler context in the failing process's actual diagnostic.
   $psi.Environment['GESHER_TRACE_INVALID_SENTINEL'] = '1'
+  foreach ($entry in $Environment.GetEnumerator()) { $psi.Environment[$entry.Key] = [string]$entry.Value }
   $p = [Diagnostics.Process]::Start($psi)
   $stdout = $p.StandardOutput.ReadToEndAsync()
   $stderr = $p.StandardError.ReadToEndAsync()
@@ -229,8 +230,22 @@ if ($LASTEXITCODE -eq 0 -and $geo -match 'status: ([A-Za-z]+)') {
   }
 }
 
+# Admit the actual fixture APK and persist explicit operator grants before exercising
+# location/camera APIs. No application is granted permissions merely for requesting them.
+$permissionSetup = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+  'gesher.services.FixturePermissionSetup', (NoDrive "$Dir/devices.apk"),
+  'android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION',
+  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }
+if ($LASTEXITCODE -ne 0 -or -not $permissionSetup.Contains('FixturePermissionSetup persisted grants verified') -or
+    $permissionSetup -notmatch 'FixturePermissionSetup UID ([0-9]+) package com\.gesher\.devices') {
+  throw "Devices permission prerequisites failed: $permissionSetup"
+}
+$devicesUid = [int]$Matches[1]
+if ($devicesUid -lt 10000 -or $devicesUid -gt 19999) { throw 'Devices fixture did not receive an ordinary application UID' }
+$devicesIdentity = @{ GESHER_UID = [string]$devicesUid; GESHER_BINDER_UID = [string]$devicesUid }
+
 # Single process: the services in the app's own process (gesher-app --single-process).
-$out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400
+$out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400 '' $devicesIdentity
 $code = $LASTEXITCODE
 LocationChecks 'single process' $out $code $false
 SensorsEmptyCheck 'single process' $out $code
@@ -238,7 +253,7 @@ CameraEmptyCheck 'single process' $out $code
 $env:GESHER_SENSOR_TEST = '1'
 $env:GESHER_CAMERA_TEST = '1'
 $env:GESHER_DEVICES_STEPS = 'sensors,camera'
-$out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400
+$out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400 '' $devicesIdentity
 $code = $LASTEXITCODE
 SensorsTestCheck 'single process' $out $code
 CameraTestCheck 'single process' $out $code

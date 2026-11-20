@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Exercise actual Bionic state allocation and close/reopen/pclose transactions.
+"""Exercise Bionic entry-point failures and close/reopen/pclose transactions.
 
 Only the Windows CRT lock/path and descriptor transaction boundaries are host
 adapters. Linux performs file opening, closing and reopening; controlled failures
 separate pre-close admission, CRT errors after close, and post-close bookkeeping.
-Controlled C++ allocation failure also exercises the actual metadata registry
-and stdio entry points; wide conversion itself is a declared counting boundary.
+The shared stream owner is a declared boundary here; its actual allocation,
+conversion-state lifecycle and final flushing run in test_stdio_contracts.py.
+Controlled owner-allocation failure exercises the actual Bionic entry points;
+wide conversion itself remains a declared counting boundary.
 This does not claim Windows UCRT slot-reuse or real record-lock fault execution.
 """
 import argparse, hashlib, os, pathlib, shlex, subprocess, tempfile
@@ -29,15 +31,15 @@ def main():
         '@PARSE@':section(host,'bool ParseMode(','// Random characters'),
         '@HOST_CLOSE@':section(host,'int gesher_fclose_state(' if modern else 'int fclose(FILE* stream)','// The stream is reopened'),
         '@HOST_REOPEN@':section(host,'FILE* gesher_freopen_state(' if modern else 'FILE* freopen(','char* mkdtemp('),
-        '@STATE@':section(guest,'constexpr uint32_t kWeof','class StreamLock'),
+        '@STATE@':section(guest,'constexpr uint32_t kWeof','using StreamLock'),
+        '@BIONIC_STATE_TYPE@':section((ROOT/'compat/posix/include/gesher/stdio.h').read_text(), 'struct BionicState {', '// The returned pointer'),
         '@WIDE@':section(guest,'uint32_t BIONIC_SYSV Fgetwc(','int BIONIC_SYSV Fclose('),
         '@BYTE@':section(guest,'int BIONIC_SYSV GetcUnlocked(','[[noreturn]] void StdioFortify('),
         '@UNGETC@':section(guest,'int BIONIC_SYSV Ungetc(','int BIONIC_SYSV Fflush('),
         '@STATUS@':section(guest,'int BIONIC_SYSV FerrorUnlocked(','int BIONIC_SYSV Fileno('),
         '@GETDELIM@':section(guest,'int64_t BIONIC_SYSV Getdelim(','size_t DecodeWide('),
         '@PERROR@':section(guest,'void BIONIC_SYSV Perror(','// --- scanf'),
-        '@MODE@':section(guest,'std::string CrtMode(','}  // namespace\n\nint CloseBionicStream'),
-        '@CLOSE@':section(guest,'int CloseBionicStream(','namespace {\n\n// /dev/zero'),
+        '@CLOSE@':section(guest,'int CloseBionicStream(','namespace {\n\n// Descriptor-backed'),
         '@REOPEN@':section(guest,'FILE* BIONIC_SYSV Freopen(','int BIONIC_SYSV Fgetpos('),
         '@PCLOSE@':section(process,'int BIONIC_SYSV Pclose(','// --- posix_spawn'),
     }

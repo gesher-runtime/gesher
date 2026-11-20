@@ -24,6 +24,8 @@ jobs:
           fetch-depth: 0
       - name: Pure Python owned exit and cleanup error controls
         run: python3 tests/native3-locks/test_command_cleanup.py
+      - name: Public stdio witness parser positive and corruption controls
+        run: python3 tests/native3-locks/test_public_stdio_evidence.py
       - name: Actual strict archive adversarial controls before producer compilation
         run: python3 tools/native3-locks/artifact/test-verified-artifact.py
   compile:
@@ -105,7 +107,9 @@ jobs:
               return hashlib.sha256(Path(path).read_bytes()).hexdigest()
           paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
           files = {path: digest(path) for path in paths if path and Path(path).is_file()}
-          assert files and 'tests/native3-locks/command_worker.cc' in files
+          assert {'tests/native3-locks/command_worker.cc',
+                  'tests/native3-locks/public_lock_probe.h',
+                  'tests/native3-locks/test_public_stdio_evidence.py'} <= files.keys()
           outputs = {path.name: digest(path) for path in Path('fixture').iterdir() if path.is_file()}
           metadata = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'],
                           run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
@@ -125,7 +129,8 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 8
+    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
+    timeout-minutes: 23
     steps:
       - uses: actions/checkout@v4
         with:
@@ -255,7 +260,7 @@ jobs:
             if (Test-Path -LiteralPath "$env:RUNNER_TEMP/blocking.stdout.txt") { Get-Content -LiteralPath "$env:RUNNER_TEMP/blocking.stdout.txt" }
             if (Test-Path -LiteralPath "$env:RUNNER_TEMP/blocking.stderr.txt") { Get-Content -LiteralPath "$env:RUNNER_TEMP/blocking.stderr.txt" }
           }
-      - name: Actual strict Linux rows and all-four-cycle CRT owner call-frame and negative witnesses
+      - name: Actual strict Linux rows and all-four-cycle public stdio call-frame and negative witnesses
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

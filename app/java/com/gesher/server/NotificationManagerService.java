@@ -242,7 +242,9 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     private void own(String pkg) {
         if (pkg == null) throw new SecurityException("Missing notification owner");
-        callers().requireSystemOrPackage(pkg);
+        // Legacy UID10000 is shared by unrelated apps; authenticate ownership by
+        // the same attached-process rule used for posting and delegation calls.
+        if (!callers().isSystem()) notificationCaller(pkg);
         if (packageFor(pkg) == null && !(callers().isSystem() && "android".equals(pkg))) {
             throw new SecurityException("Unknown notification owner");
         }

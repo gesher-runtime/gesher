@@ -14,8 +14,8 @@ $reviewed=@{
  'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
  'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
  'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
- 'tools/ci/github_read.py'='006eaf96a47049aaa5f59be744723e934647f86f'
- 'tools/ci/github_jobs.py'='c9d669313dc23f4d7d63017ecaa07f923e91932d'
+ 'tools/ci/github_read.py'='b126f5e1fc81ac6fb40f9635f99069df6103a727'
+ 'tools/ci/github_jobs.py'='f4278108b42329950525fb9fa34b78ae75694915'
 }
 function ExactMap($Value){
  if($Value.Count -ne $reviewed.Count){return $false}

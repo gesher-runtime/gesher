@@ -426,19 +426,22 @@ Check 'services: MediaStore picker/collection contracts and missing-provider han
 
 # Production DocumentsProvider transport and real filesystem operations. The
 # explicit package fixture capability is confined to these fresh ART processes.
+. "$PSScriptRoot/../saf-binder-transport.ps1"
 $safSpoofPresent = Test-Path Env:GESHER_MICROG_SPOOF
 $safSpoofValue = [Environment]::GetEnvironmentVariable('GESHER_MICROG_SPOOF', 'Process')
 $safRestart = Join-Path $root ('saf-restart-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $safRestart -Force | Out-Null
+$safBinderSession = $null
 try {
   $env:GESHER_MICROG_SPOOF = '1'
+  $safBinderSession = Start-SafBinderFixture $Dir $dvmFixes $root
   $safOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
     'SafDocumentsContractTest') 90
   $safCode = $LASTEXITCODE
   Check 'services: AOSP documents transport, selection, actual descriptors and lifecycle' {
     $global:LASTEXITCODE = $safCode
     $safOut
-  } @('SafDocumentsContractTest passed:', 'nativeFiles=true')
+  } @('SafDocumentsContractTest passed:', 'nativeFiles=true', 'SAF_BINDER_NATIVE peer credential provenance verified')
   $detachedUiOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
     'DetachedNativeUiContractTest') 45
   $detachedUiCode = $LASTEXITCODE
@@ -456,9 +459,12 @@ try {
     } @("SafDocumentsContractTest restart $safPhase passed")
   }
 } finally {
-  if ($safSpoofPresent) { Set-Item Env:GESHER_MICROG_SPOOF $safSpoofValue }
-  else { Remove-Item Env:GESHER_MICROG_SPOOF -ErrorAction SilentlyContinue }
-  Remove-Item $safRestart -Recurse -Force -ErrorAction SilentlyContinue
+  try { Stop-SafBinderFixture $safBinderSession }
+  finally {
+    if ($safSpoofPresent) { Set-Item Env:GESHER_MICROG_SPOOF $safSpoofValue }
+    else { Remove-Item Env:GESHER_MICROG_SPOOF -ErrorAction SilentlyContinue }
+    Remove-Item $safRestart -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 # Real COM dialogs close through their own message-loop lifetime timer; an

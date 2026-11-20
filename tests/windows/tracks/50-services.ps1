@@ -215,7 +215,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
+    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -312,9 +312,15 @@ if (-not (CheckOrdered 'services: LifecycleActivity finish(): the system server 
   'gesher-app: done') $appCode)) { Write-Host $appOut }
 
 # A runtime permission request (lifecycle.apk with com.gesher.lifecycle.REQUEST_PERMISSIONS):
-# Activity.requestPermissions asks permissionmgr for each permission's request state; every
-# permission is granted, so the result comes without a permission dialog.
-$appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server',
+# The test operator grants the actual requested permission through the normal host
+# shell API. The application still requests it and must receive its real callback.
+$grantOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.server.RuntimeCommands',
+  'pm', 'grant', 'com.gesher.lifecycle', 'android.permission.CAMERA') 45
+if ($LASTEXITCODE -ne 0 -or -not $grantOut.Contains('Permission grant completed for com.gesher.lifecycle')) {
+  throw "Lifecycle CAMERA prerequisite grant failed: $grantOut"
+}
+try {
+$appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server', '--keep-task',
   '--ez', 'com.gesher.lifecycle.REQUEST_PERMISSIONS', 'true', (NoDrive "$Dir/lifecycle.apk")) 400
 $appCode = $LASTEXITCODE
 if (-not (CheckOrdered 'services: requestPermissions: permissionmgr grants it, onRequestPermissionsResult' $appOut @(
@@ -322,6 +328,13 @@ if (-not (CheckOrdered 'services: requestPermissions: permissionmgr grants it, o
   'LifecycleActivity onRequestPermissionsResult 7: android.permission.CAMERA=0',
   'LifecycleActivity onDestroy',
   'gesher-app: done') $appCode)) { Write-Host $appOut }
+} finally {
+  $revokeOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.server.RuntimeCommands',
+    'pm', 'revoke', 'com.gesher.lifecycle', 'android.permission.CAMERA') 45
+  if ($LASTEXITCODE -ne 0 -or -not $revokeOut.Contains('Permission revoke completed for com.gesher.lifecycle')) {
+    throw "Lifecycle CAMERA prerequisite cleanup failed: $revokeOut"
+  }
+}
 
 # The rest of the app model in the system server (tests/apps/components):
 # MainActivity runs each step after the previous one ended, then finishes;

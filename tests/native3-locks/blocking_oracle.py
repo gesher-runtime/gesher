@@ -22,6 +22,9 @@ class Worker:
         self.process = subprocess.Popen([str(executable), role, str(path), str(command), mode],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         text=True, bufsize=1)
+        # The command protocol is LF bytes on every host. TextIOWrapper would
+        # otherwise translate LF to CRLF on Windows, changing a binary pipe.
+        self.process.stdin.reconfigure(newline="\n")
         self.lines = queue.Queue()
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
@@ -73,7 +76,40 @@ def observe(waiter, windows):
     raise AssertionError('real conflict registration/kernel queue not observed')
 
 
+def transport_contract(executable):
+    """Use the real strict worker to check LF and reject a CRLF control."""
+    with tempfile.TemporaryDirectory(prefix='gesher-blocking-transport-') as directory:
+        path = Path(directory) / 'lock'
+        path.write_bytes(b'x')
+        for translated in (False, True):
+            worker = Worker(executable, 'holder', path, 7, 'normal')
+            try:
+                assert worker.receive('held') == [str(worker.process.pid)]
+                if translated:
+                    # Model the Windows TextIOWrapper default explicitly on
+                    # either host; the worker's binary protocol stays unchanged.
+                    worker.process.stdin.reconfigure(newline='\r\n')
+                worker.send('unlock')
+                if translated:
+                    assert worker.process.wait(timeout=6) == 86, 'CRLF command was not rejected'
+                    worker.reader.join(timeout=2)
+                    assert not worker.reader.is_alive(), 'rejected transport stdout did not close'
+                else:
+                    assert worker.receive('released') == ['0']
+                    worker.finish('exit')
+            finally:
+                if worker.process.poll() is None:
+                    worker.process.kill()
+                worker.process.wait(timeout=6)
+                worker.reader.join(timeout=2)
+                assert not worker.reader.is_alive()
+                worker.process.stdin.close()
+                worker.process.stdout.close()
+    print('BLOCKING_TRANSPORT LF=accepted CRLF=rejected actual_worker=true', flush=True)
+
+
 def run(executable, windows):
+    transport_contract(executable)
     rows = []
     with tempfile.TemporaryDirectory(prefix='gesher-blocking-') as directory:
         path = Path(directory) / 'lock'
@@ -175,6 +211,7 @@ def run(executable, windows):
                     assert fields == dict(mode=mode, result=str(110 if mode.startswith('timeout') else 125),
                                           begin_failures=str(int(mode.endswith('begin'))),
                                           commit_failures=str(int(mode.endswith('commit'))),
+                                          deadline_barriers=str(int(mode.startswith('timeout'))),
                                           live_identity='1', retained_capacity='256', denied_capacity='256',
                                           unknown_capacity='256', reclaimed_capacity='255', later_timeout='1',
                                           handles_closed='260'), fields

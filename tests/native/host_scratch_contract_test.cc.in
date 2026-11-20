@@ -1,6 +1,9 @@
 // The actual outer poll, EpollWaiter, nested epoll readiness, Epoll state and
 // delivery methods. Win32 events use Linux eventfds; sockets use Linux poll.
 // Descriptor registration and topology edits are explicit fixture boundaries.
+// Pipe readiness/admission and the descriptor guard use production bodies.
+// Descriptor capture and native pipe queries use real retained Linux objects;
+// this is not a Windows/OFD-publication fixture.
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -28,6 +31,7 @@
 #include "poll_scratch.h"
 #include "socket_internal.h"
 @HAS_SCRATCH@
+@HAS_PIPE_SNAPSHOT@
 
 namespace allocation {
 thread_local bool enabled = false;
@@ -49,11 +53,12 @@ void end() { enabled = false; }
 
 using DWORD = uint32_t;
 using ULONGLONG = unsigned long long;
-struct NativeEvent { int fd; bool manual; };
+struct NativeEvent { int fd; bool manual; std::recursive_mutex* mutex = nullptr; };
 using HANDLE = NativeEvent*;
 #define INVALID_HANDLE_VALUE reinterpret_cast<HANDLE>(intptr_t{-1})
 static constexpr int FALSE = 0;
 static constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258, WAIT_FAILED = 0xffffffffu;
+static constexpr DWORD WAIT_ABANDONED = 128;
 static constexpr DWORD INFINITE = 0xffffffffu, MAXIMUM_WAIT_OBJECTS = 64;
 static constexpr DWORD FILE_TYPE_DISK = 1, FILE_TYPE_PIPE = 3;
 static std::atomic<int> live_handles{0};
@@ -121,8 +126,18 @@ static DWORD WaitForMultipleObjects(DWORD count, const HANDLE* handles, int, DWO
   return WAIT_TIMEOUT;
 }
 static DWORD WaitForSingleObject(HANDLE handle, DWORD milliseconds) {
+  if (handle->mutex) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+    do {
+      if (handle->mutex->try_lock()) return WAIT_OBJECT_0;
+      if (milliseconds == 0) break;
+      std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    return WAIT_TIMEOUT;
+  }
   return WaitForMultipleObjects(1, &handle, FALSE, milliseconds);
 }
+static bool ReleaseMutex(HANDLE handle) { handle->mutex->unlock(); return true; }
 static void Sleep(DWORD milliseconds) {
   if (milliseconds == INFINITE) std::abort();
   std::this_thread::sleep_for(std::chrono::milliseconds(planned_wait(int(milliseconds))));
@@ -139,6 +154,22 @@ static bool PeekNamedPipe(HANDLE h, void*, DWORD, void*, DWORD* available, void*
   if (::ioctl(fd.fd, FIONREAD, &bytes) < 0 || ::poll(&fd, 1, 0) < 0 || (fd.revents & POLLHUP)) return false;
   *available = static_cast<DWORD>(bytes); return true;
 }
+
+#ifdef HAS_OFD_PIPE_POLL
+// The production guard resolves these executable-owned entry points. The host
+// boundary supplies a real recursive transaction, not an empty guard.
+static std::recursive_mutex descriptor_transaction;
+static thread_local unsigned descriptor_depth;
+static void DescriptorEnter() { descriptor_transaction.lock(); ++descriptor_depth; }
+static void DescriptorLeave() { --descriptor_depth; descriptor_transaction.unlock(); }
+static void* GetModuleHandleW(const wchar_t*) { return &descriptor_transaction; }
+static void* GetProcAddress(void* module, const char* name) {
+  if (module != &descriptor_transaction) return nullptr;
+  if (std::strcmp(name, "gesher_descriptor_enter_v1") == 0) return reinterpret_cast<void*>(DescriptorEnter);
+  if (std::strcmp(name, "gesher_descriptor_leave_v1") == 0) return reinterpret_cast<void*>(DescriptorLeave);
+  return nullptr;
+}
+#endif
 
 namespace gesher {
 void WakePollers();
@@ -167,6 +198,70 @@ static HANDLE HandleFromFd(int fd) {
   return ::fcntl(fd, F_GETFD) < 0 ? INVALID_HANDLE_VALUE : reinterpret_cast<HANDLE>(intptr_t{fd} + 1);
 }
 static int FailWithLastError() { return -1; }
+#ifdef HAS_OFD_PIPE_POLL
+namespace record_locks {
+@DESCRIPTOR_GUARD_DECLARATION@
+@DESCRIPTOR_GUARD_BODY@
+}
+static int live_pipe_snapshots, last_pipe_duplicate = -1;
+static thread_local int capture_error, query_error;
+static thread_local bool capture_had_guard = true, query_outside_guard = true;
+static thread_local void (*after_pipe_capture)(void*);
+static thread_local void* pipe_capture_context;
+struct OpenFileDescription {
+  int fd;
+  std::recursive_mutex mutex;
+  NativeEvent native_mutex{-1, false, &mutex};
+  HANDLE pipe_mutex = &native_mutex;
+  explicit OpenFileDescription(int descriptor) : fd(descriptor) {}
+  bool OwnedPipe() const { struct stat info{}; return ::fstat(fd, &info) == 0 && S_ISFIFO(info.st_mode); }
+  bool KnownPipeStatus() const { return ::fcntl(fd, F_GETFL) >= 0; }
+  int Flags() const { return ::fcntl(fd, F_GETFL); }
+};
+struct DescriptorSnapshot {
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  std::shared_ptr<OpenFileDescription> description;
+  ~DescriptorSnapshot() {
+    if (handle != INVALID_HANDLE_VALUE) { ::close(HostFd(handle)); --live_pipe_snapshots; }
+  }
+};
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
+  capture_had_guard &= descriptor_depth != 0;
+  if (capture_error) { errno = capture_error; capture_error = 0; return {}; }
+  // Allocate ownership before duplicating, and retain the exact Linux open
+  // description when the original numeric slot is closed/replaced below.
+  auto snapshot = std::make_shared<DescriptorSnapshot>();
+  const int duplicate = ::fcntl(fd, F_DUPFD_CLOEXEC, 0);
+  if (duplicate < 0) return {};
+  snapshot->handle = reinterpret_cast<HANDLE>(intptr_t{duplicate} + 1);
+  ++live_pipe_snapshots; last_pipe_duplicate = duplicate;
+  snapshot->description = std::make_shared<OpenFileDescription>(duplicate);
+  if (after_pipe_capture) {
+    auto observer = after_pipe_capture; after_pipe_capture = nullptr;
+    observer(pipe_capture_context);
+  }
+  return snapshot;
+}
+using ULONG = uint32_t;
+enum FILE_INFORMATION_CLASS { FilePipeLocalInformation };
+struct FILE_PIPE_LOCAL_INFORMATION { ULONG NamedPipeState, ReadDataAvailable, WriteQuotaAvailable; };
+static int QueryPipe(HANDLE handle, void* output, ULONG size, FILE_INFORMATION_CLASS kind) {
+  query_outside_guard &= descriptor_depth == 0;
+  if (query_error) { errno = query_error; query_error = 0; return -1; }
+  if (kind != FilePipeLocalInformation || size != sizeof(FILE_PIPE_LOCAL_INFORMATION)) std::abort();
+  const int fd = HostFd(handle), capacity = ::fcntl(fd, F_GETPIPE_SZ);
+  int bytes = 0;
+  pollfd descriptor{fd, POLLIN | POLLOUT, 0};
+  if (capacity < 0 || ::ioctl(fd, FIONREAD, &bytes) < 0 || ::poll(&descriptor, 1, 0) < 0) return -1;
+  *static_cast<FILE_PIPE_LOCAL_INFORMATION*>(output) = {
+      (descriptor.revents & (POLLERR | POLLHUP)) ? 4u : 3u,
+      static_cast<ULONG>(bytes), static_cast<ULONG>(capacity - bytes)};
+  return 0;
+}
+@PIPE_ADMISSION@
+@PIPE_POLL@
+#endif
 static ULONGLONG MonotonicMicros() {
   if (controlled_clock) return virtual_micros;
   return static_cast<ULONGLONG>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -341,6 +436,40 @@ void basic_and_lifetime() {
   check("Windows wait failure also releases event owner", weak_event.expired());
   check_empty_cache();
 }
+#ifdef HAS_OFD_PIPE_POLL
+void pipe_snapshot_boundary() {
+  int original[2], replacement[2];
+  if (::pipe2(original, O_NONBLOCK | O_CLOEXEC) < 0 || ::pipe2(replacement, O_NONBLOCK | O_CLOEXEC) < 0) std::abort();
+  pollfd read_end{original[0], POLLIN, 0}, write_end{original[1], POLLOUT, 0};
+  check("empty real pipe is not readable", run_poll(&read_end, 1) == 0 && read_end.revents == 0);
+  check("real pipe write quota admits POLLOUT", run_poll(&write_end, 1) == 1 && write_end.revents == POLLOUT);
+  const char byte = 'p';
+  if (::write(original[1], &byte, 1) != 1) std::abort();
+  check("production pipe readiness sees real queued byte", run_poll(&read_end, 1) == 1 && read_end.revents == POLLIN);
+  struct ReusePipe { int original, replacement; } reuse{original[0], replacement[0]};
+  gesher::after_pipe_capture = [](void* raw) {
+    const auto& state = *static_cast<ReusePipe*>(raw);
+    if (::dup2(state.replacement, state.original) != state.original) std::abort();
+  };
+  gesher::pipe_capture_context = &reuse;
+  check("captured pipe survives actual numeric descriptor replacement",
+      run_poll(&read_end, 1) == 1 && read_end.revents == POLLIN && gesher::after_pipe_capture == nullptr);
+  check("next call observes replacement pipe without old readiness", run_poll(&read_end, 1) == 0 && read_end.revents == 0);
+  check("snapshot duplicate really closes before return", gesher::live_pipe_snapshots == 0 &&
+      ::fcntl(gesher::last_pipe_duplicate, F_GETFD) < 0 && errno == EBADF);
+  gesher::capture_error = EMFILE;
+  check("descriptor capture error propagates", run_poll(&read_end, 1) == -1 && errno == EMFILE);
+  gesher::query_error = EIO;
+  check("native pipe query error propagates and retires snapshot",
+      run_poll(&read_end, 1) == -1 && errno == EIO && gesher::live_pipe_snapshots == 0);
+  ::close(replacement[1]);
+  check("real final writer close produces pipe HUP", run_poll(&read_end, 1) == 1 && read_end.revents == POLLHUP);
+  check("capture owns transaction and native query releases it", gesher::capture_had_guard && gesher::query_outside_guard);
+  ::close(original[0]); ::close(original[1]); ::close(replacement[0]);
+  check("pipe boundary retains no descriptor owner", gesher::live_pipe_snapshots == 0);
+  check_empty_cache();
+}
+#endif
 struct Reentry { int nested, removed; std::weak_ptr<gesher::EventFd> event; std::weak_ptr<gesher::ws::SocketDescription> socket; bool retained = false; };
 void nested_poll(void* context) {
   auto& test = *static_cast<Reentry*>(context);
@@ -574,6 +703,9 @@ void measurements() {
 int main(int argc, char** argv) {
   measure = argc == 2 && std::strcmp(argv[1], "measure") == 0;
   basic_and_lifetime();
+#ifdef HAS_OFD_PIPE_POLL
+  pipe_snapshot_boundary();
+#endif
   reentry_and_reuse();
   nested_epolls();
   epoll_mutation_and_errors();

@@ -11,7 +11,10 @@ import time
 
 _BACKOFF_SECONDS = (1, 2, 4)
 _MAX_ELAPSED_SECONDS = 4 * 60 + sum(_BACKOFF_SECONDS)
-_MAX_RATE_WAIT_SECONDS = 120
+# The repository's GITHUB_TOKEN quota is shared by every concurrent job and
+# resets hourly. Waiting up to 15 minutes for a published reset is cheaper
+# than failing the job and rerunning the whole ci run (about 500 more calls).
+_MAX_RATE_WAIT_SECONDS = 15 * 60
 _RATE_HEADERS = ('date', 'retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset',
                  'x-ratelimit-limit', 'x-ratelimit-used', 'x-ratelimit-resource')
 _HTTP_STATUS = re.compile(r'\(HTTP ([1-5][0-9]{2})\)')
@@ -24,6 +27,10 @@ _DIAL_TIMEOUT = re.compile(
 
 class GitHubReadError(RuntimeError):
     """The exact read failed; callers must not accept or consume partial output."""
+
+
+class GitHubTransientError(GitHubReadError):
+    """An observed transient failure that the caller asked not to retry here."""
 
 
 def _reject_json_constant(value):
@@ -128,13 +135,15 @@ def _transient(stderr):
         _STREAM_CANCEL.search(line) for line in stderr.splitlines())
 
 
-def get_json(endpoint):
+def get_json(endpoint, *, retry_transient=True):
     """GET endpoint verbatim, retrying only the observed transient failures.
 
     There are at most four requests. Quota waits require GitHub's message and
-    valid headers, fit a 120-second cumulative wait budget, and remain within
-    the original 247-second maximum read envelope. JSON parsing and all caller
-    identity/digest predicates are outside the retry decision.
+    valid headers and fit a 15-minute cumulative wait budget; time spent in
+    those waits does not consume the 247-second transport envelope. JSON parsing and all caller
+    identity/digest predicates are outside the retry decision. With
+    retry_transient=False an observed transient failure raises
+    GitHubTransientError at once, so the caller can choose a cheaper fallback.
     """
     if not isinstance(endpoint, str) or not endpoint:
         raise ValueError('An exact GitHub endpoint is required')
@@ -178,7 +187,6 @@ def get_json(endpoint):
         if quota is not None:
             delay = quota['delay']
             permitted = (delay is not None and rate_wait + delay <= _MAX_RATE_WAIT_SECONDS
-                         and time.monotonic() + delay < deadline
                          and attempt < len(_BACKOFF_SECONDS))
             print('CI_GITHUB_RATE_LIMIT ' + ' '.join(
                 f'{key}={quota[key]}' for key in ('kind', 'limit', 'used', 'remaining', 'resource', 'reset', 'retry_after'))
@@ -187,7 +195,12 @@ def get_json(endpoint):
                 raise GitHubReadError('GitHub quota cannot recover within bounded read/wait budget')
             rate_wait += delay
             rate_failures += 1
+            # The quota wait is not transport time: extend the envelope by it.
+            deadline += delay
         elif _transient(stderr):
+            if not retry_transient:
+                raise GitHubTransientError(
+                    f'GitHub GET transient failure (gh exit {result.returncode})')
             delay = _BACKOFF_SECONDS[attempt] if attempt < len(_BACKOFF_SECONDS) else None
         if delay is None or time.monotonic() + delay >= deadline:
             raise GitHubReadError(

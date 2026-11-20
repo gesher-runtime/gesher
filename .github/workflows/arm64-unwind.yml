@@ -1,0 +1,96 @@
+name: arm64-native-unwind
+on:
+  push:
+    branches: ['fix/56-arm64-thunk-unwind-*']
+    paths:
+      - 'compat/arm64/dll/thunks.S'
+      - 'compat/arm64/dll/arm64_unwind_test.*'
+      - 'tools/arm64/*unwind*'
+      - '.github/workflows/arm64-unwind.yml'
+      - 'docs/research/arm64-thunk-unwind-2026-11-17.md'
+  pull_request:
+    paths:
+      - 'compat/arm64/dll/thunks.S'
+      - 'compat/arm64/dll/arm64_unwind_test.*'
+      - 'tools/arm64/*unwind*'
+      - '.github/workflows/arm64-unwind.yml'
+      - 'docs/research/arm64-thunk-unwind-2026-11-17.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.bundle.outputs.artifact-id }}
+      artifact-digest: ${{ steps.bundle.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch and verify the pinned native compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/unwind-toolchain"
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" \
+            -o "$RUNNER_TEMP/unwind-toolchain/compiler.tar.xz"
+          printf '%s  %s\n' "$LLVM_MINGW_SHA256" "$RUNNER_TEMP/unwind-toolchain/compiler.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/unwind-toolchain/compiler.tar.xz" -C "$RUNNER_TEMP/unwind-toolchain"
+      - name: Build exact assembly and source-derived negative controls
+        shell: bash
+        run: |
+          python3 tools/arm64/build-unwind.py \
+            --toolchain "$RUNNER_TEMP/unwind-toolchain/$LLVM_MINGW_NAME" \
+            --archive "$RUNNER_TEMP/unwind-toolchain/compiler.tar.xz" \
+            --out "$RUNNER_TEMP/arm64-native-unwind"
+      - uses: actions/upload-artifact@v4
+        id: bundle
+        with:
+          name: arm64-native-unwind-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/arm64-native-unwind/
+          if-no-files-found: error
+
+  native:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    env:
+      UNWIND_EXPECTED_RUNNER: ${{ matrix.os }}
+      UNWIND_BUILD_ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+      UNWIND_BUILD_ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: ${{ runner.temp }}/arm64-native-unwind
+          merge-multiple: true
+      - name: Run real Windows unwind and ordinary ABI contracts
+        shell: pwsh
+        run: tools/arm64/run-unwind.ps1 -Dir "$env:RUNNER_TEMP/arm64-native-unwind"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm64-native-unwind-results-${{ matrix.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/arm64-native-unwind/
+          if-no-files-found: error

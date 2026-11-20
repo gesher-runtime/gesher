@@ -15,6 +15,7 @@
 #include <windows.data.xml.dom.h>
 #include <windows.ui.notifications.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -34,6 +35,7 @@ typedef __x_ABI_CWindows_CUI_CNotifications_CIToastNotifier IToastNotifier;
 typedef __x_ABI_CWindows_CUI_CNotifications_CIToastActivatedEventArgs IToastActivatedArgs;
 typedef __x_ABI_CWindows_CData_CXml_CDom_CIXmlDocument IXmlDoc;
 typedef __x_ABI_CWindows_CData_CXml_CDom_CIXmlDocumentIO IXmlDocIO;
+typedef __x_ABI_CWindows_CData_CXml_CDom_CIXmlNodeSerializer IXmlSerializer;
 typedef __FITypedEventHandler_2_Windows__CUI__CNotifications__CToastNotification_IInspectable
     ActivatedHandler;
 typedef __FITypedEventHandler_2_Windows__CUI__CNotifications__CToastNotification_IInspectableVtbl
@@ -310,6 +312,96 @@ static HRESULT History(IToastHistory** out) {
   return hr;
 }
 
+/* Explicit CI diagnostics. They never change a toast result, identity, or lookup.
+ * History can lag Show, so an empty immediate snapshot is not a failed assertion. */
+static int TraceToastEnabled(void) {
+  wchar_t value[2];
+  return GetEnvironmentVariableW(L"GESHER_TRACE_TOAST_IDENTITY", value, 2) == 1 && value[0] == L'1';
+}
+
+static void TraceToastString(const char* name, const wchar_t* value, UINT32 length) {
+  fprintf(stderr, " %sLength=%u %s=\"", name, (unsigned)length, name);
+  UINT32 limit = length < 4096 ? length : 4096;
+  for (UINT32 i = 0; i < limit; ++i) {
+    unsigned ch = (unsigned)value[i];
+    if (ch >= 32 && ch < 127 && ch != '\\' && ch != '"') fputc((int)ch, stderr);
+    else fprintf(stderr, "\\u%04x", ch);
+  }
+  if (limit != length) fputs("[truncated]", stderr);
+  fputc('"', stderr);
+}
+
+static void TraceToastHString(const char* name, HSTRING value) {
+  UINT32 length = 0;
+  const wchar_t* text = value == NULL ? L"" : g_raw_buffer(value, &length);
+  TraceToastString(name, text, length);
+}
+
+static int StringEquals(HSTRING value, const wchar_t* expected);
+
+static void TraceToastObject(const char* phase, IToast* toast, IToast2* toast2,
+    const wchar_t* expected_tag, const wchar_t* expected_group) {
+  HSTRING tag = NULL, group = NULL;
+  HRESULT tag_hr = toast2 ? toast2->lpVtbl->get_Tag(toast2, &tag) : E_POINTER;
+  HRESULT group_hr = toast2 ? toast2->lpVtbl->get_Group(toast2, &group) : E_POINTER;
+  fprintf(stderr, "TOAST_IDENTITY phase=%s getTag=0x%08lx getGroup=0x%08lx",
+      phase, (unsigned long)tag_hr, (unsigned long)group_hr);
+  TraceToastString("expectedTag", expected_tag, (UINT32)wcslen(expected_tag));
+  TraceToastString("expectedGroup", expected_group, (UINT32)wcslen(expected_group));
+  TraceToastHString("actualTag", tag); TraceToastHString("actualGroup", group);
+  int matches = SUCCEEDED(tag_hr) && SUCCEEDED(group_hr)
+      && StringEquals(tag, expected_tag) && StringEquals(group, expected_group);
+  fprintf(stderr, " matches=%d\n", matches);
+  if (!matches && toast != NULL) {
+    IXmlDoc* doc = NULL;
+    IXmlSerializer* serializer = NULL;
+    HSTRING xml = NULL;
+    HRESULT hr = toast->lpVtbl->get_Content(toast, &doc);
+    if (SUCCEEDED(hr) && doc == NULL) hr = E_UNEXPECTED;
+    if (SUCCEEDED(hr)) hr = QUERY(doc, IID___x_ABI_CWindows_CData_CXml_CDom_CIXmlNodeSerializer, &serializer);
+    if (SUCCEEDED(hr) && serializer == NULL) hr = E_UNEXPECTED;
+    if (SUCCEEDED(hr)) hr = serializer->lpVtbl->GetXml(serializer, &xml);
+    fprintf(stderr, "TOAST_IDENTITY phase=%s xml=0x%08lx", phase, (unsigned long)hr);
+    TraceToastHString("actualXml", xml); fputc('\n', stderr);
+    HsFree(xml); RELEASE(serializer); RELEASE(doc);
+  }
+  HsFree(tag); HsFree(group);
+}
+
+static void TraceToastHistory(const char* phase, const wchar_t* app_id,
+    const wchar_t* expected_tag, const wchar_t* expected_group) {
+  IToastHistory* history = NULL;
+  IToastHistory2* history2 = NULL;
+  IToastList* list = NULL;
+  HSTRING id = NULL;
+  HRESULT hr = History(&history);
+  if (SUCCEEDED(hr) && history == NULL) hr = E_UNEXPECTED;
+  if (SUCCEEDED(hr)) hr = QUERY(history, IID___x_ABI_CWindows_CUI_CNotifications_CIToastNotificationHistory2, &history2);
+  if (SUCCEEDED(hr) && history2 == NULL) hr = E_UNEXPECTED;
+  if (SUCCEEDED(hr)) hr = HsChecked(app_id, &id);
+  if (SUCCEEDED(hr)) hr = history2->lpVtbl->GetHistoryWithId(history2, id, &list);
+  if (SUCCEEDED(hr) && list == NULL) hr = E_UNEXPECTED;
+  UINT32 count = 0;
+  if (SUCCEEDED(hr)) hr = list->lpVtbl->get_Size(list, &count);
+  fprintf(stderr, "TOAST_IDENTITY phase=%s history=0x%08lx count=%u", phase,
+      (unsigned long)hr, (unsigned)count);
+  TraceToastString("appId", app_id, (UINT32)wcslen(app_id)); fputc('\n', stderr);
+  for (UINT32 at = 0; SUCCEEDED(hr) && at < count && at < 16; ++at) {
+    IToast* toast = NULL;
+    IToast2* toast2 = NULL;
+    HRESULT item_hr = list->lpVtbl->GetAt(list, at, &toast);
+    if (SUCCEEDED(item_hr) && toast == NULL) item_hr = E_UNEXPECTED;
+    if (SUCCEEDED(item_hr)) item_hr = QUERY(toast, IID___x_ABI_CWindows_CUI_CNotifications_CIToastNotification2, &toast2);
+    fprintf(stderr, "TOAST_IDENTITY phase=%s index=%u item=0x%08lx\n", phase,
+        (unsigned)at, (unsigned long)item_hr);
+    if (SUCCEEDED(item_hr)) TraceToastObject(phase, toast, toast2, expected_tag, expected_group);
+    RELEASE(toast2); RELEASE(toast);
+  }
+  if (count > 16) fprintf(stderr, "TOAST_IDENTITY phase=%s omitted=%u\n", phase, (unsigned)(count - 16));
+  HsFree(id); RELEASE(list); RELEASE(history2); RELEASE(history);
+  fflush(stderr);
+}
+
 static void Hide(const wchar_t* app_id, IToast* toast) {
   IToastNotifier* notifier = NULL;
   if (SUCCEEDED(Notifier(app_id, &notifier))) {
@@ -365,6 +457,10 @@ static long ShowUnlocked(const wchar_t* app_id, const wchar_t* tag, const wchar_
     if (SUCCEEDED(hr)) hr = toast2->lpVtbl->put_Group(toast2, h);
     HsFree(h);
   }
+  if (TraceToastEnabled()) {
+    fprintf(stderr, "TOAST_IDENTITY phase=after-set result=0x%08lx\n", (unsigned long)hr);
+    TraceToastObject("after-set", toast, toast2, tag, group);
+  }
   if (SUCCEEDED(hr) && suppress_popup) toast2->lpVtbl->put_SuppressPopup(toast2, TRUE);
   if (SUCCEEDED(hr) && high &&
       SUCCEEDED(QUERY(toast, IID___x_ABI_CWindows_CUI_CNotifications_CIToastNotification4,
@@ -382,6 +478,11 @@ static long ShowUnlocked(const wchar_t* app_id, const wchar_t* tag, const wchar_
     hr = Notifier(app_id, &notifier);
   }
   if (SUCCEEDED(hr)) hr = notifier->lpVtbl->Show(notifier, toast);
+  if (TraceToastEnabled()) {
+    fprintf(stderr, "TOAST_IDENTITY phase=after-show result=0x%08lx\n", (unsigned long)hr);
+    TraceToastObject("after-show", toast, toast2, tag, group);
+    TraceToastHistory("after-show-history", app_id, tag, group);
+  }
   if (SUCCEEDED(hr)) {
     IToast* old = Keep(Key(app_id, tag, group), toast);
     toast = NULL; /* kept */
@@ -420,6 +521,10 @@ static long RemoveUnlocked(const wchar_t* app_id, const wchar_t* tag, const wcha
   hr = History(&history);
   if (SUCCEEDED(hr)) {
     hr = history->lpVtbl->RemoveGroupedTagWithId(history, t, g, id);
+  }
+  if (TraceToastEnabled()) {
+    fprintf(stderr, "TOAST_IDENTITY phase=after-remove result=0x%08lx\n", (unsigned long)hr);
+    TraceToastHistory("after-remove-history", app_id, tag, group);
   }
   HsFree(t); HsFree(g); HsFree(id);
   RELEASE(history);

@@ -567,8 +567,9 @@ int SelectImpl(int nfds, BionicFdSet* r, BionicFdSet* w, BionicFdSet* e, PollTim
   for (const pollfd& p : fds) {
     if (p.revents & POLLNVAL) return errno = 9 /* EBADF */, -1;
   }
+  const size_t clear_bytes = (static_cast<size_t>(nfds) + 63) / 64 * sizeof(uint64_t);
   for (BionicFdSet* s : {r, w, e}) {
-    if (s != nullptr) std::memset(s, 0, sizeof(*s));
+    if (s != nullptr && clear_bytes > 0) std::memset(s, 0, clear_bytes);
   }
   int count = 0;
   for (const pollfd& p : fds) {

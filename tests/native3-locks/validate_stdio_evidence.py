@@ -1,4 +1,4 @@
-"""Validate four complete stdio witnesses and their exact WCT/conjunctive routes."""
+"""Validate four public-stream-lock witnesses and their WCT/stack conjunction."""
 import argparse
 import json
 import os
@@ -27,11 +27,10 @@ def main():
     args = parser.parse_args()
     assert os.environ.get('GITHUB_ACTIONS') == 'true', 'CI-only actual witness validation'
     lines = args.stderr.read_text(encoding='utf-8-sig').splitlines()
-    layouts = [fields(line) for line in lines if line.startswith('ACTUAL_CRT_LOCK_LAYOUT ')]
-    assert len(layouts) == 2 and all(row['decoded'] == 'true' for row in layouts), 'Both actual workers must decode CRT'
-    offsets = {int(row['offset']) for row in layouts}
-    assert len(offsets) == 1 and next(iter(offsets)) > 0
-    offset = next(iter(offsets))
+    workers = [fields(line) for line in lines if line.startswith('ACTUAL_PUBLIC_LOCK_PROBE ')]
+    assert len(workers) == 2 and all(row['public-api'] == 'true' for row in workers)
+    worker_pids = {row['pid'] for row in workers}
+    assert len(worker_pids) == 2 and all(int(pid) > 0 for pid in worker_pids)
     groups = []
     for line in lines:
         if line.startswith('ACTUAL_STDIO_CLOCK ') and fields(line)['phase'] == 'start':
@@ -50,24 +49,26 @@ def main():
         ticks = [int(row['tick']) for row in clocks]
         deadline = int(clocks[0]['deadline'])
         assert ticks == sorted(ticks) and 0 < deadline - ticks[0] <= 5000 and ticks[-1] < deadline
-        records = [fields(line) for line in group if line.startswith('ACTUAL_CRT_FILE_OWNER ')]
-        assert {row['phase'] for row in records} == {'before', 'held', 'waiting', 'negative-sibling'} and len(records) == 4
+        records = [fields(line) for line in group if line.startswith('ACTUAL_PUBLIC_FILE_LOCK ')]
+        assert {row['phase'] for row in records} == {'before', 'held-sibling-unlocked', 'waiting'} and len(records) == 3
         by_phase = {row['phase']: row for row in records}
-        before, held, waiting, other = (by_phase[name] for name in ('before', 'held', 'waiting', 'negative-sibling'))
-        assert len({(row['FILE'], row['cs'], row['expected-owner'], row['owner-birth']) for row in (before, held, waiting)}) == 1
-        assert hexvalue(before['cs']) == hexvalue(before['FILE']) + offset
-        assert before['owner'] == before['recursion'] == '0'
-        assert held['owner'] == waiting['owner'] == held['expected-owner'] and held['recursion'] == waiting['recursion'] == '1'
-        assert int(held['owner-birth']) > 0
-        assert hexvalue(other['FILE']) != hexvalue(held['FILE']) and hexvalue(other['cs']) != hexvalue(held['cs'])
-        assert hexvalue(other['cs']) == hexvalue(other['FILE']) + offset
-        assert other['owner'] == held['owner'] and other['recursion'] == '1'
+        before, held, waiting = (by_phase[name] for name in ('before', 'held-sibling-unlocked', 'waiting'))
+        assert len({(row['FILE'], row['sibling'], row['owner'], row['owner-birth']) for row in records}) == 1
+        assert 0 < hexvalue(held['FILE']) != hexvalue(held['sibling']) > 0
+        assert int(held['owner']) > 0 and int(held['owner-birth']) > 0
+        for row in records:
+            assert int(row['probe']) > 0 and row['probe'] != row['owner'] and int(row['probe-birth']) > 0
+            assert row['signaled-exit'] == row['handle-closed'] == 'true'
+        assert before['target-result'] == before['sibling-result'] == before['recursive-owner'] == '0'
+        assert int(held['target-result']) != 0 and held['sibling-result'] == '0' and held['recursive-owner'] == '1'
+        assert int(waiting['target-result']) != 0 and int(waiting['sibling-result']) != 0 and waiting['recursive-owner'] == '1'
         stack = exactly(group, 'ACTUAL_CLOSER_STACK ')
+        assert stack['pid'] in worker_pids
         assert stack['captured'] == stack['closed'] == '1' and stack['error'] == '0'
         assert stack['suspend-before'] == '0' and stack['resume-before'] == '1' and int(stack['birth']) > 0
         call = exactly(group, 'ACTUAL_CLOSER_FILE_CALL index=')
-        assert hexvalue(call['unwound-rsi']) == hexvalue(call['FILE']) == hexvalue(held['FILE']) == hexvalue(stack['FILE'])
-        assert call['exact-rsi-rcx-copy-and-lock-file-iat'] == 'true'
+        assert hexvalue(call['unwound-r12']) == hexvalue(call['FILE']) == hexvalue(held['FILE']) == hexvalue(stack['FILE'])
+        assert call['exact-r12-rcx-copy-and-public-fclose'] == 'true' and call['unsupported-code-copy'] == 'reject'
         enter = exactly(group, 'ACTUAL_CLOSER_ENTER_FRAME ')
         begin, end = hexvalue(enter['unwind-begin']), hexvalue(enter['unwind-end'])
         assert begin <= hexvalue(enter['pc']) < end and begin <= hexvalue(enter['named-entry']) < end
@@ -78,7 +79,7 @@ def main():
         assert frames[enter['index']]['pc'] == enter['pc'] and frames[call['index']]['pc'] == call['pc']
         summary = exactly(group, 'ACTUAL_CLOSER_FILE_CALL_SUMMARY ')
         assert summary['matches'] == summary['required'] == summary['enter-frames'] == '1' and summary['other-matches'] == '0'
-        assert hexvalue(summary['other-FILE']) == hexvalue(other['FILE'])
+        assert hexvalue(summary['other-FILE']) == hexvalue(held['sibling'])
         trace = exactly(group, 'ACTUAL_WCT samples=')
         assert trace['success'] == '1' and trace['error'] == trace['cycle'] == trace['contradictory'] == trace['completed-before-unlock'] == '0'
         assert int(trace['samples']) >= 3
@@ -91,12 +92,13 @@ def main():
             assert nodes[2]['tid'] == held['owner'] and nodes[2]['pid'] == stack['pid']
         assert group.count('ACTUAL_STDIO_PHASE independent-fd-closed result=0 closer-completed-before-unlock=0') == 1
         assert group.count('ACTUAL_STDIO_PHASE stream-unlocked') == 1
-        negative = exactly(group, 'ACTUAL_CRT_NEGATIVE_CONTROLS ')
-        expected_negatives = {'wrong-live-FILE-CS', 'wrong-live-owner', 'actual-other-birth',
+        negative = exactly(group, 'ACTUAL_PUBLIC_NEGATIVE_CONTROLS ')
+        expected_negatives = {'distinct-live-FILE-lock', 'wrong-live-owner', 'actual-other-birth',
                               'completed-real-closer', 'unsupported-code-copy', 'call-other-FILE-argument'}
         assert set(negative) == expected_negatives and set(negative.values()) == {'reject'}
-        values = exactly(group, 'ACTUAL_CRT_NEGATIVE_VALUES ')
-        assert int(values['cycle']) == index and values['closer'] == values['wrong-owner'] == stack['closer']
+        values = exactly(group, 'ACTUAL_PUBLIC_NEGATIVE_VALUES ')
+        assert int(values['cycle']) == index and values['closer'] == stack['closer']
+        assert values['wrong-owner'] == waiting['probe'] and values['wrong-owner'] != stack['closer']
         assert values['closer-birth'] == stack['birth'] and values['wrong-birth'] == held['owner-birth']
         assert values['wrong-birth'] != values['closer-birth'] and values['wrong-owner'] != held['owner']
         assert values['completed-control-close'] == '0' and values['completed-control-signaled'] == 'true'
@@ -108,15 +110,15 @@ def main():
         route = exactly(group, 'ACTUAL_STDIO_ROUTE ')
         assert int(route['cycle']) == index and route['strong-witness'] == 'true'
         assert route['independent-close'] == route['fclose'] == '0'
-        assert route['preunlock-completed'] == 'false' and route['signaled-exit'] == route['joined'] == 'true'
+        assert route['preunlock-completed'] == 'false' and route['signaled-exit'] == route['joined'] == route['fd-retired'] == 'true'
         if len(nodes) >= 3:
             assert route['route'] == 'full-wct' and route['full-wct'] == '1' and route['single-blocked'] == '0'
         else:
-            assert len(nodes) == 1 and route['route'] == 'decoded-crt-lock'
+            assert len(nodes) == 1 and route['route'] == 'public-file-lock'
             assert route['full-wct'] == '0' and route['single-blocked'] == '1'
         assert group.index(next(line for line in group if line.startswith('ACTUAL_STDIO_ROUTE '))) > group.index(
             next(line for line in group if line.startswith('ACTUAL_STDIO_CLOCK ') and fields(line)['phase'] == 'control-cleanup'))
-        summaries.append(dict(cycle=index, file=held['FILE'], cs=held['cs'], owner=held['owner'],
+        summaries.append(dict(cycle=index, file=held['FILE'], sibling=held['sibling'], owner=held['owner'],
                               owner_birth=held['owner-birth'], closer=stack['closer'], closer_birth=stack['birth'],
                               elapsed_ms=ticks[-1] - ticks[0], wct_count=len(nodes), actual_enter_frame=enter,
                               real_negative_cases=sorted(expected_negatives), evidence_route=route['route'],

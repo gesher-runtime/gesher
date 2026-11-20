@@ -43,7 +43,7 @@ public final class DocumentPickerTest {
                 + "another to /mnt/<drive>");
     }
 
-    private static void cancelDialog(Method pick, int mode, boolean multiple) throws Exception {
+    private static void cancelDialog(Method pick, int mode, boolean multiple, boolean localOnly) throws Exception {
         AtomicInteger polls = new AtomicInteger();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         AtomicReference<Object> selected = new AtomicReference<>();
@@ -60,14 +60,17 @@ public final class DocumentPickerTest {
             try {
                 selected.set(pick.invoke(null, mode, "Gesher document picker cancellation fixture",
                         "new-fixture-file.txt", null, "*.txt", "txt", multiple,
-                        true, android.os.Process.myPid(), lifetime));
+                        localOnly, android.os.Process.myPid(), lifetime));
             } catch (InvocationTargetException error) { failure.set(error.getCause()); }
             catch (Throwable error) { failure.set(error); }
         }, "native-document-dialog-fixture");
         worker.setDaemon(true);
         worker.start();
         worker.join(10000);
-        require(!worker.isAlive(), "Native document dialog did not close after its owner retired");
+        require(!worker.isAlive(), "Native document dialog did not close after its owner retired"
+                + " (mode=" + mode + ", localOnly=" + localOnly + ", polls=" + polls.get()
+                + ", elapsedMs=" + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
+                + ", timerStarted=" + (pumping.get() != 0) + ")");
         if (failure.get() != null) throw new AssertionError("Actual Windows dialog failed", failure.get());
         require(selected.get() == null, "Cancelled dialog returned selected paths");
         require(polls.get() >= 4 && System.nanoTime() - start >= TimeUnit.MILLISECONDS.toNanos(800),
@@ -104,13 +107,17 @@ public final class DocumentPickerTest {
         Method pick = host.getDeclaredMethod("pickDocuments", int.class, String.class, String.class,
                 String.class, String.class, String.class, boolean.class, boolean.class, int.class, BooleanSupplier.class);
         pick.setAccessible(true);
-        // Repeat all modes: every COM instance, timer and hidden lifetime window
+        // Repeat all original local-only modes: every COM instance and lifetime timer
         // must retire so the next request starts and closes on its own STA thread.
         for (int repeat = 0; repeat < 2; repeat++) {
-            cancelDialog(pick, 0, repeat != 0);
-            cancelDialog(pick, 1, false);
-            cancelDialog(pick, 2, false);
+            cancelDialog(pick, 0, repeat != 0, true);
+            cancelDialog(pick, 1, false, true);
+            cancelDialog(pick, 2, false, true);
         }
+        // Cancellation also applies when the application did not request local-only input.
+        cancelDialog(pick, 0, true, false);
+        cancelDialog(pick, 1, false, false);
+        cancelDialog(pick, 2, false, false);
         require(pick.invoke(null, 1, "Already retired fixture", "unused.txt", null, "*.txt",
                 "txt", false, true, 0, (BooleanSupplier)() -> false) == null,
                 "Retired owner must not open another dialog");

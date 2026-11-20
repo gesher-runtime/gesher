@@ -22,7 +22,7 @@
 #include <wct.h>
 #include <io.h>
 #include "stack_probe.h"
-#include "crt_lock_probe.h"
+#include "public_lock_probe.h"
 #else
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -47,18 +47,10 @@ int Failure(const char* message) {
   return 91;
 }
 void LockStream(FILE* stream) {
-#ifdef _WIN32
-  _lock_file(stream);
-#else
   flockfile(stream);
-#endif
 }
 void UnlockStream(FILE* stream) {
-#ifdef _WIN32
-  _unlock_file(stream);
-#else
   funlockfile(stream);
-#endif
 }
 unsigned ThreadId() {
 #ifdef _WIN32
@@ -196,8 +188,7 @@ int main(int argc, char** argv) {
   if (setrlimit(RLIMIT_NOFILE, &limit)) return Failure("actual Linux fd limit");
 #else
   if (!EnableOwnWaitChainProbe()) return Failure("actual own-thread WCT privilege");
-  native3_crt_lock_probe::Layout crt_layout;
-  if (!crt_layout.Initialize()) return Failure("actual named CRT lock implementation decode");
+  std::fprintf(stderr, "ACTUAL_PUBLIC_LOCK_PROBE pid=%lu public-api=true\n", GetCurrentProcessId());
 #endif
   static_assert(sizeof(struct flock) == 32 && offsetof(struct flock, l_start) == 8);
   for (int& descriptor : descriptors) descriptor = -1;
@@ -286,7 +277,7 @@ int main(int argc, char** argv) {
           !Slot(other) || slot == other || Descriptor(other) < 0) return Failure("contended stdio command shape");
       // The controller bounds this entire command externally. A historical
       // registry-before-stream implementation can block in close(otherfd)
-      // while fclose waits for this real CRT/glibc stream lock. No fake lock
+      // while fclose waits for this real public stream lock. No fake lock
       // callback or implementation hook participates in the two operations.
       FILE* stream = streams[slot];
       int stream_fd = Descriptor(slot), close_fd = Descriptor(other);
@@ -331,9 +322,7 @@ int main(int argc, char** argv) {
       const DWORD stream_owner = GetCurrentThreadId();
       const uint64_t stream_owner_birth = native3_stack_probe::Birth(owner_created);
       if (stream_owner_birth == 0) return Failure("actual stream owner birth is empty");
-      native3_crt_lock_probe::Snapshot before{}, held{}, waiting{};
-      if (!crt_layout.Read(stream, &before) || before.owner != 0 || before.recursion != 0)
-        return Failure("actual stream lock before owner acquisition");
+      native3_public_lock_probe::Sample before{}, held{}, waiting{};
       FILE* other_stream = std::tmpfile();
       FILE* completed_stream = std::tmpfile();
       if (!other_stream || !completed_stream) {
@@ -341,6 +330,9 @@ int main(int argc, char** argv) {
         if (completed_stream) std::fclose(completed_stream);
         return Failure("actual negative-control streams");
       }
+      if (!native3_public_lock_probe::Observe(stream, other_stream, deadline_tick, &before) ||
+          before.target_result != 0 || before.sibling_result != 0)
+        return Failure("actual public locks initially available to another thread");
       std::atomic<DWORD> control_tid{0};
       std::atomic<uint64_t> control_birth{0};
       std::atomic<bool> control_release{false}, control_completed{false};
@@ -362,23 +354,24 @@ int main(int argc, char** argv) {
           control_birth.load(std::memory_order_acquire));
       if (!completed_thread) std::_Exit(97);
       control_release.store(true, std::memory_order_release);
-      if (!exited_before_limit(completed_thread) || !CloseHandle(completed_thread)) std::_Exit(97);
+      if (!exited_before_limit(completed_thread)) std::_Exit(97);
       completed_closer.join();
       diagnostic("completed-control-joined");
       if (!control_completed.load(std::memory_order_acquire) || control_close != 0) std::_Exit(97);
-      // The distinct live sibling has the SAME owner/recursion as the target,
-      // isolating FILE/CS identity from a simple owner-only predicate.
+      // Keep a distinct live sibling locked by the same owner. Closing the
+      // wrong FILE cannot finish when only the target is eventually unlocked.
       LockStream(other_stream);
-      native3_crt_lock_probe::Snapshot other_held{};
-      if (!crt_layout.Read(other_stream, &other_held) ||
-          !crt_layout.Matches(other_stream, other_held, stream_owner, false)) std::_Exit(97);
 #endif
       LockStream(stream);
 #ifdef _WIN32
-      if (!crt_layout.Read(stream, &held) || held.address != before.address ||
-          !crt_layout.Matches(stream, held, stream_owner, false)) {
-        Failure("actual stream lock held by expected owner"); std::_Exit(96);
-      }
+      if (!native3_public_lock_probe::RecursiveOwner(stream) ||
+          !native3_public_lock_probe::RecursiveOwner(other_stream)) std::_Exit(96);
+      // Actual public operations distinguish the two locks: the target stays
+      // held while the live sibling becomes available to an independent thread.
+      UnlockStream(other_stream);
+      if (!native3_public_lock_probe::Observe(stream, other_stream, deadline_tick, &held) ||
+          held.target_result == 0 || held.sibling_result != 0) std::_Exit(96);
+      LockStream(other_stream);
 #endif
       std::thread closer([&] {
 #ifdef _WIN32
@@ -388,7 +381,11 @@ int main(int argc, char** argv) {
 #endif
         entering.store(ThreadId(), std::memory_order_release);
         errno = 123;
+#ifdef _WIN32
+        stream_result = native3_stack_probe::Close(stream);
+#else
         stream_result = std::fclose(stream);
+#endif
         stream_error = errno;
         completed.store(true, std::memory_order_release);
       });
@@ -429,24 +426,28 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
 #ifdef _WIN32
-      // Read only while this real owner still holds the stream lock. Never
-      // inspect the FILE/embedded lock after unlock permits fclose to free it.
-      if (!stack_sampled || completed.load(std::memory_order_acquire) || !crt_layout.Read(stream, &waiting) ||
-          waiting.address != held.address || !crt_layout.Matches(stream, waiting, stream_owner, false)) {
-        Failure("actual live FILE lock owner during closer wait"); std::_Exit(96);
+      // Probe only while this real owner still holds both public stream locks.
+      // No FILE or stream metadata is inspected after the closer may retire it.
+      if (std::chrono::steady_clock::now() >= limit) {
+        diagnostic("fatal94-before-public-ownership-probe");
+        std::_Exit(94);
+      }
+      if (!stack_sampled || completed.load(std::memory_order_acquire) ||
+          !native3_public_lock_probe::Observe(stream, other_stream, deadline_tick, &waiting) ||
+          waiting.target_result == 0 || waiting.sibling_result == 0 ||
+          !native3_public_lock_probe::RecursiveOwner(stream) ||
+          !native3_public_lock_probe::RecursiveOwner(other_stream)) {
+        Failure("actual public FILE lock ownership during closer wait"); std::_Exit(96);
       }
       bool wrong_birth = true;
       diagnostic("negative-controls-begin");
       if (entering_birth.load() == stream_owner_birth ||
           !native3_stack_probe::MatchesBirth(entering.load(), stream_owner_birth, &wrong_birth) || wrong_birth ||
-          crt_layout.Matches(stream, other_held, stream_owner, false) ||
-          crt_layout.Matches(stream, held, entering.load(), false) ||
-          crt_layout.Matches(stream, held, stream_owner, control_completed.load()) ||
-          !crt_layout.RejectsUnsupportedCode()) std::_Exit(99);
-      std::fprintf(stderr, "ACTUAL_CRT_NEGATIVE_CONTROLS wrong-live-FILE-CS=reject wrong-live-owner=reject actual-other-birth=reject completed-real-closer=reject unsupported-code-copy=reject call-other-FILE-argument=reject\n");
-      native3_crt_lock_probe::Report("negative-sibling", other_stream, other_held, stream_owner, stream_owner_birth);
-      std::fprintf(stderr, "ACTUAL_CRT_NEGATIVE_VALUES cycle=%u closer=%u closer-birth=%llu wrong-owner=%u wrong-birth=%llu completed-control-tid=%lu completed-control-birth=%llu completed-control-close=%d completed-control-signaled=true\n",
-          cycle, entering.load(), static_cast<unsigned long long>(entering_birth.load()), entering.load(),
+          native3_stack_probe::OpenOwnedForExit(control_tid.load(), control_birth.load()) != nullptr ||
+          !CloseHandle(completed_thread)) std::_Exit(99);
+      std::fprintf(stderr, "ACTUAL_PUBLIC_NEGATIVE_CONTROLS distinct-live-FILE-lock=reject wrong-live-owner=reject actual-other-birth=reject completed-real-closer=reject unsupported-code-copy=reject call-other-FILE-argument=reject\n");
+      std::fprintf(stderr, "ACTUAL_PUBLIC_NEGATIVE_VALUES cycle=%u closer=%u closer-birth=%llu wrong-owner=%lu wrong-birth=%llu completed-control-tid=%lu completed-control-birth=%llu completed-control-close=%d completed-control-signaled=true\n",
+          cycle, entering.load(), static_cast<unsigned long long>(entering_birth.load()), waiting.thread,
           static_cast<unsigned long long>(stream_owner_birth), control_tid.load(),
           static_cast<unsigned long long>(control_birth.load()), control_close);
       WaitTrace error_copy = wait_trace, cycle_copy = wait_trace, wrong_thread_copy = wait_trace;
@@ -466,9 +467,9 @@ int main(int argc, char** argv) {
           SingleBlockedCloser(sticky_copy, entering.load(), stream_owner)) std::_Exit(99);
       std::fprintf(stderr, "STDIO_ROUTE_METADATA_COPIES single-running=reject sticky-contradiction=reject not-actual-OS-waits=true\n");
       phase("sample-and-negatives");
-      native3_crt_lock_probe::Report("before", stream, before, stream_owner, stream_owner_birth);
-      native3_crt_lock_probe::Report("held", stream, held, stream_owner, stream_owner_birth);
-      native3_crt_lock_probe::Report("waiting", stream, waiting, stream_owner, stream_owner_birth);
+      native3_public_lock_probe::Report("before", before, stream_owner, stream_owner_birth, false);
+      native3_public_lock_probe::Report("held-sibling-unlocked", held, stream_owner, stream_owner_birth, true);
+      native3_public_lock_probe::Report("waiting", waiting, stream_owner, stream_owner_birth, true);
       DumpWaitTrace(entering.load(std::memory_order_acquire), ThreadId(), stream, stream_fd,
           completed.load(std::memory_order_acquire));
 #endif
@@ -501,6 +502,9 @@ int main(int argc, char** argv) {
       }
 #endif
       closer.join();  // Completion was observed; no unbounded callback remains.
+      errno = 0;
+      const bool stream_retired = fcntl(stream_fd, F_GETFD) == -1 && errno == EBADF;
+      if (!stream_retired) std::_Exit(99);
 #ifdef _WIN32
       phase("actual-thread-exit-and-join");
       UnlockStream(other_stream);
@@ -509,7 +513,7 @@ int main(int argc, char** argv) {
       // Decide only after the complete live-lock witness, all real rejection
       // controls, independent close, unlock, actual fclose and signaled exit/
       // join have finished under the SAME original deadline. A single WCT
-      // node supplies no owner proof; the decoded CRT/FILE/call-frame conjunction
+      // node supplies no owner proof; the public-lock/FILE/call-frame conjunction
       // above supplies that proof only for this controlled stdio regression.
       const bool full_wct = contended && !wait_trace.contradictory &&
           !InvalidWaitTrace(wait_trace, entering.load(), stream_owner) && wait_trace.count >= 3;
@@ -517,8 +521,8 @@ int main(int argc, char** argv) {
       if ((!full_wct && !single_blocked) || close_result != 0 || stream_result != 0 ||
           !completed.load(std::memory_order_acquire) || std::chrono::steady_clock::now() >= limit) std::_Exit(99);
       contended = true;
-      std::fprintf(stderr, "ACTUAL_STDIO_ROUTE cycle=%u route=%s full-wct=%d single-blocked=%d strong-witness=true independent-close=%d fclose=%d preunlock-completed=false signaled-exit=true joined=true\n",
-          cycle, full_wct ? "full-wct" : "decoded-crt-lock", full_wct, single_blocked, close_result, stream_result);
+      std::fprintf(stderr, "ACTUAL_STDIO_ROUTE cycle=%u route=%s full-wct=%d single-blocked=%d strong-witness=true independent-close=%d fclose=%d preunlock-completed=false signaled-exit=true joined=true fd-retired=true\n",
+          cycle, full_wct ? "full-wct" : "public-file-lock", full_wct, single_blocked, close_result, stream_result);
 #endif
       streams[slot] = nullptr;
       if (stream_result == 0) Forget(stream_fd);
