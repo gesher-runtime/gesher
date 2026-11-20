@@ -256,6 +256,10 @@ public final class WindowsHost {
         return available() ? nativeRemoveToast(appId, tag, group) : 0x80004001;
     }
 
+    public static int removeToastIfLaunch(String appId, String tag, String group, String launch) {
+        return available() ? nativeRemoveToastIfLaunch(appId, tag, group, launch) : 0x80004001;
+    }
+
     public static int clearToasts(String appId) {
         return available() ? nativeClearToasts(appId) : 0x80004001;
     }
@@ -392,6 +396,16 @@ public final class WindowsHost {
 
     private static native boolean nativeIsLocalDocument(String windowsPath);
 
+    /** AppsUseLightTheme: 0 dark, 1 light, -1 missing/unreadable; never launches a process. */
+    public static int appsUseLightTheme() {
+        if (!available()) return -1;
+        try { return nativeAppsUseLightTheme(); }
+        catch (UnsatisfiedLinkError unavailable) { return -1; }
+    }
+
+    public static void removeListener(Listener listener) { sListeners.remove(listener); }
+
+    private static native int nativeAppsUseLightTheme();
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();
@@ -416,6 +430,7 @@ public final class WindowsHost {
     private static native int nativeShowToast(String appId, String tag, String group,
             String xml, boolean suppressPopup, boolean high);
     private static native int nativeRemoveToast(String appId, String tag, String group);
+    private static native int nativeRemoveToastIfLaunch(String appId, String tag, String group, String launch);
     private static native int nativeClearToasts(String appId);
     private static native int nativeShowNotificationBridge(String appId, String tag,
             String group, String title, String text, String iconPath, int id);

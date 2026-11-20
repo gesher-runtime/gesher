@@ -319,7 +319,8 @@ static void test_time_math(void) {
 // libselinux-jni.so). statfs on the working directory and on Android's /data
 // (not on the disk: it answers for the volume it would be on, as
 // SQLiteGlobal's StatFs("/data") needs), fstatfs on an open file, the xattr
-// family failing with ENOTSUP, an empty mount table and mount refused.
+// user.* xattr round trips, unsupported security namespace, an empty mount
+// table and mount refused.
 // Acquire loads of read-only memory (LocalSend's libflutter: Dart reads its
 // write-protected VM isolate heap with LDAR). The arm64 translator's dynarmic
 // emits an ordered load as `lock xadd [m], 0`, which faults as a write on a
@@ -346,6 +347,101 @@ static void test_ldar_readonly(void) {
 #endif
 }
 
+static void check_xattr_result(const char* what, ssize_t result, int error,
+                               ssize_t expected, int expected_error) {
+  int okay = result == expected && (expected >= 0 || error == expected_error);
+  if (!okay)
+    printf("  xattr observation: result=%lld errno=%d expected=%lld error=%d\n",
+           (long long)result, error, (long long)expected, expected_error);
+  check(what, okay);
+}
+
+static void check_xattr_byte(const char* what, ssize_t result, int error, unsigned char value) {
+  int okay = result == 1 && value == '1';
+  if (!okay)
+    printf("  xattr value observation: result=%lld errno=%d byte=%u expected=1/'1'\n",
+           (long long)result, error, (unsigned)value);
+  check(what, okay);
+}
+
+static int xattr_list_contains(const char* list, size_t bytes, const char* name) {
+  int found = 0;
+  size_t offset = 0;
+  while (offset < bytes) {
+    const char* end = memchr(list + offset, '\0', bytes - offset);
+    if (!end || end == list + offset) return 0;
+    if (strcmp(list + offset, name) == 0) found = 1;
+    offset = (size_t)(end - list) + 1;
+  }
+  return found;
+}
+
+// These are real user.* operations on a newly created regular file. Keep this
+// sequence independent of the Windows-only unsupported-namespace checks so it
+// also serves as an unmodified Linux syscall reference.
+static void test_user_xattrs(const char* path, int fd) {
+  char value[16] = {0};
+  errno = 0;
+  ssize_t result = fgetxattr(fd, "user.x", value, sizeof(value));
+  int error = errno;
+  check_xattr_result("fresh fgetxattr reports missing attribute", result, error, -1, ENODATA);
+
+  errno = 0;
+  result = fsetxattr(fd, "user.x", "1", 1, 0);
+  error = errno;
+  check_xattr_result("fsetxattr stores user.x", result, error, 0, 0);
+  errno = 0;
+  result = fgetxattr(fd, "user.x", value, sizeof(value));
+  error = errno;
+  check_xattr_result("fgetxattr reads one stored byte", result, error, 1, 0);
+  check_xattr_byte("fgetxattr preserves the exact value", result, error, (unsigned char)value[0]);
+
+  errno = 0;
+  result = setxattr(path, "user.inode_cache", "1", 1, 0);
+  error = errno;
+  check_xattr_result("setxattr stores user.inode_cache", result, error, 0, 0);
+  memset(value, 0, sizeof(value));
+  errno = 0;
+  result = getxattr(path, "user.inode_cache", value, sizeof(value));
+  error = errno;
+  check_xattr_result("getxattr reads one stored byte", result, error, 1, 0);
+  check_xattr_byte("getxattr preserves the exact value", result, error, (unsigned char)value[0]);
+
+  errno = 0;
+  result = lsetxattr(path, "user.x", "1", 1, 0);
+  error = errno;
+  check_xattr_result("lsetxattr updates the regular file", result, error, 0, 0);
+  memset(value, 0, sizeof(value));
+  errno = 0;
+  result = lgetxattr(path, "user.x", value, sizeof(value));
+  error = errno;
+  check_xattr_result("lgetxattr reads one stored byte", result, error, 1, 0);
+  check_xattr_byte("lgetxattr preserves the exact value", result, error, (unsigned char)value[0]);
+
+  char list[64];
+  errno = 0;
+  result = llistxattr(path, list, sizeof(list));
+  error = errno;
+  int bounded = result > 0 && (size_t)result <= sizeof(list);
+  if (!bounded) printf("  xattr list observation: result=%lld errno=%d capacity=%zu\n",
+                       (long long)result, error, sizeof(list));
+  check("llistxattr returns a bounded name list", bounded);
+  int contains = bounded && xattr_list_contains(list, (size_t)result, "user.x") &&
+      xattr_list_contains(list, (size_t)result, "user.inode_cache");
+  if (!contains) printf("  xattr list membership: result=%lld errno=%d expected=user.x,user.inode_cache\n",
+                        (long long)result, error);
+  check("llistxattr contains both exact names in either order", contains);
+
+  errno = 0;
+  result = removexattr(path, "user.x");
+  error = errno;
+  check_xattr_result("removexattr removes user.x", result, error, 0, 0);
+  errno = 0;
+  result = getxattr(path, "user.x", value, sizeof(value));
+  error = errno;
+  check_xattr_result("removed attribute reports ENODATA", result, error, -1, ENODATA);
+}
+
 static void test_statfs(void) {
   char cwd[1024];
   struct statfs st;
@@ -365,39 +461,30 @@ static void test_statfs(void) {
                              st64.f_blocks == st.f_blocks);
 
   char tmp[1100];
-  snprintf(tmp, sizeof(tmp), "%s/libc_test_statfs.tmp", ok ? cwd : ".");
-  int fd = open(tmp, O_RDWR | O_CREAT | O_TRUNC, 0600);
+  int length = snprintf(tmp, sizeof(tmp), "%s/libc_test_statfs_XXXXXX", ok ? cwd : ".");
+  int bounded = length > 0 && (size_t)length < sizeof(tmp);
+  check("bounded statfs/xattr fixture path", bounded);
+  int fd = bounded ? mkstemp(tmp) : -1;
+  check("mkstemp creates an owned fresh xattr file", fd >= 0);
   struct statfs fst;
   memset(&fst, 0, sizeof(fst));
   check("fstatfs(an open file)",
         fd >= 0 && fstatfs(fd, &fst) == 0 && fst.f_bsize > 0 && fst.f_blocks > 0);
-  char value[16];
-  errno = 0;
-  check("fgetxattr fails with ENOTSUP",
-        fd >= 0 && fgetxattr(fd, "user.x", value, sizeof(value)) == -1 && errno == ENOTSUP);
-  errno = 0;
-  check("fsetxattr fails with ENOTSUP",
-        fd >= 0 && fsetxattr(fd, "user.x", "1", 1, 0) == -1 && errno == ENOTSUP);
-  if (fd >= 0) close(fd);
-  errno = 0;
-  check("getxattr fails with ENOTSUP",
-        getxattr(tmp, "security.selinux", value, sizeof(value)) == -1 && errno == ENOTSUP);
-  errno = 0;
-  check("lgetxattr fails with ENOTSUP",
-        lgetxattr(tmp, "security.selinux", value, sizeof(value)) == -1 && errno == ENOTSUP);
-  errno = 0;
-  check("setxattr fails with ENOTSUP",
-        setxattr(tmp, "user.inode_cache", "1", 1, 0) == -1 && errno == ENOTSUP);
-  errno = 0;
-  check("lsetxattr fails with ENOTSUP", lsetxattr(tmp, "user.x", "1", 1, 0) == -1 &&
-                                            errno == ENOTSUP);
-  char list[64];
-  errno = 0;
-  check("llistxattr fails with ENOTSUP",
-        llistxattr(tmp, list, sizeof(list)) == -1 && errno == ENOTSUP);
-  errno = 0;
-  check("removexattr fails with ENOTSUP", removexattr(tmp, "user.x") == -1 && errno == ENOTSUP);
-  unlink(tmp);
+  if (fd >= 0) {
+    test_user_xattrs(tmp, fd);
+    // The namespace is unsupported on an otherwise valid, existing file.
+    char value[16];
+    errno = 0;
+    ssize_t result = getxattr(tmp, "security.selinux", value, sizeof(value));
+    int error = errno;
+    check_xattr_result("getxattr security.selinux stays unsupported", result, error, -1, ENOTSUP);
+    errno = 0;
+    result = lgetxattr(tmp, "security.selinux", value, sizeof(value));
+    error = errno;
+    check_xattr_result("lgetxattr security.selinux stays unsupported", result, error, -1, ENOTSUP);
+    check("close the owned statfs/xattr fixture", close(fd) == 0);
+    check("unlink the owned statfs/xattr fixture", unlink(tmp) == 0);
+  }
 
   FILE* mounts = setmntent("/proc/mounts", "re");
   check("setmntent(/proc/mounts) opens a stream", mounts != NULL);

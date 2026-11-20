@@ -11,6 +11,7 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/clocks.h>
+#include <gesher/xattr.h>
 
 #include <windows.h>
 // bcrypt.h needs windows.h first.
@@ -25,7 +26,9 @@
 #include <sys/file.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/statvfs.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -456,10 +459,14 @@ int BIONIC_SYSV ClockNanosleep(int clock, int flags, const LinuxTimespec* req, L
       auto& sample = *static_cast<Observation*>(value);
       sample.at = sample.clock == 7 ? gesher::BoottimeNanos() : NowMonotonicNs();
     };
-    const int error = clock == 7
-        ? InterruptibleBoottimeSleepObserved(static_cast<int64_t>(deadline), observe, &observed)
-        : (InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe, &observed)
-               ? kEINTR : 0);
+    int error = 0;
+    if (clock == 7) {
+      error = InterruptibleBoottimeSleepObserved(static_cast<int64_t>(deadline), observe, &observed);
+    } else {
+      bool interrupted = InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe,
+                                                    &observed, &error);
+      if (error == 0 && interrupted) error = kEINTR;
+    }
     if (error != 0) {
       if (error == kEINTR && !absolute && rem != nullptr) {
         // Relative waits report the interval left when the signal interrupted
@@ -567,9 +574,30 @@ int BIONIC_SYSV Madvise(void* addr, size_t len, int advice) { return madvise(add
 int BIONIC_SYSV Msync(void* addr, size_t len, int flags) {
   return gesher::elf::SyncLoadedMemory(addr, len, flags);
 }
+int BIONIC_SYSV Mlock(const void* addr, size_t len) { return mlock(addr, len); }
+int BIONIC_SYSV Munlock(const void* addr, size_t len) { return munlock(addr, len); }
+int UnsupportedLockMode() {
+  struct rlimit limit;
+  getrlimit(RLIMIT_MEMLOCK, &limit);
+  return errno = (limit.rlim_cur == 0 ? kEPERM : kEOPNOTSUPP), -1;
+}
+int BIONIC_SYSV Mlock2(const void* addr, size_t len, int flags) {
+  constexpr int kMlockOnFault = 1;
+  if (flags == 0) return mlock(addr, len);
+  if (flags != kMlockOnFault) return errno = kEINVAL, -1;
+  return UnsupportedLockMode();
+}
+int BIONIC_SYSV Mlockall(int flags) {
+  constexpr int kMclOnFault = 4;
+  constexpr int kScope = MCL_CURRENT | MCL_FUTURE;
+  if ((flags & kScope) == 0 || (flags & ~(kScope | kMclOnFault)) != 0) {
+    return errno = kEINVAL, -1;
+  }
+  return UnsupportedLockMode();
+}
+int BIONIC_SYSV Munlockall() { return munlockall(); }
 int BIONIC_SYSV Zero2(const void*, size_t) { return 0; }
 int BIONIC_SYSV Zero1(int) { return 0; }
-int BIONIC_SYSV Zero0() { return 0; }
 int BIONIC_SYSV Mincore(void*, size_t len, unsigned char* vec) {
   for (size_t i = 0; i < (len + 4095) / 4096; ++i) vec[i] = 1;
   return 0;
@@ -787,12 +815,53 @@ int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
   return 0;
 }
 
-// Extended attributes are not supported (as gesher-base's <sys/xattr.h>):
-// every xattr call fails with ENOTSUP, which callers (SELinux label lookups,
-// ContextImpl's cache-dir tagging) treat as "no attributes here". One
-// function serves every signature: System V ignores the arguments it does not
-// read, and -1 in the 64-bit return register is -1 as an int too.
-int64_t BIONIC_SYSV XattrUnsupported() { return errno = kEOPNOTSUPP, -1; }
+ssize_t BIONIC_SYSV Getxattr(const char* path, const char* name, void* value, size_t size) {
+  return ::getxattr(path, name, value, size);
+}
+ssize_t BIONIC_SYSV Lgetxattr(const char* path, const char* name, void* value, size_t size) {
+  return ::lgetxattr(path, name, value, size);
+}
+ssize_t BIONIC_SYSV RawFgetxattr(int fd, const char* name, void* value, size_t size) {
+  return ::fgetxattr(fd, name, value, size);
+}
+int BIONIC_SYSV RawFsetxattr(int fd, const char* name, const void* value, size_t size, int flags) {
+  return ::fsetxattr(fd, name, value, size, flags);
+}
+ssize_t BIONIC_SYSV RawFlistxattr(int fd, char* list, size_t size) {
+  return ::flistxattr(fd, list, size);
+}
+ssize_t BIONIC_SYSV Fgetxattr(int fd, const char* name, void* value, size_t size) {
+  return ::gesher::BionicFgetxattr(fd, name, value, size);
+}
+int BIONIC_SYSV Setxattr(const char* path, const char* name, const void* value, size_t size,
+                       int flags) {
+  return ::setxattr(path, name, value, size, flags);
+}
+int BIONIC_SYSV Lsetxattr(const char* path, const char* name, const void* value, size_t size,
+                        int flags) {
+  return ::lsetxattr(path, name, value, size, flags);
+}
+int BIONIC_SYSV Fsetxattr(int fd, const char* name, const void* value, size_t size, int flags) {
+  return ::gesher::BionicFsetxattr(fd, name, value, size, flags);
+}
+ssize_t BIONIC_SYSV Listxattr(const char* path, char* list, size_t size) {
+  return ::listxattr(path, list, size);
+}
+ssize_t BIONIC_SYSV Llistxattr(const char* path, char* list, size_t size) {
+  return ::llistxattr(path, list, size);
+}
+ssize_t BIONIC_SYSV Flistxattr(int fd, char* list, size_t size) {
+  return ::gesher::BionicFlistxattr(fd, list, size);
+}
+int BIONIC_SYSV Removexattr(const char* path, const char* name) {
+  return ::removexattr(path, name);
+}
+int BIONIC_SYSV Lremovexattr(const char* path, const char* name) {
+  return ::lremovexattr(path, name);
+}
+int BIONIC_SYSV Fremovexattr(int fd, const char* name) {
+  return ::fremovexattr(fd, name);
+}
 
 // The mount table is gesher-base's: setmntent opens an empty stream (the mode
 // is not passed on: bionic's "re" is not a CRT fopen mode), getmntent finds
@@ -1048,11 +1117,11 @@ void RegisterExtraSys(SymbolTable& t) {
   E("madvise", Madvise);
   E("posix_madvise", PosixMadvise);
   E("msync", Msync);
-  E("mlock", Zero2);
-  E("munlock", Zero2);
-  E("mlock2", Zero2);
-  E("mlockall", Zero1);
-  E("munlockall", Zero0);
+  E("mlock", Mlock);
+  E("munlock", Munlock);
+  E("mlock2", Mlock2);
+  E("mlockall", Mlockall);
+  E("munlockall", Munlockall);
   E("mincore", Mincore);
   E("dup3", Dup3);
   E("tgkill", Tgkill);
@@ -1091,11 +1160,21 @@ void RegisterExtraSys(SymbolTable& t) {
   E("statfs64", Statfs);
   E("fstatfs", Fstatfs);
   E("fstatfs64", Fstatfs);
-  for (const char* name : {"getxattr", "lgetxattr", "fgetxattr", "setxattr", "lsetxattr",
-                           "fsetxattr", "listxattr", "llistxattr", "flistxattr", "removexattr",
-                           "lremovexattr", "fremovexattr"}) {
-    t[name] = reinterpret_cast<void*>(&XattrUnsupported);
-  }
+  E("getxattr", Getxattr);
+  E("lgetxattr", Lgetxattr);
+  E("fgetxattr", Fgetxattr);
+  E("__fgetxattr", RawFgetxattr);
+  E("setxattr", Setxattr);
+  E("lsetxattr", Lsetxattr);
+  E("fsetxattr", Fsetxattr);
+  E("__fsetxattr", RawFsetxattr);
+  E("listxattr", Listxattr);
+  E("llistxattr", Llistxattr);
+  E("flistxattr", Flistxattr);
+  E("__flistxattr", RawFlistxattr);
+  E("removexattr", Removexattr);
+  E("lremovexattr", Lremovexattr);
+  E("fremovexattr", Fremovexattr);
   E("setmntent", Setmntent);
   E("getmntent", Getmntent);
   E("getmntent_r", GetmntentR);

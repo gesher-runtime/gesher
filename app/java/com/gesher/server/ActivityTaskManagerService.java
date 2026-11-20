@@ -4324,6 +4324,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         mConfigSeq = Math.max(mConfigSeq, global.seq) + 1;
         if (mConfigSeq == 0) mConfigSeq = 1;
         override.seq = mConfigSeq;
+        // A shared process may host an activity with another package's night override.
+        // ActivityConfigurationChangeItem carries only the activity override, so it
+        // must retain that package's mode independently of the process configuration.
+        override.uiMode = global.uiMode;
         return override;
     }
 
@@ -5673,7 +5677,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             for (ProcessRecord p : mProcesses) {
                 if (p.exiting || !p.ready || p.packageName == null || p.config == null) continue;
-                if (packageName == null || packageName.equals(p.packageName)) processes.add(p);
+                boolean containsPackage = packageName == null || packageName.equals(p.packageName);
+                if (!containsPackage) {
+                    for (ActivityRecord activity : p.activities) {
+                        if (packageName.equals(activity.info.packageName)) { containsPackage = true; break; }
+                    }
+                }
+                if (containsPackage) processes.add(p);
             }
         }
         for (ProcessRecord p : processes) {

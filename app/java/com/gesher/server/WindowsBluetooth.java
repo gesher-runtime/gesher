@@ -114,6 +114,13 @@ public final class WindowsBluetooth {
     private static volatile Adapter sAdapter;
     private static volatile long sAdapterAt;
 
+    /** Recent observation for host diagnostics; never activates Windows or blocks. */
+    public static Adapter cachedAdapter(long maxAgeMs) {
+        Adapter a = sAdapter;
+        long age = System.nanoTime() / 1_000_000 - sAdapterAt;
+        return a != null && age >= 0 && age <= maxAgeMs ? a : null;
+    }
+
     /** The adapter, asked again after {@code maxAgeMs}. */
     public static Adapter adapter(long maxAgeMs) {
         Adapter a = sAdapter;

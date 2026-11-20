@@ -34,6 +34,15 @@ public final class WifiUnsupportedTest {
             return result;
         } finally { parcel.recycle(); }
     }
+    private static void requireNullConfigurationFieldRejected(WifiConfiguration value, String field) {
+        Parcel parcel = Parcel.obtain();
+        try {
+            value.writeToParcel(parcel, 0);
+            throw new AssertionError("Null " + field + " was accepted by the Wi-Fi configuration writer");
+        } catch (NullPointerException expected) {
+            checks++;
+        } finally { parcel.recycle(); }
+    }
     public static void main(String[] args) throws Exception {
         String root = System.getenv("ANDROID_ROOT");
         com.gesher.app.Main.bootstrap("wifi-test", root + "/build.prop", root + "/framework/framework-res.apk");
@@ -110,9 +119,13 @@ public final class WifiUnsupportedTest {
         require(config.allowedKeyManagement.equals(copy.allowedKeyManagement) && config.allowedProtocols.equals(copy.allowedProtocols)
                 && config.allowedAuthAlgorithms.equals(copy.allowedAuthAlgorithms) && config.allowedPairwiseCiphers.equals(copy.allowedPairwiseCiphers)
                 && config.allowedGroupCiphers.equals(copy.allowedGroupCiphers), "Wi-Fi parcel dropped security bitsets");
-        config.wepKeys = null; config.allowedProtocols = null;
-        copy = roundTrip(config, WifiConfiguration.CREATOR);
-        require(copy.wepKeys == null && copy.allowedProtocols == null, "Wi-Fi parcel lost nullable fields");
+        // Android 16 writes the four-element WEP array and security bitsets directly.
+        // These containers are required state; nullable entries inside wepKeys remain valid.
+        config.wepKeys = null;
+        requireNullConfigurationFieldRejected(config, "wepKeys");
+        config.wepKeys = new String[4];
+        config.allowedProtocols = null;
+        requireNullConfigurationFieldRejected(config, "allowedProtocols");
         ScanResult scan = new ScanResult(); scan.SSID = "רשת סינתטית"; scan.BSSID = "02:00:00:00:00:02";
         scan.capabilities = "[synthetic]"; scan.frequency = 5180; scan.level = -77; scan.timestamp = 1234567890123L;
         ScanResult scanCopy = roundTrip(scan, ScanResult.CREATOR);

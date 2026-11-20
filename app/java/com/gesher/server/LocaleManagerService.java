@@ -114,21 +114,42 @@ public final class LocaleManagerService extends ILocaleManager.Default
      * current sequence number. Null package: the device's.
      */
     public static Configuration configurationFor(String packageName) {
-        Configuration c = DeviceProfile.configuration();
-        LocaleManagerService s = sInstance;
-        LocaleList app = s != null && packageName != null ? s.appLocales(packageName) : null;
-        if (app != null && !app.isEmpty()) {
-            LocaleList combined = combine(app, c.getLocales());
-            c.setLocales(combined);
-            c.setLayoutDirection(combined.get(0));
-        }
         synchronized (LocaleManagerService.class) {
-            // Read geometry under the same sequence lock: an older rotation
-            // snapshot must not receive a newer concurrent change's sequence.
+            // Capture global/package mode and sequence together. A pre-change resource
+            // snapshot must never carry the new sequence and suppress its real update.
+            Configuration c = DeviceProfile.configuration();
+            UiModeManagerService.applyConfiguration(packageName, c);
+            LocaleManagerService service = sInstance;
+            LocaleList app = service != null && packageName != null
+                    ? service.appLocales(packageName) : null;
+            if (app != null && !app.isEmpty()) {
+                LocaleList combined = combine(app, c.getLocales());
+                c.setLocales(combined);
+                c.setLayoutDirection(combined.get(0));
+            }
             com.gesher.app.window.ApplicationDisplay.applyConfiguration(c);
             c.seq = sSeq;
+            return c;
         }
-        return c;
+    }
+
+    /** UiMode updates use the same sequence and activity lifecycle as other configurations. */
+    static void onUiModeChanged(String packageName) {
+        nextSeq();
+        LocaleManagerService service = sInstance;
+        if (service == null) return;
+        if (service.mInProcessPackage != null) {
+            if (packageName == null || packageName.equals(service.mInProcessPackage)) {
+                applyInProcess(configurationFor(service.mInProcessPackage), "night mode");
+            }
+        } else {
+            service.mAtm.dispatchConfiguration(packageName);
+        }
+        if (packageName == null) {
+            Intent intent = new Intent(Intent.ACTION_CONFIGURATION_CHANGED);
+            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY | Intent.FLAG_RECEIVER_FOREGROUND);
+            service.mAm.sendBroadcastFor("android", intent, null);
+        }
     }
 
     /** The shared Application display changed while task overrides stay local. */
@@ -457,50 +478,13 @@ public final class LocaleManagerService extends ILocaleManager.Default
      * drives its activity): ActivityThread.handleConfigurationChanged on the main thread (the
      * resources, the default locales, Application and other non-UI callbacks'
      * onConfigurationChanged), then the activity's onConfigurationChanged when it handles
-     * every change; otherwise it is not recreated (only the Gesher device relaunches
-     * activities) and that is logged.
+     * every change; otherwise GesherAppDriver relaunches it, preserving saved state.
      */
     private static void applyInProcess(Configuration config, String why) {
-        android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
-        main.post(() -> {
-            android.app.ActivityThread thread = android.app.ActivityThread.currentActivityThread();
-            if (thread == null) return;
-            android.app.Activity activity = android.app.GesherAppDriver.currentActivity();
-            Configuration before = activity != null
-                    ? new Configuration(activity.getResources().getConfiguration()) : null;
-            try {
-                thread.handleConfigurationChanged(config, android.content.Context.DEVICE_ID_DEFAULT);
-            } catch (Throwable t) {
-                SystemServer.log(TAG + "the configuration change (" + why + ") failed in this"
-                        + " process: " + t);
-                return;
-            }
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            android.app.GesherAppDriver.applyConfiguration(config);
             SystemServer.log(TAG + "configuration change in this process (" + why + "): "
                     + config.getLocales().toLanguageTags());
-            if (activity == null || before == null) return;
-            Configuration after = new Configuration(activity.getResources().getConfiguration());
-            int diff = before.diffPublicOnly(after);
-            int handled = activity.getApplicationInfo() != null
-                    ? activityConfigChanges(activity) : 0;
-            if (diff != 0 && (diff & ~handled) == 0) {
-                activity.onConfigurationChanged(after);
-                SystemServer.log(TAG + activity.getComponentName().getShortClassName()
-                        + " onConfigurationChanged (it handles the change)");
-            } else if (diff != 0) {
-                SystemServer.log(TAG + activity.getComponentName().getShortClassName()
-                        + " is not recreated in a single process (changes 0x"
-                        + Integer.toHexString(diff) + "; only the Gesher device relaunches"
-                        + " activities)");
-            }
         });
-    }
-
-    private static int activityConfigChanges(android.app.Activity activity) {
-        try {
-            return activity.getPackageManager().getActivityInfo(activity.getComponentName(), 0)
-                    .getRealConfigChanged();
-        } catch (Exception e) {
-            return 0;
-        }
     }
 }

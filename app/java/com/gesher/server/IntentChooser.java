@@ -225,6 +225,15 @@ final class IntentChooser {
         // sender UID. This metadata-only context never participates in camera or
         // content-provider conversion: only the two SEND actions enter here.
         if (Intent.ACTION_SEND.equals(launch.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(launch.getAction())) {
+            // A Binder-delivered target may still hold a parcelled Bundle. The
+            // framework migration deliberately refuses that state. Materialize
+            // its outer map before migration; unrelated Parcelable values remain
+            // lazy and the framework still validates the typed SEND payload.
+            Bundle extras = launch.getExtras();
+            if (extras != null) {
+                extras.size();
+                launch.replaceExtras(extras);
+            }
             ApplicationInfo origin = new ApplicationInfo(callerInfo);
             launch.migrateExtraStreamToClipData(new android.content.ContextWrapper(null) {
                 @Override public ApplicationInfo getApplicationInfo() { return origin; }

@@ -23,6 +23,15 @@ Check 'network: Android HttpEngine requests over real ART and HTTP sockets' {
   $httpEngineOut
 } @('HttpEngineDeviceSmoke passed:')
 
+foreach ($httpPolicyMode in @('ordinary', 'global-enabled', 'global-disabled')) {
+  $httpPolicyOut = FixesRun ($dvmFixes + 'HttpEngineProtocolPolicyTest' + $httpPolicyMode) 45
+  $httpPolicyCode = $LASTEXITCODE
+  Check "network: HTTP/2 $httpPolicyMode engine isolation and request/response headers" {
+    if ($httpPolicyCode -ne 0) { throw "HTTP protocol policy failed: $httpPolicyOut" }
+    $httpPolicyOut
+  } @('HttpEngineProtocolPolicyTest passed:')
+}
+
 $http2Out = FixesRun ($dvmFixes + 'Http2DeviceSmoke') 45
 $http2Code = $LASTEXITCODE
 Check 'network: HTTP/2 full duplex, direct buffers, flush and gRPC trailers' {
@@ -30,7 +39,7 @@ Check 'network: HTTP/2 full duplex, direct buffers, flush and gRPC trailers' {
   $http2Out
 } @('Http2DeviceSmoke passed:')
 
-$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write')
+$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'disabled')
 foreach ($http2ContractMode in $http2ContractModes) {
   $http2ContractOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + $http2ContractMode) 45
   $http2ContractCode = $LASTEXITCODE
@@ -289,6 +298,42 @@ Check 'services: durable notification groups, real channel policy and lifecycle 
   $groupsOut
 } @('NotificationChannelGroupsTest all passed:')
 
+# Delegation uses the real service and generated Binder parcels with controlled
+# fixture identities, plus durable restart/migration and ownership checks.
+$delegationOut = FixesRun ($dvmFixes + 'gesher.services.NotificationDelegationTest') 120
+$delegationCode = $LASTEXITCODE
+Check 'services: authenticated notification delegation, revocation and retained poster ownership' {
+  $global:LASTEXITCODE = $delegationCode
+  $delegationOut
+} @('NotificationDelegationTest all passed:')
+
+# The format fixture calls package-private production storage methods. Put this
+# test DEX on this VM's boot path, using a fresh profile and no application UI.
+$formatData = Join-Path $root 'notification-format-data'
+New-Item -ItemType Directory -Path $formatData -Force | Out-Null
+$formatSavedData = $env:ANDROID_DATA
+$formatSavedSpoof = $env:GESHER_MICROG_SPOOF
+try {
+  $env:ANDROID_DATA = NoDrive $formatData
+  $env:GESHER_MICROG_SPOOF = '0'
+  $formatBoot = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
+  $formatArgs = @("-Xbootclasspath:$formatBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
+    'com.gesher.server.NotificationStoreFormatRunner')
+  foreach ($formatPhase in @('write', 'read')) {
+    $formatOut = FixesRun ($formatArgs + $formatPhase) 90
+    $formatCode = $LASTEXITCODE
+    Check "services: native Parcel notification formats and restart migration ($formatPhase)" {
+      $global:LASTEXITCODE = $formatCode
+      $formatOut
+    } @("NotificationStoreFormatDevice $formatPhase passed:")
+  }
+} finally {
+  if ($null -eq $formatSavedData) { Remove-Item Env:ANDROID_DATA -ErrorAction SilentlyContinue }
+  else { $env:ANDROID_DATA = $formatSavedData }
+  if ($null -eq $formatSavedSpoof) { Remove-Item Env:GESHER_MICROG_SPOOF -ErrorAction SilentlyContinue }
+  else { $env:GESHER_MICROG_SPOOF = $formatSavedSpoof }
+}
+
 # Real JobService callbacks attach notifications to a running job. Exercise
 # shared ownership, replacement, completion and cancellation through generated
 # Binder transactions, including their retained-notification effects.
@@ -315,6 +360,15 @@ Check 'services: audio focus ownership, loss escalation, token death and public 
   $global:LASTEXITCODE = $audioFocusCode
   $audioFocusOut
 } @('AudioFocusLifecycleTest all passed:')
+
+# UiMode uses generated IUiModeManager Binder parcels and the real ATM transaction path.
+$uiModeOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'UiModeContractTest') 90
+$uiModeCode = $LASTEXITCODE
+Check 'services: Android night mode scope, schedule, permissions, persistence and relaunch' {
+  $global:LASTEXITCODE = $uiModeCode
+  $uiModeOut
+} @('UiModeContractTest all passed:', 'checks; binder=true')
 
 # The wrapper creates the writable framework cache region. The fixture uses
 # generated AM Binder parcels and production URI/provider authorization state.
@@ -380,19 +434,22 @@ Check 'services: MediaStore picker/collection contracts and missing-provider han
 
 # Production DocumentsProvider transport and real filesystem operations. The
 # explicit package fixture capability is confined to these fresh ART processes.
+. "$PSScriptRoot/../saf-binder-transport.ps1"
 $safSpoofPresent = Test-Path Env:GESHER_MICROG_SPOOF
 $safSpoofValue = [Environment]::GetEnvironmentVariable('GESHER_MICROG_SPOOF', 'Process')
 $safRestart = Join-Path $root ('saf-restart-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $safRestart -Force | Out-Null
+$safBinderSession = $null
 try {
   $env:GESHER_MICROG_SPOOF = '1'
+  $safBinderSession = Start-SafBinderFixture $Dir $dvmFixes $root
   $safOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
     'SafDocumentsContractTest') 90
   $safCode = $LASTEXITCODE
   Check 'services: AOSP documents transport, selection, actual descriptors and lifecycle' {
     $global:LASTEXITCODE = $safCode
     $safOut
-  } @('SafDocumentsContractTest passed:', 'nativeFiles=true')
+  } @('SafDocumentsContractTest passed:', 'nativeFiles=true', 'SAF_BINDER_NATIVE peer credential provenance verified')
   $detachedUiOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
     'DetachedNativeUiContractTest') 45
   $detachedUiCode = $LASTEXITCODE
@@ -410,9 +467,12 @@ try {
     } @("SafDocumentsContractTest restart $safPhase passed")
   }
 } finally {
-  if ($safSpoofPresent) { Set-Item Env:GESHER_MICROG_SPOOF $safSpoofValue }
-  else { Remove-Item Env:GESHER_MICROG_SPOOF -ErrorAction SilentlyContinue }
-  Remove-Item $safRestart -Recurse -Force -ErrorAction SilentlyContinue
+  try { Stop-SafBinderFixture $safBinderSession }
+  finally {
+    if ($safSpoofPresent) { Set-Item Env:GESHER_MICROG_SPOOF $safSpoofValue }
+    else { Remove-Item Env:GESHER_MICROG_SPOOF -ErrorAction SilentlyContinue }
+    Remove-Item $safRestart -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 # Real COM dialogs close through their own message-loop lifetime timer; an

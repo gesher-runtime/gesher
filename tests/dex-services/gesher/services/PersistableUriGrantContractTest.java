@@ -138,6 +138,7 @@ public final class PersistableUriGrantContractTest {
     }
 
     private static final class Harness {
+        final java.util.ArrayDeque<Runnable> packageEvents = new java.util.ArrayDeque<>();
         final Map<String, ApkPackage> records = new LinkedHashMap<>();
         final Map<String, ThreadToken> threads = new LinkedHashMap<>();
         final Map<String, Integer> pids = new LinkedHashMap<>();
@@ -168,6 +169,7 @@ public final class PersistableUriGrantContractTest {
             set(pm, "mPackages", new LinkedHashMap<>(records));
             set(pm, "mRemoving", new LinkedHashMap<String, ApkPackage>());
             set(pm, "mPackageRemoval", new ArrayList<>());
+            set(pm, "mPackageEventExecutor", (java.util.concurrent.Executor)packageEvents::addLast);
             Class<?> policy = Class.forName("com.gesher.server.PermissionPolicy");
             Constructor<?> policyConstructor = policy.getDeclaredConstructor(PackageManagerService.class);
             policyConstructor.setAccessible(true);
@@ -262,7 +264,14 @@ public final class PersistableUriGrantContractTest {
             records.put(name, replacement);
             // This models the metadata publication after identity admission, not an APK install.
             var publish = PackageManagerService.class.getDeclaredMethod("publishPrepared", ApkPackage.class);
+            int queued = packageEvents.size();
             publish.setAccessible(true); publish.invoke(pm, replacement);
+            if (packageEvents.size() != queued + 1) {
+                throw new AssertionError("Replacement did not queue its package lifecycle callback");
+            }
+            // Execute the real production callbacks after publication releases its locks.
+            // A no-op executor would hide persisted-grant retirement on replacement.
+            while (!packageEvents.isEmpty()) packageEvents.removeFirst().run();
         }
 
         void removeCapabilities(String name) throws Exception {

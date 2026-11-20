@@ -1,0 +1,72 @@
+[
+  {
+    "name": "windows-x64",
+    "producer": "build",
+    "destination": "windows_x64"
+  },
+  {
+    "name": "framework",
+    "producer": "framework / framework",
+    "destination": "framework"
+  },
+  {
+    "name": "native-libs",
+    "producer": "native-libs / native-libs",
+    "destination": "native_libs"
+  },
+  {
+    "name": "arm64",
+    "producer": "arm64 / build",
+    "destination": "arm64"
+  },
+  {
+    "name": "libs-tests",
+    "producer": "libs / build",
+    "destination": "libs_tests"
+  },
+  {
+    "name": "art-gtests",
+    "producer": "posix / build",
+    "destination": "art_gtests"
+  },
+  {
+    "name": "graphics",
+    "producer": "graphics / build",
+    "destination": "graphics"
+  },
+  {
+    "name": "angle",
+    "producer": "angle / probe-build",
+    "destination": "angle"
+  },
+  {
+    "name": "boot-image",
+    "producer": "boot-image / compile",
+    "destination": "boot_image"
+  },
+  {
+    "name": "webview",
+    "producer": "webview / build",
+    "destination": "webview"
+  },
+  {
+    "name": "exec",
+    "producer": "exec / exec",
+    "destination": "exec"
+  },
+  {
+    "name": "media",
+    "producer": "media / media",
+    "destination": "media"
+  },
+  {
+    "name": "surfaces",
+    "producer": "surfaces / apps",
+    "destination": "surfaces"
+  },
+  {
+    "name": "native2",
+    "producer": "native2 / native2",
+    "destination": "native2"
+  }
+]

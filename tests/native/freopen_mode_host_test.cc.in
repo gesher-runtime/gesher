@@ -21,6 +21,7 @@ static int stream_depth;
 static int transactions;
 static int completions;
 static int crt_calls;
+static int expected_depth = 1;
 struct StreamLock {
   explicit StreamLock(FILE*) { ++stream_depth; }
   ~StreamLock() { --stream_depth; }
@@ -37,13 +38,13 @@ namespace record_locks {
 class ClosingDescriptor {
  public:
   explicit ClosingDescriptor(int) {
-    check("freopen descriptor transaction starts inside its stream lock", stream_depth == 1);
+    check("freopen descriptor transaction starts inside its stream lock", stream_depth == expected_depth);
     ++transactions;
   }
   int Error() const { return 0; }
   int Finish(bool) {
     check("freopen descriptor transaction completes once inside its stream lock",
-          !finished_ && stream_depth == 1);
+          !finished_ && stream_depth == expected_depth);
     finished_ = true;
     ++completions;
     return 0;
@@ -56,12 +57,12 @@ class ClosingDescriptor {
 }  // namespace gesher
 
 static int _fileno(FILE* stream) { return fileno(stream); }
-static int _fclose_nolock(FILE* stream) { return std::fclose(stream); }
+static int _fclose_nolock(FILE* stream) { ++crt_calls; return std::fclose(stream); }
 static int gesher_errno_from_crt(int error) { return error; }
 static bool HasNonDirectoryParent(const std::wstring&) { return false; }
 static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
   ++crt_calls;
-  check("freopen keeps the CRT reopen inside its stream transaction", stream_depth == 1);
+  check("freopen keeps the CRT reopen inside its stream transaction", stream_depth == expected_depth);
   std::wstring wide_path(path), wide_mode(mode);
   std::string narrow_path(wide_path.begin(), wide_path.end());
   std::string linux_mode(wide_mode.begin(), wide_mode.end());
@@ -71,6 +72,7 @@ static FILE* _wfreopen(const wchar_t* path, const wchar_t* mode, FILE* stream) {
 
 namespace host {
 @HOST_PARSE_MODE@
+@HOST_FCLOSE@
 @HOST_FREOPEN@
 }  // namespace host
 
@@ -78,10 +80,13 @@ namespace guest {
 #define BIONIC_SYSV
 constexpr int kEINVAL = EINVAL;
 static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
-static FILE* HostFreopen(const char* path, const char* mode, FILE* stream) {
-  return host::freopen(path, mode, stream);
+static FILE* HostFreopen(const char* path, const char* mode, FILE* stream, int* retired) {
+  return host::gesher_freopen_state(path, mode, stream, retired);
 }
+// Actual state retirement is covered by test_stdio_lifetime_contracts.py.
+static void ResetStream(FILE*) {}
 @GUEST_CRT_MODE@
+@GUEST_CLOSE@
 @GUEST_FREOPEN@
 }  // namespace guest
 
@@ -100,6 +105,7 @@ int main(int argc, char** argv) {
     reopen_call = host::freopen;
     reopen64_call = host::freopen64;
   } else if (std::strcmp(argv[1], "guest") == 0) {
+    expected_depth = 2;  // Both layers hold the same recursive CRT stream lock.
     reopen_call = reopen64_call = GuestReopen;
   } else {
     return 2;

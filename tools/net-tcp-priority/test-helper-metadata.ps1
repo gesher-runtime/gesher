@@ -14,6 +14,8 @@ $reviewed=@{
  'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
  'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
  'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
+ 'tools/ci/github_read.py'='b126f5e1fc81ac6fb40f9635f99069df6103a727'
+ 'tools/ci/github_jobs.py'='f4278108b42329950525fb9fa34b78ae75694915'
 }
 function ExactMap($Value){
  if($Value.Count -ne $reviewed.Count){return $false}
@@ -50,4 +52,4 @@ foreach($call in $calls){
 }
 foreach($bad in @(-1,0,45001,90000)){if($bad -ge 1 -and $bad -le 45000){throw 'Invalid budget accepted'}}
 Write-Host 'TCP_CALLER_BUDGET_METADATA_PASS actual_controller_max=45000 actual_Run_calls=4 old90000=REJECTED boundary_mutants=4 native_processes_started=0'
-Write-Host 'TCP_HELPER_METADATA_PASS pins=7 actual_sources=EXACT changed_missing_stale_additional_prequeue=REJECTED negative_cases=19 native_processes_started=0 CSharp_compiles=0'
+Write-Host "TCP_HELPER_METADATA_PASS pins=$($reviewed.Count) actual_sources=EXACT changed_missing_stale_additional_prequeue=REJECTED negative_cases=$($reviewed.Count * 2 + 5) native_processes_started=0 CSharp_compiles=0"

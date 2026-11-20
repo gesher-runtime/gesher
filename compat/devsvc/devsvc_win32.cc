@@ -2,6 +2,7 @@
 // see devsvc_win32.h. Toasts (WinRT) are devsvc_toast.c's.
 
 #include "devsvc_win32.h"
+#include "toast_identity.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -331,27 +332,63 @@ struct DocumentLifetime {
   IFileDialog* dialog;
   bool (*active)(void*);
   void* context;
+  HWND window = nullptr;
+  UINT_PTR timer = 0;
+  HRESULT error = S_OK;
 };
 
-LRESULT CALLBACK DocumentLifetimeProc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
-  if (message == WM_NCCREATE) {
-    SetWindowLongPtrW(window, GWLP_USERDATA,
-        reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams));
-  } else if (message == WM_TIMER) {
-    auto* state = reinterpret_cast<DocumentLifetime*>(GetWindowLongPtrW(window, GWLP_USERDATA));
-    if (state && !state->active(state->context)) {
-      state->dialog->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
+// Bind cancellation to the dialog HWND participating in its modal dispatch.
+// Arm it once IFileDialogEvents reports that Show has opened the dialog. The
+// callback remains on the same STA/JNI thread as the lifetime predicate.
+thread_local std::map<UINT_PTR, DocumentLifetime*> document_timers;
+thread_local UINT_PTR next_document_timer = std::numeric_limits<UINT_PTR>::max() / 2;
+
+void CALLBACK DocumentLifetimeTimer(HWND window, UINT, UINT_PTR id, DWORD) {
+  auto found = document_timers.find(id);
+  // KillTimer does not remove an already queued WM_TIMER. Lookup before touching
+  // the request so a late callback cannot dereference a retired stack context.
+  if (found == document_timers.end()) return;
+  DocumentLifetime* state = found->second;
+  if (state->window != window || state->timer != id) return;
+  if (!state->active(state->context)) {
+    // A timer callback is nested inside the shell dialog's message dispatch.
+    // Close can return S_OK there without ending Show. Queue the dialog's normal
+    // cancel message so its own modal loop handles retirement after this callback.
+    if (!PostMessageW(window, WM_CLOSE, 0, 0)) {
+      HRESULT status = HRESULT_FROM_WIN32(GetLastError());
+      state->error = FAILED(status) ? status : E_FAIL;
     }
   }
-  return DefWindowProcW(window, message, wp, lp);
 }
 
-BOOL CALLBACK RegisterDocumentLifetime(PINIT_ONCE, PVOID, PVOID*) {
-  WNDCLASSW cls{};
-  cls.lpfnWndProc = DocumentLifetimeProc;
-  cls.hInstance = GetModuleHandleW(nullptr);
-  cls.lpszClassName = L"GesherDocumentPickerLifetime";
-  return RegisterClassW(&cls) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+HRESULT StartDocumentLifetime(DocumentLifetime* state) {
+  if (state->timer) return S_OK;
+  IOleWindow* window = nullptr;
+  HRESULT status = state->dialog->QueryInterface(IID_PPV_ARGS(&window));
+  if (SUCCEEDED(status)) {
+    status = window->GetWindow(&state->window);
+    window->Release();
+  }
+  if (FAILED(status)) return status;
+  if (!state->window || next_document_timer == std::numeric_limits<UINT_PTR>::max()) return E_FAIL;
+  UINT_PTR id = ++next_document_timer;
+  if (!SetTimer(state->window, id, 100, DocumentLifetimeTimer)) {
+    status = HRESULT_FROM_WIN32(GetLastError());
+    return FAILED(status) ? status : E_FAIL;
+  }
+  // With a non-null HWND, WM_TIMER and KillTimer use the requested identifier.
+  // SetTimer's nonzero success value need not be that identifier.
+  state->timer = id;
+  document_timers.emplace(state->timer, state);
+  return S_OK;
+}
+
+void StopDocumentLifetime(DocumentLifetime* state) {
+  if (!state->timer) return;
+  document_timers.erase(state->timer);
+  KillTimer(state->window, state->timer);
+  state->timer = 0;
+  state->window = nullptr;
 }
 
 struct DocumentOwner { DWORD pid; HWND window; };
@@ -426,9 +463,9 @@ bool DocumentPathsAreLocal(int mode, const std::vector<std::u16string>& paths) {
 
 // OnFileOk returns S_FALSE to keep an invalid selection in the real dialog, so
 // the user can choose a local target or cancel. No alternate document is returned.
-class DocumentLocalEvents final : public IFileDialogEvents {
+class DocumentEvents final : public IFileDialogEvents {
  public:
-  DocumentLocalEvents(int mode, bool multiple, IFileDialogCustomize* custom,
+  DocumentEvents(int mode, bool multiple, IFileDialogCustomize* custom,
       DocumentLifetime* lifetime) : mode_(mode), multiple_(multiple), custom_(custom), lifetime_(lifetime) {}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** result) override {
     if (!result) return E_POINTER;
@@ -448,6 +485,7 @@ class DocumentLocalEvents final : public IFileDialogEvents {
     if (!lifetime_->active(lifetime_->context)) {
       dialog->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED)); return S_FALSE;
     }
+    if (!custom_) return S_OK; // No EXTRA_LOCAL_ONLY request; lifetime still applies.
     std::vector<std::u16string> paths;
     HRESULT status = DocumentPaths(dialog, mode_, multiple_, &paths);
     if (SUCCEEDED(status) && DocumentPathsAreLocal(mode_, paths)) return S_OK;
@@ -455,7 +493,14 @@ class DocumentLocalEvents final : public IFileDialogEvents {
     return S_FALSE;
   }
   HRESULT STDMETHODCALLTYPE OnFolderChanging(IFileDialog*, IShellItem*) override { return S_OK; }
-  HRESULT STDMETHODCALLTYPE OnFolderChange(IFileDialog*) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnFolderChange(IFileDialog* dialog) override {
+    HRESULT status = StartDocumentLifetime(lifetime_);
+    if (FAILED(status)) {
+      lifetime_->error = status;
+      dialog->Close(status);
+    }
+    return status;
+  }
   HRESULT STDMETHODCALLTYPE OnSelectionChange(IFileDialog*) override { return S_OK; }
   HRESULT STDMETHODCALLTYPE OnShareViolation(IFileDialog*, IShellItem*, FDE_SHAREVIOLATION_RESPONSE* response) override {
     *response = FDESVR_DEFAULT; return S_OK;
@@ -489,10 +534,9 @@ DocumentSelection PickDocuments(int mode, const std::u16string& title,
   IFileDialog* dialog = nullptr;
   status = CoCreateInstance(mode == 1 ? CLSID_FileSaveDialog : CLSID_FileOpenDialog,
       nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
-  HWND lifetime_window = nullptr;
   DocumentLifetime lifetime{dialog, active, context};
   IFileDialogCustomize* custom = nullptr;
-  DocumentLocalEvents* events = nullptr;
+  DocumentEvents* events = nullptr;
   DWORD cookie = 0;
   bool advised = false;
   if (SUCCEEDED(status)) {
@@ -530,29 +574,17 @@ DocumentSelection PickDocuments(int mode, const std::u16string& title,
     if (SUCCEEDED(status) && local_only) {
       status = dialog->QueryInterface(IID_PPV_ARGS(&custom));
       if (SUCCEEDED(status)) status = custom->AddText(1, L"Choose files or folders available on this computer.");
-      if (SUCCEEDED(status)) {
-        events = new (std::nothrow) DocumentLocalEvents(mode, multiple, custom, &lifetime);
-        if (!events) status = E_OUTOFMEMORY;
-        else { status = dialog->Advise(events, &cookie); advised = SUCCEEDED(status); }
-      }
-    }
-    static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
-    if (SUCCEEDED(status) && !InitOnceExecuteOnce(&once, RegisterDocumentLifetime, nullptr, nullptr)) {
-      status = HRESULT_FROM_WIN32(GetLastError());
-      if (SUCCEEDED(status)) status = E_FAIL;
     }
     if (SUCCEEDED(status)) {
-      lifetime_window = CreateWindowExW(0, L"GesherDocumentPickerLifetime", L"", 0,
-          0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), &lifetime);
-      if (!lifetime_window || !SetTimer(lifetime_window, 1, 100, nullptr)) {
-        status = HRESULT_FROM_WIN32(GetLastError());
-        if (SUCCEEDED(status)) status = E_FAIL;
-      }
+      events = new (std::nothrow) DocumentEvents(mode, multiple, custom, &lifetime);
+      if (!events) status = E_OUTOFMEMORY;
+      else { status = dialog->Advise(events, &cookie); advised = SUCCEEDED(status); }
     }
     if (SUCCEEDED(status) && active(context)) {
       DocumentOwner owner{owner_pid, nullptr};
       if (owner_pid) EnumWindows(FindDocumentOwner, reinterpret_cast<LPARAM>(&owner));
       status = dialog->Show(owner.window);
+      if (FAILED(lifetime.error)) status = lifetime.error;
       if (SUCCEEDED(status) && active(context)) {
         status = DocumentPaths(dialog, mode, multiple, &selection.paths);
         if (SUCCEEDED(status) && local_only && !DocumentPathsAreLocal(mode, selection.paths)) {
@@ -561,7 +593,7 @@ DocumentSelection PickDocuments(int mode, const std::u16string& title,
       }
     }
   }
-  if (lifetime_window) { KillTimer(lifetime_window, 1); DestroyWindow(lifetime_window); }
+  StopDocumentLifetime(&lifetime);
   if (advised) dialog->Unadvise(cookie);
   if (events) events->Release();
   if (custom) custom->Release();
@@ -796,6 +828,16 @@ int SessionDisplayState() {
   return state;
 }
 
+int AppsUseLightTheme() {
+  DWORD value = 0;
+  DWORD size = sizeof(value);
+  LSTATUS status = RegGetValueW(HKEY_CURRENT_USER,
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size);
+  return status == ERROR_SUCCESS && size == sizeof(value) && value <= 1
+      ? static_cast<int>(value) : -1;
+}
+
 uint64_t JobIdleMillis() {
   AcquireSRWLockShared(&g_lock);
   bool off = g_session_display_state == 0;
@@ -882,6 +924,14 @@ long ClearToasts(const std::u16string& app_id) {
   HRESULT hr = EnsureCom();
   if (FAILED(hr)) return hr;
   return gesher_toast_clear(W(app_id));
+}
+
+long RemoveToastIfLaunch(const std::u16string& app_id, const std::u16string& tag,
+                         const std::u16string& group, const std::u16string& launch) {
+  if (!ValidToastIdentityArguments(app_id, tag, group, launch)) return E_INVALIDARG;
+  HRESULT hr = EnsureCom();
+  if (FAILED(hr)) return hr;
+  return gesher_toast_remove_if_launch(W(app_id), W(tag), W(group), W(launch));
 }
 
 const char16_t kToastActivatorClsid[] = u"{C18D9445-A7F0-472E-985F-AC354EBEB660}";

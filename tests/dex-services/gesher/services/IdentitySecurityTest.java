@@ -30,6 +30,8 @@ import java.util.Properties;
  * Cross-VM persistence: run "uid-write DATA_ROOT", then "uid-read DATA_ROOT".
  * "remote-denied PACKAGE PERMISSION" runs with an unattached non-system UID
  * against an existing test device, checking real Binder rejection paths.
+ * "revoke-post-without-kill PACKAGE" runs as the shell UID against an existing test
+ * device and uses Android's test-only POST_NOTIFICATIONS revoke that skips killUid.
  * No APK application code, external Binder endpoint or network connection is used.
  */
 public final class IdentitySecurityTest {
@@ -85,6 +87,19 @@ public final class IdentitySecurityTest {
         denied(() -> usage.queryEventsForPackage(0, Long.MAX_VALUE, packageName), "");
         denied(() -> usage.queryEvents(0, Long.MAX_VALUE, packageName), "");
         System.out.println("IdentitySecurityTest: real Binder rejects forged attachment and unattached permission mutation");
+    }
+
+    private static void revokePostWithoutKill(String packageName) throws Exception {
+        require(android.os.Process.myUid() == android.os.Process.SHELL_UID,
+                "The no-kill revoke fixture must run with the shell UID");
+        android.permission.IPermissionManager permissions = android.permission.IPermissionManager
+                .Stub.asInterface(ServiceManager.getService("permissionmgr"));
+        require(permissions != null, "The test device permission service is unavailable");
+        permissions.revokePostNotificationPermissionWithoutKillForTest(packageName, 0);
+        require(permissions.checkPermission(packageName, android.Manifest.permission.POST_NOTIFICATIONS,
+                "default:0", 0) == android.content.pm.PackageManager.PERMISSION_DENIED,
+                "POST_NOTIFICATIONS remained granted after the no-kill revoke");
+        System.out.println("IdentitySecurityTest: POST_NOTIFICATIONS revoked without killing " + packageName);
     }
 
     private static int uid(String name) throws Exception {
@@ -303,6 +318,8 @@ public final class IdentitySecurityTest {
         System.loadLibrary("android_runtime");
         if (args.length == 3 && args[0].equals("remote-denied")) {
             remoteDenied(args[1], args[2]);
+        } else if (args.length == 2 && args[0].equals("revoke-post-without-kill")) {
+            revokePostWithoutKill(args[1]);
         } else if (args.length == 2 && (args[0].equals("uid-write") || args[0].equals("uid-read"))) {
             persistentUids(new File(args[1]), args[0].equals("uid-read"));
         } else {

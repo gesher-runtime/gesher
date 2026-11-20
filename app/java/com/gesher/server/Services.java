@@ -143,8 +143,9 @@ public final class Services {
                 new TextServicesManagerService()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
+        UiModeManagerService uiMode = new UiModeManagerService(pm, atm, persistentAccounts);
         services.put(Context.UI_MODE_SERVICE,
-                StandIn.of(IUiModeManager.class, new UiModeService()).asBinder());
+                StandIn.of(IUiModeManager.class, uiMode).asBinder());
         // mount: the private data volume and its emulated shared view at
         // $ANDROID_DATA/media/0. Both describe the same host filesystem.
         services.put("mount", StandIn.of(IStorageManager.class, new StorageService()).asBinder());
@@ -169,7 +170,7 @@ public final class Services {
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
-                new DeviceServices.SearchService()).asBinder());
+                new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new ClipboardService()).asBinder());
         // Construct the network provider before jobs subscribe to its changes.
@@ -697,41 +698,6 @@ public final class Services {
         @Override
         public void mkdirs(String callingPkg, String path) {
             new java.io.File(path).mkdirs();
-        }
-    }
-
-    /**
-     * uimode: UiModeManagerService, a normal (not car, desk or TV) device in day mode,
-     * standard contrast, no forced dark. ViewRootImpl's UiModeManager reads it.
-     */
-    public static final class UiModeService extends IUiModeManager.Default {
-        @Override
-        public void addCallback(IUiModeManagerCallback callback, int userId) {
-            // Nothing ever changes.
-        }
-
-        @Override
-        public void removeCallback(IUiModeManagerCallback callback, int userId) {
-        }
-
-        @Override
-        public int getCurrentModeType(int displayId) {
-            return Configuration.UI_MODE_TYPE_NORMAL;
-        }
-
-        @Override
-        public int getNightMode(int displayId) {
-            return UiModeManager.MODE_NIGHT_NO;
-        }
-
-        @Override
-        public float getContrast(int userId) {
-            return 0f;
-        }
-
-        @Override
-        public int getForceInvertState(int userId) {
-            return UiModeManager.FORCE_INVERT_TYPE_OFF;
         }
     }
 

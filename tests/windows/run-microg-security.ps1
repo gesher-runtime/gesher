@@ -530,7 +530,15 @@ try {
     $permissionPid = $Matches[1]
     $null = Tool 'grant-notifications' @('pm', 'grant', $probe, 'android.permission.POST_NOTIFICATIONS')
     $null = WaitLog 'permission-cache-grant-observed' $permissionLog $offset @("GRANT_OBSERVED pid=$permissionPid") '' 30
-    $null = Tool 'revoke-notifications' @('pm', 'revoke', $probe, 'android.permission.POST_NOTIFICATIONS')
+    # An ordinary runtime revoke kills the UID (Android killUid). Observing the denial
+    # in the same live process uses Android's test-only revoke that skips that kill.
+    $env:GESHER_UID = '2000'
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'revoke-notifications-without-kill' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.IdentitySecurityTest', 'revoke-post-without-kill', $probe)
+    RequireOutput 'test-only POST revoke without kill' $text @('IdentitySecurityTest all passed')
+    $env:GESHER_UID = $null
+    $env:GESHER_BINDER_UID = $null
     $null = WaitLog 'permission-cache-revoke-same-process' $permissionLog $offset @(
         "PASS deny-grant-deny in same process pid=$permissionPid"
     ) '' 30

@@ -1,0 +1,269 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Host tests of unchanged production record processing; Win32 identity and
+// event publication are explicit boundaries. wchar_t uses the host width;
+// this exercises state semantics, not a native Windows buffer ABI.
+// Independent bounded state-machine fixture. Production Changes is included
+// unchanged. Win32 file-identity lookup, native completion, and event
+// publication are explicit boundaries.
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cwctype>
+#include <map>
+#include <set>
+#include <string>
+#include <sys/inotify.h>
+#include <vector>
+using DWORD = uint32_t;
+using WCHAR = wchar_t;
+struct LARGE_INTEGER {
+  long long QuadPart;
+};
+struct FILE_NOTIFY_INFORMATION {
+  DWORD NextEntryOffset, Action, FileNameLength;
+  WCHAR FileName[1];
+};
+constexpr DWORD FILE_ACTION_ADDED = 1, FILE_ACTION_REMOVED = 2,
+                FILE_ACTION_MODIFIED = 3, FILE_ACTION_RENAMED_OLD_NAME = 4,
+                FILE_ACTION_RENAMED_NEW_NAME = 5, FILE_ATTRIBUTE_DIRECTORY = 16;
+constexpr DWORD kBufferSize = 64 * 1024;
+constexpr bool TRUE = true;
+constexpr int CSTR_EQUAL = 2;
+int CompareStringOrdinal(const wchar_t *a, int, const wchar_t *b, int, bool) {
+  std::wstring x = a, y = b;
+  std::transform(x.begin(), x.end(), x.begin(), towlower);
+  std::transform(y.begin(), y.end(), y.begin(), towlower);
+  return x == y ? CSTR_EQUAL : 0;
+}
+std::wstring Join(const std::wstring &d, const std::wstring &n) {
+  return d + L"/" + n;
+}
+bool IsDirectory(const std::wstring &) { return false; }
+struct Watch {
+  int wd = 7;
+  uint32_t mask = IN_MOVE_SELF | IN_MODIFY | IN_DELETE_SELF;
+  std::wstring dir = L"parent", file = L"a";
+  unsigned long long volume = 1, index = 42;
+  std::vector<DWORD> buffer = std::vector<DWORD>(kBufferSize / 4);
+  bool extended = true, removed = false, ignored_sent = false,
+       awaiting_rename = false, still_linked = false;
+  std::set<std::wstring> writing;
+  std::map<std::wstring, std::pair<long long, long long>> contents;
+};
+std::map<std::wstring, unsigned long long> current_entries;
+bool MatchesNamedEntry(const Watch &w, const std::wstring &name) {
+  auto it = current_entries.find(name);
+  return it != current_entries.end() && it->second == w.index;
+}
+bool FileStillLinked(const Watch &w) { return w.still_linked; }
+struct Event {
+  int wd;
+  uint32_t mask, cookie;
+  std::string name;
+  bool operator==(const Event &) const = default;
+};
+struct Inotify {
+  std::vector<Event> events;
+  uint32_t next_cookie = 1;
+  void Emit(int wd, uint32_t mask, uint32_t cookie, const std::string &name) {
+    Event e{wd, mask, cookie, name};
+    if (events.empty() || events.back() != e)
+      events.push_back(e);
+  }
+  void End(Watch &w) {
+    if (!w.ignored_sent) {
+      w.ignored_sent = true;
+      Emit(w.wd, IN_IGNORED, 0, "");
+    }
+    w.removed = true;
+  }
+  void EmitFor(Watch &w, uint32_t mask, uint32_t cookie,
+               const std::wstring &name) {
+    if ((mask & (w.mask | IN_IGNORED | IN_Q_OVERFLOW | IN_UNMOUNT)) == 0 ||
+        w.removed)
+      return;
+    Emit(w.wd, mask, cookie, std::string(name.begin(), name.end()));
+    if ((w.mask & IN_ONESHOT) != 0 &&
+        (mask & (IN_IGNORED | IN_Q_OVERFLOW | IN_UNMOUNT)) == 0)
+      End(w);
+  }
+  void Changes(Watch &, DWORD);
+};
+// clang-format off
+@PRODUCTION_NOTIFY_HEADER@
+
+@PRODUCTION_INOTIFY_CHANGES@
+    // clang-format on
+
+    struct Record {
+  DWORD action;
+  std::wstring name;
+  unsigned long long id = 42;
+  long long modified = 0;
+};
+DWORD Records(Watch &w, std::initializer_list<Record> records) {
+  size_t used = 0;
+  size_t i = 0;
+  for (const auto &r : records) {
+    size_t header = w.extended ? offsetof(NotifyExtended, name)
+                               : offsetof(FILE_NOTIFY_INFORMATION, FileName);
+    size_t bytes = (header + r.name.size() * sizeof(WCHAR) + 3) & ~size_t(3);
+    DWORD next = ++i == records.size() ? 0 : static_cast<DWORD>(bytes);
+    auto *p = reinterpret_cast<unsigned char *>(w.buffer.data()) + used;
+    if (w.extended) {
+      NotifyExtended e{};
+      e.next = next;
+      e.action = r.action;
+      e.file_id.QuadPart = static_cast<long long>(r.id);
+      e.modification_time.QuadPart = r.modified;
+      e.name_length = static_cast<DWORD>(r.name.size() * sizeof(WCHAR));
+      std::memcpy(p, &e, header);
+    } else {
+      FILE_NOTIFY_INFORMATION e{};
+      e.NextEntryOffset = next;
+      e.Action = r.action;
+      e.FileNameLength = static_cast<DWORD>(r.name.size() * sizeof(WCHAR));
+      std::memcpy(p, &e, header);
+    }
+    std::memcpy(p + header, r.name.data(), r.name.size() * sizeof(WCHAR));
+    used += bytes;
+  }
+  return static_cast<DWORD>(used);
+}
+int failures = 0, checks = 0;
+void Check(const char *label, bool ok, const Inotify &in) {
+  ++checks;
+  if (!ok)
+    ++failures;
+  std::printf("%s %s events=", ok ? "PASS" : "FAIL", label);
+  for (auto &e : in.events)
+    std::printf("%x,", e.mask);
+  std::puts("");
+}
+bool Masks(const Inotify &in, std::initializer_list<uint32_t> want) {
+  if (in.events.size() != want.size())
+    return false;
+  size_t i = 0;
+  for (auto mask : want)
+    if (in.events[i++].mask != mask)
+      return false;
+  return true;
+}
+bool Overflow(const Inotify &in) {
+  for (const auto &e : in.events)
+    if (e.mask == IN_Q_OVERFLOW && e.wd == -1 && e.cookie == 0 &&
+        e.name.empty())
+      return true;
+  return false;
+}
+int main() {
+  {
+    Watch w;
+    w.still_linked = true;
+    Inotify in;
+    in.Changes(w, Records(w, {{2, L"a"}}));
+    in.Changes(w, Records(w, {{4, L"a"}, {5, L"A"}, {3, L"A", 42, 1}}));
+    Check("transient removal of live inode preserves rename and write",
+          Masks(in, {IN_MOVE_SELF, IN_MODIFY}) && !w.removed && w.file == L"A", in);
+  }
+  {
+    Watch w;
+    Inotify in;
+    in.Changes(w, Records(w, {{2, L"a"}}));
+    Check("actual unlink still retires watch",
+          Masks(in, {IN_DELETE_SELF, IN_IGNORED}) && w.removed, in);
+  }
+  {
+    Watch w;
+    Inotify in;
+    in.Changes(w, Records(w, {{4, L"a"}, {5, L"b"}, {3, L"b", 42, 1}}));
+    Check("extended rename retains watch",
+          Masks(in, {IN_MOVE_SELF, IN_MODIFY}) && w.file == L"b" &&
+              !w.removed && !w.awaiting_rename,
+          in);
+  }
+  {
+    Watch w;
+    w.mask = IN_MODIFY;
+    Inotify in;
+    in.Changes(w, Records(w, {{4, L"a"}, {5, L"b"}, {3, L"b", 42, 1}}));
+    Check("masked move still follows identity",
+          Masks(in, {IN_MODIFY}) && w.file == L"b" && !w.removed, in);
+  }
+  {
+    Watch w;
+    Inotify in;
+    in.Changes(w, Records(w, {{4, L"a"},
+                              {5, L"b"},
+                              {3, L"a", 99, 1},
+                              {3, L"b", 99, 1},
+                              {3, L"b", 42, 2}}));
+    Check("replacement identity ignored", Masks(in, {IN_MOVE_SELF, IN_MODIFY}),
+          in);
+  }
+  {
+    Watch w;
+    w.mask = IN_MOVE_SELF | IN_ONESHOT;
+    Inotify in;
+    in.Changes(w, Records(w, {{4, L"a"}, {5, L"b"}, {3, L"b", 42, 1}}));
+    Check("one shot retires once",
+          Masks(in, {IN_MOVE_SELF, IN_IGNORED}) && w.removed, in);
+  }
+  {
+    Watch w;
+    w.extended = false;
+    current_entries = {{L"b", 42}};
+    Inotify in;
+    in.Changes(w, Records(w, {{4, L"a"}, {5, L"b"}, {3, L"b", 42, 1}}));
+    Check("basic verified destination",
+          Masks(in, {IN_MOVE_SELF, IN_MODIFY}) && w.file == L"b" &&
+              !w.awaiting_rename,
+          in);
+  }
+  {
+    Watch w;
+    w.extended = false;
+    current_entries = {{L"c", 42}};
+    Inotify in;
+    in.Changes(w, Records(w, {{4, L"a"},
+                              {5, L"b"},
+                              {3, L"b", 42, 1},
+                              {4, L"b"},
+                              {5, L"c"},
+                              {3, L"c", 42, 2}}));
+    Check("basic rapid chain must preserve events or report loss",
+          (Masks(in, {IN_MOVE_SELF, IN_MODIFY, IN_MOVE_SELF, IN_MODIFY}) ||
+           Overflow(in)) && w.file == L"c" && !w.removed && !w.awaiting_rename,
+          in);
+  }
+  {
+    Watch w;
+    w.extended = false;
+    current_entries.clear();
+    Inotify in;
+    in.Changes(w, Records(w, {{4, L"a"}, {5, L"b"}, {2, L"b"}}));
+    Check(
+        "basic rename-delete must report retirement or lost events",
+        (Masks(in, {IN_MOVE_SELF, IN_DELETE_SELF, IN_IGNORED}) && w.removed) ||
+            Overflow(in),
+        in);
+    std::printf("DELETE_STATE removed=%d awaiting=%d file=%ls\n", w.removed,
+                w.awaiting_rename, w.file.c_str());
+  }
+  {
+    Watch w;
+    w.extended = false;
+    w.mask = IN_MODIFY;
+    current_entries.clear();
+    Inotify in;
+    in.Changes(w, Records(w, {{4, L"a"}, {3, L"b", 42, 1}}));
+    Check("unresolved basic record reports loss without move subscription",
+          Overflow(in) && !w.removed, in);
+  }
+  std::printf("INOTIFY_RECORD_CONTRACTS checks=%d failures=%d\n", checks,
+              failures);
+  return failures ? 1 : 0;
+}

@@ -6,10 +6,12 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 
 #include "../audio/log.h"
@@ -90,6 +92,10 @@ bool Fill(RetrieverSnapshot* r, std::shared_ptr<DataSource> source, std::string*
       if (f.GetInt32("width", &w)) r->metadata[18] = std::to_string(w);
       if (f.GetInt32("height", &h)) r->metadata[19] = std::to_string(h);
       r->metadata[24] = std::to_string(f.GetInt32("rotation-degrees", &rot) ? rot : 0);
+      int32_t frame_count;
+      if (f.GetInt32("frame-count", &frame_count) && frame_count > 0) {
+        r->metadata[32] = std::to_string(frame_count);
+      }
       r->metadata[40] = m;
     }
   }
@@ -222,47 +228,177 @@ jbyteArray JNICALL MMR_getEmbeddedPicture(JNIEnv* env, jobject thiz, jint) {
   return a;
 }
 
-// FrameDecoder keeps the extractor's first-sample target time for SEEK_CLOSEST
-// and applies the same output predicate before and after decoder EOS. A delayed
-// decoder may produce the entire tail only when drained.
-std::unique_ptr<VideoFrame> DecodeRetrieverFrame(TrackReader* reader, VideoDecoder* decoder,
-                                               int64_t time_us, int option) {
-  const bool closest = option == 3;
-  const SeekMode mode = closest ? SeekMode::kClosest
-      : static_cast<SeekMode>(std::clamp(option, 0, 2));
+// FrameDecoder uses the extractor's target time for closest and indexed seeks.
+// Decoders can emit multiple presentation-ordered frames at once, including at EOS.
+template <typename Consumer>
+void VisitRetrieverFrames(TrackReader* reader, VideoDecoder* decoder, int64_t position,
+                          SeekMode mode, int input_limit, Consumer consume) {
   Sample sample;
-  if (reader->Read(&sample, std::max<int64_t>(time_us, 0), mode) != 0) return nullptr;
-  const int64_t target_time = closest
-      ? (sample.target_time_us >= 0 ? sample.target_time_us : std::max<int64_t>(time_us, 0))
-      : -1;
-  auto select = [target_time](std::vector<VideoFrame>& frames) -> std::unique_ptr<VideoFrame> {
+  if (reader->Read(&sample, position, mode) != 0) return;
+  if (mode == SeekMode::kFrameIndex && sample.target_time_us < 0) return;
+  int64_t target_time = -1;
+  if (mode == SeekMode::kClosest || mode == SeekMode::kFrameIndex) {
+    target_time = sample.target_time_us >= 0 ? sample.target_time_us : position;
+  }
+
+  auto visit = [&](std::vector<VideoFrame>& frames) {
     for (VideoFrame& frame : frames) {
-      if (target_time < 0 || frame.time_us >= target_time) {
-        return std::make_unique<VideoFrame>(std::move(frame));
-      }
+      if ((target_time < 0 || frame.time_us >= target_time) && !consume(frame)) return false;
     }
-    return nullptr;
+    return true;
   };
   std::vector<VideoFrame> frames;
-  for (int n = 0; n < 600; ++n) {
-    if (!decoder->Decode(sample, &frames)) return nullptr;
-    if (auto chosen = select(frames)) return chosen;
+  for (;;) {
+    if (!decoder->Decode(sample, &frames) || !visit(frames)) return;
     frames.clear();
-    const int status = reader->Read(&sample);
-    if (status < 0) return nullptr;
+    int status = reader->Read(&sample);
+    if (status < 0) return;
     if (status > 0) {
       decoder->Drain(&frames);
-      return select(frames);
+      visit(frames);
+      return;
     }
+    if (input_limit > 0 && --input_limit == 0) return;
   }
-  return nullptr;
 }
 
-// _getFrameAtTime(timeUs, option, width, height, params): the frame at (or the
-// sync frame around) timeUs as an ARGB_8888 Bitmap, scaled to fit width x height
-// (keeping its aspect) when both are positive; null without video.
+std::unique_ptr<VideoFrame> DecodeRetrieverFrame(TrackReader* reader, VideoDecoder* decoder,
+                                               int64_t time_us, int option) {
+  auto mode = static_cast<SeekMode>(std::clamp(option, 0, 3));
+  std::unique_ptr<VideoFrame> chosen;
+  VisitRetrieverFrames(reader, decoder, std::max<int64_t>(time_us, 0), mode, 600,
+                       [&](VideoFrame& frame) {
+                         chosen = std::make_unique<VideoFrame>(std::move(frame));
+                         return false;
+                       });
+  return chosen;
+}
+
+jobject RetrieverBitmapConfig(JNIEnv* env, jobject params, jfieldID* actual_field) {
+  constexpr const char* kConfigType = "Landroid/graphics/Bitmap$Config;";
+  jclass config = env->FindClass("android/graphics/Bitmap$Config");
+  if (config == nullptr) return nullptr;
+  jfieldID argb_field = env->GetStaticFieldID(config, "ARGB_8888", kConfigType);
+  if (argb_field == nullptr) return nullptr;
+  if (params != nullptr) {
+    jclass params_class = env->GetObjectClass(params);
+    jfieldID preferred_field = env->GetFieldID(params_class, "inPreferredConfig", kConfigType);
+    if (preferred_field == nullptr) return nullptr;
+    *actual_field = env->GetFieldID(params_class, "outActualConfig", kConfigType);
+    if (*actual_field == nullptr) return nullptr;
+    jfieldID rgb565_field = env->GetStaticFieldID(config, "RGB_565", kConfigType);
+    if (rgb565_field == nullptr) return nullptr;
+    jobject preferred = env->GetObjectField(params, preferred_field);
+    jobject rgb565 = env->GetStaticObjectField(config, rgb565_field);
+    if (env->IsSameObject(preferred, rgb565)) return rgb565;
+  }
+  return env->GetStaticObjectField(config, argb_field);
+}
+
+// Clockwise rotation from coded pixels to presentation orientation.
+size_t RetrieverPixelIndex(int x, int y, int w, int h, int rotation) {
+  switch (rotation) {
+    case 90: return static_cast<size_t>(x) * h + (h - 1 - y);
+    case 180: return static_cast<size_t>(h - 1 - y) * w + (w - 1 - x);
+    case 270: return static_cast<size_t>(w - 1 - x) * h + y;
+    default: return static_cast<size_t>(y) * w + x;
+  }
+}
+
+// FrameDecoder::allocVideoFrame uses track presentation metadata after the
+// decoder's crop. A valid track crop overrides SAR and explicit display size.
+bool RetrieverDisplaySize(const VideoFrame& frame, const Format& track, int32_t* width,
+                          int32_t* height) {
+  const int w = frame.visible_width(), h = frame.visible_height();
+  if (w <= 0 || h <= 0) return false;
+  int32_t sar_w, sar_h;
+  if (track.GetInt32("sar-width", &sar_w) && track.GetInt32("sar-height", &sar_h) && sar_h != 0) {
+    int32_t product;
+    if (sar_w < 0 || __builtin_mul_overflow(w, sar_w, &product)) return false;
+    *width = product / sar_h;
+    *height = h;
+  } else if (!track.GetInt32("display-width", width) || !track.GetInt32("display-height", height)
+             || *width <= 0 || *height <= 0) {
+    *width = w;
+    *height = h;
+  }
+  int32_t left, top, right, bottom;
+  if (track.GetRect("crop", &left, &top, &right, &bottom) && left >= 0 && top >= 0
+      && right < w && bottom < h && left <= right && top <= bottom) {
+    *width = right - left + 1;
+    *height = bottom - top + 1;
+  }
+  return true;
+}
+
+jobject CreateRetrieverBitmap(JNIEnv* env, const VideoFrame& frame, jobject config,
+                              int dst_w, int dst_h, int rotation, int display_w, int display_h) {
+  const int w = frame.visible_width(), h = frame.visible_height();
+  int bitmap_w = w, bitmap_h = h;
+  if (rotation == 90 || rotation == 270) {
+    std::swap(bitmap_w, bitmap_h);
+    std::swap(display_w, display_h);
+  }
+  const size_t pixel_count = static_cast<size_t>(w) * h;
+  if (pixel_count > static_cast<size_t>(std::numeric_limits<jsize>::max()) / sizeof(jint)) {
+    return nullptr;
+  }
+  if (env->PushLocalFrame(4) < 0) {
+    env->ExceptionClear();
+    return nullptr;
+  }
+  const jsize length = static_cast<jsize>(pixel_count);
+  jintArray colors = env->NewIntArray(length);
+  if (colors == nullptr) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return env->PopLocalFrame(nullptr);
+  }
+  std::unique_ptr<uint32_t[]> rgba(new (std::nothrow) uint32_t[pixel_count]);
+  std::unique_ptr<jint[]> argb(new (std::nothrow) jint[pixel_count]);
+  // Scratch storage belongs to the initial bitmap allocation. Like the Android
+  // bitmap allocation failure below, it produces a null frame without an exception.
+  if (rgba == nullptr || argb == nullptr) return env->PopLocalFrame(nullptr);
+  I420ToRgba(frame, rgba.get(), w, w, h);
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const uint32_t p = rgba[static_cast<size_t>(y) * w + x];
+      argb[RetrieverPixelIndex(x, y, w, h, rotation)] = static_cast<jint>(
+          0xff000000u | ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu));
+    }
+  }
+  env->SetIntArrayRegion(colors, 0, length, argb.get());
+  if (env->ExceptionCheck()) return env->PopLocalFrame(nullptr);
+  jclass bitmap = env->FindClass("android/graphics/Bitmap");
+  if (bitmap == nullptr) return env->PopLocalFrame(nullptr);
+  jmethodID create = env->GetStaticMethodID(
+      bitmap, "createBitmap", "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+  if (create == nullptr) return env->PopLocalFrame(nullptr);
+  jobject result = env->CallStaticObjectMethod(bitmap, create, colors, bitmap_w, bitmap_h, config);
+  if (result == nullptr) {
+    // AOSP clears failure to allocate the decoded frame's initial Java bitmap.
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return env->PopLocalFrame(nullptr);
+  }
+  if (dst_w <= 0 || dst_h <= 0) {
+    dst_w = display_w;
+    dst_h = display_h;
+  } else {
+    const float factor = std::min(static_cast<float>(dst_w) / display_w,
+                                  static_cast<float>(dst_h) / display_h);
+    dst_w = std::round(display_w * factor);
+    dst_h = std::round(display_h * factor);
+  }
+  if (dst_w != bitmap_w || dst_h != bitmap_h) {
+    jmethodID scale = env->GetStaticMethodID(
+        bitmap, "createScaledBitmap", "(Landroid/graphics/Bitmap;IIZ)Landroid/graphics/Bitmap;");
+    if (scale == nullptr) return env->PopLocalFrame(nullptr);
+    result = env->CallStaticObjectMethod(bitmap, scale, result, dst_w, dst_h, true);
+  }
+  return env->PopLocalFrame(result);
+}
+
 jobject JNICALL MMR_getFrameAtTime(JNIEnv* env, jobject thiz, jlong time_us, jint option, jint dst_w,
-                                   jint dst_h, jobject) {
+                                   jint dst_h, jobject params) {
   auto r = GetRetriever(env, thiz);
   if (r == nullptr || r->snapshot.source == nullptr) {
     jniThrow(env, "java/lang/IllegalStateException", "No retriever available");
@@ -273,11 +409,17 @@ jobject JNICALL MMR_getFrameAtTime(JNIEnv* env, jobject thiz, jlong time_us, jin
   if (ex == nullptr) return nullptr;
   std::unique_ptr<VideoDecoder> decoder;
   std::unique_ptr<TrackReader> reader;
+  Format track;
+  int32_t rotation = 0;
   for (size_t i = 0; i < ex->TrackCount() && decoder == nullptr; i++) {
     Format f = ex->TrackFormat(i);
     if (f.Mime().rfind("video/", 0) != 0) continue;
     decoder = VideoDecoder::Create(f, &error);
-    if (decoder != nullptr) reader = ex->OpenTrack(i);
+    if (decoder != nullptr) {
+      reader = ex->OpenTrack(i);
+      f.GetInt32("rotation-degrees", &rotation);
+      track = std::move(f);
+    }
   }
   if (decoder == nullptr || reader == nullptr) {
     MEDIA_LOGW("MediaMetadataRetriever: no video frame: %s", error.c_str());
@@ -285,30 +427,82 @@ jobject JNICALL MMR_getFrameAtTime(JNIEnv* env, jobject thiz, jlong time_us, jin
   }
   auto chosen = DecodeRetrieverFrame(reader.get(), decoder.get(), time_us, option);
   if (chosen == nullptr) return nullptr;
-  int w = chosen->visible_width(), h = chosen->visible_height();
-  if (dst_w > 0 && dst_h > 0 && (dst_w != w || dst_h != h)) {
-    double scale = std::min(static_cast<double>(dst_w) / w, static_cast<double>(dst_h) / h);
-    w = std::max(1, static_cast<int>(w * scale + 0.5));
-    h = std::max(1, static_cast<int>(h * scale + 0.5));
+  int32_t display_w, display_h;
+  if (!RetrieverDisplaySize(*chosen, track, &display_w, &display_h)) return nullptr;
+
+  jfieldID actual_field = nullptr;
+  jobject config = RetrieverBitmapConfig(env, params, &actual_field);
+  if (config == nullptr) return nullptr;
+  if (actual_field != nullptr) env->SetObjectField(params, actual_field, config);
+  return CreateRetrieverBitmap(env, *chosen, config, dst_w, dst_h, rotation, display_w, display_h);
+}
+
+jobject JNICALL MMR_getFrameAtIndex(JNIEnv* env, jobject thiz, jint frame_index, jint frame_count,
+                                    jobject params) {
+  auto r = GetRetriever(env, thiz);
+  if (r == nullptr || r->snapshot.source == nullptr) {
+    jniThrow(env, "java/lang/IllegalStateException", "No retriever available");
+    return nullptr;
   }
-  std::vector<uint32_t> rgba(static_cast<size_t>(w) * h);
-  I420ToRgba(*chosen, rgba.data(), w, w, h);
-  std::vector<jint> argb(rgba.size());
-  for (size_t i = 0; i < rgba.size(); i++) {
-    uint32_t p = rgba[i];
-    argb[i] = static_cast<jint>(0xff000000u | ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu));
+
+  jclass list_class = env->FindClass("java/util/ArrayList");
+  if (list_class == nullptr) return nullptr;
+  jmethodID init = env->GetMethodID(list_class, "<init>", "()V");
+  if (init == nullptr) return nullptr;
+  jmethodID add = env->GetMethodID(list_class, "add", "(Ljava/lang/Object;)Z");
+  if (add == nullptr) return nullptr;
+  jobject list = env->NewObject(list_class, init);
+  if (list == nullptr) {
+    // Android's jniThrowException discards the original allocation exception.
+    env->ExceptionClear();
+    jniThrow(env, "java/lang/IllegalStateException", "Can't create bitmap array");
+    return nullptr;
   }
-  jintArray colors = env->NewIntArray(static_cast<jsize>(argb.size()));
-  env->SetIntArrayRegion(colors, 0, static_cast<jsize>(argb.size()), argb.data());
-  jclass config = env->FindClass("android/graphics/Bitmap$Config");
-  jobject argb8888 = env->GetStaticObjectField(
-      config, env->GetStaticFieldID(config, "ARGB_8888", "Landroid/graphics/Bitmap$Config;"));
-  jclass bitmap = env->FindClass("android/graphics/Bitmap");
-  jmethodID create = env->GetStaticMethodID(
-      bitmap, "createBitmap", "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
-  jobject b = env->CallStaticObjectMethod(bitmap, create, colors, w, h, argb8888);
-  if (CheckException(env, "MediaMetadataRetriever.getFrameAtTime")) return nullptr;
-  return b;
+  jfieldID actual_field = nullptr;
+  jobject config = RetrieverBitmapConfig(env, params, &actual_field);
+  if (config == nullptr) return nullptr;
+  if (actual_field != nullptr) env->SetObjectField(params, actual_field, config);
+
+  std::string error;
+  auto ex = Extractor::Open(r->snapshot.source, &error);
+  jint count = 0;
+  if (ex != nullptr) {
+    for (size_t i = 0; i < ex->TrackCount(); ++i) {
+      Format format = ex->TrackFormat(i);
+      if (format.Mime().rfind("video/", 0) != 0) continue;
+      int32_t available, rotation = 0;
+      if (!format.GetInt32("frame-count", &available) || available <= 0) break;
+      if (frame_index < 0 || frame_index >= available || frame_count < 1 ||
+          frame_count > available - frame_index) {
+        jniThrow(env, "java/lang/IllegalArgumentException", "Invalid frameIndex or numFrames");
+        return nullptr;
+      }
+      format.GetInt32("rotation-degrees", &rotation);
+      auto decoder = VideoDecoder::Create(format, &error);
+      auto reader = ex->OpenTrack(i);
+      if (decoder == nullptr || reader == nullptr) break;
+      VisitRetrieverFrames(reader.get(), decoder.get(), frame_index, SeekMode::kFrameIndex, 0,
+                           [&](const VideoFrame& frame) {
+                             int32_t display_w, display_h;
+                             if (!RetrieverDisplaySize(frame, format, &display_w, &display_h)) return false;
+                             jobject bitmap =
+                                 CreateRetrieverBitmap(env, frame, config, -1, -1, rotation,
+                                                       display_w, display_h);
+                             if (env->ExceptionCheck()) return false;
+                             env->CallBooleanMethod(list, add, bitmap);
+                             env->DeleteLocalRef(bitmap);
+                             if (env->ExceptionCheck()) return false;
+                             return ++count < frame_count;
+                           });
+      break;
+    }
+  }
+  if (env->ExceptionCheck()) return nullptr;
+  if (count == 0) {
+    jniThrow(env, "java/lang/IllegalStateException", "No frames from retriever");
+    return nullptr;
+  }
+  return list;
 }
 
 void JNICALL MMR_init(JNIEnv* env, jclass) {
@@ -334,6 +528,8 @@ const JNINativeMethod kRetrieverMethods[] = {
     {"getEmbeddedPicture", "(I)[B", GESHER_NATIVE(MMR_getEmbeddedPicture)},
     {"_getFrameAtTime", "(JIIILandroid/media/MediaMetadataRetriever$BitmapParams;)Landroid/graphics/Bitmap;",
      GESHER_NATIVE(MMR_getFrameAtTime)},
+    {"_getFrameAtIndex", "(IILandroid/media/MediaMetadataRetriever$BitmapParams;)Ljava/util/List;",
+     GESHER_NATIVE(MMR_getFrameAtIndex)},
     {"release", "()V", GESHER_NATIVE(MMR_release)},
     {"native_finalize", "()V", GESHER_NATIVE(MMR_release)},
     {"native_setup", "()V", GESHER_NATIVE(MMR_setup)},
