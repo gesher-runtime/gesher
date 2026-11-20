@@ -736,6 +736,11 @@ class Rewriter {
         executable_tls_size_(executable_tls_size), span_lo_(span_lo), span_hi_(span_hi),
         restore_(restore), first_new_arena_(object->arenas.size()) {}
 
+  // At load time: the object's executable segments ([start, end) addresses),
+  // each made writable as a whole on its first patch (MakeWritable).
+  void SetLoadTimeCode(std::vector<std::pair<uintptr_t, uintptr_t>> code) {
+    load_time_code_ = std::move(code);
+  }
   // Rewrites the instruction `in` at `site` if it needs it. False only on a
   // hard failure (*error set).
   bool Rewrite(uint8_t* site, const X86Insn& in);
@@ -766,6 +771,10 @@ class Rewriter {
   std::vector<TrapSite> traps_;
   std::vector<std::pair<uintptr_t, uint8_t>> syscalls_;
   std::set<uintptr_t> writable_pages_;
+  // Load time: executable segments, page-rounded, and what MakeWritable did.
+  enum SegmentState : uint8_t { kSegmentUntouched, kSegmentWritable, kSegmentByPage };
+  std::vector<std::pair<uintptr_t, uintptr_t>> load_time_code_;
+  std::vector<SegmentState> load_time_state_;
 };
 
 bool Rewriter::NeedSlot() {
@@ -814,15 +823,34 @@ void Rewriter::AddTrap(uint8_t* site, const X86Insn& in, uintptr_t stub, const c
 }
 
 // At load time the segments are file-backed views mapped read-execute
-// (elf_loader.cc, MapSegments): only the pages that get patched become
-// writable (copy-on-write, so they alone turn private); the loader's final
-// mprotect makes them read-execute again. Deferred, a page is pending (not
-// executable) or was rewritten before (executable, maybe running on another
-// thread): it is made writable, keeping that, and its protection is restored
-// afterwards (restore_).
+// (elf_loader.cc, MapSegments). The executable segment holding a patch is made
+// writable as a whole, once: copy-on-write, so only the pages actually patched
+// turn private, and the loader's final mprotect (ProtectSegments) makes the
+// segment read-execute again. Not page by page: each mprotect queries the
+// mapping (VirtualQuery), whose cost grows with the unchanged run of pages
+// after the address, so a front-to-back walk was quadratic in the segment's
+// size (libxul.so: 18k patched pages of a 150 MB segment took 4-15 s).
+// Deferred, a page is pending (not executable) or was rewritten before
+// (executable, maybe running on another thread): it is made writable, keeping
+// that, and its protection is restored afterwards (restore_).
 bool Rewriter::MakeWritable(uint8_t* site, size_t n) {
   const uintptr_t first = reinterpret_cast<uintptr_t>(site) & ~(kPage - 1);
   const uintptr_t last = (reinterpret_cast<uintptr_t>(site) + n - 1) & ~(kPage - 1);
+  if (!deferred_) {
+    load_time_state_.resize(load_time_code_.size(), kSegmentUntouched);
+    for (size_t i = 0; i < load_time_code_.size(); ++i) {
+      const auto& [lo, hi] = load_time_code_[i];
+      if (first < lo || last >= hi) continue;
+      if (load_time_state_[i] == kSegmentUntouched) {
+        // Should the segment refuse as a whole, its pages are tried one by one.
+        load_time_state_[i] =
+            mprotect(reinterpret_cast<void*>(lo), hi - lo, PROT_READ | PROT_WRITE | PROT_EXEC) == 0
+                ? kSegmentWritable : kSegmentByPage;
+      }
+      if (load_time_state_[i] == kSegmentWritable) return true;
+      break;
+    }
+  }
   for (uintptr_t page = first; page <= last; page += kPage) {
     if (writable_pages_.count(page) != 0) continue;
     int prot = PROT_READ | PROT_WRITE | PROT_EXEC;
@@ -1437,6 +1465,11 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
   }
 
   Rewriter rewriter(object, false, stats, error, executable_tls_size, span_lo, span_hi, nullptr);
+  std::vector<std::pair<uintptr_t, uintptr_t>> code_segments;
+  for (const Region& e : exec) {
+    code_segments.emplace_back(PageOf(bias + e.start), PageOf(bias + e.end + kPage - 1));
+  }
+  rewriter.SetLoadTimeCode(std::move(code_segments));
   for (const Region& r : merged) {
     uint8_t* p = load_bias + r.start;
     uint8_t* end = load_bias + r.end;

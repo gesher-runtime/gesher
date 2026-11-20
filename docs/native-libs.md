@@ -36,9 +36,14 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     0036), code and read-only data mapped with their final protection (shared
     with the file and every process that loads it, not charged to commit),
     writable data copy-on-write, `.bss` anonymous zero pages. Pages that a
-    text relocation or the `%fs` rewrite patches are made writable
-    (copy-on-write) one at a time and become private; `mprotect` sets each
-    segment's final protection after relocation. A segment whose file offset
+    text relocation patches are made writable (copy-on-write) one at a time;
+    an executable segment the `%fs` rewrite patches is made writable
+    (copy-on-write) as a whole, once, since each `mprotect` queries the
+    mapping (`VirtualQuery`) at a cost that grows with the run of unchanged
+    pages after it (page by page, libxul.so's 18k patched pages took 4-15 s;
+    as a whole its rewrite takes about a second). Either way only the patched
+    pages become private; `mprotect` sets each segment's final protection
+    after relocation. A segment whose file offset
     and address are not congruent modulo the page size, an object loaded from
     memory, segments sharing a page, or mmap without placeholders fall back to
     copying the contents into anonymous memory;
@@ -100,7 +105,9 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   ([0008](decisions/0008-linux-abi.md)). `InstallBionicShim()` registers it
   with the loader.
   - `shim.cc`: memory (CRT malloc; over-aligned blocks from
-    `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them),
+    `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them;
+    `mallinfo` walks that heap and fills the fields bionic's jemalloc fills:
+    mapped, allocated, free),
     strings, FORTIFY `__*_chk`, ctype, `long`-returning functions widened to
     64 bits (`strtol`, `lseek`, `sysconf`, `lround`...), `__errno` (the CRT's
     errno, which gesher-base keeps in Linux numbering), time (`clock_gettime`
@@ -108,7 +115,17 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     (gesher-base's Linux-layout struct with widened `tv_nsec`), `mmap`, libm,
     `qsort`/`bsearch` with a System V comparator, libdl over the loader
     (`dlopen`, `dlsym`, `dladdr`, `dl_iterate_phdr`), `__cxa_atexit`/
-    `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`.
+    `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`. The environment
+    is the CRT's (`environ` is its `_environ`); gesher-base's `setenv`/
+    `unsetenv`, which `putenv` uses too, keep every string they replace or
+    remove, as bionic does: before a change the CRT gets a copy of the
+    variable's string to free, and the original stays valid, so what
+    `getenv` returned and what `environ` pointed at keep their bytes.
+    mozglue reads `environ` through its own `getenv` and keeps
+    `MOZ_ANDROID_LIBDIR`'s value in a static while GeckoLoader `putenv`s it
+    again (the freed bytes became the next allocation: `dlopen failed:
+    cannot open cko_mozglue_GeckoLoader_loadNSSLibsNative/libxul.so`).
+    Setting the value a variable already has changes nothing.
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
     the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
     `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,
@@ -240,7 +257,17 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     thunk to ANGLE's `libEGL.dll`/`libGLESv2.dll` (loaded from the
     executable's directory on first use; a function ANGLE lacks aborts naming
     itself), so an app's `libEGL.so`/`libGLESv1_CM.so`/`libGLESv2.so`/
-    `libGLESv3.so` imports and `eglGetProcAddress` all resolve.
+    `libGLESv3.so` imports and `eglGetProcAddress` all resolve. The
+    extensions ANGLE adds to `GL_EXTENSIONS` beyond those headers
+    (`GL_ANGLE_*`, `GL_CHROMIUM_*`) get thunks too, from ANGLE's own
+    `gl2ext_angle.h` at the DLLs' commit (`compat/bionic/third_party/angle`):
+    a client calls the functions of an extension it sees advertised
+    (WebRender calls `glProvokingVertexANGLE` for `GL_ANGLE_provoking_vertex`;
+    Firefox's GPU process panicked, "gles function was not loaded", while
+    `eglGetProcAddress` returned null for it). `gl_extension_procs_test.so`
+    checks every advertised extension's entry points; only
+    `glBlobCacheCallbacksANGLE` (`GL_ANGLE_blob_cache`), which takes callbacks,
+    is not provided.
     `EGL_DEFAULT_DISPLAY` is ANGLE's Direct3D 11 display on the hardware
     adapter, else WARP (`GESHER_EGL_DEVICE=warp` forces WARP; the choice is
     printed as `gesher EGL: default display: ...`). `eglCreateWindowSurface`

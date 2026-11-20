@@ -34,7 +34,9 @@ permissions:
 env:
   # chromium.googlesource.com/angle/angle: the upstream commit AOSP's
   # external/angle was rolled to at android-16.0.0_r4 ("Roll ANGLE from
-  # 238eaf1dd4d3 to ab6a82e0ed14", merged as 620766820606).
+  # 238eaf1dd4d3 to ab6a82e0ed14", merged as 620766820606). Its
+  # include/GLES2/gl2ext_angle.h is copied in compat/bionic/third_party/angle
+  # (the GL thunks of ANGLE's own extensions): update it with this commit.
   ANGLE_COMMIT: ab6a82e0ed1425316da0ba9a0b1c715a58a0b725
   # depot_tools as pinned by that commit's DEPS (third_party/depot_tools).
   DEPOT_TOOLS_COMMIT: 3accee0833540add4e5e608d222e01a768d9f94e

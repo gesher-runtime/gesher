@@ -114,6 +114,13 @@ jobs:
           # AHardwareBuffer, the EGL native buffer/fence extensions and
           # ASurfaceControl (ADR 0089), for tests/native/surface_control_host_test.cc.
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android31-clang" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libsurface_control_test.so -o dist-native/surface_control_test.so tests/native/surface_control_test.c -landroid -lEGL -lGLESv3 -ldl
+
+          # getenv results outlive setenv/putenv/unsetenv, as bionic's do.
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libenvironment_lifetime_test.so -o dist-native/environment_lifetime_test.so tests/native/environment_lifetime_test.c
+          # The NDK's MediaDrm/MediaCrypto without a DRM plugin.
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libmedia_drm_test.so -o dist-native/media_drm_test.so tests/native/media_drm_test.c -lmediandk -ldl
+          # The entry points of every GL extension ANGLE advertises (gl_extension_test.exe).
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libgl_extension_procs_test.so -o dist-native/gl_extension_procs_test.so tests/native/gl_extension_procs_test.c -lEGL -lGLESv3 -ldl
           echo "--- fs_test29.so ---"
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d -r -l dist-native/fs_test29.so
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"             -d dist-native/fs_test29.so | grep '%fs:' | head -40 || true

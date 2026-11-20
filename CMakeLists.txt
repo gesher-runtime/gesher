@@ -188,7 +188,9 @@ target_link_options(font_environment_test PRIVATE
 # Phase 6: the ELF loader loads an x86-64 Android .so and calls its exports.
 add_executable(elf_load_test tests/native/elf_load_test.cc)
 target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf)
+# gesher_media_drm: the production NDK MediaDrm/MediaCrypto entries, for
+# media_drm_test.so (they have no dependency beyond the bionic shim).
+target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf gesher_media_drm)
 
 # Original dependency graphs exercise the actual loader, including concurrent
 # publication and constructor reentry. The failure target redirects only its

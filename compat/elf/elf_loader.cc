@@ -13,6 +13,7 @@
 #include <io.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -217,7 +218,23 @@ struct Library {
   std::vector<void*> unresolved_functions;
   uint8_t* unresolved_data = nullptr;
   std::vector<const char*> unresolved_data_names;
+  // Relocation time only: the stubbed-import notes, written together (Relocate).
+  std::string load_notes;
 };
+
+namespace {
+
+// Adds a line to the object's stubbed-import notes.
+[[gnu::format(printf, 2, 3)]] void NoteLoad(Library* lib, const char* format, ...) {
+  char line[512];
+  va_list args;
+  va_start(args, format);
+  const int n = std::vsnprintf(line, sizeof(line), format, args);
+  va_end(args);
+  if (n > 0) lib->load_notes.append(line, std::min<size_t>(static_cast<size_t>(n), sizeof(line) - 1));
+}
+
+}  // namespace
 
 namespace {
 
@@ -940,8 +957,8 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
         rs->address = MakeUnresolvedStub(lib, name);
         rs->found = rs->address != nullptr;
         if (rs->found) {
-          std::fprintf(stderr, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
-                       lib->name.c_str(), name);
+          NoteLoad(lib, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
+                   lib->name.c_str(), name);
           return true;
         }
       }
@@ -950,10 +967,10 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
         rs->address = MakeUnresolvedData(lib, name);
         rs->found = rs->address != nullptr;
         if (rs->found) {
-          std::fprintf(stderr,
-                       "gesher elf: %s: data '%s' is not provided (a placeholder that faults "
-                       "if used)\n",
-                       lib->name.c_str(), name);
+          NoteLoad(lib,
+                   "gesher elf: %s: data '%s' is not provided (a placeholder that faults "
+                   "if used)\n",
+                   lib->name.c_str(), name);
           return true;
         }
       }
@@ -1075,8 +1092,8 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
           return false;
         }
         *out = reinterpret_cast<uint64_t>(bound);
-        std::fprintf(stderr, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
-                     lib->name.c_str(), name);
+        NoteLoad(lib, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
+                 lib->name.c_str(), name);
         return true;
       }
       Fail(error, lib->name + ": unresolved symbol '" + name + "'");
@@ -1357,7 +1374,22 @@ bool DecodeAndroidRela(const uint8_t* p, size_t size, Visit&& visit, std::string
   return true;
 }
 
+bool RelocateObject(Library* lib, std::string* error);
+
+// The unresolved-import notes of one object's relocation go out in one write:
+// a write to the log can take tens of milliseconds (a process's stderr is a
+// file shared by the app's processes), and libxul.so has some forty.
 bool Relocate(Library* lib, std::string* error) {
+  const bool ok = RelocateObject(lib, error);
+  if (!lib->load_notes.empty()) {
+    std::fwrite(lib->load_notes.data(), 1, lib->load_notes.size(), stderr);
+    std::fflush(stderr);
+    std::string().swap(lib->load_notes);
+  }
+  return ok;
+}
+
+bool RelocateObject(Library* lib, std::string* error) {
   // DT_RELR is arch-neutral (load-bias add).
   if (lib->relr && !ApplyRelr(lib, error)) return false;
   // Keep the original validate-before-apply and snapshot semantics. A regular

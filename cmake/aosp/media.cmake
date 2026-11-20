@@ -28,6 +28,16 @@ set_target_properties(gesher_media_format PROPERTIES CXX_STANDARD 23)
 target_link_libraries(dalvikvm PRIVATE gesher_media_format)
 target_link_libraries(gesher-exec PRIVATE gesher_media_format)
 
+# The NDK's MediaDrm/MediaCrypto: no DRM plugin, so no scheme is supported
+# and no object is created (compat/media/ndk/media_drm.cc).
+add_library(gesher_media_drm OBJECT ${_media}/ndk/media_drm.cc)
+target_include_directories(gesher_media_drm PRIVATE ${AOSP_DIR}/frameworks/av/media/ndk/include)
+target_link_libraries(gesher_media_drm PUBLIC gesher_bionic)
+target_compile_options(gesher_media_drm PRIVATE -Wall -Wextra -Werror)
+set_target_properties(gesher_media_drm PROPERTIES CXX_STANDARD 23)
+target_link_libraries(dalvikvm PRIVATE gesher_media_drm)
+target_link_libraries(gesher-exec PRIVATE gesher_media_drm)
+
 set(GESHER_MEDIA_AUDIO_SOURCES
   ${_media}/audio/engine.cc
   ${_media}/audio/shared_state.cc

@@ -136,6 +136,21 @@ Check 'native libs: SCM_RIGHTS through the descriptor broker from a .so' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_rights_test.so")
 } @('unix_rights: all passed', 'unix_rights: all passed (without a broker)', 'elf_load_test all passed')
 
+# What getenv returned and what environ pointed at keep their bytes after the
+# variable is putenv()ed, setenv()ed or unsetenv()ed again, as bionic's
+# (mozglue's own getenv reads environ, and it caches one).
+Check 'native libs: getenv results and environ entries outlive later setenv/putenv/unsetenv from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/environment_lifetime_test.so")
+} @('the first result keeps its bytes after putenv', 'the first environ entry keeps its bytes after a new value',
+    'environment_lifetime: all passed', 'elf_load_test all passed')
+
+# The NDK's MediaDrm/MediaCrypto with no DRM plugin: no scheme is supported and
+# no object is created, as Android answers for an unsupported scheme.
+Check 'native libs: MediaDrm/MediaCrypto report no crypto scheme from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/media_drm_test.so")
+} @('AMediaDrm_isCryptoSchemeSupported is false for every scheme', 'media_drm: all passed',
+    'elf_load_test all passed')
+
 Check 'native libs: a UPX-packed .so unpacks itself with raw syscalls and runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/raw_syscall_upx.so")
 } @('unpacks its code at run time (UPX)', 'code unpacked at run time: yes',
@@ -324,6 +339,16 @@ Check 'native libs: the same AHardwareBuffer and ASurfaceControl checks on WARP,
     'surface_control: ok: sendHandleToUnixSocket without a descriptor broker fails',
     'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
     'surface_control_test all passed')
+
+# eglGetProcAddress and dlsym return the functions of every GL extension the
+# context advertises, ANGLE's own (gl2ext_angle.h) included: WebRender calls
+# glProvokingVertexANGLE for GL_ANGLE_provoking_vertex, and Firefox's GPU
+# process panicked when it was null. The provoking vertex set through the
+# returned pointer is read back.
+Check 'native libs: the entry points of every advertised GL extension from an NDK .so' {
+  & "$Dir/gl_extension_test.exe" (NoDrive "$Dir/gl_extension_procs_test.so")
+} @('GL_ANGLE_provoking_vertex: glProvokingVertexANGLE', 'is read back',
+    'gl_extension_procs: all passed', 'gl_extension_test all passed')
 
 # Through gesher-app: glapp.apk's Activity makes windows with gesher-app's
 # NativeWindow and passes their android.view.Surface to the library, which

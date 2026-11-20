@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <link.h>
+#include <malloc.h>
 #include <math.h>
 #include <mntent.h>
 #include <pthread.h>
@@ -100,6 +101,20 @@ static void test_memory(void) {
   a = realloc(a, 2000);
   check("realloc of aligned memory", a != NULL && ((unsigned char*)a)[999] == 1);
   free(a);
+  // mallinfo: what the allocator has mapped and allocated; a live 4 MiB block
+  // is counted, and the allocated bytes fit in the mapped ones. (The block
+  // escapes through a volatile, so the compiler keeps the allocation.)
+  static char* volatile live_block;
+  struct mallinfo before = mallinfo();
+  char* big = malloc(4 << 20);
+  memset(big, 1, 4 << 20);
+  live_block = big;
+  struct mallinfo during = mallinfo();
+  check("mallinfo counts allocated bytes",
+        during.uordblks >= before.uordblks + (4u << 20) - (64u << 10) && during.uordblks > 0);
+  check("mallinfo: allocated fit in mapped, the rest is free",
+        during.hblkhd >= during.uordblks && during.fordblks == during.hblkhd - during.uordblks);
+  free(big);
 }
 
 static void test_strings(void) {
@@ -354,6 +369,22 @@ static void test_time_math(void) {
   check("CLOCK_REALTIME is after 2020", rt.tv_sec > 1577836800);
   check("libm", fabs(sqrt(2.0) * sqrt(2.0) - 2.0) < 1e-12 && fabs(sin(0.0)) < 1e-12 &&
                     fabs(pow(2.0, 10.0) - 1024.0) < 1e-9);
+  // nexttoward's long double is binary128 here: a y strictly between x and its
+  // neighbour still decides the direction, and equal values return y's sign.
+  // (volatile: computed at run time, through the shim.)
+  volatile long double above = 1.0L + 0x1p-60L, below = 1.0L - 0x1p-60L, negzero = -0.0L;
+  volatile double one = 1.0, zero = 0.0;
+  check("nexttoward steps toward a binary128 just above x",
+        nexttoward(one, above) == nextafter(1.0, 2.0));
+  check("nexttoward steps toward a binary128 just below x",
+        nexttoward(one, below) == nextafter(1.0, 0.0));
+  check("nexttoward of equal values is y, signed zero included",
+        nexttoward(one, 1.0L) == 1.0 && signbit(nexttoward(zero, negzero)));
+  check("nexttoward from 0 is the smallest subnormal", nexttoward(zero, 1.0L) == 0x1p-1074);
+  check("nexttoward with a NaN is a NaN", isnan(nexttoward(one, (long double)NAN)));
+  check("nexttowardf steps toward a binary128 just above x",
+        nexttowardf((float)one, above) == nextafterf(1.0f, 2.0f) &&
+            nexttowardf((float)one, below) == nextafterf(1.0f, 0.0f));
 }
 
 // statfs and its neighbours: imports the shim once lacked, so they were bound
