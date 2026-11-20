@@ -139,7 +139,7 @@ def source_map() -> dict:
                 "tools/surface/download-verified-artifact.py",
                 ".github/workflows/qa73-runtime-diagnostic.yml").splitlines()
     # Include newly authored diagnostic files during the local precommit build.
-    paths += [str(p.relative_to(ROOT)) for p in (ROOT / "tools/qa73-diagnostic").rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+    paths += [p.relative_to(ROOT).as_posix() for p in (ROOT / "tools/qa73-diagnostic").rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     return {p: sha(ROOT / p) for p in sorted(set(paths))}
 
 def package(build: Path, inputs: Path, toolchain: Path, archive: Path, out: Path) -> None:
