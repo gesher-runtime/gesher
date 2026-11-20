@@ -7,6 +7,13 @@ Check 'framework: Wi-Fi data APIs and real native Parcelable round trips' {
   $deepWifiOut
 } @('WifiDataContractTest all passed:', 'parcel=true')
 
+$deepOsIdentityOut = FixesRun ($dvmFixes + 'gesher.services.OsIdentityContractTest') 60
+$deepOsIdentityCode = $LASTEXITCODE
+Check 'framework: os.name and Os.uname() report Linux; the release claims no kernel version' {
+  $global:LASTEXITCODE = $deepOsIdentityCode
+  $deepOsIdentityOut
+} @('OsIdentityContractTest: os.name=Linux', 'OsIdentityContractTest all passed:')
+
 $deepWifiConfigurationOut = FixesRun ($dvmFixes + 'gesher.services.WifiConfigurationContractTest') 90
 $deepWifiConfigurationCode = $LASTEXITCODE
 Check 'framework: Wi-Fi configuration, enterprise certificates and native Parcelable contracts' {

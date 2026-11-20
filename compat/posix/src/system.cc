@@ -87,8 +87,12 @@ extern "C" {
 
 int uname(struct utsname* buf) {
   memset(buf, 0, sizeof(*buf));
-  // Not "Linux": kernel-version checks must not pass.
-  snprintf(buf->sysname, sizeof(buf->sysname), "Windows");
+  // Android's kernel is Linux, and Android code takes it as given: libcore turns
+  // sysname into os.name (JNA, for one, selects its native platform from it), and
+  // ART's IsKernelVersionAtLeast CHECKs that sysname is "Linux". The release names
+  // no real kernel version, so "kernel >= X" checks still fail: callers take their
+  // oldest-kernel path instead of assuming features Gesher may not provide.
+  snprintf(buf->sysname, sizeof(buf->sysname), "Linux");
   snprintf(buf->release, sizeof(buf->release), "0.0.0-gesher");
   OSVERSIONINFOEXW v{};
   v.dwOSVersionInfoSize = sizeof(v);
