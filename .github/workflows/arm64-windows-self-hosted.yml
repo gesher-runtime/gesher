@@ -28,7 +28,8 @@ jobs:
   authorize:
     if: github.event_name == 'workflow_dispatch' || vars.GESHER_SELF_HOSTED_TRIAL == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
+    timeout-minutes: 20
     permissions:
       contents: read
       actions: read

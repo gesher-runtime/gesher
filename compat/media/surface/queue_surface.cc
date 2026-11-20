@@ -11,6 +11,69 @@
 
 namespace gesher::media {
 
+// Keep at most one returned pixel allocation, never a published frame. A
+// consumer (including SkData or an externally promoted weak_ptr) may keep any
+// frame immutable for as long as it needs. Only that frame's final destruction
+// returns its pixels. The pool never calls back into QueueSurface while locked.
+class QueueSurface::FramePool {
+ public:
+  void Configure(int width, int height) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (width_ == width && height_ == height) return;
+    width_ = width;
+    height_ = height;
+    ++generation_;
+    std::vector<uint32_t>().swap(spare_);
+  }
+
+  std::vector<uint32_t> Take(int width, int height, uint64_t* generation) {
+    std::vector<uint32_t> pixels;
+    std::lock_guard<std::mutex> lock(mutex_);
+    *generation = generation_;
+    if (!closed_ && width == width_ && height == height_) pixels.swap(spare_);
+    return pixels;
+  }
+
+  void Return(SurfaceFrame* frame, uint64_t generation) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!closed_ && generation == generation_ &&
+        frame->width == width_ && frame->height == height_ && spare_.empty() &&
+        frame->pixels.capacity() <= kMaxSpareBytes / sizeof(uint32_t)) {
+      spare_.swap(frame->pixels);
+    }
+  }
+
+  void Close() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    closed_ = true;
+    std::vector<uint32_t>().swap(spare_);
+  }
+
+ private:
+  // A single 4K RGBA frame fits. Larger frames still work, without caching.
+  static constexpr size_t kMaxSpareBytes = 32u << 20;
+  std::mutex mutex_;
+  int width_ = 0, height_ = 0;
+  uint64_t generation_ = 0;
+  bool closed_ = false;
+  std::vector<uint32_t> spare_;
+};
+
+class QueueSurface::RecycledFrame : public SurfaceFrame {
+ public:
+  RecycledFrame(const std::shared_ptr<FramePool>& pool, int width, int height) : pool_(pool) {
+    pixels = pool->Take(width, height, &generation_);
+  }
+  ~RecycledFrame() {
+    if (auto pool = pool_.lock()) pool->Return(this, generation_);
+  }
+
+ private:
+  // Outstanding readers cannot prolong the Surface or its spare allocation.
+  std::weak_ptr<FramePool> pool_;
+  uint64_t generation_ = 0;
+};
+
 class QueueSurface::Buffer
     : public android::ANativeObjectBase<ANativeWindowBuffer, QueueSurface::Buffer, android::RefBase> {
  public:
@@ -29,9 +92,11 @@ class QueueSurface::Buffer
   std::vector<uint32_t> pixels;
 };
 
-QueueSurface::QueueSurface(int default_width, int default_height) : android::Surface(nullptr) {
+QueueSurface::QueueSurface(int default_width, int default_height)
+    : android::Surface(nullptr), frame_pool_(std::make_shared<FramePool>()) {
   default_width_ = default_width > 0 ? default_width : 1;
   default_height_ = default_height > 0 ? default_height : 1;
+  UpdateFrameGeometry();
   ANativeWindow::setSwapInterval = HookSetSwapInterval;
   ANativeWindow::queueBuffer = HookQueueBuffer;
   ANativeWindow::cancelBuffer = HookCancelBuffer;
@@ -45,7 +110,7 @@ QueueSurface::QueueSurface(int default_width, int default_height) : android::Sur
   const_cast<int&>(ANativeWindow::maxSwapInterval) = 1;
 }
 
-QueueSurface::~QueueSurface() = default;
+QueueSurface::~QueueSurface() { frame_pool_->Close(); }
 
 QueueSurface* QueueSurface::From(ANativeWindow* window) {
   if (window == nullptr || window->common.magic != ANDROID_NATIVE_WINDOW_MAGIC ||
@@ -59,6 +124,7 @@ void QueueSurface::SetDefaultSize(int width, int height) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (width > 0) default_width_ = width;
   if (height > 0) default_height_ = height;
+  UpdateFrameGeometry();
 }
 
 void QueueSurface::SetListener(std::function<void()> listener) {
@@ -80,6 +146,7 @@ void QueueSurface::Abandon() {
   std::lock_guard<std::mutex> lock(mutex_);
   abandoned_ = true;
   listener_ = nullptr;
+  frame_pool_->Close();
   latest_.reset();
   // Dequeued producers own their buffers through dequeued_. A CPU lock has
   // only a raw pixels pointer, so keep its buffer until unlockAndPost returns.
@@ -97,6 +164,12 @@ void QueueSurface::Size(int* width, int* height) const {
     *width = default_width_;
     *height = default_height_;
   }
+}
+
+void QueueSurface::UpdateFrameGeometry() {
+  int w, h;
+  Size(&w, &h);
+  frame_pool_->Configure(w, h);
 }
 
 void QueueSurface::EnsureBuffer() {
@@ -165,13 +238,17 @@ int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns) {
 std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timestamp_ns) {
   if (buffer_ == nullptr) return {};
   buffer_contents_valid_ = true;
-  auto f = std::make_shared<SurfaceFrame>();
+  auto f = std::make_shared<RecycledFrame>(frame_pool_, buffer_->width, buffer_->height);
   f->width = buffer_->width;
   f->height = buffer_->height;
   const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
   const bool bgra = buffer_->format == HAL_PIXEL_FORMAT_BGRA_8888;
   f->pixels.resize(static_cast<size_t>(f->width) * f->height);
-  for (int y = 0; y < f->height; y++) {
+  if (!opaque && !bgra && buffer_->stride == f->width) {
+    // Ordinary RGBA producer storage is already packed. Let memcpy handle
+    // the complete frame instead of restarting its copy loop on every row.
+    memcpy(f->pixels.data(), buffer_->pixels.data(), f->pixels.size() * sizeof(uint32_t));
+  } else for (int y = 0; y < f->height; y++) {
     const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y) * buffer_->stride];
     uint32_t* d = &f->pixels[static_cast<size_t>(y) * f->width];
     if (!opaque && !bgra) {
@@ -309,6 +386,7 @@ int QueueSurface::perform(int operation, va_list args) {
         requested_width_ = w;
         requested_height_ = h;
       }
+      UpdateFrameGeometry();
       return 0;
     }
     case NATIVE_WINDOW_SET_BUFFERS_GEOMETRY: {
@@ -320,6 +398,7 @@ int QueueSurface::perform(int operation, va_list args) {
       // The legacy dispatch sets producer dimensions before setting format.
       requested_width_ = w;
       requested_height_ = h;
+      UpdateFrameGeometry();
       if (format == 0) format = HAL_PIXEL_FORMAT_RGBA_8888;
       if (format != HAL_PIXEL_FORMAT_RGBA_8888 && format != HAL_PIXEL_FORMAT_RGBX_8888 &&
           format != HAL_PIXEL_FORMAT_BGRA_8888) return -EINVAL;

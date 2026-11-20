@@ -86,7 +86,15 @@ void AddCode(const void* start, size_t size, const char* name) {
   if (g_api) g_api->add_code(start, size, name);
 }
 
+void RemoveCode(const void* mapping_base, size_t mapping_size) {
+  if (g_api) g_api->remove_code(mapping_base, mapping_size);
+}
+
 void* BindHostFunction(void* host_fn) { return g_bind ? g_bind(host_fn) : nullptr; }
+
+void UnbindHostFunction(void* host_fn) {
+  if (g_api) g_api->unbind_host_function(host_fn);
+}
 
 void* HostEntry(const void* fn) { return g_api ? g_api->host_entry(fn) : nullptr; }
 
@@ -98,8 +106,16 @@ int64_t TlsRegister(size_t total_size, size_t align) {
   return g_api ? g_api->tls_register(total_size, align) : -1;
 }
 
+bool TlsPrepare(int64_t offset, const void* image, size_t image_size, size_t total_size) {
+  return g_api && g_api->tls_prepare(offset, image, image_size, total_size) != 0;
+}
+
 void TlsPublish(int64_t offset, const void* image, size_t image_size, size_t total_size) {
   if (g_api) g_api->tls_publish(offset, image, image_size, total_size);
+}
+
+bool TlsRollback(int64_t offset, size_t total_size) {
+  return g_api && g_api->tls_rollback(offset, total_size) != 0;
 }
 
 void AddVaListFunction(const void* fn, int index) {

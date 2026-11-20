@@ -67,8 +67,11 @@ class QueueSurface : public android::Surface {
 
  private:
   class Buffer;
+  class FramePool;
+  class RecycledFrame;
 
   void Size(int* width, int* height) const;
+  void UpdateFrameGeometry();  // with mutex_ held; drops obsolete reusable pixels
   void EnsureBuffer();  // with mutex_ held
   int UnlockAndPost(std::optional<int64_t> timestamp_ns);
   // Copies buffer_ as the latest frame with mutex_ held. Invoke the returned
@@ -90,6 +93,7 @@ class QueueSurface : public android::Surface {
   bool locked_ = false;
   bool buffer_contents_valid_ = false;
   bool abandoned_ = false;
+  std::shared_ptr<FramePool> frame_pool_;
   std::shared_ptr<const SurfaceFrame> latest_;
   uint64_t frames_ = 0;
   std::function<void()> listener_;

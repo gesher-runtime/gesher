@@ -19,9 +19,14 @@ public final class ServiceFixtureRunner {
                 || args[0].equals("GrammaticalInflectionUnavailableTest")
                 || args[0].equals("WifiUnsupportedTest")
                 || args[0].equals("WifiScannerUnsupportedTest")
+                || args[0].equals("RoleManagerUnsupportedTest")
                 || args[0].equals("AccountVisibilityNotificationTest");
         if (!ownsBootstrap) {
             System.loadLibrary("android_runtime");
+            String root = System.getenv("ANDROID_ROOT");
+            if (root == null || root.isEmpty()) throw new IllegalStateException("ANDROID_ROOT is required");
+            android.content.res.AssetManager.createSystemAssetsInZygoteLocked(false,
+                    root + "/framework/framework-res.apk");
             Class<?> shared = Class.forName("com.android.internal.os.ApplicationSharedMemory");
             Object region = shared.getMethod("create").invoke(null);
             shared.getMethod("setInstance", shared).invoke(null, region);

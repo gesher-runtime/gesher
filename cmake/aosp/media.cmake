@@ -11,6 +11,11 @@
 
 set(_media "${CMAKE_SOURCE_DIR}/compat/media")
 
+# Synthetic inputs belong to separately named CI fixtures, never the package.
+option(GESHER_CAPTURE_TEST_SOURCES "Compile isolated synthetic audio capture fixtures" OFF)
+set_property(SOURCE ${_media}/audio/capture.cc APPEND PROPERTY COMPILE_DEFINITIONS
+  "$<$<BOOL:${GESHER_CAPTURE_TEST_SOURCES}>:GESHER_CAPTURE_TEST_SOURCES=1>")
+
 # AOSP's extractors and the open codecs (cmake/aosp/media_codecs.cmake).
 include(${CMAKE_CURRENT_LIST_DIR}/media_codecs.cmake)
 
@@ -74,7 +79,8 @@ target_compile_options(gesher_media_player_core PRIVATE -Wall -Wextra -Werror
 set_target_properties(gesher_media_player_core PROPERTIES CXX_STANDARD 23)
 
 # The native APIs share the actual audio/file-player backend in both hosts.
-add_library(gesher_media_ndk OBJECT ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc)
+add_library(gesher_media_ndk OBJECT
+  ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc ${_media}/ndk/media_extractor.cc)
 target_link_libraries(gesher_media_ndk PUBLIC gesher_media_audio gesher_media_player_core gesher_bionic)
 target_compile_options(gesher_media_ndk PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 set_target_properties(gesher_media_ndk PROPERTIES CXX_STANDARD 23)
@@ -217,6 +223,15 @@ target_compile_options(media_surface_geometry_contract_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_surface_geometry_contract_test PRIVATE gesher_window_surface)
 gesher_graphics_cxx(media_surface_geometry_contract_test)
+
+add_executable(media_surface_frame_recycling_test
+  "${CMAKE_SOURCE_DIR}/tests/media/surface_frame_recycling_contract_test.cc"
+  ${_media}/surface/queue_surface.cc)
+target_include_directories(media_surface_frame_recycling_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_surface_frame_recycling_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter)
+target_link_libraries(media_surface_frame_recycling_test PRIVATE hostgraphics)
+gesher_graphics_cxx(media_surface_frame_recycling_test)
 
 # The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).

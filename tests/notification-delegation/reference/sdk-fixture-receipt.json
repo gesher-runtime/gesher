@@ -1,0 +1,41 @@
+{
+  "source_sha256": "6188c8bb32710bd279efe4cfd02cb71245a13c87b03f0abc1c300afa85451a48",
+  "android_jar_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "apks": [
+    {
+      "name": "owner",
+      "package": "gesher.notificationdelegation.owner",
+      "apk": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/owner.apk",
+      "sha256": "dfd62f016dd719096ee6f43b211aed9aaf36d04c31d12e8906a36cd275a88862",
+      "shared_uid": false
+    },
+    {
+      "name": "delegate",
+      "package": "gesher.notificationdelegation.delegate",
+      "apk": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/delegate.apk",
+      "sha256": "001d78ab2dd1a4ad6bc591f808dca54e39f43304667d622ccb7e0a74a49a13e7",
+      "shared_uid": false
+    },
+    {
+      "name": "other",
+      "package": "gesher.notificationdelegation.other",
+      "apk": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/other.apk",
+      "sha256": "7feb3a89927f76021533aa155d864390af4a3b1b72504f7673ce059594942963",
+      "shared_uid": false
+    },
+    {
+      "name": "sharedowner",
+      "package": "gesher.notificationdelegation.sharedowner",
+      "apk": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/sharedowner.apk",
+      "sha256": "ddfabe93a8e142e0f61efa07d3cc2ca3232d9aa134fed44c0cdb5103814e236c",
+      "shared_uid": true
+    },
+    {
+      "name": "shareddelegate",
+      "package": "gesher.notificationdelegation.shareddelegate",
+      "apk": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/shareddelegate.apk",
+      "sha256": "6cc77d37d175cd0434ba52d6ea2b1a7bf54c6ad292cac073fc5acb67efba2fcd",
+      "shared_uid": true
+    }
+  ]
+}

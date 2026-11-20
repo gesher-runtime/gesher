@@ -1,0 +1,37 @@
+[
+  {
+    "name": "windows-x64",
+    "producer": "build",
+    "destination": "windows_x64"
+  },
+  {
+    "name": "framework",
+    "producer": "framework / framework",
+    "destination": "framework"
+  },
+  {
+    "name": "graphics",
+    "producer": "graphics / build",
+    "destination": "graphics"
+  },
+  {
+    "name": "angle",
+    "producer": "angle / probe-build",
+    "destination": "angle"
+  },
+  {
+    "name": "arm64",
+    "producer": "arm64 / build",
+    "destination": "arm64"
+  },
+  {
+    "name": "boot-image",
+    "producer": "boot-image / compile",
+    "destination": "boot_image"
+  },
+  {
+    "name": "media",
+    "producer": "media / media",
+    "destination": "media"
+  }
+]

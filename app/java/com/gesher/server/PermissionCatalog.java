@@ -47,6 +47,7 @@ final class PermissionCatalog {
                         info.name = name;
                         info.packageName = "android";
                         info.protectionLevel = xml.getAttributeIntValue(ANDROID, "protectionLevel", 0);
+                        info.flags = xml.getAttributeIntValue(ANDROID, "permissionFlags", 0);
                         info.group = xml.getAttributeValue(ANDROID, "permissionGroup");
                         info.labelRes = xml.getAttributeResourceValue(ANDROID, "label", 0);
                         info.descriptionRes = xml.getAttributeResourceValue(ANDROID, "description", 0);
@@ -92,6 +93,7 @@ final class PermissionCatalog {
                 info.name = parsed.getName();
                 info.packageName = pkg.packageName;
                 info.protectionLevel = parsed.getProtectionLevel();
+                info.flags = parsed.getFlags();
                 info.group = parsed.getGroup();
                 info.labelRes = parsed.getLabelRes();
                 info.descriptionRes = parsed.getDescriptionRes();
@@ -106,6 +108,12 @@ final class PermissionCatalog {
         load();
         // A failed framework catalog must not authorize an unknown sender.
         return name != null && (!mFrameworkRead || mProtectedBroadcasts.contains(name));
+    }
+
+    /** Positive catalog evidence, for exemptions that must not be granted on load failure. */
+    boolean isKnownProtectedBroadcast(String name) {
+        load();
+        return mFrameworkRead && name != null && mProtectedBroadcasts.contains(name);
     }
 
     Map<String, PermissionInfo> permissions() {

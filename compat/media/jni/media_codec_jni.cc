@@ -1314,7 +1314,9 @@ class Codec {
       if (input_format_.GetInt32("sample-rate", &v) && v > 0) p.sample_rate = static_cast<uint32_t>(v);
       if (input_format_.GetInt32("channel-count", &v) && v > 0) p.channels = static_cast<uint32_t>(v);
       if (input_format_.GetInt32("bitrate", &v) && v > 0) p.bitrate = v;
-      if (input_format_.GetInt32("aac-profile", &v) && v > 0) p.aac_profile = v;
+      // Preserve an explicit profile, including an invalid value, so the
+      // encoder factory can reject it instead of silently selecting AAC-LC.
+      if (input_format_.GetInt32("aac-profile", &v)) p.aac_profile = v;
       int32_t encoding = 2;
       input_format_.GetInt32("pcm-encoding", &encoding);
       in_float_ = encoding == 4;
@@ -1952,8 +1954,8 @@ jint JNICALL MCL_findCodecByName(JNIEnv* env, jclass, jstring name) {
   return -2;  // -ENOENT
 }
 
-// The profiles and levels a decoder declares, as on a device's codec list.
-std::vector<std::pair<int, int>> ProfileLevels(const std::string& mime) {
+// Profiles and levels by codec role, as on a device's codec list.
+std::vector<std::pair<int, int>> ProfileLevels(const std::string& mime, bool encoder = false) {
   if (mime == "video/avc") return {{0x01, 0x8000}, {0x02, 0x8000}, {0x08, 0x8000}, {0x10000, 0x8000}, {0x80000, 0x8000}};
   if (mime == "video/hevc") return {{0x01, 0x10000}};
   if (mime == "video/x-vnd.on2.vp8") return {{0x01, 0x01}};
@@ -1961,7 +1963,10 @@ std::vector<std::pair<int, int>> ProfileLevels(const std::string& mime) {
   if (mime == "video/av01") return {{0x1, 0x2000}};
   if (mime == "video/mp4v-es") return {{0x01, 0x80}};
   if (mime == "video/3gpp") return {{0x01, 0x80}};
-  if (mime == "audio/mp4a-latm") return {{2, 0}, {5, 0}, {29, 0}};
+  if (mime == "audio/mp4a-latm") {
+    if (encoder) return {{2, 0}};  // The implemented AAC encoder emits LC only.
+    return {{2, 0}, {5, 0}, {29, 0}};
+  }
   return {};
 }
 
@@ -1973,7 +1978,7 @@ jobject JNICALL MCL_getCodecCapabilities(JNIEnv* env, jclass, jint index, jstrin
     return nullptr;
   }
   jclass pl_class = env->FindClass("android/media/MediaCodecInfo$CodecProfileLevel");
-  auto pls = ProfileLevels(e->mime);
+  auto pls = ProfileLevels(e->mime, e->encoder);
   jobjectArray pl_array = env->NewObjectArray(static_cast<jsize>(pls.size()), pl_class, nullptr);
   jfieldID profile = env->GetFieldID(pl_class, "profile", "I");
   jfieldID level = env->GetFieldID(pl_class, "level", "I");
@@ -2015,7 +2020,8 @@ jobject JNICALL MCL_getCodecCapabilities(JNIEnv* env, jclass, jint index, jstrin
     details.strings["sample-rate-ranges"] = !e->encoder                 ? "7350-96000"
                                             : e->mime == "audio/opus" ? "8000,12000,16000,24000,48000"
                                                                       : "44100,48000";
-    details.strings["bitrate-range"] = e->encoder && e->mime == "audio/mp4a-latm" ? "96000-192000" : "8000-960000";
+    details.strings["bitrate-range"] = !e->encoder ? "8000-960000"
+        : e->mime == "audio/opus" ? "6000-510000" : "96000-192000";
   }
   jobject default_map = defaults.Make(env);
   jobject details_map = details.Make(env);
