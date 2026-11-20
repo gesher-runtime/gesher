@@ -135,7 +135,12 @@ static void test_pair(int type, const char* name) {
                                              recv(inner[0], buf, sizeof(buf), 0) == 4 &&
                                              memcmp(buf, "back", 4) == 0);
     (void)type_value;
-    (void)len;
+    struct ucred peer = {0, 0, 0};
+    len = sizeof(peer);
+    check("and SO_PEERCRED is still the pair's creator",
+          getsockopt(got[0], SOL_SOCKET, SO_PEERCRED, &peer, &len) == 0 &&
+              len == sizeof(peer) && peer.pid == getpid() && peer.uid == getuid() &&
+              peer.gid == getgid());
     close(got[0]);
   }
   close(inner[0]);

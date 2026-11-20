@@ -1573,7 +1573,7 @@ void ServeProc(HANDLE pipe, In in) {
 
 struct RightsEntry {
   HANDLE handle;
-  uint32_t metadata;
+  uint64_t metadata;
 };
 
 struct RightsGroup {
@@ -1623,7 +1623,7 @@ void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
       out = nullptr;
     }
     reply->Put<uint64_t>(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(out)));
-    reply->Put<uint32_t>(e.metadata);
+    reply->Put<uint64_t>(e.metadata);
   }
   g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
   group->entries.clear();
@@ -1662,7 +1662,7 @@ void ServeRights(HANDLE pipe, In in) {
       int32_t status = 0;
       for (uint32_t i = 0; i < count; ++i) {
         uint64_t handle;
-        uint32_t metadata;
+        uint64_t metadata;
         if (!req.Get(&handle) || !req.Get(&metadata)) {
           status = -EINVAL;
           break;

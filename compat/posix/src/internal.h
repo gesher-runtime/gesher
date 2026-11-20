@@ -170,18 +170,18 @@ void RegisterMemfdIfSealed(int fd, HANDLE file);
 // carry Gesher's state. kTransferredSocket marks such metadata.
 inline constexpr uint32_t kTransferredSocket = 0x1;
 // False if fd is not a socket; else its handle and description's metadata.
-bool TransferSocket(int fd, uintptr_t* socket, uint32_t* metadata);
+bool TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata);
 // A new fd for `socket`, this process's own handle (taken over, closed on
 // failure), with the description `metadata` describes; -1 with errno.
-int AdoptSocket(uintptr_t socket, uint32_t metadata);
+int AdoptSocket(uintptr_t socket, uint64_t metadata);
 // Any descriptor that can travel to another process (unix_rights.cc): its
 // handle and metadata (a socket's, or 0). False with EINVAL for descriptors
 // gesher-base serves itself (eventfd, epoll, inotify, timerfd, binder,
 // devices), EBADF for none.
-bool DescribeForTransfer(int fd, uintptr_t* handle, uint32_t* metadata);
+bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata);
 // A new descriptor for a received handle (this process's own, taken over) with
 // its metadata; -1 with errno.
-int AdoptTransferred(HANDLE owned, uint32_t metadata);
+int AdoptTransferred(HANDLE owned, uint64_t metadata);
 // dup/dup2/F_DUPFD: `to` is a memfd exactly when `from` is.
 void CopyMemfdRegistration(int from, int to);
 // fcntl F_GET_SEALS / F_ADD_SEALS: -1 with errno (EINVAL for another file).

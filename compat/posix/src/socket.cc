@@ -1093,9 +1093,11 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
 // --- sockets in Binder transactions (ADR 0088 phase 3) -------------------------
 //
 // Metadata bits after kTransferredSocket; the creator's pid (SO_PEERCRED of a
-// socketpair) fills the rest, divided by 4: Windows process ids are multiples
-// of 4 below 2^26. uid and gid are those of the receiver, every process of a
-// package runs as its uid.
+// socketpair) fills the rest of the low 32 bits, divided by 4: Windows process
+// ids are multiples of 4 below 2^26. The creator's uid is the high 32 bits: the
+// receiver may run as another uid ($GESHER_UID), and SO_PEERCRED reports the
+// creator's. Gesher's gid is its uid (getgid), so credentials whose gid differs
+// do not travel, and the received end then has none, as one Linux never knew.
 namespace {
 constexpr uint32_t kTransferUnixDatagram = 0x2;
 constexpr uint32_t kTransferPassCredentials = 0x4;
@@ -1105,25 +1107,28 @@ constexpr uint32_t kTransferUnixStream = 0x20;
 constexpr int kTransferPidShift = 6;
 }  // namespace
 
-bool gesher::TransferSocket(int fd, uintptr_t* socket, uint32_t* metadata) {
+bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {
   SocketFd state;
   if (!gesher::LookupSocket(fd, &state)) return false;
   const ws::SocketDescription& d = *state.description;
-  uint32_t m = kTransferredSocket;
+  uint64_t m = kTransferredSocket;
   if (d.unix_datagram_pair.load()) m |= kTransferUnixDatagram;
   if (d.unix_stream_pair.load()) m |= kTransferUnixStream;
   if (d.pass_credentials.load()) m |= kTransferPassCredentials;
   if (d.nonblocking.load()) m |= kTransferNonBlocking;
   if (d.has_peer_credentials && d.peer_pid > 0 && d.peer_pid % 4 == 0 &&
-      (static_cast<uint32_t>(d.peer_pid) >> 2) < (1u << (32 - kTransferPidShift))) {
-    m |= kTransferPeerCredentials | (static_cast<uint32_t>(d.peer_pid) >> 2) << kTransferPidShift;
+      (static_cast<uint32_t>(d.peer_pid) >> 2) < (1u << (32 - kTransferPidShift)) &&
+      d.peer_gid == d.peer_uid) {
+    m |= kTransferPeerCredentials |
+         uint64_t{static_cast<uint32_t>(d.peer_pid) >> 2} << kTransferPidShift |
+         uint64_t{d.peer_uid} << 32;
   }
   *socket = state.socket;
   *metadata = m;
   return true;
 }
 
-int gesher::AdoptSocket(uintptr_t socket, uint32_t metadata) {
+int gesher::AdoptSocket(uintptr_t socket, uint64_t metadata) {
   if (!ws::Startup()) {
     int saved = errno;
     ws::Close(socket);
@@ -1138,11 +1143,10 @@ int gesher::AdoptSocket(uintptr_t socket, uint32_t metadata) {
     d.unix_stream_pair.store((metadata & kTransferUnixStream) != 0);
     d.pass_credentials.store((metadata & kTransferPassCredentials) != 0);
     if ((metadata & kTransferPeerCredentials) != 0) {
-      const ws::UnixCredentials self = ws::LocalCredentials();
       d.has_peer_credentials = true;
-      d.peer_pid = static_cast<int32_t>((metadata >> kTransferPidShift) << 2);
-      d.peer_uid = self.uid;
-      d.peer_gid = self.gid;
+      d.peer_pid = static_cast<int32_t>(((metadata & 0xffffffffu) >> kTransferPidShift) << 2);
+      d.peer_uid = static_cast<uint32_t>(metadata >> 32);
+      d.peer_gid = d.peer_uid;
     }
   }
   return fd;

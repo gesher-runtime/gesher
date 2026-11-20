@@ -149,8 +149,11 @@ Each phase is a PR with contract tests:
   each `BINDER_TYPE_FD` handle into the receiver; a socket's fd sends its
   `SOCKET` handle, and its description's state (datagram or stream pair,
   `SO_PASSCRED`, `O_NONBLOCK`, `SO_PEERCRED`'s pid) travels in the fd object's
-  `pad_flags`, which the kernel ABI leaves unused (`TransferSocket`,
-  `AdoptSocket` in `socket.cc`). The receiver registers the duplicated handle as
+  `pad_flags`, which the kernel ABI leaves unused, and `SO_PEERCRED`'s uid in
+  the high 32 bits of its `cookie`, whose low bits keep libbinder's value
+  (`TransferSocket`, `AdoptSocket` in `socket.cc`). Through the broker the
+  same 64-bit metadata travels with each handle. The received end reports the
+  pair's creator, not the receiver, which may run as another uid. The receiver registers the duplicated handle as
   a socket. Sockets are duplicated with `DuplicateHandle`, as inherited
   sockets are, not `WSADuplicateSocketW`: the broker does not know the
   receiver when the descriptor is deposited.
@@ -181,7 +184,14 @@ Each phase is a PR with contract tests:
   - two threads or processes writing on one end at once can make a group's
     position precede bytes written concurrently with it.
 - **Not done:** descriptors in flight are not released when the receiving end
-  closes (they stay in binderd, within its limit of 65536). `SCM_RIGHTS` on
+  closes (they stay in binderd). The in-flight limit (65536, `ETOOMANYREFS`)
+  is binderd's in total, not per sender as section 3 planned. A stream
+  connection's queue is known by its two loopback ports, and the broker does
+  not check that a process depositing or taking descriptors holds an end of
+  that connection. Gesher's processes run as one Windows user without an
+  AppContainer, so a process could reach the other's handles regardless;
+  binding queues to the connection's processes is left with the release of
+  in-flight descriptors. `SCM_RIGHTS` on
   named `AF_UNIX` sockets and on `AF_INET` sockets still fails with
   `EOPNOTSUPP`; so does `SCM_RIGHTS` without a broker (`$GESHER_BINDER`).
 

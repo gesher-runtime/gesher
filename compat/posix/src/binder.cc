@@ -312,7 +312,10 @@ void CloseThreadPipe(BinderFile* file) {
 // (DuplicateHandle). That staging handle remains broker-owned; the receiver
 // duplicates it again and adopts only its distinct local copy. A socket's fd
 // (open on NUL) travels as its SOCKET handle, and its description's state in
-// pad_flags (TransferSocket, ADR 0088 phase 3). Only fds backed by a Windows
+// pad_flags and the high 32 bits of the object's cookie (TransferSocket's low
+// and high 32 bits, ADR 0088 phase 3). binderd copies an fd object's cookie
+// unchanged; its low 32 bits keep libbinder's value (the sender's ownership
+// flag), which the receiver gets back as sent. Only fds backed by a Windows
 // handle (files, memfds, pipes, sockets) travel; any other goes as handle 0,
 // which binderd refuses (BR_FAILED_REPLY).
 template <typename F>
@@ -335,9 +338,10 @@ void SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
   ForEachFdObject(data, data_size, offsets, offsets_size, [](binder_fd_object& obj) {
     const int fd = static_cast<int>(obj.fd);
     uintptr_t socket = 0;
-    uint32_t metadata = 0;
+    uint64_t metadata = 0;
     if (gesher::TransferSocket(fd, &socket, &metadata)) {
-      obj.pad_flags = metadata;
+      obj.pad_flags = static_cast<__u32>(metadata);
+      obj.cookie = (obj.cookie & 0xffffffffu) | (metadata >> 32) << 32;
       obj.pad_binder = static_cast<binder_uintptr_t>(socket);
       return;
     }
@@ -355,10 +359,12 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
     int fd = -1;
     if (DuplicateHandle(GetCurrentProcess(), staging, GetCurrentProcess(), &owned,
                         0, FALSE, DUPLICATE_SAME_ACCESS)) {
-      fd = gesher::AdoptTransferred(owned, obj.pad_flags);
+      fd = gesher::AdoptTransferred(
+          owned, uint64_t{obj.pad_flags} | (uint64_t{obj.cookie} >> 32) << 32);
     }
     if (fd < 0) ok = false;
     obj.pad_flags = 0;
+    obj.cookie &= 0xffffffffu;
     obj.pad_binder = 0;
     obj.fd = static_cast<__u32>(fd);
   });

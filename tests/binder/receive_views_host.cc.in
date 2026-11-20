@@ -227,8 +227,8 @@ int FixtureClose(int fd) {
 namespace gesher {
 // The fixture's descriptors are plain handles, never sockets: production
 // adopts those with _open_osfhandle (unix_rights.cc's AdoptTransferred).
-bool TransferSocket(int, uintptr_t*, uint32_t*) { return false; }
-int AdoptTransferred(HANDLE owned, uint32_t) {
+bool TransferSocket(int, uintptr_t*, uint64_t*) { return false; }
+int AdoptTransferred(HANDLE owned, uint64_t) {
   const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
   if (fd < 0) CloseHandle(owned);  // as production: a failed adoption closes the handle
   return fd;

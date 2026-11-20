@@ -147,7 +147,7 @@ bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt) {
   if (status != 0) return errno = -status, false;
   for (uint32_t i = 0; i < count; ++i) {
     uint64_t handle;
-    uint32_t metadata;
+    uint64_t metadata;
     if (!reply.Get(&handle) || !reply.Get(&metadata)) return errno = EIO, false;
     HANDLE h = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle));
     if (!adopt) {
@@ -194,7 +194,7 @@ volatile LONG64* PositionOf(uint16_t port, bool sent) {
 
 }  // namespace
 
-bool DescribeForTransfer(int fd, uintptr_t* handle, uint32_t* metadata) {
+bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata) {
   if (TransferSocket(fd, handle, metadata)) return true;
   gesher::Device device;
   short ready = 0;
@@ -211,7 +211,7 @@ bool DescribeForTransfer(int fd, uintptr_t* handle, uint32_t* metadata) {
   return true;
 }
 
-int AdoptTransferred(HANDLE owned, uint32_t metadata) {
+int AdoptTransferred(HANDLE owned, uint64_t metadata) {
   if ((metadata & kTransferredSocket) != 0) {
     return AdoptSocket(reinterpret_cast<uintptr_t>(owned), metadata);
   }
@@ -256,10 +256,10 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
   request.Put<uint32_t>(static_cast<uint32_t>(fds.size()));
   for (int fd : fds) {
     uintptr_t handle;
-    uint32_t metadata;
+    uint64_t metadata;
     if (!DescribeForTransfer(fd, &handle, &metadata)) return false;
     request.Put<uint64_t>(handle);
-    request.Put<uint32_t>(metadata);
+    request.Put<uint64_t>(metadata);
   }
   std::lock_guard<std::mutex> lock(g_mutex);
   Reply reply;

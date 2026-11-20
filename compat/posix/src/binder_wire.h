@@ -68,7 +68,7 @@ enum Op : uint32_t {
   // -> {queue (u64): 0, or a stream connection's key; position (u64): with a
   //     queue, where the bytes sent with the group begin in that direction of
   //     the connection (kStreamPositionsPrefix); count (u32);
-  //     count x {handle (u64), metadata (u32)}}
+  //     count x {handle (u64), metadata (u64)}}
   // <- {status, token (2 x u64)}. With a queue, the group also waits in that
   // connection's queue (kRightsTake), in order.
   kRightsDeposit = 8,
@@ -88,7 +88,7 @@ enum Op : uint32_t {
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
 // binderd and the processes that send or receive descriptors must agree on it;
 // other binder clients need not.
-constexpr uint32_t kRightsVersion = 3;
+constexpr uint32_t kRightsVersion = 4;
 
 // The broker's doorbell for stream queues: a shared section named
 // kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint64 values, one
