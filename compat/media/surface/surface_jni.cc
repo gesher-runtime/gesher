@@ -4,7 +4,10 @@
 //
 //  - android.graphics.SurfaceTexture: a QueueSurface (queue_surface.h) for its
 //    producer; each frame calls SurfaceTexture.postEventFromNative, so the
-//    TextureView updates its layer and invalidates.
+//    TextureView updates its layer and invalidates. Its GL side
+//    (updateTexImage into the app's GL_TEXTURE_EXTERNAL_OES texture,
+//    attach/detach, releaseTexImage, the transform and time stamp of the
+//    latched frame) is surface_texture_gl.h's.
 //  - TextureView's layer: HardwareRenderer.nCreateTextureLayer makes a
 //    Gesher TextureLayer (not hwui's DeferredLayerUpdater, which needs the
 //    device's ASurfaceTexture), TextureLayer's natives configure it, and
@@ -58,6 +61,7 @@
 #include "frame_invalidation.h"
 #include "queue_surface.h"
 #include "surface_parcel_bridge.h"
+#include "surface_texture_gl.h"
 
 #if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
@@ -135,7 +139,8 @@ class FrameImages {
 struct SurfaceTextureState {
   android::sp<QueueSurface> surface;
   jobject weak_self = nullptr;  // global ref to the WeakReference
-  int64_t timestamp_ns = 0;
+  // The GL side: the external texture updateTexImage latches frames into.
+  std::unique_ptr<gesher::media::GlTextureConsumer> consumer;
   bool released = false;
 };
 
@@ -150,9 +155,13 @@ SurfaceTextureState* StateOf(JNIEnv* env, jobject thiz) {
   return reinterpret_cast<SurfaceTextureState*>(env->GetLongField(thiz, gST.surface_texture));
 }
 
-void JNICALL ST_init(JNIEnv* env, jobject thiz, jboolean, jint, jboolean, jobject weak_self) {
+// SurfaceTexture.nativeInit(isDetached, texName, singleBufferMode, weakSelf).
+void JNICALL ST_init(JNIEnv* env, jobject thiz, jboolean detached, jint tex_name, jboolean,
+                     jobject weak_self) {
   auto* s = new SurfaceTextureState();
   s->surface = android::sp<QueueSurface>::make(1, 1);
+  s->consumer = std::make_unique<gesher::media::GlTextureConsumer>(
+      detached != JNI_FALSE, static_cast<uint32_t>(tex_name));
   s->weak_self = env->NewGlobalRef(weak_self);
   jobject weak = s->weak_self;
   s->surface->SetListener([weak] {
@@ -168,6 +177,7 @@ void ReleaseState(JNIEnv* env, SurfaceTextureState* s) {
   if (s == nullptr || s->released) return;
   s->released = true;
   s->surface->Abandon();
+  s->consumer->Abandon();
 }
 
 void JNICALL ST_release(JNIEnv* env, jobject thiz) { ReleaseState(env, StateOf(env, thiz)); }
@@ -190,32 +200,59 @@ void JNICALL ST_setDefaultBufferSize(JNIEnv* env, jobject thiz, jint w, jint h) 
   if (SurfaceTextureState* s = StateOf(env, thiz)) s->surface->SetDefaultSize(w, h);
 }
 
-// No GL texture behind it: latching a frame only takes its time stamp (apps that
-// sample the external texture themselves get nothing new).
+// updateTexImage and releaseTexImage throw as android_graphics_SurfaceTexture.cpp
+// does: INVALID_OPERATION (no or another EGL context current) is an
+// IllegalStateException, other errors (abandoned: NO_INIT) a RuntimeException.
+void ThrowForStatus(JNIEnv* env, int err, const char* invalid_operation) {
+  if (err == gesher::media::GlTextureConsumer::kInvalidOperation) {
+    jniThrowException(env, "java/lang/IllegalStateException", invalid_operation);
+  } else if (err < 0) {
+    jniThrowException(env, "java/lang/RuntimeException",
+                      "Error during updateTexImage (see logcat for details)");
+  }
+}
+
+// The newest frame into the external texture (surface_texture_gl.h).
 void JNICALL ST_updateTexImage(JNIEnv* env, jobject thiz) {
   SurfaceTextureState* s = StateOf(env, thiz);
   if (s == nullptr) return;
-  auto f = s->surface->Latest();
-  if (f != nullptr) s->timestamp_ns = f->timestamp_ns;
+  ThrowForStatus(env, s->consumer->UpdateTexImage(s->surface->Latest()),
+                 "Unable to update texture contents (see logcat for details)");
 }
 
-void JNICALL ST_releaseTexImage(JNIEnv*, jobject) {}
+void JNICALL ST_releaseTexImage(JNIEnv* env, jobject thiz) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  if (s == nullptr) return;
+  ThrowForStatus(env, s->consumer->ReleaseTexImage(),
+                 "Unable to release texture contents (see logcat for details)");
+}
 
 jlong JNICALL ST_getTimestamp(JNIEnv* env, jobject thiz) {
   SurfaceTextureState* s = StateOf(env, thiz);
-  return s != nullptr ? s->timestamp_ns : 0;
+  return s != nullptr ? s->consumer->Timestamp() : 0;
 }
 
 jint JNICALL ST_getDataSpace(JNIEnv*, jobject) { return 0; }
 
-// The usual transform of a buffer for GL's bottom-up texture coordinates.
-void JNICALL ST_getTransformMatrix(JNIEnv* env, jobject, jfloatArray mtx) {
-  const jfloat m[16] = {1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1};
+// The latched frame's transform: the identity before one is latched, then the
+// vertical flip of a buffer without crop or transform.
+void JNICALL ST_getTransformMatrix(JNIEnv* env, jobject thiz, jfloatArray mtx) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  if (s != nullptr) s->consumer->TransformMatrix(m);
   if (mtx != nullptr && env->GetArrayLength(mtx) >= 16) env->SetFloatArrayRegion(mtx, 0, 16, m);
 }
 
-jint JNICALL ST_detachFromGLContext(JNIEnv*, jobject) { return 0; }
-jint JNICALL ST_attachToGLContext(JNIEnv*, jobject, jint) { return 0; }
+// The Java side throws RuntimeException for a non-zero status.
+jint JNICALL ST_detachFromGLContext(JNIEnv* env, jobject thiz) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  return s != nullptr ? s->consumer->DetachFromContext() : 0;
+}
+
+jint JNICALL ST_attachToGLContext(JNIEnv* env, jobject thiz, jint tex_name) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  return s != nullptr ? s->consumer->AttachToContext(static_cast<uint32_t>(tex_name)) : 0;
+}
 
 // Surface.nativeCreateFromSurfaceTexture(SurfaceTexture): its producer side.
 jlong JNICALL Surface_createFromSurfaceTexture(JNIEnv* env, jclass, jobject surface_texture) {

@@ -249,6 +249,8 @@ target_sources(hwui PRIVATE
   ${_media}/surface/queue_surface.cc
   ${_media}/surface/reader_surface.cc
   ${_media}/surface/surface_jni.cc
+  # SurfaceTexture's GL consumer: frames into the app's external texture.
+  ${_media}/surface/surface_texture_gl.cc
   # The encoders' input surfaces (media3, ADR 0059): QueueSurfaces too.
   ${_media}/video/input_surface.cc)
 

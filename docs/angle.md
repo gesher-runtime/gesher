@@ -244,8 +244,10 @@ notice requirements. All of these are compatible with Gesher's Apache 2.0.
 - Java apps' GL (above): a frame drawn into a SurfaceView's or a
   SurfaceTexture's surface is read back with glReadPixels at each swap and
   copied (the surfaces track's child surfaces), not shared with the window's
-  swap chain; `SurfaceTexture.updateTexImage` gives no GL texture
-  (`GL_TEXTURE_EXTERNAL_OES` consumers see nothing new); Android-only EGL
+  swap chain; `SurfaceTexture.updateTexImage` latches the newest frame into
+  the app's `GL_TEXTURE_EXTERNAL_OES` texture through an EGLImage of a
+  Direct3D 11 texture holding its pixels (docs/graphics.md, "SurfaceTexture in
+  OpenGL ES"), one upload per latched frame; Android-only EGL
   extensions (`eglPresentationTimeANDROID`, native fences) reach ANGLE's
   exports, which fail on the Direct3D 11 backend.
 - The runners report OpenGL ES 3.0 on both devices; ES 3.1 and hwui on a

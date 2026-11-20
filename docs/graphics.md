@@ -532,6 +532,29 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   back and posted to the ANativeWindow, paced at 60 Hz (`compat/bionic/egl_child_surface.cc`).
 - **TextureView / SurfaceTexture**: the media track's TextureLayer and SurfaceTexture
   natives; TextureView.lockCanvas now draws into the SurfaceTexture's producer.
+- **SurfaceTexture in OpenGL ES** (`compat/media/surface/surface_texture_gl.{h,cc}`):
+  what an app samples as `GL_TEXTURE_EXTERNAL_OES` (Firefox's compositor shows a video
+  decoder's frames this way; GLSurfaceView camera previews, ExoPlayer's GL effects).
+  On a device the SurfaceTexture's EGLConsumer binds each latched buffer to the app's
+  texture as an EGLImage. Here a frame is RGBA pixels (its QueueSurface's), so
+  `updateTexImage` makes a Direct3D 11 texture of ANGLE's device from the newest frame
+  (`CreateTexture2D` with the pixels as initial data, a free-threaded device call that
+  does not touch ANGLE's device context), an EGLImage of it
+  (`EGL_ANGLE_image_d3d11_texture`) and binds it with `glEGLImageTargetTexture2DOES`;
+  the image and texture belong to the app's texture from then on and go when it is
+  bound to the next frame or deleted, so nothing of Gesher's is left in the app's
+  context (a SurfaceTexture is often released on a thread without it). AOSP's state
+  machine is kept: a SurfaceTexture made with a texture name is attached to the context
+  current at its first `updateTexImage`; `detachFromGLContext` deletes the texture and
+  works with no context current before any use (Firefox detaches a new SurfaceTexture
+  on a binder thread); `attachToGLContext` shows the latched frame in the new texture;
+  `updateTexImage` with no or another context current throws IllegalStateException,
+  after `release()` RuntimeException; with no new frame it binds the texture and keeps
+  the latched frame; `releaseTexImage` drops the frame (a 1x1 black image, time stamp
+  0); the transform matrix is the identity until a frame is latched, then the vertical
+  flip of a buffer without crop; `getTimestamp` is the latched frame's. One upload per
+  latched frame. Tested by `tests/dex-graphics/gesher/SurfaceTextureGlTest.java`
+  (31-angle.ps1, WARP) and GlBindingsTest's SurfaceTexture frames.
 - **Cameras**: Camera2 and the legacy Camera write RGBA into any surface with a native
   window, so SurfaceViews and TextureViews get frames; the legacy `setPreviewTexture`
   now goes through a Surface over the SurfaceTexture (LegacyCamera).
