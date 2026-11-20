@@ -70,6 +70,17 @@ all three contexts are bound to GitHub Actions, force pushes/deletion are blocke
 and there are no permanent bypass actors. Branch updates may need fresh CI;
 there is no automatic second full CI run simply for merging.
 
+GitHub's stale-review dismissal (`dismiss_stale_reviews_on_push`) is off. With
+it on, GitHub dismissed the controller's exact-head approval with "The
+merge-base changed after approval" whenever `main` advanced, and kept dismissing
+every fresh approval of the same head until the branch was updated, although
+`git merge-base` was unchanged (PR 120 after #218). Approval stays exact-head
+without it: `qa/label-approval` is required and bound to the reviewed head, a
+push removes the label, disarms native auto-merge and dismisses the controller's
+own approvals of older heads, and only a fresh label on the new head can turn
+the gate green again. An approval therefore survives `main` advancing but never
+authorizes a different PR head.
+
 ## API quota
 
 Every reconciliation rereads labels, reviews, permission and CI evidence. These
