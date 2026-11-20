@@ -161,6 +161,23 @@ static void test_stdio_ofd_contracts(void) {
     fclose(stream);
   } else close(fd);
 
+  fd = open(path, O_RDWR | O_TRUNC);
+  check("wide format span fixture seeds the same description", fd >= 0 && write(fd, "base", 4) == 4 && lseek(fd, 0, SEEK_SET) == 0);
+  stream = fdopen(fd, "w");
+  check("wide format span fixture wraps its descriptor", stream != NULL);
+  if (stream) {
+    const char* expected = "<alpha|   bra|xy   |Q|17>!";
+    int counted = -1;
+    alias = dup(fd);
+    check("wide literals strings padding and percent-n retain their exact count",
+        fwprintf(stream, L"<%ls|%6.3ls|%-5ls|%lc|%d>%n!", L"alpha", L"bravo", L"xy", L'Q', 17, &counted) == (int)strlen(expected) &&
+        counted == (int)strlen(expected) - 1);
+    check("wide span flush follows the live alias append flag", alias >= 0 && fcntl(alias, F_SETFL, O_APPEND) == 0 && fflush(stream) == 0);
+    check("all wide span bytes share the owned output buffer", stdio_bytes_equal(alias, "base<alpha|   bra|xy   |Q|17>!"));
+    close(alias);
+    fclose(stream);
+  } else close(fd);
+
   stream = fopen(path, "w+");
   check("stdio opens recursive-lock fixture", stream != NULL);
   if (stream) {

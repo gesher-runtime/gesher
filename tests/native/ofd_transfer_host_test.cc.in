@@ -211,9 +211,18 @@ static HANDLE CreateMutexW(void*, BOOL owned, const wchar_t* name) {
   host::mutex_names.insert(path);
   return MapMutex(fd, true);
 }
-static HANDLE OpenMutexW(DWORD access, BOOL inherit, const wchar_t* name) {
-  host::Require(access == (SYNCHRONIZE | MUTEX_MODIFY_STATE) && !inherit);
-  return MapMutex(shm_open(MutexName(name).c_str(), O_RDWR | O_CLOEXEC, 0), false);
+static HANDLE CreateMutexExW(void* attributes, const wchar_t* name, DWORD flags, DWORD access) {
+  host::Require(!attributes && flags == 0 && access == (SYNCHRONIZE | MUTEX_MODIFY_STATE));
+  const std::string path = MutexName(name);
+  int fd = shm_open(path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  const bool created = fd >= 0;
+  if (!created && errno == EEXIST) fd = shm_open(path.c_str(), O_RDWR | O_CLOEXEC, 0);
+  HANDLE result = MapMutex(fd, created);
+  if (result) {
+    host::mutex_names.insert(path);
+    SetLastError(created ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS);
+  }
+  return result;
 }
 static DWORD WaitForSingleObject(HANDLE handle, DWORD milliseconds) {
   host::Require(milliseconds == 0);

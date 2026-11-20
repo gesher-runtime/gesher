@@ -1,6 +1,7 @@
 // Actual Windows pipe/OFD transport. The component's job runner owns every
 // child and supplies a hard deadline; no foreign process or pipe is touched.
 #include "exec_spawn.h"
+#include "../../compat/posix/src/ofd_internal.h"
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -143,6 +144,53 @@ static void AwarePeer(const std::wstring& self, bool diagnostic_stdio) {
   }
   files.clear(); snapshot.reset(); close(ends[0]); close(ends[1]);
 }
+// Stop the actual child before CRT/import startup, retire every parent alias
+// of its endpoint, then resume. This makes the last-mutex-handle boundary
+// deterministic without retaining a pipe peer that would hide real EOF.
+static void RetiredGatePeer(const std::wstring& self, bool child_writes) {
+  int ends[2] = {-1, -1};
+  Check("retired-parent gate fixture creates real pipe", pipe2(ends, O_CLOEXEC) == 0);
+  if (ends[0] < 0 || ends[1] < 0) return;
+  const int child_end = child_writes ? 1 : 0;
+  auto snapshot = gesher::CaptureDescriptor(ends[child_end]);
+  Check("retired-parent gate fixture captures actual endpoint", static_cast<bool>(snapshot));
+  if (!snapshot) { close(ends[0]); close(ends[1]); return; }
+  const auto* shared = snapshot->description->shared.load(std::memory_order_acquire);
+  Check("retired-parent gate has genuine shared admission metadata", shared && shared->pipe_gate[0] && shared->pipe_gate[32] == 0);
+  if (!shared || !shared->pipe_gate[0] || shared->pipe_gate[32] != 0) {
+    snapshot.reset(); close(ends[0]); close(ends[1]); return;
+  }
+  std::wstring name = L"Local\\gesher-pipe-";
+  for (unsigned i = 0; i != 32; ++i) name += static_cast<wchar_t>(shared->pipe_gate[i]);
+  std::vector<gesher::exec::ChildFd> files{{37, snapshot->handle, snapshot}, {7100, snapshot->handle, snapshot}};
+  PROCESS_INFORMATION child{};
+  DWORD error = gesher::exec::SpawnWithFds(Target(self, child_writes ?
+      L"--retired-gate-writer" : L"--retired-gate-reader"), nullptr, L"", files, &child, CREATE_SUSPENDED);
+  Check("retired-parent child is created before its importer runs", error == 0);
+  files.clear(); snapshot.reset();
+  close(ends[child_end]); ends[child_end] = -1;
+  if (!error) {
+    SetLastError(ERROR_SUCCESS);
+    HANDLE gone = OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, name.c_str());
+    const DWORD lookup_error = GetLastError();
+    Check("last parent alias really destroys the old named gate", gone == nullptr && lookup_error == ERROR_FILE_NOT_FOUND);
+    if (gone) CloseHandle(gone);
+    if (!child_writes) {
+      Check("retired-parent reader receives real queued data", write(ends[1], "R", 1) == 1);
+      close(ends[1]); ends[1] = -1;
+    }
+    const DWORD resumed = ResumeThread(child.hThread);
+    Check("retired-parent child resumes its real importer", resumed == 1);
+    if (resumed == static_cast<DWORD>(-1)) TerminateProcess(child.hProcess, 127);
+    Check("import after last sender retirement preserves alias status and I/O", WaitChild(&child));
+    if (child_writes) {
+      char byte = 0;
+      Check("retired-parent writer delivers actual data then last-writer EOF", read(ends[0], &byte, 1) == 1 && byte == 'W' && read(ends[0], &byte, 1) == 0);
+    }
+  }
+  for (int fd : ends) if (fd >= 0) close(fd);
+}
+
 struct ReadState { int fd; int result = -1; char byte = 0; };
 static void* ReadOne(void* raw) {
   auto* state = static_cast<ReadState*>(raw);
@@ -194,6 +242,17 @@ static void ExternalPipe(bool asynchronous) {
   close(fd);
 }
 int main(int argc, char** argv) {
+  if (argc == 2 && (std::strcmp(argv[1], "--retired-gate-reader") == 0 ||
+                    std::strcmp(argv[1], "--retired-gate-writer") == 0)) {
+    if (!StandardDescriptors(false)) return 24;
+    if (fcntl(37, F_SETFL, O_NONBLOCK) < 0) return 25;
+    const int alias_flags = fcntl(7100, F_GETFL);
+    if (alias_flags < 0 || (alias_flags & O_NONBLOCK) == 0) return 25;
+    if (std::strcmp(argv[1], "--retired-gate-writer") == 0)
+      return write(7100, "W", 1) == 1 ? 0 : 26;
+    char byte = 0;
+    return read(37, &byte, 1) == 1 && byte == 'R' && read(7100, &byte, 1) == 0 ? 0 : 27;
+  }
   if (argc == 2 && (std::strcmp(argv[1], "--aware-flags") == 0 ||
                     std::strcmp(argv[1], "--aware-flags-stdio") == 0)) {
     if (!StandardDescriptors(std::strcmp(argv[1], "--aware-flags-stdio") == 0)) return 22;
@@ -220,6 +279,8 @@ int main(int argc, char** argv) {
   NativePeer(native);
   AwarePeer(self, false);
   AwarePeer(self, true);
+  RetiredGatePeer(self, false);
+  RetiredGatePeer(self, true);
   ExternalPipe(false);
   ExternalPipe(true);
   std::printf("pipe native process contracts: %d checks, %d failures\n", checks, failures);

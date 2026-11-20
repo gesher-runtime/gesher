@@ -444,7 +444,11 @@ int PrintWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
   state->buffer.Orient(1);
   const uint64_t failures = state->buffer.Failures();
   FormatScope callbacks(state.Get());
-  int result = __mingw_wpformat(0x6000 /* TO_FILE | NOLIMIT */, stream, 0, format, arguments);
+  // MinGW's wide NOLIMIT shortcut sends literal/wide-string spans through
+  // private __ms_fwprintf, bypassing this stream's buffer and OFD status.
+  // A representable printf result fits INT_MAX; the bounded TO_FILE path
+  // emits every character through our public fputwc callback exactly once.
+  int result = __mingw_wpformat(0x2000 /* TO_FILE */, stream, INT_MAX, format, arguments);
   return state->buffer.Failures() != failures ? -1 : result;
 }
 int ScanLocal(FILE* stream, const char* format, va_list arguments) {

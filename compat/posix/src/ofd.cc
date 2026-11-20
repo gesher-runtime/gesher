@@ -103,7 +103,12 @@ bool OpenFileDescription::Adopt(HANDLE inherited) {
       name += static_cast<wchar_t>(digit);
     }
     if (!valid) { UnmapViewOfFile(view); errno = EINVAL; return false; }
-    gate = OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, name.c_str());
+    // An inherited section and pipe survive the sender's last local alias.
+    // The named mutex need not: its last handle may close before this child
+    // reaches the importer. Atomically reopen the same gate when it exists,
+    // or create it when there is no remaining owner to coordinate with.
+    // Keep the random section-bound name, minimal rights and no inheritance.
+    gate = CreateMutexExW(nullptr, name.c_str(), 0, SYNCHRONIZE | MUTEX_MODIFY_STATE);
     if (!gate) {
       DWORD error = GetLastError();
       UnmapViewOfFile(view);
