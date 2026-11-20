@@ -53,16 +53,18 @@ def generate(component: str, ref: str | None) -> str:
         markers = {
             "DESTRUCTOR": "  ~Codec()",
             "START": "  bool Start(std::string* error)",
-            "STOP": "  void Stop()",
+            "STOP": "  void Stop(",
             "RESET": "  void Reset()",
-            "FLUSH": "  void Flush()",
-            "DEQUEUE_INPUT": "  int DequeueInput(int64_t timeout_us)",
-            "DEQUEUE_OUTPUT": "  int DequeueOutput(JNIEnv* env, jobject info, int64_t timeout_us)",
+            "FLUSH": "  void Flush(",
+            "DEQUEUE_INPUT": "  int DequeueInput(int64_t timeout_us",
+            "DEQUEUE_OUTPUT": "  int DequeueOutput(JNIEnv* env, jobject info, int64_t timeout_us",
             "STOP_WORKER": "  void StopWorker()",
         }
         replacements = {name: method(source, marker) for name, marker in markers.items()}
         replacements["RELEASE"] = method(source, "  void Release()") if has_release else ""
         replacements["STOP_LOCKED"] = method(source, "  void StopLocked()") if has_release else ""
+        replacements["RETIRE_SURFACE"] = method(source, "  void RetireSurfaceFailure(") if "  void RetireSurfaceFailure(" in source else ""
+        replacements["POST_FATAL"] = method(source, "  void PostFatalErrorLocked(") if "  void PostFatalErrorLocked(" in source else ""
     template = (ROOT / ("tests/media/codec_" + component + "_host.cc.in")).read_text()
     for name, body in replacements.items():
         marker = "@" + name + "@"
@@ -71,7 +73,9 @@ def generate(component: str, ref: str | None) -> str:
         template = template.replace(marker, body)
     digest = hashlib.sha256(source.encode()).hexdigest()
     print(component + " production SHA256 " + digest, flush=True)
-    return "#define HAS_RELEASE " + str(int(has_release)) + "\n" + template
+    return ("#define HAS_RELEASE " + str(int(has_release)) + "\n"
+            + "#define HAS_FATAL_RETIREMENT " + str(int("  void RetireSurfaceFailure(" in source)) + "\n"
+            + template)
 
 
 def main() -> int:

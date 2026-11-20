@@ -1179,6 +1179,8 @@ public class RecordActivity extends Activity {
 
     // --- MediaCodec into an ImageReader ------------------------------------------------
 
+    private static final long EXPLICIT_TIMESTAMP_NS = 9_000_000_000_000_001L;
+
     void imageReader() throws Exception {
         File file = new File(getFilesDir(), "h264.mp4");
         if (!file.exists()) {
@@ -1189,6 +1191,7 @@ public class RecordActivity extends Activity {
         ht.start();
         ImageReader reader = ImageReader.newInstance(320, 240, ImageFormat.YUV_420_888, 4);
         final Video seen = new Video();
+        final List<Long> observedTimestamps = new ArrayList<>();
         final String[] format = new String[1];
         reader.setOnImageAvailableListener(rd -> {
             Image img = rd.acquireNextImage();
@@ -1196,6 +1199,7 @@ public class RecordActivity extends Activity {
             Image.Plane[] p = img.getPlanes();
             int x = img.getWidth() / 2, y = img.getHeight() / 2;
             synchronized (seen) {
+                observedTimestamps.add(img.getTimestamp());
                 format[0] = img.getFormat() + " " + img.getWidth() + "x" + img.getHeight() + " " + p.length + " planes";
                 seen.color(colorOf(p[0].getBuffer().get(y * p[0].getRowStride() + x * p[0].getPixelStride()) & 0xff,
                         p[1].getBuffer().get((y / 2) * p[1].getRowStride() + (x / 2) * p[1].getPixelStride()) & 0xff,
@@ -1204,18 +1208,41 @@ public class RecordActivity extends Activity {
             }
             img.close();
         }, new Handler(ht.getLooper()));
-        Video v = decodeVideoSlowly(file, reader.getSurface());
+        List<Long> expectedTimestamps = new ArrayList<>();
+        Video v = decodeVideoSlowly(file, reader.getSurface(), expectedTimestamps);
         Thread.sleep(500);
         reader.close();
         ht.quitSafely();
         synchronized (seen) {
             say("imagereader: decoder rendered " + v.frames + " frames into the reader's surface; images "
                     + (seen.frames >= 40 ? "40+" : String.valueOf(seen.frames)) + " (" + format[0] + "), colors " + seen.runs);
+            // Readers may drop images under load. The surviving timestamps must
+            // be in order, and the fixture must observe all four release cases.
+            int next = 0;
+            boolean timestampsMatch = true;
+            boolean sawDefault = false, sawZero = false, sawPositive = false, sawNegative = false;
+            for (long observed : observedTimestamps) {
+                while (next < expectedTimestamps.size() && expectedTimestamps.get(next) != observed) {
+                    next++;
+                }
+                if (next == expectedTimestamps.size()) {
+                    timestampsMatch = false;
+                    break;
+                }
+                next++;
+                sawDefault |= observed > 0 && observed < EXPLICIT_TIMESTAMP_NS;
+                sawZero |= observed == 0;
+                sawPositive |= observed >= EXPLICIT_TIMESTAMP_NS;
+                sawNegative |= observed <= -EXPLICIT_TIMESTAMP_NS;
+            }
+            say("imagereader timestamps: " + (timestampsMatch && sawDefault && sawZero
+                    && sawPositive && sawNegative ? "pass" : "fail"));
         }
     }
 
     /** decodeVideo into a Surface, a frame each 15 ms (the reader's listener keeps up). */
-    static Video decodeVideoSlowly(File file, Surface surface) throws Exception {
+    static Video decodeVideoSlowly(File file, Surface surface, List<Long> expectedTimestamps)
+            throws Exception {
         MediaExtractor ex = new MediaExtractor();
         ex.setDataSource(file.getPath());
         ex.selectTrack(0);
@@ -1243,10 +1270,25 @@ public class RecordActivity extends Activity {
             }
             int o = codec.dequeueOutputBuffer(info, 10000);
             if (o >= 0) {
-                boolean render = info.size > 0;
-                if (render) r.frames++;
-                codec.releaseOutputBuffer(o, render);
-                if (render) Thread.sleep(15);
+                if (info.size > 0) {
+                    int frame = r.frames++;
+                    long timestamp;
+                    if (frame % 4 == 2) {
+                        timestamp = info.presentationTimeUs * 1000;
+                        codec.releaseOutputBuffer(o, true);
+                    } else {
+                        timestamp = switch (frame % 4) {
+                            case 0 -> EXPLICIT_TIMESTAMP_NS + frame;
+                            case 1 -> 0L;
+                            default -> -EXPLICIT_TIMESTAMP_NS - frame;
+                        };
+                        codec.releaseOutputBuffer(o, timestamp);
+                    }
+                    expectedTimestamps.add(timestamp);
+                    Thread.sleep(15);
+                } else {
+                    codec.releaseOutputBuffer(o, false);
+                }
                 if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break;
             }
         }
