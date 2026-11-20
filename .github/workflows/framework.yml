@@ -516,6 +516,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Package visibility and authenticated shared-UID queries in both GMS modes
+        run: |
+          python3 tools/test_package_visibility.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Unsupported connectionless handwriting callback contracts
         run: |
           python3 tools/test_handwriting_unavailable.py --java-home "$JAVA_HOME" \
