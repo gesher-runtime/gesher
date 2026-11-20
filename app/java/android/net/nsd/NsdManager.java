@@ -6,10 +6,13 @@ package android.net.nsd;
 
 import android.content.Context;
 import android.net.Network;
+import android.net.ConnectivityManager;
 import android.net.NetworkRequest;
 import android.os.Handler;
-import android.os.Looper;
+import android.os.HandlerThread;
+import com.gesher.net.WindowsNsd;
 
+import java.io.IOException;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -17,19 +20,10 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
 /**
- * NsdManager (network service discovery, DNS-SD over mDNS) with the Connectivity
- * module's public API, which framework.jar compiles against and does not contain: an app
- * that names a listener class (NsdManager.RegistrationListener) failed to load without
- * it. Gesher has no mDNS responder (docs/network.md): a discovery starts and finds
- * nothing, and registering or resolving a service fails with
- * {@link #FAILURE_INTERNAL_ERROR}, each through the listener as the module reports it,
- * on the executor given or the main thread. A discovery listener is in use from its
- * start until it is stopped; reusing it throws, as on a device. Unregistering a
- * registration, resolution or callback that failed does nothing (apps unregister in
- * onDestroy whether or not it succeeded, which on a device it usually has).
- *
- * <p>Registered as {@code servicediscovery} by
- * {@link android.net.ConnectivityFrameworkInitializer}.
+ * Android 16 NSD API backed by real Windows DNS-SD browsing. Registration,
+ * resolution and service-info subscriptions remain explicitly unavailable:
+ * Windows' string-only TXT API cannot represent Android's arbitrary bytes.
+ * See docs/research/nsd-windows-browse-2026-11-18.md.
  */
 public final class NsdManager {
     public static final String ACTION_NSD_STATE_CHANGED = "android.net.nsd.STATE_CHANGED";
@@ -91,17 +85,34 @@ public final class NsdManager {
         void onServiceInfoCallbackUnregistered();
     }
 
-    private final Executor mMainExecutor;
-    // AOSP keys listeners by identity, not by application-defined equals/hashCode.
+    private final Executor mMainExecutor = Runnable::run;
+    private final Executor mServiceExecutor;
+    private final WindowsNsd.Factory mBackend;
+    private final Context mContext;
     private final Map<DiscoveryListener, Discovery> mDiscoveries = new IdentityHashMap<>();
 
+    private static final class CallbackThread {
+        static final Executor EXECUTOR;
+        static {
+            HandlerThread thread = new HandlerThread("Gesher-NsdManager");
+            thread.setDaemon(true);
+            thread.start();
+            Handler handler = new Handler(thread.getLooper());
+            EXECUTOR = command -> {
+                if (!handler.post(command)) throw new RejectedExecutionException("NSD callback thread stopped");
+            };
+        }
+    }
     private static final class Discovery {
         final String serviceType;
         final Executor executor;
-        // Protected by mDiscoveries. Keep the listener reserved until its stop callback.
+        WindowsNsd.Session session;
         boolean stopPending;
-        boolean stopped;
-
+        ConnectivityManager connectivity;
+        ConnectivityManager.NetworkCallback networks;
+        boolean networksRegistered;
+        long networkGeneration;
+        final Map<Integer, Long> selected = new java.util.HashMap<>();
         Discovery(String serviceType, Executor executor) {
             this.serviceType = serviceType;
             this.executor = executor;
@@ -109,11 +120,26 @@ public final class NsdManager {
     }
 
     public NsdManager(Context context) {
-        this(new Handler(Looper.getMainLooper())::post);
+        if (context != null) {
+            context.enforcePermission("android.permission.INTERNET",
+                    android.os.Process.myPid(), android.os.Process.myUid(), "NsdService");
+            Context app = context.getApplicationContext();
+            mContext = app != null ? app : context;
+        } else mContext = null;
+        WindowsNsd.enforceInternetPermission();
+        mServiceExecutor = CallbackThread.EXECUTOR;
+        mBackend = WindowsNsd.factory();
     }
 
-    private NsdManager(Executor mainExecutor) {
-        mMainExecutor = Objects.requireNonNull(mainExecutor);
+    // Explicit fixture injection; ordinary construction always selects WindowsNsd.
+    private NsdManager(Executor serviceExecutor, WindowsNsd.Factory backend) {
+        this(null, serviceExecutor, backend);
+    }
+
+    private NsdManager(Context context, Executor serviceExecutor, WindowsNsd.Factory backend) {
+        mContext = context;
+        mServiceExecutor = Objects.requireNonNull(serviceExecutor);
+        mBackend = Objects.requireNonNull(backend);
     }
 
     // --- registering ---------------------------------------------------------------
@@ -130,7 +156,8 @@ public final class NsdManager {
         Objects.requireNonNull(executor, "executor cannot be null");
         Objects.requireNonNull(listener, "listener cannot be null");
         NsdServiceInfo info = new NsdServiceInfo(serviceInfo);
-        executor.execute(() -> listener.onRegistrationFailed(info, FAILURE_INTERNAL_ERROR));
+        mServiceExecutor.execute(() -> executor.execute(() ->
+                listener.onRegistrationFailed(info, FAILURE_INTERNAL_ERROR)));
     }
 
     public void registerService(AdvertisingRequest advertisingRequest, Executor executor,
@@ -153,82 +180,197 @@ public final class NsdManager {
 
     public void discoverServices(String serviceType, int protocolType, Network network,
             Executor executor, DiscoveryListener listener) {
-        startDiscovery(serviceType, protocolType, executor, listener);
+        startDiscovery(serviceType, null, protocolType, network, null, executor, listener);
     }
 
-    public void discoverServices(DiscoveryRequest discoveryRequest, Executor executor,
+    public void discoverServices(DiscoveryRequest request, Executor executor,
             DiscoveryListener listener) {
-        Objects.requireNonNull(discoveryRequest, "DiscoveryRequest cannot be null");
-        startDiscovery(discoveryRequest.getServiceType(), discoveryRequest.getProtocolType(),
-                executor, listener);
+        Objects.requireNonNull(request, "DiscoveryRequest cannot be null");
+        startDiscovery(request.getServiceType(), request.getSubtype(), request.getProtocolType(),
+                request.getNetwork(), null, executor, listener);
     }
 
-    public void discoverServices(String serviceType, int protocolType, NetworkRequest networkRequest,
+    public void discoverServices(String serviceType, int protocolType, NetworkRequest request,
             Executor executor, DiscoveryListener listener) {
-        Objects.requireNonNull(networkRequest, "NetworkRequest cannot be null");
-        // As with the Network overload, the absent mDNS backend produces no found/lost
-        // events. Do not register a Windows network watcher with nothing to discover.
-        startDiscovery(serviceType, protocolType, executor, listener);
+        Objects.requireNonNull(request, "NetworkRequest cannot be null");
+        startDiscovery(serviceType, null, protocolType, null, request, executor, listener);
     }
 
-    private void startDiscovery(String serviceType, int protocolType, Executor executor,
-            DiscoveryListener listener) {
+    private void dispatch(DiscoveryListener listener, Discovery discovery, boolean terminal,
+            Runnable callback) {
+        mServiceExecutor.execute(() -> {
+            synchronized (mDiscoveries) {
+                if (mDiscoveries.get(listener) != discovery) return;
+                if (terminal) mDiscoveries.remove(listener);
+            }
+            if (terminal) detachNetworks(discovery);
+            try {
+                // AOSP submits callbacks in handler order. An application-supplied
+                // executor still controls their execution order and concurrency.
+                discovery.executor.execute(callback);
+            } catch (RejectedExecutionException error) {
+                synchronized (mDiscoveries) {
+                    if (mDiscoveries.get(listener) == discovery) mDiscoveries.remove(listener);
+                    discovery.stopPending = true;
+                    if (discovery.session != null) discovery.session.stop();
+                }
+                if (!terminal) detachNetworks(discovery);
+                throw error;
+            }
+        });
+    }
+
+    private static void detachNetworks(Discovery discovery) {
+        ConnectivityManager connectivity;
+        ConnectivityManager.NetworkCallback networks;
+        synchronized (discovery) {
+            connectivity = discovery.connectivity;
+            networks = discovery.networksRegistered ? discovery.networks : null;
+            discovery.networksRegistered = false;
+            discovery.networks = null;
+            discovery.connectivity = null;
+        }
+        if (networks != null) connectivity.unregisterNetworkCallback(networks);
+    }
+
+    private void startDiscovery(String serviceType, String subtype, int protocolType,
+            Network network, NetworkRequest request, Executor executor, DiscoveryListener listener) {
         if (serviceType == null || serviceType.isEmpty()) {
             throw new IllegalArgumentException("Service type cannot be empty");
         }
         checkProtocol(protocolType);
         Objects.requireNonNull(executor, "executor cannot be null");
         Objects.requireNonNull(listener, "listener cannot be null");
-        Discovery discovery = new Discovery(serviceType, executor);
         synchronized (mDiscoveries) {
-            if (mDiscoveries.containsKey(listener)) {
-                throw new IllegalArgumentException("listener already in use");
-            }
+            // API36 rejects an already-used listener before the NetworkRequest
+            // tracker reaches ConnectivityManager's permission check. Do not
+            // reserve a new listener if that permission check then fails.
+            if (mDiscoveries.containsKey(listener)) throw new IllegalArgumentException("listener already in use");
+        }
+        if (request != null && mContext != null) {
+            mContext.enforcePermission("android.permission.ACCESS_NETWORK_STATE",
+                    android.os.Process.myPid(), android.os.Process.myUid(), "NsdService");
+        }
+        Discovery discovery = new Discovery(serviceType, executor);
+        boolean overLimit;
+        synchronized (mDiscoveries) {
+            // Another thread may have registered it during permission checking.
+            if (mDiscoveries.containsKey(listener)) throw new IllegalArgumentException("listener already in use");
+            overLimit = mDiscoveries.size() >= 200;
             mDiscoveries.put(listener, discovery);
         }
+        if (overLimit) {
+            dispatch(listener, discovery, true, () ->
+                    listener.onStartDiscoveryFailed(serviceType, FAILURE_MAX_LIMIT));
+            return;
+        }
         try {
-            executor.execute(() -> {
-                synchronized (mDiscoveries) {
-                    // A non-FIFO executor may run the terminal callback first. Never
-                    // resurrect that request, including after this listener is reused.
-                    if (discovery.stopped) return;
+            WindowsNsd.Scope scope;
+            if (request != null) {
+                if (mContext == null) {
+                    dispatch(listener, discovery, true, () -> listener.onStartDiscoveryFailed(
+                            serviceType, FAILURE_INTERNAL_ERROR));
+                    return;
                 }
-                listener.onDiscoveryStarted(serviceType);
-            });
-        } catch (RejectedExecutionException e) {
+                discovery.connectivity = mContext.getSystemService(ConnectivityManager.class);
+                discovery.networks = new ConnectivityManager.NetworkCallback() {
+                    @Override public void onAvailable(Network value) {
+                        synchronized (discovery.selected) {
+                            int index = value.netId - 100;
+                            if (!discovery.selected.containsKey(index)) {
+                                discovery.selected.put(index, ++discovery.networkGeneration);
+                            }
+                        }
+                    }
+                    @Override public void onLost(Network value) {
+                        synchronized (discovery.selected) { discovery.selected.remove(value.netId - 100); }
+                    }
+                };
+                discovery.connectivity.registerNetworkCallback(request, discovery.networks);
+                discovery.networksRegistered = true;
+                scope = new WindowsNsd.Scope() {
+                    @Override public int[] interfaces() {
+                        synchronized (discovery.selected) {
+                            int[] indices = new int[discovery.selected.size()];
+                            int i = 0;
+                            for (int index : discovery.selected.keySet()) indices[i++] = index;
+                            return indices;
+                        }
+                    }
+                    @Override public Map<Integer, Long> snapshot() {
+                        synchronized (discovery.selected) {
+                            return new java.util.HashMap<>(discovery.selected);
+                        }
+                    }
+                };
+            } else if (network != null) {
+                int index = network.netId - 100;
+                scope = () -> {
+                    if (network.netId <= 100 || index <= 0) throw new IOException("Invalid network");
+                    for (int present : mBackend.interfaces()) if (present == index) return new int[] {index};
+                    // Never send a network-bound request over a different adapter.
+                    return new int[0];
+                };
+            } else scope = mBackend::interfaces;
+
+            WindowsNsd.Session session = mBackend.start(serviceType, subtype, scope,
+                    new WindowsNsd.Callback() {
+                        public void started() {
+                            dispatch(listener, discovery, false, () -> listener.onDiscoveryStarted(serviceType));
+                        }
+                        private NsdServiceInfo info(String name, String type, int index, long expiry, String subtype) {
+                            NsdServiceInfo info = new NsdServiceInfo();
+                            info.setServiceName(name);
+                            info.setServiceType(type);
+                            info.setNetwork(new Network(index + 100));
+                            if (expiry >= 0) info.setExpirationTime(java.time.Instant.ofEpochMilli(expiry));
+                            if (subtype != null) info.setSubtypes(java.util.Set.of(subtype));
+                            return info;
+                        }
+                        public void found(String name, String type, int index) { found(name, type, index, -1, null); }
+                        public void found(String name, String type, int index, long expiry, String subtype) {
+                            NsdServiceInfo value = info(name, type, index, expiry, subtype);
+                            dispatch(listener, discovery, false, () -> listener.onServiceFound(value));
+                        }
+                        public void lost(String name, String type, int index) { lost(name, type, index, -1, null); }
+                        public void lost(String name, String type, int index, long expiry, String subtype) {
+                            NsdServiceInfo value = info(name, type, index, expiry, subtype);
+                            dispatch(listener, discovery, false, () -> listener.onServiceLost(value));
+                        }
+                        public void stopped() {
+                            dispatch(listener, discovery, true, () -> listener.onDiscoveryStopped(serviceType));
+                        }
+                        public void stopFailed(int error) {
+                            dispatch(listener, discovery, true, () -> listener.onStopDiscoveryFailed(serviceType, error));
+                        }
+                        public void failed(int error) {
+                            dispatch(listener, discovery, true, () -> listener.onStartDiscoveryFailed(serviceType, error));
+                        }
+                    });
+            synchronized (mDiscoveries) {
+                discovery.session = session;
+                if (discovery.stopPending) session.stop();
+            }
+        } catch (RuntimeException | Error error) {
             synchronized (mDiscoveries) {
                 if (mDiscoveries.get(listener) == discovery) mDiscoveries.remove(listener);
-                discovery.stopped = true;
+                if (discovery.session != null) discovery.session.stop();
             }
-            throw e;
+            try { detachNetworks(discovery); }
+            catch (RuntimeException | Error cleanup) { error.addSuppressed(cleanup); }
+            throw error;
         }
     }
 
     public void stopServiceDiscovery(DiscoveryListener listener) {
         Objects.requireNonNull(listener, "listener cannot be null");
-        Discovery discovery;
         synchronized (mDiscoveries) {
-            discovery = mDiscoveries.get(listener);
-            if (discovery == null || discovery.stopPending) {
-                throw new IllegalArgumentException("listener not registered");
-            }
+            Discovery discovery = mDiscoveries.get(listener);
+            if (discovery == null) throw new IllegalArgumentException("listener not registered");
+            // Registration remains live until the terminal event is dispatched.
+            if (discovery.stopPending) return;
             discovery.stopPending = true;
-        }
-        try {
-            discovery.executor.execute(() -> {
-                synchronized (mDiscoveries) {
-                    if (discovery.stopped) return;
-                    discovery.stopped = true;
-                    if (mDiscoveries.get(listener) == discovery) mDiscoveries.remove(listener);
-                }
-                listener.onDiscoveryStopped(discovery.serviceType);
-            });
-        } catch (RejectedExecutionException e) {
-            synchronized (mDiscoveries) {
-                // Submission failed: leave an active request that can be stopped again.
-                if (!discovery.stopped) discovery.stopPending = false;
-            }
-            throw e;
+            if (discovery.session != null) discovery.session.stop();
         }
     }
 
@@ -245,7 +387,8 @@ public final class NsdManager {
         Objects.requireNonNull(executor, "executor cannot be null");
         Objects.requireNonNull(listener, "listener cannot be null");
         NsdServiceInfo info = new NsdServiceInfo(serviceInfo);
-        executor.execute(() -> listener.onResolveFailed(info, FAILURE_INTERNAL_ERROR));
+        mServiceExecutor.execute(() -> executor.execute(() ->
+                listener.onResolveFailed(info, FAILURE_INTERNAL_ERROR)));
     }
 
     public void stopServiceResolution(ResolveListener listener) {
@@ -257,8 +400,8 @@ public final class NsdManager {
         checkServiceInfo(serviceInfo);
         Objects.requireNonNull(executor, "executor cannot be null");
         Objects.requireNonNull(listener, "listener cannot be null");
-        executor.execute(() -> listener.onServiceInfoCallbackRegistrationFailed(
-                FAILURE_INTERNAL_ERROR));
+        mServiceExecutor.execute(() -> executor.execute(() ->
+                listener.onServiceInfoCallbackRegistrationFailed(FAILURE_INTERNAL_ERROR)));
     }
 
     public void unregisterServiceInfoCallback(ServiceInfoCallback listener) {

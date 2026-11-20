@@ -25,7 +25,6 @@ import com.android.internal.pm.pkg.component.ParsedProviderImpl;
 import com.android.internal.pm.pkg.component.ParsedServiceImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import com.gesher.server.ApkPackage;
-import com.gesher.server.GmsSignatureSpoofing;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.PackageUids;
 import com.gesher.server.StandIn;
@@ -152,7 +151,7 @@ public final class PackageVisibilityContractTest {
         // inherited Binder implementation returns null and the wrapper indexes [0].
         check(client.canPackageQuery(A, A), "Public self-package query failed");
         boolean shared = a.uid() == b.uid();
-        check(shared != GmsSignatureSpoofing.isEnabled(), "Fixture did not use actual runtime UID mode");
+        check(!shared, "Unrelated packages shared an identity in the current runtime UID mode");
         check(client.canPackageQuery(A, B) == shared, "Unrelated distinct UID became visible");
         check(Arrays.equals(client.canPackageQuery(A, new String[]{B, A, "android", B}),
                 new boolean[]{shared, true, true, shared}), "Bulk query lost order, duplicate or false values");
@@ -302,8 +301,11 @@ public final class PackageVisibilityContractTest {
         check(!serviceQuery(visible, A, B), "Removing provider remained visible to service lookup");
         PackageImpl siblingQueries = parsed(C); siblingQueries.addQueriesPackage(B);
         ApkPackage sibling = record(siblingQueries); set(sibling, "mUid", a.uid());
-        check(serviceQuery(service(a, sibling, b), A, B) == GmsSignatureSpoofing.isEnabled(),
-                "Compatibility UID inherited another app's provider queries or real shared UID lost them");
+        PackageManagerService shared = service(a, sibling, b);
+        check(serviceQuery(shared, A, C), "Authenticated shared UID lost sibling visibility");
+        check(serviceQuery(shared, A, B), "Authenticated shared UID lost sibling provider queries");
+        set(shared, "mPackages", Map.of(A, a, B, b));
+        check(!serviceQuery(shared, A, B), "Removed shared UID sibling kept its provider queries");
         PackageImpl legacy = parsed(A); legacy.setTargetSdkVersion(29);
         check(serviceQuery(service(record(legacy), b), A, B), "Legacy target lost provider visibility");
         PackageImpl all = parsed(A); permission(all, Manifest.permission.QUERY_ALL_PACKAGES);
@@ -312,7 +314,7 @@ public final class PackageVisibilityContractTest {
     public static int run(boolean onArt) throws Exception {
         art = onArt; checks = 0; shapesAndCallers();
         authenticatedServiceVisibility();
-        if (GmsSignatureSpoofing.isEnabled()) { declarations(); components(); }
+        declarations(); components();
         return checks;
     }
     public static void main(String[] args) throws Exception {

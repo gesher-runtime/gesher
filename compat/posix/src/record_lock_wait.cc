@@ -137,6 +137,12 @@ int WaitProcessLock(Registry& registry, const PreparedOperation& prepared, HANDL
       (Remaining(deadline) < kLivenessInterval ? Remaining(deadline) : kLivenessInterval));
     if (wait == WAIT_FAILED) { error = WinError(); break; }
     if (wait != WAIT_OBJECT_0 && wait != WAIT_OBJECT_0 + 1 && wait != WAIT_TIMEOUT) { error = EIO; break; }
+#ifdef GESHER_RECORD_WAIT_TEST
+    if (wait_test_hooks && wait_test_hooks->before_recheck) {
+      ++wait_test_hooks->deadline_barriers;
+      wait_test_hooks->before_recheck(deadline);
+    }
+#endif
     // Recheck cancellation/deadline/conflict inside the next transaction.
     // Death and missed hints are recovered by real identity probes, not by
     // declaring a wait interval to be evidence that acquisition occurred.

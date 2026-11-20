@@ -38,7 +38,17 @@ jobs:
         with:
           sparse-checkout: |
             tests/exec
+            tests/native
+            compat/posix/include
             app/java/com/gesher/app
+            tools
+
+      - name: Ordinary Linux realtime-signal reference
+        run: |
+          python3 tools/test_realtime_signals_contract.py --out work/realtime-reference
+          mkdir -p dist-exec
+          cp work/realtime-reference/linux-results.json dist-exec/realtime-signals-linux.json
+          cp work/realtime-reference/isolated-storage.json dist-exec/realtime-signals-storage.json
 
       - name: Cache the Android NDK
         id: ndk
@@ -92,6 +102,22 @@ jobs:
             -o dist-exec/exec4-spawn-x86_64 tests/exec/exec4_spawn.c
           "$bin/aarch64-linux-android34-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -o dist-exec/exec4-spawn-arm64-v8a tests/exec/exec4_spawn.c
+          # Same public-API fixture as Linux and native Windows, loaded as ELF.
+          "$bin/x86_64-linux-android34-clang" -std=c11 -O2 -g -Wall -Wextra -Werror \
+            -o dist-exec/realtime-signals-x86_64 tests/exec/realtime_signals_contract.c
+          "$bin/aarch64-linux-android34-clang" -std=c11 -O2 -g -Wall -Wextra -Werror \
+            -o dist-exec/realtime-signals-arm64-v8a tests/exec/realtime_signals_contract.c
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          artifacts = [Path('dist-exec/realtime-signals-' + abi) for abi in ('x86_64', 'arm64-v8a')]
+          Path('dist-exec/realtime-signals-build.json').write_text(json.dumps({
+              'revision': os.environ['GITHUB_SHA'],
+              'ndk': os.environ['NDK_VERSION'],
+              'fixture_sha256': hashlib.sha256(Path('tests/exec/realtime_signals_contract.c').read_bytes()).hexdigest(),
+              'artifacts': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in artifacts}
+          }, indent=2))
+          PY
           "$bin/llvm-readelf" -l -W dist-exec/libexec3tls.so | grep ' TLS '
           echo "--- libexec2test.so UND imports ---"
           "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexec2test.so | awk '$7 == "UND" && $8 != "" {print $8}' | sort -u

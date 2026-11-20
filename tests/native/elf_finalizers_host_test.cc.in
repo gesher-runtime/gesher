@@ -32,7 +32,7 @@ struct Library {
   const char* symbol_name = nullptr;
   void* symbol_address = nullptr;
 };
-std::mutex g_mutex;
+std::recursive_mutex g_mutex;
 static std::vector<Library*> loaded;
 static const std::vector<Library*>& Loaded() { return loaded; }
 // The fixture only supplies symbol storage. Visibility and loader locking use

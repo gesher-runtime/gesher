@@ -47,6 +47,84 @@ app). `GESHER_BINDER_TRACE=1` makes binderd trace every transaction on stderr;
 device starts stream an ART method trace to `<dir>/<package>-<pid>.trace`,
 which survives an abort (it found the HealthConnectManager placeholder's need).
 
+## Storage Access Framework documents
+
+`DocumentsStorageProvider` publishes `com.gesher.documents` through the platform's
+`DocumentsProvider` and `ContentProvider.Transport`. Its registered metadata is
+available before persisted URI grants load; clients receive the transport only
+after `attachInfo` initializes its context, authority and URI matcher. The
+provider requires `MANAGE_DOCUMENTS`, while per-document read/write grants and
+AOSP tree containment authorize normal app operations. The boot framework's
+complete `DocumentsContract` remains the client API.
+
+`DocumentPicker` translates implicit open, create, tree and get-content requests
+into Windows filesystem dialogs. MIME filters, supported multiple selection,
+suggested save names and local initial-URI hints reach the native dialog.
+`ACTION_CREATE_DOCUMENT` uses `IFileSaveDialog`; the selected location is created
+atomically with Android's unique-name rules, preserving existing contents.
+`ACTION_GET_CONTENT` offers temporary read access. SAF results offer persistable
+read/write access; trees also carry a prefix grant. Persisting and releasing each
+mode uses the shared durable URI-grant store.
+
+Multiple selection and `EXTRA_MIME_TYPES` retain all valid entries; there is no
+256-document or 64-filter policy. Native results are checked against the actual
+JNI array and C++ container representation limits before conversion, following
+Android 16's [selection predicate](https://android.googlesource.com/platform/packages/apps/DocumentsUI/+/android-16.0.0_r4/src/com/android/documentsui/dirlist/DocsSelectionPredicate.java),
+[picked-document delivery](https://android.googlesource.com/platform/packages/apps/DocumentsUI/+/android-16.0.0_r4/src/com/android/documentsui/picker/PickActivity.java)
+and [MIME state](https://android.googlesource.com/platform/packages/apps/DocumentsUI/+/android-16.0.0_r4/src/com/android/documentsui/base/State.java).
+
+`EXTRA_LOCAL_ONLY` is preserved through the Java/JNI/native request. Windows opens
+the existing target for attributes without recall, follows reparse points, and
+queries its [resolved volume GUID](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew)
+and actual drive type. Network, offline and unverifiable targets are rejected,
+including remote mapped drives and local paths that resolve onto a remote share.
+The dialog's [OnFileOk validation](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifiledialogevents-onfileok)
+keeps an invalid selection open with an explanation. A local-only save dialog
+does not create test files; its existing parent is checked again before atomic
+creation, and the selected target is checked before grants or success. The
+aggregate `/` root includes network mounts and does not advertise `FLAG_LOCAL_ONLY`.
+
+Each request belongs to its authenticated activity/process and current package
+installation. The actual covered activity pauses while the native UI runs; a
+paused result recipient retains its pending result until normal resume.
+Cancellation, owner retirement, native errors, unavailable selections and failed
+creation/grant publication produce no successful URI result. Native STA timers
+close retired dialogs, and every request retires its COM objects and window.
+The outstanding picker session keeps the device busy through native cleanup,
+including requests from a process without an activity. Concurrent native document
+and intent dialogs retain their own busy and pause coverage; the covered activity
+resumes after the last dialog closes and any outstanding pause is acknowledged.
+Capabilities reflect existing backing files and writable operations. Android
+shared-storage private subtrees are hidden, and restricted tree roots carry the
+framework blocking flag.
+Recursive deletion retires each successfully deleted child's document and tree
+grants immediately through the framework helper. If a later deletion fails,
+already deleted children remain retired while surviving documents keep their
+permissions; the existing durable grant writer batches the resulting updates.
+
+The behavior follows Android 16 r4
+[DocumentsProvider](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/provider/DocumentsProvider.java),
+[ContentProvider](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/content/ContentProvider.java),
+[DocumentsContract](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/provider/DocumentsContract.java),
+[ExternalStorageProvider](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java),
+and the [Android documents guide](https://developer.android.com/training/data-storage/shared/documents-files).
+
+Validation: `tools/test_saf_documents.py` runs the production Java provider
+transport, activity-manager lifecycle and real filesystem/grant store, including
+recursive deletion and partial-failure grant retirement, headless idle ownership,
+overlapping native dialogs, delayed pause acknowledgment,
+257-document/65-filter requests, locality rejection before creation, and exact
+AppTask retirement across native UI. Three separate JVMs cover retained-mode
+reload and release. It declares its host Binder/native initialization, user-input
+and locality-query boundaries. Windows track 94 runs the same service
+fixture through actual provider Binder parcels and file descriptors, then
+`DocumentPickerTest` checks real local and absent targets and opens and cancels
+real local-only open/save/tree dialogs repeatedly. Optional Windows path arguments
+to that test must be caller-owned nonlocal fixtures, such as a mapped share or a
+local reparse point to that share; the actual Windows query must reject each one.
+Unavailable native dialogs fail that check. Neither suite substitutes document
+operations or reports a selected path when an operation fails.
+
 ## Device services (devsvc track)
 
 Design: [0038](decisions/0038-devsvc-windows-backed-services.md). Tests:
@@ -697,3 +775,21 @@ tests/dex-services `SettingsIntentsTest` (tests/windows/tracks/95-browser.ps1).
   drive, ADR 0010) are the graphics track's.
 - Local builds: WinLibs g++ warns (`-Warray-bounds` false positives in
   vector inserts) where clang does not; CI uses llvm-mingw.
+
+### Detached native document and chooser overlap
+
+A detached no-result document picker or intent chooser captures the focused task
+even if another native request already covers that task. Focus discovery and
+eligibility to resume are separate: each admitted window owns coverage until its
+real worker completes. The final covering completion alone can resume the source.
+The original caller/process still owns document and intent chooser cancellation;
+retirement does not release a busy reservation before the native call returns.
+
+`DetachedNativeUiContractTest` exercises both document-first and chooser-first
+admission. An attached first request overlaps a detached `NEW_TASK` request;
+closing the first must leave the source paused and the second busy, then the
+last completion resumes once and delivers only the attached result. The same
+new probe fails both orders on published `b03805d8ea701061e73836d45f26549201c0178a`.
+The host runner and Windows track 94 register this regression alongside the
+existing SAF, durable-grant and restart contracts. Host user-input/process
+fixtures do not establish Windows UI, ART or remote Binder behavior.

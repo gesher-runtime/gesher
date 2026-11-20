@@ -1,0 +1,306 @@
+// Only Android/Skia object boundaries are adapted; the complete producer and
+// actual immutable-frame image cache are inserted below.
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstddef>
+#include <new>
+#include <thread>
+#include <array>
+
+@ADAPTERS@
+
+@ACCOUNTING@
+
+@PRODUCTION@
+
+using gesher::media::SurfaceFrame;
+using gesher::media::QueueSurface;
+template<class T> using sk_sp = std::shared_ptr<T>;
+struct SkData {
+  const void* pixels;
+  size_t bytes;
+  void (*release)(const void*, void*);
+  void* context;
+  SkData(const void* p, size_t n, void (*r)(const void*, void*), void* c)
+      : pixels(p), bytes(n), release(r), context(c) {}
+  ~SkData() { release(pixels, context); }
+  static sk_sp<SkData> MakeWithProc(const void* p, size_t n, void (*r)(const void*, void*), void* c) {
+    return std::make_shared<SkData>(p, n, r, c);
+  }
+};
+constexpr int kRGBA_8888_SkColorType = 1, kPremul_SkAlphaType = 1;
+struct SkImageInfo {
+  int width, height;
+  static SkImageInfo Make(int w, int h, int, int) { return {w, h}; }
+};
+struct SkImage {
+  SkImageInfo info;
+  sk_sp<SkData> data;
+  SkImage(SkImageInfo i, sk_sp<SkData> d) : info(i), data(std::move(d)) {}
+};
+namespace SkImages {
+sk_sp<SkImage> RasterFromData(SkImageInfo info, sk_sp<SkData> data, size_t) {
+  return std::make_shared<SkImage>(info, std::move(data));
+}
+}
+@CACHE@
+
+namespace {
+std::atomic<size_t> checks{0}, failures{0};
+void Check(bool okay, const char* reason) {
+  ++checks;
+  if (!okay) {
+    if (failures.fetch_add(1) < 20) std::fprintf(stderr, "FAIL frame recycling: %s\n", reason);
+  }
+}
+uint32_t Pixel(uint32_t number, size_t position) {
+  return 0x40201008u ^ (number * 0x01010203u) ^ static_cast<uint32_t>(position * 0x30405u);
+}
+uint32_t Converted(uint32_t pixel, int format) {
+  if (format == HAL_PIXEL_FORMAT_BGRA_8888) {
+    return (pixel & 0xff00ff00u) | (pixel & 0xffu) * 65536u | ((pixel / 65536u) & 0xffu);
+  }
+  return format == HAL_PIXEL_FORMAT_RGBX_8888 ? pixel | 0xff000000u : pixel;
+}
+void Post(QueueSurface* surface, uint32_t number, bool fill = true, ARect* dirty = nullptr) {
+  ANativeWindow_Buffer buffer{};
+  const int status = surface->lock(&buffer, dirty);
+  Check(status == 0, "acquire producer");
+  if (status != 0) return;
+  if (fill) {
+    for (int y = 0; y < buffer.height; ++y)
+      for (int x = 0; x < buffer.width; ++x)
+        static_cast<uint32_t*>(buffer.bits)[static_cast<size_t>(y) * buffer.stride + x] =
+            Pixel(number, static_cast<size_t>(y) * buffer.width + x);
+  }
+  Check(surface->unlockAndPost() == 0, "publish producer");
+}
+void FramePixels(const std::shared_ptr<const SurfaceFrame>& frame, uint32_t number, int format) {
+  Check(frame != nullptr, "published frame exists");
+  if (frame == nullptr) return;
+  Check(frame->pixels.size() == static_cast<size_t>(frame->width) * frame->height, "packed size");
+  for (size_t i = 0; i < frame->pixels.size(); ++i)
+    Check(frame->pixels[i] == Converted(Pixel(number, i), format), "independent exact pixel oracle");
+}
+
+void PixelsAndIdentity() {
+  for (int format : {HAL_PIXEL_FORMAT_RGBA_8888, HAL_PIXEL_FORMAT_RGBX_8888, HAL_PIXEL_FORMAT_BGRA_8888}) {
+    auto surface = android::sp<QueueSurface>::make(37, 29);
+    ANativeWindow* window = surface.get();
+    Check(window->perform(window, NATIVE_WINDOW_SET_BUFFERS_FORMAT, format) == 0, "select real pixel format");
+    size_t notifications = 0;
+    surface->SetListener([&] {
+      ++notifications;
+      auto frame = surface->Latest();  // reenters QueueSurface after its mutex is released
+      Check(frame && frame->number == notifications, "one ordered callback with published state");
+    });
+    FrameImages cache;
+    Post(surface.get(), 1);
+    auto first = surface->Latest();
+    std::weak_ptr<const SurfaceFrame> weak = first;
+    auto image = cache.Get(first);
+    Check(cache.Get(first) == image, "same frame identity reuses actual image cache");
+    first.reset();
+    for (uint32_t n = 2; n <= 6; ++n) {
+      Check(window->perform(window, NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP,
+                            n == 2 ? int64_t{0} : -static_cast<int64_t>(n)) == 0,
+            "signed timestamp dispatch");
+      Post(surface.get(), n);
+      auto current = surface->Latest();
+      FramePixels(current, n, format);
+      Check(current->timestamp_ns == (n == 2 ? 0 : -static_cast<int64_t>(n)), "exact supplied timestamp");
+      Check(current.get() != weak.lock().get(), "held image prevents frame identity reuse");
+      Check(cache.Get(current) != image, "new identity produces new cached image");
+      const auto* saved = static_cast<const uint32_t*>(image->data->pixels);
+      for (size_t p = 0; p < 37u * 29u; ++p)
+        Check(saved[p] == Converted(Pixel(1, p), format), "held SkData retains immutable pixels");
+    }
+    Check(!weak.expired(), "image owns the first frame after producer releases it");
+    image.reset();
+    Check(weak.expired(), "weak pointer expires at final reader release");
+    Post(surface.get(), 7);
+    Check(!weak.lock(), "recycled pixels do not resurrect an expired frame");
+    FramePixels(surface->Latest(), 7, format);
+    ARect dirty{1, 2, 3, 4};
+    Post(surface.get(), 8, false, &dirty);
+    Check(dirty.left == 1 && dirty.top == 2 && dirty.right == 3 && dirty.bottom == 4,
+          "damage and producer copyback survive recycling");
+    FramePixels(surface->Latest(), 7, format);
+    Check(notifications == 8 && surface->frames() == 8, "no dropped or combined publications");
+    surface->Abandon();
+    Check(surface->Latest() == nullptr, "abandon removes latest publication");
+    cache.Get(nullptr);
+  }
+  Check(accounting::live == 0, "all exact-format pixels released");
+}
+
+void GeometryAndRetirement() {
+  constexpr size_t a = 64u * 64u * 4u, b = 96u * 96u * 4u;
+  auto surface = android::sp<QueueSurface>::make(64, 64);
+  for (uint32_t n = 1; n <= 4; ++n) Post(surface.get(), n);
+  auto old = surface->Latest();
+  surface->SetDefaultSize(96, 96);
+  Check(accounting::live == 2 * a, "geometry change immediately frees old spare");
+  for (uint32_t n = 5; n <= 8; ++n) Post(surface.get(), n);
+  FramePixels(old, 4, HAL_PIXEL_FORMAT_RGBA_8888);
+  Check(accounting::live <= a + 3 * b, "retained consumer plus at most one current spare");
+  surface->SetDefaultSize(64, 64);
+  const size_t before = accounting::live;
+  old.reset();
+  Check(accounting::live == before - a, "late old-generation frame cannot repopulate resized pool");
+  for (uint32_t n = 9; n <= 12; ++n) Post(surface.get(), n);
+  Check(accounting::live <= 3 * a, "roundtrip resize has no old geometry cache");
+
+  // An outstanding native producer may return its original geometry after a
+  // resize. It keeps the existing queue contract and never fills the new pool.
+  ANativeWindow* window = surface.get();
+  ANativeWindowBuffer* producer = nullptr;
+  int fence = -1;
+  Check(window->dequeueBuffer(window, &producer, &fence) == 0, "hold dequeued old producer");
+  surface->SetDefaultSize(96, 96);
+  Post(surface.get(), 13);
+  Check(window->queueBuffer(window, producer, fence) == 0, "publish returned old-geometry producer");
+  Check(surface->Latest()->width == 64 && surface->Latest()->height == 64,
+        "returned producer retains its actual geometry");
+  for (uint32_t n = 14; n <= 17; ++n) Post(surface.get(), n);
+  Check(accounting::live <= 3 * b, "old producer frames are not cached");
+  auto held = surface->Latest();
+  surface->Abandon();
+  Check(accounting::live == b, "abandon frees producer, latest ownership and spare");
+  FramePixels(held, 17, HAL_PIXEL_FORMAT_RGBA_8888);
+  held.reset();
+  Check(accounting::live == 0, "late reader releases directly after abandonment");
+  surface->Abandon();
+}
+
+void OutstandingReaders() {
+  constexpr size_t bytes = 64u * 64u * 4u;
+  auto surface = android::sp<QueueSurface>::make(64, 64);
+  std::array<std::shared_ptr<const SurfaceFrame>, 24> held;
+  for (size_t n = 0; n < held.size(); ++n) {
+    Post(surface.get(), static_cast<uint32_t>(n + 1));
+    held[n] = surface->Latest();
+    Check(accounting::live <= (n + 3) * bytes, "retained pixels belong only to readers/current/spare");
+  }
+  for (size_t n = 0; n < held.size(); ++n) FramePixels(held[n], static_cast<uint32_t>(n + 1), 1);
+  std::array<std::thread, 4> threads;
+  std::atomic<bool> go{false};
+  for (size_t t = 0; t < threads.size(); ++t) {
+    threads[t] = std::thread([&, t] {
+      while (!go.load()) std::this_thread::yield();
+      for (size_t n = t; n < held.size(); n += threads.size()) held[n].reset();
+    });
+  }
+  go = true;
+  for (auto& thread : threads) thread.join();
+  Check(accounting::live <= 3 * bytes, "concurrent returns retain at most one spare");
+  surface->Abandon();
+  Check(accounting::live == 0, "abandon releases bounded returned storage");
+}
+
+void ConcurrentPublication() {
+  auto surface = android::sp<QueueSurface>::make(32, 32);
+  Post(surface.get(), 1);
+  std::atomic<bool> done{false};
+  std::atomic<size_t> observations{0};
+  std::thread consumer([&] {
+    while (!done.load()) {
+      auto frame = surface->Latest();
+      if (!frame) continue;
+      std::weak_ptr<const SurfaceFrame> weak = frame;
+      auto promoted = weak.lock();
+      frame.reset();
+      if (!promoted) continue;
+      const uint32_t n = static_cast<uint32_t>(promoted->number);
+      for (size_t p = 0; p < promoted->pixels.size(); ++p)
+        Check(promoted->pixels[p] == Pixel(n, p), "concurrent strong/weak reader remains immutable");
+      ++observations;
+    }
+  });
+  for (uint32_t n = 2; n <= 500; ++n) {
+    Post(surface.get(), n);
+    if ((n & 15) == 0) std::this_thread::yield();
+  }
+  while (observations.load() == 0) std::this_thread::yield();
+  surface->Abandon();
+  done = true;
+  consumer.join();
+  Check(observations > 0 && accounting::live == 0, "concurrent close releases all pixel ownership");
+}
+
+void DestructionAndCap() {
+  std::shared_ptr<const SurfaceFrame> held;
+  {
+    auto surface = android::sp<QueueSurface>::make(64, 64);
+    for (uint32_t n = 1; n <= 4; ++n) Post(surface.get(), n);
+    held = surface->Latest();
+  }
+  Check(accounting::live == 64u * 64u * 4u, "held frame cannot retain destroyed Surface's spare");
+  FramePixels(held, 4, 1);
+  held.reset();
+  Check(accounting::live == 0, "reader releases safely after Surface destruction");
+  {
+    constexpr size_t bytes = 4096u * 2160u * 4u;  // just above the 32 MiB cache bound
+    auto surface = android::sp<QueueSurface>::make(4096, 2160);
+    Post(surface.get(), 1);
+    Post(surface.get(), 2, false);
+    Post(surface.get(), 3, false);
+    Check(accounting::live == 2 * bytes, "oversize frames work without retaining a spare");
+  }
+  Check(accounting::live == 0, "oversize frame payload freed");
+}
+
+void Measure(int width, int height, size_t posts, bool cache_images, bool gate) {
+  auto surface = android::sp<QueueSurface>::make(width, height);
+  FrameImages cache;
+  Post(surface.get(), 1);
+  for (int warm = 0; warm < 4; ++warm) {
+    Post(surface.get(), 1, false);
+    if (cache_images) cache.Get(surface->Latest());
+  }
+  const size_t pixel_bytes = static_cast<size_t>(width) * height * 4;
+  size_t minimum_allocations = SIZE_MAX, minimum_bytes = SIZE_MAX, maximum_live = 0;
+  std::array<double, 5> times;
+  for (double& millis : times) {
+    accounting::Start();
+    const auto start = std::chrono::steady_clock::now();
+    for (size_t n = 0; n < posts; ++n) {
+      Post(surface.get(), 1, false);
+      if (cache_images) cache.Get(surface->Latest());
+    }
+    millis = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    accounting::measuring = false;
+    minimum_allocations = std::min(minimum_allocations, accounting::payload_allocations);
+    minimum_bytes = std::min(minimum_bytes, accounting::payload_bytes);
+    maximum_live = std::max(maximum_live, accounting::peak.load());
+    if (gate) Check(accounting::payload_allocations == 0, "warmed publication has no pixel allocation");
+  }
+  std::sort(times.begin(), times.end());
+  std::printf("frames %dx%d image_cache=%d posts=%zu rounds=5 payload_allocations=%zu payload_bytes=%zu "
+              "steady_payload_bytes=%zu peak_payload_bytes=%zu median_ms=%.3f\n",
+              width, height, cache_images, posts, minimum_allocations, minimum_bytes,
+              accounting::live.load(), maximum_live, times[2]);
+  Check(maximum_live <= 3 * pixel_bytes, "ordinary publication peaks at three frame payloads");
+  auto latest = surface->Latest();
+  Check(latest->pixels.front() == Pixel(1, 0) && latest->pixels.back() == Pixel(1, latest->pixels.size() - 1),
+        "timed workload preserves full image endpoints");
+}
+}
+
+int main(int argc, char** argv) {
+  const bool gate = argc < 2 || std::strcmp(argv[1], "measure") != 0;
+  PixelsAndIdentity();
+  GeometryAndRetirement();
+  OutstandingReaders();
+  ConcurrentPublication();
+  DestructionAndCap();
+  Measure(64, 64, 500, false, gate);
+  Measure(1280, 720, 180, false, gate);
+  Measure(1920, 1080, 120, false, gate);
+  Measure(1920, 1080, 120, true, gate);
+  Measure(3840, 2160, 30, true, gate);
+  Check(accounting::live == 0, "all measured payloads freed");
+  std::printf("surface frame recycling: %zu checks, %zu failures\n", checks.load(), failures.load());
+  return failures != 0;
+}
