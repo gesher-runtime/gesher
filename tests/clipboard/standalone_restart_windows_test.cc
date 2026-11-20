@@ -10,9 +10,6 @@
 #include <string>
 
 #include "../../compat/framework/services_zygote.h"
-#ifdef GESHER_RESTART_AUDIT
-#include "restart_resource_audit.h"
-#endif
 
 namespace {
 int checks = 0;
@@ -77,55 +74,36 @@ bool ReadChildIdentity(const std::string& report, DWORD* pid, unsigned long long
   return true;
 }
 
-#ifdef GESHER_RESTART_AUDIT
-void PlainProcessCreationControl() {
-  std::printf("Plain CreateProcessW control: no RestartWithUid, job, stdio duplication or attribute list\n");
-  std::fflush(stdout);
-  wchar_t executable[32768]{};
-  DWORD length = GetModuleFileNameW(nullptr, executable, 32768);
-  Check(length != 0 && length < 32768, "control executable path");
-  for (int pass = 1; pass <= 2; ++pass) {
-    std::wstring command = L"\"" + std::wstring(executable)
-        + L"\" --creation-control-child";
-    restart_audit::Entries before_handles;
-    Check(restart_audit::Capture(&before_handles) == ERROR_SUCCESS, "control initial snapshot");
-    DWORD before = 0, created = 0, after = 0;
-    Check(GetProcessHandleCount(GetCurrentProcess(), &before) != FALSE, "control initial count");
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION child{};
-    BOOL launched = CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE,
-        CREATE_SUSPENDED, nullptr, nullptr, &startup, &child);
-    Check(launched != FALSE, "plain control CreateProcessW");
-    BOOL created_counted = GetProcessHandleCount(GetCurrentProcess(), &created);
-    DWORD resumed = ResumeThread(child.hThread);
-    DWORD waited = resumed == static_cast<DWORD>(-1) ? WAIT_FAILED
-        : WaitForSingleObject(child.hProcess, 5000);
-    DWORD code = 0;
-    BOOL queried = waited == WAIT_OBJECT_0 ? GetExitCodeProcess(child.hProcess, &code) : FALSE;
-    if (waited != WAIT_OBJECT_0) {
-      TerminateProcess(child.hProcess, 1);
-      WaitForSingleObject(child.hProcess, 5000);
-    }
-    BOOL thread_closed = CloseHandle(child.hThread);
-    DWORD thread_error = thread_closed ? ERROR_SUCCESS : GetLastError();
-    BOOL process_closed = CloseHandle(child.hProcess);
-    DWORD process_error = process_closed ? ERROR_SUCCESS : GetLastError();
-    BOOL after_counted = GetProcessHandleCount(GetCurrentProcess(), &after);
-    std::printf("plain control pass=%d before=%lu after-create=%lu after-close=%lu process=%p thread=%p process-close=%d/%lu thread-close=%d/%lu exit=%lu\n",
-        pass, before, created, after, child.hProcess, child.hThread,
-        process_closed, process_error, thread_closed, thread_error, code);
-    std::fflush(stdout);
-    Check(created_counted != FALSE && after_counted != FALSE, "control count queries");
-    Check(thread_closed != FALSE && process_closed != FALSE, "control closes its two owned handles");
-    Check(waited == WAIT_OBJECT_0 && queried != FALSE && code == 0, "control child exact exit");
-    restart_audit::Entries after_handles;
-    Check(restart_audit::Capture(&after_handles) == ERROR_SUCCESS, "control final snapshot");
-    restart_audit::Delta(pass == 1 ? "plain-create-first" : "plain-create-second",
-        before_handles, after_handles);
+void InitializeProcessCreation() {
+  // Windows initializes process-global handles on its first CreateProcessW.
+  // Initialize only that OS path: the FIRST RestartWithUid remains inside the
+  // strict before/after resource comparison, so none of its own leaks is hidden.
+  auto executable = gesher::zygote::ExePath();
+  Check(!executable.empty(), "process creation initialization executable");
+  std::wstring command = L"\"" + std::wstring(executable.begin(), executable.end())
+      + L"\" --initialize-process-creation";
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION child{};
+  Check(CreateProcessW(reinterpret_cast<const wchar_t*>(executable.c_str()), command.data(),
+      nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr, nullptr, &startup, &child) != FALSE,
+      "initialize ordinary Windows process creation");
+  DWORD resumed = ResumeThread(child.hThread);
+  DWORD waited = resumed == static_cast<DWORD>(-1) ? WAIT_FAILED
+      : WaitForSingleObject(child.hProcess, 5000);
+  DWORD code = 0;
+  BOOL queried = waited == WAIT_OBJECT_0 ? GetExitCodeProcess(child.hProcess, &code) : FALSE;
+  if (waited != WAIT_OBJECT_0) {
+    TerminateProcess(child.hProcess, 1);
+    WaitForSingleObject(child.hProcess, 5000);
   }
+  BOOL thread_closed = CloseHandle(child.hThread);
+  BOOL process_closed = CloseHandle(child.hProcess);
+  Check(thread_closed != FALSE && process_closed != FALSE,
+      "process creation initialization releases both owned handles");
+  Check(waited == WAIT_OBJECT_0, "process creation initialization child completed");
+  Check(queried != FALSE && code == 0, "process creation initialization exact child exit");
 }
-#endif
 
 void Worker(uint32_t expected, const wchar_t* payload) {
   Check(std::wcscmp(payload, L"argument with spaces \u05d0") == 0, "same Unicode arguments");
@@ -149,16 +127,10 @@ void Worker(uint32_t expected, const wchar_t* payload) {
     if (expected == 99) Sleep(INFINITE);  // Parent-death test owns this process and its job.
     ExitProcess(expected);
   }
+  InitializeProcessCreation();
   DWORD before = 0, after = 0;
   Check(GetProcessHandleCount(GetCurrentProcess(), &before) != FALSE, "initial handle count");
   std::printf("supervisor before restart\n"); std::fflush(stdout);
-#ifdef GESHER_RESTART_AUDIT
-  gesher::zygote::RestartAudit("after-first-stdio", nullptr, TRUE, ERROR_SUCCESS);
-  restart_audit::Entries initial_handles;
-  DWORD capture = restart_audit::Capture(&initial_handles);
-  gesher::zygote::RestartAudit("initial-snapshot-cleaned", nullptr, capture == ERROR_SUCCESS, capture);
-  Check(capture == ERROR_SUCCESS, "capture initial diagnostic handle types");
-#endif
   uint32_t result = 0;
   uint32_t restart_error = gesher::zygote::RestartWithUid(10037, &result);
   if (restart_error != 0) {
@@ -173,29 +145,6 @@ void Worker(uint32_t expected, const wchar_t* payload) {
     std::fprintf(stderr, "restart handles before=%lu after=%lu counted=%d error=%lu child-exit=%u\n",
         before, after, counted, error, result);
     std::fflush(stderr);
-#ifdef GESHER_RESTART_AUDIT
-    restart_audit::Entries first_handles;
-    capture = restart_audit::Capture(&first_handles);
-    gesher::zygote::RestartAudit("first-call-snapshot-cleaned", nullptr,
-        capture == ERROR_SUCCESS, capture);
-    Check(capture == ERROR_SUCCESS, "capture first-call diagnostic handle types");
-    restart_audit::Delta("first-call", initial_handles, first_handles);
-    // Keep the original first-call comparison below fatal. This additional real
-    // call only distinguishes one-time initialization from continuing growth.
-    if (expected == 0) {
-      LARGE_INTEGER rewind{};
-      Check(SetFilePointerEx(GetStdHandle(STD_INPUT_HANDLE), rewind, nullptr, FILE_BEGIN) != FALSE,
-          "rewind real stdin for resource diagnostic repetition");
-      uint32_t repeated_exit = 0;
-      uint32_t repeated_error = gesher::zygote::RestartWithUid(10037, &repeated_exit);
-      std::printf("restart audit repetition native-error=%u child-exit=%u\n",
-          repeated_error, repeated_exit);
-      restart_audit::Entries repeated_handles;
-      capture = restart_audit::Capture(&repeated_handles);
-      Check(capture == ERROR_SUCCESS, "capture repeated diagnostic handle types");
-      restart_audit::Delta("repetition", first_handles, repeated_handles);
-    }
-#endif
   }
   Check(counted != FALSE && before == after,
       "restart releases process, thread, job, stdio and attribute resources");
@@ -263,11 +212,7 @@ void Run(uint32_t expected) {
     DWORD code = 0;
     BOOL queried = GetExitCodeProcess(process.value, &code);
     DWORD query_error = queried ? ERROR_SUCCESS : GetLastError();
-    if (!queried || code != expected
-#ifdef GESHER_RESTART_AUDIT
-        || expected == 0
-#endif
-        ) {
+    if (!queried || code != expected) {
       std::string child_output = output.Read(), child_error = error.Read();
       std::fprintf(stderr,
           "restart exit expected=%u (0x%08x) observed=%lu (0x%08lx) queried=%d error=%lu supervisor=%lu\n",
@@ -293,13 +238,7 @@ void Run(uint32_t expected) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
-#ifdef GESHER_RESTART_AUDIT
-  if (argc == 2 && std::wcscmp(argv[1], L"--creation-control-child") == 0) return 0;
-  if (argc == 2 && std::wcscmp(argv[1], L"--creation-control") == 0) {
-    PlainProcessCreationControl();
-    return 0;
-  }
-#endif
+  if (argc == 2 && std::wcscmp(argv[1], L"--initialize-process-creation") == 0) return 0;
   if (argc == 4 && std::wcscmp(argv[1], L"--worker") == 0) {
     Worker(static_cast<uint32_t>(std::wcstoull(argv[2], nullptr, 10)), argv[3]);
   }

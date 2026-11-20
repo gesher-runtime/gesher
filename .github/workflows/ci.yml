@@ -25,22 +25,26 @@ jobs:
         run: |
           git rev-parse HEAD
           git rev-parse "HEAD^{tree}"
-      - name: Build actual app identity restart implementation
+      - name: Build exact repaired fixture and isolated leak negative
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
-      - name: Build isolated restart resource diagnostics
-        shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_RESTART_AUDIT compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart-audit.exe user32.lib
-      - name: Check UID re-entry, inherited I/O, exact exit and parent-death cleanup
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_RESTART_LEAK_NEGATIVE_CONTROL compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart-leak.exe user32.lib
+      - name: Require repaired positive and detected first-call owned-handle leak
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
-          & .\app-identity-restart.exe
-          $originalExit = $LASTEXITCODE
-          & .\app-identity-restart-audit.exe
-          $auditExit = $LASTEXITCODE
-          & .\app-identity-restart-audit.exe --creation-control
-          $controlExit = $LASTEXITCODE
-          if ($originalExit -ne 0 -or $auditExit -ne 0 -or $controlExit -ne 0) {
-            throw "Native application identity restart gate failed (original=$originalExit audit=$auditExit control=$controlExit)"
+          $positive = @(& .\app-identity-restart.exe 2>&1)
+          $positiveExit = $LASTEXITCODE
+          $positive | ForEach-Object { Write-Host $_ }
+          $negative = @(& .\app-identity-restart-leak.exe 2>&1)
+          $negativeExit = $LASTEXITCODE
+          $negative | ForEach-Object { Write-Host $_ }
+          if ($positiveExit -ne 0 -or ($positive -join "`n") -notmatch 'Standalone native restart all passed:') {
+            throw "Repaired positive fixture failed (exit=$positiveExit)"
           }
+          if ($negativeExit -eq 0 -or ($negative -join "`n") -notmatch 'FAIL restart releases process, thread, job, stdio and attribute resources') {
+            throw "Seeded owned input-handle leak was not detected at the original resource assertion (exit=$negativeExit)"
+          }
+          Write-Host "NEGATIVE_OWNED_HANDLE_LEAK positive=$positiveExit expected-resource-failure=$negativeExit"
