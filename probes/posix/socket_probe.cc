@@ -57,6 +57,41 @@ static sockaddr_in Loopback(unsigned short port) {
   return a;
 }
 
+static void CheckXattrPaths() {
+  // Own the parent so the negative case has exactly one invalid condition:
+  // a missing child, with a valid user.* name and output buffer.
+  char root[] = "socket-probe-xattr-XXXXXX";
+  char* created = mkdtemp(root);
+  CHECK(created != nullptr);
+  if (!created) return;
+  const std::string missing = std::string(root) + "/missing";
+  char value[16] = {};
+  errno = 0;
+  ssize_t result = getxattr(missing.c_str(), "user.a", value, sizeof(value));
+  int error = errno;
+  if (result != -1 || error != ENOENT)
+    printf("FAIL missing-path xattr: result=%lld errno=%d expected=-1/ENOENT\n",
+           static_cast<long long>(result), error);
+  CHECK(result == -1 && error == ENOENT);
+
+  // Namespace support is a separate check on an existing, owned file.
+  const std::string present = std::string(root) + "/present";
+  int fd = open(present.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  CHECK(fd >= 0);
+  if (fd >= 0) {
+    errno = 0;
+    result = getxattr(present.c_str(), "security.selinux", value, sizeof(value));
+    error = errno;
+    if (result != -1 || error != ENOTSUP)
+      printf("FAIL unsupported-namespace xattr: result=%lld errno=%d expected=-1/ENOTSUP\n",
+             static_cast<long long>(result), error);
+    CHECK(result == -1 && error == ENOTSUP);
+    CHECK(close(fd) == 0);
+    CHECK(unlink(present.c_str()) == 0);
+  }
+  CHECK(rmdir(root) == 0);
+}
+
 int main(int, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   // Bad fds fail instead of ending the process.
@@ -310,7 +345,7 @@ int main(int, char** argv) {
   __user_cap_data_struct cd[2];
   memset(cd, 0xFF, sizeof(cd));
   CHECK(capget(&ch, cd) == 0 && cd[0].effective == 0 && cd[1].permitted == 0);
-  CHECK(getxattr("x", "user.a", buf, sizeof(buf)) == -1 && errno == ENOTSUP);
+  CheckXattrPaths();
   FILE* mounts = setmntent("/proc/mounts", "r");
   CHECK(mounts != nullptr && getmntent(mounts) == nullptr);
   endmntent(mounts);

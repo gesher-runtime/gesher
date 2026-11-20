@@ -89,6 +89,37 @@ HANDLE Job() {
   return g_job;
 }
 
+struct OwnedHandle {
+  HANDLE value = nullptr;
+  OwnedHandle() = default;
+  OwnedHandle(const OwnedHandle&) = delete;
+  OwnedHandle& operator=(const OwnedHandle&) = delete;
+  ~OwnedHandle() {
+    if (value != nullptr && value != INVALID_HANDLE_VALUE) CloseHandle(value);
+  }
+};
+
+struct HandleList {
+  std::vector<char> storage;
+  LPPROC_THREAD_ATTRIBUTE_LIST value = nullptr;
+  ~HandleList() { if (value != nullptr) DeleteProcThreadAttributeList(value); }
+
+  DWORD Initialize(HANDLE* handles, size_t count) {
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    if (size == 0) return GetLastError();
+    storage.resize(size);
+    auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+    if (!InitializeProcThreadAttributeList(list, 1, 0, &size)) return GetLastError();
+    value = list;
+    if (!UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                    handles, count * sizeof(HANDLE), nullptr, nullptr)) {
+      return GetLastError();
+    }
+    return ERROR_SUCCESS;
+  }
+};
+
 }  // namespace
 
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
@@ -158,6 +189,79 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
   CloseHandle(nul);
   CloseHandle(log);
   return result;
+}
+
+uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
+  if (uid < 10000 || exit_code == nullptr) return ERROR_INVALID_PARAMETER;
+  std::u16string exe = ExePath(), command = CommandLine();
+  if (exe.empty() || command.empty()) return ERROR_INVALID_PARAMETER;
+  // This is a loop guard, never evidence of package admission. The new VM parses
+  // and admits the APK again and checks its native/Binder UID before binding it.
+  const std::wstring decimal = std::to_wstring(uid);
+  const std::u16string identity = U(decimal.c_str(), decimal.size());
+  std::u16string environment = EnvironmentBlock(
+      {u"GESHER_UID=" + identity, u"GESHER_BINDER_UID=" + identity,
+       u"GESHER_STANDALONE_RESTARTED=1"}, {});
+
+  OwnedHandle input, output, error, job, process, thread;
+  const DWORD kinds[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+  OwnedHandle* copies[] = {&input, &output, &error};
+  HANDLE handles[3]{};
+  for (size_t i = 0; i < 3; ++i) {
+    HANDLE original = GetStdHandle(kinds[i]);
+    if (original == nullptr || original == INVALID_HANDLE_VALUE) {
+      SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
+      copies[i]->value = CreateFileW(L"NUL", i == 0 ? GENERIC_READ : GENERIC_WRITE,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
+                                     OPEN_EXISTING, 0, nullptr);
+      if (copies[i]->value == INVALID_HANDLE_VALUE) return GetLastError();
+    } else if (!DuplicateHandle(GetCurrentProcess(), original, GetCurrentProcess(),
+                                &copies[i]->value, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
+      return GetLastError();
+    }
+    handles[i] = copies[i]->value;
+  }
+  HandleList attributes;
+  DWORD failure = attributes.Initialize(handles, 3);
+  if (failure != ERROR_SUCCESS) return failure;
+  job.value = CreateJobObjectW(nullptr, nullptr);
+  if (job.value == nullptr) return GetLastError();
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (!SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits,
+                               sizeof(limits))) return GetLastError();
+
+  STARTUPINFOEXW startup{};
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = input.value;
+  startup.StartupInfo.hStdOutput = output.value;
+  startup.StartupInfo.hStdError = error.value;
+  startup.lpAttributeList = attributes.value;
+  PROCESS_INFORMATION child{};
+  if (!CreateProcessW(W(exe), reinterpret_cast<wchar_t*>(command.data()), nullptr, nullptr,
+                       TRUE, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT |
+                             EXTENDED_STARTUPINFO_PRESENT,
+                       environment.data(), nullptr, &startup.StartupInfo, &child)) {
+    return GetLastError();
+  }
+  process.value = child.hProcess;
+  thread.value = child.hThread;
+  // Bind lifetime ownership before the child can execute any runtime or APK code.
+  if (!AssignProcessToJobObject(job.value, process.value)) {
+    failure = GetLastError();
+    if (TerminateProcess(process.value, 1)) WaitForSingleObject(process.value, INFINITE);
+    return failure;
+  }
+  // Transfer only the foreground permission Windows actually gives this launcher.
+  // Failure leaves the normal OS focus rules in force; it never fabricates focus.
+  AllowSetForegroundWindow(child.dwProcessId);
+  if (ResumeThread(thread.value) == static_cast<DWORD>(-1)) return GetLastError();
+  if (WaitForSingleObject(process.value, INFINITE) != WAIT_OBJECT_0) return GetLastError();
+  DWORD code = 0;
+  if (!GetExitCodeProcess(process.value, &code)) return GetLastError();
+  *exit_code = code;
+  return ERROR_SUCCESS;
 }
 
 int64_t StartTime(int pid) {

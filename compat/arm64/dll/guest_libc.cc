@@ -397,6 +397,10 @@ struct SyscallMap {
   char ret;
 };
 const SyscallMap kSyscalls[] = {
+    {5, "setxattr", 'i'}, {6, "lsetxattr", 'i'}, {7, "__fsetxattr", 'i'},
+    {8, "getxattr", 'l'}, {9, "lgetxattr", 'l'}, {10, "__fgetxattr", 'l'},
+    {11, "listxattr", 'l'}, {12, "llistxattr", 'l'}, {13, "__flistxattr", 'l'},
+    {14, "removexattr", 'i'}, {15, "lremovexattr", 'i'}, {16, "fremovexattr", 'i'},
     {17, "getcwd", 'p'},      {23, "dup", 'i'},          {24, "dup3", 'i'},
     {26, "inotify_init1", 'i'}, {27, "inotify_add_watch", 'i'}, {28, "inotify_rm_watch", 'i'},
     {32, "flock", 'i'},
@@ -416,7 +420,9 @@ const SyscallMap kSyscalls[] = {
     {175, "geteuid", 'i'},    {176, "getgid", 'i'},      {177, "getegid", 'i'},
     {179, "sysinfo", 'i'},    {198, "socket", 'i'},      {203, "connect", 'i'},
     {215, "munmap", 'i'},     {222, "mmap", 'l'},        {226, "mprotect", 'i'},
-    {233, "madvise", 'i'},    {278, "getrandom", 'l'},   {279, "memfd_create", 'i'},
+    {228, "mlock", 'i'},      {229, "munlock", 'i'},     {230, "mlockall", 'i'},
+    {231, "munlockall", 'i'},  {233, "madvise", 'i'},     {278, "getrandom", 'l'},
+    {279, "memfd_create", 'i'}, {284, "mlock2", 'i'},
 };
 std::unordered_map<uint32_t, std::pair<void*, char>> g_syscalls;
 void* g_host_syscall = nullptr;

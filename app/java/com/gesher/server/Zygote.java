@@ -26,6 +26,7 @@ public final class Zygote {
 
     static native int nativeSpawn(String commandLine, String[] setEnv, String[] unsetEnv,
             String logPath, boolean breakaway);
+    private static native int nativeRestartWithUid(int uid);
     static native long nativeStartTime(int pid);
     static native long nativeChildStartTime(int pid);
     static native int nativeExitCode(int pid);
@@ -43,6 +44,18 @@ public final class Zygote {
 
     /** STILL_ACTIVE, the exit code of a process that runs. */
     public static final int STILL_ACTIVE = 259;
+
+    /**
+     * Re-enters the current standalone command with immutable UID/Binder identity.
+     * The native supervisor preserves stdio and the child's exact exit status, and
+     * owns a kill-on-close job so it cannot leave a relaunched application behind.
+     */
+    public static int restartWithUid(int uid) {
+        if (uid < android.os.Process.FIRST_APPLICATION_UID) {
+            throw new IllegalArgumentException("Standalone launch requires an application UID");
+        }
+        return nativeRestartWithUid(uid);
+    }
 
     /**
      * Starts {@code commandLine} detached, its output appended to {@code logPath}, with

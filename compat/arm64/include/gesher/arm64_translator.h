@@ -34,9 +34,10 @@
 extern "C" {
 #endif
 
-// Version3 requires the shared tagged ARM va_list readers in the host shim.
+// Version 4 adds pending-load rollback/private TLS preparation and retains
+// version 3's tagged va_list.
 // Neither an old host/new DLL nor a new host/old DLL is compatible.
-#define GESHER_ARM64_API_VERSION 3
+#define GESHER_ARM64_API_VERSION 4
 
 // What the host gives the translator.
 struct gesher_arm64_host {
@@ -63,7 +64,7 @@ struct gesher_arm64_api {
   uint64_t (*call)(const void* fn, const uint64_t* args, size_t nargs);
 
   // A System V x86-64 entry point for guest function `fn` (an explicit form
-  // of the DEP redirection; one stub per function, never freed).
+  // of the DEP redirection; pending-load stubs can be retired on abort).
   void* (*host_entry)(const void* fn);
 
   // The guest-specific definition of import `name`, or nullptr if the
@@ -78,8 +79,9 @@ struct gesher_arm64_api {
 
   // Guest TLS (variant I, TPIDR_EL0). Registers a PT_TLS module and gives
   // its offset from the thread pointer, the same in every thread; -1 if the
-  // static TLS area is full. The image is copied into every thread's block
-  // when it is published (after the module's relocations).
+  // static TLS area is full. After relocation, tls_prepare initializes only
+  // the loader owner's blocks. Publication initializes other threads while
+  // retaining any mutations made by that owner's IFUNC calls.
   int64_t (*tls_register)(size_t total_size, size_t align);
   void (*tls_publish)(int64_t offset, const void* image, size_t image_size, size_t total_size);
   // The guest address of the TLSDESC resolver for static TLS: the
@@ -95,6 +97,18 @@ struct gesher_arm64_api {
   // _start does not return (the program ends with exit()); if it does,
   // returns X0.
   uint64_t (*run_program)(const void* entry, const uint64_t* block, size_t words);
+
+  // Abort an unpublished image after IFUNC calls return, before unmapping.
+  // This does not implement dlclose for a successfully loaded library.
+  void (*remove_code)(const void* mapping_base, size_t mapping_size);
+  // Returns nonzero only for an owned pending reservation that was removed.
+  // The caller must retire its token; offsets may be reused after rollback.
+  int (*tls_rollback)(int64_t offset, size_t total_size);
+  // Retire a library-owned unresolved host stub before freeing it on abort.
+  void (*unbind_host_function)(void* host_fn);
+  // Prepare a relocated pending image for its owner only, without committing
+  // its lifetime. Nonzero on success; an identical repeat preserves writes.
+  int (*tls_prepare)(int64_t offset, const void* image, size_t image_size, size_t total_size);
 };
 
 // The DLL's one export.

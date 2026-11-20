@@ -29,6 +29,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare Android SDK identity tools
+        shell: pwsh
+        run: ./tests/e2e/prepare-identity-sdk.ps1
+      - name: APK identity parser and real signed fixture
+        run: python tests/e2e/test_apk_identity.py -v
       - name: Coverage accounting contracts
         run: python tests/e2e/test_coverage.py -v
       - name: Actual evidence writer and runner syntax

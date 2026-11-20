@@ -60,6 +60,13 @@ try {
   if (-not (Test-Path -LiteralPath $env:GESHER_METADATA_OTHER_VOLUME -PathType Container)) {
     throw 'The filesystem contract requires an available second volume'
   }
+  $xattrOut = RunTimed "$Dir/xattr_fd_host_test.exe" @() 90
+  $xattrCode = $LASTEXITCODE
+  Check 'xattr: current DACL/token authorization, public/raw providers, pointers and FD lifetime' {
+    $global:LASTEXITCODE = $xattrCode
+    $xattrOut
+  } @('xattr fd contracts:', 'xattr Windows contracts:', ' checks, 0 failures',
+      'xattr authorization measurement: 1000 gets,')
   foreach ($fixture in @(
     @{ Exe = 'filesystem_metadata_host_test.exe'; Args = @(); Label = 'host POSIX'; End = '0 failures' },
     @{ Exe = 'elf_load_test.exe'; Args = @("$Dir/filesystem_contract.so"); Label = 'x86_64 guest'; End = 'elf_load_test all passed' },
@@ -72,6 +79,12 @@ try {
       $metadataOut
     } @('filesystem metadata contracts:', ' checks, 0 failures',
         'filesystem metadata: cross-volume rename and renameat exercised', $fixture.End)
+    if ($fixture.Label -ne 'host POSIX') {
+      Check ('xattr: public Bionic and raw syscall distinction on ' + $fixture.Label) {
+        $global:LASTEXITCODE = $metadataCode
+        $metadataOut
+      } @('xattr fd contracts:', ' checks, 0 failures')
+    }
   }
 } finally {
   foreach ($name in $followupSavedEnvironment.Keys) {
