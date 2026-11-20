@@ -61,8 +61,8 @@ and Recents. Only the presentation is wrong for a desktop.
    window activation is marked (`AppWindows.MOVE_TASK_FROM_WINDOW`, a flag
    outside Android's `MOVE_TASK_*`). For 1 s after a task covers the app's
    others, the system server ignores a marked request for a covered task. The
-   app process also ignores activation of a window that is not its app's task
-   in front. An app's own `moveTaskToFront` or `AppTask.moveToFront`, and a task
+   app process also ignores activation of a window that is hidden because
+   another task of its app took the app's window. An app's own `moveTaskToFront` or `AppTask.moveToFront`, and a task
    chosen in the window menu, are always carried out.
 7. **Hidden at once in the app process.** Covered windows hide as soon as the
    new task's window shows, before their Activities stop (which reaches the

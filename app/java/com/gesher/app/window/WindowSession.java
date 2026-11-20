@@ -191,13 +191,6 @@ public final class WindowSession extends IWindowSession.Stub {
     private Rect mAppScreen;
     /** Whether this process's tasks share one window (ADR 0088). */
     private final boolean mOneWindow = !AppWindows.separateInProcess();
-    /**
-     * The task the app's window shows (one window per app): the task of the opaque
-     * top-level window shown last, or -1. Activating another task's window (a focus event
-     * that arrives after the system server moved its task behind) is not the user's choice
-     * of that task. Guarded by mWindows.
-     */
-    private int mAppFrontTask = -1;
 
     /** Stable identity used by View.getWindowId and AndroidX scene transitions. */
     private static final class WindowIdentity extends IWindowId.Stub {
@@ -544,7 +537,19 @@ public final class WindowSession extends IWindowSession.Stub {
             android.app.ActivityManager am = a.getSystemService(android.app.ActivityManager.class);
             if (am == null) return;
             int own = a.getTaskId();
-            for (android.app.ActivityManager.AppTask task : am.getAppTasks()) {
+            List<android.app.ActivityManager.AppTask> tasks = am.getAppTasks();
+            boolean ownApp = false;
+            for (android.app.ActivityManager.AppTask task : tasks) {
+                try {
+                    if (task.getTaskInfo().taskId == own) ownApp = true;
+                } catch (RuntimeException e) {
+                    // The task went meanwhile.
+                }
+            }
+            // Another app's task (this process's Activity in it, a share target): its window
+            // is not this app's, and closing it leaves the app's own tasks alone.
+            if (!ownApp) return;
+            for (android.app.ActivityManager.AppTask task : tasks) {
                 try {
                     int id = task.getTaskInfo().taskId;
                     if (id == own || keep.contains(id)) continue;
@@ -1819,10 +1824,6 @@ public final class WindowSession extends IWindowSession.Stub {
         w.shown = true;
         synchronized (mWindows) {
             mActiveRoot = w;
-            if (w.taskId >= 0 && w.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
-                    && !isTranslucentOrFloating(w.attrs.token)) {
-                mAppFrontTask = w.taskId;
-            }
         }
         updateGroup(w);
         updateTaskMenu(w);
@@ -2163,18 +2164,13 @@ public final class WindowSession extends IWindowSession.Stub {
         // click on a freeform task does on Android's desktop.
         if (root.taskId >= 0 && !root.minimized
                 && root.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
-            // One window per app (ADR 0088): only the task the window shows is the user's;
-            // another task's window activated is one the system server moved behind (a
-            // late focus event), and bringing it back would swap the tasks in turn. The
-            // window menu brings a task forward.
-            int front;
-            synchronized (mWindows) {
-                front = mAppFrontTask;
-            }
-            if (mOneWindow && front >= 0 && root.taskId != front
-                    && !isTranslucentOrFloating(root.attrs.token)) {
-                log("window \"" + root.title() + "\" activated: task " + root.taskId
-                        + " stays behind task " + front + " (one window per app)");
+            // One window per app (ADR 0088): a window another task of its app took over
+            // (hidden) cannot be the user's choice; its activation is a late focus event,
+            // and bringing its task back would swap the tasks in turn. The window menu
+            // brings a task forward.
+            if (mOneWindow && (root.coverHidden || !root.shown)) {
+                log("window \"" + root.title() + "\" activated while hidden: task "
+                        + root.taskId + " stays behind (one window per app)");
                 return;
             }
             mLifecycleHandler.onTaskActivated(root.attrs.token, root.taskId);
