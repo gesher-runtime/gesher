@@ -8,6 +8,7 @@
     }
   },
   "messages": {
+    "intent_chooser_title": {"en": "Gesher — choose an app", "he": "גשר — בחירת יישום"},
     "chooser_title": {"en": "Gesher accounts", "he": "גשר — בחירת חשבון"},
     "chooser_prompt": {"en": "Choose an account for this application:", "he": "בחר חשבון עבור יישום זה:"},
     "chooser_select": {"en": "Select", "he": "בחירה"},
@@ -78,6 +79,10 @@
       "en": "Gesher Camera",
       "he": "מצלמת גשר"
     },
+    "camera_selection_restart": {
+      "en": "Close your Android apps and run gesher-app shutdown for the camera change to take effect.",
+      "he": "כדי להחיל את בחירת המצלמה, סגור את יישומי Android והפעל gesher-app shutdown."
+    },
     "camera_take": {
       "en": "Take photo",
       "he": "צילום תמונה"
@@ -114,6 +119,10 @@
       "en": "failed: {0}",
       "he": "הפעולה נכשלה: {0}"
     },
+    "app_crash_generic": {"en": "The application ⁨{0}⁩ closed because of an error.\n\nDetails are in the log:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה עקב שגיאה.\n\nפרטים מופיעים בלוג:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
+    "app_crash_bluetooth": {"en": "The application ⁨{0}⁩ closed after trying to use a missing Bluetooth adapter. Windows currently reports no Bluetooth adapter.\n\nConnect or enable a Bluetooth adapter in Windows, then try again.\n\nDetails are in the log:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שניסתה להשתמש במתאם Bluetooth שאינו זמין. Windows מדווח כרגע שאין מתאם Bluetooth.\n\nחבר או הפעל מתאם Bluetooth ב־Windows ונסה שוב.\n\nפרטים מופיעים בלוג:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
+    "app_crash_security": {"en": "The application ⁨{0}⁩ closed after a security or permission check rejected an operation.\n\nCheck the application permissions in the Gesher control center. The log may explain other security restrictions:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שבדיקת אבטחה או הרשאות דחתה פעולה.\n\nבדוק את הרשאות האפליקציה בלוח הבקרה של גשר. הלוג עשוי להסביר מגבלות אבטחה אחרות:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
+    "app_crash_compatibility": {"en": "The application ⁨{0}⁩ closed after a class, method or native library could not be linked.\n\nThis may require a compatibility fix. Include the log when reporting the problem:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שלא ניתן היה לקשר מחלקה, מתודה או ספרייה מקומית.\n\nייתכן שנדרש תיקון תאימות. צרף את הלוג לדיווח על התקלה:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
     "launch_failed": {
       "en": "The Android application could not be opened.\n\n{0}",
       "he": "לא ניתן לפתוח את יישום ה־Android.\n\n{0}"

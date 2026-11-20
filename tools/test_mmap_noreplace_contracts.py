@@ -55,7 +55,8 @@ def main() -> None:
         "DWORD AnonymousCommit(int prot)",
         "std::map<uintptr_t, Region>::iterator FindRegion(State& s, uintptr_t addr)",
         "std::map<uintptr_t, Region>::iterator AddRegion(State& s, uintptr_t start, size_t size,",
-        "void Release(uintptr_t start, Region& region)",
+        ("void ForgetLocks(State& s, uintptr_t begin, uintptr_t end)"
+         if "void ForgetLocks(" in source else "void Release(uintptr_t start, Region& region)"),
         "std::map<uintptr_t, Region>::iterator SplitEntry(State& s,",
         "uintptr_t Reserve(State& s, void* at, size_t len)",
         "uintptr_t ReserveNear(State& s, void* hint, size_t len)",
@@ -70,8 +71,13 @@ def main() -> None:
         "bool FillAnonymous(std::map<uintptr_t, Region>::iterator it, int prot, Origin origin)",
         "void* GroupAnonymous(State& s, void* start, size_t len, int prot, int flags)",
         "void* MapAnonymous(State& s, void* start, size_t len, int prot, int flags)",
-        "int munmap(void* addr, size_t length)",
     ]
+    if "int Unmap(" in source:
+        signatures += [
+            "bool AdviceRange(uintptr_t begin, size_t length, size_t page, size_t* rounded)",
+            "int Unmap(State& s, uintptr_t begin, uintptr_t end)",
+        ]
+    signatures.append("int munmap(void* addr, size_t length)")
     production = "\n\n".join(block(source, signature) for signature in signatures)
     template = (ROOT / "tests/mman/noreplace_mapping_host.cc.in").read_text()
     for marker, code in [("@TYPES@", types), ("@PRODUCTION@", production)]:

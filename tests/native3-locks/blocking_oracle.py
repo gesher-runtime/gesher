@@ -175,6 +175,7 @@ def run(executable, windows):
                     assert fields == dict(mode=mode, result=str(110 if mode.startswith('timeout') else 125),
                                           begin_failures=str(int(mode.endswith('begin'))),
                                           commit_failures=str(int(mode.endswith('commit'))),
+                                          deadline_barriers=str(int(mode.startswith('timeout'))),
                                           live_identity='1', retained_capacity='256', denied_capacity='256',
                                           unknown_capacity='256', reclaimed_capacity='255', later_timeout='1',
                                           handles_closed='260'), fields

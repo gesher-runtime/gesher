@@ -13,8 +13,8 @@ $trusted = @{
   'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
   'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
   'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
-  'tools/ci/github_read.py'='ea686540993dcba31d0f33e48f9bcec4d1a20023'
-  'tools/ci/github_jobs.py'='c9d669313dc23f4d7d63017ecaa07f923e91932d'
+  'tools/ci/github_read.py'='b126f5e1fc81ac6fb40f9635f99069df6103a727'
+  'tools/ci/github_jobs.py'='f4278108b42329950525fb9fa34b78ae75694915'
 }
 foreach ($entry in $trusted.GetEnumerator()) {
   $actualHelperBlob = git hash-object $entry.Key
@@ -356,9 +356,12 @@ function RunPriority([string] $Context, [string] $Exe, [string] $Arguments) {
     }
   }
   if ($Context -eq 'host-posix') {
+    if ($text -notmatch '(?m)^TCP_PRIORITY_OWNER_CLASSIFIER default_pool=1 ordinary_thread_rejected=1 exact_retirement=1\r?$') { throw 'Missing HOST calibrated pool and ordinary-thread negative control' }
     foreach ($mode in 0..3) {
       if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_WAIT mode=$mode .*native_retired=1\r?$") { throw "Missing HOST actual mode/cancel/deadline context $mode" }
-      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=([0-9]+)/\2\r?$") { throw "Missing HOST repeated physical owner census $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_CENSUS mode=$mode handles=([0-9]+)/\1 threads=[0-9]+/[0-9]+\r?$") { throw "Missing HOST exact process handle census $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNER_IDENTITIES mode=$mode entries=([1-9][0-9]*)/\1 pool=[0-9]+/[0-9]+ matched=1\r?$") { throw "Missing HOST exact non-pool thread identities $mode" }
+      if ($text -notmatch "(?m)^TCP_PRIORITY_OWNED_REFS mode=$mode operation=0 description=0\r?$") { throw "Missing HOST expired product owner references $mode" }
       if ($text -notmatch "(?m)^TCP_PRIORITY_LEGACY_LEASE mode=$mode fd_reused=1 old_call_rc=-1 old_call_errno=9 close_rc=[0-9]+ global_progress=1 replacement_error=0\r?$") { throw "Missing HOST exact legacy lease context $mode" }
     }
   }

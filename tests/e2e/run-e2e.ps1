@@ -17,6 +17,8 @@ param(
   [Alias('Out')] [string] $OutDir = 'e2e-results',
   [string[]] $Only = @(),
   [switch] $SkipInstall,
+  [switch] $RequireApkIdentity,
+  [string] $BuildTools = '',
   [string] $InvocationId = ([guid]::NewGuid().ToString('N'))
 )
 $ErrorActionPreference = 'Stop'
@@ -33,7 +35,7 @@ Set-Content $summary ''
 $script:failed = 0
 $script:lines = @()
 $manifestData = Get-Content -Raw $Manifest | ConvertFrom-Json
-New-E2eEvidence $manifestData $Manifest $Only $OutDir
+New-E2eEvidence $manifestData $Manifest $Only $OutDir $RequireApkIdentity.IsPresent
 . (Join-Path $root 'tests\windows\graphics\WindowChecks.ps1')
 Add-Type -AssemblyName System.Drawing
 
@@ -141,8 +143,10 @@ function ReadText([string] $file) { return "$(Get-Content -Raw $file -ErrorActio
 function WaitFirstFrame($p, [string] $log, [int] $seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
-    $m = [regex]::Match((ReadText $log), 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
-    if ($m.Success) { return [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16) }
+    foreach ($m in [regex]::Matches((ReadText $log), 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')) {
+      $window = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16)
+      if ([GesherWin32]::IsWindow($window)) { return $window }
+    }
     Start-Sleep -Milliseconds 500
   }
   return [IntPtr]::Zero
@@ -221,6 +225,29 @@ function KillTree($p) {
   if ($null -ne $p -and -not $p.HasExited) { try { $p.Kill($true) } catch {} }
 }
 
+function DismissStartupDialog([string] $log, [string] $pkg, $settings) {
+  $text = ReadText $log
+  $title = $settings.title
+  $m = [regex]::Match($text,
+    ('(?m)^gesher-app: window "{0}" \d+x\d+: first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)' -f
+      [regex]::Escape($title)))
+  if (-not $m.Success) { return $false }
+  $dialog = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16)
+  $ownerId = AppPid $text $pkg
+  if (-not $ownerId -or [GesherWin32]::ProcessId($dialog) -ne $ownerId -or
+      [GesherWin32]::Title($dialog) -cne $title) { throw "Cannot identify '$title' as the launched app's dialog" }
+  SavePng ([GesherWin32]::Capture($dialog)) ([IO.Path]::ChangeExtension($log, '.startup-dialog.png'))
+  $size = [GesherWin32]::ClientSize($dialog)
+  if ($size[0] -ne $settings.size[0] -or $size[1] -ne $settings.size[1]) {
+    throw "Unexpected geometry for '$title': $($size -join 'x')"
+  }
+  [GesherWin32]::Click($dialog, [int]$settings.cancel[0], [int]$settings.cancel[1])
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  while ([GesherWin32]::IsWindow($dialog) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+  if ([GesherWin32]::IsWindow($dialog)) { throw "'$title' did not close" }
+  return $true
+}
+
 # Closes the window, waits for the launcher (and the app's process) to end. Returns problems.
 function CloseAndWait([IntPtr] $hwnd, $p, [string] $log, [string] $pkg) {
   $problems = @()
@@ -264,6 +291,24 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
     return $res
   }
   Start-Sleep 3
+  $actions = $a.actions
+  if (-not $NoInput -and $a.startupDialog) {
+    try {
+      if (DismissStartupDialog $log $pkg $a.startupDialog) {
+        $hwnd = WaitFirstFrame $p $log 15
+        if ($hwnd -eq [IntPtr]::Zero) { throw 'No app window remained after closing the startup dialog' }
+        $hwnd = FrontWindow $log $hwnd
+        $focus = $a.startupDialog.focus
+        [GesherWin32]::Click($hwnd, [int]$focus[0], [int]$focus[1])
+        $actions = $a.startupDialog.actions
+        $res.Info += "closed '$($a.startupDialog.title)' and focused the editor"
+      }
+    } catch {
+      $res.Problems += $_.Exception.Message
+      $res.Problems += @(CloseAndWait $hwnd $p $log $pkg)
+      return $res
+    }
+  }
   $hwnd = FrontWindow $log $hwnd
   $px = CaptureSettled $hwnd
   if ($null -eq $px) { $res.Problems += 'PrintWindow failed'; KillTree $p; return $res }
@@ -278,10 +323,10 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
   if ($a.surfaceTrace -and $an.Other -lt $area * 0.005) {
     $res.Info += @(BlankFrameDiagnostics $hwnd $px $pkg $tag)
   }
-  if (-not $NoInput -and $a.actions) {
+  if (-not $NoInput -and $actions) {
     $before = $px
     $i = 0
-    foreach ($act in $a.actions) {
+    foreach ($act in $actions) {
       $i++
       if ($act.click) { [GesherWin32]::Click($hwnd, [int]$act.click[0], [int]$act.click[1]); $what = "click at $($act.click[0]),$($act.click[1])" }
       elseif ($act.keys) { [GesherWin32]::TypeKeys($hwnd, [string]$act.keys); $what = "keys '$($act.keys)'" }
@@ -344,6 +389,7 @@ foreach ($a in $manifestData.apps) {
   $info = @()
   $ranWindow = $false
   $downloadFailed = $false
+  $identityFailed = $false
   Set-E2eCheck $pkg 'launch' 'running'
   # --- Download and verify.
   $apk = Join-Path $apks "$($pkg)_$($a.versionCode).apk"
@@ -357,6 +403,25 @@ foreach ($a in $manifestData.apps) {
   } catch {
     $downloadFailed = $true
     $problems += "download $url failed: $_"
+  }
+  # --- Measure the identity of the pinned bytes with the SDK, without running
+  # APK code. An unavailable optional collector stays explicit; CI requires it.
+  if (-not $problems) {
+    $identityArgs = @((Join-Path $PSScriptRoot 'apk_identity.py'), '--apk', $apk,
+      '--package', $pkg, '--version-code', [string]$a.versionCode, '--sha256', $sha)
+    if ($BuildTools) { $identityArgs += @('--build-tools', $BuildTools) }
+    $identityErrorPath = Join-Path $OutDir "$pkg.identity-error.log"
+    $identityJson = & python @identityArgs 2> $identityErrorPath | Out-String
+    if ($LASTEXITCODE -eq 0) {
+      Set-E2eApkIdentity $pkg ($identityJson | ConvertFrom-Json)
+    } else {
+      Set-E2eApkIdentity $pkg $null "SDK identity collection failed; see $pkg.identity-error.log"
+      if ($RequireApkIdentity) {
+        $identityFailed = $true
+        $problems += 'Required SDK APK identity collection failed'
+      }
+      else { $info += 'APK identity unmeasured: SDK collection failed' }
+    }
   }
   # --- Install.
   if (-not $problems) {
@@ -426,7 +491,7 @@ foreach ($a in $manifestData.apps) {
   }
   $standIns = [regex]::Matches($log + (ReadText $appLog), 'stand-in (\S+) not implemented') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
   if ($standIns) { Report "INFO  e2e: ${pkg}: stand-in methods called but not implemented: $($standIns -join ', ')" }
-  $observedStatus = if (-not $problems) { 'passed' } elseif ($downloadFailed) { 'blocked' } else { 'failed' }
+  $observedStatus = if (-not $problems) { 'passed' } elseif ($downloadFailed -or $identityFailed) { 'blocked' } else { 'failed' }
   Set-E2eCheck $pkg 'launch' $observedStatus $problems
   if (-not $problems) {
     if ($known) { Report "PASS  e2e: $name (listed as a known failure: $known)" }

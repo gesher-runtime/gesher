@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "contract": "WifiInfo API36 values and native Parcel",
+  "aosp_tag": "android-16.0.0_r4",
+  "device": {
+    "ro.build.fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+    "ro.build.version.sdk": "36",
+    "ro.build.version.sdk_full": "36.0",
+    "ro.build.version.release": "16",
+    "ro.build.version.security_patch": "2025-07-05",
+    "ro.product.cpu.abilist": "x86_64"
+  },
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "payloads": {
+    "reference.jar": {
+      "sha256": "0756a421fe2d862067ebac5e1c70c5a5d1a3bfa423b273f7b1f2291ee4739063",
+      "bytes": 14006
+    },
+    "candidate.jar": {
+      "sha256": "21eda26a651a4364f4e629076a7b18123add13ba6ef7885ded0008501d5f625e",
+      "bytes": 81333
+    },
+    "launcher.jar": {
+      "sha256": "be2e68e12aa8064249c0294737c4f5f42740b969b6bd4752074f03070d2d1067",
+      "bytes": 3020
+    }
+  },
+  "source_files": {
+    "tests/dex-services/gesher/services/WifiInfoContractTest.java": "2cab9cf236065a9b16f9d934911030eb9a7188617932aa0f7e578a03ea62ff47",
+    "tests/wifi-info/WifiInfoOracle.java": "84a7511610430d6d48a66ef7507b86e37c622468aa9ed93544770ca7efd8e720",
+    "app/java/android/net/wifi/WifiInfo.java": "628ad87acf898a63138692e374ab309a061a6ca7edd0c8f43f9fb0df450c2c89",
+    "app/java/android/net/wifi/WifiConfiguration.java": "235b0da14843357decf6c20a0f12966982018166ddfb730c92f405ed2e6dba3a",
+    "app/java/android/net/wifi/WifiEnterpriseConfig.java": "7c7f53a802c07704d42700aa2db3a185c4753368c4fbeb3800d0b3dd9539deb0",
+    "app/java/android/net/wifi/SecurityParams.java": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060",
+    "app/java/android/net/wifi/ParcelUtil.java": "a35e0d2b112833ae5e8eb74b266f845bb40f6249d473f841e11e29f2d0f454c8",
+    "app/java/android/net/wifi/OuiKeyedData.java": "670ea134264cbc80ae7eca2f7beed833475c9aa6f03443cc2ee9582c76b0734a",
+    "app/java/android/net/wifi/util/PersistableBundleUtils.java": "82a38ffde5621d1a0c7c6b8c71ce535502f8c71a68397eb8586742f171094730",
+    "app/java/android/net/wifi/WifiSsid.java": "a7a2bbcc8769f6bfe14d0ad7affccb8da16d9aed72132cda3d1b0f56184aa287",
+    "app/java/android/net/wifi/util/HexEncoding.java": "99e9186f20fd88e3de58cf3e64b9718042854229772797515396a4f1c1bdac92",
+    "app/java/android/net/wifi/SupplicantState.java": "101c373c45666294c634b55ec4a331b468fd4823a4015cc83b40a49ee28a4e6a",
+    "app/java/android/net/wifi/MloLink.java": "e8c01629ba773b8afd5a2f3df7f661a2fa23aca039f0e98ad0f236dace83f5e0",
+    "app/java/android/net/wifi/ScanResult.java": "d199a7f827ad88b8039f60ff964b663f7c4a72cfd5a66f22f3e2c99f90c3ff3f",
+    "app/java/android/net/wifi/ScanResultSecurity.java": "19d2b4cf717ee710738f9cfe8b1c4ea53e5d16aa85d5e2ce8c6850ea685d81d2",
+    "app/java/android/net/wifi/AnqpInformationElement.java": "565f496f653ac76d3c6a75da4512ba37388fd3726cdf85e676f1615da58e5661",
+    "app/java/android/net/MacAddress.java": "03985501545223e3641065512efb48656bf1dd5d5b55bedaf5feb8685912eac8",
+    "app/java/android/net/TransportInfo.java": "493dfc6ee465779b6b7dc80fc23aea18787266e168dfcc74c7fa42c426447f32"
+  },
+  "reference": {
+    "exit_code": 0,
+    "seconds": 10.52,
+    "checks": 631,
+    "parcel": true,
+    "providers_asserted": 9,
+    "receipt_file": "005-wifiinfo-wire-reference.result.json",
+    "receipt_sha256": "490d6ed861d5e3f93f9fccbfa0ef7ea99a24a215a981eeea5f426e0037fc67d8",
+    "stdout_sha256": "e56aedbc9b8d9a2953f16a21135a4aa4bd92d072bd8289a4439a293426d62cee"
+  },
+  "candidate": {
+    "exit_code": 0,
+    "seconds": 13.118,
+    "checks": 631,
+    "parcel": true,
+    "providers_asserted": 16,
+    "receipt_file": "006-wifiinfo-wire-candidate.result.json",
+    "receipt_sha256": "0fffc04dd9e16e389f961ced5e6f0694a41c9095bac24b14b3f60ff53ac21162",
+    "stdout_sha256": "f753c44098f6f37df3421fa1c516b3ce3637dda69c39facf87929c31347d0226"
+  },
+  "wire_cases": [
+    {
+      "case": "Vendor-bearing_Parcel",
+      "bytes": 1396,
+      "sha256": "fdb8b1ae93cc09865f628ac57272ef4eb4446f18bdfc1b31c8589f73707e7eb6"
+    },
+    {
+      "case": "Default_Parcel",
+      "bytes": 280,
+      "sha256": "57fc10cb2ef0c3141fc7921f0ee374adf6da8eeb9f87a5c80bfc75bd4e4d4999"
+    },
+    {
+      "case": "Populated_Parcel",
+      "bytes": 1260,
+      "sha256": "b7b16f5a348fb5e92511bc0d6ae217380f09ee415b0d0fbb5680819d4f1eb895"
+    },
+    {
+      "case": "Redacted_Parcel_1",
+      "bytes": 832,
+      "sha256": "288ee817dbb820e87f22fce771e9e6a11331c8a85684bde41f22770feb571238"
+    },
+    {
+      "case": "Redacted_Parcel_2",
+      "bytes": 1092,
+      "sha256": "08bdfa131d2bbd0ce16fc73802c2c1a925c550b1cea05b4e5a2e8a24dff9794b"
+    },
+    {
+      "case": "Redacted_Parcel_4",
+      "bytes": 1224,
+      "sha256": "077ed31a148b4f3e147ac77ce76c25901689c09059f4fdab3c19b0692d85fdb4"
+    },
+    {
+      "case": "Redacted_Parcel_7",
+      "bytes": 628,
+      "sha256": "92db3f647757cdffa83d35d4b3fd881680a394446cc456fe3cebab9fc6f8b71d"
+    },
+    {
+      "case": "IPv6_Parcel",
+      "bytes": 1272,
+      "sha256": "596662fdf7b83602810b73a0d2157df321366210b103c806a011d9fbd97f56f2"
+    },
+    {
+      "case": "Empty-list_Parcel",
+      "bytes": 584,
+      "sha256": "73819c6df242c04816450f6acc5fa3e473d3b8d51b4c581d37dd7522c1d3cc57"
+    }
+  ],
+  "comparison": "All nine case identifiers, byte lengths and whole native Parcel SHA256 digests match exactly. This records Android execution, not Windows execution."
+}

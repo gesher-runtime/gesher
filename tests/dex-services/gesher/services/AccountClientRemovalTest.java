@@ -60,9 +60,13 @@ public final class AccountClientRemovalTest {
         Object owner=apk.getMethod("parse",String.class).invoke(null,args[0]);
         Object client=apk.getMethod("parse",String.class).invoke(null,args[1]);
         String ownerName=(String)apk.getField("packageName").get(owner),clientName=(String)apk.getField("packageName").get(client);
+        Object packages=pm.getConstructor(Collection.class).newInstance(Arrays.asList(owner,client));
+        // The package manager assigns installed identities. Capture them only after admission.
         int uid=(Integer)method(apk,"uid").invoke(client);
         int ownerUid=(Integer)method(apk,"uid").invoke(owner);
-        Object packages=pm.getConstructor(Collection.class).newInstance(Arrays.asList(owner,client));
+        require(uid >= android.os.Process.FIRST_APPLICATION_UID
+                && ownerUid >= android.os.Process.FIRST_APPLICATION_UID && uid != ownerUid,
+                "Fixtures did not receive distinct application UIDs");
         Object manager=svc.getConstructor(am,pm).newInstance(null,packages);
         Class<?> writer=Class.forName(svc.getName()+"$StoreWriter");
         AtomicReference<Properties> persisted=new AtomicReference<>();AtomicBoolean failWrite=new AtomicBoolean();
@@ -76,6 +80,8 @@ public final class AccountClientRemovalTest {
         Class<?> caller=Class.forName(svc.getName()+"$Caller"),entry=Class.forName(svc.getName()+"$Entry");
         Object oldCaller=method(svc,"captureCaller",String.class,String.class,boolean.class,int.class,int.class)
                 .invoke(manager,clientName,clientCode,false,uid,123);
+        require((Boolean)method(svc,"callerUnchanged",caller).invoke(manager,oldCaller),
+                "Newly captured installed caller was invalid before removal");
         entries(manager).clear();
         Class<?> auth=Class.forName(svc.getName()+"$Authenticator"),answer=Class.forName(svc.getName()+"$Answer");
         Object realOwner=method(svc,"authenticator",String.class).invoke(manager,"com.gesher.devsvc.account");

@@ -1,0 +1,4779 @@
+{
+  "schema": "gesher-notification-delegation-observations-v1",
+  "completed": true,
+  "device": {
+    "ro.build.fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+    "ro.build.version.sdk": "36",
+    "ro.build.version.sdk_full": "36.0",
+    "ro.build.version.release": "16",
+    "ro.product.cpu.abilist": "x86_64"
+  },
+  "apks": [
+    {
+      "name": "owner",
+      "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/owner.apk",
+      "sha256": "dfd62f016dd719096ee6f43b211aed9aaf36d04c31d12e8906a36cd275a88862"
+    },
+    {
+      "name": "delegate",
+      "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/delegate.apk",
+      "sha256": "001d78ab2dd1a4ad6bc591f808dca54e39f43304667d622ccb7e0a74a49a13e7"
+    },
+    {
+      "name": "other",
+      "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/other.apk",
+      "sha256": "7feb3a89927f76021533aa155d864390af4a3b1b72504f7673ce059594942963"
+    },
+    {
+      "name": "sharedowner",
+      "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/sharedowner.apk",
+      "sha256": "ddfabe93a8e142e0f61efa07d3cc2ca3232d9aa134fed44c0cdb5103814e236c"
+    },
+    {
+      "name": "shareddelegate",
+      "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/shareddelegate.apk",
+      "sha256": "6cc77d37d175cd0434ba52d6ea2b1a7bf54c6ad292cac073fc5acb67efba2fcd"
+    }
+  ],
+  "observations": [
+    {
+      "label": "owner-identity",
+      "step": 8,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "get",
+        "delegate": null,
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-channel",
+      "step": 9,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "channel",
+        "channel": "delegation",
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-identity",
+      "step": 13,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "get",
+        "delegate": null,
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-channel",
+      "step": 14,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "channel",
+        "channel": "delegation",
+        "ok": true
+      }
+    },
+    {
+      "label": "other-identity",
+      "step": 18,
+      "value": {
+        "package": "gesher.notificationdelegation.other",
+        "uid": 10152,
+        "command": "get",
+        "delegate": null,
+        "ok": true
+      }
+    },
+    {
+      "label": "other-channel",
+      "step": 19,
+      "value": {
+        "package": "gesher.notificationdelegation.other",
+        "uid": 10152,
+        "command": "channel",
+        "channel": "delegation",
+        "ok": true
+      }
+    },
+    {
+      "label": "sharedowner-identity",
+      "step": 23,
+      "value": {
+        "package": "gesher.notificationdelegation.sharedowner",
+        "uid": 10153,
+        "command": "get",
+        "delegate": null,
+        "ok": true
+      }
+    },
+    {
+      "label": "sharedowner-channel",
+      "step": 24,
+      "value": {
+        "package": "gesher.notificationdelegation.sharedowner",
+        "uid": 10153,
+        "command": "channel",
+        "channel": "delegation",
+        "ok": true
+      }
+    },
+    {
+      "label": "shareddelegate-identity",
+      "step": 28,
+      "value": {
+        "package": "gesher.notificationdelegation.shareddelegate",
+        "uid": 10153,
+        "command": "get",
+        "delegate": null,
+        "ok": true
+      }
+    },
+    {
+      "label": "shareddelegate-channel",
+      "step": 29,
+      "value": {
+        "package": "gesher.notificationdelegation.shareddelegate",
+        "uid": 10153,
+        "command": "channel",
+        "channel": "delegation",
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-self-post",
+      "step": 30,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "notify",
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-self-post-visible",
+      "step": 31,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.owner",
+            "uid": 10150,
+            "id": 1,
+            "tag": null
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 80,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              }
+            ]
+          }
+        ],
+        "awaitId": 1,
+        "awaitPresent": true,
+        "predicateObserved": true,
+        "stableWindowMs": 0,
+        "timeoutMs": 6500,
+        "elapsedMs": 81,
+        "observation": "observed-presence",
+        "ok": true
+      }
+    },
+    {
+      "label": "unapproved-post",
+      "step": 32,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "notify",
+        "ok": false,
+        "exception": "java.lang.SecurityException",
+        "message": "Caller gesher.notificationdelegation.delegate:10151 cannot post for pkg gesher.notificationdelegation.owner in user 0"
+      }
+    },
+    {
+      "label": "set-delegate",
+      "step": 33,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "set",
+        "delegate": "gesher.notificationdelegation.delegate",
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-allowed",
+      "step": 34,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "can",
+        "allowed": true,
+        "ok": true
+      }
+    },
+    {
+      "label": "other-denied",
+      "step": 35,
+      "value": {
+        "package": "gesher.notificationdelegation.other",
+        "uid": 10152,
+        "command": "can",
+        "allowed": false,
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-channel-query",
+      "step": 36,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "channels",
+        "channel": "delegation",
+        "count": 1,
+        "ok": true
+      }
+    },
+    {
+      "label": "other-channel-query",
+      "step": 37,
+      "value": {
+        "package": "gesher.notificationdelegation.other",
+        "uid": 10152,
+        "command": "channels",
+        "ok": false,
+        "exception": "java.lang.SecurityException",
+        "message": "Pkg gesher.notificationdelegation.other cannot read channels for gesher.notificationdelegation.owner in 0"
+      }
+    },
+    {
+      "label": "delegate-post",
+      "step": 38,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "notify",
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-sees-delegated",
+      "step": 39,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.owner",
+            "uid": 10150,
+            "id": 1,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 2,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 1,
+            "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 61,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 2,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          }
+        ],
+        "awaitId": 2,
+        "awaitPresent": true,
+        "predicateObserved": true,
+        "stableWindowMs": 0,
+        "timeoutMs": 6500,
+        "elapsedMs": 62,
+        "observation": "observed-presence",
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-sees-own-post",
+      "step": 40,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 2,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 1,
+            "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 36,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 2,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          }
+        ],
+        "awaitId": 2,
+        "awaitPresent": true,
+        "predicateObserved": true,
+        "stableWindowMs": 0,
+        "timeoutMs": 6500,
+        "elapsedMs": 36,
+        "observation": "observed-presence",
+        "ok": true
+      }
+    },
+    {
+      "label": "other-sees-none",
+      "step": 41,
+      "value": {
+        "package": "gesher.notificationdelegation.other",
+        "uid": 10152,
+        "command": "active",
+        "active": [],
+        "samples": [
+          {
+            "elapsedMs": 68,
+            "active": []
+          },
+          {
+            "elapsedMs": 173,
+            "active": []
+          },
+          {
+            "elapsedMs": 278,
+            "active": []
+          },
+          {
+            "elapsedMs": 380,
+            "active": []
+          },
+          {
+            "elapsedMs": 482,
+            "active": []
+          },
+          {
+            "elapsedMs": 585,
+            "active": []
+          },
+          {
+            "elapsedMs": 688,
+            "active": []
+          },
+          {
+            "elapsedMs": 791,
+            "active": []
+          },
+          {
+            "elapsedMs": 893,
+            "active": []
+          },
+          {
+            "elapsedMs": 997,
+            "active": []
+          },
+          {
+            "elapsedMs": 1100,
+            "active": []
+          },
+          {
+            "elapsedMs": 1202,
+            "active": []
+          },
+          {
+            "elapsedMs": 1305,
+            "active": []
+          },
+          {
+            "elapsedMs": 1407,
+            "active": []
+          },
+          {
+            "elapsedMs": 1510,
+            "active": []
+          },
+          {
+            "elapsedMs": 1612,
+            "active": []
+          },
+          {
+            "elapsedMs": 1715,
+            "active": []
+          },
+          {
+            "elapsedMs": 1818,
+            "active": []
+          },
+          {
+            "elapsedMs": 1922,
+            "active": []
+          },
+          {
+            "elapsedMs": 2140,
+            "active": []
+          },
+          {
+            "elapsedMs": 2243,
+            "active": []
+          },
+          {
+            "elapsedMs": 2347,
+            "active": []
+          },
+          {
+            "elapsedMs": 2449,
+            "active": []
+          },
+          {
+            "elapsedMs": 2553,
+            "active": []
+          },
+          {
+            "elapsedMs": 2656,
+            "active": []
+          }
+        ],
+        "awaitId": 2,
+        "awaitPresent": false,
+        "predicateObserved": true,
+        "stableWindowMs": 2500,
+        "timeoutMs": 6500,
+        "elapsedMs": 2656,
+        "observation": "bounded-absence-window",
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-cannot-cancel-owner",
+      "step": 42,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "cancel",
+        "ok": false,
+        "exception": "java.lang.SecurityException",
+        "message": "gesher.notificationdelegation.delegate does not have permission to cancel a notification they did not post null 1"
+      }
+    },
+    {
+      "label": "delegate-cancels-own",
+      "step": 43,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "cancel",
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-post-remains",
+      "step": 44,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.owner",
+            "uid": 10150,
+            "id": 1,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 1,
+            "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 7,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 112,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 218,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 323,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 430,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 535,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 640,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 746,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 852,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 957,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1065,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1170,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1277,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1382,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1487,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1594,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1702,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1808,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1913,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2026,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2133,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2237,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2343,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2449,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2555,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          }
+        ],
+        "awaitId": 2,
+        "awaitPresent": false,
+        "predicateObserved": true,
+        "stableWindowMs": 2500,
+        "timeoutMs": 6500,
+        "elapsedMs": 2555,
+        "observation": "bounded-absence-window",
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-post-before-revoke",
+      "step": 45,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "notify",
+        "ok": true
+      }
+    },
+    {
+      "label": "pre-revoke-post-visible",
+      "step": 46,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.owner",
+            "uid": 10150,
+            "id": 1,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 3,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 1,
+            "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 8,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 3,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          }
+        ],
+        "awaitId": 3,
+        "awaitPresent": true,
+        "predicateObserved": true,
+        "stableWindowMs": 0,
+        "timeoutMs": 6500,
+        "elapsedMs": 8,
+        "observation": "observed-presence",
+        "ok": true
+      }
+    },
+    {
+      "label": "revoke-delegate",
+      "step": 47,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "set",
+        "delegate": null,
+        "ok": true
+      }
+    },
+    {
+      "label": "revoked-cannot-notify",
+      "step": 48,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "can",
+        "allowed": false,
+        "ok": true
+      }
+    },
+    {
+      "label": "revoked-post-still-queryable",
+      "step": 49,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 3,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 1,
+            "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 16,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 3,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          }
+        ],
+        "awaitId": 3,
+        "awaitPresent": true,
+        "predicateObserved": true,
+        "stableWindowMs": 0,
+        "timeoutMs": 6500,
+        "elapsedMs": 16,
+        "observation": "observed-presence",
+        "ok": true
+      }
+    },
+    {
+      "label": "revoked-cancel-denied",
+      "step": 50,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "cancel",
+        "ok": false,
+        "exception": "java.lang.SecurityException",
+        "message": "Caller gesher.notificationdelegation.delegate:10151 cannot post for pkg gesher.notificationdelegation.owner in user 0"
+      }
+    },
+    {
+      "label": "owner-cancels-delegated",
+      "step": 51,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "cancel",
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-cancel-observed",
+      "step": 52,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.owner",
+            "uid": 10150,
+            "id": 1,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 1,
+            "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 44,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 150,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 257,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 362,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 467,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 573,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 677,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 815,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 921,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1026,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1131,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1273,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1378,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1483,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1587,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1694,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1799,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 1910,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2015,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2120,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2225,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2330,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2437,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          },
+          {
+            "elapsedMs": 2544,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          }
+        ],
+        "awaitId": 3,
+        "awaitPresent": false,
+        "predicateObserved": true,
+        "stableWindowMs": 2500,
+        "timeoutMs": 6500,
+        "elapsedMs": 2544,
+        "observation": "bounded-absence-window",
+        "ok": true
+      }
+    },
+    {
+      "label": "restore-delegate",
+      "step": 53,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "set",
+        "delegate": "gesher.notificationdelegation.delegate",
+        "ok": true
+      }
+    },
+    {
+      "label": "unknown-delegate-keeps-current",
+      "step": 54,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "set",
+        "delegate": "gesher.notificationdelegation.delegate",
+        "ok": true
+      }
+    },
+    {
+      "label": "unknown-delegate-get",
+      "step": 55,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "get",
+        "delegate": "gesher.notificationdelegation.delegate",
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-own-permission-not-required",
+      "step": 57,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "notify",
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-sees-post-from-denied-delegate",
+      "step": 58,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.owner",
+            "uid": 10150,
+            "id": 1,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 4,
+            "tag": null
+          },
+          {
+            "owner": "gesher.notificationdelegation.owner",
+            "opPkg": "gesher.notificationdelegation.delegate",
+            "uid": 10150,
+            "id": 1,
+            "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 24,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.owner",
+                "uid": 10150,
+                "id": 1,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 4,
+                "tag": null
+              },
+              {
+                "owner": "gesher.notificationdelegation.owner",
+                "opPkg": "gesher.notificationdelegation.delegate",
+                "uid": 10150,
+                "id": 1,
+                "tag": "0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection"
+              }
+            ]
+          }
+        ],
+        "awaitId": 4,
+        "awaitPresent": true,
+        "predicateObserved": true,
+        "stableWindowMs": 0,
+        "timeoutMs": 6500,
+        "elapsedMs": 24,
+        "observation": "observed-presence",
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-permission-required",
+      "step": 60,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "notify",
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-permission-revoked-active",
+      "step": 61,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "active",
+        "active": [],
+        "samples": [
+          {
+            "elapsedMs": 4,
+            "active": []
+          },
+          {
+            "elapsedMs": 116,
+            "active": []
+          },
+          {
+            "elapsedMs": 243,
+            "active": []
+          },
+          {
+            "elapsedMs": 353,
+            "active": []
+          },
+          {
+            "elapsedMs": 457,
+            "active": []
+          },
+          {
+            "elapsedMs": 561,
+            "active": []
+          },
+          {
+            "elapsedMs": 668,
+            "active": []
+          },
+          {
+            "elapsedMs": 775,
+            "active": []
+          },
+          {
+            "elapsedMs": 881,
+            "active": []
+          },
+          {
+            "elapsedMs": 985,
+            "active": []
+          },
+          {
+            "elapsedMs": 1100,
+            "active": []
+          },
+          {
+            "elapsedMs": 1205,
+            "active": []
+          },
+          {
+            "elapsedMs": 1312,
+            "active": []
+          },
+          {
+            "elapsedMs": 1414,
+            "active": []
+          },
+          {
+            "elapsedMs": 1518,
+            "active": []
+          },
+          {
+            "elapsedMs": 1621,
+            "active": []
+          },
+          {
+            "elapsedMs": 1728,
+            "active": []
+          },
+          {
+            "elapsedMs": 1831,
+            "active": []
+          },
+          {
+            "elapsedMs": 1933,
+            "active": []
+          },
+          {
+            "elapsedMs": 2044,
+            "active": []
+          },
+          {
+            "elapsedMs": 2146,
+            "active": []
+          },
+          {
+            "elapsedMs": 2276,
+            "active": []
+          },
+          {
+            "elapsedMs": 2384,
+            "active": []
+          },
+          {
+            "elapsedMs": 2487,
+            "active": []
+          },
+          {
+            "elapsedMs": 2595,
+            "active": []
+          }
+        ],
+        "awaitId": 5,
+        "awaitPresent": false,
+        "predicateObserved": true,
+        "stableWindowMs": 2500,
+        "timeoutMs": 6500,
+        "elapsedMs": 2597,
+        "observation": "bounded-absence-window",
+        "ok": true
+      }
+    },
+    {
+      "label": "grant-survives-process-stop",
+      "step": 64,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10151,
+        "command": "can",
+        "allowed": true,
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-uninstalled-name",
+      "step": 66,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "get",
+        "delegate": "gesher.notificationdelegation.delegate",
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-reinstall-identity",
+      "step": 68,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10154,
+        "command": "get",
+        "delegate": null,
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-reinstall-authorization",
+      "step": 69,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10154,
+        "command": "can",
+        "allowed": false,
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-reinstall-regrant",
+      "step": 70,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10150,
+        "command": "set",
+        "delegate": "gesher.notificationdelegation.delegate",
+        "ok": true
+      }
+    },
+    {
+      "label": "delegate-reinstall-allowed-after-regrant",
+      "step": 71,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10154,
+        "command": "can",
+        "allowed": true,
+        "ok": true
+      }
+    },
+    {
+      "label": "same-uid-can-without-grant",
+      "step": 72,
+      "value": {
+        "package": "gesher.notificationdelegation.shareddelegate",
+        "uid": 10153,
+        "command": "can",
+        "allowed": false,
+        "ok": true
+      }
+    },
+    {
+      "label": "same-uid-post-without-grant",
+      "step": 73,
+      "value": {
+        "package": "gesher.notificationdelegation.shareddelegate",
+        "uid": 10153,
+        "command": "notify",
+        "ok": true
+      }
+    },
+    {
+      "label": "same-uid-owner-active",
+      "step": 74,
+      "value": {
+        "package": "gesher.notificationdelegation.sharedowner",
+        "uid": 10153,
+        "command": "active",
+        "active": [
+          {
+            "owner": "gesher.notificationdelegation.sharedowner",
+            "opPkg": "gesher.notificationdelegation.shareddelegate",
+            "uid": 10153,
+            "id": 30,
+            "tag": null
+          }
+        ],
+        "samples": [
+          {
+            "elapsedMs": 74,
+            "active": [
+              {
+                "owner": "gesher.notificationdelegation.sharedowner",
+                "opPkg": "gesher.notificationdelegation.shareddelegate",
+                "uid": 10153,
+                "id": 30,
+                "tag": null
+              }
+            ]
+          }
+        ],
+        "awaitId": 30,
+        "awaitPresent": true,
+        "predicateObserved": true,
+        "stableWindowMs": 0,
+        "timeoutMs": 6500,
+        "elapsedMs": 77,
+        "observation": "observed-presence",
+        "ok": true
+      }
+    },
+    {
+      "label": "same-uid-channel-query",
+      "step": 75,
+      "value": {
+        "package": "gesher.notificationdelegation.shareddelegate",
+        "uid": 10153,
+        "command": "channels",
+        "ok": false,
+        "exception": "java.lang.SecurityException",
+        "message": "Pkg gesher.notificationdelegation.shareddelegate cannot read channels for gesher.notificationdelegation.sharedowner in 0"
+      }
+    },
+    {
+      "label": "owner-reinstall-clears-delegate",
+      "step": 78,
+      "value": {
+        "package": "gesher.notificationdelegation.owner",
+        "uid": 10155,
+        "command": "get",
+        "delegate": null,
+        "ok": true
+      }
+    },
+    {
+      "label": "owner-reinstall-authorization",
+      "step": 79,
+      "value": {
+        "package": "gesher.notificationdelegation.delegate",
+        "uid": 10154,
+        "command": "can",
+        "allowed": false,
+        "ok": true
+      }
+    }
+  ],
+  "errors": [],
+  "inconclusive": [],
+  "absence_caveat": "Bounded absence windows retain timing uncertainty; presence uses predicate polling.",
+  "request": {
+    "schema": "gesher-notification-delegation-adb-v1",
+    "apks": [
+      {
+        "name": "owner",
+        "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/owner.apk",
+        "sha256": "dfd62f016dd719096ee6f43b211aed9aaf36d04c31d12e8906a36cd275a88862"
+      },
+      {
+        "name": "delegate",
+        "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/delegate.apk",
+        "sha256": "001d78ab2dd1a4ad6bc591f808dca54e39f43304667d622ccb7e0a74a49a13e7"
+      },
+      {
+        "name": "other",
+        "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/other.apk",
+        "sha256": "7feb3a89927f76021533aa155d864390af4a3b1b72504f7673ce059594942963"
+      },
+      {
+        "name": "sharedowner",
+        "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/sharedowner.apk",
+        "sha256": "ddfabe93a8e142e0f61efa07d3cc2ca3232d9aa134fed44c0cdb5103814e236c"
+      },
+      {
+        "name": "shareddelegate",
+        "path": "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/shareddelegate.apk",
+        "sha256": "6cc77d37d175cd0434ba52d6ea2b1a7bf54c6ad292cac073fc5acb67efba2fcd"
+      }
+    ],
+    "absence_caveat": "Bounded absence windows retain timing uncertainty; presence uses predicate polling.",
+    "steps": [
+      {
+        "label": "device-ro.build.fingerprint",
+        "adb": [
+          "shell",
+          "getprop",
+          "ro.build.fingerprint"
+        ],
+        "timeout": 90,
+        "device_property": "ro.build.fingerprint"
+      },
+      {
+        "label": "device-ro.build.version.sdk",
+        "adb": [
+          "shell",
+          "getprop",
+          "ro.build.version.sdk"
+        ],
+        "timeout": 90,
+        "device_property": "ro.build.version.sdk"
+      },
+      {
+        "label": "device-ro.build.version.sdk_full",
+        "adb": [
+          "shell",
+          "getprop",
+          "ro.build.version.sdk_full"
+        ],
+        "timeout": 90,
+        "device_property": "ro.build.version.sdk_full"
+      },
+      {
+        "label": "device-ro.build.version.release",
+        "adb": [
+          "shell",
+          "getprop",
+          "ro.build.version.release"
+        ],
+        "timeout": 90,
+        "device_property": "ro.build.version.release"
+      },
+      {
+        "label": "device-ro.product.cpu.abilist",
+        "adb": [
+          "shell",
+          "getprop",
+          "ro.product.cpu.abilist"
+        ],
+        "timeout": 90,
+        "device_property": "ro.product.cpu.abilist"
+      },
+      {
+        "label": "initial-cleanup-owner",
+        "adb": [
+          "uninstall",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "allow_failure": true
+      },
+      {
+        "label": "install-owner",
+        "adb": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/owner.apk"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "grant-owner",
+        "adb": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.owner",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "owner-identity",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "get"
+      },
+      {
+        "label": "owner-channel",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "channel"
+      },
+      {
+        "label": "initial-cleanup-delegate",
+        "adb": [
+          "uninstall",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "timeout": 90,
+        "allow_failure": true
+      },
+      {
+        "label": "install-delegate",
+        "adb": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/delegate.apk"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "grant-delegate",
+        "adb": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.delegate",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "delegate-identity",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "get"
+      },
+      {
+        "label": "delegate-channel",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "channel"
+      },
+      {
+        "label": "initial-cleanup-other",
+        "adb": [
+          "uninstall",
+          "gesher.notificationdelegation.other"
+        ],
+        "timeout": 90,
+        "allow_failure": true
+      },
+      {
+        "label": "install-other",
+        "adb": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/other.apk"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "grant-other",
+        "adb": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.other",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "other-identity",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.other",
+        "fixture_command": "get"
+      },
+      {
+        "label": "other-channel",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.other",
+        "fixture_command": "channel"
+      },
+      {
+        "label": "initial-cleanup-sharedowner",
+        "adb": [
+          "uninstall",
+          "gesher.notificationdelegation.sharedowner"
+        ],
+        "timeout": 90,
+        "allow_failure": true
+      },
+      {
+        "label": "install-sharedowner",
+        "adb": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/sharedowner.apk"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "grant-sharedowner",
+        "adb": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.sharedowner",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "sharedowner-identity",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.sharedowner",
+        "fixture_command": "get"
+      },
+      {
+        "label": "sharedowner-channel",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.sharedowner",
+        "fixture_command": "channel"
+      },
+      {
+        "label": "initial-cleanup-shareddelegate",
+        "adb": [
+          "uninstall",
+          "gesher.notificationdelegation.shareddelegate"
+        ],
+        "timeout": 90,
+        "allow_failure": true
+      },
+      {
+        "label": "install-shareddelegate",
+        "adb": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/shareddelegate.apk"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "grant-shareddelegate",
+        "adb": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.shareddelegate",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "shareddelegate-identity",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.shareddelegate",
+        "fixture_command": "get"
+      },
+      {
+        "label": "shareddelegate-channel",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.shareddelegate",
+        "fixture_command": "channel"
+      },
+      {
+        "label": "owner-self-post",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--ei",
+          "id",
+          "1"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "notify"
+      },
+      {
+        "label": "owner-self-post-visible",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "1",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "active"
+      },
+      {
+        "label": "unapproved-post",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "2"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "notify"
+      },
+      {
+        "label": "set-delegate",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "set"
+      },
+      {
+        "label": "delegate-allowed",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "can"
+      },
+      {
+        "label": "other-denied",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.other",
+        "fixture_command": "can"
+      },
+      {
+        "label": "delegate-channel-query",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channels",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "channels"
+      },
+      {
+        "label": "other-channel-query",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channels",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.other",
+        "fixture_command": "channels"
+      },
+      {
+        "label": "delegate-post",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "2"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "notify"
+      },
+      {
+        "label": "owner-sees-delegated",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "2",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "active"
+      },
+      {
+        "label": "delegate-sees-own-post",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "2",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "active"
+      },
+      {
+        "label": "other-sees-none",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "2",
+          "--ez",
+          "awaitPresent",
+          "false"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.other",
+        "fixture_command": "active"
+      },
+      {
+        "label": "delegate-cannot-cancel-owner",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "cancel",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "1"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "cancel"
+      },
+      {
+        "label": "delegate-cancels-own",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "cancel",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "2"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "cancel"
+      },
+      {
+        "label": "owner-post-remains",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "2",
+          "--ez",
+          "awaitPresent",
+          "false"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "active"
+      },
+      {
+        "label": "delegate-post-before-revoke",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "3"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "notify"
+      },
+      {
+        "label": "pre-revoke-post-visible",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "3",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "active"
+      },
+      {
+        "label": "revoke-delegate",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "set"
+      },
+      {
+        "label": "revoked-cannot-notify",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "can"
+      },
+      {
+        "label": "revoked-post-still-queryable",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "3",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "active"
+      },
+      {
+        "label": "revoked-cancel-denied",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "cancel",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "3"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "cancel"
+      },
+      {
+        "label": "owner-cancels-delegated",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "cancel",
+          "--ei",
+          "id",
+          "3"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "cancel"
+      },
+      {
+        "label": "owner-cancel-observed",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "3",
+          "--ez",
+          "awaitPresent",
+          "false"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "active"
+      },
+      {
+        "label": "restore-delegate",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "set"
+      },
+      {
+        "label": "unknown-delegate-keeps-current",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.absent"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "set"
+      },
+      {
+        "label": "unknown-delegate-get",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "get"
+      },
+      {
+        "label": "revoke-delegate-post-permission",
+        "adb": [
+          "shell",
+          "pm",
+          "revoke",
+          "gesher.notificationdelegation.delegate",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "delegate-own-permission-not-required",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "4"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "notify"
+      },
+      {
+        "label": "owner-sees-post-from-denied-delegate",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "4",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "active"
+      },
+      {
+        "label": "revoke-owner-post-permission",
+        "adb": [
+          "shell",
+          "pm",
+          "revoke",
+          "gesher.notificationdelegation.owner",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "owner-permission-required",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "5"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "notify"
+      },
+      {
+        "label": "owner-permission-revoked-active",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "5",
+          "--ez",
+          "awaitPresent",
+          "false"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "active"
+      },
+      {
+        "label": "restore-owner-post-permission",
+        "adb": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.owner",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "stop-delegate-process",
+        "adb": [
+          "shell",
+          "am",
+          "force-stop",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "grant-survives-process-stop",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "can"
+      },
+      {
+        "label": "uninstall-delegate",
+        "adb": [
+          "uninstall",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "delegate-uninstalled-name",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "get"
+      },
+      {
+        "label": "reinstall-delegate",
+        "adb": [
+          "install",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/delegate.apk"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "delegate-reinstall-identity",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "get"
+      },
+      {
+        "label": "delegate-reinstall-authorization",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "can"
+      },
+      {
+        "label": "delegate-reinstall-regrant",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "set"
+      },
+      {
+        "label": "delegate-reinstall-allowed-after-regrant",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "can"
+      },
+      {
+        "label": "same-uid-can-without-grant",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.sharedowner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.shareddelegate",
+        "fixture_command": "can"
+      },
+      {
+        "label": "same-uid-post-without-grant",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.sharedowner",
+          "--ei",
+          "id",
+          "30"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.shareddelegate",
+        "fixture_command": "notify"
+      },
+      {
+        "label": "same-uid-owner-active",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "30",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.sharedowner",
+        "fixture_command": "active"
+      },
+      {
+        "label": "same-uid-channel-query",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channels",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.sharedowner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.shareddelegate",
+        "fixture_command": "channels"
+      },
+      {
+        "label": "uninstall-owner",
+        "adb": [
+          "uninstall",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "reinstall-owner",
+        "adb": [
+          "install",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/owner.apk"
+        ],
+        "timeout": 90
+      },
+      {
+        "label": "owner-reinstall-clears-delegate",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.owner",
+        "fixture_command": "get"
+      },
+      {
+        "label": "owner-reinstall-authorization",
+        "adb": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "timeout": 90,
+        "fixture_package": "gesher.notificationdelegation.delegate",
+        "fixture_command": "can"
+      }
+    ]
+  },
+  "raw_controller_result": {
+    "results": [
+      {
+        "argv": [
+          "shell",
+          "getprop",
+          "ro.build.fingerprint"
+        ],
+        "exit_code": 0,
+        "output": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys\n",
+        "seconds": 0.239
+      },
+      {
+        "argv": [
+          "shell",
+          "getprop",
+          "ro.build.version.sdk"
+        ],
+        "exit_code": 0,
+        "output": "36\n",
+        "seconds": 0.273
+      },
+      {
+        "argv": [
+          "shell",
+          "getprop",
+          "ro.build.version.sdk_full"
+        ],
+        "exit_code": 0,
+        "output": "36.0\n",
+        "seconds": 0.258
+      },
+      {
+        "argv": [
+          "shell",
+          "getprop",
+          "ro.build.version.release"
+        ],
+        "exit_code": 0,
+        "output": "16\n",
+        "seconds": 0.26
+      },
+      {
+        "argv": [
+          "shell",
+          "getprop",
+          "ro.product.cpu.abilist"
+        ],
+        "exit_code": 0,
+        "output": "x86_64\n",
+        "seconds": 0.263
+      },
+      {
+        "argv": [
+          "uninstall",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 1,
+        "output": "Failure [DELETE_FAILED_INTERNAL_ERROR]\n",
+        "seconds": 0.346
+      },
+      {
+        "argv": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/owner.apk"
+        ],
+        "exit_code": 0,
+        "output": "Serving...\nAll files should be loaded. Notifying the device.\nPerforming Incremental Install\nSuccess\nInstall command complete in 1473 ms\n",
+        "seconds": 1.843
+      },
+      {
+        "argv": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.owner",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 1.881
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"get\",\"delegate\":null,\"ok\":true}\"\n",
+        "seconds": 5.264
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"channel\",\"channel\":\"delegation\",\"ok\":true}\"\n",
+        "seconds": 1.551
+      },
+      {
+        "argv": [
+          "uninstall",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "exit_code": 1,
+        "output": "Failure [DELETE_FAILED_INTERNAL_ERROR]\n",
+        "seconds": 0.82
+      },
+      {
+        "argv": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/delegate.apk"
+        ],
+        "exit_code": 0,
+        "output": "Serving...\nAll files should be loaded. Notifying the device.\nPerforming Incremental Install\nSuccess\nInstall command complete in 2472 ms\n",
+        "seconds": 2.527
+      },
+      {
+        "argv": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.delegate",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 1.394
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"get\",\"delegate\":null,\"ok\":true}\"\n",
+        "seconds": 5.462
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"channel\",\"channel\":\"delegation\",\"ok\":true}\"\n",
+        "seconds": 1.396
+      },
+      {
+        "argv": [
+          "uninstall",
+          "gesher.notificationdelegation.other"
+        ],
+        "exit_code": 1,
+        "output": "Failure [DELETE_FAILED_INTERNAL_ERROR]\n",
+        "seconds": 0.822
+      },
+      {
+        "argv": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/other.apk"
+        ],
+        "exit_code": 0,
+        "output": "Serving...\nAll files should be loaded. Notifying the device.\nPerforming Incremental Install\nSuccess\nInstall command complete in 2232 ms\n",
+        "seconds": 2.265
+      },
+      {
+        "argv": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.other",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 1.455
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.other\",\"uid\":10152,\"command\":\"get\",\"delegate\":null,\"ok\":true}\"\n",
+        "seconds": 5.485
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.other\",\"uid\":10152,\"command\":\"channel\",\"channel\":\"delegation\",\"ok\":true}\"\n",
+        "seconds": 1.617
+      },
+      {
+        "argv": [
+          "uninstall",
+          "gesher.notificationdelegation.sharedowner"
+        ],
+        "exit_code": 1,
+        "output": "Failure [DELETE_FAILED_INTERNAL_ERROR]\n",
+        "seconds": 1.136
+      },
+      {
+        "argv": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/sharedowner.apk"
+        ],
+        "exit_code": 0,
+        "output": "Serving...\nAll files should be loaded. Notifying the device.\nPerforming Incremental Install\nSuccess\nInstall command complete in 1679 ms\n",
+        "seconds": 1.734
+      },
+      {
+        "argv": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.sharedowner",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 1.269
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.sharedowner\",\"uid\":10153,\"command\":\"get\",\"delegate\":null,\"ok\":true}\"\n",
+        "seconds": 5.344
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.sharedowner\",\"uid\":10153,\"command\":\"channel\",\"channel\":\"delegation\",\"ok\":true}\"\n",
+        "seconds": 1.404
+      },
+      {
+        "argv": [
+          "uninstall",
+          "gesher.notificationdelegation.shareddelegate"
+        ],
+        "exit_code": 1,
+        "output": "Failure [DELETE_FAILED_INTERNAL_ERROR]\n",
+        "seconds": 0.858
+      },
+      {
+        "argv": [
+          "install",
+          "-r",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/shareddelegate.apk"
+        ],
+        "exit_code": 0,
+        "output": "Serving...\nAll files should be loaded. Notifying the device.\nPerforming Incremental Install\nSuccess\nInstall command complete in 2150 ms\n",
+        "seconds": 2.185
+      },
+      {
+        "argv": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.shareddelegate",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 1.458
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.shareddelegate\",\"uid\":10153,\"command\":\"get\",\"delegate\":null,\"ok\":true}\"\n",
+        "seconds": 6.181
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channel"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.shareddelegate\",\"uid\":10153,\"command\":\"channel\",\"channel\":\"delegation\",\"ok\":true}\"\n",
+        "seconds": 1.438
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--ei",
+          "id",
+          "1"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"notify\",\"ok\":true}\"\n",
+        "seconds": 1.843
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "1",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null}],\"samples\":[{\"elapsedMs\":80,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null}]}],\"awaitId\":1,\"awaitPresent\":true,\"predicateObserved\":true,\"stableWindowMs\":0,\"timeoutMs\":6500,\"elapsedMs\":81,\"observation\":\"observed-presence\",\"ok\":true}\"\n",
+        "seconds": 2.522
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "2"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"notify\",\"ok\":false,\"exception\":\"java.lang.SecurityException\",\"message\":\"Caller gesher.notificationdelegation.delegate:10151 cannot post for pkg gesher.notificationdelegation.owner in user 0\"}\"\n",
+        "seconds": 1.764
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"set\",\"delegate\":\"gesher.notificationdelegation.delegate\",\"ok\":true}\"\n",
+        "seconds": 1.768
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"can\",\"allowed\":true,\"ok\":true}\"\n",
+        "seconds": 1.529
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.other\",\"uid\":10152,\"command\":\"can\",\"allowed\":false,\"ok\":true}\"\n",
+        "seconds": 1.288
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channels",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"channels\",\"channel\":\"delegation\",\"count\":1,\"ok\":true}\"\n",
+        "seconds": 0.831
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channels",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.other\",\"uid\":10152,\"command\":\"channels\",\"ok\":false,\"exception\":\"java.lang.SecurityException\",\"message\":\"Pkg gesher.notificationdelegation.other cannot read channels for gesher.notificationdelegation.owner in 0\"}\"\n",
+        "seconds": 0.746
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "2"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"notify\",\"ok\":true}\"\n",
+        "seconds": 0.788
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "2",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":2,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}],\"samples\":[{\"elapsedMs\":61,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":2,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]}],\"awaitId\":2,\"awaitPresent\":true,\"predicateObserved\":true,\"stableWindowMs\":0,\"timeoutMs\":6500,\"elapsedMs\":62,\"observation\":\"observed-presence\",\"ok\":true}\"\n",
+        "seconds": 1.039
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "2",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":2,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}],\"samples\":[{\"elapsedMs\":36,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":2,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]}],\"awaitId\":2,\"awaitPresent\":true,\"predicateObserved\":true,\"stableWindowMs\":0,\"timeoutMs\":6500,\"elapsedMs\":36,\"observation\":\"observed-presence\",\"ok\":true}\"\n",
+        "seconds": 1.106
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "2",
+          "--ez",
+          "awaitPresent",
+          "false"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.other/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.other\",\"uid\":10152,\"command\":\"active\",\"active\":[],\"samples\":[{\"elapsedMs\":68,\"active\":[]},{\"elapsedMs\":173,\"active\":[]},{\"elapsedMs\":278,\"active\":[]},{\"elapsedMs\":380,\"active\":[]},{\"elapsedMs\":482,\"active\":[]},{\"elapsedMs\":585,\"active\":[]},{\"elapsedMs\":688,\"active\":[]},{\"elapsedMs\":791,\"active\":[]},{\"elapsedMs\":893,\"active\":[]},{\"elapsedMs\":997,\"active\":[]},{\"elapsedMs\":1100,\"active\":[]},{\"elapsedMs\":1202,\"active\":[]},{\"elapsedMs\":1305,\"active\":[]},{\"elapsedMs\":1407,\"active\":[]},{\"elapsedMs\":1510,\"active\":[]},{\"elapsedMs\":1612,\"active\":[]},{\"elapsedMs\":1715,\"active\":[]},{\"elapsedMs\":1818,\"active\":[]},{\"elapsedMs\":1922,\"active\":[]},{\"elapsedMs\":2140,\"active\":[]},{\"elapsedMs\":2243,\"active\":[]},{\"elapsedMs\":2347,\"active\":[]},{\"elapsedMs\":2449,\"active\":[]},{\"elapsedMs\":2553,\"active\":[]},{\"elapsedMs\":2656,\"active\":[]}],\"awaitId\":2,\"awaitPresent\":false,\"predicateObserved\":true,\"stableWindowMs\":2500,\"timeoutMs\":6500,\"elapsedMs\":2656,\"observation\":\"bounded-absence-window\",\"ok\":true}\"\n",
+        "seconds": 3.765
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "cancel",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "1"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"cancel\",\"ok\":false,\"exception\":\"java.lang.SecurityException\",\"message\":\"gesher.notificationdelegation.delegate does not have permission to cancel a notification they did not post null 1\"}\"\n",
+        "seconds": 0.513
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "cancel",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "2"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"cancel\",\"ok\":true}\"\n",
+        "seconds": 0.485
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "2",
+          "--ez",
+          "awaitPresent",
+          "false"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}],\"samples\":[{\"elapsedMs\":7,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":112,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":218,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":323,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":430,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":535,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":640,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":746,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":852,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":957,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1065,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1170,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1277,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1382,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1487,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1594,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1702,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1808,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1913,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2026,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2133,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2237,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2343,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2449,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2555,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]}],\"awaitId\":2,\"awaitPresent\":false,\"predicateObserved\":true,\"stableWindowMs\":2500,\"timeoutMs\":6500,\"elapsedMs\":2555,\"observation\":\"bounded-absence-window\",\"ok\":true}\"\n",
+        "seconds": 3.555
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "3"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"notify\",\"ok\":true}\"\n",
+        "seconds": 0.502
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "3",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":3,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}],\"samples\":[{\"elapsedMs\":8,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":3,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]}],\"awaitId\":3,\"awaitPresent\":true,\"predicateObserved\":true,\"stableWindowMs\":0,\"timeoutMs\":6500,\"elapsedMs\":8,\"observation\":\"observed-presence\",\"ok\":true}\"\n",
+        "seconds": 0.629
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"set\",\"delegate\":null,\"ok\":true}\"\n",
+        "seconds": 0.952
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"can\",\"allowed\":false,\"ok\":true}\"\n",
+        "seconds": 0.984
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "3",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":3,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}],\"samples\":[{\"elapsedMs\":16,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":3,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]}],\"awaitId\":3,\"awaitPresent\":true,\"predicateObserved\":true,\"stableWindowMs\":0,\"timeoutMs\":6500,\"elapsedMs\":16,\"observation\":\"observed-presence\",\"ok\":true}\"\n",
+        "seconds": 0.508
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "cancel",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "3"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"cancel\",\"ok\":false,\"exception\":\"java.lang.SecurityException\",\"message\":\"Caller gesher.notificationdelegation.delegate:10151 cannot post for pkg gesher.notificationdelegation.owner in user 0\"}\"\n",
+        "seconds": 0.474
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "cancel",
+          "--ei",
+          "id",
+          "3"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"cancel\",\"ok\":true}\"\n",
+        "seconds": 0.506
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "3",
+          "--ez",
+          "awaitPresent",
+          "false"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}],\"samples\":[{\"elapsedMs\":44,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":150,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":257,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":362,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":467,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":573,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":677,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":815,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":921,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1026,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1131,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1273,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1378,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1483,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1587,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1694,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1799,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":1910,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2015,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2120,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2225,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2330,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2437,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]},{\"elapsedMs\":2544,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]}],\"awaitId\":3,\"awaitPresent\":false,\"predicateObserved\":true,\"stableWindowMs\":2500,\"timeoutMs\":6500,\"elapsedMs\":2544,\"observation\":\"bounded-absence-window\",\"ok\":true}\"\n",
+        "seconds": 3.838
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"set\",\"delegate\":\"gesher.notificationdelegation.delegate\",\"ok\":true}\"\n",
+        "seconds": 0.464
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.absent"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"set\",\"delegate\":\"gesher.notificationdelegation.delegate\",\"ok\":true}\"\n",
+        "seconds": 0.857
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"get\",\"delegate\":\"gesher.notificationdelegation.delegate\",\"ok\":true}\"\n",
+        "seconds": 0.435
+      },
+      {
+        "argv": [
+          "shell",
+          "pm",
+          "revoke",
+          "gesher.notificationdelegation.delegate",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 0.448
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "4"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"notify\",\"ok\":true}\"\n",
+        "seconds": 2.567
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "4",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":4,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}],\"samples\":[{\"elapsedMs\":24,\"active\":[{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"id\":1,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":4,\"tag\":null},{\"owner\":\"gesher.notificationdelegation.owner\",\"opPkg\":\"gesher.notificationdelegation.delegate\",\"uid\":10150,\"id\":1,\"tag\":\"0|gesher.notificationdelegation.owner|g:Aggregate_SilentSection\"}]}],\"awaitId\":4,\"awaitPresent\":true,\"predicateObserved\":true,\"stableWindowMs\":0,\"timeoutMs\":6500,\"elapsedMs\":24,\"observation\":\"observed-presence\",\"ok\":true}\"\n",
+        "seconds": 1.457
+      },
+      {
+        "argv": [
+          "shell",
+          "pm",
+          "revoke",
+          "gesher.notificationdelegation.owner",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 1.387
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner",
+          "--ei",
+          "id",
+          "5"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"notify\",\"ok\":true}\"\n",
+        "seconds": 1.305
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "5",
+          "--ez",
+          "awaitPresent",
+          "false"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"active\",\"active\":[],\"samples\":[{\"elapsedMs\":4,\"active\":[]},{\"elapsedMs\":116,\"active\":[]},{\"elapsedMs\":243,\"active\":[]},{\"elapsedMs\":353,\"active\":[]},{\"elapsedMs\":457,\"active\":[]},{\"elapsedMs\":561,\"active\":[]},{\"elapsedMs\":668,\"active\":[]},{\"elapsedMs\":775,\"active\":[]},{\"elapsedMs\":881,\"active\":[]},{\"elapsedMs\":985,\"active\":[]},{\"elapsedMs\":1100,\"active\":[]},{\"elapsedMs\":1205,\"active\":[]},{\"elapsedMs\":1312,\"active\":[]},{\"elapsedMs\":1414,\"active\":[]},{\"elapsedMs\":1518,\"active\":[]},{\"elapsedMs\":1621,\"active\":[]},{\"elapsedMs\":1728,\"active\":[]},{\"elapsedMs\":1831,\"active\":[]},{\"elapsedMs\":1933,\"active\":[]},{\"elapsedMs\":2044,\"active\":[]},{\"elapsedMs\":2146,\"active\":[]},{\"elapsedMs\":2276,\"active\":[]},{\"elapsedMs\":2384,\"active\":[]},{\"elapsedMs\":2487,\"active\":[]},{\"elapsedMs\":2595,\"active\":[]}],\"awaitId\":5,\"awaitPresent\":false,\"predicateObserved\":true,\"stableWindowMs\":2500,\"timeoutMs\":6500,\"elapsedMs\":2597,\"observation\":\"bounded-absence-window\",\"ok\":true}\"\n",
+        "seconds": 5.388
+      },
+      {
+        "argv": [
+          "shell",
+          "pm",
+          "grant",
+          "gesher.notificationdelegation.owner",
+          "android.permission.POST_NOTIFICATIONS"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 0.937
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "force-stop",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "exit_code": 0,
+        "output": "",
+        "seconds": 0.711
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10151,\"command\":\"can\",\"allowed\":true,\"ok\":true}\"\n",
+        "seconds": 1.895
+      },
+      {
+        "argv": [
+          "uninstall",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "exit_code": 0,
+        "output": "Success\n",
+        "seconds": 1.38
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"get\",\"delegate\":\"gesher.notificationdelegation.delegate\",\"ok\":true}\"\n",
+        "seconds": 2.6
+      },
+      {
+        "argv": [
+          "install",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/delegate.apk"
+        ],
+        "exit_code": 0,
+        "output": "Serving...\nAll files should be loaded. Notifying the device.\nPerforming Incremental Install\nSuccess\nInstall command complete in 3259 ms\n",
+        "seconds": 4.032
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10154,\"command\":\"get\",\"delegate\":null,\"ok\":true}\"\n",
+        "seconds": 5.062
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10154,\"command\":\"can\",\"allowed\":false,\"ok\":true}\"\n",
+        "seconds": 1.706
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "set",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.delegate"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10150,\"command\":\"set\",\"delegate\":\"gesher.notificationdelegation.delegate\",\"ok\":true}\"\n",
+        "seconds": 1.22
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10154,\"command\":\"can\",\"allowed\":true,\"ok\":true}\"\n",
+        "seconds": 1.183
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.sharedowner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.shareddelegate\",\"uid\":10153,\"command\":\"can\",\"allowed\":false,\"ok\":true}\"\n",
+        "seconds": 1.114
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "notify",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.sharedowner",
+          "--ei",
+          "id",
+          "30"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.shareddelegate\",\"uid\":10153,\"command\":\"notify\",\"ok\":true}\"\n",
+        "seconds": 1.714
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "active",
+          "--ei",
+          "awaitId",
+          "30",
+          "--ez",
+          "awaitPresent",
+          "true"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.sharedowner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.sharedowner\",\"uid\":10153,\"command\":\"active\",\"active\":[{\"owner\":\"gesher.notificationdelegation.sharedowner\",\"opPkg\":\"gesher.notificationdelegation.shareddelegate\",\"uid\":10153,\"id\":30,\"tag\":null}],\"samples\":[{\"elapsedMs\":74,\"active\":[{\"owner\":\"gesher.notificationdelegation.sharedowner\",\"opPkg\":\"gesher.notificationdelegation.shareddelegate\",\"uid\":10153,\"id\":30,\"tag\":null}]}],\"awaitId\":30,\"awaitPresent\":true,\"predicateObserved\":true,\"stableWindowMs\":0,\"timeoutMs\":6500,\"elapsedMs\":77,\"observation\":\"observed-presence\",\"ok\":true}\"\n",
+        "seconds": 1.772
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "channels",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.sharedowner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.shareddelegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.shareddelegate\",\"uid\":10153,\"command\":\"channels\",\"ok\":false,\"exception\":\"java.lang.SecurityException\",\"message\":\"Pkg gesher.notificationdelegation.shareddelegate cannot read channels for gesher.notificationdelegation.sharedowner in 0\"}\"\n",
+        "seconds": 1.754
+      },
+      {
+        "argv": [
+          "uninstall",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Success\n",
+        "seconds": 3.113
+      },
+      {
+        "argv": [
+          "install",
+          "/workspace/scratch/e0c0a146099b/validation/f32-delegation/sdk-fixtures/owner.apk"
+        ],
+        "exit_code": 0,
+        "output": "Serving...\nAll files should be loaded. Notifying the device.\nPerforming Incremental Install\nSuccess\nInstall command complete in 5636 ms\n",
+        "seconds": 5.745
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "get"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.owner/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.owner\",\"uid\":10155,\"command\":\"get\",\"delegate\":null,\"ok\":true}\"\n",
+        "seconds": 5.12
+      },
+      {
+        "argv": [
+          "shell",
+          "am",
+          "broadcast",
+          "--include-stopped-packages",
+          "-n",
+          "gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver",
+          "--es",
+          "command",
+          "can",
+          "--es",
+          "target",
+          "gesher.notificationdelegation.owner"
+        ],
+        "exit_code": 0,
+        "output": "Broadcasting: Intent { flg=0x400020 cmp=gesher.notificationdelegation.delegate/gesher.notificationdelegation.ControlReceiver (has extras) }\nBroadcast completed: result=0, data=\"F32_DELEGATION:{\"package\":\"gesher.notificationdelegation.delegate\",\"uid\":10154,\"command\":\"can\",\"allowed\":false,\"ok\":true}\"\n",
+        "seconds": 1.41
+      }
+    ],
+    "requested_steps": 80
+  }
+}

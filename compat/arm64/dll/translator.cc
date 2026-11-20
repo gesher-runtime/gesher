@@ -102,8 +102,21 @@ struct CodeRegion {
 };
 std::shared_mutex g_regions_mutex;
 std::vector<CodeRegion> g_regions;
+// Each classifier and Jit independently observes pending-load retirement.
+std::atomic<uint64_t> g_code_generation{1};
+
+// Called outside Jit::Run on every dispatch, also after a nested host call.
+// Pooled Envs retain their generations and invalidate on their next dispatch.
+void RefreshCodeCache(A64::Jit* jit, uint64_t* seen) {
+  const uint64_t generation = g_code_generation.load(std::memory_order_acquire);
+  if (*seen != generation) {
+    jit->ClearCache();
+    *seen = generation;
+  }
+}
 
 void AddRegion(uintptr_t start, size_t size) {
+  if (size == 0 || start > UINTPTR_MAX - size) return;
   std::unique_lock<std::shared_mutex> lock(g_regions_mutex);
   g_regions.push_back({start, start + size});
 }
@@ -151,20 +164,27 @@ constexpr uint32_t kBrk = 0xD4200000;
 struct Trampoline {
   void* host_fn;
   int va_list_index;
+  int pointer_variadic_fixed = -1;
+  uint32_t* guest_code = nullptr;
 };
 Trampoline g_tramps[kMaxTramps];
 std::atomic<size_t> g_tramp_count{0};
 std::mutex g_tramp_mutex;
-std::unordered_map<void*, void*> g_tramp_by_fn;
+std::unordered_map<void*, size_t> g_tramp_by_fn;
+std::vector<size_t> g_free_tramps;  // reuse both the index and its code slot
 
 // --- va_list host functions --------------------------------------------------
 std::mutex g_va_mutex;
 std::unordered_map<const void*, int> g_va_functions;
+std::unordered_map<const void*, Trampoline> g_pointer_variadic_functions;
 
-int VaListIndexOf(const void* fn) {
+Trampoline HostSignature(void* fn, int va_list_index = -2) {
   std::lock_guard<std::mutex> lock(g_va_mutex);
+  auto direct = g_pointer_variadic_functions.find(fn);
+  if (direct != g_pointer_variadic_functions.end()) return direct->second;
+  if (va_list_index != -2) return {fn, va_list_index};
   auto it = g_va_functions.find(fn);
-  return it == g_va_functions.end() ? -1 : it->second;
+  return {fn, it == g_va_functions.end() ? -1 : it->second};
 }
 
 // --- guest TLS (variant I: TPIDR_EL0 -> TCB, then the static TLS modules) ----
@@ -174,32 +194,114 @@ int VaListIndexOf(const void* fn) {
 constexpr size_t kTcbSize = 64;
 constexpr size_t kTlsBlockSize = 256 * 1024;  // per thread
 std::mutex g_tls_mutex;
-size_t g_tls_offset = kTcbSize;  // next free offset in a block
+size_t g_tls_offset = kTcbSize;  // highest live extent; gaps below it can be reused
+size_t g_tls_clear_size = kTcbSize;  // pooled blocks can retain a rolled-back tail
 struct TlsImage {
   int64_t offset;
   const void* image;
   size_t image_size;
   size_t total_size;
+  DWORD owner_thread;
+  bool prepared;
+  bool published;
+};
+struct TlsBlock {
+  uint8_t* base;
+  DWORD owner_thread;
 };
 std::vector<TlsImage> g_tls_images;
-std::vector<uint8_t*> g_tls_blocks;  // every live thread's block (its TP)
+std::vector<TlsBlock> g_tls_blocks;  // every live thread's block (its TP)
+
+void InitializeTlsImage(const TlsImage& image, uint8_t* base) {
+  std::memset(base + image.offset, 0, image.total_size);
+  if (image.image_size != 0) {
+    std::memcpy(base + image.offset, image.image, image.image_size);
+  }
+}
 
 int64_t ApiTlsRegister(size_t total_size, size_t align) {
   std::lock_guard<std::mutex> lock(g_tls_mutex);
   if (align < 1) align = 1;
-  size_t off = (g_tls_offset + align - 1) & ~(align - 1);
-  if (off + total_size > kTlsBlockSize) return -1;
-  g_tls_offset = off + total_size;
+  if ((align & (align - 1)) != 0 || align > kTlsBlockSize) return -1;
+  // Zero-size modules still need distinct tokens while pending.
+  const size_t reserved = std::max(total_size, size_t{1});
+  if (reserved > kTlsBlockSize - kTcbSize) return -1;
+  // Rollback can leave an interior gap below a nested committed module.
+  // Derive occupied intervals without reordering the publication registry or
+  // adding a second mutable allocation registry. Both pending and published
+  // reservations retain their offsets and block reuse of their full extent.
+  std::vector<const TlsImage*> ordered;
+  ordered.reserve(g_tls_images.size());
+  for (const TlsImage& entry : g_tls_images) ordered.push_back(&entry);
+  std::sort(ordered.begin(), ordered.end(), [](const TlsImage* a, const TlsImage* b) {
+    return a->offset < b->offset;
+  });
+  size_t off = (kTcbSize + align - 1) & ~(align - 1);
+  for (const TlsImage* entry : ordered) {
+    const size_t start = static_cast<size_t>(entry->offset);
+    if (off <= start && reserved <= start - off) break;
+    const size_t end = start + std::max(entry->total_size, size_t{1});
+    off = (end + align - 1) & ~(align - 1);
+  }
+  if (off > kTlsBlockSize || reserved > kTlsBlockSize - off) return -1;
+  g_tls_images.push_back({static_cast<int64_t>(off), nullptr, 0, total_size,
+                          GetCurrentThreadId(), false, false});
+  g_tls_offset = std::max(g_tls_offset, off + reserved);
+  g_tls_clear_size = std::max(g_tls_clear_size, g_tls_offset);
   return static_cast<int64_t>(off);
+}
+
+int ApiTlsPrepare(int64_t offset, const void* image, size_t image_size, size_t total_size) {
+  std::lock_guard<std::mutex> lock(g_tls_mutex);
+  auto entry = std::find_if(g_tls_images.begin(), g_tls_images.end(),
+      [offset](const TlsImage& ti) { return ti.offset == offset; });
+  if (entry == g_tls_images.end() || entry->published || entry->total_size != total_size ||
+      entry->owner_thread != GetCurrentThreadId() || image_size > total_size ||
+      (image_size != 0 && image == nullptr)) return 0;
+  if (entry->prepared) return entry->image == image && entry->image_size == image_size;
+  entry->image = image;
+  entry->image_size = image_size;
+  entry->prepared = true;
+  for (const TlsBlock& block : g_tls_blocks) {
+    if (block.owner_thread == entry->owner_thread) InitializeTlsImage(*entry, block.base);
+  }
+  return 1;
 }
 
 void ApiTlsPublish(int64_t offset, const void* image, size_t image_size, size_t total_size) {
   std::lock_guard<std::mutex> lock(g_tls_mutex);
-  g_tls_images.push_back({offset, image, image_size, total_size});
-  for (uint8_t* base : g_tls_blocks) {
-    std::memset(base + offset, 0, total_size);
-    if (image != nullptr && image_size > 0) std::memcpy(base + offset, image, image_size);
+  auto entry = std::find_if(g_tls_images.begin(), g_tls_images.end(),
+      [offset](const TlsImage& ti) { return ti.offset == offset; });
+  if (entry == g_tls_images.end() || entry->published || entry->total_size != total_size ||
+      entry->owner_thread != GetCurrentThreadId() || image_size > total_size ||
+      (image_size != 0 && image == nullptr) ||
+      (entry->prepared && (entry->image != image || entry->image_size != image_size))) return;
+  entry->image = image;
+  entry->image_size = image_size;
+  entry->published = true;
+  for (const TlsBlock& block : g_tls_blocks) {
+    if (entry->prepared && block.owner_thread == entry->owner_thread) continue;
+    InitializeTlsImage(*entry, block.base);
   }
+}
+
+int ApiTlsRollback(int64_t offset, size_t total_size) {
+  std::lock_guard<std::mutex> lock(g_tls_mutex);
+  auto entry = std::find_if(g_tls_images.begin(), g_tls_images.end(),
+      [offset](const TlsImage& ti) { return ti.offset == offset; });
+  if (entry == g_tls_images.end() || entry->published || entry->total_size != total_size ||
+      entry->owner_thread != GetCurrentThreadId()) return 0;
+  for (const TlsBlock& block : g_tls_blocks) {
+    std::memset(block.base + offset, 0, std::max(total_size, size_t{1}));
+  }
+  g_tls_images.erase(entry);
+  // A nested independent load may already have committed a newer extent.
+  g_tls_offset = kTcbSize;
+  for (const TlsImage& live : g_tls_images) {
+    g_tls_offset = std::max(g_tls_offset, static_cast<size_t>(live.offset) +
+                                            std::max(live.total_size, size_t{1}));
+  }
+  return 1;
 }
 
 // --- the exclusive monitor and its processor ids ------------------------------
@@ -408,6 +510,17 @@ void ConvertVaList(const Aapcs64VaList* a, VaListStorage* s) {
   s->tag.overflow_arg_area = a->stack;
 }
 
+// All scanf destinations are pointers, so only the GP bank is consumed.
+// Keep the original guest stack as the overflow source and let NextGp read
+// one argument at a time, including calls with no assignments at all.
+void PointerVaList(const uint64_t (&gp)[8], void* stack, int fixed, VaListStorage* s) {
+  s->registers = {reinterpret_cast<const uint8_t*>(gp + 8), nullptr};
+  s->tag.gp_offset = gesher::abi::kArm64VaTag | static_cast<uint32_t>(fixed * 8);
+  s->tag.fp_offset = gesher::abi::kArm64VaTag | gesher::abi::kArm64VaFpBytes;
+  s->tag.reg_save_area = &s->registers;
+  s->tag.overflow_arg_area = stack;
+}
+
 // Pages already found to hold host code: a guest that calls a host pointer
 // (a JNIEnv table entry, dlsym's result) does so again and again.
 std::shared_mutex g_host_pages_mutex;
@@ -495,13 +608,15 @@ class Env final : public A64::UserCallbacks {
   void Attach() {
     {
       std::lock_guard<std::mutex> lock(g_tls_mutex);
-      // A pooled block holds its last thread's TLS: clear the TCB and every
-      // module's area (all of [0, g_tls_offset)); a new block is zero anyway.
-      if (used_before_) std::memset(tls_block_, 0, g_tls_offset);
-      g_tls_blocks.push_back(tls_block_);
+      // A failed Park decommit can retain the last thread's bytes, including
+      // a tail rolled back while parked. Clear the historical assigned extent;
+      // a fresh block is zero anyway. The allocation cursor can still shrink.
+      if (used_before_) std::memset(tls_block_, 0, g_tls_clear_size);
+      const DWORD owner = GetCurrentThreadId();
+      g_tls_blocks.push_back({tls_block_, owner});
       for (const TlsImage& ti : g_tls_images) {
-        std::memset(tls_block_ + ti.offset, 0, ti.total_size);
-        if (ti.image) std::memcpy(tls_block_ + ti.offset, ti.image, ti.image_size);
+        if (!ti.published && !(ti.prepared && ti.owner_thread == owner)) continue;
+        InitializeTlsImage(ti, tls_block_);
       }
     }
     used_before_ = true;
@@ -542,7 +657,7 @@ class Env final : public A64::UserCallbacks {
     }
     {
       std::lock_guard<std::mutex> lock(g_tls_mutex);
-      std::erase(g_tls_blocks, tls_block_);
+      std::erase_if(g_tls_blocks, [this](const TlsBlock& block) { return block.base == tls_block_; });
     }
     if (t_env_raw == this) t_env_raw = nullptr;
     for (auto& jit : jits_) jit->ClearExclusiveState();
@@ -611,6 +726,7 @@ class Env final : public A64::UserCallbacks {
       // The outermost Jit runs almost all guest code; nested ones are short.
       conf.code_cache_size = (jits_.empty() ? 32 : 8) * 1024 * 1024;
       jits_.push_back(std::make_unique<A64::Jit>(conf));
+      code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
     }
     return jits_[depth].get();
   }
@@ -709,11 +825,19 @@ class Env final : public A64::UserCallbacks {
       jit->HaltExecution(Dynarmic::HaltReason::UserDefined2);
       return;
     }
-    if (swi - 1 >= g_tramp_count.load(std::memory_order_acquire)) {
+    Trampoline trampoline{};
+    {
+      // Bind, va_list updates and unbind mutate these records under this lock.
+      // Copy the record; never retain its reference across a host call.
+      std::lock_guard<std::mutex> lock(g_tramp_mutex);
+      if (swi - 1 < g_tramp_count.load(std::memory_order_relaxed)) {
+        trampoline = g_tramps[swi - 1];
+      }
+    }
+    if (trampoline.host_fn == nullptr) {
       GuestCrash(kSigSys, 1, "SYS_SECCOMP", jit->GetPC() - 4, "SVC with an unknown number");
     }
-    const Trampoline& t = g_tramps[swi - 1];
-    QueueHostCall(jit, t.host_fn, t.va_list_index);
+    QueueHostCall(jit, trampoline);
   }
 
   void ExceptionRaised(uint64_t pc, A64::Exception ex) override {
@@ -726,7 +850,7 @@ class Env final : public A64::UserCallbacks {
         // pointer (dlsym, eglGetProcAddress, a table): call it as System V
         // and return to the guest's X30, as a bound trampoline would.
         if (HostExecutable(pc)) {
-          QueueHostCall(jit, reinterpret_cast<void*>(pc), VaListIndexOf(reinterpret_cast<void*>(pc)));
+          QueueHostCall(jit, HostSignature(reinterpret_cast<void*>(pc)));
           jit->SetPC(jit->GetRegister(30));
           return;
         }
@@ -904,15 +1028,20 @@ class Env final : public A64::UserCallbacks {
     void* fn = nullptr;
     int va_index = -1;
     bool syscall = false;
+    int pointer_variadic_fixed = -1;
   };
 
-  void QueueHostCall(A64::Jit* jit, void* fn, int va_index) {
-    pending_call_ = {fn, va_index, false};
+  void QueueHostCall(A64::Jit* jit, const Trampoline& signature) {
+    pending_call_ = {signature.host_fn, signature.va_list_index, false,
+                     signature.pointer_variadic_fixed};
     jit->HaltExecution(Dynarmic::HaltReason::UserDefined2);
   }
 
   void RunGuest(A64::Jit* jit) {
     for (;;) {
+      // A host call can abort a nested load while this outer Jit is paused.
+      // Nested Jit creation may grow the vector: keep no reference across Run.
+      RefreshCodeCache(jit, &code_generations_[depth_ - 1]);
       pending_call_ = {};
       jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2);
       int saved_running = t_guest_running;
@@ -935,7 +1064,7 @@ class Env final : public A64::UserCallbacks {
         int64_t result = GuestRawSyscall(jit->GetRegister(8), args);
         jit->SetRegister(0, static_cast<uint64_t>(result));
       } else if (pending.fn != nullptr) {
-        CallHost(jit, pending.fn, pending.va_index);
+        CallHost(jit, pending.fn, pending.va_index, pending.pointer_variadic_fixed);
       } else {
         return;
       }
@@ -945,24 +1074,32 @@ class Env final : public A64::UserCallbacks {
   static constexpr size_t kStackSize = 8 << 20;
   static constexpr size_t kGuardSize = 0x10000;
 
-  void CallHost(A64::Jit* jit, void* fn, int va_index) {
+  void CallHost(A64::Jit* jit, void* fn, int va_index, int pointer_variadic_fixed) {
     HostFenvScope host_fenv;
     // AAPCS64 -> System V. X0..X5 are the first six System V integer
     // arguments; X6, X7 are System V arguments 7 and 8, which go on the stack;
-    // any further arguments (a variadic call with more than eight) are on the
-    // guest stack at SP and follow on the host stack. Copying a fixed window
-    // of guest stack words covers them without knowing the real count (the
-    // callee reads only what its signature or format string names).
+    // further arguments are on the guest stack at SP. Preserve the generic
+    // stack window for other signatures. Registered pointer-only variadic
+    // calls instead pass the original banks and stack to their va_list form.
     uint64_t gpr[6], xmm[8];
     for (int i = 0; i < 6; ++i) gpr[i] = jit->GetRegister(i);
     for (int i = 0; i < 8; ++i) xmm[i] = jit->GetVector(i)[0];
     uint64_t stack[2 + 14];
-    stack[0] = jit->GetRegister(6);
-    stack[1] = jit->GetRegister(7);
+    uint64_t nstack = 0;
     uint64_t gsp = jit->GetSP();
-    std::memcpy(&stack[2], reinterpret_cast<void*>(gsp), 14 * 8);
     VaListStorage va;
-    if (va_index >= 0 && va_index < 8) {
+    uint64_t pointer_gp[8];
+    if (pointer_variadic_fixed >= 0) {
+      for (int i = 0; i < 8; ++i) pointer_gp[i] = jit->GetRegister(i);
+      PointerVaList(pointer_gp, reinterpret_cast<void*>(gsp), pointer_variadic_fixed, &va);
+      gpr[pointer_variadic_fixed] = reinterpret_cast<uint64_t>(&va.tag);
+    } else {
+      stack[0] = jit->GetRegister(6);
+      stack[1] = jit->GetRegister(7);
+      std::memcpy(&stack[2], reinterpret_cast<void*>(gsp), 14 * 8);
+      nstack = 16;
+    }
+    if (pointer_variadic_fixed < 0 && va_index >= 0 && va_index < 8) {
       uint64_t& slot = va_index < 6 ? gpr[va_index] : stack[va_index - 6];
       if (slot != 0) {
         char trace[2] = {};
@@ -988,7 +1125,7 @@ class Env final : public A64::UserCallbacks {
         slot = reinterpret_cast<uint64_t>(&va.tag);
       }
     }
-    HostCall call{fn, gpr, xmm, stack, 16, 0, 0};
+    HostCall call{fn, gpr, xmm, stack, nstack, 0, 0};
     // A host->guest call made by this host function runs below the guest's
     // live frames.
     uint64_t saved_stack_cur = stack_cur_;
@@ -1014,6 +1151,7 @@ class Env final : public A64::UserCallbacks {
   }
 
   std::vector<std::unique_ptr<A64::Jit>> jits_;
+  std::vector<uint64_t> code_generations_;  // one generation for each jits_ entry
   PendingHostCall pending_call_;
   uint32_t fpcr_ = 0;
   uint32_t fpsr_ = 0;
@@ -1119,21 +1257,28 @@ std::unordered_map<const void*, void*> g_entries;
 uint8_t* g_entry_page = nullptr;
 size_t g_entry_used = 0;
 size_t g_entry_cap = 0;
+constexpr size_t kEntryStub = 24;
+std::vector<uint8_t*> g_free_entries;
 
 void* MakeHostEntry(const void* fn) {
   std::lock_guard<std::mutex> lock(g_entry_mutex);
   auto it = g_entries.find(fn);
   if (it != g_entries.end()) return it->second;
-  constexpr size_t kStub = 24;  // mov r10, imm64; mov rax, imm64; jmp rax
-  if (g_entry_page == nullptr || g_entry_used + kStub > g_entry_cap) {
-    g_entry_cap = 0x10000;
-    g_entry_page = static_cast<uint8_t*>(
-        VirtualAlloc(nullptr, g_entry_cap, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-    g_entry_used = 0;
-    if (g_entry_page == nullptr) return nullptr;
+  uint8_t* p;
+  if (!g_free_entries.empty()) {
+    p = g_free_entries.back();
+    g_free_entries.pop_back();
+  } else {
+    if (g_entry_page == nullptr || g_entry_used + kEntryStub > g_entry_cap) {
+      g_entry_cap = 0x10000;
+      g_entry_page = static_cast<uint8_t*>(
+          VirtualAlloc(nullptr, g_entry_cap, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+      g_entry_used = 0;
+      if (g_entry_page == nullptr) return nullptr;
+    }
+    p = g_entry_page + g_entry_used;
+    g_entry_used += kEntryStub;
   }
-  uint8_t* p = g_entry_page + g_entry_used;
-  g_entry_used += kStub;
   uint64_t f = reinterpret_cast<uint64_t>(fn);
   uint64_t shim = reinterpret_cast<uint64_t>(&gesher_guest_entry_shim);
   p[0] = 0x49; p[1] = 0xBA;              // mov r10, imm64(fn)
@@ -1142,7 +1287,7 @@ void* MakeHostEntry(const void* fn) {
   std::memcpy(p + 12, &shim, 8);
   p[20] = 0xFF; p[21] = 0xE0;            // jmp rax
   p[22] = 0x90; p[23] = 0x90;
-  FlushInstructionCache(GetCurrentProcess(), p, kStub);
+  FlushInstructionCache(GetCurrentProcess(), p, kEntryStub);
   g_entries[fn] = p;
   return p;
 }
@@ -1675,6 +1820,67 @@ void ApiAddCode(const void* start, size_t size, const char* /*name*/) {
   AddRegion(reinterpret_cast<uintptr_t>(start), size);
 }
 
+void ApiRemoveCode(const void* mapping_base, size_t mapping_size) {
+  const uintptr_t first = reinterpret_cast<uintptr_t>(mapping_base);
+  if (mapping_size == 0 || first > UINTPTR_MAX - mapping_size) return;
+  const uintptr_t end = first + mapping_size;
+  {
+    std::unique_lock<std::shared_mutex> lock(g_regions_mutex);
+    // A guest mprotect registration may span more than the aborted mapping.
+    // Keep outside prefixes/suffixes without retaining a stale overlap.
+    std::vector<CodeRegion> survivors;
+    survivors.reserve(g_regions.size() + 1);
+    for (const CodeRegion& region : g_regions) {
+      if (region.end <= first || region.start >= end) survivors.push_back(region);
+      else {
+        if (region.start < first) survivors.push_back({region.start, first});
+        if (region.end > end) survivors.push_back({end, region.end});
+      }
+    }
+    g_regions.swap(survivors);
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_entry_mutex);
+    for (auto entry = g_entries.begin(); entry != g_entries.end();) {
+      const uintptr_t guest = reinterpret_cast<uintptr_t>(entry->first);
+      if (guest >= first && guest < end) {
+        auto* stub = static_cast<uint8_t*>(entry->second);
+        std::memset(stub, 0xcc, kEntryStub);  // erase every embedded guest pointer
+        FlushInstructionCache(GetCurrentProcess(), stub, kEntryStub);
+        g_free_entries.push_back(stub);
+        entry = g_entries.erase(entry);
+      } else ++entry;
+    }
+  }
+  g_code_generation.fetch_add(1, std::memory_order_release);
+}
+
+void ApiUnbindHostFunction(void* fn) {
+  if (fn == nullptr) return;
+  {
+    std::lock_guard<std::mutex> lock(g_tramp_mutex);
+    auto entry = g_tramp_by_fn.find(fn);
+    if (entry == g_tramp_by_fn.end()) return;
+    const size_t index = entry->second;
+    uint32_t* code = g_tramps[index].guest_code;
+    g_tramps[index] = {nullptr, -1, -1, code};
+    std::fill(code, code + kTrampWords, kBrk);
+    g_tramp_by_fn.erase(entry);
+    g_free_tramps.push_back(index);
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_va_mutex);
+    g_va_functions.erase(fn);
+  }
+  {
+    std::unique_lock<std::shared_mutex> lock(g_host_pages_mutex);
+    g_host_pages.erase(reinterpret_cast<uintptr_t>(fn) & ~uintptr_t{0xfff});
+  }
+  // Live and pooled Jits may have translated the slot. Retire those copies
+  // before their next dispatch, after all instruction writes are complete.
+  g_code_generation.fetch_add(1, std::memory_order_release);
+}
+
 uint64_t ApiCall(const void* fn, const uint64_t* args, size_t nargs) {
   uint64_t gpr[8] = {0}, xmm[8] = {0};
   for (size_t i = 0; i < nargs && i < 8; ++i) gpr[i] = args[i];
@@ -1713,14 +1919,22 @@ gesher_arm64_api g_api = {
     ApiTlsDescStatic,
     ApiIsGuestCode,
     ApiRunProgram,
+    ApiRemoveCode,
+    ApiTlsRollback,
+    ApiUnbindHostFunction,
+    ApiTlsPrepare,
 };
 
 }  // namespace
 
 bool InGuestCode(uintptr_t addr) {
   static thread_local CodeRegion last{0, 0};
-  if (addr >= last.start && addr < last.end) return true;
+  static thread_local uint64_t seen = 0;
+  const uint64_t generation = g_code_generation.load(std::memory_order_acquire);
+  if (seen == generation && addr >= last.start && addr < last.end) return true;
   std::shared_lock<std::shared_mutex> lock(g_regions_mutex);
+  last = {0, 0};
+  seen = g_code_generation.load(std::memory_order_relaxed);
   for (const CodeRegion& r : g_regions) {
     if (addr >= r.start && addr < r.end) {
       last = r;
@@ -1745,28 +1959,47 @@ void AddVaListFunction(const void* fn, int index) {
   std::lock_guard<std::mutex> lock(g_tramp_mutex);
   auto it = g_tramp_by_fn.find(const_cast<void*>(fn));
   if (it != g_tramp_by_fn.end()) {
-    uint32_t svc;
-    std::memcpy(&svc, it->second, 4);
-    g_tramps[((svc >> 5) & 0xFFFF) - 1].va_list_index = index;
+    g_tramps[it->second].va_list_index = index;
+  }
+}
+
+void AddPointerVariadicFunction(const void* fn, void* va_fn, int fixed_arguments) {
+  // The va_list must fit after the fixed arguments in the host GP registers.
+  if (fn == nullptr || va_fn == nullptr || fixed_arguments < 0 || fixed_arguments >= 6) return;
+  Trampoline signature{va_fn, -1, fixed_arguments};
+  {
+    std::lock_guard<std::mutex> lock(g_va_mutex);
+    g_pointer_variadic_functions[fn] = signature;
+  }
+  std::lock_guard<std::mutex> lock(g_tramp_mutex);
+  auto it = g_tramp_by_fn.find(const_cast<void*>(fn));
+  if (it != g_tramp_by_fn.end()) {
+    signature.guest_code = g_tramps[it->second].guest_code;
+    g_tramps[it->second] = signature;
   }
 }
 
 void* BindHost(void* fn, int va_list_index) {
   if (fn == nullptr) return nullptr;
-  if (va_list_index == -2) va_list_index = VaListIndexOf(fn);
+  Trampoline signature = HostSignature(fn, va_list_index);
   std::lock_guard<std::mutex> lock(g_tramp_mutex);
   auto it = g_tramp_by_fn.find(fn);
-  if (it != g_tramp_by_fn.end()) return it->second;
-  size_t index = g_tramp_count.load(std::memory_order_relaxed);
+  if (it != g_tramp_by_fn.end()) return g_tramps[it->second].guest_code;
+  size_t index = g_free_tramps.empty() ? g_tramp_count.load(std::memory_order_relaxed)
+                                      : g_free_tramps.back();
   if (index >= kMaxTramps) return nullptr;
-  uint32_t* p = AllocGuestCode(kTrampWords);
+  uint32_t* p = g_free_tramps.empty() ? AllocGuestCode(kTrampWords) : g_tramps[index].guest_code;
   if (p == nullptr) return nullptr;
-  g_tramps[index] = {fn, va_list_index};
+  if (!g_free_tramps.empty()) g_free_tramps.pop_back();
+  g_tramps[index] = signature;
+  g_tramps[index].guest_code = p;
   p[0] = Svc(static_cast<uint32_t>(index + 1));
   p[1] = kRet;
   for (size_t i = 2; i < kTrampWords; ++i) p[i] = kBrk;
-  g_tramp_count.store(index + 1, std::memory_order_release);
-  g_tramp_by_fn[fn] = p;
+  if (index == g_tramp_count.load(std::memory_order_relaxed)) {
+    g_tramp_count.store(index + 1, std::memory_order_release);
+  }
+  g_tramp_by_fn[fn] = index;
   return p;
 }
 
@@ -1972,8 +2205,8 @@ extern "C" __declspec(dllexport) void gesher_arm64_print_guest_state() { PrintGu
 
 extern "C" __declspec(dllexport) const gesher_arm64_api* gesher_arm64_init(
     const gesher_arm64_host* host) {
-  // API3 changes the private va_list representation consumed by the host
-  // shim. Reject old hosts before resolving any shim symbol or running code.
+  // API4 adds load-abort retirement and retains API3's private va_list format.
+  // Reject old hosts before resolving any shim symbol or running code.
   if (host == nullptr || host->version != GESHER_ARM64_API_VERSION) {
     return nullptr;
   }

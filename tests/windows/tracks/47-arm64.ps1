@@ -70,6 +70,12 @@ Check 'arm64: loader runs a self-contained arm64-v8a .so' {
   A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/trivial_arm64.so"))
 } @('arm64_elf_test all passed')
 
+foreach ($transactionExe in 'elf_load_transaction_test.exe', 'elf_load_transaction_failure_test.exe') {
+  Check "arm64: ELF graph rollback and atomic publication through the real translator ($transactionExe)" {
+    A64Run "$a64/$transactionExe" @((NoDrive "$a64/elf-load-transaction-arm64"), '--arm64') 120
+  } @('elf_load_transaction_test all passed')
+}
+
 # Read-only relocations are applied before guest constructors execute. This
 # goes through the bounded guest runner and cannot pass with a missing fixture.
 Check 'arm64: TEXTREL pages relocate before guest constructors and selftest' {

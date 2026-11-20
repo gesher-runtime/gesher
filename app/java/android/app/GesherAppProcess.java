@@ -152,6 +152,7 @@ public final class GesherAppProcess {
             System.out.flush();
             System.err.println(TAG + ": failed: " + t);
             t.printStackTrace();
+            com.gesher.app.AppCrash.report(t);
             code = 1;
         }
         String methodTrace = System.getenv("GESHER_APP_METHOD_TRACE");

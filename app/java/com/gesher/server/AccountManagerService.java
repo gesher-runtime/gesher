@@ -1585,12 +1585,15 @@ public final class AccountManagerService extends IAccountManager.Default {
         private java.util.function.Consumer<Bundle> listener;
         private java.util.function.BiConsumer<Integer, String> errorListener;
         private boolean complete, failed, deliveryStarted;
+        private int deliveriesInProgress;
+        private boolean timeoutPending;
         private IBinder responseBinder;
         private java.util.concurrent.ScheduledFuture<?> timeout;
 
         /** Called with this Answer's monitor held on every terminal session path. */
         private void completeLocked() {
             complete = true;
+            timeoutPending = false;
             if (timeout != null) { timeout.cancel(false); timeout = null; }
             if (responseBinder != null) {
                 responseBinder.unlinkToDeath(this, 0);
@@ -1641,22 +1644,40 @@ public final class AccountManagerService extends IAccountManager.Default {
         }
 
         private void onTimedOut() {
-            synchronized (deliveryLock) {
-                synchronized (this) {
-                    if (complete) return;
-                    // The scheduler's delay clock need not exclude host sleep. Keep the
-                    // Android Handler uptime deadline even if a host wakeup arrives early.
-                    if (mSessionUptimeMillis.getAsLong() < deadline) {
-                        scheduleTimeoutLocked();
-                        return;
-                    }
+            java.util.function.BiConsumer<Integer, String> deliver;
+            synchronized (this) {
+                if (complete) return;
+                // The scheduler's delay clock need not exclude host sleep. Keep the
+                // Android Handler uptime deadline even if a host wakeup arrives early.
+                if (mSessionUptimeMillis.getAsLong() < deadline) {
+                    scheduleTimeoutLocked();
+                    return;
                 }
-                finishError(AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "timeout", false);
+                if (deliveriesInProgress != 0) {
+                    // This Answer's accepted result goes first. The shared clock thread
+                    // must remain available while validation or a local callback runs.
+                    timeoutPending = true;
+                    return;
+                }
+                deliver = finishErrorLocked(AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "timeout");
             }
+            if (deliver != null) mCalls.execute(() -> deliver.accept(
+                    AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "timeout"));
         }
 
         private boolean current() {
             return authenticatorUnchanged(owner) && (client == null || callerUnchanged(client));
+        }
+
+        /** Records the sole terminal error, with this Answer's state monitor held. */
+        private java.util.function.BiConsumer<Integer, String> finishErrorLocked(int errorCode, String errorMessage) {
+            code = errorCode;
+            message = errorMessage;
+            failed = true;
+            java.util.function.BiConsumer<Integer, String> deliver = errorListener;
+            if (deliver != null) deliveryStarted = true;
+            completeLocked();
+            return deliver;
         }
 
         private void finishError(int errorCode, String errorMessage, boolean asynchronous) {
@@ -1664,10 +1685,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 java.util.function.BiConsumer<Integer, String> deliver;
                 synchronized (this) {
                     if (complete) return;
-                    code = errorCode; message = errorMessage; failed = true;
-                    deliver = errorListener;
-                    if (deliver != null) deliveryStarted = true;
-                    completeLocked();
+                    deliver = finishErrorLocked(errorCode, errorMessage);
                 }
                 if (deliver != null) {
                     if (asynchronous) mCalls.execute(() -> deliver.accept(errorCode, errorMessage));
@@ -1755,20 +1773,31 @@ public final class AccountManagerService extends IAccountManager.Default {
 
         private void deliverChecked(IAccountManagerResponse response, ResultCheck check, Bundle value) {
             synchronized (deliveryLock) {
-                synchronized (this) { if (complete) return; }
-                if (!current()) { cancelForRemoval(); return; }
-                Bundle checked;
-                try { checked = check.check(value); }
-                catch (RuntimeException e) { checked = null; }
                 synchronized (this) {
                     if (complete) return;
-                    if (checked == null || response == null
-                            || !checked.containsKey(AccountManager.KEY_INTENT)) completeLocked();
+                    deliveriesInProgress++;
                 }
-                if (checked == null) error(response, AccountManager.ERROR_CODE_INVALID_RESPONSE, "Invalid authenticator response");
-                else if (response != null) {
-                    try { response.onResult(checked); }
-                    catch (RemoteException e) { close(); }
+                try {
+                    if (!current()) { cancelForRemoval(); return; }
+                    Bundle checked;
+                    try { checked = check.check(value); }
+                    catch (RuntimeException e) { checked = null; }
+                    synchronized (this) {
+                        if (complete) return;
+                        if (checked == null || response == null
+                                || !checked.containsKey(AccountManager.KEY_INTENT)) completeLocked();
+                    }
+                    if (checked == null) error(response, AccountManager.ERROR_CODE_INVALID_RESPONSE, "Invalid authenticator response");
+                    else if (response != null) {
+                        try { response.onResult(checked); }
+                        catch (RemoteException e) { close(); }
+                    }
+                } finally {
+                    boolean expire;
+                    synchronized (this) {
+                        expire = --deliveriesInProgress == 0 && timeoutPending;
+                    }
+                    if (expire) onTimedOut();
                 }
             }
         }

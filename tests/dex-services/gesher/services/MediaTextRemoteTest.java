@@ -4,6 +4,7 @@ package gesher.services;
 import android.app.ActivityThread;
 import android.app.IApplicationThread;
 import android.content.Context;
+import android.content.pm.IPackageManager;
 import android.media.IMediaRouterService;
 import android.os.Binder;
 import android.os.IBinder;
@@ -11,6 +12,7 @@ import android.os.Parcel;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.UserHandle;
 import android.view.textservice.SentenceSuggestionsInfo;
 import android.view.textservice.SpellCheckerSession;
 import android.view.textservice.SuggestionsInfo;
@@ -41,7 +43,6 @@ import java.util.Map;
  */
 public final class MediaTextRemoteTest {
     private static final String CONTROL = "gesher.media.text.contract";
-    private static final int CLIENT_UID = 10000;
     private static int checks;
     private static IBinder deathProbe;
     private static void check(boolean condition, String reason) {
@@ -62,8 +63,12 @@ public final class MediaTextRemoteTest {
         bootstrap("media-text-server");
         check(Process.myUid() == Process.SYSTEM_UID, "system server UID");
         ApkPackage apk = ApkPackage.parse(apkPath);
-        check(apk.uid() == CLIENT_UID, "fixture APK must use the ordinary legacy app UID");
         Map<String, IBinder> services = Services.create(Collections.singletonList(apk));
+        final int clientUid = apk.uid();
+        check(UserHandle.isApp(clientUid), "fixture APK must have an admitted ordinary application UID");
+        check(IPackageManager.Stub.asInterface(services.get("package"))
+                        .getApplicationInfo(apk.packageName, 0, 0).uid == clientUid,
+                "admitted package and PackageManager UID agree");
         Object created = field(Services.class, "sLast").get(null);
         Object atm = field(created.getClass(), "atm").get(created);
         List<Object> processes = (List<Object>) field(atm.getClass(), "mProcesses").get(atm);
@@ -82,7 +87,7 @@ public final class MediaTextRemoteTest {
                     throws RemoteException {
                 request.enforceInterface(CONTROL);
                 if (code == 1) {
-                    if (Binder.getCallingUid() != CLIENT_UID) throw new SecurityException("fixture UID");
+                    if (Binder.getCallingUid() != clientUid) throw new SecurityException("fixture UID");
                     IBinder threadBinder = request.readStrongBinder();
                     if (threadBinder == null) throw new IllegalArgumentException("application thread");
                     int pid = Binder.getCallingPid();
@@ -95,6 +100,7 @@ public final class MediaTextRemoteTest {
                                 IApplicationThread.Stub.asInterface(threadBinder));
                         field(recordType, "packageName").set(record, apk.packageName);
                         field(recordType, "processName").set(record, apk.packageName);
+                        field(recordType, "packageCode").set(record, apk);
                         field(recordType, "ready").setBoolean(record, true);
                         synchronized (atm) {
                             check(processes.isEmpty(), "only one fixture process is enrolled");
@@ -108,6 +114,7 @@ public final class MediaTextRemoteTest {
                     }
                     reply.writeNoException();
                     reply.writeInt(Process.myUid());
+                    reply.writeInt(Binder.getCallingUid());
                     return true;
                 }
                 if (code == 2) {
@@ -123,7 +130,7 @@ public final class MediaTextRemoteTest {
         SystemServer.startBinderThreads("media-text-server", 4);
         java.nio.file.Path readyPath = new File(ready).toPath();
         java.nio.file.Path staging = new File(ready + ".writing").toPath();
-        Files.write(staging, apk.packageName.getBytes(StandardCharsets.UTF_8));
+        Files.write(staging, (apk.packageName + "\n" + clientUid + "\n").getBytes(StandardCharsets.UTF_8));
         Files.move(staging, readyPath);
         System.out.println("MediaTextRemoteTest server ready"); System.out.flush();
         Binder.joinThreadPool();
@@ -136,9 +143,13 @@ public final class MediaTextRemoteTest {
         throw new AssertionError(reason);
     }
 
-    private static void client(String packageName) throws Exception {
+    private static void client(String packageName, int expectedUid) throws Exception {
         bootstrap("media-text-client");
-        check(Process.myUid() == CLIENT_UID, "ordinary client UID");
+        check(UserHandle.isApp(expectedUid) && Process.myUid() == expectedUid
+                        && Binder.getCallingUid() == expectedUid, "ordinary client native/Binder UID");
+        IPackageManager packages = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
+        check(packages.getApplicationInfo(packageName, 0, 0).uid == expectedUid,
+                "client and remote PackageManager canonical UID agree");
         IMediaRouterService media = IMediaRouterService.Stub.asInterface(
                 ServiceManager.getService(Context.MEDIA_ROUTER_SERVICE));
         check(media != null && !(media.asBinder() instanceof Binder), "media service is an actual BinderProxy");
@@ -152,6 +163,7 @@ public final class MediaTextRemoteTest {
             request.writeStrongBinder(applicationThread.asBinder());
             check(ServiceManager.getService(CONTROL).transact(1, request, reply, 0), "private enrollment transaction");
             reply.readException(); check(reply.readInt() == Process.SYSTEM_UID, "enrollment server identity");
+            check(reply.readInt() == expectedUid, "server observed the real ordinary client Binder UID");
         } finally { reply.recycle(); request.recycle(); }
         denied(() -> media.getSystemRoutes("another.package", false), "cross-package media query was accepted");
         denied(() -> media.registerManager(null, packageName), "ordinary app acquired manager authority");
@@ -214,6 +226,6 @@ public final class MediaTextRemoteTest {
     public static void main(String[] args) throws Exception {
         if (args[0].equals("server")) server(args[1], args[2]);
         else if (args[0].equals("verify-cleanup")) verifyCleanup();
-        else client(args[1]);
+        else client(args[1], Integer.parseInt(args[2]));
     }
 }

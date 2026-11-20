@@ -17,6 +17,35 @@ jobs=${FETCH_JOBS:-8}
 tag=$(awk '$1 == "tag" { print $2 }' "$lock")
 mkdir -p "$dest"
 
+retry_git_transport() {
+  # Git uses exit 128 for both HTTP failures and permanent errors such as a
+  # missing ref. Identify only the transient HTTP diagnostics.
+  local attempt status output delay http_status
+  local transient='(The requested URL returned error: |RPC failed; HTTP )(429|502|503|504)([^0-9]|$)'
+  for attempt in 1 2 3; do
+    if output=$(LC_ALL=C "$@" 2>&1); then
+      if [[ -n $output ]]; then printf '%s\n' "$output"; fi
+      return 0
+    else
+      status=$?
+    fi
+    printf '%s\n' "$output" >&2
+    if ((attempt < 3)) && [[ $output =~ $transient ]]; then
+      http_status=${BASH_REMATCH[2]}
+      if [[ $http_status == 429 ]]; then
+        delay=$((30 * attempt + RANDOM % 10))
+      else
+        delay=$((5 * attempt + RANDOM % 5))
+      fi
+      printf 'AOSP Git HTTP %s, retrying in %ss (attempt %s of 3)\n' \
+        "$http_status" "$delay" "$((attempt + 1))" >&2
+      sleep "$delay"
+    else
+      return "$status"
+    fi
+  done
+}
+
 clone() {  # clone <repository> <dir> [sparse dirs...]
   local url=https://android.googlesource.com/$1 dir=$2
   shift 2
@@ -26,12 +55,13 @@ clone() {  # clone <repository> <dir> [sparse dirs...]
     # Non-cone patterns, so single files can be listed too. protectNTFS is off
     # because some AOSP projects (libcore) have paths Windows cannot hold;
     # those paths are outside the sparse set and never written to disk.
-    "${git[@]}" -c core.protectNTFS=false clone -q --depth 1 --filter=blob:none --no-checkout       --branch "$tag" "$url" "$dir"
+    retry_git_transport "${git[@]}" -c core.protectNTFS=false clone -q --depth 1 --filter=blob:none --no-checkout --branch "$tag" "$url" "$dir"
     git -C "$dir" config core.protectNTFS false
-    git -C "$dir" sparse-checkout set --no-cone "$@"
-    git -C "$dir" read-tree -mu HEAD
+    # Updating a sparse worktree can fetch missing blobs from the same remote.
+    retry_git_transport git -C "$dir" sparse-checkout set --no-cone "$@"
+    retry_git_transport git -C "$dir" read-tree -mu HEAD
   else
-    "${git[@]}" clone -q --depth 1 --branch "$tag" "$url" "$dir"
+    retry_git_transport "${git[@]}" clone -q --depth 1 --branch "$tag" "$url" "$dir"
   fi
 }
 
@@ -73,7 +103,7 @@ sync_project() {  # sync_project <entry> [sparse dirs...]
   echo "$want" > "$stamp"
 }
 
-export -f clone sync_project
+export -f clone retry_git_transport sync_project
 export root dest tag
 
 grep -vE '^\s*(#|$|tag )' "$lock" | xargs -P "$jobs" -d '\n' -I{} bash -c 'sync_project {}'
