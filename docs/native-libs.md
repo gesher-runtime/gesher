@@ -114,7 +114,14 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     with Linux clock ids and a 64-bit `tv_nsec`), fd-level files, `stat`
     (gesher-base's Linux-layout struct with widened `tv_nsec`), `mmap`, libm,
     `qsort`/`bsearch` with a System V comparator, libdl over the loader
-    (`dlopen`, `dlsym`, `dladdr`, `dl_iterate_phdr`), `__cxa_atexit`/
+    (`dlopen`, `dlsym`, `dladdr`, `dl_iterate_phdr`; as on bionic, which
+    gives `soinfo::get_realpath()`, `dladdr`'s `dli_fname` and
+    `dl_iterate_phdr`'s `dlpi_name` are the absolute path of the file the
+    object was loaded from: Gecko's `FFVPXRuntimeLinker` takes
+    `dladdr(&malloc)` (libmozglue.so's), puts `libmozavcodec.so` in place of
+    the file name and loads that, so with only the soname Firefox had no
+    FFmpeg decoders at all: no Vorbis, Opus, FLAC or MP3, `Error no decoder
+    found for audio/vorbis`), `__cxa_atexit`/
     `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`. The environment
     is the CRT's (`environ` is its `_environ`); gesher-base's `setenv`/
     `unsetenv`, which `putenv` uses too, keep every string they replace or
@@ -439,8 +446,10 @@ see "After that" for what is left._
   variable handshake, `pthread_once`, keys and their destructors at thread
   exit, a recursive mutex (and `trylock` from another thread gives `EBUSY`),
   `pthread_cond_timedwait` timing out, `dlsym(RTLD_DEFAULT)`/`dlerror`,
-  `dl_iterate_phdr` finding the library's own `PT_LOAD`, `dladdr`, and
-  `__android_log_print`.
+  `dl_iterate_phdr` finding the library's own `PT_LOAD`, `dladdr` (its
+  `dli_fname` the absolute path of the library's file, the same as
+  `dl_iterate_phdr`'s `dlpi_name`, and a path built from its directory
+  opening the same library), and `__android_log_print`.
 - **Step 3 — `%fs` by load-time rewrite** (ADR 0014's revised decision).
   `compat/elf/x86_decode.cc` (length decoder), `compat/elf/fs_rewrite.cc`
   (rewrite, stubs, vectored handler for `int3` sites and diagnostics),

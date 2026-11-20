@@ -802,6 +802,7 @@ static void test_pthread(void) {
 // --- libdl and liblog -------------------------------------------------------------
 
 static int phdr_found = 0;
+static char phdr_name[4096];
 static int phdr_callback(struct dl_phdr_info* info, size_t size, void* data) {
   (void)size;
   for (int i = 0; i < info->dlpi_phnum; ++i) {
@@ -810,6 +811,7 @@ static int phdr_callback(struct dl_phdr_info* info, size_t size, void* data) {
     uintptr_t start = info->dlpi_addr + ph->p_vaddr;
     if ((uintptr_t)data >= start && (uintptr_t)data < start + ph->p_memsz) {
       phdr_found = 1;
+      snprintf(phdr_name, sizeof(phdr_name), "%s", info->dlpi_name ? info->dlpi_name : "");
       return 1;
     }
   }
@@ -817,6 +819,29 @@ static int phdr_callback(struct dl_phdr_info* info, size_t size, void* data) {
 }
 
 int gesher_selftest(void);
+
+// bionic names a loaded object by its file's realpath in dladdr's dli_fname and
+// dl_iterate_phdr's dlpi_name (soinfo::get_realpath). Apps build the paths of
+// their other libraries from it: Gecko's FFVPXRuntimeLinker takes dladdr(malloc)
+// (libmozglue.so's), replaces the file name with libmozavcodec.so and opens that.
+static void test_dl_paths(const Dl_info* info) {
+  const char* path = info->dli_fname;
+  check("dladdr's dli_fname is an absolute path", path != NULL && path[0] == '/');
+  struct stat st;
+  check("dladdr's dli_fname is the library's file",
+        path != NULL && stat(path, &st) == 0 && S_ISREG(st.st_mode));
+  check_str("dl_iterate_phdr's dlpi_name is the same path", phdr_name, path != NULL ? path : "");
+  // The directory of that path is where the library's file is: the file name
+  // built from it (as Gecko builds libmozavcodec.so's) opens the same object.
+  char sibling[4096];
+  const char* slash = path != NULL ? strrchr(path, '/') : NULL;
+  int built = slash != NULL &&
+              snprintf(sibling, sizeof(sibling), "%.*s/%s", (int)(slash - path), path, slash + 1) <
+                  (int)sizeof(sibling);
+  void* self = built ? dlopen(sibling, RTLD_NOW) : NULL;
+  check("dlopen of the path built from dli_fname's directory opens the library",
+        self != NULL && dlsym(self, "gesher_selftest") == (void*)gesher_selftest);
+}
 
 static void test_random_state(void) {
   typedef char* (*init_fn)(unsigned, char*, size_t);
@@ -871,6 +896,7 @@ static void test_dl(void) {
   Dl_info info;
   check("dladdr names the library", dladdr((void*)gesher_selftest, &info) != 0 &&
                                         strstr(info.dli_fname, "libc_test") != NULL);
+  test_dl_paths(&info);
   __android_log_print(ANDROID_LOG_INFO, "gesher", "liblog: %s %d", "formatted", 42);
   check("__android_log_print", 1);
   test_random_state();

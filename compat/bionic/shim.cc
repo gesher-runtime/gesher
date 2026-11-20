@@ -1076,10 +1076,13 @@ struct BionicDlInfo {
   const char* dli_sname;
   void* dli_saddr;
 };
+// dladdr and dl_iterate_phdr name an object by its file's path, as bionic does
+// (soinfo::get_realpath): apps derive the paths of their other libraries from
+// it (Gecko's FFVPXRuntimeLinker opens libmozavcodec.so next to libmozglue.so).
 int BIONIC_SYSV DlAddr(const void* addr, BionicDlInfo* info) {
   gesher::elf::AddressInfo ai;
   if (!gesher::elf::FindAddress(addr, &ai)) return 0;
-  info->dli_fname = ai.soname;
+  info->dli_fname = ai.path;
   info->dli_fbase = ai.base;
   info->dli_sname = ai.symbol;
   info->dli_saddr = ai.symbol_addr;
@@ -1101,7 +1104,7 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
   return gesher::elf::ForEachLoaded([&](const gesher::elf::PhdrInfo& in) {
     BionicPhdrInfo info{};
     info.dlpi_addr = in.addr;
-    info.dlpi_name = in.name;
+    info.dlpi_name = in.path;
     info.dlpi_phdr = in.phdr;
     info.dlpi_phnum = in.phnum;
     info.dlpi_adds = in.adds;

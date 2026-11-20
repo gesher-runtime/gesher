@@ -124,6 +124,7 @@ uint32_t SysvHash(const char* name) {
 struct Library {
   std::string name;       // file base name or given name
   std::string soname;     // DT_SONAME, else name
+  std::string path;       // the file's absolute path (realpath), else name
   uint8_t* base = nullptr;   // where the first PT_LOAD landed
   uint8_t* load_bias = nullptr;  // base - first PT_LOAD p_vaddr
   size_t map_size = 0;       // total reserved span
@@ -516,6 +517,25 @@ ResolvedSymbol ResolveForReloc(Library* lib, const char* name) {
 
 void Fail(std::string* error, const std::string& msg) {
   if (error) *error = msg;
+}
+
+// The path an object loaded from `path` reports (dladdr's dli_fname,
+// dl_iterate_phdr's dlpi_name): bionic gives the file's realpath, which code
+// in apps builds the paths of the libraries next to it from (Gecko finds
+// libmozavcodec.so beside the library that defines its malloc). The path as
+// given when it cannot be resolved, made absolute.
+std::string AbsolutePath(const char* path) {
+  if (char* resolved = realpath(path, nullptr)) {
+    std::string out = resolved;
+    std::free(resolved);
+    return out;
+  }
+  if (path[0] == '/') return path;
+  char cwd[4096];
+  if (getcwd(cwd, sizeof(cwd)) == nullptr) return path;
+  std::string out = cwd;
+  if (out.empty() || out.back() != '/') out += '/';
+  return out + path;
 }
 
 // An object's file, open for mapping its segments, and a read-only view of
@@ -1541,9 +1561,10 @@ class LoadTransaction {
     g_pending_scopes.pop_back();
   }
 
-  Library* Load(const char* name, const uint8_t* data, size_t size, int fd,
+  // `path`: the root's file (null for an object loaded from memory).
+  Library* Load(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
                 const LoadOptions& options, std::string* error) {
-    Library* root = Stage(name, data, size, fd, options, error, nullptr);
+    Library* root = Stage(name, path, data, size, fd, options, error, nullptr);
     if (root == nullptr) return nullptr;
     for (const auto& node : nodes_) {
       if (!Prepare(*node, error)) return nullptr;
@@ -1605,7 +1626,7 @@ class LoadTransaction {
     return nullptr;
   }
 
-  Library* Stage(const char* name, const uint8_t* data, size_t size, int fd,
+  Library* Stage(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
                  const LoadOptions& options, std::string* error,
                  std::unique_ptr<FileImage> image) {
     if (IsPending(name)) {
@@ -1633,6 +1654,7 @@ class LoadTransaction {
     node->library.reset(new Library());
     Library* lib = node->library.get();
     lib->name = name;
+    lib->path = path != nullptr ? AbsolutePath(path) : std::string(name);
     lib->is_aarch64 = aarch64;
     lib->stub_unresolved = options.stub_unresolved_functions;
     lib->load_scope = &scope_;
@@ -1667,7 +1689,7 @@ class LoadTransaction {
         FileImage* source = child_image.get();
         LoadOptions child_options = options;
         child_options.main_executable = false;
-        dep = Stage(soname.c_str(), source->data, source->size, source->fd,
+        dep = Stage(soname.c_str(), found.c_str(), source->data, source->size, source->fd,
                     child_options, error, std::move(child_image));
         if (dep == nullptr) return nullptr;
       }
@@ -1735,10 +1757,10 @@ class LoadTransaction {
 
 };
 
-Library* LoadCommon(const char* name, const uint8_t* data, size_t size, int fd,
+Library* LoadCommon(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
                     std::string* error, const LoadOptions& options) {
   LoadTransaction transaction;
-  return transaction.Load(name, data, size, fd, options, error);
+  return transaction.Load(name, path, data, size, fd, options, error);
 }
 
 }  // namespace
@@ -1754,6 +1776,7 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
       PhdrInfo info;
       info.addr = reinterpret_cast<uintptr_t>(lib->load_bias);
       info.name = lib->soname.c_str();
+      info.path = lib->path.c_str();
       info.phdr = lib->phdr;
       info.phnum = lib->phnum;
       info.tls_modid = lib->tls.present ? lib->tls.module_id : 0;
@@ -1774,6 +1797,7 @@ bool FindAddress(const void* addr, AddressInfo* info) {
   for (Library* lib : Loaded()) {
     if (a < lib->base || a >= lib->base + lib->map_size) continue;
     info->soname = lib->soname.c_str();
+    info->path = lib->path.c_str();
     info->base = lib->base;
     info->symbol = nullptr;
     info->symbol_addr = nullptr;
@@ -1824,7 +1848,7 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
   }
   FileImage image;
   if (!OpenImage(path, &image, error)) return nullptr;
-  return LoadCommon(name.c_str(), image.data, image.size, image.fd, error, options);
+  return LoadCommon(name.c_str(), path, image.data, image.size, image.fd, error, options);
 }
 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
@@ -1834,7 +1858,7 @@ Library* LoadFromMemory(const char* name, const void* data, size_t size, std::st
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (Library* existing = FindLocked(name)) return existing;
   }
-  return LoadCommon(name, static_cast<const uint8_t*>(data), size, -1, error, options);
+  return LoadCommon(name, nullptr, static_cast<const uint8_t*>(data), size, -1, error, options);
 }
 
 void* Lookup(Library* library, const char* name) {
