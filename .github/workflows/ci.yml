@@ -39,6 +39,8 @@ jobs:
           $originalExit = $LASTEXITCODE
           & .\app-identity-restart-audit.exe
           $auditExit = $LASTEXITCODE
-          if ($originalExit -ne 0 -or $auditExit -ne 0) {
-            throw "Native application identity restart gate failed (original=$originalExit audit=$auditExit)"
+          & .\app-identity-restart-audit.exe --creation-control
+          $controlExit = $LASTEXITCODE
+          if ($originalExit -ne 0 -or $auditExit -ne 0 -or $controlExit -ne 0) {
+            throw "Native application identity restart gate failed (original=$originalExit audit=$auditExit control=$controlExit)"
           }

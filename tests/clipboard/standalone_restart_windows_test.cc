@@ -77,6 +77,56 @@ bool ReadChildIdentity(const std::string& report, DWORD* pid, unsigned long long
   return true;
 }
 
+#ifdef GESHER_RESTART_AUDIT
+void PlainProcessCreationControl() {
+  std::printf("Plain CreateProcessW control: no RestartWithUid, job, stdio duplication or attribute list\n");
+  std::fflush(stdout);
+  wchar_t executable[32768]{};
+  DWORD length = GetModuleFileNameW(nullptr, executable, 32768);
+  Check(length != 0 && length < 32768, "control executable path");
+  for (int pass = 1; pass <= 2; ++pass) {
+    std::wstring command = L"\"" + std::wstring(executable)
+        + L"\" --creation-control-child";
+    restart_audit::Entries before_handles;
+    Check(restart_audit::Capture(&before_handles) == ERROR_SUCCESS, "control initial snapshot");
+    DWORD before = 0, created = 0, after = 0;
+    Check(GetProcessHandleCount(GetCurrentProcess(), &before) != FALSE, "control initial count");
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    BOOL launched = CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE,
+        CREATE_SUSPENDED, nullptr, nullptr, &startup, &child);
+    Check(launched != FALSE, "plain control CreateProcessW");
+    BOOL created_counted = GetProcessHandleCount(GetCurrentProcess(), &created);
+    DWORD resumed = ResumeThread(child.hThread);
+    DWORD waited = resumed == static_cast<DWORD>(-1) ? WAIT_FAILED
+        : WaitForSingleObject(child.hProcess, 5000);
+    DWORD code = 0;
+    BOOL queried = waited == WAIT_OBJECT_0 ? GetExitCodeProcess(child.hProcess, &code) : FALSE;
+    if (waited != WAIT_OBJECT_0) {
+      TerminateProcess(child.hProcess, 1);
+      WaitForSingleObject(child.hProcess, 5000);
+    }
+    BOOL thread_closed = CloseHandle(child.hThread);
+    DWORD thread_error = thread_closed ? ERROR_SUCCESS : GetLastError();
+    BOOL process_closed = CloseHandle(child.hProcess);
+    DWORD process_error = process_closed ? ERROR_SUCCESS : GetLastError();
+    BOOL after_counted = GetProcessHandleCount(GetCurrentProcess(), &after);
+    std::printf("plain control pass=%d before=%lu after-create=%lu after-close=%lu process=%p thread=%p process-close=%d/%lu thread-close=%d/%lu exit=%lu\n",
+        pass, before, created, after, child.hProcess, child.hThread,
+        process_closed, process_error, thread_closed, thread_error, code);
+    std::fflush(stdout);
+    Check(created_counted != FALSE && after_counted != FALSE, "control count queries");
+    Check(thread_closed != FALSE && process_closed != FALSE, "control closes its two owned handles");
+    Check(waited == WAIT_OBJECT_0 && queried != FALSE && code == 0, "control child exact exit");
+    restart_audit::Entries after_handles;
+    Check(restart_audit::Capture(&after_handles) == ERROR_SUCCESS, "control final snapshot");
+    restart_audit::Delta(pass == 1 ? "plain-create-first" : "plain-create-second",
+        before_handles, after_handles);
+  }
+}
+#endif
+
 void Worker(uint32_t expected, const wchar_t* payload) {
   Check(std::wcscmp(payload, L"argument with spaces \u05d0") == 0, "same Unicode arguments");
   wchar_t restarted[2]{};
@@ -243,6 +293,13 @@ void Run(uint32_t expected) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+#ifdef GESHER_RESTART_AUDIT
+  if (argc == 2 && std::wcscmp(argv[1], L"--creation-control-child") == 0) return 0;
+  if (argc == 2 && std::wcscmp(argv[1], L"--creation-control") == 0) {
+    PlainProcessCreationControl();
+    return 0;
+  }
+#endif
   if (argc == 4 && std::wcscmp(argv[1], L"--worker") == 0) {
     Worker(static_cast<uint32_t>(std::wcstoull(argv[2], nullptr, 10)), argv[3]);
   }
