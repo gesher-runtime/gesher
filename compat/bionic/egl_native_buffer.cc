@@ -48,10 +48,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #ifndef EGL_NATIVE_BUFFER_ANDROID
@@ -235,18 +235,23 @@ struct Sync {
   EGLenum type = 0;
   EGLDisplay display = EGL_NO_DISPLAY;
   int fd = -1;  // a native fence's, signaled when the fence is
+  ~Sync() {
+    if (fd >= 0) close(fd);
+  }
 };
 
+// A sync destroyed while another thread waits on it or reads it stays alive
+// (with its fence fd open) until that call returns.
 std::mutex g_syncs_mutex;
-std::unordered_set<Sync*>& Syncs() {
-  static auto* set = new std::unordered_set<Sync*>();
-  return *set;
+std::unordered_map<void*, std::shared_ptr<Sync>>& Syncs() {
+  static auto* map = new std::unordered_map<void*, std::shared_ptr<Sync>>();
+  return *map;
 }
 
-Sync* FindSync(void* sync) {
-  auto* s = static_cast<Sync*>(sync);
+std::shared_ptr<Sync> FindSync(void* sync) {
   std::lock_guard<std::mutex> lock(g_syncs_mutex);
-  return Syncs().count(s) != 0 ? s : nullptr;
+  auto found = Syncs().find(sync);
+  return found != Syncs().end() ? found->second : nullptr;
 }
 
 int SignaledFenceFd() { return open("/dev/null", O_RDONLY | O_CLOEXEC); }
@@ -301,13 +306,13 @@ EGLSyncKHR CreateFence(EGLDisplay dpy, EGLenum type, const std::vector<EGLint>& 
       }
     }
   }
-  auto* s = new Sync();
+  auto s = std::make_shared<Sync>();
   s->type = type;
   s->display = dpy;
   s->fd = fd;  // given in the attributes: the implementation owns it from now on
   std::lock_guard<std::mutex> lock(g_syncs_mutex);
-  Syncs().insert(s);
-  return s;
+  Syncs().emplace(s.get(), s);
+  return s.get();
 }
 
 bool OurSyncType(EGLenum type) { return type == EGL_SYNC_NATIVE_FENCE_ANDROID || type == EGL_SYNC_FENCE_KHR; }
@@ -325,26 +330,28 @@ EGLSync BIONIC_SYSV CreateSync(EGLDisplay dpy, EGLenum type, const EGLAttrib* at
 }
 
 EGLBoolean DestroySyncImpl(EGLDisplay dpy, void* sync) {
-  Sync* s = FindSync(sync);
-  if (s == nullptr) return G()->eglDestroySyncKHR(dpy, sync);
+  std::shared_ptr<Sync> s;
   {
     std::lock_guard<std::mutex> lock(g_syncs_mutex);
-    Syncs().erase(s);
+    auto found = Syncs().find(sync);
+    if (found != Syncs().end()) {
+      s = std::move(found->second);
+      Syncs().erase(found);
+    }
   }
-  if (s->fd >= 0) close(s->fd);
-  delete s;
+  if (s == nullptr) return G()->eglDestroySyncKHR(dpy, sync);
   return EGL_TRUE;
 }
 
 EGLBoolean BIONIC_SYSV DestroySyncKhr(EGLDisplay dpy, EGLSyncKHR sync) { return DestroySyncImpl(dpy, sync); }
 EGLBoolean BIONIC_SYSV DestroySync(EGLDisplay dpy, EGLSync sync) { return DestroySyncImpl(dpy, sync); }
 
-bool Signaled(Sync* s, uint64_t timeout) { return s->fd < 0 || PollFence(s->fd, timeout); }
+bool Signaled(const Sync* s, uint64_t timeout) { return s->fd < 0 || PollFence(s->fd, timeout); }
 
 EGLint ClientWaitImpl(EGLDisplay dpy, void* sync, EGLint flags, uint64_t timeout) {
-  Sync* s = FindSync(sync);
+  std::shared_ptr<Sync> s = FindSync(sync);
   if (s == nullptr) return G()->eglClientWaitSyncKHR(dpy, sync, flags, timeout);
-  return Signaled(s, timeout) ? EGL_CONDITION_SATISFIED_KHR : EGL_TIMEOUT_EXPIRED_KHR;
+  return Signaled(s.get(), timeout) ? EGL_CONDITION_SATISFIED_KHR : EGL_TIMEOUT_EXPIRED_KHR;
 }
 
 EGLint BIONIC_SYSV ClientWaitSyncKhr(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout) {
@@ -356,14 +363,14 @@ EGLint BIONIC_SYSV ClientWaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags, EG
 }
 
 EGLint WaitImpl(EGLDisplay dpy, void* sync, EGLint flags) {
-  Sync* s = FindSync(sync);
+  std::shared_ptr<Sync> s = FindSync(sync);
   if (s == nullptr) return G()->eglWaitSyncKHR(dpy, sync, flags);
   if (flags != 0) {
     SetError(EGL_BAD_PARAMETER);
     return EGL_FALSE;
   }
   // The commands after the wait are issued once the fence has signaled.
-  Signaled(s, EGL_FOREVER_KHR);
+  Signaled(s.get(), EGL_FOREVER_KHR);
   return EGL_TRUE;
 }
 
@@ -373,7 +380,7 @@ EGLBoolean BIONIC_SYSV WaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags) {
   return WaitImpl(dpy, sync, flags) == EGL_TRUE ? EGL_TRUE : EGL_FALSE;
 }
 
-bool SyncAttrib(Sync* s, EGLint attribute, EGLint* value) {
+bool SyncAttrib(const Sync* s, EGLint attribute, EGLint* value) {
   switch (attribute) {
     case EGL_SYNC_TYPE_KHR:
       *value = static_cast<EGLint>(s->type);
@@ -392,17 +399,17 @@ bool SyncAttrib(Sync* s, EGLint attribute, EGLint* value) {
 }
 
 EGLBoolean BIONIC_SYSV GetSyncAttribKhr(EGLDisplay dpy, EGLSyncKHR sync, EGLint attribute, EGLint* value) {
-  Sync* s = FindSync(sync);
+  std::shared_ptr<Sync> s = FindSync(sync);
   if (s == nullptr) return G()->eglGetSyncAttribKHR(dpy, sync, attribute, value);
   if (value == nullptr) {
     SetError(EGL_BAD_PARAMETER);
     return EGL_FALSE;
   }
-  return SyncAttrib(s, attribute, value) ? EGL_TRUE : EGL_FALSE;
+  return SyncAttrib(s.get(), attribute, value) ? EGL_TRUE : EGL_FALSE;
 }
 
 EGLBoolean BIONIC_SYSV GetSyncAttrib(EGLDisplay dpy, EGLSync sync, EGLint attribute, EGLAttrib* value) {
-  Sync* s = FindSync(sync);
+  std::shared_ptr<Sync> s = FindSync(sync);
   if (s == nullptr) {
     auto angle = reinterpret_cast<decltype(&::eglGetSyncAttrib)>(gesher_egl_proc("eglGetSyncAttrib"));
     if (angle != nullptr) return angle(dpy, sync, attribute, value);
@@ -416,7 +423,7 @@ EGLBoolean BIONIC_SYSV GetSyncAttrib(EGLDisplay dpy, EGLSync sync, EGLint attrib
     return EGL_FALSE;
   }
   EGLint v = 0;
-  if (!SyncAttrib(s, attribute, &v)) return EGL_FALSE;
+  if (!SyncAttrib(s.get(), attribute, &v)) return EGL_FALSE;
   *value = v;
   return EGL_TRUE;
 }
@@ -435,7 +442,7 @@ EGLBoolean BIONIC_SYSV SignalSyncKhr(EGLDisplay dpy, EGLSyncKHR sync, EGLenum mo
 }
 
 EGLint BIONIC_SYSV DupNativeFenceFd(EGLDisplay /*dpy*/, EGLSyncKHR sync) {
-  Sync* s = FindSync(sync);
+  std::shared_ptr<Sync> s = FindSync(sync);
   if (s == nullptr || s->fd < 0) {  // not a native fence sync
     SetError(EGL_BAD_PARAMETER);
     return EGL_NO_NATIVE_FENCE_FD_ANDROID;
