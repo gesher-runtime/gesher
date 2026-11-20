@@ -1,10 +1,15 @@
-# Required PR builds on the local Linux runner
+# Framework build routing and the local Linux runner
 
-The required `ci / framework` pipeline can run its existing `host-tools` and
-`framework` jobs on `gesher-wsl-trial`. Their producer IDs, artifact names,
-current-run host-tool receipts, compiler flags, Android contract checks and
-Windows consumers are preserved. No application behavior is changed. There is
-one physical runner, so it executes one job at a time; other PRs can queue.
+The required `ci / framework` pipeline retains its existing `host-tools` and
+`framework` jobs. The current CI caller requests GitHub-hosted `ubuntu-24.04`
+execution with `local-runner: false` for the new immutable policy described below.
+Their producer IDs, artifact names, current-run host-tool receipts, compiler
+flags, Android contract checks and Windows consumers are preserved. No
+application behavior is changed.
+
+The previously authorized policy can run these jobs on `gesher-wsl-trial`.
+There is one physical runner, so it executes one job at a time; other PRs can
+queue. The new policy has not been authorized for that restricted runner group.
 
 The root native Gesher `build` job still runs on GitHub. This rollout first
 validates these two framework producer jobs before moving more required work.
@@ -32,12 +37,29 @@ expected. Windows-only execution tests continue on GitHub-hosted Windows.
 
 ## Trust and rollout
 
-The CI caller pins `framework.yml` to
-`7a45c2468c270bfe68ee5f854aa9d4feaf2208b3`. That policy pins the runner-route
-and local-cache actions to `b9510513a538d80669895521d1061b54fbe11aff`.
+The CI caller pins the combined `framework.yml` recipe at
+`jobs.framework.uses` in `.github/workflows/ci.yml`. That workflow pins the
+runner-route action to `5d76cae649c2257c376aaf87a5283099c99f111c`; its
+local-cache actions pin to `e5eb64d95271bc83c4eb40c9a069a2a45acac11c`.
+Hosted cache saves are limited to `main`; branch and PR restores retain the
+same keys, inputs and behavior.
+The recipe retains the current notification, SoftAP and Wi-Fi Direct contracts
+and adds the suggestion/Passpoint value, network specifier and geolocation
+lifetime contracts.
 Changes to PR workflow files cannot change the policy authorized by the runner
 group. Publishing a replacement requires reviewing/pinning a new immutable
-policy and explicitly updating the group allowlist.
+policy and explicitly updating the group allowlist before enabling local use.
+This change does not update that allowlist or any permission. The current caller
+sets `local-runner: false`, so the pinned action selects the existing hosted
+runner without making local-authorization API requests. Both required Linux
+producer jobs and all Windows execution jobs remain required.
+
+The pinned action also handles confirmed GitHub quota responses if local routing
+is later enabled after separate authorization. Matching HTTP 403/429 status and
+the API response's rate-limit message can select only `ubuntu-24.04`; it does not
+retry the API, grant restricted-runner access, skip work or log the response body.
+Permission denials, malformed quota evidence, invalid merge identity and invalid
+ancestry retain their existing failure behavior.
 
 The pinned `framework.yml` is the one CI runs, also on GitHub-hosted runners,
 so a change to `framework.yml` on `main` takes effect only once the pin moves
@@ -61,7 +83,9 @@ merge-queue events use GitHub-hosted runners. A stale head also falls back to
 hosted CI. Invalid merge identity fails closed. No GitHub write token or account
 login is installed on the build computer.
 
-The organization group `gesher-build-trial` permits only this repository and:
+The existing documented `gesher-build-trial` allowlist remains restricted to this
+repository and the following older policies; the new framework policy is not
+added by this change:
 
 ```
 gesher-runtime/gesher/.github/workflows/arm64-windows-self-hosted.yml@refs/heads/main
@@ -111,9 +135,11 @@ until active local jobs finish or cancellation completes. If cancellation gets
 stuck, use `gh api --method POST repos/gesher-runtime/gesher/actions/runs/$ciRunId/force-cancel`
 and wait for completion before rerunning. Do not bypass required checks.
 
-To resume local routing later, set only `GESHER_SELF_HOSTED_PRS=true`. Leave the
-trial flag false. The same switch remains the rollback path if more required
-jobs are added in a later rollout.
+For the previously authorized policy, `GESHER_SELF_HOSTED_PRS=true` enables local
+routing. For the new policy, a separate reviewed rollout must first authorize its
+exact workflow SHA in the group and change the caller's `local-runner` input to
+true. Leave the trial flag false. The repository switch remains the rollback
+path for any policy that has been authorized and explicitly opted in.
 
 ## Local caches
 

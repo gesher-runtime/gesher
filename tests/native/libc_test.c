@@ -75,6 +75,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "freopen_mode_contract_test.inc"
 #include "statvfs_contract_test.inc"
 #include "sleep_contract_test.inc"
+#include "bionic_signal_range_contracts.h"
 #include "stream_device_contract_test.inc"
 
 // --- memory and strings -------------------------------------------------------
@@ -828,6 +829,7 @@ static void test_dl(void) {
 
 __attribute__((visibility("default"))) int gesher_selftest(void) {
   printf("libc_test: bionic libc through the shim\n");
+  failures += BionicSignalRangeContracts();
   test_memory();
   test_allocation_contracts();
   test_system_contracts();

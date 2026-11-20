@@ -711,7 +711,8 @@ bool ClipboardHtml(std::u16string* html) {
   return ok;
 }
 
-bool SetClipboard(const std::u16string& text, const std::u16string& html) {
+bool SetClipboard(const std::u16string& text, const std::u16string& html, uint32_t* written_sequence) {
+  if (written_sequence != nullptr) *written_sequence = 0;
   if (!OpenClipboardRetrying()) return false;
   bool ok = EmptyClipboard() != 0;
   if (ok && !text.empty()) {
@@ -739,6 +740,9 @@ bool SetClipboard(const std::u16string& text, const std::u16string& html) {
       if (SetClipboardData(HtmlFormat(), g) == nullptr) GlobalFree(g);
     }
   }
+  // Capture ownership while the clipboard is still open. A later external write
+  // must not be mistaken for the sequence/provenance of this Android clip.
+  if (ok && written_sequence != nullptr) *written_sequence = GetClipboardSequenceNumber();
   CloseClipboard();
   return ok;
 }

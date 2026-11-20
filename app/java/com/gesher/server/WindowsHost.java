@@ -98,6 +98,11 @@ public final class WindowsHost {
         t.start();
     }
 
+    /** Releases a service's event subscription; the shared event thread belongs to the server. */
+    public static void removeListener(Listener listener) {
+        sListeners.remove(listener);
+    }
+
     /**
      * Whether this process is a system server (SystemServer sets GESHER_BINDER_UID to the
      * system uid before it creates the services), not an app's own (--single-process).
@@ -113,6 +118,20 @@ public final class WindowsHost {
     }
 
     // --- clipboard ----------------------------------------------------------------------
+
+    /** Native foreground PID and creation FILETIME, or null when no stable owner is known. */
+    public static long[] foregroundProcess() {
+        if (!available()) return null;
+        try { return nativeForegroundProcess(); }
+        catch (UnsatisfiedLinkError unavailable) { return null; }
+    }
+
+    /** Windows session lock state: 0 unlocked, 1 locked, -1 unknown. */
+    public static int sessionLockState() {
+        if (!available()) return -1;
+        try { return nativeSessionLockState(); }
+        catch (UnsatisfiedLinkError unavailable) { return -1; }
+    }
 
     public static String clipboardText() {
         return available() ? nativeClipboardText() : null;
@@ -156,6 +175,15 @@ public final class WindowsHost {
         } catch (Throwable t) {
             return setClipboard(text, html);
         }
+    }
+
+    /** Sequence captured during this write while Windows' clipboard is open; zero means unavailable. */
+    static int setClipboardSequence(String text, String html, byte[] image) {
+        if (!available()) return 0;
+        try {
+            return image == null ? nativeSetClipboardSequence(text, html)
+                    : nativeSetClipboardRichSequence(text, html, image);
+        } catch (UnsatisfiedLinkError unavailable) { return 0; }
     }
 
     public static int clipboardSequence() {
@@ -403,8 +431,6 @@ public final class WindowsHost {
         catch (UnsatisfiedLinkError unavailable) { return -1; }
     }
 
-    public static void removeListener(Listener listener) { sListeners.remove(listener); }
-
     private static native int nativeAppsUseLightTheme();
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
@@ -416,7 +442,11 @@ public final class WindowsHost {
     private static native boolean nativeSetClipboard(String text, String html);
     private static native boolean nativeSetClipboardRich(String text, String html,
             byte[] imageBytes);
+    private static native int nativeSetClipboardSequence(String text, String html);
+    private static native int nativeSetClipboardRichSequence(String text, String html, byte[] image);
     private static native int nativeClipboardSequence();
+    private static native long[] nativeForegroundProcess();
+    private static native int nativeSessionLockState();
     private static native int nativeAlarmWait(long utcMillis, boolean wakeup, int timeoutMs);
     private static native void nativeAlarmKick();
     private static native int[] nativePowerStatus();

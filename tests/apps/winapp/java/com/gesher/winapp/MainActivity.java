@@ -127,6 +127,18 @@ public class MainActivity extends Reporting {
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+        // The desktop fixture checks the actual foreground PID independently before
+        // asserting denial. This ordinary app only reports its public clipboard result.
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            if (!isDestroyed() && !hasWindowFocus() && mClipboard != null) {
+                say("MainActivity stopped clipboard present " + (mClipboard.getPrimaryClip() != null));
+            }
+        }, 500);
+    }
+
+    @Override
     protected void onDestroy() {
         if (mClipboard != null) mClipboard.removePrimaryClipChangedListener(mClipListener);
         super.onDestroy();

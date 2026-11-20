@@ -246,6 +246,16 @@ add_executable(native3_unicode_test tests/native/native3_unicode_test.cc)
 target_compile_options(native3_unicode_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(native3_unicode_test PRIVATE gesher_bionic gesher_elf icuuc)
 
+add_executable(binary128_parsing_test tests/native/binary128_parsing_test.cc)
+target_compile_options(binary128_parsing_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(binary128_parsing_test PRIVATE gesher_bionic gesher_elf)
+add_executable(binary128_records tests/binary128/backend_records.cc)
+target_compile_options(binary128_records PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(binary128_records PRIVATE gesher_bionic_binary128)
+add_executable(binary128_concurrency tests/binary128/concurrency_contracts.cc)
+target_compile_options(binary128_concurrency PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(binary128_concurrency PRIVATE gesher_bionic_binary128)
+
 add_executable(clock_domains_windows_test tests/native/clock_domains_windows_test.cc)
 target_compile_options(clock_domains_windows_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(clock_domains_windows_test PRIVATE gesher_posix)
@@ -333,6 +343,15 @@ target_link_libraries(native3_lock_blocking_worker PRIVATE gesher_posix)
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
 target_compile_options(arm64_elf_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(arm64_elf_test PRIVATE gesher_bionic gesher_elf)
+
+# Ordinary public numeric API qualification through the x64 translator.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  add_executable(arm64_numeric_return_host EXCLUDE_FROM_ALL tests/native/arm64_numeric_return_host.cc)
+  target_compile_options(arm64_numeric_return_host PRIVATE -Wall -Wextra -Werror)
+  target_link_libraries(arm64_numeric_return_host PRIVATE gesher_bionic gesher_elf)
+  add_executable(arm64_numeric_fenv_test EXCLUDE_FROM_ALL tests/native/arm64_numeric_fenv_test.cc)
+  target_compile_options(arm64_numeric_fenv_test PRIVATE -Wall -Wextra -Werror -frounding-math)
+endif()
 
 # BEGIN FILE_MREMAP_SOURCE_QUALIFICATION
 # Explicit CI qualification targets; no fixture is part of the default product.

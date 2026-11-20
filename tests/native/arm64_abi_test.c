@@ -26,6 +26,7 @@
 #include <stdatomic.h>
 #include "arm64_fpcr_contracts.h"
 #include "arm64_fpsr_contracts.h"
+#include "bionic_setjmp_contracts.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +41,7 @@
 #include "arm64_perf_kernel.h"
 
 static int failures;
+extern int Arm64SetjmpRegisters(void);
 
 static void check(const char* what, int ok) {
   printf("  %-56s %s\n", what, ok ? "ok" : "FAIL");
@@ -346,6 +348,8 @@ int gesher_selftest(const char* dir) {
   check("stack protector frames return", protected_frame("guarded") == 7);
   test_tls();
   test_setjmp();
+  failures += BionicSetjmpContracts();
+  check("arm64 setjmp callee registers, SP and FP environment", Arm64SetjmpRegisters() == 0);
   test_stat_epoll(dir != NULL ? dir : ".");
   test_syscall_auxv();
   test_atomics();

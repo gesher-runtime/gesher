@@ -77,7 +77,6 @@
   },
   "services": {
     "tracks": [
-      "38-media.ps1",
       "50-services.ps1",
       "52-microg.ps1",
       "54-web3.ps1",
@@ -85,16 +84,11 @@
       "56-net.ps1",
       "57-devsvc.ps1",
       "58-devices.ps1",
-      "59-media3.ps1",
       "61-bluetooth.ps1",
       "70-e2e.ps1",
       "70-exec4-exit.ps1",
-      "71-media4-format.ps1",
       "74-exec4-actions.ps1",
-      "76-media4-opensl.ps1",
       "77-exec4-spawn.ps1",
-      "79-media4-muxer.ps1",
-      "87-ndk-extractor.ps1",
       "83-libcore-io.ps1",
       "93-microg-gms.ps1",
       "94-framework-fixes.ps1",
@@ -110,6 +104,22 @@
     "helpers": {
       "61-aot2.ps1": [
         "Aot2Run"
+      ]
+    }
+  },
+  "media": {
+    "tracks": [
+      "38-media.ps1",
+      "59-media3.ps1",
+      "71-media4-format.ps1",
+      "76-media4-opensl.ps1",
+      "79-media4-muxer.ps1",
+      "87-ndk-extractor.ps1"
+    ],
+    "helpers": {
+      "50-services.ps1": [
+        "CheckTimed",
+        "RunTimed"
       ]
     }
   },

@@ -10,14 +10,8 @@
 #include <initializer_list>
 
 #include "arm64_unwind_offsets.h"  // Derived from the exact production object.
+#include "host_call.h"
 
-struct HostCall {
-  void* fn;
-  const uint64_t* gpr;
-  const uint64_t* xmm;
-  const uint64_t* stack;
-  uint64_t nstack, out_xmm0, out_rdx;
-};
 struct EntryFrame {
   uint64_t gpr[8], xmm[8];
   const uint64_t* stack;
@@ -33,7 +27,6 @@ struct NativeArgs {
 };
 struct Result { uint64_t rax, rdx, xmm0; };
 
-static_assert(offsetof(HostCall, out_xmm0) == 40 && sizeof(HostCall) == 56);
 static_assert(offsetof(EntryFrame, stack) == 128 && sizeof(EntryFrame) == 152);
 static_assert(offsetof(RegisterState, xmm) == 32);
 static_assert(offsetof(RegisterState, rsp) == 192 && sizeof(RegisterState) == 208);
@@ -178,7 +171,7 @@ static void RunHost(unsigned nstack) {
   for (unsigned i = 0; i != 31; ++i)
     stack[i] = UINT64_C(0x6172839400000000) + i * UINT64_C(0x10101);
   HostCall call{reinterpret_cast<void*>(&UnwindSysvTarget), unwind_guest_gpr,
-                unwind_fp_args, stack, nstack, 0, 0};
+                unwind_fp_args, stack, nstack, 0, 0, 0};
   expected = &before;
   active_call = &call;
   const uint64_t result = UnwindCallHost(&call, &before, &after);

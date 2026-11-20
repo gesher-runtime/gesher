@@ -56,6 +56,13 @@ final class SettingsProvider extends ContentProvider {
     /** The provider of this process (the system server's), for {@link #putSystem}. */
     private static volatile SettingsProvider sInstance;
 
+    /** Server-local view of the actual secure setting; absent configuration stays absent. */
+    static String secureString(String name) {
+        SettingsProvider provider = sInstance;
+        if (provider == null) return null;
+        synchronized (provider) { return provider.mTables.get(SECURE).get(name); }
+    }
+
     /** Server-local numeric global setting, with the same malformed-value fallback as Settings. */
     static long globalLong(String name, long defaultValue) {
         SettingsProvider provider = sInstance;
@@ -177,7 +184,6 @@ final class SettingsProvider extends ContentProvider {
     }
 
     private void enforceWrite(String table) {
-        if (!GmsSignatureSpoofing.isEnabled()) return;
         if (android.os.Binder.getCallingPid() == Process.myPid()) return;
         if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
         if (mCallers.isSystem()) return;

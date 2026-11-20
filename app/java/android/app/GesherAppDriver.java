@@ -44,6 +44,7 @@ public final class GesherAppDriver {
     /** Keeps the LoadedApk alive: ActivityThread's mPackages holds it weakly. */
     private static LoadedApk sLoadedApk;
     private static volatile Activity sActivity;
+    private static com.gesher.server.InProcessApplication sApplication;
     // The launched Activity's record (what ActivityClientRecord keeps; windows3 track): its
     // token, info and title, its window's config callback (to whichever instance has the
     // token), its override configuration, the orientation it asks for and the rotation its
@@ -73,8 +74,10 @@ public final class GesherAppDriver {
      * Binds the application and launches {@code activityInfo}, on the main thread.
      * Returns the resumed Activity.
      */
-    public static Activity launch(ApplicationInfo appInfo, ActivityInfo activityInfo)
+    public static Activity launch(ApplicationInfo appInfo, ActivityInfo activityInfo,
+            com.gesher.server.InProcessApplication application)
             throws Exception {
+        sApplication = java.util.Objects.requireNonNull(application);
         ActivityThread thread = bindApplication(appInfo);
         return launchActivity(thread, activityInfo);
     }
@@ -88,6 +91,9 @@ public final class GesherAppDriver {
         set(ActivityThread.class, null, "sCurrentActivityThread", thread);
         ConfigurationController configController = new ConfigurationController(thread);
         set(ActivityThread.class, thread, "mConfigurationController", configController);
+        // The manual driver does not call attach(false). Its trusted startup session
+        // registers the real process before LoadedApk loads any application classes.
+        sApplication.bind(thread.getApplicationThread());
 
         // System features: ActivityThread reads them early from ApplicationSharedMemory,
         // which ActivityManagerService fills from PackageManagerService. The headless
@@ -271,6 +277,7 @@ public final class GesherAppDriver {
 
         // ON_START, and the post-create step handleStartActivity does
         activity.performStart("gesher-app");
+        sApplication.activityStarted();
         log(info.name + " onStart");
         activity.mCalled = false;
         instrumentation.callActivityOnPostCreate(activity, (Bundle) null);
@@ -281,12 +288,20 @@ public final class GesherAppDriver {
 
         // ON_RESUME. handleResumeActivity would now add the decor view to the window
         // manager and makeVisible(); headless, the Activity stays resumed and unshown.
+        sApplication.activityResuming();
         activity.performResume(false /* followedByPause */, "gesher-app");
+        sApplication.activityResumed();
         log(info.name + " onResume");
         // The only Activity: the top resumed one (Android 10's onTopResumedActivityChanged).
         activity.performTopResumedActivityChanged(true, "gesher-app");
         return activity;
     }
+
+    /** Reports completed manual window lifecycle transitions to this admission. */
+    static void activityPaused() { if (sApplication != null) sApplication.activityPaused(); }
+    static void activityStopped() { if (sApplication != null) sApplication.activityStopped(); }
+    static void activityResuming() { if (sApplication != null) sApplication.activityResuming(); }
+    static void activityResumed() { if (sApplication != null) sApplication.activityResumed(); }
 
     /** Every task has an explicit display rotation, including the natural zero. */
     private static Configuration taskOverride(int rotation) {
@@ -355,12 +370,14 @@ public final class GesherAppDriver {
         if (resumed) {
             old.performTopResumedActivityChanged(false, "relaunch");
             old.performPause();
+            activityPaused();
         }
         Bundle state = new Bundle();
         boolean preP = info.applicationInfo.targetSdkVersion < android.os.Build.VERSION_CODES.P;
         if (!stopped) {
             if (preP) instrumentation.callActivityOnSaveInstanceState(old, state);
             old.performStop(true /* preserveWindow */, "relaunch");
+            activityStopped();
             if (!preP) instrumentation.callActivityOnSaveInstanceState(old, state);
         } else {
             instrumentation.callActivityOnSaveInstanceState(old, state);
@@ -401,6 +418,7 @@ public final class GesherAppDriver {
         }
         log(info.name + " onCreate (relaunched)");
         activity.performStart("gesher-app relaunch");
+        sApplication.activityStarted();
         instrumentation.callActivityOnRestoreInstanceState(activity, state);
         activity.mCalled = false;
         instrumentation.callActivityOnPostCreate(activity, state);
@@ -421,12 +439,15 @@ public final class GesherAppDriver {
             }
         }
         if (resumed) {
+            activityResuming();
             activity.performResume(false /* followedByPause */, "gesher-app relaunch");
+            activityResumed();
             log(info.name + " onResume (relaunched)");
             activity.performTopResumedActivityChanged(true, "gesher-app relaunch");
         } else if (stopped) {
             // It was stopped (its window minimized): it ends stopped again.
             activity.performStop(true /* preserveWindow */, "gesher-app relaunch");
+            activityStopped();
         }
         if (decor != null && !stopped) {
             activity.mVisibleFromServer = true;

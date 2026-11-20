@@ -59,6 +59,8 @@ jobs:
             .github/scripts
             .github/workflows
             .github/actions/runner-route
+            .github/actions/local-build-cache
+            .github/actions/setup-build
             tools/ci
       - uses: actions/setup-node@v4
         with:
@@ -72,6 +74,7 @@ jobs:
           python3 -m pip install PyYAML==6.0.3
           python3 .github/scripts/test_automerge_workflows.py
           python3 tools/ci/test_release_workflows.py
+          python3 -m unittest discover -s tools/ci -p test_cache_policy.py
   app-identity-restart:
     needs: [source-identity]
     strategy:
@@ -174,14 +177,16 @@ jobs:
         shell: pwsh
         run: tests/windows/test-process-reader-handles.ps1
   union-tsf:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/tsf-format-component.yml
   union-services:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/services-geocoder-worker-component.yml
   union-native-blocking:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native3-locks-blocking.yml
+  # Host-only contract tests. Builds no longer wait for them: they run
+  # alongside the build jobs and ci-required still requires them to pass.
   artifact-preflight:
     needs: [source-identity, reader-ownership]
     runs-on: ubuntu-24.04
@@ -202,6 +207,7 @@ jobs:
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/ci -p test_wait_for_job.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
@@ -212,6 +218,7 @@ jobs:
           python3 -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
           python3 -m unittest discover -s tools/tests -p 'test_*api_inventory.py'
           python3 -m unittest discover -s tools/tests -p test_java_member_inventory.py
+          python3 -m unittest discover -s tools/tests -p test_sdk_api_history_diff.py
           python3 -m unittest discover -s tools/tests -p test_audit_services_jni.py
           python3 -m unittest discover -s tools/tests -p test_host_bp_srcs.py
           python3 -m unittest discover -s tools/tests -p test_framework_tree.py
@@ -225,6 +232,7 @@ jobs:
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
           python3 tools/test_bionic_system_contracts.py --sanitize
+          python3 tools/test_bionic_signal_masks.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
           python3 tools/test_bionic_directory_contracts.py --sanitize
@@ -432,13 +440,23 @@ jobs:
         run: python3 tools/test_app_crash_diagnostics.py
 
   build-framework-assets:
-    needs: [artifact-preflight, source-identity]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Only main saves; other refs restore main's entry (see .github/actions/setup-build).
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -493,7 +511,7 @@ jobs:
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [artifact-preflight, source-identity, build-framework-assets]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     env:
       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
@@ -591,6 +609,7 @@ jobs:
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
           ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
+          ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -615,15 +634,21 @@ jobs:
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: framework-assets
-          path: dist
+      # The framework assets are needed only from here on. Compiling above
+      # overlaps build-framework-assets instead of waiting for it via needs:;
+      # the receipt still requires that exact producer to have succeeded.
+      - name: Wait for and verify the framework assets producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/wait_for_job.py --job build-framework-assets --timeout 1800
+          python3 tools/ci/artifact_receipt.py --name framework-assets --producer build-framework-assets --destination dist
 
       - name: Collect artifacts
         run: |
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
+          cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
           cp out/futex_test_module.dll dist/
           cp out/libgesher_account_crypto.so dist/
@@ -727,7 +752,7 @@ jobs:
           if-no-files-found: error
 
   native3-locks-reference:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -792,65 +817,66 @@ jobs:
   # tools/framework/build.py): .github/workflows/framework.yml, which also
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
-    needs: [artifact-preflight]
-    # This immutable policy, not PR-controlled workflow YAML, may use the runner.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@7a45c2468c270bfe68ee5f854aa9d4feaf2208b3
+    needs: [source-identity]
+    # This reviewed immutable policy keeps every combined framework contract gate.
+    # Restricted runner use requires separate policy authorization; use hosted CI.
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@187f36df8572c5ac7a763fe45c4057ccd6f9bc7b
     with:
-      local-runner: true
+      local-runner: false
 
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
   native-libs:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native-libs.yml
 
   # The Bluetooth backend's probe (docs/bluetooth.md): built on the Linux
   # runner, run against Windows' real APIs (no radio) and the test radio.
   bluetooth:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/bluetooth.yml
 
   # Android ELF executables run as processes (docs/exec.md): the NDK test
   # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
   exec:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/exec.yml
 
   # The core libraries' own unit tests (AOSP's cc_test modules), built for
   # the test job: .github/workflows/libs.yml.
   libs:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/libs.yml
 
   # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
   # (dynarmic) dalvikvm LoadLibrary()s for arm64-v8a apps (docs/arm64.md,
   # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
   arm64:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/arm64.yml
 
   # The native2 track's NDK test programs (shim extras, platform dlopen,
   # popular NDK libraries' self-tests): .github/workflows/native2.yml.
   native2:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native2.yml
 
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/posix.yml
 
   # Skia, hwui and the graphics probes (docs/graphics.md):
   # .github/workflows/graphics.yml, which also runs on its own.
   graphics:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/graphics.yml
 
   # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
   # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
   angle:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/angle.yml
 
   # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
@@ -877,18 +903,28 @@ jobs:
   # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
   # .github/workflows/surfaces.yml.
   surfaces:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/surfaces.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Only main saves; other refs restore main's entry (see .github/actions/setup-build).
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -1040,7 +1076,7 @@ jobs:
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'gesher-camera.apk') {
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
@@ -1749,7 +1785,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
-        shard: [native, desktop, services, compilation]
+        shard: [native, desktop, services, media, compilation]
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
     timeout-minutes: 120
@@ -1909,7 +1945,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Assemble isolated capture hosts for explicit synthetic media fixtures
-        if: matrix.shard == 'services'
+        if: matrix.shard == 'media'
         shell: pwsh
         run: |
           python tools/ci/artifact_receipt.py --name media-capture-test --producer "build" --destination ci-suppliers/media_capture_test
@@ -1952,7 +1988,7 @@ jobs:
 
       - name: Upload media output captures
         uses: actions/upload-artifact@v4
-        if: ${{ always() && matrix.shard == 'services' }}
+        if: ${{ always() && matrix.shard == 'media' }}
         with:
           name: media-output-${{ matrix.os }}
           path: |
@@ -2072,7 +2108,7 @@ jobs:
   # Ordinary Binder scope is mandatory and separate from production installer
   # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
   binder2-sg-fixtures:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/binder2-sg-full-fixtures.yml
 
   binder2-sg-regression:
@@ -2164,7 +2200,7 @@ jobs:
           python3 tools/host-pthread-authority/minimum_receipt.py selftest
       - uses: ./.github/actions/setup-build
         with:
-          ccache-key: runtime
+          ccache-key: selected-minimum
       - name: Cache dynarmic, fmt and Boost headers
         id: deps
         uses: actions/cache@v4
