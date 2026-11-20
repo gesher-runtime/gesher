@@ -36,9 +36,14 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     0036), code and read-only data mapped with their final protection (shared
     with the file and every process that loads it, not charged to commit),
     writable data copy-on-write, `.bss` anonymous zero pages. Pages that a
-    text relocation or the `%fs` rewrite patches are made writable
-    (copy-on-write) one at a time and become private; `mprotect` sets each
-    segment's final protection after relocation. A segment whose file offset
+    text relocation patches are made writable (copy-on-write) one at a time;
+    an executable segment the `%fs` rewrite patches is made writable
+    (copy-on-write) as a whole, once, since each `mprotect` queries the
+    mapping (`VirtualQuery`) at a cost that grows with the run of unchanged
+    pages after it (page by page, libxul.so's 18k patched pages took 4-15 s;
+    as a whole its rewrite takes about a second). Either way only the patched
+    pages become private; `mprotect` sets each segment's final protection
+    after relocation. A segment whose file offset
     and address are not congruent modulo the page size, an object loaded from
     memory, segments sharing a page, or mmap without placeholders fall back to
     copying the contents into anonymous memory;
