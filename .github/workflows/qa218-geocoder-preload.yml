@@ -1,0 +1,46 @@
+name: QA218 geocoder preload observation
+on:
+  push:
+    branches: [qa/diagnostic-pr218-geocoder-preload-20261120]
+permissions:
+  contents: read
+concurrency:
+  group: qa218-geocoder-preload-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  controlled-worker:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      GESHER_QA218_RESULTS: ${{ runner.temp }}/qa218-preload-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify unchanged product and explicit observation sources
+        shell: pwsh
+        run: python tools/qa218-diagnostic/verify.py
+      - name: Qualify shared job controller
+        shell: pwsh
+        run: ./tools/windows4/test-tsf-job-supervisor.ps1
+      - name: Characterize PowerShell process startup
+        shell: pwsh
+        run: ./tools/windows4/diagnose-pwsh-job.ps1
+      - name: Exercise owned worker and child containment
+        shell: pwsh
+        run: ./tests/windows/tracks/geocoder-operation-fixture.ps1
+      - name: Observe actual WinRT preload and original adapter/provider cases
+        shell: pwsh
+        run: ./tools/qa218-diagnostic/run.ps1
+      - name: Upload owned source and phase evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa218-geocoder-preload-${{ matrix.os }}
+          path: ${{ env.GESHER_QA218_RESULTS }}
+          if-no-files-found: error
+          retention-days: 7

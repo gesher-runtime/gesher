@@ -1,8 +1,26 @@
 $ErrorActionPreference = 'Stop'
+# QA218-OBSERVATION-BEGIN fixture-entry
+
+if (-not $env:GESHER_QA218_PHASE_DIR) { throw 'Owned diagnostic phase directory absent' }
+[IO.File]::WriteAllText([IO.Path]::Combine($env:GESHER_QA218_PHASE_DIR, ($PID.ToString() + '-fixture-entry.txt')), ($PID.ToString() + '|' + [Diagnostics.Stopwatch]::GetTimestamp().ToString() + '|' + [Diagnostics.Stopwatch]::Frequency.ToString() + '|' + [DateTime]::UtcNow.ToString('o') + '|fixture-entry|'))
+# QA218-OBSERVATION-END fixture-entry
 . (Join-Path $PSScriptRoot '../tracks/geocoder-operation.ps1')
+# QA218-OBSERVATION-BEGIN fixture-dot-source-end
+Write-GeocoderDiagnosticPhase 'fixture-dot-source-end'
+Write-GeocoderDiagnosticPhase 'fixture-add-type-begin'
+# QA218-OBSERVATION-END fixture-dot-source-end
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
+# QA218-OBSERVATION-BEGIN fixture-add-type-end
+Write-GeocoderDiagnosticPhase 'fixture-add-type-end'
+# QA218-OBSERVATION-END fixture-add-type-end
 $source = Join-Path $PSScriptRoot '../tracks/geocoder-winrt-supplier.cs'
+# QA218-OBSERVATION-BEGIN fixture-import-begin
+Write-GeocoderDiagnosticPhase 'fixture-import-begin'
+# QA218-OBSERVATION-END fixture-import-begin
 Import-GeocoderProbeType $source
+# QA218-OBSERVATION-BEGIN fixture-import-end
+Write-GeocoderDiagnosticPhase 'fixture-import-end'
+# QA218-OBSERVATION-END fixture-import-end
 $run = @([System.Runtime.InteropServices.WindowsRuntime.AsyncInfo].GetMethods() | Where-Object {
   $_.Name -eq 'Run' -and $_.IsGenericMethodDefinition -and $_.GetGenericArguments().Count -eq 1 -and
   $_.GetParameters().Count -eq 1 -and $_.ReturnType.Name -eq 'IAsyncOperation`1'
