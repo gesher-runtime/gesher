@@ -1119,6 +1119,46 @@ public final class TaskStackContractTest {
         check(h.records().isEmpty(), "Caller package spoofing published history");
     }
 
+    /** IActivityClientController.onBackPressed on a task's root; true if it asked to finish. */
+    private static boolean backOnRoot(Harness h, Object root) throws Exception {
+        boolean[] finish = new boolean[1];
+        android.app.IRequestFinishCallback callback = new android.app.IRequestFinishCallback.Stub() {
+            @Override public void requestFinish() { finish[0] = true; }
+        };
+        h.asApp(() -> h.api.getActivityClientController().onBackPressed((IBinder) get(root, "token"), callback));
+        return finish[0];
+    }
+
+    /**
+     * Back with nothing left to go back to (Activity.onBackPressed on a task's root, as
+     * OnBackPressedDispatcher's fallback): the root finishes, unless home launched its task
+     * with the launcher intent, whose task moves to the back (ActivityClientController).
+     */
+    private static void backOnTaskRoot() throws Exception {
+        Harness h = new Harness();
+        h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .setAction(Intent.ACTION_SEND));
+        Object root = h.record("Root");
+        h.acknowledge("activityResumed", root);
+        java.util.Set<Integer> hidden = (java.util.Set<Integer>) get(h.tasks, "mHiddenTasks");
+        int task = (Integer) get(root, "taskId");
+        check(backOnRoot(h, root) && !hidden.contains(task),
+                "Back on a task root another app started did not finish it");
+
+        Harness home = new Harness();
+        home.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER));
+        Object main = home.record("Root");
+        home.acknowledge("activityResumed", main);
+        Field from = main.getClass().getDeclaredField("launchedFromPackage");
+        from.setAccessible(true);
+        from.set(main, "com.gesher.launcher");
+        java.util.Set<Integer> homeHidden = (java.util.Set<Integer>) get(home.tasks, "mHiddenTasks");
+        check(!backOnRoot(home, main) && homeHidden.contains((Integer) get(main, "taskId")),
+                "Back on an app opened from home did not move its task to the back");
+        check(!(Boolean) get(main, "finishing"), "Back on an app opened from home finished it");
+    }
+
     private static void pendingStacks() throws Exception {
         Harness h = new Harness();
         Object singleton = field(ActivityManager.class, "IActivityManagerSingleton").get(null);
@@ -1429,6 +1469,7 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("appwindow")) oneWindowPerApp();
         if (selected.equals("all") || selected.equals("permissions")) permissions();
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
+        if (selected.equals("all") || selected.equals("back")) backOnTaskRoot();
         return checks;
     }
     public static void main(String[] args) throws Exception {

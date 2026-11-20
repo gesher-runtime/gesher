@@ -5081,6 +5081,36 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
+    /** The package of the host launcher (desktop shortcut, taskbar, Start): Android's home. */
+    static final String HOME_PACKAGE = "com.gesher.launcher";
+
+    /**
+     * Whether Back on {@code r} with nothing left to go back to moves its task to the back
+     * instead of finishing it (ActivityClientController.onBackPressed): the last running
+     * activity of a task whose root the home screen launched with its launcher intent, as
+     * Android keeps an app the user opened from home (ActivityRecord.isMainIntent,
+     * LAUNCH_SOURCE_TYPE_HOME). Any other root finishes.
+     */
+    boolean backMovesTaskToBack(ActivityRecord r) {
+        synchronized (this) {
+            if (topOf(r.taskId) != r) return false;
+            for (ActivityRecord a : mActivities) {
+                if (a.taskId == r.taskId && !a.finishing && a.state != State.DESTROYED) {
+                    return HOME_PACKAGE.equals(a.launchedFromPackage) && isMainIntent(a.intent);
+                }
+            }
+            return false;
+        }
+    }
+
+    /** ActivityRecord.isMainIntent: MAIN with LAUNCHER as its only category, no data. */
+    private static boolean isMainIntent(Intent intent) {
+        return intent != null && Intent.ACTION_MAIN.equals(intent.getAction())
+                && intent.getCategories() != null && intent.getCategories().size() == 1
+                && intent.hasCategory(Intent.CATEGORY_LAUNCHER)
+                && intent.getData() == null && intent.getType() == null;
+    }
+
     /** Whether the activity is its task's root (the bottom one not finishing). */
     boolean isTaskRoot(ActivityRecord r) {
         synchronized (this) {
