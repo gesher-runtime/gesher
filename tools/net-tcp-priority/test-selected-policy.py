@@ -245,10 +245,10 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PINS={
  'compat/posix/src/fd.cc':'b503078a80a724a8b549848f6f938e8cbdf4fe3016c326b70360a112a88bb1a5',
- 'compat/posix/src/socket.cc':'badf0ba57bddc19710df6a90754c475f281fa3a4e0d0e9c80453652631d8c650',
- 'compat/posix/src/socket_internal.h':'7f226646682014e4ad0335ecffd18a373a9614cd8d383876a2d3d630bed728b0',
+ 'compat/posix/src/socket.cc':'af046f6cd225ef0e77e8e54b7d94b858bd151c260c4d2599303128dcf5e2963d',
+ 'compat/posix/src/socket_internal.h':'4f6e0b3229b861a0797172c62f340759adc539d994b61da8b1beac35033750e8',
  'compat/posix/src/system.cc':'0842e11270220b7f99c5186fbef1df694e44f29d1f83b419983dfec52c567fe0',
- 'compat/posix/src/winsock.cc':'426b5628060d7630e6719ada9b51ac4180a6e88f09d292c97bd4ca77549c6db4',
+ 'compat/posix/src/winsock.cc':'860ba46886f941e490eb994925cd322a87192a29904dff5e0a3ee08e0d859de4',
 }
 def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
 def check():
