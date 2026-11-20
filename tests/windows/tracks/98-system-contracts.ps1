@@ -101,6 +101,13 @@ try {
     $providerOrderOut
   } @('ProviderInitOrderTest all passed')
 
+  $microgLibsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'MicrogAddonNativeLibsTest') 90
+  $microgLibsCode = $LASTEXITCODE
+  Check 'services: microG priv-app native libraries extracted idempotently with stale cleanup' {
+    $global:LASTEXITCODE = $microgLibsCode
+    $microgLibsOut
+  } @('MicrogAddonNativeLibsTest all passed')
+
   # Constructed package metadata uses the existing synthetic-fixture capability.
   $env:GESHER_MICROG_SPOOF = '1'
   $syncContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SyncManagerContractTest') 120

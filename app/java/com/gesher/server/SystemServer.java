@@ -181,6 +181,7 @@ public final class SystemServer {
                 File apk = new File(androidRoot, "priv-app/" + name + "/base.apk");
                 if (!apk.isFile()) continue;
                 ApkPackage p = MicrogAddons.load(apk, name);
+                boolean fromPrivApp = true;
                 for (ApkPackage installed : packages) {
                     if (!name.equals(installed.packageName)) continue;
                     if (!GmsSignatureSpoofing.verifyAddonApk(name, installed.apkPath)) {
@@ -193,6 +194,14 @@ public final class SystemServer {
                     // release and its privileges, with the staged APK as fallback.
                     if (installed.versionCode() >= p.versionCode()) {
                         p = installed;
+                        fromPrivApp = false;
+                    }
+                }
+                if (fromPrivApp) {
+                    int libs = MicrogAddons.prepareNativeLibraries(p);
+                    if (libs > 0) {
+                        log("microg addon " + name + ": extracted " + libs + " native lib(s) to "
+                                + p.nativeLibraryDir());
                     }
                 }
                 packages.removeIf(old -> name.equals(old.packageName));

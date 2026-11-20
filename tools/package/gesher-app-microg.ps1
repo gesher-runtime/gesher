@@ -51,9 +51,17 @@ function Initialize-MicrogDefaults([string] $ProfileRoot) {
     <boolean name="checkin_enable_service" value="true" />
     <boolean name="gcm_enable_mcs_service" value="true" />
 </map>
+
 "@
     if (-not (Test-Path -LiteralPath (Join-Path $prefsDir 'org.microg.gms.settings_preferences.xml'))) {
     Set-Content -LiteralPath (Join-Path $prefsDir 'org.microg.gms.settings_preferences.xml') -Value $settingsXml -Encoding UTF8
+    }
+
+    # microG's SettingsProvider reads Check-in/GCM toggles via PreferenceManager's
+    # default SharedPreferences file (com.google.android.gms_preferences.xml).
+    $defaultPrefsPath = Join-Path $prefsDir 'com.google.android.gms_preferences.xml'
+    if (-not (Test-Path -LiteralPath $defaultPrefsPath)) {
+        [IO.File]::WriteAllText($defaultPrefsPath, $settingsXml, [Text.UTF8Encoding]::new($false))
     }
 
     # Pre-seed runtime permissions for official microG
@@ -118,6 +126,17 @@ if ($Remove) {
         foreach ($name in 'base.apk', 'base.apk.new') {
             $file = Join-Path $ProfileRoot "system/priv-app/$package/$name"
             if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
+        }
+        foreach ($isa in 'x86_64', 'arm64') {
+            $libDir = Join-Path $ProfileRoot "system/priv-app/$package/lib/$isa"
+            if (Test-Path -LiteralPath $libDir -PathType Container) {
+                $dirItem = Get-Item -LiteralPath $libDir -Force
+                if (-not ($dirItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                    Get-ChildItem -LiteralPath $libDir -Filter '*.so' -File -ErrorAction SilentlyContinue |
+                        Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+                        Remove-Item -Force
+                }
+            }
         }
     }
     Write-Host (Get-GesherText 'microg_removed')
