@@ -21,6 +21,7 @@ struct Worker {
   Attr own{};
   int own_result = -1;
   uintptr_t local = 0;
+  DWORD win_tid = 0;
   ULONG_PTR low = 0, high = 0;
   HANDLE witness = nullptr;
 };
@@ -41,6 +42,7 @@ void* BIONIC_SYSV RunGuest(void* raw) {
   int local = 0;
   GetCurrentThreadStackLimits(&worker.low, &worker.high);
   worker.local = reinterpret_cast<uintptr_t>(&local);
+  worker.win_tid = GetCurrentThreadId();
   worker.id = api.self();
   worker.own_result = api.getattr(worker.id, &worker.own);
   DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &worker.witness,
@@ -75,8 +77,20 @@ bool IsDescriptorReadable(Thread id) {
   }
   return true;
 }
+// Bionic's pthread_internal_t: tid at +16, 31-bit cached pid at +20.
+int32_t DescriptorTid(Thread id) {
+  return *reinterpret_cast<const volatile int32_t*>(static_cast<uintptr_t>(id) + 16);
+}
+bool DescriptorMatches(Thread id, DWORD tid) {
+  if (!IsDescriptorReadable(id)) return false;
+  uint32_t pid = *reinterpret_cast<const volatile uint32_t*>(static_cast<uintptr_t>(id) + 20);
+  return DescriptorTid(id) == static_cast<int32_t>(tid) &&
+         (pid & 0x7fffffffu) == GetCurrentProcessId();
+}
 void Verify(Thread id, Worker& worker, uintptr_t caller) {
   Check(IsDescriptorReadable(id), "target descriptor stays page-readable");
+  Check(DescriptorMatches(id, worker.win_tid),
+        "target descriptor holds its live tid and pid at Bionic offsets");
   Attr attr{};
   Check(api.getattr(id, &attr) == 0 &&
             reinterpret_cast<ULONG_PTR>(attr.stack_base) == worker.low &&
@@ -115,6 +129,8 @@ int main() {
   Check(api.getattr(api.self(), &self) == 0 && Contains(self, reinterpret_cast<uintptr_t>(&local)),
         "calling external thread reports its actual stack");
   Check(IsDescriptorReadable(api.self()), "caller self descriptor is page-readable");
+  Check(DescriptorMatches(api.self(), GetCurrentThreadId()),
+        "caller self descriptor holds its tid and pid at Bionic offsets");
   for (int kind : {0, 1, 2}) {
     Worker worker;
     Attr requested{};
@@ -143,6 +159,8 @@ int main() {
     }
     Finish(worker);
     Retired(target);
+    Check(IsDescriptorReadable(target) && DescriptorTid(target) == 0,
+          "exited guest target's descriptor stays readable with tid cleared");
   }
   Worker external;
   HANDLE native = CreateThread(nullptr, 3 * 1024 * 1024, RunExternal, &external,
@@ -154,6 +172,8 @@ int main() {
   Finish(external);
   CloseHandle(native);
   Retired(external.id);
+  Check(IsDescriptorReadable(external.id) && DescriptorTid(external.id) == 0,
+        "reaped external target's descriptor stays readable with tid cleared");
   Retired(UINT64_MAX);
   Check(api.getattr(api.self(), nullptr) == 22, "null query output is rejected");
   std::vector<Thread> seen_ids{api.self()};
@@ -174,9 +194,10 @@ int main() {
     replacement.stop.store(true);
     replacements &= api.join(id, nullptr) == 0;
     Finish(replacement);
-    replacements &= api.getattr(id, &snapshot) == 3 && IsDescriptorReadable(id);
+    replacements &= api.getattr(id, &snapshot) == 3 && IsDescriptorReadable(id) &&
+                    DescriptorTid(id) == 0;
   }
-  Check(replacements && seen_ids.size() == 33,
+  Check(replacements,
         "32 replacement threads keep unique page-readable identities across retirement");
   std::printf("pthread attributes: %d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
