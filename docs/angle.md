@@ -57,6 +57,14 @@ and [0030](decisions/0030-angle-hwui-skiagl.md).
 - **Installer**: `tools/package/gesher.iss` installs `libEGL.dll` and
   `libGLESv2.dll` next to `dalvikvm.exe` and `ANGLE-NOTICES.txt` into
   `licenses\`; the package job checks the three files are installed.
+- **What the per-call context check costs** (measured 2026-11-20 on an Intel
+  UHD Graphics 770 with a native program over the DLLs, against the build
+  before it): `glUniform1f` 11.6 to 21 ns a call with it, 11.5 to 12.4 ns
+  without; a frame of 500 draws (a uniform, a texture bind and a draw each)
+  0.48 to 0.69 ms either way; two threads drawing with contexts of their own
+  at the same time 21 to 23 ns a call and 0.8 to 1.0 ms a frame, where the
+  build without it crashed. Not a bottleneck for Firefox's compositor (a
+  frame's read-back alone takes 3 to 9 ms).
 
 ## hwui's SkiaGL pipeline on ANGLE
 
