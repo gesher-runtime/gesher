@@ -116,7 +116,9 @@ the app's ELF code) or players.
   csd-0/csd-1 as Annex B parameter sets (as NuMediaExtractor's do).
 - **Surfaces without a compositor** (`compat/media/surface`, built into hwui):
   a SurfaceTexture's and a SurfaceView's Surface is a `QueueSurface` (frames
-  stay in the process). TextureView's layer is Gesher's (HardwareRenderer
+  stay in the process; a producer in another process, given the Surface in a
+  Parcel, queues its frames through a memfd: docs/graphics.md "Surfaces in
+  Parcels"). TextureView's layer is Gesher's (HardwareRenderer
   `nCreateTextureLayer`, TextureLayer's natives, RecordingCanvas
   `nDrawTextureLayer` records a drawable that draws the latest frame);
   SurfaceView draws its surface's latest frame into its hole (frameworks/base
