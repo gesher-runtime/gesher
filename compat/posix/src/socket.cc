@@ -27,6 +27,16 @@ namespace ws = gesher::ws;
 using gesher::SocketFd;
 using namespace gesher::sock;
 
+// The credentials this process's AF_UNIX messages carry (ADR 0088): its pid
+// (the Windows process id, as getpid) and the uid and gid it runs as.
+ws::UnixCredentials gesher::ws::LocalCredentials() {
+  UnixCredentials self;
+  self.pid = static_cast<int32_t>(GetCurrentProcessId());
+  self.uid = static_cast<uint32_t>(getuid());
+  self.gid = static_cast<uint32_t>(getgid());
+  return self;
+}
+
 namespace {
 
 // The socket behind fd, or false with errno EBADF/ENOTSOCK.
@@ -322,6 +332,20 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
     errno = saved;
     return -1;
   }
+  // AF_UNIX (ADR 0088): SO_PEERCRED of both ends is the process that made the
+  // pair, as on Linux; datagram pairs frame each datagram with credentials.
+  if (domain == AF_UNIX) {
+    const ws::UnixCredentials self = ws::LocalCredentials();
+    for (int fd : {fd_a, fd_b}) {
+      SocketFd end;
+      if (!gesher::LookupSocket(fd, &end)) continue;
+      end.description->has_peer_credentials = true;
+      end.description->peer_pid = self.pid;
+      end.description->peer_uid = self.uid;
+      end.description->peer_gid = self.gid;
+      end.description->unix_datagram_pair.store(ws_type == ws::Type::kDgram);
+    }
+  }
   fds[0] = fd_a;
   fds[1] = fd_b;
   return 0;
@@ -427,16 +451,21 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
 }
 
 ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockaddr* addr,
-                    socklen_t* addrlen, int* result_flags = nullptr) {
+                    socklen_t* addrlen, int* result_flags = nullptr,
+                    ws::UnixCredentials* credentials = nullptr, bool* pass_credentials = nullptr) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   // There is no error queue: Linux reports EAGAIN when it is empty.
   if (flags & MSG_ERRQUEUE) return errno = EAGAIN, -1;
   if (WouldBlock(state, flags, ws::kPollIn)) return -1;
+  if (pass_credentials != nullptr) {
+    *pass_credentials = state.description->unix_datagram_pair.load() &&
+                        state.description->pass_credentials.load();
+  }
   ws::Address from;
   ssize_t n = ws::RecvOwned(state.socket, buffers, count, ToMsgFlags(flags),
                        addr != nullptr ? &from : nullptr, state.description,
-                            (flags & MSG_DONTWAIT) != 0, result_flags);
+                            (flags & MSG_DONTWAIT) != 0, result_flags, credentials);
   if (n >= 0 && addr != nullptr) {
     sockaddr_storage local = {};
     socklen_t actual = sizeof(local), capacity = 0;
@@ -467,6 +496,46 @@ void ReleaseCanceledBuffers(void* raw) {
   empty.swap(*static_cast<std::vector<ws::Buffer>*>(raw));
 }
 
+// Ancillary data a message may carry (ADR 0088). SCM_CREDENTIALS is accepted on
+// an AF_UNIX datagram pair when it names this process, as Linux allows an
+// unprivileged sender (any other credentials are EPERM); every datagram's
+// header carries them anyway. Nothing else can be transmitted yet (SCM_RIGHTS
+// is phase 2): the complete message is rejected before its payload is sent, so
+// the peer never sees a message without the descriptors it was sent with.
+bool AcceptSendControl(int fd, const msghdr& message) {
+  if (message.msg_controllen < sizeof(cmsghdr)) return true;  // no complete header: none
+  if (message.msg_controllen > 65536) return errno = ENOBUFS, false;
+  std::vector<unsigned char> control(message.msg_controllen);
+  if (message.msg_control == nullptr ||
+      !ws::CopyFromUser(control.data(), message.msg_control, control.size())) {
+    return errno = EFAULT, false;
+  }
+  SocketFd state;
+  if (!Lookup(fd, &state)) return false;
+  for (size_t at = 0; control.size() - at >= sizeof(cmsghdr);) {
+    cmsghdr header;
+    memcpy(&header, control.data() + at, sizeof(header));
+    if (header.cmsg_len < sizeof(cmsghdr) || header.cmsg_len > control.size() - at) {
+      return errno = EINVAL, false;
+    }
+    if (header.cmsg_level != SOL_SOCKET || header.cmsg_type != SCM_CREDENTIALS) {
+      return errno = EOPNOTSUPP, false;
+    }
+    if (!state.description->unix_datagram_pair.load()) return errno = EOPNOTSUPP, false;
+    if (header.cmsg_len != CMSG_LEN(sizeof(ucred))) return errno = EINVAL, false;
+    ucred claimed;
+    memcpy(&claimed, control.data() + at + CMSG_ALIGN(sizeof(cmsghdr)), sizeof(claimed));
+    const ws::UnixCredentials self = ws::LocalCredentials();
+    if (claimed.pid != self.pid || static_cast<uint32_t>(claimed.uid) != self.uid ||
+        static_cast<uint32_t>(claimed.gid) != self.gid) {
+      return errno = EPERM, false;
+    }
+    at += CMSG_ALIGN(header.cmsg_len);
+    if (at > control.size()) break;
+  }
+  return true;
+}
+
 }  // namespace
 
 extern "C" {
@@ -482,13 +551,10 @@ ssize_t sendto(int fd, const void* buf, size_t len, int flags, const struct sock
   return SendBuffers(fd, &buffer, 1, flags, addr, addrlen);
 }
 
-// The backend cannot transmit ancillary data. Reject the complete message
-// before sending its payload so the peer cannot observe missing descriptors
-// or credentials after the caller was told that transmission succeeded.
 ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
   msghdr local;
   if (!ws::CopyFromUser(&local, msg, sizeof(local))) return errno = EFAULT, -1;
-  if (local.msg_controllen != 0) return errno = EOPNOTSUPP, -1;
+  if (!AcceptSendControl(fd, local)) return -1;
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(&local, &buffers)) return -1;
   ssize_t result;
@@ -516,15 +582,40 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(&local, &buffers)) return -1;
   int result_flags = 0;
+  ws::UnixCredentials credentials;
+  bool pass_credentials = false;
   ssize_t n;
   pthread_cleanup_push(ReleaseCanceledBuffers, &buffers);
   n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
                  static_cast<sockaddr*>(local.msg_name),
-                 local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags);
+                 local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags,
+                 &credentials, &pass_credentials);
   pthread_cleanup_pop(0);
   if (n >= 0) {
-    local.msg_controllen = 0;  // no ancillary data
     local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
+    size_t control_used = 0;
+    if (pass_credentials) {
+      // SO_PASSCRED (ADR 0088): the sender's credentials, from the datagram's
+      // header. A control buffer too small for them is MSG_CTRUNC, as on Linux.
+      if (local.msg_control == nullptr || local.msg_controllen < CMSG_LEN(sizeof(ucred))) {
+        local.msg_flags |= MSG_CTRUNC;
+      } else {
+        unsigned char control[CMSG_SPACE(sizeof(ucred))] = {};
+        cmsghdr header = {};
+        header.cmsg_len = CMSG_LEN(sizeof(ucred));
+        header.cmsg_level = SOL_SOCKET;
+        header.cmsg_type = SCM_CREDENTIALS;
+        ucred value = {};
+        value.pid = credentials.pid;
+        value.uid = credentials.uid;
+        value.gid = credentials.gid;
+        memcpy(control, &header, sizeof(header));
+        memcpy(control + CMSG_ALIGN(sizeof(cmsghdr)), &value, sizeof(value));
+        control_used = local.msg_controllen < sizeof(control) ? local.msg_controllen : sizeof(control);
+        if (!ws::CopyToUser(local.msg_control, control, control_used)) return errno = EFAULT, -1;
+      }
+    }
+    local.msg_controllen = control_used;
     uintptr_t base = reinterpret_cast<uintptr_t>(msg);
     if (!ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_namelen)),
                         &local.msg_namelen, sizeof(local.msg_namelen)) ||
@@ -752,6 +843,15 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     state.description->reuse_addr.store(v != 0);
     return 0;
   }
+  if (level == SOL_SOCKET && name == SO_PASSCRED) {
+    // ADR 0088: an AF_UNIX datagram pair carries its senders' credentials and
+    // delivers them as SCM_CREDENTIALS. Other sockets cannot carry them yet,
+    // so the option is not accepted there instead of being ignored.
+    if (!state.description->unix_datagram_pair.load()) return errno = ENOPROTOOPT, -1;
+    if (!ReadInt(value, len, &v)) return -1;
+    state.description->pass_credentials.store(v != 0);
+    return 0;
+  }
   if (level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO)) {
     if (value == nullptr || len < sizeof(timeval)) return errno = EINVAL, -1;
     timeval tv;
@@ -826,6 +926,23 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
   }
   if (level == SOL_SOCKET && name == SO_REUSEADDR) {
     return WriteInt(state.description->reuse_addr.load() ? 1 : 0, value, len) ? 0 : -1;
+  }
+  if (level == SOL_SOCKET && name == SO_PASSCRED && state.description->unix_datagram_pair.load()) {
+    return WriteInt(state.description->pass_credentials.load() ? 1 : 0, value, len) ? 0 : -1;
+  }
+  if (level == SOL_SOCKET && name == SO_PEERCRED && state.description->has_peer_credentials) {
+    // A socketpair's peer credentials are its creator's (ADR 0088), as on Linux.
+    ucred peer = {};
+    peer.pid = state.description->peer_pid;
+    peer.uid = state.description->peer_uid;
+    peer.gid = state.description->peer_gid;
+    socklen_t capacity = 0;
+    if (!ws::CopyFromUser(&capacity, len, sizeof(capacity))) return errno = EFAULT, -1;
+    const socklen_t copied = capacity < sizeof(peer) ? capacity : static_cast<socklen_t>(sizeof(peer));
+    if (!ws::CopyToUser(value, &peer, copied) || !ws::CopyToUser(len, &copied, sizeof(copied))) {
+      return errno = EFAULT, -1;
+    }
+    return 0;
   }
   if (level == SOL_SOCKET && name == SO_TYPE) {
     if (ws::GetOption(state.socket, ws::Option::kType, &v) < 0) return -1;

@@ -113,6 +113,13 @@ Check 'native libs: raw syscalls, syscall(2), ptrace and regex from a .so; code 
     'raw_syscall: stack guard in code written at run time PASS',
     'raw_syscall: all passed', 'elf_load_test all passed')
 
+# AF_UNIX socketpair credentials (ADR 0088): SO_PEERCRED, SO_PASSCRED and
+# SCM_CREDENTIALS on a SOCK_SEQPACKET pair, whose framed datagrams keep their
+# boundaries, MSG_TRUNC, MSG_PEEK and FIONREAD; SCM_RIGHTS still refused.
+Check 'native libs: AF_UNIX socketpair credentials (SO_PEERCRED, SO_PASSCRED, SCM_CREDENTIALS) from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_credentials_test.so")
+} @('unix_credentials: all passed', 'elf_load_test all passed')
+
 Check 'native libs: a UPX-packed .so unpacks itself with raw syscalls and runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/raw_syscall_upx.so")
 } @('unpacks its code at run time (UPX)', 'code unpacked at run time: yes',

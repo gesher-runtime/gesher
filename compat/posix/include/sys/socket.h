@@ -150,8 +150,10 @@ struct mmsghdr {
   unsigned int msg_len;
 };
 
-// Ancillary data is not supported: recvmsg returns msg_controllen == 0 and
-// sendmsg rejects nonzero msg_controllen with EOPNOTSUPP before sending payload.
+// Ancillary data (ADR 0088): an AF_UNIX datagram socketpair carries
+// SCM_CREDENTIALS (SO_PASSCRED); recvmsg returns no other control data, and
+// sendmsg rejects any other control message (SCM_RIGHTS among them) with
+// EOPNOTSUPP before sending its payload.
 struct cmsghdr {
   size_t cmsg_len;
   int cmsg_level;
