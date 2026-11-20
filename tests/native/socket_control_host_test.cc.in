@@ -29,16 +29,18 @@ UnixCredentials LocalCredentials() {
   self.gid = getgid();
   return self;
 }
+bool StreamPorts(Socket, SocketDescription&, uint16_t*, uint16_t*) { return errno = EOPNOTSUPP, false; }
 }
 
 // The host has no descriptor broker ($GESHER_BINDER): SCM_RIGHTS on a
 // socketpair fails with EOPNOTSUPP, as production does without one.
 namespace gesher {
 bool UnixRightsAvailable() { return errno = EOPNOTSUPP, false; }
-bool DepositRights(const std::vector<int>&, uint64_t, ws::RightsToken*) {
+bool DepositRights(const std::vector<int>&, uint64_t, uint64_t, ws::RightsToken*) {
   return errno = EOPNOTSUPP, false;
 }
 void CancelRights(const ws::RightsToken&) {}
+uint64_t StreamPosition(uint16_t, bool) { return 0; }
 }
 
 namespace socket_contract {
@@ -56,8 +58,6 @@ bool Lookup(int fd, SocketFd* state) {
   state->description->unix_datagram_pair = type != SOCK_STREAM;
   return true;
 }
-
-bool StreamPorts(const SocketFd&, uint16_t*, uint16_t*) { return errno = EOPNOTSUPP, false; }
 
 ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
                     const sockaddr* address, socklen_t length, const ws::RightsToken* rights) {
