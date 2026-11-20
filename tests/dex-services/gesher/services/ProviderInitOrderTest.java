@@ -5,6 +5,7 @@
 package gesher.services;
 
 import android.app.IApplicationThread;
+import android.content.ComponentName;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
@@ -12,6 +13,7 @@ import android.content.pm.Signature;
 import android.content.res.AssetManager;
 import android.os.Binder;
 import android.os.IBinder;
+import android.os.Bundle;
 import android.system.Os;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedProviderImpl;
@@ -36,7 +38,7 @@ import sun.misc.Unsafe;
 /**
  * ContentProviders.providersFor orders providers by initOrder descending and keeps tie
  * order, with one entry per provider component: a provider declared twice (as merged
- * library manifests do) is bound once, from its later declaration.
+ * library manifests do) is bound once, from its first declaration.
  */
 public final class ProviderInitOrderTest {
     private static final String PKG = "fixture.provider.initorder";
@@ -71,7 +73,7 @@ public final class ProviderInitOrderTest {
         }
     }
 
-    private static void addProvider(PackageImpl parsed, String shortName, String processName,
+    private static ParsedProviderImpl addProvider(PackageImpl parsed, String shortName, String processName,
             int initOrder, boolean enabled) {
         ParsedProviderImpl provider = new ParsedProviderImpl();
         provider.setName(PKG + "." + shortName);
@@ -82,6 +84,7 @@ public final class ProviderInitOrderTest {
         provider.setEnabled(enabled);
         provider.setExported(false);
         parsed.addProvider(provider);
+        return provider;
     }
 
     private static List<String> names(List<ProviderInfo> infos) {
@@ -90,31 +93,11 @@ public final class ProviderInitOrderTest {
         return result;
     }
 
-    @SuppressWarnings("unchecked")
-    public static void run() throws Exception {
+    private static ApkPackage packageFor(PackageImpl parsed) throws Exception {
         Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
         unsafeField.setAccessible(true);
         Unsafe unsafe = (Unsafe) unsafeField.get(null);
-
-        PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(PKG, "/fixture/" + PKG + "/base.apk");
-        parsed.setEnabled(true);
-        parsed.setTargetSdkVersion(36);
-        parsed.setProcessName(PKG);
-        addProvider(parsed, "ZeroFirst", PKG, 0, true);
-        addProvider(parsed, "Negative", PKG, -10, true);
-        addProvider(parsed, "HundredFirst", PKG, 100, true);
-        addProvider(parsed, "DisabledHigh", PKG, 500, false);
-        addProvider(parsed, "OtherProcessHigh", PKG + ":remote", 999, true);
-        addProvider(parsed, "MinInt", PKG, Integer.MIN_VALUE, true);
-        addProvider(parsed, "MaxInt", PKG, Integer.MAX_VALUE, true);
-        addProvider(parsed, "HundredSecond", PKG, 100, true);
-        addProvider(parsed, "ZeroSecond", PKG, 0, true);
-        // Declared twice with one authority, as Firefox declares
-        // androidx.startup.InitializationProvider; Android keeps the later declaration.
-        addProvider(parsed, "Duplicated", PKG, 40, true);
-        addProvider(parsed, "Duplicated", PKG, 50, true);
         parsed.hideAsFinal();
-
         ApkPackage pkg = (ApkPackage) unsafe.allocateInstance(ApkPackage.class);
         field(ApkPackage.class, "packageName").set(pkg, PKG);
         field(ApkPackage.class, "parsed").set(pkg, parsed);
@@ -125,6 +108,122 @@ public final class ProviderInitOrderTest {
         field(ApkPackage.class, "mSigningIdentityChecked").set(pkg, true);
         field(ApkPackage.class, "mVerifiedSignatures").set(pkg,
                 new Signature[] { new Signature(new byte[] { 1 }) });
+        return pkg;
+    }
+
+    private static PackageImpl manifest() {
+        PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(PKG, "/fixture/" + PKG + "/base.apk");
+        parsed.setEnabled(true);
+        parsed.setTargetSdkVersion(36);
+        parsed.setProcessName(PKG);
+        return parsed;
+    }
+
+    private static ProviderInfo named(List<ProviderInfo> providers, String shortName) {
+        ProviderInfo found = null;
+        for (ProviderInfo info : providers) {
+            if (!(PKG + "." + shortName).equals(info.name)) continue;
+            require(found == null, "Provider component appeared twice: " + shortName);
+            found = info;
+        }
+        return found;
+    }
+
+    /** Also run on a host JVM with only native framework initialization adapted. */
+    public static void declarationContracts() throws Exception {
+        PackageImpl parsed = manifest();
+        ParsedProviderImpl first = addProvider(parsed, "Canonical", PKG, 40, true);
+        first.setReadPermission(PKG + ".READ");
+        first.setWritePermission(PKG + ".WRITE");
+        Bundle metadata = new Bundle();
+        metadata.putString("declaration", "first");
+        first.setMetaData(metadata);
+        addProvider(parsed, "Canonical", PKG + ":remote", 50, true)
+                .setAuthority(PKG + ".later");
+        addProvider(parsed, "Identical", PKG, 10, true);
+        addProvider(parsed, "Identical", PKG, 10, true);
+        addProvider(parsed, "Disabled", PKG, 20, false);
+        addProvider(parsed, "Disabled", PKG, 30, true);
+        addProvider(parsed, "Enabled", PKG, 60, true);
+        addProvider(parsed, "Enabled", PKG, 70, false);
+        addProvider(parsed, "Unaware", PKG, 80, true);
+        addProvider(parsed, "Unaware", PKG, 90, true).setDirectBootAware(true);
+        addProvider(parsed, "Aware", PKG, 100, true).setDirectBootAware(true);
+        addProvider(parsed, "Aware", PKG, 110, true);
+        ApkPackage pkg = packageFor(parsed);
+        List<ProviderInfo> enabled = pkg.providers(PackageManager.GET_META_DATA);
+        require(enabled.size() == 5, "Registered provider count includes a duplicate or disabled first");
+        ProviderInfo canonical = named(enabled, "Canonical");
+        require(canonical != null && canonical.initOrder == 40 && PKG.equals(canonical.processName)
+                        && (PKG + ".Canonical").equals(canonical.authority)
+                        && (PKG + ".READ").equals(canonical.readPermission)
+                        && (PKG + ".WRITE").equals(canonical.writePermission)
+                        && "first".equals(canonical.metaData.getString("declaration")),
+                "First provider metadata was replaced by a later declaration");
+        require(named(enabled, "Identical") != null, "Identical duplicate lost its single component");
+        require(named(enabled, "Disabled") == null, "Enabled duplicate replaced disabled first declaration");
+        require(named(enabled, "Enabled").initOrder == 60, "Disabled duplicate replaced enabled first declaration");
+        require(named(pkg.providers(PackageManager.MATCH_DIRECT_BOOT_AWARE), "Unaware") == null,
+                "Boot-aware duplicate replaced the canonical unaware component");
+        require(named(pkg.providers(PackageManager.MATCH_DIRECT_BOOT_UNAWARE), "Aware") == null,
+                "Boot-unaware duplicate replaced the canonical aware component");
+        require(named(pkg.providers(PackageManager.MATCH_DIRECT_BOOT_AWARE), "Aware").initOrder == 100,
+                "Canonical aware component lost its metadata");
+        require(named(pkg.providers(PackageManager.MATCH_DIRECT_BOOT_UNAWARE), "Unaware").initOrder == 80,
+                "Canonical unaware component lost its metadata");
+        ProviderInfo disabled = named(pkg.providers(PackageManager.MATCH_DISABLED_COMPONENTS), "Disabled");
+        require(disabled != null && !disabled.enabled && disabled.initOrder == 20,
+                "Disabled component query did not preserve the first declaration");
+        Method setEnabled = method(ApkPackage.class, "setComponentEnabledState", String.class, int.class);
+        setEnabled.invoke(pkg, PKG + ".Disabled", PackageManager.COMPONENT_ENABLED_STATE_ENABLED);
+        require(named(pkg.providers(0), "Disabled").initOrder == 20,
+                "Installed enable override did not use the first provider metadata");
+        setEnabled.invoke(pkg, PKG + ".Canonical", PackageManager.COMPONENT_ENABLED_STATE_DISABLED);
+        require(named(pkg.providers(0), "Canonical") == null, "Installed disable override was ignored");
+        setEnabled.invoke(pkg, PKG + ".Canonical", PackageManager.COMPONENT_ENABLED_STATE_DEFAULT);
+
+        Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
+        unsafeField.setAccessible(true);
+        Unsafe unsafe = (Unsafe) unsafeField.get(null);
+        PackageManagerService pm = (PackageManagerService) unsafe.allocateInstance(PackageManagerService.class);
+        field(PackageManagerService.class, "mPackages").set(pm, Map.of(PKG, pkg));
+        field(PackageManagerService.class, "mRemoving").set(pm, Map.of());
+        Class<?> cpType = Class.forName("com.gesher.server.ContentProviders");
+        Method declared = method(cpType, "declaredProvider", PackageManagerService.class, String.class);
+        ProviderInfo authority = (ProviderInfo) declared.invoke(null, pm, PKG + ".Canonical");
+        require(authority != null && authority.initOrder == 40 && (PKG + ".READ").equals(authority.readPermission),
+                "Authority consumer did not use canonical metadata");
+        require(declared.invoke(null, pm, PKG + ".later") == null,
+                "Ignored duplicate introduced an authority");
+        require(pm.resolveContentProvider(PKG + ".Canonical", 0, 0).initOrder == 40
+                        && pm.resolveContentProvider(PKG + ".later", 0, 0) == null,
+                "PackageManager authority resolution disagrees with provider registration");
+        require(pm.getProviderInfo(new ComponentName(PKG, PKG + ".Canonical"), 0, 0).initOrder == 40,
+                "PackageManager component lookup disagrees with provider registration");
+        System.out.println("Provider declaration contracts passed");
+    }
+
+    @SuppressWarnings("unchecked")
+    public static void run() throws Exception {
+        declarationContracts();
+
+        PackageImpl parsed = manifest();
+        addProvider(parsed, "ZeroFirst", PKG, 0, true);
+        addProvider(parsed, "Negative", PKG, -10, true);
+        addProvider(parsed, "HundredFirst", PKG, 100, true);
+        addProvider(parsed, "DisabledHigh", PKG, 500, false);
+        addProvider(parsed, "OtherProcessHigh", PKG + ":remote", 999, true);
+        addProvider(parsed, "MinInt", PKG, Integer.MIN_VALUE, true);
+        addProvider(parsed, "MaxInt", PKG, Integer.MAX_VALUE, true);
+        addProvider(parsed, "HundredSecond", PKG, 100, true);
+        addProvider(parsed, "ZeroSecond", PKG, 0, true);
+        // A duplicate cannot move a registered provider to another process or replace
+        // the first declaration's lifecycle order and permission metadata.
+        addProvider(parsed, "Duplicated", PKG, 40, true).setReadPermission(PKG + ".READ");
+        addProvider(parsed, "Duplicated", PKG + ":remote", 50, true);
+        addProvider(parsed, "DisabledDuplicate", PKG, 70, false);
+        addProvider(parsed, "DisabledDuplicate", PKG, 80, true);
+        ApkPackage pkg = packageFor(parsed);
 
         PackageManagerService pm = (PackageManagerService) construct(PackageManagerService.class,
                 new Class<?>[] { Collection.class, boolean.class }, List.of(pkg), false);
@@ -174,7 +273,9 @@ public final class ProviderInitOrderTest {
 
         for (ProviderInfo info : byAi) {
             if (info.name.equals(PKG + ".Duplicated")) {
-                require(info.initOrder == 50, "Duplicated provider kept its earlier declaration");
+                require(info.initOrder == 40 && PKG.equals(info.processName)
+                                && (PKG + ".READ").equals(info.readPermission),
+                        "Duplicated provider replaced its first declaration metadata");
             }
         }
 
