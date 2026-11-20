@@ -10,6 +10,7 @@
 #include <dlfcn.h>
 #include <malloc.h>
 #include <mutex>
+#include <sys/mman.h>
 #include <unordered_map>
 
 static size_t _msize(void* p) { return malloc_usable_size(p); }
@@ -83,6 +84,7 @@ int main(int argc, char** argv) {
   else if (std::strcmp(argv[1], "realloc") == 0) test_realloc_failure();
   else if (std::strcmp(argv[1], "reallocarray") == 0) test_reallocarray_contract();
   else if (std::strcmp(argv[1], "zero") == 0) test_realloc_zero_size();
+  else if (std::strcmp(argv[1], "page-mprotect") == 0) test_page_aligned_mprotect_free();
   else return 2;
   return failures == 0 ? 0 : 1;
 }
