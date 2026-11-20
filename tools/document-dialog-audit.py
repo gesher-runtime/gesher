@@ -18,6 +18,7 @@ body = body.replace(
     '    std::printf("DOC_CLOSE end hr=0x%08lx\\n", static_cast<unsigned long>(status)); '
     'std::fflush(stdout);')
 header = r'''#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #include <objbase.h>
 #include <shobjidl.h>
