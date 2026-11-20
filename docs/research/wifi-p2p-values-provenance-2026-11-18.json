@@ -1,0 +1,587 @@
+{
+  "schema_version": 1,
+  "scope": "SDK36 Wi-Fi Direct values only; no radio/service or API37 runtime qualification",
+  "integration_inputs": {
+    "local_integration_commit": "f0dce23e5418add5af38dd7762a061593b3751f1",
+    "integration_tree": "1632bf0e0f49b470348ba77028bb3d6ecf805d19",
+    "parents": [
+      {
+        "local": "c6af607b9f09a62f5642404cc3773107f35f871a",
+        "remote": "c6731c78944abb35814b6227e3337fbf2dc90c74",
+        "tree": "6198e54c76b58bf8d4cb093e4420d533783f291a",
+        "role": "reviewed PR144 dependencies"
+      },
+      {
+        "local": "ab254299ee7c66bc2d47e2e63d23e31e8821d7e7",
+        "remote": "1e14cbb8629e1defba0009f58996630e51bc0c19",
+        "tree": "a33e0765eaf122320e93c8ef3dea8d9922aa50fe",
+        "role": "verified current main"
+      }
+    ],
+    "preserved_wifi_paths": [
+      "app/java/android/net/wifi/AnqpInformationElement.java",
+      "app/java/android/net/wifi/MloLink.java",
+      "app/java/android/net/wifi/OuiKeyedData.java",
+      "app/java/android/net/wifi/ParcelUtil.java",
+      "app/java/android/net/wifi/ScanResult.java",
+      "app/java/android/net/wifi/ScanResultSecurity.java",
+      "app/java/android/net/wifi/SecurityParams.java",
+      "app/java/android/net/wifi/SoftApConfiguration.java",
+      "app/java/android/net/wifi/SupplicantState.java",
+      "app/java/android/net/wifi/WifiConfiguration.java",
+      "app/java/android/net/wifi/WifiEnterpriseConfig.java",
+      "app/java/android/net/wifi/WifiFrameworkInitializer.java",
+      "app/java/android/net/wifi/WifiInfo.java",
+      "app/java/android/net/wifi/WifiManager.java",
+      "app/java/android/net/wifi/WifiScanner.java",
+      "app/java/android/net/wifi/WifiSsid.java",
+      "app/java/android/net/wifi/WpsInfo.java",
+      "app/java/android/net/wifi/util/HexEncoding.java",
+      "app/java/android/net/wifi/util/PersistableBundleUtils.java"
+    ],
+    "shared_framework_workflow": "automatic merge preserves all PR144 entries and main page-script test insertion",
+    "working_tree_clean": true
+  },
+  "later_main_observed_not_integrated": {
+    "commit": "b67a818925df72b86557405405e375ed5a750f9c",
+    "tree": "e7eed5ab80ae25458d05084ecc9ef9bf5b22c065",
+    "delta": "external PR77 JobScheduler; no P2P value/Track96 paths"
+  },
+  "aosp_wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+  "aosp_release_commit": "0998133091794b56253fd6bd5c33ed0e0e5bd9de",
+  "production_source_adaptations": {
+    "WifiP2pConfig": {
+      "source": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pConfig.java",
+      "original_sha256": "690eacbbba8d04a30b2134ddef17a0b1ebbb6d76c6ce62ff4edcd5aa5574f325",
+      "candidate_sha256": "0253516e40e58db83f33fab74438a06941b2ef46183bb83700ceea894ed970da",
+      "removed_build_annotations": 27,
+      "adaptations": [
+        "Unavailable build annotations removed; API37 source methods are not counted as SDK36 coverage.",
+        "Use genuine framework jarjar namespace for SdkLevel.",
+        "Inline exact Environment.isSdkAtLeastB release/preview predicate.",
+        "Select verified bp4a READ_ONLY wifi_direct_r2=true at build time."
+      ],
+      "byte_identical": false
+    },
+    "WifiP2pPairingBootstrappingConfig": {
+      "source": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pPairingBootstrappingConfig.java",
+      "original_sha256": "df3a85270e801260c4373204bb8042b6a136f81f07b5f2bc92f47c0a8c045a11",
+      "candidate_sha256": "24c2b4b7509a2873e81cead67dba1d21391d28e344fa9ac47001616389c422f6",
+      "removed_build_annotations": 6,
+      "adaptations": [
+        "Unavailable build annotations removed; API37 source methods are not counted as SDK36 coverage."
+      ],
+      "byte_identical": false
+    },
+    "WifiP2pDevice": {
+      "source": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pDevice.java",
+      "original_sha256": "c28e9a3f7ef947a4c905e13c2937ec2ef68f253885e8c2b9a6b7a621e7876b42",
+      "candidate_sha256": "556fd4209455c8e64bd4e1086c746c30f777a9b5ab612c3366a13669e3cc17b5",
+      "removed_build_annotations": 15,
+      "adaptations": [
+        "Unavailable build annotations removed; API37 source methods are not counted as SDK36 coverage.",
+        "Use genuine framework jarjar namespace for SdkLevel.",
+        "Inline exact Environment.isSdkAtLeastB release/preview predicate.",
+        "Omit hidden dirInfo field and corresponding hidden DeviceList update assignment; absent from SDK36 Device and all retained public copy/Parcel state."
+      ],
+      "byte_identical": false
+    },
+    "WifiP2pWfdInfo": {
+      "source": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pWfdInfo.java",
+      "original_sha256": "22266040a6194335d00134a50efbe824b5f8fac245d290b9b50f11749f39b057",
+      "candidate_sha256": "8cbfaaccfd96d3cbf5daaafc1ff4d58cb576198f3ad7b68eabbc1ded11e6b748",
+      "removed_build_annotations": 1,
+      "adaptations": [
+        "Unavailable build annotations removed; API37 source methods are not counted as SDK36 coverage.",
+        "Use genuine framework jarjar namespace for SdkLevel."
+      ],
+      "byte_identical": false
+    },
+    "WifiP2pDeviceList": {
+      "source": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pDeviceList.java",
+      "original_sha256": "89b006d2c20f1f185685cd5e348d88eeaa602b41ef62b522b02e095337fd6fc8",
+      "candidate_sha256": "68c5b5ad89c9d5a9cace208d2cacb92595ffaae8a24c2bce979f518901051459",
+      "removed_build_annotations": 0,
+      "adaptations": [
+        "Inline exact Environment.isSdkAtLeastB release/preview predicate.",
+        "Omit the one hidden dirInfo assignment paired with omitted Device field; preserve pairing-method update in same SDK guard."
+      ],
+      "byte_identical": false
+    },
+    "WifiP2pGroup": {
+      "source": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pGroup.java",
+      "original_sha256": "3e59859ba6da1d26679b68777fd7db08f94de3552be3af4b2a47121275033255",
+      "candidate_sha256": "0803ad08551b76209c8d9d4813548434cb1843a9c8512b842e16fec1667be9d9",
+      "removed_build_annotations": 12,
+      "adaptations": [
+        "Unavailable build annotations removed; API37 source methods are not counted as SDK36 coverage.",
+        "Use genuine framework jarjar namespace for SdkLevel.",
+        "Inline exact Environment.isSdkAtLeastB release/preview predicate.",
+        "Select verified bp4a READ_ONLY wifi_direct_r2=true at build time."
+      ],
+      "byte_identical": false
+    },
+    "WifiP2pInfo": {
+      "source": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pInfo.java",
+      "original_sha256": "87cf578d032cb46c3c92b939bc3c9d49991070388021d6e0501d2bd4e5d1d7c2",
+      "candidate_sha256": "87cf578d032cb46c3c92b939bc3c9d49991070388021d6e0501d2bd4e5d1d7c2",
+      "removed_build_annotations": 0,
+      "adaptations": [],
+      "byte_identical": true
+    }
+  },
+  "source_token_audit": {
+    "scope": "All non-comment Java tokens after listed adaptations; not runtime qualification",
+    "files": {
+      "WifiP2pConfig.java": {
+        "raw_sha256": "690eacbbba8d04a30b2134ddef17a0b1ebbb6d76c6ce62ff4edcd5aa5574f325",
+        "candidate_sha256": "0253516e40e58db83f33fab74438a06941b2ef46183bb83700ceea894ed970da",
+        "tokens_after_listed_adaptations": 2736,
+        "exact_remaining_token_match": true,
+        "inlined_release_predicates": 1,
+        "read_only_profile_constants": 1,
+        "adapted_tokens_sha256": "aa06d7c078f8d2b04c5206e7b785f346f5cec45318bab812c2cdd364a35c9f0b"
+      },
+      "WifiP2pPairingBootstrappingConfig.java": {
+        "raw_sha256": "df3a85270e801260c4373204bb8042b6a136f81f07b5f2bc92f47c0a8c045a11",
+        "candidate_sha256": "24c2b4b7509a2873e81cead67dba1d21391d28e344fa9ac47001616389c422f6",
+        "tokens_after_listed_adaptations": 548,
+        "exact_remaining_token_match": true,
+        "inlined_release_predicates": 0,
+        "read_only_profile_constants": 0,
+        "adapted_tokens_sha256": "d3647641eb36e52d871d407c576580e04ee7750f64c269ca84319435e164d3bf"
+      },
+      "WifiP2pDevice.java": {
+        "raw_sha256": "c28e9a3f7ef947a4c905e13c2937ec2ef68f253885e8c2b9a6b7a621e7876b42",
+        "candidate_sha256": "556fd4209455c8e64bd4e1086c746c30f777a9b5ab612c3366a13669e3cc17b5",
+        "tokens_after_listed_adaptations": 2655,
+        "exact_remaining_token_match": true,
+        "inlined_release_predicates": 1,
+        "read_only_profile_constants": 0,
+        "adapted_tokens_sha256": "9ded3e6bf2a0bce264b8a1bf64f513a0dde6da721eee1408b37043cc332068d9"
+      },
+      "WifiP2pWfdInfo.java": {
+        "raw_sha256": "22266040a6194335d00134a50efbe824b5f8fac245d290b9b50f11749f39b057",
+        "candidate_sha256": "8cbfaaccfd96d3cbf5daaafc1ff4d58cb576198f3ad7b68eabbc1ded11e6b748",
+        "tokens_after_listed_adaptations": 1330,
+        "exact_remaining_token_match": true,
+        "inlined_release_predicates": 0,
+        "read_only_profile_constants": 0,
+        "adapted_tokens_sha256": "26559cde9e40f865a1b69cd2bd9718adace7053d5bf9e2d700083ae1328a815f"
+      },
+      "WifiP2pDeviceList.java": {
+        "raw_sha256": "89b006d2c20f1f185685cd5e348d88eeaa602b41ef62b522b02e095337fd6fc8",
+        "candidate_sha256": "68c5b5ad89c9d5a9cace208d2cacb92595ffaae8a24c2bce979f518901051459",
+        "tokens_after_listed_adaptations": 930,
+        "exact_remaining_token_match": true,
+        "inlined_release_predicates": 1,
+        "read_only_profile_constants": 0,
+        "adapted_tokens_sha256": "9b7aca488260e8deb15a5066d4c224fc694f0a7124533ddb51fb080aee2cfa5d"
+      },
+      "WifiP2pGroup.java": {
+        "raw_sha256": "3e59859ba6da1d26679b68777fd7db08f94de3552be3af4b2a47121275033255",
+        "candidate_sha256": "0803ad08551b76209c8d9d4813548434cb1843a9c8512b842e16fec1667be9d9",
+        "tokens_after_listed_adaptations": 2169,
+        "exact_remaining_token_match": true,
+        "inlined_release_predicates": 1,
+        "read_only_profile_constants": 1,
+        "adapted_tokens_sha256": "9e26503a6727ba3889332cfae582578fdb70c9674718e08b68c96dc022a1c8fd"
+      },
+      "WifiP2pInfo.java": {
+        "raw_sha256": "87cf578d032cb46c3c92b939bc3c9d49991070388021d6e0501d2bd4e5d1d7c2",
+        "candidate_sha256": "87cf578d032cb46c3c92b939bc3c9d49991070388021d6e0501d2bd4e5d1d7c2",
+        "tokens_after_listed_adaptations": 386,
+        "exact_remaining_token_match": true,
+        "inlined_release_predicates": 0,
+        "read_only_profile_constants": 0,
+        "adapted_tokens_sha256": "ff08c4c555d392bea4fe5f72f16e6f9b90834903939f0246c598187fd1206ec2"
+      }
+    },
+    "hidden_dir_use_audit": {
+      "raw_device_field_sites": 1,
+      "raw_device_list_assignment_sites": 1,
+      "candidate_field_or_assignment_sites": 0,
+      "public_copy_parcel_or_observer_sites": 0,
+      "adjacent_pairing_update_retained": true,
+      "scope": "retained seven-source closure; DIR is not claimed globally unused"
+    },
+    "preserved_behavior": "Validation, copies, aliases, collections, Parcel readers/writers and other retained bodies have no further token changes."
+  },
+  "unchanged_pr144_wifi_source_hashes": {
+    "app/java/android/net/wifi/AnqpInformationElement.java": "565f496f653ac76d3c6a75da4512ba37388fd3726cdf85e676f1615da58e5661",
+    "app/java/android/net/wifi/MloLink.java": "e8c01629ba773b8afd5a2f3df7f661a2fa23aca039f0e98ad0f236dace83f5e0",
+    "app/java/android/net/wifi/OuiKeyedData.java": "670ea134264cbc80ae7eca2f7beed833475c9aa6f03443cc2ee9582c76b0734a",
+    "app/java/android/net/wifi/ParcelUtil.java": "a35e0d2b112833ae5e8eb74b266f845bb40f6249d473f841e11e29f2d0f454c8",
+    "app/java/android/net/wifi/ScanResult.java": "d199a7f827ad88b8039f60ff964b663f7c4a72cfd5a66f22f3e2c99f90c3ff3f",
+    "app/java/android/net/wifi/ScanResultSecurity.java": "19d2b4cf717ee710738f9cfe8b1c4ea53e5d16aa85d5e2ce8c6850ea685d81d2",
+    "app/java/android/net/wifi/SecurityParams.java": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060",
+    "app/java/android/net/wifi/SoftApConfiguration.java": "071dc931f5d1884df843e87779d692e13a6bbe6406d0bc8f965636360eb8cd64",
+    "app/java/android/net/wifi/SupplicantState.java": "101c373c45666294c634b55ec4a331b468fd4823a4015cc83b40a49ee28a4e6a",
+    "app/java/android/net/wifi/WifiConfiguration.java": "235b0da14843357decf6c20a0f12966982018166ddfb730c92f405ed2e6dba3a",
+    "app/java/android/net/wifi/WifiEnterpriseConfig.java": "7c7f53a802c07704d42700aa2db3a185c4753368c4fbeb3800d0b3dd9539deb0",
+    "app/java/android/net/wifi/WifiFrameworkInitializer.java": "cc82c3c6ee32f2256140abef9f5e335c8dd1247199d0c61fce8dc9fe2ed3f050",
+    "app/java/android/net/wifi/WifiInfo.java": "628ad87acf898a63138692e374ab309a061a6ca7edd0c8f43f9fb0df450c2c89",
+    "app/java/android/net/wifi/WifiManager.java": "80ad34ccfe4ed3818322136a2ee9d17d07d284ed0454cb50cfdb237c3fead61c",
+    "app/java/android/net/wifi/WifiScanner.java": "7230eab0449b31d7d10c095815849f7c3e14a7bd2102d98ca48d34e2b48fca71",
+    "app/java/android/net/wifi/WifiSsid.java": "a7a2bbcc8769f6bfe14d0ad7affccb8da16d9aed72132cda3d1b0f56184aa287",
+    "app/java/android/net/wifi/WpsInfo.java": "8e0f8020e96e6a2fe5365df41c8e05d92e5b3da6f03196f04547ffccbe8dbc50",
+    "app/java/android/net/wifi/util/HexEncoding.java": "99e9186f20fd88e3de58cf3e64b9718042854229772797515396a4f1c1bdac92",
+    "app/java/android/net/wifi/util/PersistableBundleUtils.java": "82a38ffde5621d1a0c7c6b8c71ce535502f8c71a68397eb8586742f171094730"
+  },
+  "release_profile": {
+    "name": "bp4a",
+    "wifi_direct_r2": {
+      "enabled": true,
+      "read_only": true
+    },
+    "verified_inputs": {
+      "release_configs/bp4a.textproto": "3f0a1de927826a70b2165ea6b2b378b87a78995d30645b44e741d82b5792871a",
+      "release_configs/bp3a.textproto": "31b921df4dc487f4aa4dcb5ff3a019db1899817a1d134506541066b35cd2810b",
+      "release_configs/bp2a.textproto": "ec6eff13fe0f08bed831f59a50bc33289efdcbb5136a618dfae18cee0cda9e5f",
+      "aconfig/bp2a/com.android.wifi.flags/wifi_direct_r2_flag_values.textproto": "22dfdbf299d52f56193a4036f2ad4a310b99107e448c298b6e7e21517c77420f"
+    },
+    "all_generated_values_sha256": "adb87bdc6e6c522fabf78ae64774adc4b4158f24318c05cf4f100a8ef3e632d2"
+  },
+  "sdk_version_boundary": {
+    "scope": "Pairing declaration version boundary only; no API37 compile or runtime qualification",
+    "artifacts": {
+      "36": {
+        "path": "/workspace/scratch/1b0b1d85480f/tooling/sdk36/android.jar",
+        "sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a"
+      },
+      "37": {
+        "path": "/workspace/scratch/e0c0a146099b/tooling/sdk37/platform-37.0-r02/android-37.0/android.jar",
+        "sha256": "bf1b4387cc7ca94fc6ef684f040d9d16fbf16248e181819f020736ea2053f177"
+      }
+    },
+    "sdk36_declarations": 11,
+    "sdk37_declarations": 13,
+    "sdk37_added_declarations": [
+      {
+        "kind": "method",
+        "name": "getPairingBootstrappingMethod",
+        "descriptor": "()I",
+        "flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getPairingBootstrappingPassword",
+        "descriptor": "()Ljava/lang/String;",
+        "flags": 1
+      }
+    ]
+  },
+  "loader_contract": {
+    "upstream_Parcel": {
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/core/java/android/os/Parcel.java?format=TEXT",
+      "sha256": "956dbc11e40eb03b1b006b61420779637559dcf4dd15432f052d8400e63eff3d",
+      "bytes": 223222
+    },
+    "production_launcher_sha256": "68ec8590b71ad642a049444c12077b4a9495a3cca5969fd7814d810613cb748e",
+    "boot_order": [
+      "core-oj",
+      "core-libart",
+      "core-icu4j",
+      "framework",
+      "gesher-app"
+    ],
+    "source_owned_android_DeviceList_reader": false,
+    "stock_android_DeviceList_reader": true,
+    "required_windows_DeviceList_reader": true,
+    "runtime_status": "Windows execution pending; source inspection finds intended same-boot topology"
+  },
+  "android_capsule": {
+    "version": "v2",
+    "manifest_sha256": "c4abd06c012e8331d1fd654b0d5ac8c928e50ce1fe186a9c998ae59a79daf291",
+    "freeze": {
+      "source_files_verified": 33,
+      "build_steps": 12,
+      "manifest_sha256": "c4abd06c012e8331d1fd654b0d5ac8c928e50ce1fe186a9c998ae59a79daf291",
+      "source_token_audit_sha256": "f2192aa6d2b01740b011b71bc9a0251f5545a5fd7ffb86f5e0106470fd0ca933",
+      "source_head": "f0dce23e5418add5af38dd7762a061593b3751f1",
+      "scope": "Normal native Parcel; stock profile measured separately; source-owned DeviceList writer only",
+      "device_list_reader": {
+        "stock": true,
+        "candidate": false,
+        "pinned-r4": false,
+        "required_windows": true
+      },
+      "artifacts": {
+        "launcher.jar": {
+          "sha256": "e9a837167180ba29729c148b3380922e8019b413b724b65c17ac468299dff816",
+          "bytes": 5763
+        },
+        "stock.jar": {
+          "sha256": "1b2f63fbf69bb872a6effd762d0c51027e0546cfc1e31c449b9b661cceb331c7",
+          "bytes": 14570
+        },
+        "pinned-r4.jar": {
+          "sha256": "8af11feec42da83cf2e54ea283f2f9250dfc6a2f9dca391e0bdf1d132de5063b",
+          "bytes": 104279
+        },
+        "candidate.jar": {
+          "sha256": "b2dc253180062ce95449fd5fc79ddff67683b4b92e8749cd856f515c7057a5f9",
+          "bytes": 98192
+        }
+      },
+      "dex_definitions": {
+        "stock": 26,
+        "candidate": 138,
+        "pinned-r4": 144,
+        "launcher": 2
+      },
+      "command_payloads": {
+        "stock-request.json": "61257ac29a648f07489c4b842fda309768a3d84ad366f929d78f1cbb93e537ba",
+        "pinned-r4-request.json": "77d953ead58c807606454af7aa2187bb6e40a03520fbb44e969c6a0e224b6fcf",
+        "candidate-request.json": "8c7f5670089a76dc305ffd10f53cda10d3c6443e9c80710987f6e4061038095d",
+        "setup-request.json": "610f933d1280636a1fd2fb6f3bb627b09090c6c2357ddd2a08b1ce6fceacf96f"
+      },
+      "no_device_commands_executed": true
+    },
+    "candidate_source_hashes": {
+      "tests/dex-services/gesher/services/WifiP2pValuesContractTest.java": "39fff2004c1a51e3ce6055f767bf46df021e9ab727a95b6d41707c1af0e6a154",
+      "tests/dex-services/gesher/services/WifiP2pValuesExtendedTest.java": "a9aa70bd1ac9135cdf74074b924d2df722840bbb9f3866003f84e5f9f4eb9f83",
+      "tests/wifi-p2p/WifiP2pValuesOracle.java": "32b1022a899822d57898a1848fa57da38ef0ceba034fc9e0d872a14c628aec29",
+      "app/java/android/net/wifi/p2p/WifiP2pConfig.java": "0253516e40e58db83f33fab74438a06941b2ef46183bb83700ceea894ed970da",
+      "app/java/android/net/wifi/p2p/WifiP2pPairingBootstrappingConfig.java": "24c2b4b7509a2873e81cead67dba1d21391d28e344fa9ac47001616389c422f6",
+      "app/java/android/net/wifi/p2p/WifiP2pDevice.java": "556fd4209455c8e64bd4e1086c746c30f777a9b5ab612c3366a13669e3cc17b5",
+      "app/java/android/net/wifi/p2p/WifiP2pWfdInfo.java": "8cbfaaccfd96d3cbf5daaafc1ff4d58cb576198f3ad7b68eabbc1ded11e6b748",
+      "app/java/android/net/wifi/p2p/WifiP2pDeviceList.java": "68c5b5ad89c9d5a9cace208d2cacb92595ffaae8a24c2bce979f518901051459",
+      "app/java/android/net/wifi/p2p/WifiP2pGroup.java": "0803ad08551b76209c8d9d4813548434cb1843a9c8512b842e16fec1667be9d9",
+      "app/java/android/net/wifi/p2p/WifiP2pInfo.java": "87cf578d032cb46c3c92b939bc3c9d49991070388021d6e0501d2bd4e5d1d7c2",
+      "app/java/android/net/wifi/WpsInfo.java": "8e0f8020e96e6a2fe5365df41c8e05d92e5b3da6f03196f04547ffccbe8dbc50",
+      "app/java/android/net/wifi/WifiInfo.java": "628ad87acf898a63138692e374ab309a061a6ca7edd0c8f43f9fb0df450c2c89",
+      "app/java/android/net/wifi/WifiConfiguration.java": "235b0da14843357decf6c20a0f12966982018166ddfb730c92f405ed2e6dba3a",
+      "app/java/android/net/wifi/WifiEnterpriseConfig.java": "7c7f53a802c07704d42700aa2db3a185c4753368c4fbeb3800d0b3dd9539deb0",
+      "app/java/android/net/wifi/SecurityParams.java": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060",
+      "app/java/android/net/wifi/ParcelUtil.java": "a35e0d2b112833ae5e8eb74b266f845bb40f6249d473f841e11e29f2d0f454c8",
+      "app/java/android/net/wifi/OuiKeyedData.java": "670ea134264cbc80ae7eca2f7beed833475c9aa6f03443cc2ee9582c76b0734a",
+      "app/java/android/net/wifi/util/PersistableBundleUtils.java": "82a38ffde5621d1a0c7c6b8c71ce535502f8c71a68397eb8586742f171094730",
+      "app/java/android/net/wifi/WifiSsid.java": "a7a2bbcc8769f6bfe14d0ad7affccb8da16d9aed72132cda3d1b0f56184aa287",
+      "app/java/android/net/wifi/util/HexEncoding.java": "99e9186f20fd88e3de58cf3e64b9718042854229772797515396a4f1c1bdac92",
+      "app/java/android/net/wifi/SupplicantState.java": "101c373c45666294c634b55ec4a331b468fd4823a4015cc83b40a49ee28a4e6a",
+      "app/java/android/net/wifi/MloLink.java": "e8c01629ba773b8afd5a2f3df7f661a2fa23aca039f0e98ad0f236dace83f5e0",
+      "app/java/android/net/wifi/ScanResult.java": "d199a7f827ad88b8039f60ff964b663f7c4a72cfd5a66f22f3e2c99f90c3ff3f",
+      "app/java/android/net/wifi/ScanResultSecurity.java": "19d2b4cf717ee710738f9cfe8b1c4ea53e5d16aa85d5e2ce8c6850ea685d81d2",
+      "app/java/android/net/wifi/AnqpInformationElement.java": "565f496f653ac76d3c6a75da4512ba37388fd3726cdf85e676f1615da58e5661",
+      "app/java/android/net/MacAddress.java": "03985501545223e3641065512efb48656bf1dd5d5b55bedaf5feb8685912eac8",
+      "app/java/android/net/TransportInfo.java": "493dfc6ee465779b6b7dc80fc23aea18787266e168dfcc74c7fa42c426447f32",
+      "tools/prepare_wifi_p2p_oracle.py": "292f73f09c517a4478f5ad121fbd89aee9d66f66ff5d522d448932f98e36b542",
+      "tools/audit_wifi_p2p_sources.py": "8ea1f827de44e3d2ba41dcbfc12f86b32c1e4a01b62129b55af24d2f6339db25",
+      "tools/test_wifi_p2p_values.py": "8d734b089ed3b3cdc009e3f97b1bc6bda617b8f9ea63270cfd03ce31f973ba51",
+      "tools/gen/aconfig_java.py": "0666834b5e283a9e7d2da038efba6ab66d1b9ae39fb691a71b741d441ac4a288",
+      "tools/gen/aconfig_values.py": "a72c92add55158cd7992dca2c980f0a92479296f284c1a87551546ffdbe820e9",
+      "tools/gen/aconfig_header.py": "f6dc0e0a87bade0611db9de3aa00e7ecd6b7d563225082d5c0689903fd29cfdd"
+    },
+    "reference_sources": {
+      "p2p/WifiP2pConfig.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pConfig.java",
+        "raw_sha256": "690eacbbba8d04a30b2134ddef17a0b1ebbb6d76c6ce62ff4edcd5aa5574f325",
+        "compiled_source_sha256": "40dd213f8157e20df44044626ef52bd96053aaeb0707ab0493c510946ba87efd",
+        "removed_build_annotations": 27,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": false
+      },
+      "p2p/WifiP2pPairingBootstrappingConfig.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pPairingBootstrappingConfig.java",
+        "raw_sha256": "df3a85270e801260c4373204bb8042b6a136f81f07b5f2bc92f47c0a8c045a11",
+        "compiled_source_sha256": "02d31caf30a32395bd36c31cffbf63b55258b2db5b6760d4ba04ce0033cbcb94",
+        "removed_build_annotations": 6,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": false
+      },
+      "p2p/WifiP2pDevice.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pDevice.java",
+        "raw_sha256": "c28e9a3f7ef947a4c905e13c2937ec2ef68f253885e8c2b9a6b7a621e7876b42",
+        "compiled_source_sha256": "edc8adde4a02f8af28526a6f471424e8ea13803b3642da32c42838ade00202ef",
+        "removed_build_annotations": 15,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": true
+      },
+      "p2p/WifiP2pWfdInfo.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pWfdInfo.java",
+        "raw_sha256": "22266040a6194335d00134a50efbe824b5f8fac245d290b9b50f11749f39b057",
+        "compiled_source_sha256": "8cbfaaccfd96d3cbf5daaafc1ff4d58cb576198f3ad7b68eabbc1ded11e6b748",
+        "removed_build_annotations": 1,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": false
+      },
+      "p2p/WifiP2pDeviceList.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pDeviceList.java",
+        "raw_sha256": "89b006d2c20f1f185685cd5e348d88eeaa602b41ef62b522b02e095337fd6fc8",
+        "compiled_source_sha256": "89b006d2c20f1f185685cd5e348d88eeaa602b41ef62b522b02e095337fd6fc8",
+        "removed_build_annotations": 0,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": true
+      },
+      "p2p/WifiP2pGroup.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pGroup.java",
+        "raw_sha256": "3e59859ba6da1d26679b68777fd7db08f94de3552be3af4b2a47121275033255",
+        "compiled_source_sha256": "c6c8119025129e9dc2e0ecb3ee37154338b7a6c133ddffc98ea60db64d9fbe76",
+        "removed_build_annotations": 12,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": false
+      },
+      "p2p/WifiP2pInfo.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pInfo.java",
+        "raw_sha256": "87cf578d032cb46c3c92b939bc3c9d49991070388021d6e0501d2bd4e5d1d7c2",
+        "compiled_source_sha256": "87cf578d032cb46c3c92b939bc3c9d49991070388021d6e0501d2bd4e5d1d7c2",
+        "removed_build_annotations": 0,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": false
+      },
+      "p2p/WifiP2pDirInfo.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/p2p/WifiP2pDirInfo.java",
+        "raw_sha256": "2efeef247f555f6cbc0b20dd72a2dd0b9b6ae8da9868ca509b9ee65dee8090a4",
+        "compiled_source_sha256": "414c78c9a7009bcbe23e06aacc778d7bccb5cf951467724c31a4eb0005062a5c",
+        "removed_build_annotations": 2,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": false
+      },
+      "util/Environment.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/util/Environment.java",
+        "raw_sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d",
+        "compiled_source_sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d",
+        "removed_build_annotations": 0,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar SdkLevel namespace"
+        ],
+        "hidden_dir_field_and_update_retained": false
+      }
+    },
+    "public_callers": "official SDK36 only",
+    "extended_fixture": "explicit source-level setup, no Android implementation",
+    "source_owned_prerequisites": "Reviewed PR144 dependency sources, unchanged in candidate and pinned profiles",
+    "prior_capsule": "v1 frozen and unexecuted; superseded before device execution to remove orphaned Nullable annotation"
+  },
+  "full_production_build": {
+    "script": "app/build.sh",
+    "script_sha256": "c754f58e6c1bb91be0786ad97dbcdb60fd0c923ec7097341f3318a1b1eba54fb",
+    "input_counts": {
+      "selected_app_java_inputs": 296,
+      "compat_java_inputs": 27,
+      "generated_binder_stubs": 58,
+      "generated_compat_table_sources": 1,
+      "services_inputs": 155
+    },
+    "command_results": [
+      {
+        "name": "app",
+        "exit_code": 0,
+        "seconds": 24.32353080900066,
+        "cumulative_child_maxrss_kib": 890724,
+        "child_user_seconds": 58.651249,
+        "child_system_seconds": 4.547835
+      },
+      {
+        "name": "services",
+        "exit_code": 0,
+        "seconds": 7.517044204003469,
+        "cumulative_child_maxrss_kib": 890724,
+        "child_user_seconds": 35.276768999999994,
+        "child_system_seconds": 1.5747359999999997
+      }
+    ],
+    "artifacts": {
+      "services/services-tests.dex": {
+        "bytes": 1730928,
+        "sha256": "f9d04023d6730a97e8c974bb24387a6d7fbaf3e439148fbc8a924ad000bb1df3"
+      },
+      "app/com.android.location.provider.jar": {
+        "bytes": 12677,
+        "sha256": "2c701526a49387c21b7a71a0c061070400beda62be730f66b33cfbf2222b11ee"
+      },
+      "app/gesher-app-classes.jar": {
+        "bytes": 2642853,
+        "sha256": "5a5aee8eac456888b796539b1d1e0b58dc934de41880108312726a675dcc4b69"
+      },
+      "app/gesher-app.jar": {
+        "bytes": 1409285,
+        "sha256": "07190f2dc84ee8f41819071015495e30de7be26d04746a1a23051b0b9864e8d1"
+      }
+    },
+    "app_dex_class_count": 2443,
+    "service_dex_class_count": 1664,
+    "sdk36_types": 8,
+    "sdk36_declarations": 172,
+    "source_manifest_sha256": "456bd63b88b7f01f34ec12786963eb9f1619570d855ec0901a6af7b9344f4c1a",
+    "build_receipt_sha256": "cb98c7c3bfd66c166bdc8231c40735763c1a87a5c552f62104448f5de8e0e9f0",
+    "D8_version": "9.0.3-dev, build 750a21b4f4281b1f453b649e0b84f1ba9c04f4fc",
+    "D8_sha256": "e0c2803fbf9a1258051c3202daad46a2e00f33a0eb91258ac9fd373df0a832ce",
+    "limit": "Existing genuine framework/core compile inputs; not a fresh current framework or Windows runtime build"
+  },
+  "host_corpus": {
+    "public_checks": 193,
+    "source_level_checks": 29,
+    "runtime_constant_checks": 49,
+    "fresh_value_source_families": 24,
+    "supplies_Parcel_implementation": false,
+    "source_manifest_sha256": "fa5e6b8c1fc439edd1563c5b97fc1af2d88461957fa7d19600928381aeea1a9c",
+    "absence_control_sha256": "0c51127c2a0146d7fcdc4c4bae6aa3aa66d5da2a2acf3bfaec610d78e3c658c2"
+  },
+  "windows_gate": {
+    "track": "tests/windows/tracks/96-deep-compatibility.ps1",
+    "case_count": 23,
+    "requires_all_roundtrips": true,
+    "requires_boot_provider_assertion": true,
+    "actual_execution": "pending",
+    "CI_manual_dispatch_or_rerun": false,
+    "logic_controls_passed": 20,
+    "logic_receipt_sha256": "56fdabc8717616b3bc2e8337468d3c500fddf21957d99b84edf08fd6c72e289b"
+  },
+  "android_native_results": {
+    "reference_document": "wifi-p2p-values-android-reference-2026-11-18.json",
+    "reference_sha256": "690729590710560affd245c16d171252077e5bb4da7c91d9835842ca5353f6e2",
+    "root_summary_sha256": "0084fc1eb962a7639a2a1e325f713adab32583a41a786f7d391a4e9023ef69b7",
+    "setup_request": 58,
+    "execute_requests": [
+      59,
+      60,
+      61
+    ],
+    "stock_cases": 15,
+    "pinned_candidate_cases": 23,
+    "source_owned_readers": 20,
+    "source_owned_writer_only_cases": [
+      "devicelist_empty",
+      "devicelist_public_two",
+      "devicelist_two"
+    ],
+    "all_pinned_candidate_hashes_match": true,
+    "stock_differing_cases": [
+      "config_default",
+      "config_peer",
+      "config_unicode"
+    ],
+    "stock_difference_cause_established": false
+  },
+  "syntax": {
+    "python_ast_and_workflow_yaml_receipt_sha256": "1358718668befe8cd4cf53b860aa36a8f0fd50227be2d3a846e99d19a89c5201",
+    "powershell_all_three_receipt_sha256": "ed4dfa0d570945e75e11f11030052104990e99d2a1b0563e79e9072976e8cb82"
+  }
+}

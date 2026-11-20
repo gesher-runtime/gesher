@@ -6,10 +6,14 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <thread>
 #include <unistd.h>
@@ -28,6 +32,16 @@ constexpr DWORD THREAD_QUERY_LIMITED_INFORMATION = 0x800;
 constexpr DWORD THREAD_SET_LIMITED_INFORMATION = 0x400;
 constexpr DWORD SYNCHRONIZE = 0x100000;
 constexpr DWORD STACK_SIZE_PARAM_IS_A_RESERVATION = 0x10000;
+constexpr DWORD MEM_COMMIT = 0x1000;
+constexpr DWORD MEM_RESERVE = 0x2000;
+constexpr DWORD PAGE_READWRITE = 0x04;
+
+// Committed, readable/writable anonymous pages; production never frees them.
+inline void* VirtualAlloc(void* address, SIZE_T size, DWORD type, DWORD protect) {
+  if (type != (MEM_COMMIT | MEM_RESERVE) || protect != PAGE_READWRITE) std::abort();
+  void* pages = mmap(address, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  return pages == MAP_FAILED ? nullptr : pages;
+}
 
 namespace test_windows {
 struct Thread {

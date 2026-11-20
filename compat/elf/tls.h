@@ -33,7 +33,7 @@ struct TlsModule {
   size_t module_id = 0;             // 1-based; 0 = unassigned
   int64_t tp_offset = 0;           // offset from the thread pointer (negative)
   bool is_static = false;          // has a tp_offset in every thread's block
-  bool ready = false;              // relocated; its image may be copied
+  bool ready = false;              // published; cannot be rolled back
 };
 
 // Assigns `m` a module id and, if it fits, a static offset from the thread
@@ -43,9 +43,24 @@ struct TlsModule {
 // layout, so link-time local-exec offsets address this module unchanged.
 bool TlsAssignModule(TlsModule* m, bool executable = false);
 
-// After the object's relocations: copies its TLS image into every live
-// thread's block; threads set up later copy it themselves.
+// After this object's relocations: make its image available privately to the
+// assigning thread, including initial-exec access from a parent's IFUNC. Other
+// threads still cannot resolve it. It remains unpublished and rollbackable.
+bool TlsPrepareModule(TlsModule* m);
+
+// After every failable step in the load graph succeeds: copies its TLS image
+// into other live threads' blocks, preserving private resolver writes on the
+// owner. Threads set up later copy the initial image themselves.
+// Only the thread that assigned an unpublished module may publish it.
 void TlsPublishModule(TlsModule* m);
+
+// Removes an assigned, unpublished module owned by the calling loader thread.
+// Invalidates all cached bases, frees its dynamic copies, and reclaims unused
+// static space without moving surviving modules. Resets only the assignment
+// fields; a retry gets a new module id. Returns false (without changes) for
+// unassigned, published, or foreign-thread modules, including repeated rollback.
+// Call before destroying the module or unmapping its initialization image.
+bool TlsRollbackModule(TlsModule* m);
 
 // The thread-pointer offset for R_X86_64_TPOFF64 against `m`.
 int64_t TlsTpOffset(const TlsModule& m);
@@ -56,8 +71,9 @@ int64_t TlsTpOffset(const TlsModule& m);
 bool TlsSetupThread();
 
 // __tls_get_addr: the address of module `module_id`'s variable at `offset` in
-// the current thread (setting the thread up if needed). The bionic shim
-// exports this to loaded code.
+// the current thread (setting the thread up if needed). An unpublished module
+// is visible only to its assigning loader thread. The bionic shim exports this
+// to loaded code.
 void* TlsGetAddr(size_t module_id, size_t offset);
 
 // The TEB offset (0x1480 + 8 * index) of the TlsAlloc slot holding the thread

@@ -165,12 +165,13 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
 
 // Sleeps `ms`, or less if a signal this thread does not block arrives (its
 // handler has run then); returns true if interrupted, with what was left.
-bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms);
+// A nonzero error reports unavailable delivery/registration, never completion.
+bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
 
 // As above, observing an interruption before delivering its handlers. The
 // observer is an internal host callback, never loaded application code; it
 // runs without the signal-state lock and must only record the wake instant.
-bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context);
+bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context, int* error);
 // Absolute Android BOOTTIME deadline. Resume notification wakes the signal
 // transport to recheck it; returns 0, EINTR, or a registration error number.
 int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*), void* context);
@@ -183,6 +184,9 @@ void DeliverPendingSignals();
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();
+// Retains a known live kernel thread object for the signal queue. The caller
+// closes the returned handle; an arbitrary or retired pthread id is ESRCH.
+int PthreadSignalTarget(uint64_t thread, void** handle);
 int PthreadSetName(uint64_t thread, const char* name);
 int PthreadGetName(uint64_t thread, char* name, size_t size);
 int PthreadCpuClock(uint64_t thread, int* clock_id);

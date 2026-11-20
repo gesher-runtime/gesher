@@ -4,6 +4,7 @@
  */
 package com.gesher.components;
 
+import android.app.SearchManager;
 import android.content.ContentProvider;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -33,6 +34,18 @@ public class ItemsProvider extends ContentProvider {
     @Override
     public synchronized Cursor query(Uri uri, String[] projection, String selection,
             String[] selectionArgs, String sortOrder) {
+        if (List.of("inventory", SearchManager.SUGGEST_URI_PATH_QUERY).equals(uri.getPathSegments())) {
+            MatrixCursor suggestions = new MatrixCursor(new String[] {"_id", SearchManager.SUGGEST_COLUMN_TEXT_1});
+            if (!"name LIKE ?".equals(selection) || selectionArgs == null || selectionArgs.length != 1) {
+                throw new IllegalArgumentException("Unexpected suggestion query");
+            }
+            for (int i = 0; i < mItems.size(); i++) {
+                if (mItems.get(i).startsWith(selectionArgs[0])) {
+                    suggestions.addRow(new Object[] {i + 1, mItems.get(i)});
+                }
+            }
+            return suggestions;
+        }
         MatrixCursor c = new MatrixCursor(new String[] {"_id", NAME});
         for (int i = 0; i < mItems.size(); i++) {
             c.addRow(new Object[] {i + 1, mItems.get(i)});

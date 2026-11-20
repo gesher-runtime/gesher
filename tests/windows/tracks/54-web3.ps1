@@ -208,9 +208,41 @@ $geoExpect = @(
   'Web3 geo watchPosition: [', '32.0853 34.7818 accuracy 7',
   'Web3 geo with geolocation disabled: "error 1',
   'Web3 geo done')
-$null = Web3Run 'web3app.apk''s GeoActivity: navigator.geolocation in a WebView answered from LocationManager (test providers): getCurrentPosition after onGeolocationPermissionsShowPrompt, watchPosition following the test location, error 1 with geolocation disabled (single process)' @(
-  'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.GeoActivity',
-  (NoDrive "$Dir/web3app.apk")) ($geoExpect + 'gesher-app: done') 'Web3 geo done'
+
+function GrantWeb3Location {
+  # The modern fixture APK needs a platform grant before WebView can ask about the page's origin.
+  # Use the real host shell grant in the existing isolated device profile. The standalone launcher
+  # also reads this profile, so wait for both decisions to reach disk before starting either view.
+  $deviceState = Get-Content -LiteralPath "$root/data-web3/system/gesher-device" -Raw
+  $device = [regex]::Match($deviceState, '(?m)^device=(gesher-[a-z0-9]+)\r?$')
+  if (-not $device.Success) { throw 'Web3 fixture device namespace is missing' }
+  $savedBinder = $env:GESHER_BINDER
+  try {
+    $env:GESHER_BINDER = $device.Groups[1].Value
+    $granted = 'Permission grant completed for com.gesher.web3app'
+    foreach ($permission in 'ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION') {
+      $result = Web3Run "grant $permission to the Web3 fixture" @(
+        'com.gesher.server.RuntimeCommands', 'pm', 'grant', 'com.gesher.web3app',
+        "android.permission.$permission") @($granted) $granted -Seconds 30
+      if (-not $result.Contains($granted)) { throw "Could not grant $permission to the Web3 fixture" }
+    }
+  } finally {
+    $env:GESHER_BINDER = $savedBinder
+  }
+  $deadline = [DateTime]::UtcNow.AddSeconds(15)
+  $path = "$root/data-web3/system/runtime-permissions"
+  do {
+    if (Test-Path -LiteralPath $path) {
+      $saved = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+      $coarse = [regex]::Match([string]$saved, '(?m)^uid\\:(\d+)\\:android\.permission\.ACCESS_COARSE_LOCATION=granted\r?$')
+      if ($coarse.Success -and $saved -match "(?m)^uid\\:$($coarse.Groups[1].Value)\\:android\.permission\.ACCESS_FINE_LOCATION=granted\r?$") {
+        return
+      }
+    }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw 'The Web3 fixture location grants did not reach its device profile'
+}
 
 # --- Accessibility -------------------------------------------------------------------
 # A UI Automation client, as Narrator: the app's window's tree has the Android views (and
@@ -346,6 +378,10 @@ try {
   $null = Web3Run "the Gesher device: $compatName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.CompatActivity') ($compatExpect + 'gesher-app: app process for com.gesher.web3app: pid ') 'Web3 compat done'
   CompatProxied 'the app process''s WebView' $before
 
+  GrantWeb3Location
+  $null = Web3Run 'web3app.apk''s GeoActivity: navigator.geolocation in a WebView answered from LocationManager (test providers): getCurrentPosition after onGeolocationPermissionsShowPrompt, watchPosition following the test location, error 1 with geolocation disabled (single process)' @(
+    'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.GeoActivity',
+    (NoDrive "$Dir/web3app.apk")) ($geoExpect + 'gesher-app: done') 'Web3 geo done'
   $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
   $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity', '--ez', 'arm64Native', 'true') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
 

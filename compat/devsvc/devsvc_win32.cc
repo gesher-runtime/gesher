@@ -2,6 +2,7 @@
 // see devsvc_win32.h. Toasts (WinRT) are devsvc_toast.c's.
 
 #include "devsvc_win32.h"
+#include "toast_identity.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -12,13 +13,17 @@
 #include <netlistmgr.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <shlobj.h>
 
 #include "devsvc_toast.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <map>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -283,6 +288,325 @@ bool PopActivation(std::u16string* app_id, std::u16string* tag, std::u16string* 
   return any;
 }
 
+bool IsLocalDocument(const std::u16string& path) {
+  if (path.empty()) return false;
+  // OPEN_EXISTING cannot create anything. Do not use OPEN_REPARSE_POINT: the
+  // actual target must be local, including mapped drives and directory junctions.
+  HANDLE file = CreateFileW(W(path), FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_NO_RECALL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  FILE_ATTRIBUTE_TAG_INFO attributes{};
+  bool available = GetFileInformationByHandleEx(file, FileAttributeTagInfo,
+      &attributes, sizeof(attributes))
+      && !(attributes.FileAttributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS));
+  std::wstring final_path;
+  if (available) {
+    // Network shares have no volume GUID. Windows resolves reparse targets before
+    // returning this path; an input such as C:\\link or X:\\file is not evidence of locality.
+    DWORD size = GetFinalPathNameByHandleW(file, nullptr, 0, VOLUME_NAME_GUID | FILE_NAME_NORMALIZED);
+    available = size != 0;
+    if (available) {
+      final_path.resize(size);
+      DWORD length = GetFinalPathNameByHandleW(file, final_path.data(), size,
+          VOLUME_NAME_GUID | FILE_NAME_NORMALIZED);
+      available = length != 0 && length < size;
+      if (available) final_path.resize(length);
+    }
+  }
+  CloseHandle(file);
+  if (!available || final_path.rfind(L"\\\\?\\Volume{", 0) != 0) return false;
+  size_t end = final_path.find(L"}\\", 11);
+  if (end == std::wstring::npos) return false;
+  std::wstring volume = final_path.substr(0, end + 2);
+  switch (GetDriveTypeW(volume.c_str())) {
+    case DRIVE_FIXED: case DRIVE_REMOVABLE: case DRIVE_CDROM: case DRIVE_RAMDISK:
+      return true;
+    default: return false;
+  }
+}
+
+namespace {
+
+struct DocumentLifetime {
+  IFileDialog* dialog;
+  bool (*active)(void*);
+  void* context;
+  HWND window = nullptr;
+  UINT_PTR timer = 0;
+  HRESULT error = S_OK;
+};
+
+// Bind cancellation to the dialog HWND participating in its modal dispatch.
+// Arm it once IFileDialogEvents reports that Show has opened the dialog. The
+// callback remains on the same STA/JNI thread as the lifetime predicate.
+thread_local std::map<UINT_PTR, DocumentLifetime*> document_timers;
+thread_local UINT_PTR next_document_timer = std::numeric_limits<UINT_PTR>::max() / 2;
+
+void CALLBACK DocumentLifetimeTimer(HWND window, UINT, UINT_PTR id, DWORD) {
+  auto found = document_timers.find(id);
+  // KillTimer does not remove an already queued WM_TIMER. Lookup before touching
+  // the request so a late callback cannot dereference a retired stack context.
+  if (found == document_timers.end()) return;
+  DocumentLifetime* state = found->second;
+  if (state->window != window || state->timer != id) return;
+  if (!state->active(state->context)) {
+    // A timer callback is nested inside the shell dialog's message dispatch.
+    // Close can return S_OK there without ending Show. Queue the dialog's normal
+    // cancel message so its own modal loop handles retirement after this callback.
+    if (!PostMessageW(window, WM_CLOSE, 0, 0)) {
+      HRESULT status = HRESULT_FROM_WIN32(GetLastError());
+      state->error = FAILED(status) ? status : E_FAIL;
+    }
+  }
+}
+
+HRESULT StartDocumentLifetime(DocumentLifetime* state) {
+  if (state->timer) return S_OK;
+  IOleWindow* window = nullptr;
+  HRESULT status = state->dialog->QueryInterface(IID_PPV_ARGS(&window));
+  if (SUCCEEDED(status)) {
+    status = window->GetWindow(&state->window);
+    window->Release();
+  }
+  if (FAILED(status)) return status;
+  if (!state->window || next_document_timer == std::numeric_limits<UINT_PTR>::max()) return E_FAIL;
+  UINT_PTR id = ++next_document_timer;
+  if (!SetTimer(state->window, id, 100, DocumentLifetimeTimer)) {
+    status = HRESULT_FROM_WIN32(GetLastError());
+    return FAILED(status) ? status : E_FAIL;
+  }
+  // With a non-null HWND, WM_TIMER and KillTimer use the requested identifier.
+  // SetTimer's nonzero success value need not be that identifier.
+  state->timer = id;
+  document_timers.emplace(state->timer, state);
+  return S_OK;
+}
+
+void StopDocumentLifetime(DocumentLifetime* state) {
+  if (!state->timer) return;
+  document_timers.erase(state->timer);
+  KillTimer(state->window, state->timer);
+  state->timer = 0;
+  state->window = nullptr;
+}
+
+struct DocumentOwner { DWORD pid; HWND window; };
+BOOL CALLBACK FindDocumentOwner(HWND window, LPARAM parameter) {
+  auto* owner = reinterpret_cast<DocumentOwner*>(parameter);
+  DWORD pid = 0;
+  GetWindowThreadProcessId(window, &pid);
+  if (pid == owner->pid && IsWindowVisible(window) && GetWindow(window, GW_OWNER) == nullptr) {
+    owner->window = window;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+HRESULT DocumentPath(IShellItem* item, std::vector<std::u16string>* paths) {
+  PWSTR value = nullptr;
+  HRESULT status = item->GetDisplayName(SIGDN_FILESYSPATH, &value);
+  if (SUCCEEDED(status)) {
+    if (!value || !*value || wcslen(value) > 32768) status = E_INVALIDARG;
+    else paths->push_back(U16(value));
+  }
+  CoTaskMemFree(value);
+  return status;
+}
+
+HRESULT DocumentPaths(IFileDialog* dialog, int mode, bool multiple,
+    std::vector<std::u16string>* paths) {
+  paths->clear();
+  if (mode == 1) {
+    IShellItem* item = nullptr;
+    HRESULT status = dialog->GetResult(&item);
+    if (SUCCEEDED(status)) { status = DocumentPath(item, paths); item->Release(); }
+    return status;
+  }
+  IFileOpenDialog* open = nullptr;
+  HRESULT status = dialog->QueryInterface(IID_PPV_ARGS(&open));
+  if (SUCCEEDED(status)) {
+    IShellItemArray* items = nullptr;
+    status = open->GetResults(&items);
+    if (SUCCEEDED(status)) {
+      DWORD count = 0;
+      status = items->GetCount(&count);
+      if (SUCCEEDED(status) && (count == 0 || (!multiple && count != 1))) status = E_INVALIDARG;
+      // JNI arrays use signed 32-bit sizes. There is no Android selection-count
+      // policy below that representation limit (nor a provider-specific 256 cap).
+      if (SUCCEEDED(status) && (count > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())
+          || count > paths->max_size())) status = E_OUTOFMEMORY;
+      for (DWORD i = 0; SUCCEEDED(status) && i < count; ++i) {
+        IShellItem* item = nullptr;
+        status = items->GetItemAt(i, &item);
+        if (SUCCEEDED(status)) { status = DocumentPath(item, paths); item->Release(); }
+      }
+      items->Release();
+    }
+    open->Release();
+  }
+  return status;
+}
+
+bool DocumentPathsAreLocal(int mode, const std::vector<std::u16string>& paths) {
+  if (paths.empty()) return false;
+  for (const auto& path : paths) {
+    if (mode == 1) {
+      // A save target need not exist. Query its existing parent without creating
+      // even a test file; the provider alone performs atomic document creation.
+      size_t slash = path.find_last_of(u"\\/");
+      if (slash == std::u16string::npos || !IsLocalDocument(path.substr(0, slash + 1))) return false;
+    } else if (!IsLocalDocument(path)) return false;
+  }
+  return true;
+}
+
+// OnFileOk returns S_FALSE to keep an invalid selection in the real dialog, so
+// the user can choose a local target or cancel. No alternate document is returned.
+class DocumentEvents final : public IFileDialogEvents {
+ public:
+  DocumentEvents(int mode, bool multiple, IFileDialogCustomize* custom,
+      DocumentLifetime* lifetime) : mode_(mode), multiple_(multiple), custom_(custom), lifetime_(lifetime) {}
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** result) override {
+    if (!result) return E_POINTER;
+    *result = nullptr;
+    if (iid == IID_IUnknown || iid == IID_IFileDialogEvents) {
+      *result = static_cast<IFileDialogEvents*>(this); AddRef(); return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&references_); }
+  ULONG STDMETHODCALLTYPE Release() override {
+    ULONG result = InterlockedDecrement(&references_);
+    if (!result) delete this;
+    return result;
+  }
+  HRESULT STDMETHODCALLTYPE OnFileOk(IFileDialog* dialog) override {
+    if (!lifetime_->active(lifetime_->context)) {
+      dialog->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED)); return S_FALSE;
+    }
+    if (!custom_) return S_OK; // No EXTRA_LOCAL_ONLY request; lifetime still applies.
+    std::vector<std::u16string> paths;
+    HRESULT status = DocumentPaths(dialog, mode_, multiple_, &paths);
+    if (SUCCEEDED(status) && DocumentPathsAreLocal(mode_, paths)) return S_OK;
+    custom_->SetControlLabel(1, L"This selection is not available locally. Choose a local file or folder.");
+    return S_FALSE;
+  }
+  HRESULT STDMETHODCALLTYPE OnFolderChanging(IFileDialog*, IShellItem*) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnFolderChange(IFileDialog* dialog) override {
+    HRESULT status = StartDocumentLifetime(lifetime_);
+    if (FAILED(status)) {
+      lifetime_->error = status;
+      dialog->Close(status);
+    }
+    return status;
+  }
+  HRESULT STDMETHODCALLTYPE OnSelectionChange(IFileDialog*) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnShareViolation(IFileDialog*, IShellItem*, FDE_SHAREVIOLATION_RESPONSE* response) override {
+    *response = FDESVR_DEFAULT; return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE OnTypeChange(IFileDialog*) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnOverwrite(IFileDialog*, IShellItem*, FDE_OVERWRITE_RESPONSE* response) override {
+    *response = FDEOR_DEFAULT; return S_OK;
+  }
+ private:
+  LONG references_ = 1;
+  int mode_;
+  bool multiple_;
+  // Both outlive the Advise registration and this object on the same STA thread.
+  IFileDialogCustomize* custom_;
+  DocumentLifetime* lifetime_;
+};
+
+}  // namespace
+
+DocumentSelection PickDocuments(int mode, const std::u16string& title,
+    const std::u16string& suggested_name, const std::u16string& initial_directory,
+    const std::u16string& filter, const std::u16string& extension, bool multiple,
+    bool local_only, uint32_t owner_pid, bool (*active)(void*), void* context) {
+  DocumentSelection selection;
+  if (mode < 0 || mode > 2 || !active || (mode != 0 && multiple)) {
+    selection.error = E_INVALIDARG; return selection;
+  }
+  if (!active(context)) return selection;
+  HRESULT status = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  if (FAILED(status)) { selection.error = status; return selection; }
+  IFileDialog* dialog = nullptr;
+  status = CoCreateInstance(mode == 1 ? CLSID_FileSaveDialog : CLSID_FileOpenDialog,
+      nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
+  DocumentLifetime lifetime{dialog, active, context};
+  IFileDialogCustomize* custom = nullptr;
+  DocumentEvents* events = nullptr;
+  DWORD cookie = 0;
+  bool advised = false;
+  if (SUCCEEDED(status)) {
+    FILEOPENDIALOGOPTIONS options = 0;
+    status = dialog->GetOptions(&options);
+    if (SUCCEEDED(status)) {
+      options |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+      // ACTION_CREATE_DOCUMENT creates a new document, including when a chosen
+      // display name already exists. Uniqueness and atomic creation are in Java.
+      options &= ~(FOS_FILEMUSTEXIST | FOS_OVERWRITEPROMPT | FOS_ALLOWMULTISELECT | FOS_PICKFOLDERS);
+      if (mode != 1) options |= FOS_FILEMUSTEXIST;
+      if (mode == 2) options |= FOS_PICKFOLDERS;
+      if (multiple) options |= FOS_ALLOWMULTISELECT;
+      if (mode == 1 && local_only) options |= FOS_NOTESTFILECREATE;
+      status = dialog->SetOptions(options);
+    }
+    if (SUCCEEDED(status) && !title.empty()) status = dialog->SetTitle(W(title));
+    if (SUCCEEDED(status) && mode == 1 && !suggested_name.empty()) {
+      status = dialog->SetFileName(W(suggested_name));
+    }
+    if (SUCCEEDED(status) && mode != 2 && !filter.empty()) {
+      COMDLG_FILTERSPEC spec{L"Requested document types", W(filter)};
+      status = dialog->SetFileTypes(1, &spec);
+    }
+    if (SUCCEEDED(status) && mode == 1 && !extension.empty()) {
+      status = dialog->SetDefaultExtension(W(extension));
+    }
+    if (SUCCEEDED(status) && !initial_directory.empty()) {
+      IShellItem* initial = nullptr;
+      if (SUCCEEDED(SHCreateItemFromParsingName(W(initial_directory), nullptr, IID_PPV_ARGS(&initial)))) {
+        dialog->SetFolder(initial); // EXTRA_INITIAL_URI is an advisory hint.
+        initial->Release();
+      }
+    }
+    if (SUCCEEDED(status) && local_only) {
+      status = dialog->QueryInterface(IID_PPV_ARGS(&custom));
+      if (SUCCEEDED(status)) status = custom->AddText(1, L"Choose files or folders available on this computer.");
+    }
+    if (SUCCEEDED(status)) {
+      events = new (std::nothrow) DocumentEvents(mode, multiple, custom, &lifetime);
+      if (!events) status = E_OUTOFMEMORY;
+      else { status = dialog->Advise(events, &cookie); advised = SUCCEEDED(status); }
+    }
+    if (SUCCEEDED(status) && active(context)) {
+      DocumentOwner owner{owner_pid, nullptr};
+      if (owner_pid) EnumWindows(FindDocumentOwner, reinterpret_cast<LPARAM>(&owner));
+      status = dialog->Show(owner.window);
+      if (FAILED(lifetime.error)) status = lifetime.error;
+      if (SUCCEEDED(status) && active(context)) {
+        status = DocumentPaths(dialog, mode, multiple, &selection.paths);
+        if (SUCCEEDED(status) && local_only && !DocumentPathsAreLocal(mode, selection.paths)) {
+          status = HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED);
+        }
+      }
+    }
+  }
+  StopDocumentLifetime(&lifetime);
+  if (advised) dialog->Unadvise(cookie);
+  if (events) events->Release();
+  if (custom) custom->Release();
+  if (dialog) dialog->Release();
+  CoUninitialize();
+  if (!active(context)) selection.paths.clear();
+  if (FAILED(status)) {
+    selection.paths.clear();
+    if (status != HRESULT_FROM_WIN32(ERROR_CANCELLED)) selection.error = status;
+  }
+  return selection;
+}
+
 }  // namespace devsvc
 }  // namespace gesher
 
@@ -504,6 +828,16 @@ int SessionDisplayState() {
   return state;
 }
 
+int AppsUseLightTheme() {
+  DWORD value = 0;
+  DWORD size = sizeof(value);
+  LSTATUS status = RegGetValueW(HKEY_CURRENT_USER,
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size);
+  return status == ERROR_SUCCESS && size == sizeof(value) && value <= 1
+      ? static_cast<int>(value) : -1;
+}
+
 uint64_t JobIdleMillis() {
   AcquireSRWLockShared(&g_lock);
   bool off = g_session_display_state == 0;
@@ -590,6 +924,14 @@ long ClearToasts(const std::u16string& app_id) {
   HRESULT hr = EnsureCom();
   if (FAILED(hr)) return hr;
   return gesher_toast_clear(W(app_id));
+}
+
+long RemoveToastIfLaunch(const std::u16string& app_id, const std::u16string& tag,
+                         const std::u16string& group, const std::u16string& launch) {
+  if (!ValidToastIdentityArguments(app_id, tag, group, launch)) return E_INVALIDARG;
+  HRESULT hr = EnsureCom();
+  if (FAILED(hr)) return hr;
+  return gesher_toast_remove_if_launch(W(app_id), W(tag), W(group), W(launch));
 }
 
 const char16_t kToastActivatorClsid[] = u"{C18D9445-A7F0-472E-985F-AC354EBEB660}";

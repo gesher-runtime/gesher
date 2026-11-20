@@ -75,7 +75,17 @@ def generate(component: str, ref: str | None) -> str:
         if len(members) != 1:
             raise ValueError("timestamp member boundary changed")
         template = (ROOT / "tests/media/surface_timestamp_host.cc.in").read_text(encoding="utf-8")
+        pool_members = pool_classes = ""
+        if "class QueueSurface::FramePool {" in source:
+            pool_members = ("class FramePool; class RecycledFrame;\n"
+                            "  std::shared_ptr<FramePool> frame_pool_;\n  QueueSurface();")
+            pool_classes = section(source, "class QueueSurface::FramePool {",
+                                   "class QueueSurface::Buffer")
+            pool_classes += ("\nQueueSurface::QueueSurface() : frame_pool_(std::make_shared<FramePool>()) {\n"
+                             "  frame_pool_->Configure(buffer_->width, buffer_->height);\n}\n")
         replacements = {
+            "@FRAME_POOL_MEMBERS@": pool_members,
+            "@FRAME_POOL_CLASSES@": pool_classes,
             "@TIMESTAMP_MEMBER@": members[0].strip(),
             "@TIMESTAMP_DISPATCH@": section(source, "    case NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP: {",
                                             "    case NATIVE_WINDOW_GET_REFRESH_CYCLE_DURATION:"),

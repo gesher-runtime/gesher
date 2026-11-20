@@ -10,9 +10,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
-#if defined(__linux__) && !defined(__ANDROID__)
+#if defined(__linux__)
 #include <sys/syscall.h>
 #endif
 #ifndef AT_EMPTY_PATH
@@ -158,6 +159,139 @@ static void MetadataRelativeLongPath(const char* root) {
     MetadataCheck(fchdir(original) == 0, "restore original directory through its fd");
   }
   close(original);
+}
+
+static int MetadataHasXattr(const char* list, size_t size, const char* name) {
+  while (size != 0) {
+    const char* end = (const char*)memchr(list, 0, size);
+    if (end == NULL) return 0;
+    size_t length = (size_t)(end - list) + 1;
+    if (strcmp(list, name) == 0) return 1;
+    list += length;
+    size -= length;
+  }
+  return 0;
+}
+
+static void MetadataXattr(const char* root, const char* directory) {
+  char path[4096], moved[4096], alias[4096], symbolic[4096];
+  MetadataJoin(path, sizeof(path), root, "xattr-source");
+  MetadataJoin(moved, sizeof(moved), root, "xattr-moved");
+  MetadataJoin(alias, sizeof(alias), root, "xattr-alias");
+  MetadataJoin(symbolic, sizeof(symbolic), root, "xattr-link");
+  MetadataCheck(MetadataWrite(path, "untouched"), "create xattr fixture");
+  const unsigned char payload[] = {0, 2, 0xff, 0, 4};
+  unsigned char out[sizeof(payload)] = {0};
+  char list[1024];
+  errno = 0;
+  MetadataCheck(getxattr(path, "user.binary", NULL, 0) == -1 && errno == ENODATA,
+                "missing xattr has ENODATA");
+  MetadataCheck(setxattr(path, "user.binary", payload, sizeof(payload), XATTR_CREATE) == 0,
+                "create binary xattr in real filesystem");
+  errno = 0;
+  MetadataCheck(lsetxattr(path, "user.binary", NULL, 0, XATTR_CREATE) == -1 && errno == EEXIST,
+                "nofollow XATTR_CREATE does not overwrite existing entry");
+  errno = 0;
+  MetadataCheck(setxattr(path, "user.absent", NULL, 0, XATTR_REPLACE) == -1 && errno == ENODATA,
+                "XATTR_REPLACE does not create absent xattr");
+  errno = 0;
+  MetadataCheck(setxattr(path, "user.absent", NULL, 0, 4) == -1 && errno == EINVAL,
+                "reject unknown xattr flags");
+  MetadataCheck(getxattr(path, "user.binary", NULL, 0) == (ssize_t)sizeof(payload),
+                "query binary xattr size with a zero-length buffer");
+  errno = 0;
+  MetadataCheck(getxattr(path, "user.binary", out, 1) == -1 && errno == ERANGE && out[0] == 0,
+                "short xattr buffer leaves destination unchanged");
+  MetadataCheck(getxattr(path, "user.binary", out, sizeof(out)) == (ssize_t)sizeof(payload) &&
+                memcmp(out, payload, sizeof(out)) == 0, "binary xattr preserves embedded zeros");
+  errno = 0;
+  ssize_t (*unchecked_get)(const char*, const char*, void*, size_t) = &getxattr;
+  MetadataCheck(unchecked_get(path, "user.binary", NULL, sizeof(out)) == -1 && errno == EFAULT,
+                "nonempty xattr cannot be delivered through a null pointer");
+
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  MetadataCheck(fd >= 0 && fsetxattr(fd, "user.Binary", NULL, 0, XATTR_CREATE) == 0,
+                "readonly fd can set xattr under inode write permission");
+  MetadataCheck(fd >= 0 && fgetxattr(fd, "user.Binary", NULL, 0) == 0,
+                "empty xattr exists as a distinct, case-sensitive attribute");
+  char max_name[256];
+  memset(max_name, 'a', sizeof(max_name));
+  memcpy(max_name, "user.", 5);
+  max_name[sizeof(max_name) - 1] = 0;
+  MetadataCheck(setxattr(path, max_name, payload, 1, 0) == 0, "255-byte attribute name");
+  ssize_t listed = flistxattr(fd, list, sizeof(list));
+  MetadataCheck(listed > 0 && MetadataHasXattr(list, (size_t)listed, "user.binary") &&
+                MetadataHasXattr(list, (size_t)listed, "user.Binary") &&
+                MetadataHasXattr(list, (size_t)listed, max_name), "FD list preserves every full name");
+  MetadataCheck(listed > 0 && listxattr(path, NULL, 0) == listed, "list reports NUL-separated byte count");
+  errno = 0;
+  MetadataCheck(listxattr(path, list, 1) == -1 && errno == ERANGE, "short list returns ERANGE");
+
+  MetadataCheck(rename(path, moved) == 0 && link(moved, alias) == 0 && symlink(moved, symbolic) == 0,
+                "rename and link the xattr fixture");
+  MetadataCheck(getxattr(moved, "user.binary", out, sizeof(out)) == (ssize_t)sizeof(payload) &&
+                fgetxattr(fd, "user.binary", out, sizeof(out)) == (ssize_t)sizeof(payload),
+                "renamed file and pre-rename fd keep original xattr");
+  MetadataCheck(getxattr(alias, "user.binary", out, sizeof(out)) == (ssize_t)sizeof(payload) &&
+                getxattr(symbolic, "user.binary", out, sizeof(out)) == (ssize_t)sizeof(payload),
+                "hard link and following lookup resolve the same EA");
+  errno = 0;
+  MetadataCheck(lgetxattr(symbolic, "user.binary", out, sizeof(out)) == -1 && errno == ENODATA,
+                "nofollow get does not return target's user attribute");
+  listed = llistxattr(symbolic, list, sizeof(list));
+  MetadataCheck(listed >= 0 && !MetadataHasXattr(list, (size_t)listed, "user.binary"),
+                "nofollow list does not enumerate target's user attribute");
+  errno = 0;
+  MetadataCheck(lsetxattr(symbolic, "user.binary", payload, 1, 0) == -1 && errno == EPERM,
+                "nofollow set refuses a symbolic link");
+  errno = 0;
+  MetadataCheck(lremovexattr(symbolic, "user.binary") == -1 && errno == EPERM,
+                "nofollow remove refuses a symbolic link");
+  MetadataCheck(lgetxattr(moved, "user.binary", out, sizeof(out)) == (ssize_t)sizeof(payload) &&
+                memcmp(out, payload, sizeof(out)) == 0, "nofollow mutation leaves target bytes intact");
+#if defined(_WIN32)
+  errno = 0;
+  MetadataCheck(setxattr(moved, "trusted.no_fake_namespace", payload, 1, 0) == -1 && errno == EOPNOTSUPP,
+                "Gesher does not implement trusted or security labels");
+#endif
+  MetadataCheck(chmod(moved, 0400) == 0, "remove write permission from the xattr fixture");
+#if defined(_WIN32)
+  errno = 0;
+  MetadataCheck(fsetxattr(fd, "user.binary", payload, 1, XATTR_REPLACE) == -1 && errno == EACCES,
+                "FD metadata update respects current file write permission");
+#endif
+  MetadataCheck(chmod(moved, 0600) == 0, "restore xattr fixture write permission");
+
+#if defined(__linux__)
+  MetadataCheck(syscall(SYS_setxattr, alias, "user.raw", payload, sizeof(payload), XATTR_CREATE) == 0 &&
+                syscall(SYS_fgetxattr, fd, "user.raw", out, sizeof(out)) == (long)sizeof(payload) &&
+                memcmp(out, payload, sizeof(out)) == 0, "Linux ABI syscall numbers use the same stored xattrs");
+  MetadataCheck(syscall(SYS_removexattr, alias, "user.raw") == 0, "syscall removes the same xattr");
+  errno = 0;
+  MetadataCheck(syscall(SYS_getxattr, alias, (const char*)(uintptr_t)1, out, sizeof(out)) == -1 &&
+                errno == EFAULT, "syscall faults safely on an invalid attribute name pointer");
+#endif
+  MetadataCheck(lremovexattr(alias, max_name) == 0 && fremovexattr(fd, "user.Binary") == 0 &&
+                removexattr(symbolic, "user.binary") == 0, "remove via nofollow, fd and following paths");
+  errno = 0;
+  MetadataCheck(fgetxattr(fd, "user.binary", out, sizeof(out)) == -1 && errno == ENODATA,
+                "the removed attribute is absent on the original fd");
+  listed = flistxattr(fd, list, sizeof(list));
+  MetadataCheck(listed >= 0 && !MetadataHasXattr(list, (size_t)listed, "user.binary") &&
+                !MetadataHasXattr(list, (size_t)listed, "user.Binary") &&
+                !MetadataHasXattr(list, (size_t)listed, max_name), "no removed xattr remains in the shared list");
+  MetadataCheck(MetadataContents(moved, "untouched"), "file payload was never used for xattr storage");
+  if (fd >= 0) close(fd);
+  errno = 0;
+  MetadataCheck(fgetxattr(-1, "user.binary", out, sizeof(out)) == -1 && errno == EBADF,
+                "an invalid descriptor cannot address an xattr");
+  MetadataCheck(setxattr(directory, "user.directory", payload, 2, 0) == 0 &&
+                getxattr(directory, "user.directory", out, sizeof(out)) == 2 &&
+                removexattr(directory, "user.directory") == 0, "directory xattr lifecycle");
+  unlink(symbolic);
+  unlink(alias);
+  unlink(moved);
+  unlink(path);
 }
 
 static int filesystem_metadata_contracts(void) {
@@ -363,6 +497,10 @@ static int filesystem_metadata_contracts(void) {
 #endif
   if (other && *other) MetadataCrossVolume(root, other);
   else MetadataCheck(0, "cross-volume fixture path is required");
+  MetadataXattr(root, directory);
+#ifdef _WIN32
+  MetadataXattrProcesses(root);
+#endif
   unlink(link); unlink(dangling); unlink(dirlink); unlink(file); rmdir(directory); rmdir(root);
   printf("filesystem metadata contracts: %d checks, %d failures\n", metadata_checks, metadata_failures);
   return metadata_failures;

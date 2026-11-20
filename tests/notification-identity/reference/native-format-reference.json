@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "reference_kind": "owned stock Android API36 native Parcel normal-record compatibility",
+  "base": "473beec761bd3005a23a8f746a6ba9216343f39d",
+  "production_sources": {
+    "app/java/com/gesher/server/NotificationStore.java": "33d3e2c49f720568077803b590f47c2355fcf1a3c080b1f8acb0ea9139bb44be",
+    "app/java/com/gesher/server/NotificationIdentity.java": "7e72fd3fcabcdf24539fd8c137b29fb1a859afaed834c9dc8d6710f32e3238f2"
+  },
+  "fixture_sources": {
+    "tests/notification-identity/android-reference/NotificationStoreNormalReference.java": "0f2c223b146db39e983aa36b65aaaf43c048cdfd6e7c0ae3169a2a81f30deaad"
+  },
+  "identity_methods": {
+    "source": "app/java/com/gesher/server/NotificationManagerService.java",
+    "source_sha256": "75a8a4eac6b9f57c817c32c27a04f3c486b868cbdf6c8e1cf25610d1bcdc0b83",
+    "excerpt_sha256": "9fc0a392ed5a2d6597a863e776b3c6ed70f55a36242f8d96bbf6d28315a287d0",
+    "template_sha256": "e1b577fe820cfffbc80573fa9f4d869a17eacc35fd65b84b0a21ccffef95a2e2",
+    "generated_sha256": "ac6260fe49bceef6acc1b4b98437e96c20f3538883bd308f99b7a67fea0ee97f"
+  },
+  "payload_sha256": "c22a163920312fc4aeae18abf3a9ffb318139da3b9ff543a4a7469f694413ed9",
+  "payload_bytes": 22536,
+  "manifest_sha256": "d43b828cc701d94b177f6f3cc89f20a0a734707cb96c3eb2d6f1b02219bb9086",
+  "provider_audit": {
+    "dex_sha256": "c22a163920312fc4aeae18abf3a9ffb318139da3b9ff543a4a7469f694413ed9",
+    "class_definition_count": 18,
+    "defined_classes": [
+      "Lcom/gesher/server/ActivityManagerService;",
+      "Lcom/gesher/server/ApkPackage;",
+      "Lcom/gesher/server/Device;",
+      "Lcom/gesher/server/GmsSignatureSpoofing;",
+      "Lcom/gesher/server/NotificationIdentity;",
+      "Lcom/gesher/server/NotificationManagerService;",
+      "Lcom/gesher/server/NotificationStore$$ExternalSyntheticLambda0;",
+      "Lcom/gesher/server/NotificationStore$Intended;",
+      "Lcom/gesher/server/NotificationStore$Stored;",
+      "Lcom/gesher/server/NotificationStore;",
+      "Lcom/gesher/server/NotificationStoreNormalReference$$ExternalSyntheticLambda0;",
+      "Lcom/gesher/server/NotificationStoreNormalReference;",
+      "Lcom/gesher/server/PackageManagerService;",
+      "Lcom/gesher/server/PendingIntents$Record;",
+      "Lcom/gesher/server/PendingIntents;",
+      "Lcom/gesher/server/Services$Created;",
+      "Lcom/gesher/server/Services;",
+      "Lcom/gesher/server/SystemServer;"
+    ],
+    "no_android_java_or_third_party_providers": true,
+    "no_malformed_corpus_classes": true
+  },
+  "setup_receipt": {
+    "name": "052-notification-normal-v3-setup.result.json",
+    "sha256": "25f536471a24aaef41a788cc53f686ac1ace6b55eaffda3e9bfbf8d4812f9236"
+  },
+  "execution_receipt": {
+    "name": "053-notification-normal-v3-execute.result.json",
+    "sha256": "b079e588aeb2b3ee89858e84db8e5a9031ab6805420f4ce955e4efe2addf171e"
+  },
+  "observations": [
+    {
+      "phase": "write",
+      "checks": 97,
+      "seconds": 4.315,
+      "exit_code": 0,
+      "sdk": 36,
+      "uid": 2000,
+      "platform_provider": "java.lang.BootClassLoader",
+      "fixture_provider": "dalvik.system.PathClassLoader",
+      "scope": "valid-native-Parcel-record-formats-only"
+    },
+    {
+      "phase": "read",
+      "checks": 16,
+      "seconds": 4.448,
+      "exit_code": 0,
+      "sdk": 36,
+      "uid": 2000,
+      "platform_provider": "java.lang.BootClassLoader",
+      "fixture_provider": "dalvik.system.PathClassLoader",
+      "scope": "valid-native-Parcel-record-formats-only"
+    }
+  ],
+  "toolchain": {
+    "javac": "javac 21.0.13",
+    "d8_jar": "/workspace/scratch/257584ba3a68/pr68-validation/build-x64/build-tools-36.1/lib/d8.jar",
+    "d8_sha256": "e0c2803fbf9a1258051c3202daad46a2e00f33a0eb91258ac9fd373df0a832ce"
+  },
+  "reproduce_builder": "tools/build_notification_store_reference.py --normal-only --java-home ... --framework-classes ... --core-classes ... --d8-jar ... --output ...",
+  "executed_scope": [
+    "native boot Parcel/Intent/Notification providers",
+    "valid v4 delegation/toast layouts and v5 layout",
+    "all five sender kinds with normal Intent/action bodies",
+    "Unicode and unpaired-surrogate String16 identity",
+    "actual v5 writer/restart persistence and valid migration"
+  ],
+  "not_qualified": [
+    "Windows runtime or toast history/delivery",
+    "installed APK or Binder permission identity",
+    "signer/package verification",
+    "PendingIntent activation",
+    "malformed/truncation/ambiguity inputs on the corrected native implementation"
+  ],
+  "earlier_probe": {
+    "v1_payload_sha256": "11abadd5409d0b56315883512a62061325173638c4060cc58f041ab31bbc44de",
+    "result": "write failed an ordinary Java truncation assertion; read not executed",
+    "receipts": [
+      "050-notification-format-native-execute.result.json",
+      "051-notification-format-crash-log.result.json"
+    ],
+    "corrective_boundary": "Compare native dataSize with original file length immediately after unmarshalling",
+    "native_source_blob": "a9eaf07da30ab13e220af5f4411615aa62710629",
+    "v2_payload_sha256": "ffde750f5925ef7d3d93119d401190d722ccead74a4cd64aeb564be2f48706db",
+    "v2_executed": false,
+    "malformed_boundary_evidence": "primary source review and bounded explicit host Parcel seam only"
+  }
+}
