@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
+#include <memory>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/socket.h>
@@ -21,13 +22,46 @@ bool CopyFromUser(void* to, const void* from, size_t size) {
   std::memcpy(to, from, size);
   return true;
 }
+UnixCredentials LocalCredentials() {
+  UnixCredentials self;
+  self.pid = static_cast<int32_t>(getpid());
+  self.uid = getuid();
+  self.gid = getgid();
+  return self;
+}
+}
+
+// The host has no descriptor broker ($GESHER_BINDER): SCM_RIGHTS on a
+// socketpair fails with EOPNOTSUPP, as production does without one.
+namespace gesher {
+bool UnixRightsAvailable() { return errno = EOPNOTSUPP, false; }
+bool DepositRights(const std::vector<int>&, uint64_t, ws::RightsToken*) {
+  return errno = EOPNOTSUPP, false;
+}
+void CancelRights(const ws::RightsToken&) {}
 }
 
 namespace socket_contract {
 namespace ws = gesher::ws;
+using gesher::SocketFd;
+
+// Every fixture fd is an AF_UNIX socketpair end, described as socketpair
+// describes Gesher's: a stream pair or a datagram pair.
+bool Lookup(int fd, SocketFd* state) {
+  int type = 0;
+  socklen_t length = sizeof(type);
+  if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0) return false;
+  state->description = std::make_shared<ws::SocketDescription>();
+  state->description->unix_stream_pair = type == SOCK_STREAM;
+  state->description->unix_datagram_pair = type != SOCK_STREAM;
+  return true;
+}
+
+bool StreamPorts(const SocketFd&, uint16_t*, uint16_t*) { return errno = EOPNOTSUPP, false; }
 
 ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
-                    const sockaddr* address, socklen_t length) {
+                    const sockaddr* address, socklen_t length, const ws::RightsToken* rights) {
+  if (rights != nullptr) return errno = EOPNOTSUPP, -1;
   std::vector<iovec> payload;
   for (size_t i = 0; i < count; ++i) payload.push_back({buffers[i].data, buffers[i].len});
   msghdr message{};
