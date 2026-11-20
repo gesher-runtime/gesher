@@ -49,6 +49,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -823,4 +824,78 @@ int register_gesher_media_surfaces(JNIEnv* env) {
   REG("android/view/TextureView", kTextureView);
 #undef REG
   return 0;
+}
+
+// --- Surfaces in Parcels (surface_parcel.cc) ----------------------------------------
+//
+// android.view.Surface crosses processes as a producer endpoint (Chromium's GPU
+// process draws into the browser's SurfaceView). surface_parcel.cc, which has
+// libbinder, does the Binder side through these; a Surface's native object is
+// an android::Surface*, as mNativeObject holds it.
+
+// The QueueSurface behind a Surface's native object, and its default size; false
+// for any other surface (a window's).
+extern "C" bool gesher_surface_queue_size(jlong native_object, int* width, int* height) {
+  auto* surface = reinterpret_cast<android::Surface*>(native_object);
+  QueueSurface* queue = surface != nullptr ? QueueSurface::From(surface) : nullptr;
+  if (queue == nullptr) return false;
+  queue->query(NATIVE_WINDOW_DEFAULT_WIDTH, width);
+  queue->query(NATIVE_WINDOW_DEFAULT_HEIGHT, height);
+  return true;
+}
+
+extern "C" void gesher_surface_acquire(jlong native_object, const void* id) {
+  reinterpret_cast<android::Surface*>(native_object)->incStrong(id);
+}
+
+extern "C" void gesher_surface_release(jlong native_object, const void* id) {
+  reinterpret_cast<android::Surface*>(native_object)->decStrong(id);
+}
+
+// Queues a frame (RGBA_8888, `stride` pixels per row) to a QueueSurface as its
+// producer would; false if it cannot take one (abandoned).
+extern "C" bool gesher_surface_post(jlong native_object, int width, int height, int stride,
+                                    const uint32_t* pixels) {
+  auto* surface = reinterpret_cast<android::Surface*>(native_object);
+  ANativeWindow* window = surface;
+  if (ANativeWindow_setBuffersGeometry(window, width, height, WINDOW_FORMAT_RGBA_8888) != 0) {
+    return false;
+  }
+  ANativeWindow_Buffer buffer;
+  if (ANativeWindow_lock(window, &buffer, nullptr) != 0) return false;
+  const int rows = buffer.height < height ? buffer.height : height;
+  const int columns = buffer.width < width ? buffer.width : width;
+  for (int y = 0; y < rows; ++y) {
+    memcpy(static_cast<uint32_t*>(buffer.bits) + static_cast<size_t>(y) * buffer.stride,
+           pixels + static_cast<size_t>(y) * stride, static_cast<size_t>(columns) * 4);
+  }
+  return ANativeWindow_unlockAndPost(window) == 0;
+}
+
+// A new QueueSurface (one strong reference, for the Surface's mNativeObject)
+// whose every frame is handed to `on_frame` on the producer's thread.
+using GesherSurfaceFrameFn = void (*)(void* context, int width, int height,
+                                      const uint32_t* pixels);
+extern "C" jlong gesher_surface_create_forwarding(int width, int height,
+                                                  GesherSurfaceFrameFn on_frame, void* context) {
+  android::sp<QueueSurface> surface = new QueueSurface(width, height);
+  QueueSurface* raw = surface.get();
+  surface->SetListener([raw, on_frame, context] {
+    std::shared_ptr<const SurfaceFrame> frame = raw->Latest();
+    if (frame != nullptr) on_frame(context, frame->width, frame->height, frame->pixels.data());
+  });
+  auto* result = static_cast<android::Surface*>(raw);
+  result->incStrong(reinterpret_cast<void*>(&gesher_surface_create_forwarding));
+  return reinterpret_cast<jlong>(result);
+}
+
+extern "C" void gesher_surface_set_default_size(jlong native_object, int width, int height) {
+  auto* surface = reinterpret_cast<android::Surface*>(native_object);
+  QueueSurface* queue = surface != nullptr ? QueueSurface::From(surface) : nullptr;
+  if (queue != nullptr) queue->SetDefaultSize(width, height);
+}
+
+// The RefBase of a Surface's native object, for weak references to it.
+extern "C" android::RefBase* gesher_surface_refbase(jlong native_object) {
+  return static_cast<android::RefBase*>(reinterpret_cast<android::Surface*>(native_object));
 }
