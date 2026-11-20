@@ -4265,6 +4265,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             int front = entry.getValue();
             if (topOf(front) != null) continue;
             it.remove();
+            mAppFrontSince.remove(entry.getKey());
             if (mHiddenTasks.contains(front) && !mAppHiddenTasks.contains(front)) continue;
             for (int i = mTaskOrder.size() - 1; i >= 0; i--) {
                 int task = mTaskOrder.get(i);
@@ -5283,14 +5284,24 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     @Override
     public void moveTaskToFront(IApplicationThread app, String callingPackage, int taskId,
             int flags, Bundle options) {
-        moveTaskToFront(taskId, null);
+        moveTaskToFront(taskId, null,
+                (flags & com.gesher.app.window.AppWindows.MOVE_TASK_FROM_WINDOW) != 0);
     }
 
     private void moveTaskToFront(int taskId, AppTaskRecord requiredTask) {
+        moveTaskToFront(taskId, requiredTask, false);
+    }
+
+    /**
+     * {@code fromWindow}: the user activated the task's desktop window (Gesher's window
+     * activation, AppWindows.MOVE_TASK_FROM_WINDOW), which can be late for a task its app's
+     * window just covered (settlingAppTaskLocked).
+     */
+    private void moveTaskToFront(int taskId, AppTaskRecord requiredTask, boolean fromWindow) {
         boolean history;
         synchronized (this) {
             if (requiredTask != null && !hasAppTaskLocked(requiredTask)) return;
-            if (requiredTask == null && settlingAppTaskLocked(taskId)) {
+            if (fromWindow && settlingAppTaskLocked(taskId)) {
                 SystemServer.log("task " + taskId + " stays behind its app's task in front:"
                         + " its window was activated as that task came to the front");
                 return;

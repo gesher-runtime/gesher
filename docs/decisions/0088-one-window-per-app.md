@@ -46,14 +46,31 @@ and Recents. Only the presentation is wrong for a desktop.
    task that the group hid back to the front. A task the user minimized is not
    replaced. Gmail's compose window therefore returns to the inbox. The
    window's X closes the app: every task of the package is removed
-   (`AppTask.finishAndRemoveTask`, then the window's own task as before). Each
-   Activity gets its usual `onPause`/`onStop`/`onDestroy`.
+   (`AppTask.finishAndRemoveTask`, then the window's own task as before), except
+   tasks the user minimized (windows of their own on the taskbar). The X of a
+   translucent or floating task's window closes only that task. Each Activity
+   gets its usual `onPause`/`onStop`/`onDestroy`.
 5. **Switching tasks.** With two or more tasks, the window menu (Alt+Space or a
    right click on the title bar) lists the app's tasks, with the shown task
    checked, plus "Close this task". Choosing a task brings it to the front
    (`moveTaskToFront`, as restoring a window does). Without this, the hidden
    tasks would be unreachable, since a phone's Recents has no counterpart here.
-6. **Per app, separate windows stay available.** `gesher-app windows PACKAGE
+6. **Late window activations do not swap the tasks.** The covered task's
+   window can still be activated after the new task came in front (a focus
+   event already queued, the shell bringing the app's window forward). Gesher's
+   window activation is marked (`AppWindows.MOVE_TASK_FROM_WINDOW`, a flag
+   outside Android's `MOVE_TASK_*`). For 1 s after a task covers the app's
+   others, the system server ignores a marked request for a covered task. The
+   app process also ignores activation of a window that is not its app's task
+   in front. An app's own `moveTaskToFront` or `AppTask.moveToFront`, and a task
+   chosen in the window menu, are always carried out.
+7. **Hidden at once in the app process.** Covered windows hide as soon as the
+   new task's window shows, before their Activities stop (which reaches the
+   process after the new task's launch on its main thread), so the window under
+   does not show while the user moves the new one. Only tasks the package owns
+   (`getAppTasks`) cover or are covered, as the system server groups them. A
+   covered Activity that resumes without having stopped shows its windows again.
+8. **Per app, separate windows stay available.** `gesher-app windows PACKAGE
    separate|shared`, or the Control Center's "Separate windows" checkbox, saves
    `separate.<package>=true` in `<data>/system/app-windows.properties`. The
    system server gives a process the setting when it starts it

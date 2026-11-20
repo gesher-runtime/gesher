@@ -465,7 +465,7 @@ public final class WindowSession extends IWindowSession.Stub {
                         android.app.ActivityClient.getInstance().moveActivityTaskToBack(token,
                                 true /* nonRoot */);
                     } else if (taskId >= 0) {
-                        moveTaskToFront(taskId);
+                        moveTaskToFront(taskId, false);
                     }
                 } catch (RuntimeException e) {
                     log("task " + taskId + (visible ? " to the front" : " to the back") + ": "
@@ -477,7 +477,8 @@ public final class WindowSession extends IWindowSession.Stub {
             public void onTaskActivated(IBinder token, int taskId) {
                 if (taskId < 0) return;
                 try {
-                    moveTaskToFront(taskId);
+                    // A window activated (token), not a task chosen in the window menu.
+                    moveTaskToFront(taskId, token != null);
                 } catch (RuntimeException e) {
                     log("task " + taskId + " to the front: " + e);
                 }
@@ -498,12 +499,13 @@ public final class WindowSession extends IWindowSession.Stub {
         };
     }
 
-    private static void moveTaskToFront(int taskId) {
+    private static void moveTaskToFront(int taskId, boolean fromWindow) {
         ActivityThread thread = ActivityThread.currentActivityThread();
         try {
             android.app.ActivityTaskManager.getService().moveTaskToFront(
                     thread != null ? thread.getApplicationThread() : null,
-                    ActivityThread.currentPackageName(), taskId, 0, null);
+                    ActivityThread.currentPackageName(), taskId,
+                    fromWindow ? AppWindows.MOVE_TASK_FROM_WINDOW : 0, null);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -520,24 +522,33 @@ public final class WindowSession extends IWindowSession.Stub {
                 ? thread.getActivity(attrs.token) : null;
         if (a != null) {
             // One window per app (ADR 0088): the window is the app's, so closing it removes
-            // the app's other tasks too (hidden in it), before its own.
-            if (!AppWindows.separateInProcess()) finishOtherAppTasks(a);
+            // the app's other tasks too (hidden in it), before its own. Not a translucent or
+            // floating task's window (the app's window shows under it), nor tasks the user
+            // minimized (windows of their own on the taskbar).
+            if (!AppWindows.separateInProcess() && !isTranslucentOrFloating(attrs.token)) {
+                finishOtherAppTasks(a, session != null
+                        ? session.minimizedTasks() : java.util.Collections.emptySet());
+            }
             a.finishAndRemoveTask();
         } else {
             log("window \"" + attrs.getTitle() + "\" closed; no Activity to finish");
         }
     }
 
-    /** Removes the app's tasks other than {@code a}'s (AppTask.finishAndRemoveTask). */
-    private static void finishOtherAppTasks(android.app.Activity a) {
+    /**
+     * Removes the app's tasks other than {@code a}'s and {@code keep}
+     * (AppTask.finishAndRemoveTask).
+     */
+    private static void finishOtherAppTasks(android.app.Activity a, java.util.Set<Integer> keep) {
         try {
             android.app.ActivityManager am = a.getSystemService(android.app.ActivityManager.class);
             if (am == null) return;
             int own = a.getTaskId();
             for (android.app.ActivityManager.AppTask task : am.getAppTasks()) {
                 try {
-                    if (task.getTaskInfo().taskId == own) continue;
-                    log("the app's window closed: task " + task.getTaskInfo().taskId + " removed");
+                    int id = task.getTaskInfo().taskId;
+                    if (id == own || keep.contains(id)) continue;
+                    log("the app's window closed: task " + id + " removed");
                     task.finishAndRemoveTask();
                 } catch (RuntimeException e) {
                     log("the app's window closed: a task stays: " + e);
@@ -1834,7 +1845,6 @@ public final class WindowSession extends IWindowSession.Stub {
                     + ") is translucent or floating: the app's other windows stay");
             return;
         }
-        watchActivities();
         List<AppWindow> covered = new ArrayList<>();
         synchronized (mWindows) {
             for (int i = 0; i < mWindows.size(); i++) {
@@ -1843,9 +1853,21 @@ public final class WindowSession extends IWindowSession.Stub {
                 if (r == w || r.taskId < 0 || r.taskId == w.taskId || r.minimized
                         || !v.shown || v.nativeWindow == null
                         || r.attrs.type != WindowManager.LayoutParams.TYPE_BASE_APPLICATION) continue;
-                v.coverHidden = true;
                 covered.add(v);
             }
+        }
+        if (covered.isEmpty()) return;
+        // Only the app's own tasks share its window, as the system server groups them (by
+        // the package whose tasks they are): another app's task that runs an Activity of
+        // this process (a share target in the other app's task) neither covers nor is
+        // covered here.
+        java.util.Set<Integer> own = appTasks(w);
+        if (own == null || !own.contains(w.taskId)) return;
+        covered.removeIf(v -> !own.contains(root(v).taskId));
+        if (covered.isEmpty()) return;
+        watchActivities();
+        synchronized (mWindows) {
+            for (AppWindow v : covered) v.coverHidden = true;
         }
         if (!covered.isEmpty()) {
             log("window \"" + w.title() + "\" (task " + w.taskId + ") takes the app's window: "
@@ -1867,6 +1889,40 @@ public final class WindowSession extends IWindowSession.Stub {
                 v.handler.post(hide);
             }
         }
+    }
+
+    /** The ids of the tasks of {@code w}'s app (ActivityManager.getAppTasks), or null. */
+    private java.util.Set<Integer> appTasks(AppWindow w) {
+        android.app.Activity a = activity(w.attrs.token);
+        if (a == null) return null;
+        try {
+            android.app.ActivityManager am = a.getSystemService(android.app.ActivityManager.class);
+            if (am == null) return null;
+            java.util.Set<Integer> ids = new java.util.HashSet<>();
+            for (android.app.ActivityManager.AppTask task : am.getAppTasks()) {
+                try {
+                    ids.add(task.getTaskInfo().taskId);
+                } catch (RuntimeException e) {
+                    // The task went meanwhile.
+                }
+            }
+            return ids;
+        } catch (RuntimeException e) {
+            log("window \"" + w.title() + "\": the app's tasks: " + e);
+            return null;
+        }
+    }
+
+    /** The tasks whose windows the user minimized (guarded by mWindows inside). */
+    private java.util.Set<Integer> minimizedTasks() {
+        java.util.Set<Integer> out = new java.util.HashSet<>();
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (!v.popup && v.taskId >= 0 && v.minimized) out.add(v.taskId);
+            }
+        }
+        return out;
     }
 
     private final AtomicBoolean mWatchingActivities = new AtomicBoolean();
@@ -2168,12 +2224,15 @@ public final class WindowSession extends IWindowSession.Stub {
                 log("window \"" + w.title() + "\": no task list: " + e);
                 return;
             }
-            NativeWindow nw = w.nativeWindow;
-            if (nw == null) return;
             if (ids.size() < 2) {
-                w.taskMenu = null;
-                nw.setTaskMenu(new String[0], -1);
+                applyTaskMenu(w, null, new String[0], -1);
                 return;
+            }
+            // The window menu's room (gesher_window.cc kTaskMenuMax), the close item included.
+            while (ids.size() > TASK_MENU_MAX - 1) {
+                int drop = ids.indexOf(w.taskId) == 0 ? 1 : 0;
+                ids.remove(drop);
+                labels.remove(drop);
             }
             // The same label twice: numbered.
             java.util.Map<String, Integer> seen = new java.util.HashMap<>();
@@ -2186,9 +2245,29 @@ public final class WindowSession extends IWindowSession.Stub {
             labels.add(com.gesher.app.locale.UiText.text("window_close_task"));
             int[] menu = new int[ids.size()];
             for (int i = 0; i < menu.length; i++) menu[i] = ids.get(i);
-            w.taskMenu = menu;
-            nw.setTaskMenu(labels.toArray(new String[0]), ids.indexOf(w.taskId));
+            applyTaskMenu(w, menu, labels.toArray(new String[0]), ids.indexOf(w.taskId));
         });
+    }
+
+    /** gesher_window.cc kTaskMenuMax: the most items of a window menu's task list. */
+    private static final int TASK_MENU_MAX = 64;
+
+    /**
+     * Sets {@code w}'s window menu task list on its window's thread, where the Win32 window
+     * is closed: not after it went.
+     */
+    private void applyTaskMenu(AppWindow w, int[] menu, String[] labels, int checked) {
+        Runnable apply = () -> {
+            NativeWindow nw = w.nativeWindow;
+            if (nw == null) return;
+            w.taskMenu = menu;
+            try {
+                nw.setTaskMenu(labels, checked);
+            } catch (RuntimeException e) {
+                log("window \"" + w.title() + "\": task list: " + e);
+            }
+        };
+        if (w.handler != null) w.handler.post(apply); else apply.run();
     }
 
     /**

@@ -1295,6 +1295,9 @@ public final class TaskStackContractTest {
                 "Force stop leaked incoming/outgoing ownerless URI grants or removed unrelated grants");
     }
 
+    /** AppWindows.MOVE_TASK_FROM_WINDOW: Gesher's own window activation. */
+    private static final int MOVE_TASK_FROM_WINDOW = 0x40000000;
+
     /** The app's window's setting as the system server holds it (AppWindows.sStarted). */
     @SuppressWarnings("unchecked")
     private static void separateWindows(String pkg, Boolean separate) throws Exception {
@@ -1334,7 +1337,7 @@ public final class TaskStackContractTest {
                     "The covered task's resumed activity was not paused");
             // Its window's late activation (a focus event already queued) does not swap back.
             int resumes = h.thread.items(ResumeActivityItem.class, root);
-            h.asApp(() -> h.api.moveTaskToFront(h.thread, PKG, rootTask, 0, null));
+            h.asApp(() -> h.api.moveTaskToFront(h.thread, PKG, rootTask, MOVE_TASK_FROM_WINDOW, null));
             check(hidden.contains(rootTask) && covered.contains(rootTask)
                     && h.thread.items(ResumeActivityItem.class, root) == resumes,
                     "A late activation of the covered task's window swapped the app's tasks");
@@ -1347,12 +1350,28 @@ public final class TaskStackContractTest {
             check(h.api.getTasks(10, false, true, Display.DEFAULT_DISPLAY).size() == 2,
                     "Covering merged or dropped the app's tasks");
             // Back on the document's root finishes it: the covered task comes back.
+            int resumesBefore = h.thread.items(ResumeActivityItem.class, root);
             h.finish(doc);
             check(!hidden.contains(rootTask) && !covered.contains(rootTask),
                     "The covered task did not come back when the task in front finished");
-            check(h.thread.items(ResumeActivityItem.class, root) >= 1
+            check(h.thread.items(ResumeActivityItem.class, root) > resumesBefore
                     || "RESUMING".equals(h.state(root)) || "RESUMED".equals(h.state(root)),
                     "The task that came back was not resumed");
+
+            // The app's own moveTaskToFront is carried out at once, settling or not.
+            Harness ownCall = new Harness();
+            ownCall.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Object ownRoot = ownCall.record("Root");
+            ownCall.acknowledge("activityResumed", ownRoot);
+            ownCall.start(document);
+            Object ownDoc = ownCall.record("Doc");
+            int ownRootTask = (Integer) get(ownRoot, "taskId");
+            int ownDocTask = (Integer) get(ownDoc, "taskId");
+            java.util.Set<Integer> ownHidden = (java.util.Set<Integer>) get(ownCall.tasks, "mHiddenTasks");
+            check(ownHidden.contains(ownRootTask), "The document task did not cover the app's task");
+            ownCall.asApp(() -> ownCall.api.moveTaskToFront(ownCall.thread, PKG, ownRootTask, 0, null));
+            check(!ownHidden.contains(ownRootTask) && ownHidden.contains(ownDocTask),
+                    "The app's own moveTaskToFront right after a cover was not carried out");
 
             // Minimized by the user, the task in front leaves the covered one alone.
             Harness minimized = new Harness();

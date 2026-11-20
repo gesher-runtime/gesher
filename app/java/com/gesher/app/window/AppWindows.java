@@ -30,6 +30,14 @@ public final class AppWindows {
 
     /** {@code 1}: the process's tasks are windows of their own. */
     public static final String ENV = "GESHER_SEPARATE_WINDOWS";
+
+    /**
+     * IActivityTaskManager.moveTaskToFront flag of Gesher's own window activation (the user
+     * clicked or focused a task's desktop window), outside Android's MOVE_TASK_* flags. Only
+     * this request can be a late activation of a window its app's other task just covered;
+     * an app's own moveTaskToFront is always carried out.
+     */
+    public static final int MOVE_TASK_FROM_WINDOW = 0x40000000;
     private static final String KEY = "separate.";
 
     /** What the system server gave each package's processes it started last. */

@@ -40,7 +40,13 @@ top activity is translucent or floating hides nothing.
 - When the task in front has no activity left (Back on its root, `finish`),
   the latest task the window hid comes back, unless the user had minimized the
   window.
-- The window's X removes every task of the app (`AppTask.finishAndRemoveTask`).
+- The window's X removes every task of the app (`AppTask.finishAndRemoveTask`),
+  except tasks the user minimized; a translucent or floating task's X closes
+  only that task.
+- Covered windows hide as the new task's window shows, before their
+  Activities stop. A late activation of a covered window (Gesher's own,
+  `AppWindows.MOVE_TASK_FROM_WINDOW`) is ignored for 1 s after the cover; an
+  app's own `moveTaskToFront` is always carried out.
 - With two or more tasks, the window menu (Alt+Space, or a right click on the
   title bar) lists them, the shown one checked, then "Close this task".
 - `gesher-app windows PACKAGE separate` (or the Control Center's "Separate
