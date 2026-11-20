@@ -1043,20 +1043,128 @@ ptrdiff_t DatagramIo(Socket s, Buffer* buffers, size_t count, int flags,
   return result;
 }
 
-}  // namespace
-
-ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
-                    std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+ptrdiff_t SendOwnedRaw(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
+                       std::shared_ptr<SocketDescription>& description, bool dont_wait) {
   if (!description->native_nonblocking_datagram) return Send(s, buffers, count, flags, to);
   return DatagramIo(s, const_cast<Buffer*>(buffers), count, flags, nullptr, to, true,
                     description, dont_wait, nullptr);
 }
 
-ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
-                    std::shared_ptr<SocketDescription>& description, bool dont_wait,
-                    int* result_flags) {
+ptrdiff_t RecvOwnedRaw(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
+                       std::shared_ptr<SocketDescription>& description, bool dont_wait,
+                       int* result_flags) {
   if (!description->native_nonblocking_datagram) return Recv(s, buffers, count, flags, from, result_flags);
   return DatagramIo(s, buffers, count, flags, from, nullptr, false, description, dont_wait, result_flags);
+}
+
+// ADR 0088: every datagram on a Gesher AF_UNIX datagram socketpair (a connected
+// loopback UDP pair) starts with this header. Both ends are Gesher's; callers
+// see only the payload, and SO_PASSCRED the credentials.
+struct UnixDatagramHeader {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t size;
+  int32_t pid;
+  uint32_t uid;
+  uint32_t gid;
+  uint32_t descriptors;  // SCM_RIGHTS tokens that follow: none until phase 2
+};
+static_assert(sizeof(UnixDatagramHeader) == 24, "header layout");
+constexpr uint32_t kUnixMagic = 0x58554747;  // "GGUX"
+constexpr uint16_t kUnixVersion = 1;
+constexpr size_t kUnixHeader = sizeof(UnixDatagramHeader);
+constexpr size_t kLoopbackDatagram = 65507;  // the largest IPv4 UDP payload
+constexpr size_t kReceiveBuffer = 65536;
+
+ptrdiff_t SendUnixDatagram(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
+                           std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+  size_t total = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (buffers[i].len > kLoopbackDatagram - kUnixHeader - total) return errno = EMSGSIZE, -1;
+    total += buffers[i].len;
+  }
+  std::unique_ptr<char, decltype(&std::free)> packet(
+      static_cast<char*>(std::malloc(kUnixHeader + total)), &std::free);
+  if (!packet) return errno = ENOMEM, -1;
+  const UnixCredentials self = LocalCredentials();
+  UnixDatagramHeader header = {kUnixMagic, kUnixVersion, static_cast<uint16_t>(kUnixHeader),
+                               self.pid, self.uid, self.gid, 0};
+  memcpy(packet.get(), &header, kUnixHeader);
+  size_t at = kUnixHeader;
+  for (size_t i = 0; i < count; ++i) {
+    if (!CopyFromUser(packet.get() + at, buffers[i].data, buffers[i].len)) return errno = EFAULT, -1;
+    at += buffers[i].len;
+  }
+  Buffer whole = {packet.get(), at};
+  const ptrdiff_t sent = SendOwnedRaw(s, &whole, 1, flags, to, description, dont_wait);
+  if (sent < 0) return sent;
+  // A datagram is sent whole or not at all.
+  return sent >= static_cast<ptrdiff_t>(kUnixHeader) ? sent - static_cast<ptrdiff_t>(kUnixHeader) : 0;
+}
+
+ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
+                           std::shared_ptr<SocketDescription>& description, bool dont_wait,
+                           int* result_flags, UnixCredentials* credentials) {
+  std::unique_ptr<char, decltype(&std::free)> packet(
+      static_cast<char*>(std::malloc(kReceiveBuffer)), &std::free);
+  if (!packet) return errno = ENOMEM, -1;
+  for (;;) {
+    Buffer whole = {packet.get(), kReceiveBuffer};
+    const ptrdiff_t n = RecvOwnedRaw(s, &whole, 1, flags & ~kMsgTrunc, from, description,
+                                     dont_wait, nullptr);
+    if (n < 0) return n;
+    UnixDatagramHeader header = {};
+    if (static_cast<size_t>(n) >= kUnixHeader) memcpy(&header, packet.get(), kUnixHeader);
+    if (static_cast<size_t>(n) < kUnixHeader || header.magic != kUnixMagic ||
+        header.version != kUnixVersion || header.size != kUnixHeader) {
+      // Not from a Gesher AF_UNIX endpoint (another local process wrote to the
+      // loopback port): no socketpair on Linux could receive it. Drop it; a
+      // peek still has to consume it.
+      if ((flags & kMsgPeek) != 0) {
+        Buffer drop = {packet.get(), kReceiveBuffer};
+        RecvOwnedRaw(s, &drop, 1, flags & ~(kMsgPeek | kMsgTrunc), nullptr, description, true,
+                     nullptr);
+      }
+      continue;
+    }
+    const size_t payload = static_cast<size_t>(n) - kUnixHeader;
+    size_t copied = 0;
+    for (size_t i = 0; i < count && copied < payload; ++i) {
+      const size_t part = buffers[i].len < payload - copied ? buffers[i].len : payload - copied;
+      if (!CopyToUser(buffers[i].data, packet.get() + kUnixHeader + copied, part)) {
+        return errno = EFAULT, -1;
+      }
+      copied += part;
+    }
+    if (result_flags != nullptr) *result_flags = copied < payload ? kMsgTrunc : 0;
+    if (credentials != nullptr) *credentials = {header.pid, header.uid, header.gid};
+    return static_cast<ptrdiff_t>((flags & kMsgTrunc) != 0 ? payload : copied);
+  }
+}
+
+}  // namespace
+
+ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+  if (description->unix_datagram_pair.load()) {
+    return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait);
+  }
+  return SendOwnedRaw(s, buffers, count, flags, to, description, dont_wait);
+}
+
+ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait,
+                    int* result_flags, UnixCredentials* credentials) {
+  if (description->unix_datagram_pair.load()) {
+    return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
+                            credentials);
+  }
+  if (credentials != nullptr) *credentials = {};
+  return RecvOwnedRaw(s, buffers, count, flags, from, description, dont_wait, result_flags);
+}
+
+int UnixDatagramPayload(int available) {
+  return available >= static_cast<int>(kUnixHeader) ? available - static_cast<int>(kUnixHeader) : 0;
 }
 
 namespace {

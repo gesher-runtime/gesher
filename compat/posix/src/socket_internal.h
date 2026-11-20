@@ -85,7 +85,23 @@ struct SocketDescription {
   Socket quarantined_socket = kInvalidSocket;
   std::shared_ptr<SocketDescription> failed_close_owner;  // explicit failure quarantine
   size_t descriptor_refs = 0;  // fd.cc's table mutex; snapshots are not fd refs
+  // AF_UNIX socketpair (ADR 0088). Set by socketpair before it returns the fds.
+  // A datagram pair (SOCK_SEQPACKET, SOCK_DGRAM) frames each datagram with the
+  // sender's credentials (winsock.cc's UnixDatagramHeader); SO_PASSCRED delivers them.
+  std::atomic<bool> unix_datagram_pair{false};
+  std::atomic<bool> pass_credentials{false};  // SO_PASSCRED
+  bool has_peer_credentials = false;  // SO_PEERCRED: the pair's creator, as on Linux
+  int32_t peer_pid = 0;
+  uint32_t peer_uid = 0, peer_gid = 0;
 };
+
+// A process's credentials as SCM_CREDENTIALS and SO_PEERCRED carry them.
+struct UnixCredentials {
+  int32_t pid = 0;
+  uint32_t uid = 0, gid = 0;
+};
+// This process's credentials (socket.cc: the Linux side computes them).
+UnixCredentials LocalCredentials();
 struct PollEntry {
   Socket socket;
   int events;
@@ -139,9 +155,14 @@ bool CopyToUser(void* destination, const void* source, size_t size);
 // cancellation are implemented without changing the shared native socket mode.
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait = false);
+// On an AF_UNIX datagram pair (SocketDescription::unix_datagram_pair) both add
+// and remove the framing header: callers see only the payload. RecvOwned
+// stores the sender's credentials in `credentials` when it is not null.
 ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait = false,
-                    int* result_flags = nullptr);
+                    int* result_flags = nullptr, UnixCredentials* credentials = nullptr);
+// Bytes of the next datagram's payload on an AF_UNIX datagram pair (FIONREAD).
+int UnixDatagramPayload(int available);
 
 int GetOption(Socket s, Option option, int* value);
 int SetOption(Socket s, Option option, int value);

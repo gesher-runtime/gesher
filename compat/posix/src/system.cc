@@ -331,7 +331,12 @@ int ioctl(int fd, unsigned long request, ...) {
   if (gesher::BinderIoctl(fd, request, argp, &binder_result)) return binder_result;
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
-    if (request == FIONREAD) return gesher::ws::Available(state.socket, argp);
+    if (request == FIONREAD) {
+      if (gesher::ws::Available(state.socket, argp) != 0) return -1;
+      // An AF_UNIX datagram pair's payload, without its framing (ADR 0088).
+      if (state.description->unix_datagram_pair.load()) *argp = gesher::ws::UnixDatagramPayload(*argp);
+      return 0;
+    }
     int result;
     if (gesher::sock::InterfaceIoctl(request, argp, &result)) return result;
     if (request == FIONBIO) {

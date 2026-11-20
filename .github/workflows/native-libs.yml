@@ -107,6 +107,8 @@ jobs:
           # Raw Linux system calls (`syscall` instructions) and code written
           # into the library's own pages at run time (ADR 0084).
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror -Wl,-soname,libraw_syscall_test.so -o dist-native/raw_syscall_test.so tests/native/raw_syscall_test.c
+          # AF_UNIX socketpair credentials (ADR 0088).
+          "$cc29" -shared -fPIC -O2 -fno-stack-protector -Wall -Wextra -Werror -Wl,-soname,libunix_credentials_test.so -o dist-native/unix_credentials_test.so tests/native/unix_credentials_test.c
           echo "--- fs_test29.so ---"
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d -r -l dist-native/fs_test29.so
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"             -d dist-native/fs_test29.so | grep '%fs:' | head -40 || true
