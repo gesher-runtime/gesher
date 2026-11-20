@@ -343,6 +343,25 @@ Check 'native libs: the same AHardwareBuffer and ASurfaceControl checks on WARP,
     'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
     'surface_control_test all passed')
 
+# The GPU kept from sleeping between the frames Gesher reads back (child
+# surfaces, SurfaceControl composition; compat/bionic/gpu_keepalive.h): on a
+# hardware adapter it gives the GPU work in the gaps of frames coming 25 a
+# second, none while frames come faster than every 10 ms, and stops a second
+# after the last frame until the next; on a software adapter (the runners'
+# Basic Render Driver, WARP) and with GESHER_GPU_KEEPALIVE=0 it stays off.
+Check 'native libs: the GPU keep-alive between frames read back (off on a software adapter)' {
+  & "$Dir/gpu_keepalive_test.exe"
+} @('gpu_keepalive_test all passed')
+
+Check 'native libs: GESHER_GPU_KEEPALIVE=0 turns the GPU keep-alive off' {
+  $env:GESHER_GPU_KEEPALIVE = '0'
+  try {
+    & "$Dir/gpu_keepalive_test.exe"
+  } finally {
+    Remove-Item Env:GESHER_GPU_KEEPALIVE -ErrorAction SilentlyContinue
+  }
+} @('GESHER_GPU_KEEPALIVE=0: the keep-alive stays off', 'gpu_keepalive_test all passed')
+
 # eglGetProcAddress and dlsym return the functions of every GL extension the
 # context advertises, ANGLE's own (gl2ext_angle.h) included: WebRender calls
 # glProvokingVertexANGLE for GL_ANGLE_provoking_vertex, and Firefox's GPU

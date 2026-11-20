@@ -8,6 +8,7 @@
 #define EGL_NO_PLATFORM_SPECIFIC_TYPES 1
 #include "egl_child_surface.h"
 #include "egl_readback_layout.h"
+#include "gpu_keepalive.h"
 
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
@@ -443,6 +444,8 @@ bool ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
       const int64_t unlock_start = gesher::perf::Now();
       ANativeWindow_unlockAndPost(c->window);
       unlock_site.Add(gesher::perf::Now() - unlock_start);
+      // The next frame's read-back must not find the GPU asleep (gpu_keepalive.h).
+      GpuKeepAliveAfterFrame(display);
     }
   }
   post_site.Add(gesher::perf::Now() - post_start);
@@ -458,9 +461,9 @@ bool ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
     pace_site.Add(gesher::perf::Now() - pace_start, late.count() > 0 ? late.count() : 0);
   }
   // The frame is posted. Presenting the helper's swap chain shows nothing (the
-  // helper is never shown) and held up the GPU: a later glReadPixels waited up
-  // to half a second for Windows to take the presented buffer. ANGLE's swap is
-  // still needed when the size changed: that is where it resizes the surface.
+  // helper is never shown) and waited for the vertical blank in every swap.
+  // ANGLE's swap is still needed when the size changed: that is where it
+  // resizes the surface.
   return resized;
 }
 

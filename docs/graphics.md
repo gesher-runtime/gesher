@@ -535,12 +535,15 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   only when the window's size changed (where ANGLE resizes the surface), with swap
   interval 0 (eglSwapInterval with such a surface current keeps 0). Presenting it with
   the default interval waited for the vertical blank in every swap (18 to 21 ms on
-  average, up to 35), and the next glReadPixels waited up to half a second at a time,
-  several times a minute, for Windows to take a presented buffer; with
-  `std::this_thread::sleep_for` the 16.7 ms pacing waits overslept by 8 to 18 ms
-  (scheduler ticks). Firefox's compositor went from 25 to 31 frames a second with
-  freezes of 0.3 to 0.5 s to 58 frames a second without them (docs/media.md,
-  "Measuring playback").
+  average, up to 35); with `std::this_thread::sleep_for` the 16.7 ms pacing waits
+  overslept by 8 to 18 ms (scheduler ticks). Firefox's compositor showing a 60 fps
+  video went from 28 to 54 frames a second. While frames come, the GPU is kept from
+  sleeping between them (`compat/bionic/gpu_keepalive.h`, also for SurfaceControl
+  composition): on an Intel UHD Graphics 770 the read-back of a frame drawn after the
+  GPU sat idle for more than about 30 ms waited about half a second, up to once a
+  second (a plain Direct3D 11 program without Gesher does the same), so a 25 fps
+  video froze for half a second 5 to 24 times a minute; with it, not once in 105 s
+  (docs/media.md, "Firefox video").
 - **TextureView / SurfaceTexture**: the media track's TextureLayer and SurfaceTexture
   natives; TextureView.lockCanvas now draws into the SurfaceTexture's producer.
 - **SurfaceTexture in OpenGL ES** (`compat/media/surface/surface_texture_gl.{h,cc}`):

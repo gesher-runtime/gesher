@@ -46,11 +46,13 @@ add_library(gesher_ndk_graphics OBJECT
   ${CMAKE_CURRENT_LIST_DIR}/hardware_buffer.cc
   ${CMAKE_CURRENT_LIST_DIR}/surface_control.cc
   ${CMAKE_CURRENT_LIST_DIR}/egl_native_buffer.cc
+  # The GPU kept from sleeping between frames read back (child surfaces, composition).
+  ${CMAKE_CURRENT_LIST_DIR}/gpu_keepalive.cc
   ${_gl_gen}/gl_thunks.inc)
 target_include_directories(gesher_ndk_graphics PRIVATE ${CMAKE_CURRENT_LIST_DIR} ${_gl_gen}
   ${_gl_include} ${CMAKE_SOURCE_DIR}/compat/hwui/window)
 # graphics_native_headers (cmake/aosp/hwui.cmake): <android/native_window.h>.
-# d3d11: the GPU thread's own device (gpu_interop.cc).
+# d3d11: the GPU thread's own device (gpu_interop.cc) and the keep-alive's (gpu_keepalive.cc).
 target_link_libraries(gesher_ndk_graphics PRIVATE gesher_bionic gesher_elf graphics_native_headers
   user32 d3d11)
 target_compile_options(gesher_ndk_graphics PRIVATE -Wall -Wextra -Werror)
@@ -72,6 +74,14 @@ target_include_directories(surface_control_host_test PRIVATE ${CMAKE_SOURCE_DIR}
 target_link_libraries(surface_control_host_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
   gesher_window_surface graphics_native_headers user32 gdi32)
 target_compile_options(surface_control_host_test PRIVATE -Wall -Wextra -Werror)
+
+# The GPU kept from sleeping between frames read back
+# (tests/native/gpu_keepalive_test.cc): on a hardware adapter, off on WARP.
+add_executable(gpu_keepalive_test ${CMAKE_SOURCE_DIR}/tests/native/gpu_keepalive_test.cc)
+target_include_directories(gpu_keepalive_test PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(gpu_keepalive_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
+  gesher_window_surface graphics_native_headers user32 gdi32 winmm)
+target_compile_options(gpu_keepalive_test PRIVATE -Wall -Wextra -Werror)
 
 # A GL test library's gesher_selftest() with the same EGL/GLES
 # (tests/native/gl_extension_test.cc; gl_extension_procs_test.so in CI).

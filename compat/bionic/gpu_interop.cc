@@ -1,5 +1,6 @@
 // gesher: the process's GPU thread (ADR 0089). See gpu_interop.h.
 #include "gpu_d3d.h"
+#include "gpu_keepalive.h"
 
 #include <gesher/egl_angle.h>
 
@@ -569,6 +570,8 @@ bool Compose(const void* key, int width, int height, const ComposeOp* ops, size_
     }
   }
   c->Unmap(t.staging, 0);
+  // The next composition's read-back must not find the GPU asleep (gpu_keepalive.h).
+  GpuKeepAliveAfterFrameOn(thread->device());
   return true;
 }
 
