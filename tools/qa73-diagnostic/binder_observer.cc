@@ -18,14 +18,14 @@ void Frame(HANDLE process, DWORD thread, unsigned index, DWORD64 pc) {
     static_cast<unsigned long long>(found ? pc - module.BaseOfImage : pc));
 }
 
-bool Snapshot(HANDLE process, DWORD pid) {
+bool Snapshot(HANDLE process, DWORD pid, DWORD main_thread) {
   SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_NO_PROMPTS);
   if (!SymInitialize(process, nullptr, TRUE)) {
     std::printf("QA73 STACK initialize_error=%lu\n", GetLastError()); return false;
   }
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snapshot == INVALID_HANDLE_VALUE) { SymCleanup(process); return false; }
-  THREADENTRY32 entry{}; entry.dwSize = sizeof(entry); unsigned sampled = 0;
+  THREADENTRY32 entry{}; entry.dwSize = sizeof(entry); unsigned sampled = 0; bool main_sampled = false;
   for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
     if (entry.th32OwnerProcessID != pid) continue;
     HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION,
@@ -36,6 +36,7 @@ bool Snapshot(HANDLE process, DWORD pid) {
     if (previous == static_cast<DWORD>(-1)) { CloseHandle(thread); continue; }
     CONTEXT context{}; context.ContextFlags = CONTEXT_FULL;
     if (GetThreadContext(thread, &context)) {
+      if (entry.th32ThreadID == main_thread) main_sampled = true;
       ++sampled; STACKFRAME64 frame{};
       frame.AddrPC.Offset = context.Rip; frame.AddrPC.Mode = AddrModeFlat;
       frame.AddrStack.Offset = context.Rsp; frame.AddrStack.Mode = AddrModeFlat;
@@ -53,8 +54,8 @@ bool Snapshot(HANDLE process, DWORD pid) {
     CloseHandle(thread);
   }
   CloseHandle(snapshot); SymCleanup(process);
-  std::printf("QA73 STACK owned_pid=%lu sampled_threads=%u\n", pid, sampled);
-  return sampled != 0;
+  std::printf("QA73 STACK owned_pid=%lu sampled_threads=%u main_sampled=%d\n", pid, sampled, main_sampled);
+  return sampled != 0 && main_sampled;
 }
 
 bool Drain(HANDLE pipe, const char* tag, bool* eof) {
@@ -90,12 +91,12 @@ int Run(const wchar_t* path) {
   for (;;) {
     if (!Drain(readers[0], "STDOUT", &out_eof) || !Drain(readers[1], "STDERR", &err_eof)) { healthy = false; break; }
     wait = WaitForSingleObject(pi.hProcess, 0);
-    if (wait == WAIT_OBJECT_0) { GetExitCodeProcess(pi.hProcess, &code); break; }
+    if (wait == WAIT_OBJECT_0) { if (!GetExitCodeProcess(pi.hProcess, &code)) healthy = false; break; }
     if (wait != WAIT_TIMEOUT) { healthy = false; break; }
     const ULONGLONG elapsed = GetTickCount64() - start;
     if (!sampled && elapsed >= 20000) {
       std::printf("QA73 BINDER root=%lu main_thread=%lu elapsed_ms=%llu sampling_owned_root\n", pi.dwProcessId, pi.dwThreadId, static_cast<unsigned long long>(elapsed));
-      sampled = true; sample_ok = Snapshot(pi.hProcess, pi.dwProcessId);
+      sampled = true; sample_ok = Snapshot(pi.hProcess, pi.dwProcessId, pi.dwThreadId);
     }
     if (elapsed >= 120000) break;
     Sleep(10);

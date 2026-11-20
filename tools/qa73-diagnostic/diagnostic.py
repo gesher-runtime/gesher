@@ -110,9 +110,11 @@ def generate(out: Path) -> None:
     spawn = one(original[paths[2]],
       "  bool completed = WaitForSingleObject(child->hProcess, 10000) == WAIT_OBJECT_0;",
       "  DWORD wait = WaitForSingleObject(child->hProcess, 10000);\n  bool completed = wait == WAIT_OBJECT_0;")
+    spawn = one(spawn, "  if (completed) GetExitCodeProcess(child->hProcess, &code);",
+      "  BOOL exit_read = FALSE;\n  if (completed) exit_read = GetExitCodeProcess(child->hProcess, &code);")
     spawn = one(spawn, "  CloseHandle(child->hProcess);", r'''  const int saved_errno = errno; const DWORD saved_error = GetLastError();
-  std::printf("QA73 WAIT pid=%lu wait=%lu code=%lu completed=%d parent_errno=%d parent_win32=%lu\n",
-      GetProcessId(child->hProcess), wait, code, completed, saved_errno, saved_error);
+  std::printf("QA73 WAIT pid=%lu wait=%lu code=%lu exit_read=%d completed=%d parent_errno=%d parent_win32=%lu\n",
+      GetProcessId(child->hProcess), wait, code, !!exit_read, completed, saved_errno, saved_error);
   std::fflush(stdout); errno = saved_errno; SetLastError(saved_error);
   CloseHandle(child->hProcess);''')
     (out / "ofd-spawn-test.cc").write_text(spawn)
