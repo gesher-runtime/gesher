@@ -840,6 +840,8 @@ try {
   CheckTimed 'services: thermal usage shortcuts and unmanaged device policy contracts' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceFixtureRunner' + 'SoftwareServiceContractTest' +
       (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/unsigned.apk'))) @('SoftwareServiceContractTest all passed') 30
+  CheckTimed 'services: statusbar without a SystemUI bar: tile listening and add-tile answers' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.StatusBarContractTest') @('StatusBarContractTest all passed') 30
   CheckTimed 'services: existing and future registration callbacks, cancellation and death cleanup' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceRegistrationCallbackTest') @('ServiceRegistrationCallbackTest all passed') 30
   CheckTimed 'services: actual storage volumes, capacity, credential state and file allocation' "$Dir/dalvikvm.exe" `

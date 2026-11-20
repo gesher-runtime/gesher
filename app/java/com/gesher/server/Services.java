@@ -166,6 +166,10 @@ public final class Services {
                 pm.appOps()).asBinder());
         services.put("permission_checker", StandIn.of(android.permission.IPermissionChecker.class,
                 new AppOpsPermissionChecker(pm)).asBinder());
+        // StatusBarManager (TileService.requestListeningState, requestAddTileService).
+        services.put(Context.STATUS_BAR_SERVICE, StandIn.of(
+                com.android.internal.statusbar.IStatusBarService.class,
+                new StatusBarService(pm, atm)).asBinder());
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
