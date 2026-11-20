@@ -41,6 +41,7 @@
 #include "abi_types.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/clocks.h>
 #include <gesher/elf_loader.h>
 
 #include <android/data_space.h>
@@ -96,11 +97,8 @@ void Fatal(const char* what) {
   std::abort();
 }
 
-int64_t MonotonicNs() {
-  timespec ts{};
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
-}
+// The app's CLOCK_MONOTONIC (the bionic shim's clock_gettime), not the host's.
+int64_t MonotonicNs() { return gesher::MonotonicNanos(); }
 
 using SysvCallback = void(BIONIC_SYSV*)(void* context, ASurfaceTransactionStats* stats);
 using SysvBufferRelease = void(BIONIC_SYSV*)(void* context, int release_fence_fd);

@@ -10,18 +10,19 @@
 //    an ANGLE image of the GPU thread's texture, so whatever the app draws
 //    into it through glEGLImageTargetTexture2DOES is the buffer's content);
 //    creating it twice gives the same image, released after as many destroys;
-//  - EGL_ANDROID_native_fence_sync: a native fence sync made without an fd
-//    puts an ANGLE fence in the current context; eglDupNativeFenceFDANDROID
-//    waits for it and gives an fd that is signaled (a /dev/null descriptor:
-//    polls readable, crosses processes, reports no sync_file details), so the
-//    fd never signals before the GPU work is done. One made from an fd (from
-//    this process or another) is waited for by polling it: eglWaitSyncKHR
-//    waits on the CPU before later commands are issued, which preserves the
-//    order the server wait promises. Waiting in eglDupNativeFenceFDANDROID
-//    costs CPU/GPU overlap: the caller blocks until its GPU work is finished.
+//  - EGL_ANDROID_native_fence_sync: ANGLE's Direct3D 11 display has no EGL
+//    fence syncs (EGL_KHR_fence_sync) to build on, so a native fence sync made
+//    without an fd waits, when it is made, for the current context's commands
+//    to finish (glFinish) and then holds an fd that is signaled (a /dev/null
+//    descriptor: polls readable, crosses processes, reports no sync_file
+//    details): the fd never signals before the GPU work before the fence is
+//    done. One made from an fd (from this process or another) is waited for by
+//    polling it: eglWaitSyncKHR waits on the CPU before later commands are
+//    issued, which keeps the order the server wait promises. The cost is
+//    CPU/GPU overlap: making a fence blocks until the GPU has caught up.
 // eglQueryString(EGL_EXTENSIONS) adds the three names for the default display
-// when ANGLE has what they are built on (EGL_KHR_image_base,
-// EGL_KHR_gl_texture_2D_image, EGL_KHR_fence_sync). Everything else is ANGLE's.
+// when ANGLE has what the images are built on (EGL_KHR_image_base,
+// EGL_KHR_gl_texture_2D_image). Everything else is ANGLE's.
 // Errors are left in ANGLE's per-thread error state (an ANGLE call that fails
 // with the same code), so eglGetError stays ANGLE's.
 #include "gpu_interop.h"  // first: the EGL/GL prototype macros
@@ -218,9 +219,7 @@ EGLBoolean BIONIC_SYSV DestroyImage(EGLDisplay dpy, EGLImage image) { return Des
 
 struct NativeFence {
   EGLDisplay display = EGL_NO_DISPLAY;
-  EGLSyncKHR angle = EGL_NO_SYNC_KHR;  // the fence a context put in its commands, or none
-  int fd = -1;                         // signaled when the fence is
-  std::mutex mutex;
+  int fd = -1;  // signaled when the fence is
 };
 
 std::mutex g_fences_mutex;
@@ -261,18 +260,25 @@ EGLSyncKHR CreateNativeFence(EGLDisplay dpy, const std::vector<EGLint>& attribs)
     }
   }
   const gpu::Gl* g = G();
-  auto* f = new NativeFence();
-  f->display = dpy;
-  if (fd >= 0) {
-    f->fd = fd;  // the implementation owns it from now on
-  } else {
-    // A fence in the current context's commands (EGL_BAD_MATCH without one).
-    f->angle = g->eglCreateSyncKHR(dpy, EGL_SYNC_FENCE_KHR, nullptr);
-    if (f->angle == EGL_NO_SYNC_KHR) {
-      delete f;
-      return EGL_NO_SYNC_KHR;  // ANGLE's error stands
+  if (fd < 0) {
+    // A fence after the current context's commands (EGL_BAD_MATCH without a
+    // context current on this display): they are waited for now, so the fd
+    // is signaled from the start and never before the work is done.
+    if (g->eglGetCurrentContext() == EGL_NO_CONTEXT || g->eglGetCurrentDisplay() != dpy) {
+      SetError(EGL_BAD_MATCH);
+      return EGL_NO_SYNC_KHR;
+    }
+    static auto finish = reinterpret_cast<decltype(&::glFinish)>(gesher_egl_proc("glFinish"));
+    finish();
+    fd = SignaledFenceFd();
+    if (fd < 0) {
+      SetError(EGL_BAD_ALLOC);
+      return EGL_NO_SYNC_KHR;
     }
   }
+  auto* f = new NativeFence();
+  f->display = dpy;
+  f->fd = fd;  // given in the attributes: the implementation owns it from now on
   std::lock_guard<std::mutex> lock(g_fences_mutex);
   Fences().insert(f);
   return f;
@@ -297,7 +303,6 @@ EGLBoolean DestroySyncImpl(EGLDisplay dpy, void* sync) {
     std::lock_guard<std::mutex> lock(g_fences_mutex);
     Fences().erase(f);
   }
-  if (f->angle != EGL_NO_SYNC_KHR) G()->eglDestroySyncKHR(f->display, f->angle);
   if (f->fd >= 0) close(f->fd);
   delete f;
   return EGL_TRUE;
@@ -309,7 +314,6 @@ EGLBoolean BIONIC_SYSV DestroySync(EGLDisplay dpy, EGLSync sync) { return Destro
 EGLint ClientWaitImpl(EGLDisplay dpy, void* sync, EGLint flags, uint64_t timeout) {
   NativeFence* f = FindFence(sync);
   if (f == nullptr) return G()->eglClientWaitSyncKHR(dpy, sync, flags, timeout);
-  if (f->angle != EGL_NO_SYNC_KHR) return G()->eglClientWaitSyncKHR(f->display, f->angle, flags, timeout);
   return PollFence(f->fd, timeout) ? EGL_CONDITION_SATISFIED_KHR : EGL_TIMEOUT_EXPIRED_KHR;
 }
 
@@ -328,7 +332,6 @@ EGLint WaitImpl(EGLDisplay dpy, void* sync, EGLint flags) {
     SetError(EGL_BAD_PARAMETER);
     return EGL_FALSE;
   }
-  if (f->angle != EGL_NO_SYNC_KHR) return G()->eglWaitSyncKHR(f->display, f->angle, 0);
   // The commands after the wait are issued once the fence has signaled.
   PollFence(f->fd, EGL_FOREVER_KHR);
   return EGL_TRUE;
@@ -349,9 +352,6 @@ bool FenceAttrib(NativeFence* f, EGLint attribute, EGLint* value) {
       *value = EGL_SYNC_NATIVE_FENCE_SIGNALED_ANDROID;
       return true;
     case EGL_SYNC_STATUS_KHR:
-      if (f->angle != EGL_NO_SYNC_KHR) {
-        return G()->eglGetSyncAttribKHR(f->display, f->angle, EGL_SYNC_STATUS_KHR, value) == EGL_TRUE;
-      }
       *value = PollFence(f->fd, 0) ? EGL_SIGNALED_KHR : EGL_UNSIGNALED_KHR;
       return true;
     default:
@@ -409,21 +409,6 @@ EGLint BIONIC_SYSV DupNativeFenceFd(EGLDisplay /*dpy*/, EGLSyncKHR sync) {
     SetError(EGL_BAD_PARAMETER);
     return EGL_NO_NATIVE_FENCE_FD_ANDROID;
   }
-  std::lock_guard<std::mutex> lock(f->mutex);
-  if (f->fd < 0) {
-    // The fd must not signal before the fence's commands are done: wait for
-    // them (flushing them first), then hand out a signaled descriptor.
-    EGLint r = G()->eglClientWaitSyncKHR(f->display, f->angle, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR,
-                                         EGL_FOREVER_KHR);
-    if (r != EGL_CONDITION_SATISFIED_KHR) {
-      return EGL_NO_NATIVE_FENCE_FD_ANDROID;  // ANGLE's error stands
-    }
-    f->fd = SignaledFenceFd();
-    if (f->fd < 0) {
-      SetError(EGL_BAD_ALLOC);
-      return EGL_NO_NATIVE_FENCE_FD_ANDROID;
-    }
-  }
   int fd = dup(f->fd);
   if (fd < 0) SetError(EGL_BAD_ALLOC);
   return fd;
@@ -448,8 +433,7 @@ const char* BIONIC_SYSV QueryString(EGLDisplay dpy, EGLint name) {
   std::lock_guard<std::mutex> lock(mutex);
   if (extended == nullptr) {
     std::string list = s;
-    if (HasExtension(s, "EGL_KHR_image_base") && HasExtension(s, "EGL_KHR_gl_texture_2D_image") &&
-        HasExtension(s, "EGL_KHR_fence_sync")) {
+    if (HasExtension(s, "EGL_KHR_image_base") && HasExtension(s, "EGL_KHR_gl_texture_2D_image")) {
       for (const char* add : {"EGL_ANDROID_get_native_client_buffer", "EGL_ANDROID_image_native_buffer",
                               "EGL_ANDROID_native_fence_sync"}) {
         if (!HasExtension(s, add)) {

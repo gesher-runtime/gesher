@@ -60,3 +60,12 @@ target_include_directories(gl_window_test PRIVATE ${CMAKE_SOURCE_DIR}/compat/hwu
 target_link_libraries(gl_window_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
   gesher_window_surface graphics_native_headers user32 gdi32)
 target_compile_options(gl_window_test PRIVATE -Wall -Wextra -Werror)
+
+# AHardwareBuffer, ASurfaceControl and the EGL native buffer/fence extensions
+# from an NDK library into a Gesher window (tests/native/surface_control_test.c,
+# ADR 0089), run in CI on Windows with surface_control_test.so.
+add_executable(surface_control_host_test ${CMAKE_SOURCE_DIR}/tests/native/surface_control_host_test.cc)
+target_include_directories(surface_control_host_test PRIVATE ${CMAKE_SOURCE_DIR}/compat/hwui/window)
+target_link_libraries(surface_control_host_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
+  gesher_window_surface graphics_native_headers user32 gdi32)
+target_compile_options(surface_control_host_test PRIVATE -Wall -Wextra -Werror)
