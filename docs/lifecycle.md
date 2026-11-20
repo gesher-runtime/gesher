@@ -21,8 +21,32 @@ does, per task:
   for its target SDK); `Activity.setTranslucent` changes it
   (`convertToTranslucent`, `convertFromTranslucent`);
 - a task moved to the back (its window minimized) shows nothing;
-- tasks are windows of their own on the Windows desktop (Android's desktop
-  windowing), so an activity of another task never hides this one's.
+- tasks of different apps are windows of their own on the Windows desktop
+  (Android's desktop windowing), so an activity of another app's task never
+  hides this one's. An app's own tasks take turns in one window (below).
+
+## One window per app
+
+An app's tasks are shown in one desktop window (ADR 0088). Gmail's compose
+screen, for example, is a document task of its own. When a task comes to the
+front (started, brought forward, restored), the system server moves the app's
+other visible tasks to the back, as `moveTaskToBack` does: their activities
+pause and stop, and their windows hide. Each task stays an Android task, with
+its own id, history, Back, `getAppTasks` entry and configuration. A task whose
+top activity is translucent or floating hides nothing.
+
+- The window keeps its place: a task window that opens or shows again takes
+  the place and size of the app's window shown now, else where it was last.
+- When the task in front has no activity left (Back on its root, `finish`),
+  the latest task the window hid comes back, unless the user had minimized the
+  window.
+- The window's X removes every task of the app (`AppTask.finishAndRemoveTask`).
+- With two or more tasks, the window menu (Alt+Space, or a right click on the
+  title bar) lists them, the shown one checked, then "Close this task".
+- `gesher-app windows PACKAGE separate` (or the Control Center's "Separate
+  windows") makes each of the app's tasks a window of its own again, from the
+  app's next start (`<data>/system/app-windows.properties`,
+  `$GESHER_SEPARATE_WINDOWS`).
 
 An activity paused because another came in front is stopped once the new one
 is resumed or idle only if it is no longer visible; under a translucent or

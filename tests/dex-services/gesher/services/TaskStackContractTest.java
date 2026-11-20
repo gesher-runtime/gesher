@@ -18,6 +18,7 @@ import android.app.servertransaction.LaunchActivityItem;
 import android.app.servertransaction.NewIntentItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
+import android.app.servertransaction.StopActivityItem;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
@@ -1294,8 +1295,110 @@ public final class TaskStackContractTest {
                 "Force stop leaked incoming/outgoing ownerless URI grants or removed unrelated grants");
     }
 
+    /** The app's window's setting as the system server holds it (AppWindows.sStarted). */
+    @SuppressWarnings("unchecked")
+    private static void separateWindows(String pkg, Boolean separate) throws Exception {
+        Field started = Class.forName("com.gesher.app.window.AppWindows").getDeclaredField("sStarted");
+        started.setAccessible(true);
+        java.util.Map<String, Boolean> map = (java.util.Map<String, Boolean>) started.get(null);
+        synchronized (map) {
+            if (separate == null) map.remove(pkg); else map.put(pkg, separate);
+        }
+    }
+
+    /**
+     * ADR 0088: an app's tasks take turns in one window. A document task coming to the front
+     * moves the app's other visible task to the back (paused, stopped, as moveTaskToBack);
+     * when the document task finishes, the covered task comes back. Each stays an Android
+     * task of its own. With separate windows, nothing is covered.
+     */
+    @SuppressWarnings("unchecked")
+    private static void oneWindowPerApp() throws Exception {
+        separateWindows(PKG, false);
+        try {
+            Harness h = new Harness();
+            check(h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    == ActivityManager.START_SUCCESS, "Root rejected");
+            Object root = h.record("Root");
+            h.acknowledge("activityResumed", root);
+            Intent document = launch("Doc").setData(android.net.Uri.parse("content://fixture/document/window"));
+            check(h.start(document) == ActivityManager.START_SUCCESS, "Document rejected");
+            Object doc = h.record("Doc");
+            int rootTask = (Integer) get(root, "taskId"), docTask = (Integer) get(doc, "taskId");
+            check(rootTask != docTask, "The document did not get a task of its own");
+            java.util.Set<Integer> hidden = (java.util.Set<Integer>) get(h.tasks, "mHiddenTasks");
+            java.util.Set<Integer> covered = (java.util.Set<Integer>) get(h.tasks, "mAppHiddenTasks");
+            check(hidden.contains(rootTask) && covered.contains(rootTask) && !hidden.contains(docTask),
+                    "The app's document task did not cover its other task");
+            check(h.thread.items(PauseActivityItem.class, root) == 1,
+                    "The covered task's resumed activity was not paused");
+            // Its window's late activation (a focus event already queued) does not swap back.
+            int resumes = h.thread.items(ResumeActivityItem.class, root);
+            h.asApp(() -> h.api.moveTaskToFront(h.thread, PKG, rootTask, 0, null));
+            check(hidden.contains(rootTask) && covered.contains(rootTask)
+                    && h.thread.items(ResumeActivityItem.class, root) == resumes,
+                    "A late activation of the covered task's window swapped the app's tasks");
+            h.acknowledge("activityPaused", root);
+            check(h.thread.items(StopActivityItem.class, root) == 1,
+                    "The covered task's activity was not stopped once paused");
+            h.acknowledgeStopped(root);
+            check(h.thread.launches(doc) == 1, "The document task's activity was not launched");
+            h.acknowledge("activityResumed", doc);
+            check(h.api.getTasks(10, false, true, Display.DEFAULT_DISPLAY).size() == 2,
+                    "Covering merged or dropped the app's tasks");
+            // Back on the document's root finishes it: the covered task comes back.
+            h.finish(doc);
+            check(!hidden.contains(rootTask) && !covered.contains(rootTask),
+                    "The covered task did not come back when the task in front finished");
+            check(h.thread.items(ResumeActivityItem.class, root) >= 1
+                    || "RESUMING".equals(h.state(root)) || "RESUMED".equals(h.state(root)),
+                    "The task that came back was not resumed");
+
+            // Minimized by the user, the task in front leaves the covered one alone.
+            Harness minimized = new Harness();
+            minimized.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Object first = minimized.record("Root");
+            minimized.acknowledge("activityResumed", first);
+            minimized.start(document);
+            Object second = minimized.record("Doc");
+            minimized.acknowledge("activityPaused", first);
+            minimized.acknowledgeStopped(first);
+            minimized.acknowledge("activityResumed", second);
+            java.util.Set<Integer> minimizedHidden = (java.util.Set<Integer>) get(minimized.tasks, "mHiddenTasks");
+            minimized.asApp(() -> check(minimized.api.getActivityClientController().moveActivityTaskToBack(
+                    (IBinder) get(second, "token"), true), "The task in front did not go to the back"));
+            minimized.finish(second);
+            check(minimizedHidden.contains((Integer) get(first, "taskId")),
+                    "A covered task came back although the user had minimized the app's window");
+
+            // Separate windows: the document task is a window of its own, nothing is covered.
+            separateWindows(PKG, true);
+            Harness separate = new Harness();
+            separate.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Object own = separate.record("Root");
+            separate.acknowledge("activityResumed", own);
+            separate.start(document);
+            java.util.Set<Integer> separateHidden = (java.util.Set<Integer>) get(separate.tasks, "mHiddenTasks");
+            check(separateHidden.isEmpty() && separate.thread.items(PauseActivityItem.class, own) == 0,
+                    "With separate windows, the app's document task covered its other task");
+        } finally {
+            separateWindows(PKG, true);
+        }
+    }
+
     public static int run(boolean binder, String selected) throws Exception {
         realBinder = binder; checks = 0;
+        // The other groups check each task as a window of its own (multi-resume): the
+        // app's separate-windows setting. oneWindowPerApp checks the default.
+        separateWindows(PKG, true);
+        try {
+            return runSelected(selected);
+        } finally {
+            separateWindows(PKG, null);
+        }
+    }
+
+    private static int runSelected(String selected) throws Exception {
         if (selected.equals("all") || selected.equals("history")) { fullStack(); acceptedHistoryLifetimes(); disabledDeferredHistory(); }
         if (selected.equals("all") || selected.equals("validation")) invalidBatch();
         if (selected.equals("all") || selected.equals("tasks")) { taskFlags(); reorderedUriOwner(); abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris(); }
@@ -1304,6 +1407,7 @@ public final class TaskStackContractTest {
         }
         if (selected.equals("all") || selected.equals("attach")) attachAndReentry();
         if (selected.equals("all") || selected.equals("visibility")) visibilityAndRemoval();
+        if (selected.equals("all") || selected.equals("appwindow")) oneWindowPerApp();
         if (selected.equals("all") || selected.equals("permissions")) permissions();
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
         return checks;

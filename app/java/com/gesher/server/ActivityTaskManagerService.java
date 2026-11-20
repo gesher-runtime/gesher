@@ -362,6 +362,23 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private long mNextActivityOrder = 1;
     /** Tasks moved to the back (their window minimized): none of their activities is visible. */
     private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
+    /**
+     * One window per app (ADR 0088): tasks moved to the back because another task of their
+     * package came to the front (also in mHiddenTasks), the package's task in front, and the
+     * hidden tasks whose activities are still to be paused and stopped (updateTopResumed).
+     */
+    private final java.util.Set<Integer> mAppHiddenTasks = new java.util.HashSet<>();
+    private final Map<String, Integer> mAppFront = new HashMap<>();
+    /** When each app's window last changed the task it shows (uptimeMillis). */
+    private final Map<String, Long> mAppFrontSince = new HashMap<>();
+    /**
+     * How long after a task covers its app's others a window activation cannot bring one of
+     * them back: activation events of the covered task's window (the window still shown, a
+     * focus change already queued, the launcher bringing the app's window forward) arrive
+     * after the task in front was started.
+     */
+    static final long APP_FRONT_SETTLE_MS = 1000;
+    private final List<Integer> mAppHidePending = new ArrayList<>();
     /** Tasks the user resized (resizeTask): their size in pixels; others are the display's. */
     private final android.util.SparseArray<Rect> mTaskBounds = new android.util.SparseArray<>();
     /**
@@ -2371,6 +2388,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (reusedTaskTop != null) {
             started[0] = reusedTaskTop;
             if (inAppTask) moveTaskToFront(reusedTaskTop.taskId, requiredTask);
+            applyAppWindows();
             return ActivityManager.START_TASK_TO_FRONT;
         }
         if (deliverTo != null) {
@@ -2387,6 +2405,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             // delivery. Creator code/capability and target generations remain live.
             deliverNewIntent(deliverTo, launch, callingPackage, sourceLifetime, callerSnapshot);
             if (inAppTask) moveTaskToFront(deliverTo.taskId, requiredTask);
+            applyAppWindows();
             return ActivityManager.START_DELIVERED_TO_TOP;
         }
         started[0] = r;
@@ -4183,6 +4202,103 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             task.lastActiveTime = SystemClock.elapsedRealtime();
             notifyTaskStackChangedLocked();
         }
+        coverAppTasksLocked(taskId);
+    }
+
+    // --- one window per app (ADR 0088) -------------------------------------------------------
+
+    /** The package whose window a task is shown in (its owner, getAppTasks'), or null. */
+    private String appOfLocked(int taskId) {
+        AppTaskRecord task = mAppTasks.get(taskId);
+        return task != null ? task.owner.packageName : null;
+    }
+
+    /**
+     * The task came to the front: unless its package's tasks are windows of their own, or
+     * its top activity is translucent or floating (what is under it stays visible), the
+     * package's other visible tasks go to the back, as the task in front covers them on a
+     * phone. Their activities are paused and stopped by updateTopResumed. Guarded by this.
+     */
+    private void coverAppTasksLocked(int taskId) {
+        mAppHiddenTasks.remove(taskId);
+        String app = appOfLocked(taskId);
+        if (app == null || com.gesher.app.window.AppWindows.separate(app)) return;
+        ActivityRecord top = topOf(taskId);
+        if (top == null || top.translucent) return;
+        Integer previous = mAppFront.put(app, taskId);
+        if (previous == null || previous != taskId) {
+            mAppFrontSince.put(app, SystemClock.uptimeMillis());
+        }
+        for (int other : mTaskOrder) {
+            if (other == taskId || mHiddenTasks.contains(other) || topOf(other) == null
+                    || !app.equals(appOfLocked(other))) continue;
+            mHiddenTasks.add(other);
+            mAppHiddenTasks.add(other);
+            mAppHidePending.add(other);
+            notifyTaskStackChangedLocked();
+        }
+    }
+
+    /**
+     * Whether a task its app's window covered a moment ago is asked to the front (guarded by
+     * this): the late activation of its window, not the user's choice (APP_FRONT_SETTLE_MS).
+     */
+    private boolean settlingAppTaskLocked(int taskId) {
+        if (!mAppHiddenTasks.contains(taskId)) return false;
+        String app = appOfLocked(taskId);
+        Long since = app != null ? mAppFrontSince.get(app) : null;
+        Integer front = app != null ? mAppFront.get(app) : null;
+        return since != null && front != null && front != taskId && topOf(front) != null
+                && SystemClock.uptimeMillis() - since < APP_FRONT_SETTLE_MS;
+    }
+
+    /**
+     * Tasks to bring back (guarded by this): for each app whose task in front has no
+     * activity left (finished, Back on its root), the latest task the app's window hid,
+     * unless the user had minimized the one in front.
+     */
+    private List<Integer> uncoverAppTasksLocked() {
+        List<Integer> restore = new ArrayList<>();
+        for (java.util.Iterator<Map.Entry<String, Integer>> it = mAppFront.entrySet().iterator();
+                it.hasNext(); ) {
+            Map.Entry<String, Integer> entry = it.next();
+            int front = entry.getValue();
+            if (topOf(front) != null) continue;
+            it.remove();
+            if (mHiddenTasks.contains(front) && !mAppHiddenTasks.contains(front)) continue;
+            for (int i = mTaskOrder.size() - 1; i >= 0; i--) {
+                int task = mTaskOrder.get(i);
+                if (task != front && mAppHiddenTasks.contains(task) && topOf(task) != null
+                        && entry.getKey().equals(appOfLocked(task))) {
+                    restore.add(task);
+                    break;
+                }
+            }
+        }
+        return restore;
+    }
+
+    /**
+     * Pauses and stops the activities of the tasks coverAppTasksLocked moved to the back, and
+     * brings back what uncoverAppTasksLocked finds (after updateTopResumed).
+     */
+    private void applyAppWindows() {
+        List<Integer> hide;
+        List<Integer> restore;
+        synchronized (this) {
+            hide = new ArrayList<>(mAppHidePending);
+            mAppHidePending.clear();
+            restore = uncoverAppTasksLocked();
+        }
+        for (int taskId : hide) {
+            SystemServer.log("task " + taskId + " is covered by another task of its app"
+                    + " (one window per app)");
+            stopHiddenTask(taskId);
+        }
+        for (int taskId : restore) {
+            SystemServer.log("task " + taskId + " comes back in its app's window");
+            moveTaskToFront(taskId, null);
+        }
     }
 
     private void recordAppTaskLocked(ActivityRecord activity, boolean clearTask) {
@@ -4195,6 +4311,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private void discardAppTaskLocked(int taskId) {
+        mAppHiddenTasks.remove(taskId);
         if (mAppTasks.remove(taskId) != null) notifyTaskStackChangedLocked();
     }
 
@@ -4263,6 +4380,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             t.addTransactionItem(new TopResumedActivityChangeItem(gain.token, true));
             schedule(gain, t, "TopResumedActivityChangeItem (the top resumed activity)");
         }
+        // Tasks came to the front or went (ADR 0088): their app's other tasks stop or return.
+        applyAppWindows();
     }
 
     /**
@@ -5100,8 +5219,6 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * saves its state, ActivityThread's handleStopActivity).
      */
     boolean moveTaskToBack(ActivityRecord r, boolean nonRoot) {
-        List<ActivityRecord> toPause = new ArrayList<>();
-        List<ActivityRecord> toStop = new ArrayList<>();
         int taskId = r.taskId;
         synchronized (this) {
             if (!nonRoot) {
@@ -5117,6 +5234,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             if (!mHiddenTasks.add(taskId)) return true;
             notifyTaskStackChangedLocked();
+        }
+        stopHiddenTask(taskId);
+        return true;
+    }
+
+    /**
+     * A task moved to the back (in mHiddenTasks): its resumed activity is paused, then
+     * stopped; the other visible ones are stopped (each saves its state, ActivityThread's
+     * handleStopActivity). The top resumed activity is another visible task's now, if any.
+     */
+    private void stopHiddenTask(int taskId) {
+        List<ActivityRecord> toPause = new ArrayList<>();
+        List<ActivityRecord> toStop = new ArrayList<>();
+        synchronized (this) {
+            if (!mHiddenTasks.contains(taskId)) return;
             for (ActivityRecord a : mActivities) {
                 if (a.taskId != taskId || a.finishing || a.app == null) continue;
                 switch (a.state) {
@@ -5140,7 +5272,6 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         updateTopResumed();
         for (ActivityRecord a : toPause) pause(a, false);
         for (ActivityRecord a : toStop) stop(a);
-        return true;
     }
 
     /**
@@ -5159,6 +5290,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean history;
         synchronized (this) {
             if (requiredTask != null && !hasAppTaskLocked(requiredTask)) return;
+            if (requiredTask == null && settlingAppTaskLocked(taskId)) {
+                SystemServer.log("task " + taskId + " stays behind its app's task in front:"
+                        + " its window was activated as that task came to the front");
+                return;
+            }
             ActivityRecord activity = topOf(taskId);
             history = activity != null && activity.deferredHistory;
             if (history) { mHiddenTasks.remove(taskId); focusTaskLocked(taskId); }

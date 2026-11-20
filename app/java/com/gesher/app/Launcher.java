@@ -63,6 +63,9 @@ import java.util.Properties;
  *                       back). --headless: no windows; once the activity is idle its task
  *                       is removed (with --keep-task it runs until it finishes).
  *                       --proxy: the app's HTTP proxy for this launch (its next process)
+ *     windows PACKAGE separate|shared
+ *                       Whether the app's tasks are windows of their own, or share one
+ *                       window (the default; ADR 0088), from the app's next start.
  *     proxy [[PACKAGE] host:port|direct|windows]
  *                       Gesher's own proxy, over Windows' settings: for every app, or for
  *                       one package (windows: Windows' settings for it); no argument
@@ -240,6 +243,7 @@ public final class Launcher {
             case "spell-checker":
                 ensureDevice(true);
                 return SpellCheckerCommands.run(rest);
+            case "windows": return windows(rest);
             case "view": {
                 if (rest.size() != 2) return usage();
                 return view(rest.get(0), rest.get(1));
@@ -323,11 +327,29 @@ public final class Launcher {
         return 0;
     }
 
+    /**
+     * {@code windows PACKAGE separate|shared}: whether the app's tasks are windows of their
+     * own or share one (the default; ADR 0088), from its next start.
+     */
+    private static int windows(List<String> args) throws Exception {
+        if (args.size() != 2) return usage();
+        String pkg = args.get(0);
+        boolean separate;
+        switch (args.get(1)) {
+            case "separate": separate = true; break;
+            case "shared": separate = false; break;
+            default: return usage();
+        }
+        com.gesher.app.window.AppWindows.save(pkg, separate);
+        log(text(separate ? "windows_separate_saved" : "windows_shared_saved", pkg));
+        return 0;
+    }
+
     private static int usage() {
         System.err.println(text("usage") + "gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
                 + " true|false]... [--proxy host:port|direct|windows]"
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
-                + " | proxy [[PACKAGE] host:port|direct|windows] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
+                + " | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
                 + " | shutdown | apk-icon APK | spell-checker list|use COMPONENT|automatic|enable|disable|language ID");
         return 2;
     }
