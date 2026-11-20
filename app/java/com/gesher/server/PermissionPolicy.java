@@ -642,6 +642,11 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     private void runtimeDecision(String pkg, String permission, int userId, String decision) {
+        runtimeDecision(pkg, permission, userId, decision, true);
+    }
+
+    private void runtimeDecision(String pkg, String permission, int userId, String decision,
+            boolean killOnRevoke) {
         requireSystem(); user(userId);
         ApkPackage installed = mPm.get(pkg);
         PermissionInfo info = mCatalog.get(permission);
@@ -670,7 +675,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             scheduleWrite();
             publishRuntimeModes(installed.uid(), before);
         } }
-        permissionChanged(installed, permission, wasGranted);
+        if (killOnRevoke) permissionChanged(installed, permission, wasGranted);
+        else permissionsChanged(installed, () -> false);
     }
 
     private void permissionChanged(ApkPackage installed, String permission, boolean wasGranted) {
@@ -705,6 +711,16 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         requireSystem();
         requireDefaultDevice(deviceId);
         runtimeDecision(pkg, permission, userId, "denied");
+    }
+    /**
+     * Android's test-only POST_NOTIFICATIONS revoke: the same runtime-permission revoke
+     * (state, flags, AppOps modes, cache invalidation and notification cleanup) but with
+     * AOSP's SKIP_KILL_APP_REASON_NOTIFICATION_TEST, so the still-running process can
+     * observe the denial. Ordinary revokes keep killing the UID.
+     */
+    @Override public void revokePostNotificationPermissionWithoutKillForTest(String pkg, int userId) {
+        requireSystem();
+        runtimeDecision(pkg, Manifest.permission.POST_NOTIFICATIONS, userId, "denied", false);
     }
     @Override public boolean shouldShowRequestPermissionRationale(String pkg, String permission, int deviceId, int userId) { return false; }
     @Override public synchronized int getPermissionFlags(String pkg, String permission, String deviceId, int userId) {

@@ -443,6 +443,15 @@ public final class GesherAppDriver {
     private static Configuration sDeferredConfigurationBefore;
 
     /**
+     * A relaunch for a configuration change is posted to the main Looper and has not run
+     * yet: a run that ends once the launch's messages have run waits for it, as the
+     * activity's relaunch is part of the change those messages made.
+     */
+    public static boolean relaunchPending() {
+        return sRelaunchPending;
+    }
+
+    /**
      * ActivityThread.handleActivityConfigurationChanged, scaled down: the Activity's
      * resources take its window's override configuration (ResourcesManager), it gets
      * onConfigurationChanged for the changes it handles (android:configChanges); the

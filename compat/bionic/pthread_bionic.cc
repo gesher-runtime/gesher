@@ -20,7 +20,10 @@
 #include <array>
 #include <climits>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -169,7 +172,67 @@ struct ExternalThreadRecord {
   bool translated_attributes_ready = false;
 };
 std::unordered_map<bionic_pthread_t, ExternalThreadRecord> g_external_threads;
-std::atomic<bionic_pthread_t> g_next_id{1};
+
+// Native Android crash reporters and profilers treat pthread_t as Bionic's
+// pthread_internal_t* and read its leading fields or scan
+// [pthread_self(), page_end). Each pthread_t points at a 64-byte record with
+// those leading fields' layout (thread-list links, tid at +16, cached pid at
+// +20), allocated from committed 64 KiB slabs that are never freed, so a
+// published identity is never reused. As the kernel clears Bionic's tid
+// (CLONE_CHILD_CLEARTID), tid becomes 0 once the thread is known to have
+// exited; a Windows TID can be reused afterwards.
+constexpr size_t kDescriptorSlabBytes = 64 * 1024;
+struct alignas(64) ThreadDescriptor {
+  void* next;  // Bionic's thread-list links; this registry never links them.
+  void* prev;
+  int32_t tid;  // Accessed atomically: other threads may read it.
+  uint32_t cached_pid;  // Bionic: 31-bit pid; the vforked top bit is never set.
+  uint64_t reserved[5];
+};
+static_assert(sizeof(ThreadDescriptor) == 64);
+static_assert(offsetof(ThreadDescriptor, tid) == 16);
+static_assert(offsetof(ThreadDescriptor, cached_pid) == 20);
+static_assert(4096 % sizeof(ThreadDescriptor) == 0);
+static_assert(kDescriptorSlabBytes % sizeof(ThreadDescriptor) == 0);
+
+std::mutex g_descriptor_mutex;
+uint8_t* g_descriptor_slab = nullptr;
+size_t g_descriptor_offset = kDescriptorSlabBytes;
+// Records whose pthread_create failed before the identity reached any caller.
+std::vector<ThreadDescriptor*> g_unpublished_descriptors;
+
+ThreadDescriptor* AllocateThreadDescriptor(int32_t tid) {
+  std::lock_guard<std::mutex> lock(g_descriptor_mutex);
+  ThreadDescriptor* descriptor = nullptr;
+  if (!g_unpublished_descriptors.empty()) {
+    descriptor = g_unpublished_descriptors.back();
+    g_unpublished_descriptors.pop_back();
+  } else {
+    if (g_descriptor_slab == nullptr ||
+        g_descriptor_offset + sizeof(ThreadDescriptor) > kDescriptorSlabBytes) {
+      auto* slab = static_cast<uint8_t*>(
+          VirtualAlloc(nullptr, kDescriptorSlabBytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+      if (slab == nullptr) return nullptr;
+      g_descriptor_slab = slab;
+      g_descriptor_offset = 0;
+    }
+    descriptor = reinterpret_cast<ThreadDescriptor*>(g_descriptor_slab + g_descriptor_offset);
+    g_descriptor_offset += sizeof(ThreadDescriptor);
+  }
+  __atomic_store_n(&descriptor->tid, tid, __ATOMIC_RELEASE);
+  descriptor->cached_pid = static_cast<uint32_t>(GetCurrentProcessId()) & 0x7fffffffu;
+  return descriptor;
+}
+
+void ReleaseUnpublishedDescriptor(ThreadDescriptor* descriptor) {
+  __atomic_store_n(&descriptor->tid, 0, __ATOMIC_RELEASE);
+  std::lock_guard<std::mutex> lock(g_descriptor_mutex);
+  g_unpublished_descriptors.push_back(descriptor);
+}
+
+void SetDescriptorTid(bionic_pthread_t thread, int32_t tid) {
+  __atomic_store_n(&reinterpret_cast<ThreadDescriptor*>(thread)->tid, tid, __ATOMIC_RELEASE);
+}
 
 thread_local bionic_pthread_t t_self = 0;
 thread_local ThreadRecord* t_record = nullptr;
@@ -191,6 +254,7 @@ void ReapCpuClocks() {
     if (it->second.handle != nullptr &&
         WaitForSingleObject(it->second.handle, 0) != WAIT_TIMEOUT) {
       CloseHandle(it->second.handle);
+      SetDescriptorTid(it->first, 0);
       it = g_external_threads.erase(it);
     } else {
       ++it;
@@ -243,18 +307,23 @@ struct StartArg {
   ThreadRecord* record;
 };
 
-// Frees a detached thread's record when it ends.
+// Frees a detached thread's record when it ends. Nothing Android-visible runs
+// on this thread afterwards, so its descriptor's tid is cleared before the
+// Windows thread handle (which join waits on) is signalled.
 void FinishThread(void* retval) {
   RunThreadExit();
   if (t_record == nullptr) return;
-  std::lock_guard<std::mutex> lock(g_threads_mutex);
-  t_record->retval = retval;
-  if (t_record->detached) {
-    CloseHandle(t_record->handle);
-    g_threads.erase(t_self);
-    delete t_record;
+  {
+    std::lock_guard<std::mutex> lock(g_threads_mutex);
+    t_record->retval = retval;
+    if (t_record->detached) {
+      CloseHandle(t_record->handle);
+      g_threads.erase(t_self);
+      delete t_record;
+    }
+    t_record = nullptr;
   }
-  t_record = nullptr;
+  SetDescriptorTid(t_self, 0);
 }
 
 DWORD WINAPI ThreadTrampoline(void* raw) {
@@ -279,7 +348,13 @@ DWORD WINAPI ThreadTrampoline(void* raw) {
 
 bionic_pthread_t SelfId() {
   if (t_self == 0) {
-    t_self = g_next_id.fetch_add(1);
+    ThreadDescriptor* descriptor = AllocateThreadDescriptor(SelfTid());
+    if (descriptor == nullptr) {
+      // Bionic's pthread_self cannot fail; an unbacked identity would alias.
+      std::fprintf(stderr, "gesher bionic: pthread_self: no memory for a thread descriptor\n");
+      std::abort();
+    }
+    t_self = reinterpret_cast<bionic_pthread_t>(descriptor);
     std::lock_guard<std::mutex> lock(g_threads_mutex);
     ReapCpuClocks();
     HANDLE retained = nullptr;
@@ -527,10 +602,12 @@ int BIONIC_SYSV gesher_bionic___gesher_arm64_pthread_getattr_np(
 int BIONIC_SYSV gesher_bionic_pthread_create(bionic_pthread_t* thread,
                                             const bionic_pthread_attr_t* attr,
                                             void* (BIONIC_SYSV* start)(void*), void* arg) {
+  ThreadDescriptor* descriptor = AllocateThreadDescriptor(0);
+  if (descriptor == nullptr) return kEAGAIN;
   auto* record = new ThreadRecord();
   record->detached = attr != nullptr && (attr->flags & kAttrDetached) != 0;
   uint64_t stack = attr != nullptr && attr->stack_size != 0 ? attr->stack_size : kDefaultStack;
-  bionic_pthread_t id = g_next_id.fetch_add(1);
+  bionic_pthread_t id = reinterpret_cast<bionic_pthread_t>(descriptor);
   auto* sa = new StartArg{start, arg, id, record};
   std::lock_guard<std::mutex> lock(g_threads_mutex);  // until the record is complete
   DWORD tid = 0;
@@ -539,8 +616,10 @@ int BIONIC_SYSV gesher_bionic_pthread_create(bionic_pthread_t* thread,
   if (h == nullptr) {
     delete sa;
     delete record;
+    ReleaseUnpublishedDescriptor(descriptor);  // never reached a caller
     return kEAGAIN;
   }
+  SetDescriptorTid(id, static_cast<int32_t>(tid));
   record->handle = h;
   record->tid = static_cast<int32_t>(tid);
   g_threads[id] = record;

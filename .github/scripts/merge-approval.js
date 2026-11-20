@@ -7,7 +7,6 @@
 const LABEL = 'automerge';
 const RECEIPT = 'gesher-automerge-v1';
 const OPENING = 'gesher-automerge-opening-v1';
-const QA = 'gesher-automerge-qa-v1';
 const BOT = 'github-actions[bot]';
 const APP_SLUG = 'gesher-runtime-automation';
 const RECEIPT_BOTS = new Map([[BOT, 41898282], [`${APP_SLUG}[bot]`, 358279050]]);
@@ -53,64 +52,15 @@ function appliedAfterOpening(pr, event, boundary) {
   const author = pr.user?.id;
   // GitHub timestamps have second precision. A creation-time label, including
   // an indistinguishable same-second addition, requires a fresh opt-in after
-  // initialization. Author opt-in also needs a prior application or QA proof.
+  // initialization. Any later application by a write/admin collaborator,
+  // including the PR author, is an explicit approval of the current head.
   return Number.isSafeInteger(author) && author > 0 &&
     Number.isFinite(opened) && Number.isFinite(applied) &&
     Number.isFinite(boundary) && applied > Math.max(opened, boundary);
 }
 
-function needsAuthorQa(pr, event) {
-  const previous = Date.parse(event.priorActorApplicationAt);
-  return event.actor?.id === pr.user?.id &&
-    !(Number.isFinite(previous) && previous >= Date.parse(pr.created_at) &&
-      previous < Date.parse(event.created_at));
-}
-
-function explicitApplication(pr, event, boundary, qa) {
-  return appliedAfterOpening(pr, event, boundary) && (!needsAuthorQa(pr, event) ||
-    (qa && qa.actor === event.actor?.id && qa.repository === pr.base.repo.id &&
-      qa.number === pr.number && qa.head === pr.head.sha && qa.base === pr.base.ref &&
-      Date.parse(qa.submitted) > Math.max(Date.parse(pr.created_at), boundary) &&
-      Date.parse(qa.submitted) < Date.parse(event.created_at)));
-}
-
-async function authorQa(github, owner, repo, pr, event, boundary) {
-  if (!appliedAfterOpening(pr, event, boundary) || !needsAuthorQa(pr, event)) return null;
-  const reviews = await list(github.rest.pulls.listReviews, {owner, repo, pull_number: pr.number});
-  const candidates = [];
-  for (const r of reviews) {
-    if (r.state !== 'COMMENTED' || r.user?.id !== event.actor?.id || r.commit_id !== pr.head.sha ||
-        !Number.isSafeInteger(r.id) || r.id <= 0 || !Number.isSafeInteger(r.user?.id) || r.user.id <= 0 ||
-        typeof r.node_id !== 'string' || !r.node_id || typeof r.submitted_at !== 'string' ||
-        !(Date.parse(r.submitted_at) > Math.max(Date.parse(pr.created_at), boundary)) ||
-        !(Date.parse(r.submitted_at) < Date.parse(event.created_at)) || typeof r.body !== 'string') continue;
-    const markers = r.body.split(/\r?\n/).filter((line) => line.includes(QA));
-    if (!markers.length) continue;
-    if (markers.length !== 1 || r.body.split(QA).length !== 2 ||
-        !markers[0].startsWith('<!-- ' + QA + ' ') || !markers[0].endsWith(' -->')) return null;
-    const raw = markers[0].slice(QA.length + 6, -4);
-    let value;
-    try { value = JSON.parse(raw); } catch { return null; }
-    // Compact JSON round-tripping also rejects duplicate keys and ambiguous spellings.
-    if (!value || Array.isArray(value) || Object.keys(value).length !== 4 ||
-        JSON.stringify(value) !== raw || value.repository !== pr.base.repo.id ||
-        value.number !== pr.number || value.head !== pr.head.sha || value.base !== pr.base.ref) return null;
-    candidates.push({review: r, proof: {...value, id: r.id, node: r.node_id,
-      actor: r.user.id, submitted: r.submitted_at, body: r.body}});
-  }
-  if (candidates.length !== 1) return null;
-  const {review, proof} = candidates[0];
-  // REST submitted_at does not change when a review body is edited. Require
-  // GitHub's edit metadata so an old comment cannot acquire proof after labeling.
-  const {node} = await github.graphql(`query($id: ID!) {
-    node(id: $id) { ... on PullRequestReview {
-      id body state submittedAt lastEditedAt commit { oid }
-    } }
-  }`, {id: review.node_id});
-  if (node?.id !== review.node_id || node.body !== review.body || node.state !== 'COMMENTED' ||
-      node.commit?.oid !== review.commit_id || node.lastEditedAt !== null ||
-      Date.parse(node.submittedAt) !== Date.parse(review.submitted_at)) return null;
-  return proof;
+function explicitApplication(pr, event, boundary) {
+  return appliedAfterOpening(pr, event, boundary);
 }
 
 // Read legacy boundaries without creating new initialization comments.
@@ -159,13 +109,9 @@ async function labelEvent(github, owner, repo, number, deliveredAt) {
   const delivered = Date.parse(deliveredAt);
   const candidates = relevant.filter((e) => e.event === 'labeled' &&
     Date.parse(e.created_at) >= delivered - 1000 && Date.parse(e.created_at) <= delivered);
-  const previous = latestBy(relevant.filter((e) => e.event === 'labeled' &&
-    e.id !== applied.id && e.actor?.id === applied.actor?.id &&
-    Date.parse(e.created_at) < Date.parse(applied.created_at)), () => LABEL)[0];
   // A delayed delivery cannot distinguish two relabels by one actor within
   // the webhook timestamp's precision. Do not infer approval in that case.
   return {...applied, invalidated: last.event !== 'labeled',
-    priorActorApplicationAt: previous?.created_at,
     deliveryMatches: Number.isFinite(delivered) && candidates.length === 1 && candidates[0].id === applied.id,
     unambiguous: relevant.filter((e) =>
       e.event === 'labeled' && e.created_at === applied.created_at).length === 1};
@@ -260,6 +206,6 @@ async function removeLabel(github, prGithub, owner, repo, pr, event, why, core) 
   return true;
 }
 
-module.exports = {list, hasLabel, labelEvent, openingBoundary, authorQa,
+module.exports = {list, hasLabel, labelEvent, openingBoundary,
   explicitApplication, authorized, approval, approvalFor, sameTarget,
   dismissStaleApprovals, removeLabel, isReceiptBot, SHA, APP_SLUG};

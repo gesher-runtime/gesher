@@ -269,6 +269,39 @@ static void ordinary_handler(int sig) {
   ordinary_mask = sigismember(&active, sig) == 1 && sigismember(&active, SIGUSR2) == 1;
   ordinary_calls += 1;
 }
+#if !defined(_WIN32) && !defined(__aarch64__)
+static volatile sig_atomic_t info_calls, info_value, info_code, info_pid, info_return_mask, info_pc;
+static void siginfo_handler(int sig, siginfo_t* info, void* raw) {
+  ucontext_t* context = (ucontext_t*)raw;
+  info_calls += 1;
+  info_value = info->si_value.sival_int;
+  info_code = info->si_code == SI_QUEUE;
+  info_pid = info->si_pid == getpid();
+  info_return_mask = sigismember(&context->uc_sigmask, sig) == 1 &&
+                     sigismember(&context->uc_sigmask, SIGUSR2) == 1;
+  info_pc = context->uc_mcontext.gregs[REG_RIP] != 0 && context->uc_mcontext.gregs[REG_RSP] != 0;
+}
+// The guest shim runs SA_SIGINFO handlers on the ordinary stack with the
+// queued record and the thread's actual context at the delivery point.
+static void siginfo_delivery(int sig, const sigset_t* temporary) {
+  struct sigaction action = {0};
+  action.sa_sigaction = siginfo_handler;
+  action.sa_flags = SA_SIGINFO | SA_RESETHAND;
+  sigemptyset(&action.sa_mask);
+  check(sigaction(sig, &action, NULL) == 0, "install guest SA_SIGINFO handler");
+  union sigval value = {.sival_int = 655};
+  check(sigqueue(getpid(), sig, value) == 0, "queue blocked signal for SA_SIGINFO delivery");
+  check(sigsuspend(temporary) == -1 && errno == EINTR, "SA_SIGINFO handler runs and sigsuspend returns EINTR");
+  check(info_calls == 1 && info_value == 655 && info_code && info_pid,
+        "SA_SIGINFO handler receives the queued record");
+  check(info_return_mask, "SA_SIGINFO ucontext reports the pre-sigsuspend mask");
+  check(info_pc, "SA_SIGINFO ucontext reports actual program counter and stack pointer");
+  struct sigaction after;
+  sigaction(sig, NULL, &after);
+  check(after.sa_handler == SIG_DFL, "SA_SIGINFO SA_RESETHAND delivery resets the action");
+}
+#endif
+
 static void capabilities(void) {
   const int sig = SIGRTMIN;
   sigset_t blocked = one(sig), original;
@@ -283,7 +316,15 @@ static void capabilities(void) {
   sigset_t temporary;
   sigfillset(&temporary);
   sigdelset(&temporary, sig);
-  for (int mode = 0; mode < 2; ++mode) {
+#if defined(_WIN32) || defined(__aarch64__)
+  // The host layer reports asynchronous SA_SIGINFO unsupported, and so does the
+  // guest shim for an ARM64 program run by the x86-64 translator (how this
+  // suite runs the arm64-v8a fixture): it has no ARM64 frame to report.
+  const int first_mode = 0;
+#else
+  const int first_mode = 1;  // the x86-64 guest shim delivers SA_SIGINFO (siginfo_delivery below)
+#endif
+  for (int mode = first_mode; mode < 2; ++mode) {
     memset(&action, 0, sizeof(action));
     if (mode == 0) action.sa_sigaction = inspect_handler;
     else action.sa_handler = ordinary_handler;
@@ -317,6 +358,10 @@ static void capabilities(void) {
   }
   check(ordinary_calls == 0 && handler_value == 0,
         "unsupported delivery never invokes a handler with an invented context or stack");
+#if !defined(_WIN32) && !defined(__aarch64__)
+  siginfo_delivery(sig, &temporary);
+  sigaction(sig, &action, NULL);  // the unsupported SA_ONSTACK disposition again
+#endif
 #if !defined(_WIN32)
   sigset_t requested = one(sig);
   check(pthread_sigmask(SIG_UNBLOCK, &requested, NULL) == 0,
@@ -377,11 +422,7 @@ static void* self_targeted(void* unused) {
   for (int i = 0; i < 3; ++i) okay &= pthread_kill(pthread_self(), SIGRTMIN) == 0;
   atomic_store(&thread_ready, 1);
   for (int i = 0; i < 300 && !atomic_load(&thread_go); ++i) step();
-#if defined(_WIN32)
-  const int expected = 3;
-#else
-  const int expected = 4;
-#endif
+  const int expected = 4;  // three of its own and one from the other thread's pthread_kill
   for (int i = 0; i < expected; ++i) {
     siginfo_t info = {0};
     okay &= take(SIGRTMIN, &info, 0) == SIGRTMIN && info.si_pid == getpid();
@@ -399,12 +440,8 @@ static void self_target(void) {
   for (int i = 0; i < 300 && !atomic_load(&thread_ready); ++i) step();
   check(atomic_load(&thread_ready), "owner queued its own RT records");
   check(pthread_kill(thread, 0) == 0, "signal zero still validates a live other thread");
-#if defined(_WIN32)
-  check(pthread_kill(thread, SIGRTMIN) == ENOSYS,
-        "host non-self targeting reports unsupported instead of process delivery");
-#else
-  check(pthread_kill(thread, SIGRTMIN) == 0, "guest retained-identity target accepts a blocked RT record");
-#endif
+  // Both layers queue a signal the exact target blocks in that thread's own queue.
+  check(pthread_kill(thread, SIGRTMIN) == 0, "exact live target accepts a blocked RT record");
   siginfo_t info;
   check(take(SIGRTMIN, &info, 0) == -1 && errno == EAGAIN,
         "a competing waiter cannot consume another thread's own RT records");

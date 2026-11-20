@@ -27,12 +27,18 @@
 //  - Not done: synchronous signals from faults (SIGSEGV, SIGBUS, SIGFPE,
 //    SIGILL, SIGTRAP) are not delivered to the .so's handlers: Windows
 //    exceptions in loaded code go to ART's handling and the loader's
-//    diagnostics; alarm/setitimer timers. Asynchronous SA_SIGINFO and an active
-//    SA_ONSTACK delivery return ENOSYS without consuming a pending record;
-//    synchronous sigwait remains available regardless of those unused flags.
+//    diagnostics; alarm/setitimer timers. An active SA_ONSTACK delivery returns
+//    ENOSYS without consuming a pending record; synchronous sigwait remains
+//    available regardless of that unused flag. SA_SIGINFO handlers get the
+//    record's siginfo and a ucontext with the thread's actual registers at the
+//    delivery point (BionicUcontext below); for an ARM64 handler run by the
+//    x86-64 translator, whose guest registers the shim cannot report, the
+//    delivery returns ENOSYS like SA_ONSTACK.
+//  - SIGRTMIN is bionic's: 32 + __SIGRT_RESERVED (10) = 42; SIGRTMAX is 64.
 
 #include "shim_internal.h"
 
+#include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/pending_signals.h>
@@ -48,6 +54,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -100,6 +107,88 @@ struct BionicStack {
   int32_t ss_flags;
   uint64_t ss_size;
 };
+
+static_assert(sizeof(BionicStack) == 24);
+
+// Bionic's ucontext_t for the guest ABI (NDK sys/ucontext.h). The shim delivers
+// a handler on the receiving thread itself, at the point where that thread
+// takes the signal (raise, an unblocking mask change, sigsuspend, an
+// interrupted wait). The machine context is that thread's actual register
+// state there (RtlCaptureContext), as Linux reports the state at the kernel
+// entry the signal interrupted; uc_sigmask is the mask the thread returns to.
+// Changes a handler makes to the context are not applied on return.
+#if defined(__x86_64__)
+struct BionicUcontext {
+  uint64_t uc_flags;
+  void* uc_link;
+  BionicStack uc_stack;
+  int64_t gregs[23];
+  void* fpregs;
+  uint64_t reserved1[8];
+  uint64_t uc_sigmask;
+  uint8_t fpregs_mem[512];
+};
+static_assert(offsetof(BionicUcontext, gregs) == 40);
+static_assert(offsetof(BionicUcontext, uc_sigmask) == 296);
+static_assert(offsetof(BionicUcontext, fpregs_mem) == 304);
+static_assert(sizeof(BionicUcontext) == 816);
+
+void FillMachineContext(const CONTEXT& c, BionicUcontext* uc) {
+  enum { R8, R9, R10, R11, R12, R13, R14, R15, RDI, RSI, RBP, RBX, RDX, RAX, RCX, RSP, RIP, EFL,
+         CSGSFS };
+  int64_t* g = uc->gregs;
+  g[R8] = c.R8; g[R9] = c.R9; g[R10] = c.R10; g[R11] = c.R11;
+  g[R12] = c.R12; g[R13] = c.R13; g[R14] = c.R14; g[R15] = c.R15;
+  g[RDI] = c.Rdi; g[RSI] = c.Rsi; g[RBP] = c.Rbp; g[RBX] = c.Rbx;
+  g[RDX] = c.Rdx; g[RAX] = c.Rax; g[RCX] = c.Rcx; g[RSP] = c.Rsp;
+  g[RIP] = c.Rip;
+  g[EFL] = c.EFlags;
+  g[CSGSFS] = static_cast<int64_t>(c.SegCs) | (static_cast<int64_t>(c.SegGs) << 16) |
+              (static_cast<int64_t>(c.SegFs) << 32);
+  // CONTEXT.FltSave is an FXSAVE image, as _libc_fpstate is.
+  static_assert(sizeof(uc->fpregs_mem) == sizeof(c.FltSave));
+  memcpy(uc->fpregs_mem, &c.FltSave, sizeof(uc->fpregs_mem));
+  uc->fpregs = uc->fpregs_mem;
+}
+#elif defined(__aarch64__)
+struct alignas(16) BionicUcontext {
+  uint64_t uc_flags;
+  void* uc_link;
+  BionicStack uc_stack;
+  uint64_t uc_sigmask;
+  uint8_t padding[120];
+  alignas(16) uint64_t fault_address;
+  uint64_t regs[31];
+  uint64_t sp;
+  uint64_t pc;
+  uint64_t pstate;
+  alignas(16) uint8_t reserved[4096];
+};
+static_assert(offsetof(BionicUcontext, uc_sigmask) == 40);
+static_assert(offsetof(BionicUcontext, fault_address) == 176);
+static_assert(offsetof(BionicUcontext, reserved) == 464);
+static_assert(sizeof(BionicUcontext) == 4560);
+
+void FillMachineContext(const CONTEXT& c, BionicUcontext* uc) {
+  for (int i = 0; i < 29; ++i) uc->regs[i] = c.X[i];
+  uc->regs[29] = c.Fp;
+  uc->regs[30] = c.Lr;
+  uc->sp = c.Sp;
+  uc->pc = c.Pc;
+  uc->pstate = c.Cpsr;
+  // The kernel's FPSIMD record (asm/sigcontext.h fpsimd_context), then the
+  // zero terminator already in place.
+  struct Fpsimd {
+    uint32_t magic, size, fpsr, fpcr;
+    uint64_t vregs[64];
+  };
+  static_assert(sizeof(Fpsimd) == 528);
+  Fpsimd fp{0x46508001u, sizeof(Fpsimd), c.Fpsr, c.Fpcr, {}};
+  static_assert(sizeof(fp.vregs) == sizeof(c.V));
+  memcpy(fp.vregs, c.V, sizeof(fp.vregs));
+  memcpy(uc->reserved, &fp, sizeof(fp));
+}
+#endif
 
 uint64_t Bit(int sig) { return uint64_t{1} << (sig - 1); }
 bool Valid(int sig) { return sig >= 1 && sig < kNsig; }
@@ -235,8 +324,15 @@ void PrintGuestState() {
 bool ActionSupported(ThreadState* self, int sig, const BionicSigaction& act) {
   if (act.handler == kSigIgn) return true;
   if (act.handler == kSigDfl) return !DefaultStops(sig);
-  return (act.sa_flags & kSaSiginfo) == 0 &&
-         ((act.sa_flags & kSaOnstack) == 0 || (self->alt_stack.ss_flags & 2) != 0);
+#if defined(__x86_64__)
+  // A translated ARM64 handler needs the guest's own registers in an ARM64
+  // frame; the host CONTEXT is not that machine state.
+  if ((act.sa_flags & kSaSiginfo) != 0 &&
+      gesher::arm64::IsGuestCode(reinterpret_cast<const void*>(act.handler))) {
+    return false;
+  }
+#endif
+  return (act.sa_flags & kSaOnstack) == 0 || (self->alt_stack.ss_flags & 2) != 0;
 }
 
 // Claim the disposition together with the pending record under the state
@@ -252,7 +348,10 @@ bool ClaimActionLocked(ThreadState* self, int sig, BionicSigaction* act) {
   return true;
 }
 
-void Dispatch(ThreadState* self, int sig, const BionicSiginfo&, const BionicSigaction& act) {
+// `return_mask` is the mask the thread goes back to after the handler (for
+// sigsuspend, the mask from before the call), reported as uc_sigmask.
+void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info, const BionicSigaction& act,
+              const uint64_t* return_mask = nullptr) {
   if (act.handler == kSigIgn) return;
   if (act.handler == kSigDfl) {
     if (DefaultIgnores(sig)) return;
@@ -260,8 +359,24 @@ void Dispatch(ThreadState* self, int sig, const BionicSiginfo&, const BionicSiga
   }
   gesher::elf::SetupThreadTls();  // the handler is loaded code
   uint64_t saved = self->mask;
-  self->mask |= act.sa_mask | ((act.sa_flags & kSaNodefer) != 0 ? 0 : Bit(sig));
-  reinterpret_cast<void(BIONIC_SYSV*)(int)>(act.handler)(sig);
+  if ((act.sa_flags & kSaSiginfo) != 0) {
+    CONTEXT context;
+    RtlCaptureContext(&context);
+    BionicUcontext frame{};
+    BionicUcontext* uc = &frame;
+    {
+      std::lock_guard<std::mutex> lock(S().mutex);
+      uc->uc_stack = self->alt_stack;
+    }
+    uc->uc_sigmask = return_mask != nullptr ? *return_mask : saved;
+    FillMachineContext(context, uc);
+    BionicSiginfo copy = info;
+    self->mask |= act.sa_mask | ((act.sa_flags & kSaNodefer) != 0 ? 0 : Bit(sig));
+    reinterpret_cast<void(BIONIC_SYSV*)(int, BionicSiginfo*, void*)>(act.handler)(sig, &copy, uc);
+  } else {
+    self->mask |= act.sa_mask | ((act.sa_flags & kSaNodefer) != 0 ? 0 : Bit(sig));
+    reinterpret_cast<void(BIONIC_SYSV*)(int)>(act.handler)(sig);
+  }
   self->mask = saved;
 }
 
@@ -592,7 +707,7 @@ int BIONIC_SYSV Sigsuspend(const uint64_t* mask) {
       return errno = -sig, -1;
     }
     if (act.handler == kSigIgn || (act.handler == kSigDfl && DefaultIgnores(sig))) continue;
-    Dispatch(self, sig, info, act);
+    Dispatch(self, sig, info, act, &saved);
     break;
   }
   self->mask = saved;
@@ -646,6 +761,10 @@ void BIONIC_SYSV Psignal(int sig, const char* s) {
 }
 
 unsigned BIONIC_SYSV Alarm(unsigned) { return 0; }
+// bionic libc/platform/bionic/reserved_signals.h: __SIGRTMIN 32 plus
+// __SIGRT_RESERVED 10 signals for the platform's own use.
+int BIONIC_SYSV LibcCurrentSigrtmin() { return 32 + 10; }
+int BIONIC_SYSV LibcCurrentSigrtmax() { return kNsig - 1; }
 
 // sys_siglist / sys_signame (bionic exports both, 65 entries).
 const char* g_sys_siglist[kNsig];
@@ -973,6 +1092,8 @@ void RegisterSignal(SymbolTable& t) {
   E("psignal", Psignal);
   E("abort", Abort);
   E("alarm", Alarm);
+  E("__libc_current_sigrtmin", LibcCurrentSigrtmin);
+  E("__libc_current_sigrtmax", LibcCurrentSigrtmax);
 #undef E
   for (int i = 1; i < kNsig; ++i) {
     g_sys_siglist[i] = i < 32 ? kDescriptions[i] : "Real-time signal";

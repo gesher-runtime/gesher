@@ -21,7 +21,8 @@ import zipfile
 # authentication, redirect policy, digest and member validation are not transient.
 RETRY_DELAYS = (1, 3)
 TRANSIENT_HTTP = frozenset((429, 500, 502, 503, 504))
-_MAX_RATE_WAIT_SECONDS = 120
+# Same 15-minute quota wait budget as tools/ci/github_read.py (shared hourly quota).
+_MAX_RATE_WAIT_SECONDS = 15 * 60
 _RATE_HEADERS = ('date', 'retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset',
                  'x-ratelimit-limit', 'x-ratelimit-used', 'x-ratelimit-resource')
 

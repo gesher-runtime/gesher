@@ -29,7 +29,7 @@ def main() -> None:
         library = work / "libnotification_delegation_host.so"
         subprocess.run([cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
-                        str(ROOT / "tests/uri/framework_host.c"), "-o", str(library)], check=True)
+                        str(ROOT / "tests/uri/intent_framework_host.c"), "-o", str(library)], check=True)
         sources = []
         for name in ("NotificationManagerService", "NotificationDelegates", "NotificationStore"):
             relative = "app/java/com/gesher/server/" + name + ".java"
@@ -46,13 +46,24 @@ def main() -> None:
         if args.with_storage:
             subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                             "-d", str(classes), str(ROOT / "tests/notification-identity/Parcel.java")], check=True)
+        # Real PermissionPolicy initializes AppOpsManager's local Binder callback.
+        # Reuse the declared holder JNI boundary and the supplied Android Cleaner
+        # classes; do not replace Binder, NativeAllocationRegistry or AppOps policy.
+        cleaner = work / "cleaner" / "sun" / "misc"; cleaner.mkdir(parents=True)
+        cleaner_inputs = list((args.core_classes / "sun/misc").glob("Cleaner*.class"))
+        if not cleaner_inputs:
+            raise ValueError("Android core compile input has no Cleaner classes")
+        for entry in cleaner_inputs:
+            shutil.copy2(entry, cleaner / entry.name)
         for protected in (True, False):
             env = os.environ.copy(); env["ANDROID_DATA"] = str(work / ("protected" if protected else "legacy"))
             env["GESHER_MICROG_SPOOF"] = "1" if protected else "0"
             env.pop("GESHER_BINDER_UID", None)
             options = (["-XX:+UnlockDiagnosticVMOptions", "-XX:-BytecodeVerificationRemote",
                         "-Dgesher.fixture.notification.storage=true"] if args.with_storage else [])
-            command = [str(args.java_home / "bin/java"), *options, "-cp", str(classes) + os.pathsep + classpath,
+            command = [str(args.java_home / "bin/java"), *options,
+                       "--patch-module", "jdk.unsupported=" + str(work / "cleaner"),
+                       "-cp", str(classes) + os.pathsep + classpath,
                        "NotificationDelegationHost", str(library)]
             if args.signed_apk: command.append(str(args.signed_apk.resolve()))
             subprocess.run(command, env=env, check=True, timeout=90)

@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -39,7 +40,8 @@ struct WaitGate { Signal waiting, woken, resume; bool pause = true; };
 thread_local WaitGate* gate = nullptr;
 class ControlledCondition {
  public:
-  void notify_all() { cv_.notify_all(); }
+  std::function<void()> notifying;
+  void notify_all() { if (notifying) notifying(); cv_.notify_all(); }
   template<class Predicate> void wait(std::unique_lock<std::mutex>& lock, Predicate ready) {
     while (!ready()) {
       if (gate) gate->waiting.Set();
@@ -69,15 +71,38 @@ class ControlledCondition {
 };
 
 constexpr int kSlots = 2, kInfoTryAgainLater = -1, kInfoOutputFormatChanged = -2;
-constexpr int kCbInputAvailable = 1;
+constexpr int kCbInputAvailable = 1, kCbError = 3;
+namespace android {
+constexpr int OK = 0, INVALID_OPERATION = -38, UNKNOWN_ERROR = INT32_MIN;
+}
 using jlong = int64_t;
 struct Info { int index_calls = 0; };
-using jobject = Info*;
-struct JNIEnv { void CallVoidMethod(jobject info, int, int, int, jlong, int) { ++info->index_calls; } };
-struct { int buffer_info_set = 1; } gJ;
+using jobject = void*;
+using jstring = std::string*;
+struct CodecError { int code = 0, action = -1; };
+struct JNIEnv {
+  CodecError error;
+  void CallVoidMethod(jobject info, int, int, int, jlong, int) {
+    ++static_cast<Info*>(info)->index_calls;
+  }
+  jstring NewStringUTF(const char* message) { return new std::string(message); }
+  jobject NewObject(int, int, int code, int action, jstring) {
+    error = {code, action};
+    return &error;
+  }
+  void DeleteLocalRef(jobject) {}
+  void DeleteLocalRef(jstring string) { delete string; }
+};
+struct { int buffer_info_set = 1, codec_exception = 1, codec_exception_ctor = 1; } gJ;
+JNIEnv* AttachedEnv(const char*) { thread_local JNIEnv env; return &env; }
+bool CheckException(JNIEnv*, const char*) { return false; }
 struct ANativeWindow { int releases = 0; };
 void ANativeWindow_release(ANativeWindow* window) { ++window->releases; }
-struct FakeInput { int abandonments = 0; void Abandon() { ++abandonments; } };
+struct FakeInput {
+  explicit FakeInput(int& count) : abandonments(count) {}
+  void Abandon() { ++abandonments; }
+  int& abandonments;
+};
 struct Slot {
   bool client = false;
   int size = 0, flags = 0;
@@ -96,12 +121,28 @@ class Codec {
   @DEQUEUE_INPUT@
   @DEQUEUE_OUTPUT@
   @STOP_WORKER@
+  @RETIRE_SURFACE@
+  @POST_FATAL@
   bool InWork(int index) const {
     return std::find(work_.begin(), work_.end(), index) != work_.end();
   }
-  void PostLocked(int, int, jobject) { ++posted_; }
+  void PostLocked(int what, int, jobject object) {
+    ++posted_;
+    if (what == kCbError) {
+      ++error_events_;
+      callback_error_ = *static_cast<CodecError*>(object);
+    }
+  }
   void Run() {
     std::unique_lock<std::mutex> lock(mu_);
+    if (decode_entered_ != nullptr) {
+      int* decoder = video_.get();
+      lock.unlock();
+      decode_entered_->Set();
+      Require(*finish_decode_, "controlled decoder can finish after fatal retirement begins");
+      Check(decoder != nullptr && *decoder == 42, "decoder storage stays alive through its admitted decode call");
+      lock.lock();
+    }
     for (;;) {
       cv_.wait(lock, [&] { return quit_ || (flush_requested_ && !stall_flush_); });
       if (quit_) return;
@@ -114,14 +155,24 @@ class Codec {
   std::thread worker_;
   bool quit_ = false, worker_running_ = false, released_ = false;
   uint64_t wait_generation_ = 0;
+  uint64_t execution_generation_ = 0, fatal_generation_ = 0;
+  bool fatal_ = false;
+  std::atomic<bool> frame_rendered_{false};
   bool configured_ = true, started_ = false, flushed_ = false, async_ = false;
   bool flush_requested_ = false, failed_ = false, stall_flush_ = false;
   bool surface_eos_ = false, enc_eos_sent_ = false, output_known_ = false, format_pending_ = false;
+  bool force_key_ = false;
+  std::optional<int> metrics_, target_bitrate_, pending_bitrate_;
+  int64_t last_out_us_ = 0;
   int posted_ = 0;
+  int error_events_ = 0;
+  CodecError callback_error_;
+  Signal* decode_entered_ = nullptr;
+  Signal* finish_decode_ = nullptr;
   Slot inputs_[kSlots], outputs_[kSlots];
   std::unique_ptr<int> video_enc_, audio_enc_, video_, audio_;
   std::unique_ptr<FakeInput> input_surface_;
-  std::deque<int> surface_frames_, csd_, work_, ready_, config_;
+  std::deque<int> surface_frames_, csd_, work_, ready_, config_, pending_config_;
   ANativeWindow* window_ = nullptr;
   std::shared_ptr<int> reader_;
 };
@@ -129,6 +180,12 @@ class Codec {
 void Start(Codec& codec) {
   std::string error;
   Check(codec.Start(&error), "configured receiver starts");
+}
+
+void Reconfigure(Codec& codec) {
+  // Configure itself uses Android/encoder boundaries exercised by the ART gate.
+  std::lock_guard<std::mutex> lock(codec.mu_);
+  codec.configured_ = true;
 }
 
 void RestartedDequeue(bool input) {
@@ -151,6 +208,7 @@ void RestartedDequeue(bool input) {
   Require(paused.waiting, "dequeue waits for an ordinary unavailable buffer");
   codec.Stop();
   Require(paused.woken, "stop wakes the old dequeue");
+  Reconfigure(codec);
   Start(codec);
   {
     std::lock_guard<std::mutex> lock(codec.mu_);
@@ -184,6 +242,7 @@ void RestartedFlush() {
   Require(paused.waiting, "flush waits for the controlled decoder boundary");
   codec.Stop();
   Require(paused.woken, "stop interrupts the previous flush");
+  Reconfigure(codec);
   Start(codec);
   {
     std::lock_guard<std::mutex> lock(codec.mu_);
@@ -236,19 +295,37 @@ void ReleasedWait(int operation) {
 }
 
 void ReleaseResources() {
-  Codec codec;
   ANativeWindow window;
+  int abandonments = 0;
+  Codec codec;
   codec.window_ = &window;
   codec.reader_ = std::make_shared<int>(1);
   std::weak_ptr<int> reader = codec.reader_;
-  codec.input_surface_ = std::make_unique<FakeInput>();
+  codec.input_surface_ = std::make_unique<FakeInput>(abandonments);
   codec.Release();
   Check(window.releases == 1 && codec.window_ == nullptr, "release drops output window immediately");
   Check(reader.expired(), "release drops its reader reference");
-  Check(codec.input_surface_->abandonments == 1, "release retires the input callback boundary");
+  Check(abandonments == 1, "release retires the input callback boundary");
   codec.Release();
-  Check(window.releases == 1 && codec.input_surface_->abandonments == 1,
+  Check(window.releases == 1 && abandonments == 1,
         "repeated release does not retire resources twice");
+}
+#endif
+
+#if STOP_REQUIRES_CONFIGURE
+void StopResources() {
+  int abandonments = 0;
+  Codec codec;
+  codec.input_surface_ = std::make_unique<FakeInput>(abandonments);
+  codec.pending_bitrate_ = 500'000;
+  codec.force_key_ = true;
+  Start(codec);
+  codec.Stop();
+  Check(abandonments == 1 && codec.input_surface_ == nullptr,
+        "stop disconnects the old input surface");
+  Check(!codec.pending_bitrate_ && !codec.force_key_, "stop retires queued encoder controls");
+  codec.Release();
+  Check(abandonments == 1, "release does not retire a stopped surface twice");
 }
 #endif
 
@@ -260,11 +337,122 @@ void OrdinaryLifecycle() {
   Check(codec.DequeueInput(0) == 0, "completed flush makes input slots reusable");
   codec.Stop();
   Check(codec.DequeueInput(0) == kInfoTryAgainLater, "stopped receiver cannot give a buffer");
+#if STOP_REQUIRES_CONFIGURE
+  std::string stop_error;
+  Check(!codec.Start(&stop_error), "stop requires a new configuration before restart");
+#endif
+  Reconfigure(codec);
   Start(codec);
   codec.Reset();
   std::string error;
   Check(!codec.Start(&error), "reset requires new configuration");
 }
+
+#if HAS_FATAL_RETIREMENT
+void FatalWait(int operation, bool restart_before_resume) {
+  Codec codec;
+  codec.stall_flush_ = true;
+  codec.async_ = operation == 2;
+  Start(codec);
+  for (auto& slot : codec.inputs_) slot.client = true;
+  codec.outputs_[1].client = true;
+  codec.outputs_[1].frame = std::make_shared<int>(7);
+  std::weak_ptr<int> old_frame = codec.outputs_[1].frame;
+  WaitGate paused;
+  Signal finished;
+  std::atomic<int> result{-99}, status{99};
+  JNIEnv env; Info info;
+  std::thread waiting([&] {
+    gate = &paused;
+    int local_status = android::OK;
+    if (operation == 0) result = codec.DequeueInput(-1, &local_status);
+    if (operation == 1) result = codec.DequeueOutput(&env, &info, -1, &local_status);
+    if (operation == 2) { codec.Flush(&local_status); result = kInfoTryAgainLater; }
+    status = local_status;
+    gate = nullptr;
+    finished.Set();
+  });
+  Require(paused.waiting, "operation is pending before consumer failure");
+  codec.RetireSurfaceFailure(codec.execution_generation_, "output consumer abandoned");
+  Require(paused.woken, "fatal failure wakes the pending operation");
+  Check(codec.fatal_ && !codec.started_ && !codec.configured_ && !codec.worker_.joinable(),
+        "consumer failure stops execution and the owned worker");
+  Check(!codec.inputs_[0].client && !codec.outputs_[1].client && old_frame.expired(),
+        "fatal retirement revokes client slots and releases queued frames");
+  Check(codec.error_events_ == 0,
+        "pending flush receives its error directly instead of an extra async callback");
+  if (restart_before_resume) {
+    codec.Reset();
+    codec.configured_ = true;  // the existing declared configuration boundary
+    Start(codec);
+    std::lock_guard<std::mutex> lock(codec.mu_);
+    codec.ready_.push_back(0);
+    codec.outputs_[0].client = true;
+    codec.inputs_[0].client = true;
+  }
+  paused.resume.Set();
+  Require(finished, "pending operation terminates after fatal failure");
+  waiting.join();
+  Check(result == kInfoTryAgainLater && info.index_calls == 0,
+        "canceled dequeue cannot publish a buffer or BufferInfo");
+  Check(status == (operation == 2 ? android::UNKNOWN_ERROR : android::INVALID_OPERATION),
+        "pending flush/dequeue preserves the AOSP fatal/cancellation status");
+  if (restart_before_resume) {
+    Check(codec.started_ && !codec.fatal_ && codec.outputs_[0].client && codec.inputs_[0].client,
+          "old fatal waiter cannot revoke ownership in the reset session");
+    Check(!codec.flushed_ && !codec.ready_.empty(), "old flush cannot discard or pause the new session");
+  }
+}
+
+void FatalAsync() {
+  Codec codec;
+  codec.async_ = true;
+  Start(codec);
+  const uint64_t generation = codec.execution_generation_;
+  codec.RetireSurfaceFailure(generation, "output consumer abandoned");
+  Check(codec.error_events_ == 1 && codec.callback_error_.code == android::UNKNOWN_ERROR
+            && codec.callback_error_.action == 0,
+        "running async codec posts exactly one fatal CCodec component error");
+  codec.RetireSurfaceFailure(generation, "duplicate completion");
+  Check(codec.error_events_ == 1, "repeated failure cannot duplicate the terminal callback");
+  int status = android::OK;
+  codec.Stop(&status);
+  Check(status == android::INVALID_OPERATION && codec.fatal_, "stop cannot recover a fatal codec");
+  status = android::OK;
+  codec.Flush(&status);
+  Check(status == android::INVALID_OPERATION && codec.fatal_, "flush cannot recover a fatal codec");
+  std::string error;
+  Check(!codec.Start(&error), "start cannot recover a fatal codec");
+}
+
+void FatalDuringDecode() {
+  Codec codec;
+  Signal decoding, finish_decode, retiring, retired;
+  codec.video_ = std::make_unique<int>(42);
+  codec.decode_entered_ = &decoding;
+  codec.finish_decode_ = &finish_decode;
+  codec.cv_.notifying = [&] { if (codec.quit_) retiring.Set(); };
+  Start(codec);
+  Require(decoding, "worker enters the decoder outside the codec mutex");
+  const uint64_t generation = codec.execution_generation_;
+  std::thread failure([&] {
+    codec.RetireSurfaceFailure(generation, "output consumer abandoned during decoding");
+    retired.Set();
+  });
+  Require(retiring, "fatal transition begins while native decoding is active");
+  {
+    std::lock_guard<std::mutex> lock(codec.mu_);
+    Check(codec.fatal_ && !codec.started_ && codec.video_ != nullptr,
+          "retirement rejects new work but retains the decoder until worker exit");
+  }
+  Check(!retired.Wait(0ms), "retirement joins the active worker before destroying its resources");
+  finish_decode.Set();
+  Require(retired, "retirement finishes after native decoding returns");
+  failure.join();
+  Check(codec.video_ == nullptr && !codec.worker_.joinable(), "decoder ownership ends after the worker is joined");
+  codec.cv_.notifying = {};
+}
+#endif
 
 int main() {
   OrdinaryLifecycle();
@@ -274,6 +462,17 @@ int main() {
 #if HAS_RELEASE
   for (int operation = 0; operation != 3; ++operation) ReleasedWait(operation);
   ReleaseResources();
+#endif
+#if STOP_REQUIRES_CONFIGURE
+  StopResources();
+#endif
+#if HAS_FATAL_RETIREMENT
+  for (int operation = 0; operation != 3; ++operation) {
+    FatalWait(operation, false);
+    FatalWait(operation, true);
+  }
+  FatalAsync();
+  FatalDuringDecode();
 #endif
   std::printf("codec wait contracts: %d checks, %d failures\n", checks.load(), failures.load());
   return failures != 0;

@@ -54,6 +54,9 @@ class VideoEncoder {
   static std::unique_ptr<VideoEncoder> Create(const std::string& mime, const VideoEncoderParams& p,
                                               std::string* error);
   virtual std::string Name() const = 0;
+  // Change the target rate on this running encoder. A rejected request
+  // leaves the existing encoder and target intact.
+  virtual bool SetBitrate(int bitrate) = 0;
   // One frame (its visible part is the picture); `key`: a key frame is asked for.
   virtual bool Encode(const VideoFrame& frame, bool key, std::vector<EncodedPacket>* out) = 0;
   // The end: what is still inside.
@@ -73,6 +76,8 @@ class AudioEncoder {
   static std::unique_ptr<AudioEncoder> Create(const std::string& mime, const AudioEncoderParams& p,
                                               std::string* error);
   virtual std::string Name() const = 0;
+  // The target accepted by this encoder after backend configuration.
+  virtual int ConfiguredBitrate() const = 0;
   // Interleaved 16-bit PCM starting at `time_us`; packets as they are complete.
   virtual bool Encode(const int16_t* pcm, size_t frames, int64_t time_us,
                       std::vector<EncodedPacket>* out) = 0;

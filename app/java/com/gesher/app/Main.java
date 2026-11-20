@@ -77,6 +77,17 @@ public final class Main {
         }
     }
 
+    /** Ends the main Looper's loop once a pending activity relaunch has run. */
+    private static void endLoop(Handler main) {
+        main.post(() -> {
+            if (GesherAppDriver.relaunchPending()) {
+                endLoop(main);
+                return;
+            }
+            throw new EndLoop();
+        });
+    }
+
     /** Prints a line on stdout, prefixed {@code gesher-app: }. */
     public static void log(String message) {
         System.out.println(TAG + ": " + message);
@@ -195,6 +206,25 @@ public final class Main {
             }
             log("package " + packageName + " from the system server's package manager: "
                     + appInfo.sourceDir);
+            // Stable package UIDs are assigned by the server, and need not be the
+            // runtime's default 10000. Re-enter before attachApplication or any APK
+            // code: changing only the environment of a live VM leaves its native
+            // and Binder identities cached under the old UID. The child queries the
+            // server again, so an environment value never substitutes for admission.
+            if (appInfo.uid < android.os.Process.FIRST_APPLICATION_UID) {
+                throw new SecurityException("The installed package has no application UID");
+            }
+            String binderUid = System.getenv("GESHER_BINDER_UID");
+            if (android.os.Process.myUid() != appInfo.uid
+                    || android.os.Binder.getCallingUid() != appInfo.uid
+                    || android.os.Binder.getCallingPid() != android.os.Process.myPid()
+                    || binderUid != null && !binderUid.equals(Integer.toString(appInfo.uid))) {
+                if ("1".equals(System.getenv("GESHER_STANDALONE_RESTARTED"))) {
+                    throw new SecurityException("App VM identity does not match the installed package");
+                }
+                log("restarting app VM for installed UID " + appInfo.uid);
+                return com.gesher.server.Zygote.restartWithUid(appInfo.uid);
+            }
             if (dataDir != null) {
                 log("--data-dir ignored: the system server's package manager sets the data"
                         + " directory");
@@ -255,7 +285,9 @@ public final class Main {
         // 7. The app and its Activity, on the main Looper. The main Looper may not
         //    quit (Looper.prepareMainLooper), so the launch ends the loop the way
         //    quitSafely would: a message posted after it, once the messages it left
-        //    behind have run, throws EndLoop out of Looper.loop().
+        //    behind have run, throws EndLoop out of Looper.loop(). A relaunch those
+        //    messages asked for (a configuration change the activity does not handle,
+        //    e.g. LocaleManager.setApplicationLocales) runs first.
         final ApplicationInfo app = appInfo;
         final ActivityInfo target = launch;
         final Throwable[] failure = new Throwable[1];
@@ -275,11 +307,7 @@ public final class Main {
                 failure[0] = t;
                 ended = true;
             } finally {
-                if (ended) {
-                    main.post(() -> {
-                        throw new EndLoop();
-                    });
-                }
+                if (ended) endLoop(main);
             }
         });
         try {

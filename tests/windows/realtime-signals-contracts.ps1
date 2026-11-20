@@ -52,7 +52,7 @@ function Invoke-RealtimeCase([string] $Role, [string] $Case, [string] $Executabl
     $record.stdout = $stdout.Result
     $record.stderr = $stderr.Result
     $record.exit = $process.ExitCode
-    $sentinel = if ($Case -eq 'legacy') { 'realtime_signals: 62 assertions, 0 failures' }
+    $sentinel = if ($Case -eq 'legacy') { 'realtime_signals: 73 assertions, 0 failures' }
                 else { 'realtime contract: 0 failures' }
     $record.pass = -not $record.timeout -and $record.exit -eq 0 -and
         $record.stdout.Contains($sentinel) -and $record.stdout -notmatch '(?m)^FAIL'

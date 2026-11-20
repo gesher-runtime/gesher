@@ -473,6 +473,11 @@ public final class SettingsIntentsTest {
                 (com.android.internal.telephony.ITelephony) tc.newInstance();
         require(phone.getSimStateForSlotIndex(0)
                 == android.telephony.TelephonyManager.SIM_STATE_ABSENT, "SIM state not ABSENT");
+        require("".equals(phone.getNetworkCountryIsoForPhone(0)),
+                "network country ISO not empty string");
+        require("".equals(phone.getNetworkCountryIsoForPhone(
+                android.telephony.SubscriptionManager.DEFAULT_PHONE_INDEX)),
+                "default-phone network country ISO not empty string");
 
         android.os.IUserManager users = new com.gesher.server.Services.UserManager();
         require("".equals(users.getProfileType(0)) && users.getProfileType(10) == null,

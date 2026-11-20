@@ -28,11 +28,16 @@ import sun.misc.Unsafe;
 public final class SafDocumentsContractTest {
     static final String CLIENT="org.gesher.fixture.saf.client", OTHER="org.gesher.fixture.saf.other";
     static final String AUTH=DocumentsStorageProvider.AUTHORITY;
-    static final int UID=10601, PID=911201, OTHER_UID=10602, OTHER_PID=911202;
+    static final int UID=10601, OTHER_UID=10602;
+    static int PID=911201, OTHER_PID=911202;
     static final int READ=Intent.FLAG_GRANT_READ_URI_PERMISSION, WRITE=Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
     static final int PERSIST=Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION, PREFIX=Intent.FLAG_GRANT_PREFIX_URI_PERMISSION;
     static final Unsafe U;
     static int checks; static boolean nativeFiles;
+    static final String RELAY="gesher.fixture.saf.relay.";
+    static final Map<Integer,IBinder> relayControls=new HashMap<>();
+    static final java.util.concurrent.atomic.AtomicInteger nativeIncoming=new java.util.concurrent.atomic.AtomicInteger();
+    static final java.util.concurrent.atomic.AtomicInteger nativeOtherIncoming=new java.util.concurrent.atomic.AtomicInteger();
     static { try { Field f=Unsafe.class.getDeclaredField("theUnsafe"); f.setAccessible(true); U=(Unsafe)f.get(null); }
         catch(Exception e){throw new ExceptionInInitializerError(e);} }
     interface Work { void run() throws Exception; }
@@ -60,6 +65,166 @@ public final class SafDocumentsContractTest {
     static void as(int uid,int pid,Work work)throws Exception{
         long old=Binder.clearCallingIdentity();try{Binder.restoreCallingIdentity(((long)uid<<32)|pid);work.run();}
         finally{Binder.restoreCallingIdentity(old);}
+    }
+
+    static void relayReady(String ready)throws IOException{
+        java.nio.file.Path path=new File(ready).toPath(),pending=new File(ready+".writing").toPath();
+        Files.writeString(pending,android.os.Process.myUid()+" "+android.os.Process.myPid()+"\n");
+        Files.move(pending,path);
+    }
+
+    /** Ordinary app UIDs cannot register ServiceManager names; the operator owns discovery. */
+    static void registryMain(String ready)throws Exception{
+        String root=System.getenv("ANDROID_ROOT");
+        com.gesher.app.Main.bootstrap("saf-binder-registry",root+"/build.prop",root+"/framework/framework-res.apk");
+        if(android.os.Process.myUid()!=android.os.Process.SYSTEM_UID)throw new SecurityException("SAF registry operator UID");
+        Map<Integer,IBinder> peers=new HashMap<>();
+        Map<Integer,Integer> pids=new HashMap<>();
+        ServiceManager.addService(RELAY+"registry",new Binder(){
+            { attachInterface(null,RELAY+"registry"); }
+            @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException{
+                if(code==INTERFACE_TRANSACTION)return super.onTransact(code,data,reply,flags);
+                if(!Binder.isDirectlyHandlingTransaction())throw new SecurityException("SAF registry requires incoming Binder transport");
+                data.enforceInterface(RELAY);
+                if(code==1){
+                    int uid=Binder.getCallingUid(),pid=Binder.getCallingPid();
+                    IBinder peer=data.readStrongBinder();
+                    if((uid!=UID&&uid!=OTHER_UID)||peer==null||peer instanceof Binder||pid<=0||
+                            !RELAY.equals(peer.getInterfaceDescriptor()))
+                        throw new SecurityException("SAF registration requires a real ordinary peer");
+                    synchronized(peers){
+                        if(peers.containsKey(uid))throw new SecurityException("SAF peer already registered");
+                        peers.put(uid,peer);pids.put(uid,pid);
+                        peer.linkToDeath(()->{synchronized(peers){if(peers.get(uid)==peer){peers.remove(uid);pids.remove(uid);}}},0);
+                    }
+                    reply.writeNoException();reply.writeInt(uid);reply.writeInt(pid);return true;
+                }
+                if(code==2){
+                    if(Binder.getCallingUid()!=android.os.Process.SYSTEM_UID)throw new SecurityException("SAF discovery requires operator");
+                    int uid=data.readInt();
+                    synchronized(peers){
+                        IBinder peer=peers.get(uid);
+                        if(peer==null)throw new IllegalStateException("SAF peer is not registered");
+                        reply.writeNoException();reply.writeStrongBinder(peer);reply.writeInt(pids.get(uid));
+                    }
+                    return true;
+                }
+                return super.onTransact(code,data,reply,flags);
+            }
+        });
+        SystemServer.startBinderThreads("saf-binder-registry",4);relayReady(ready);Binder.joinThreadPool();
+    }
+
+    /** A real separate process forwards to the provider through a BinderProxy. */
+    static void relayMain(int expectedUid,String ready)throws Exception{
+        String root=System.getenv("ANDROID_ROOT");
+        com.gesher.app.Main.bootstrap("saf-binder-relay",root+"/build.prop",root+"/framework/framework-res.apk");
+        if((expectedUid!=UID&&expectedUid!=OTHER_UID)||android.os.Process.myUid()!=expectedUid)
+            throw new SecurityException("SAF relay requires its ordinary fixture UID");
+        IBinder control=new Binder(){
+            { attachInterface(null,RELAY); }
+            @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException{
+                if(!Binder.isDirectlyHandlingTransaction()||Binder.getCallingUid()!=android.os.Process.SYSTEM_UID)
+                    throw new SecurityException("SAF relay control requires the test operator");
+                if(code==INTERFACE_TRANSACTION)return super.onTransact(code,data,reply,flags);
+                data.enforceInterface(RELAY);
+                if(code==1){
+                    reply.writeNoException();reply.writeInt(android.os.Process.myUid());reply.writeInt(android.os.Process.myPid());return true;
+                }
+                if(code==2){
+                    IBinder target=data.readStrongBinder();
+                    if(target==null||target instanceof Binder)throw new SecurityException("Provider must reside in the other process");
+                    IBinder forwarding=new Binder(){
+                        @Override protected boolean onTransact(int transaction,Parcel request,Parcel response,int options)throws RemoteException{
+                            if(Binder.getCallingUid()!=android.os.Process.SYSTEM_UID)
+                                throw new SecurityException("SAF forwarding requires the test operator");
+                            long identity=Binder.clearCallingIdentity();
+                            try{return target.transact(transaction,request,response,options);}
+                            finally{Binder.restoreCallingIdentity(identity);}
+                        }
+                    };
+                    reply.writeNoException();reply.writeStrongBinder(forwarding);return true;
+                }
+                return super.onTransact(code,data,reply,flags);
+            }
+        };
+        SystemServer.startBinderThreads("saf-binder-relay",4);
+        IBinder registry=ServiceManager.getService(RELAY+"registry");
+        if(registry==null||registry instanceof Binder)throw new IllegalStateException("SAF operator registry is unavailable");
+        Parcel request=Parcel.obtain(),reply=Parcel.obtain();
+        try{
+            request.writeInterfaceToken(RELAY);request.writeStrongBinder(control);
+            if(!registry.transact(1,request,reply,0))throw new IllegalStateException("SAF peer registration failed");
+            reply.readException();
+            if(reply.readInt()!=expectedUid||reply.readInt()!=android.os.Process.myPid())
+                throw new SecurityException("SAF registry observed different native peer credentials");
+        }finally{reply.recycle();request.recycle();}
+        relayReady(ready);
+        Binder.joinThreadPool();
+    }
+
+    static void connectRelays()throws Exception{
+        check(android.os.Process.myUid()==android.os.Process.SYSTEM_UID,"SAF fixture operator has its real system identity");
+        SystemServer.startBinderThreads("saf-provider-fixture",4);
+        IBinder registry=ServiceManager.getService(RELAY+"registry");
+        check(registry!=null&&!(registry instanceof Binder),"SAF discovery registry is cross-process");
+        for(int uid:new int[]{UID,OTHER_UID}){
+            IBinder relay;int registeredPid;
+            Parcel find=Parcel.obtain(),found=Parcel.obtain();
+            try{
+                find.writeInterfaceToken(RELAY);find.writeInt(uid);
+                check(registry.transact(2,find,found,0),"SAF peer discovery transaction");
+                found.readException();relay=found.readStrongBinder();registeredPid=found.readInt();
+            }finally{found.recycle();find.recycle();}
+            check(relay!=null&&!(relay instanceof Binder),"SAF relay is an actual cross-process BinderProxy");
+            check(RELAY.equals(relay.getInterfaceDescriptor()),"SAF relay control descriptor is authenticated");
+            Parcel request=Parcel.obtain(),reply=Parcel.obtain();
+            try{
+                request.writeInterfaceToken(RELAY);
+                check(relay.transact(1,request,reply,0),"SAF relay identity transaction");
+                reply.readException();
+                check(reply.readInt()==uid,"SAF peer native UID agrees with the declared fixture client");
+                int pid=reply.readInt();
+                check(pid>0&&pid==registeredPid&&pid!=android.os.Process.myPid(),"SAF peer has a distinct authenticated process ID");
+                if(uid==UID)PID=pid;else OTHER_PID=pid;
+                relayControls.put(uid,relay);
+            }finally{reply.recycle();request.recycle();}
+        }
+        check(PID!=OTHER_PID,"SAF positive and negative callers use separate native processes");
+    }
+
+    static IContentProvider remoteTransport(IContentProvider local)throws Exception{
+        IBinder target=local.asBinder();
+        IBinder checked=new Binder(){
+            @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException{
+                int uid=Binder.getCallingUid(),pid=Binder.getCallingPid();
+                if(!Binder.isDirectlyHandlingTransaction()||
+                        !((uid==UID&&pid==PID)||(uid==OTHER_UID&&pid==OTHER_PID)))
+                    throw new SecurityException("Provider requires actual incoming peer Binder credentials");
+                nativeIncoming.incrementAndGet();
+                if(uid==OTHER_UID)nativeOtherIncoming.incrementAndGet();
+                return target.transact(code,data,reply,flags);
+            }
+        };
+        Map<Integer,IContentProvider> peers=new HashMap<>();
+        for(var entry:relayControls.entrySet()){
+            Parcel request=Parcel.obtain(),reply=Parcel.obtain();
+            try{
+                request.writeInterfaceToken(RELAY);request.writeStrongBinder(checked);
+                check(entry.getValue().transact(2,request,reply,0),"SAF provider is exported through the remote relay");
+                reply.readException();IBinder forwarding=reply.readStrongBinder();
+                check(forwarding!=null&&!(forwarding instanceof Binder),"SAF provider transport uses a real BinderProxy");
+                peers.put(entry.getKey(),ContentProviderNative.asInterface(forwarding));
+            }finally{reply.recycle();request.recycle();}
+        }
+        return (IContentProvider)Proxy.newProxyInstance(IContentProvider.class.getClassLoader(),
+                new Class<?>[]{IContentProvider.class},(proxy,method,args)->{
+                    IContentProvider peer=peers.get(Binder.getCallingUid());
+                    if(peer==null)throw new SecurityException("No native SAF peer for the selected fixture caller");
+                    // This selects a real process; the attributed UID in the original
+                    // request stays untouched, including the forged-attribution control.
+                    try{return method.invoke(peer,args);}catch(InvocationTargetException failure){throw failure.getCause();}
+                });
     }
     @SuppressWarnings({"unchecked","rawtypes"}) static Object state(String n)throws Exception{return Enum.valueOf((Class)type("ActivityTaskManagerService$State"),n);}
     static ApkPackage code(String name,int uid)throws Exception{
@@ -108,15 +273,7 @@ public final class SafDocumentsContractTest {
                     StandIn.of(android.os.storage.IStorageManager.class,new Services.StorageService()).asBinder());
             context=new TestContext(this);call(provider,"attachTo",new Class<?>[]{Context.class},context);
             IContentProvider local=((ContentProviderHolder)call(provider,"holder",new Class<?>[0])).provider;
-            if(nativeFiles){
-                IBinder target=local.asBinder();
-                IBinder remote=new Binder(){
-                    @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException{
-                        return target.transact(code,data,reply,flags);
-                    }
-                };
-                transport=ContentProviderNative.asInterface(remote);
-            }else transport=local;
+            transport=nativeFiles?remoteTransport(local):local;
             ugm=new UriGrantsManagerService(pm,atm,am);
         }
         @SuppressWarnings("unchecked") Object activity(String name,String lifecycle)throws Exception{
@@ -888,12 +1045,22 @@ public final class SafDocumentsContractTest {
     public static void contracts(boolean descriptors)throws Exception{
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
-        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);System.out.println("SafDocumentsContractTest passed: "+checks+" checks; nativeFiles="+nativeFiles);}
+        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
+            if(nativeFiles){
+                check(nativeIncoming.get()>nativeOtherIncoming.get()&&nativeOtherIncoming.get()>0,
+                        "SAF exercised actual incoming Binder transactions from both ordinary peers");
+                System.out.println("SAF_BINDER_NATIVE peer credential provenance verified: "+UID+"/"+PID+" and "+OTHER_UID+"/"+OTHER_PID+
+                        "; incoming="+nativeIncoming.get()+"; ungranted="+nativeOtherIncoming.get());
+            }
+            System.out.println("SafDocumentsContractTest passed: "+checks+" checks; nativeFiles="+nativeFiles);}
         finally{try(var paths=Files.walk(dir.toPath())){for(var p:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(p);}}
     }
     public static void main(String[] args)throws Exception{
+        if(args.length==2&&args[0].equals("registry")){registryMain(args[1]);return;}
+        if(args.length==3&&args[0].equals("relay")){relayMain(Integer.parseInt(args[1]),args[2]);return;}
         System.loadLibrary("android_runtime");
         nativeFiles=true;
+        connectRelays();
         if(args.length==2)restartPhase(args[0],new File(args[1]));else contracts(true);
     }
 }
