@@ -29,6 +29,7 @@ public class JniTest {
     // Invoked only by FatalContext in a disposable VM, never by main().
     static native long fatalNullRead(boolean host);
     static native boolean onLoadRan();
+    static native int hookedTable(String s);
     // Registered by JNI_OnLoad.
     static native int registeredTwice(int x);
     native long instanceSum(long a);
@@ -82,6 +83,9 @@ public class JniTest {
         check("JNI_OnLoad ran", onLoadRan());
         check("Java_* by name: add(40, 2) == 42", add(40, 2) == 42);
         check("strings both ways: greet", "Hello, gesher!".equals(greet("gesher")));
+        int hooked = hookedTable("gesher");
+        check("a library that replaces its JNIEnv's table still reaches ART (failure "
+                + hooked + ")", hooked == 0);
         double expect = 1 + 0.5 + 3 + 0.25 + 50 + 600 + 7000 + 80000 + 1.5 + 2 * 2.5 + 4 * 3.5
                 + 8 * 4.5 + 16 * 5.5 + 32 * 6.5 + 64 * 7.5;
         double got = mix(1, 0.5, 3, 0.25f, 5, 6, 7, 8, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5);

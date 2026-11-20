@@ -52,6 +52,36 @@ JNIEXPORT jint JNICALL Java_gesher_JniTest_add(JNIEnv* env, jclass cls, jint a, 
   return a + b;
 }
 
+// A library that hooks JNI (Opera's does): it copies the JNIEnv's table, replaces
+// an entry with its own, which calls the original, and stores the copy in the
+// JNIEnv. The copy's other entries are called with the same JNIEnv and must still
+// reach ART; the hook must reach the original. Returns 0 when all hold, else the
+// number of the first failure.
+static const struct JNINativeInterface* g_original_table;
+static int g_hooked_calls;
+static jsize JNICALL HookedGetStringLength(JNIEnv* env, jstring s) {
+  ++g_hooked_calls;
+  return g_original_table->GetStringLength(env, s);
+}
+JNIEXPORT jint JNICALL Java_gesher_JniTest_hookedTable(JNIEnv* env, jclass cls, jstring s) {
+  (void)cls;
+  static struct JNINativeInterface copy;
+  g_original_table = *env;
+  copy = **env;
+  copy.GetStringLength = HookedGetStringLength;
+  *env = &copy;
+  int failure = 0;
+  if ((*env)->GetStringLength(env, s) != 6) failure = 1;          // the hook, then ART
+  else if (g_hooked_calls != 1) failure = 2;
+  else if ((*env)->GetStringUTFLength(env, s) != 6) failure = 3;  // a copied entry
+  else if ((*env)->GetVersion(env) < JNI_VERSION_1_6) failure = 4;
+  else if ((*env)->FindClass(env, "java/lang/String") == NULL) failure = 5;
+  *env = g_original_table;
+  if (failure == 0 && (*env)->GetStringLength(env, s) != 6) failure = 6;  // restored
+  if (failure == 0 && g_hooked_calls != 1) failure = 7;
+  return failure;
+}
+
 JNIEXPORT jstring JNICALL Java_gesher_JniTest_greet(JNIEnv* env, jclass cls, jstring who) {
   (void)cls;
   const char* s = (*env)->GetStringUTFChars(env, who, NULL);
