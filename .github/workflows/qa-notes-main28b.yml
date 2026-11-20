@@ -1,0 +1,59 @@
+name: qa-notes-main28b
+on:
+  push:
+    branches: ['qa/diagnostic-notes-main28b-20261120']
+    paths:
+      - '.github/workflows/qa-notes-main28b.yml'
+      - 'tools/qa-notes-main28b/**'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: qa-notes-main28b-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  notes:
+    name: notes (${{ matrix.os }}, ${{ matrix.mode }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        mode: [original, debug]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify unchanged source and exact historical main installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'notes-main28b'
+          "QA_NOTES_OUT=$out" >> $env:GITHUB_ENV
+          python tools/qa-notes-main28b/diagnostic.py input --out $out
+          if ($LASTEXITCODE -ne 0) { throw 'Exact main source/producer/archive validation failed' }
+      - name: Prepare unchanged Android SDK APK identity collector
+        shell: pwsh
+        run: ./tests/e2e/prepare-identity-sdk.ps1
+      - name: Run the unchanged Notes scenario in a fresh VM
+        shell: pwsh
+        run: |
+          ./tools/qa-notes-main28b/run.ps1 -Mode '${{ matrix.mode }}' -Out $env:QA_NOTES_OUT
+          exit $LASTEXITCODE
+      - name: Preserve actual runtime, original result and observed WebView phases
+        if: always()
+        shell: pwsh
+        run: |
+          python tools/qa-notes-main28b/diagnostic.py summarize --out $env:QA_NOTES_OUT --mode '${{ matrix.mode }}' --os '${{ matrix.os }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Original Notes result or exact diagnostic evidence failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notes-main28b-${{ matrix.os }}-${{ matrix.mode }}-${{ github.sha }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/notes-main28b/results/
+          if-no-files-found: error
+          retention-days: 7
