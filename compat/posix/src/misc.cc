@@ -1,6 +1,5 @@
 // gesher-base: Linux interfaces with little or no Windows equivalent —
-// termios on the console, prctl, capabilities, extended attributes, the
-// mount table, sendfile and syslog.
+// termios on the console, prctl, capabilities, mount table, sendfile and syslog.
 #include <errno.h>
 #include <mntent.h>
 #include <pthread.h>
@@ -11,7 +10,6 @@
 #include <sys/capability.h>
 #include <sys/prctl.h>
 #include <sys/sendfile.h>
-#include <sys/xattr.h>
 #include <syslog.h>
 #include <termios.h>
 #include <unistd.h>
@@ -200,21 +198,6 @@ int capset(cap_user_header_t header, const cap_user_data_t data) {
   }
   return 0;
 }
-
-// --- extended attributes ------------------------------------------------------------
-
-ssize_t getxattr(const char*, const char*, void*, size_t) { return errno = ENOTSUP, -1; }
-ssize_t lgetxattr(const char*, const char*, void*, size_t) { return errno = ENOTSUP, -1; }
-ssize_t fgetxattr(int, const char*, void*, size_t) { return errno = ENOTSUP, -1; }
-int setxattr(const char*, const char*, const void*, size_t, int) { return errno = ENOTSUP, -1; }
-int lsetxattr(const char*, const char*, const void*, size_t, int) { return errno = ENOTSUP, -1; }
-int fsetxattr(int, const char*, const void*, size_t, int) { return errno = ENOTSUP, -1; }
-ssize_t listxattr(const char*, char*, size_t) { return errno = ENOTSUP, -1; }
-ssize_t llistxattr(const char*, char*, size_t) { return errno = ENOTSUP, -1; }
-ssize_t flistxattr(int, char*, size_t) { return errno = ENOTSUP, -1; }
-int removexattr(const char*, const char*) { return errno = ENOTSUP, -1; }
-int lremovexattr(const char*, const char*) { return errno = ENOTSUP, -1; }
-int fremovexattr(int, const char*) { return errno = ENOTSUP, -1; }
 
 // --- mount table --------------------------------------------------------------------
 //

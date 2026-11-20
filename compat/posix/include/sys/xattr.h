@@ -1,5 +1,4 @@
-// gesher-base: <sys/xattr.h>. Extended attributes are not supported: the
-// calls fail with ENOTSUP.
+// gesher-base: Linux user.* extended attributes on local Windows EA volumes.
 #pragma once
 
 #include <sys/types.h>

@@ -43,7 +43,8 @@ $bcp = ($bootJars | ForEach-Object { AndroidPath (Join-Path $RuntimeDir $_) }) -
 $run = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ('native-chooser-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
 $results = @()
-foreach ($mode in 'inputs','client','select','cancel','add','noadd','timer-cancel','timer-exception') {
+foreach ($mode in 'inputs','client','select','cancel','add','noadd','timer-cancel','timer-exception',
+    'intent-inputs','intent-client','intent-select','intent-cancel','intent-noadd','intent-suspended','intent-timer-cancel','intent-timer-exception') {
     $profile = Join-Path $run $mode
     foreach ($part in 'system/framework','data','art','i18n/etc/icu') {
         New-Item -ItemType Directory -Path (Join-Path $profile $part) -Force | Out-Null
@@ -51,10 +52,10 @@ foreach ($mode in 'inputs','client','select','cancel','add','noadd','timer-cance
     Copy-Item -LiteralPath (Join-Path $RuntimeDir 'framework-res.apk') -Destination (Join-Path $profile 'system/framework')
     Copy-Item -LiteralPath (Join-Path $RuntimeDir 'build.prop') -Destination (Join-Path $profile 'system')
     Copy-Item -LiteralPath $icu[0].FullName -Destination (Join-Path $profile 'i18n/etc/icu')
-    $owner = if ($mode -eq 'client') { 'com.gesher.server.ChooserClient' } else { 'com.gesher.server.SystemServer' }
+    $owner = if ($mode -in @('client','intent-client')) { 'com.gesher.server.ChooserClient' } else { 'com.gesher.server.SystemServer' }
     $vmArgs = @($NativeExe, "-Xbootclasspath:$bcp", "-Ximage:$(AndroidPath (Join-Path $RuntimeDir 'framework/boot.art'))",
         '-Xint','-Xusejit:false','-cp',(AndroidPath $TestDex),$owner,(AndroidPath $HelperPath),$mode)
-    if ($mode -eq 'client') { $vmArgs += 'com.gesher.server.SystemServer' }
+    if ($mode -in @('client','intent-client')) { $vmArgs += 'com.gesher.server.SystemServer' }
     $commandFile = Join-Path $profile 'command.txt'
     [IO.File]::WriteAllText($commandFile, (($vmArgs | ForEach-Object { QuoteArgument $_ }) -join ' '), [Text.Encoding]::Unicode)
     $start = New-Object Diagnostics.ProcessStartInfo
@@ -91,7 +92,7 @@ foreach ($mode in 'inputs','client','select','cancel','add','noadd','timer-cance
     $results += [pscustomobject]@{Mode=$mode;Passed=$passed;ExitCode=$process.ExitCode;Log=$log}
     $process.Dispose()
     if (-not $passed) { Write-Host $output; throw "Native chooser fixture failed: $mode" }
-    Write-Host "PASS  native account chooser: $mode"
+    Write-Host "PASS  native account/intent chooser: $mode"
 }
 $receipt = [pscustomobject]@{
     Scope='Synthetic JNI/Win32 dialogs on private never-switched desktops; no accounts or app jar loaded'
@@ -103,4 +104,4 @@ $receipt = [pscustomobject]@{
     Results=$results
 }
 $receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $run 'validation.json') -Encoding UTF8
-Write-Host 'AccountChooserNative all 8 modes passed'
+Write-Host 'AccountChooserNative all 16 account/intent modes passed'

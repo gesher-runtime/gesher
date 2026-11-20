@@ -75,6 +75,21 @@ final class PackageVisibility {
 
     int uid(String name) { return mPackages.get(name).uid; }
 
+    ApkPackage apk(String name) {
+        Entry entry = mPackages.get(name);
+        return entry == null ? null : entry.apk;
+    }
+
+    /** Legacy Binder uses one compatibility UID for unrelated installed APKs. */
+    boolean canSeeFromPackage(String sourceName, String targetName) {
+        Entry source = mPackages.get(sourceName);
+        Entry target = mPackages.get(targetName);
+        if (source == null || target == null) return false;
+        return source == target || UserHandle.getAppId(target.uid) < Process.FIRST_APPLICATION_UID
+                || queriesAll(source) || isStaticSharedLibrary(target) || forceQueryable(target)
+                || declaresVisibility(source, target);
+    }
+
     boolean canSee(int callingUid, String targetName) {
         Entry target = mPackages.get(targetName);
         if (target == null || callingUid < 0) return false;
@@ -88,13 +103,10 @@ final class PackageVisibility {
         for (Entry entry : mPackages.values()) {
             if (UserHandle.getAppId(entry.uid) != callingAppId) continue;
             sources.add(entry);
-            if (entry.targetSdk < 30 || entry.apk != null && entry.apk.parsed
-                    .getRequestedPermissions().contains(Manifest.permission.QUERY_ALL_PACKAGES)) {
-                return true;
-            }
+            if (queriesAll(entry)) return true;
         }
         if (sources.isEmpty()) return false;
-        if (target.apk != null && target.apk.parsed.isStaticSharedLibrary()) return true;
+        if (isStaticSharedLibrary(target)) return true;
         // Force-queryable is shared by all packages with the target app ID, as in
         // AppsFilter's app-ID set. Only real system addons can opt in via metadata.
         for (Entry entry : mPackages.values()) {
@@ -107,6 +119,15 @@ final class PackageVisibility {
             for (Entry source : sources) if (declaresVisibility(source, sibling)) return true;
         }
         return false;
+    }
+
+    private static boolean queriesAll(Entry source) {
+        return source.targetSdk < 30 || source.apk != null && source.apk.parsed
+                .getRequestedPermissions().contains(Manifest.permission.QUERY_ALL_PACKAGES);
+    }
+
+    private static boolean isStaticSharedLibrary(Entry target) {
+        return target.apk != null && target.apk.parsed.isStaticSharedLibrary();
     }
 
     private static boolean forceQueryable(Entry target) {

@@ -66,9 +66,24 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 namespace gesher::elf {
+
+// Owns the registrations and stubs of a not-yet-committed ELF image. Destroy
+// before unmapping that image. Ordinary loaded libraries retain this owner for
+// their lifetime; this is not an API for unloading executing code.
+class FsRewriteRegistration {
+ public:
+  explicit FsRewriteRegistration(void* object) : object_(object) {}
+  ~FsRewriteRegistration();
+  FsRewriteRegistration(const FsRewriteRegistration&) = delete;
+  FsRewriteRegistration& operator=(const FsRewriteRegistration&) = delete;
+
+ private:
+  void* object_;
+};
 
 struct FsRewriteStats {
   size_t stack_guard = 0;   // %fs:0x28 -> %gs:0x30
@@ -96,7 +111,8 @@ struct FsRewriteStats {
 bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
                        uint8_t* load_bias, uint8_t* map_base, size_t map_size,
                        FsRewriteStats* stats, std::string* error,
-                       size_t executable_tls_size = 0);
+                       size_t executable_tls_size = 0,
+                       std::unique_ptr<FsRewriteRegistration>* registration = nullptr);
 
 // For an object RewriteFsAccesses found self-unpacking (stats->self_unpacking):
 // after the loader's final mprotect, makes its executable segments readable

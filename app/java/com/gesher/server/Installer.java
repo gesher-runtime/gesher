@@ -453,6 +453,9 @@ final class Installer {
                     && !parsed.updateContinuityFrom(previous)) {
                 throw new SecurityException("INSTALL_FAILED_UPDATE_INCOMPATIBLE: " + pkg);
             }
+            try (PackageUids.Admission checked = PackageUids.prepare(List.of(parsed), mPm.packages())) {
+                // Preflight only. Parsing/validation never commits shared membership.
+            }
             File[] incomingSplits = companionSplits(source);
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
@@ -539,6 +542,9 @@ final class Installer {
                     throw new SecurityException("INSTALL_FAILED_CHANGED_SPLIT: " + pkg);
                 }
             }
+            try (PackageUids.Admission checked = PackageUids.prepare(List.of(staged), mPm.packages())) {
+                // Recheck the copied cluster before stopping the working generation.
+            }
             if (old != null || previous != null) mAtm.forceStopPackage(pkg);
             if (previous != null && !previous.hasVerifiedSigningIdentity()) {
                 mPm.permissions().forgetPackage(pkg);
@@ -587,10 +593,16 @@ final class Installer {
 
     /** Owner creation can fail; finish it before committing the installed registry. */
     private void publishInstalled(Entry entry, ApkPackage installed) throws IOException {
-        mPm.prepareAdd(installed);
-        commitEntry(entry);
-        // prepareAdd attached this record to the store; publication performs no owner I/O.
-        mPm.add(installed);
+        synchronized (mPm) {
+            try (PackageUids.Admission identity = mPm.prepareAdd(installed)) {
+                identity.commit();
+                // A failed registry write rolls back both attribution below and
+                // the unaccepted UID/signer membership transaction on close.
+                commitEntry(entry);
+                identity.acceptPublished();
+                mPm.publishPrepared(installed, this);
+            }
+        }
     }
 
     private void commitEntry(Entry entry) throws IOException {
@@ -635,7 +647,7 @@ final class Installer {
             }
             installed.prepareInstalledDataDirectories();
             if (entry != old) publishInstalled(entry, installed);
-            else mPm.add(installed);
+            else mPm.add(installed, this);
         } else if (entry != old) {
             // An explicit session reinstall can change attribution even when code bytes
             // are unchanged. A direct host launch of the same file keeps the old record.
@@ -763,12 +775,16 @@ final class Installer {
             if (notifications != null) notifications.packageRemoved(packageName);
             // Retire any background start already queued while capabilities were canceled.
             mAtm.forceStopPackage(packageName);
-            quarantine.stage();
-            mEntries.remove(packageName);
-            mAttributions.remove(packageName);
-            writeRegistry();
-            committed = true;
-            mPm.remove(packageName);
+            try (PackageUids.Admission identity = PackageUids.prepareRetire(target)) {
+                quarantine.stage();
+                identity.commit();
+                mEntries.remove(packageName);
+                mAttributions.remove(packageName);
+                writeRegistry();
+                committed = true;
+                identity.acceptPublished();
+                mPm.removePrepared(packageName);
+            }
         } catch (IOException | RuntimeException failure) {
             if (!committed) {
                 mEntries.put(packageName, e);

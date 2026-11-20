@@ -27,7 +27,6 @@ import com.android.internal.pm.pkg.component.ParsedProviderImpl;
 import com.android.internal.pm.pkg.component.ParsedServiceImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import com.gesher.server.ApkPackage;
-import com.gesher.server.GmsSignatureSpoofing;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.PackageUids;
 import com.gesher.server.StandIn;
@@ -154,7 +153,7 @@ public final class PackageVisibilityContractTest {
         // inherited Binder implementation returns null and the wrapper indexes [0].
         check(client.canPackageQuery(A, A), "Public self-package query failed");
         boolean shared = a.uid() == b.uid();
-        check(shared != GmsSignatureSpoofing.isEnabled(), "Fixture did not use actual runtime UID mode");
+        check(!shared, "Production UID allocation isolates unrelated packages in both profiles");
         check(client.canPackageQuery(A, B) == shared, "Unrelated distinct UID became visible");
         check(Arrays.equals(client.canPackageQuery(A, new String[]{B, A, "android", B}),
                 new boolean[]{shared, true, true, shared}), "Bulk query lost order, duplicate or false values");
@@ -368,7 +367,7 @@ public final class PackageVisibilityContractTest {
 
     public static int run(boolean onArt) throws Exception {
         art = onArt; checks = 0; shapesAndCallers(); installSourceVisibility();
-        if (GmsSignatureSpoofing.isEnabled()) { declarations(); components(); }
+        declarations(); components();
         return checks;
     }
     public static void main(String[] args) throws Exception {

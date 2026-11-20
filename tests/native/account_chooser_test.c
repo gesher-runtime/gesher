@@ -50,14 +50,17 @@ int wmain(int argc, WCHAR** argv) {
   DWORD_PTR value = 0;
 #define CHECK(condition) do { if (!(condition)) { fprintf(stderr, "account chooser fixture failed at line %d\n", __LINE__); goto cleanup; } ++checks; } while (0)
   CHECK(argc == 4);
-  BOOL inputs = wcscmp(argv[2], L"inputs") == 0;
-  BOOL client = wcscmp(argv[2], L"client") == 0;
-  BOOL select = wcscmp(argv[2], L"select") == 0;
-  BOOL add = wcscmp(argv[2], L"add") == 0;
-  BOOL cancel = wcscmp(argv[2], L"cancel") == 0;
-  BOOL noadd = wcscmp(argv[2], L"noadd") == 0;
-  BOOL timer = wcscmp(argv[2], L"timer-cancel") == 0 || wcscmp(argv[2], L"timer-exception") == 0;
-  CHECK(inputs || client || select || add || cancel || noadd || timer);
+  BOOL intent = wcsncmp(argv[2], L"intent-", 7) == 0;
+  const WCHAR* mode = intent ? argv[2] + 7 : argv[2];
+  BOOL inputs = wcscmp(mode, L"inputs") == 0;
+  BOOL client = wcscmp(mode, L"client") == 0;
+  BOOL select = wcscmp(mode, L"select") == 0;
+  BOOL add = wcscmp(mode, L"add") == 0;
+  BOOL cancel = wcscmp(mode, L"cancel") == 0;
+  BOOL noadd = wcscmp(mode, L"noadd") == 0;
+  BOOL suspended = intent && wcscmp(mode, L"suspended") == 0;
+  BOOL timer = wcscmp(mode, L"timer-cancel") == 0 || wcscmp(mode, L"timer-exception") == 0;
+  CHECK(inputs || client || select || add || cancel || noadd || timer || suspended);
   file = CreateFileW(argv[1], GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
   CHECK(file != INVALID_HANDLE_VALUE);
   CHECK(GetFileSizeEx(file, &length) && length.QuadPart >= 4 && length.QuadPart <= 65536
@@ -110,7 +113,8 @@ int wmain(int argc, WCHAR** argv) {
     GetEnvironmentVariableW(L"GESHER_LOCALES", locale, 32);
     BOOL hebrew = wcscmp(locale, L"he-IL") == 0;
     CHECK(GetWindowTextW(dialog, text, 128) > 0);
-    CHECK(wcscmp(text, hebrew ? L"\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df" : L"Gesher accounts") == 0);
+    if (intent) CHECK(wcscmp(text, hebrew ? L"\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d9\u05d9\u05e9\u05d5\u05dd" : L"Gesher \u2014 choose an app") == 0);
+    else CHECK(wcscmp(text, hebrew ? L"\u05d2\u05e9\u05e8 \u2014 \u05d1\u05d7\u05d9\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df" : L"Gesher accounts") == 0);
     CHECK(((GetWindowLongW(dialog, GWL_EXSTYLE) & WS_EX_RTLREADING) != 0) == hebrew);
     CHECK(GetWindowTextW(select_button, text, 128) > 0);
     CHECK(wcscmp(text, hebrew ? L"\u05d1\u05d7\u05d9\u05e8\u05d4" : L"Select") == 0);
@@ -140,6 +144,13 @@ int wmain(int argc, WCHAR** argv) {
         CHECK(Message(dialog, WM_COMMAND, MAKEWPARAM(CHOOSER_ADD, BN_CLICKED),
             (LPARAM)GetDlgItem(dialog, CHOOSER_ADD), &value));
       } else {
+        if (suspended) {
+          CHECK(Message(list, LB_SETCURSEL, 1, 0, &value));
+          CHECK(Message(dialog, WM_COMMAND, MAKEWPARAM(CHOOSER_LIST, LBN_SELCHANGE), (LPARAM)list, &value));
+          CHECK(!IsWindowEnabled(select_button));
+          CHECK(Message(dialog, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), (LPARAM)select_button, &value));
+          CHECK(IsWindow(dialog) && WaitForSingleObject(process.hProcess, 0) == WAIT_TIMEOUT);
+        }
         if (noadd) {
           CHECK(Message(dialog, WM_COMMAND, MAKEWPARAM(CHOOSER_ADD, BN_CLICKED), 0, &value));
           CHECK(IsWindow(dialog));

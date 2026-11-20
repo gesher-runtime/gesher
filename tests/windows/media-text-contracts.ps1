@@ -96,11 +96,17 @@ function Test-MediaTextTransport([string] $Dir, [string[]] $VmArguments, [string
       if ([DateTime]::UtcNow -ge $deadline) { throw 'Media/text transport server readiness timed out' }
       Start-Sleep -Milliseconds 100
     }
-    $package = [IO.File]::ReadAllText($ready).Trim()
+    $admission = [IO.File]::ReadAllLines($ready)
+    if ($admission.Count -ne 2) { throw 'Invalid media/text fixture admission record' }
+    $package = $admission[0]
     if ($package -notmatch '^[A-Za-z0-9_.]+$') { throw 'Invalid media/text fixture package' }
-    $env:GESHER_BINDER_UID = '10000'
-    $env:GESHER_UID = '10000'
-    $result = RunTimed "$Dir/dalvikvm.exe" ($VmArguments + 'gesher.services.MediaTextRemoteTest' + 'client' + $package) 120
+    $clientUid = 0
+    if (-not [int]::TryParse($admission[1], [ref]$clientUid) -or $clientUid -lt 10000 -or $clientUid -gt 19999) {
+      throw 'Media/text fixture did not receive an ordinary canonical application UID'
+    }
+    $env:GESHER_BINDER_UID = [string]$clientUid
+    $env:GESHER_UID = [string]$clientUid
+    $result = RunTimed "$Dir/dalvikvm.exe" ($VmArguments + 'gesher.services.MediaTextRemoteTest' + 'client' + $package + [string]$clientUid) 120
     $code = $LASTEXITCODE
     $output.Add($result)
     if ($code -ne 0 -or -not $result.Contains('MediaTextRemoteTest all passed:')) {

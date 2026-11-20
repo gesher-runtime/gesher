@@ -1,0 +1,689 @@
+{
+  "scope": "Selected SDK36 public/protected declarations; no runtime coverage percentage",
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "classes": {
+    "android.net.wifi.SoftApConfiguration": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "BAND_2GHZ",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "BAND_5GHZ",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "BAND_60GHZ",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "BAND_6GHZ",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_OPEN",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_WPA2_PSK",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_WPA3_OWE",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_WPA3_OWE_TRANSITION",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_WPA3_SAE",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "SECURITY_TYPE_WPA3_SAE_TRANSITION",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getBssid",
+          "descriptor": "()Landroid/net/MacAddress;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getChannels",
+          "descriptor": "()Landroid/util/SparseIntArray;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPassphrase",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSecurityType",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getSsid",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getWifiSsid",
+          "descriptor": "()Landroid/net/wifi/WifiSsid;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "isHiddenSsid",
+          "descriptor": "()Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "31ed4c78fa0a88de1e88b26b95022391a53ac6392839368ea61dce2041e754d2"
+    },
+    "android.net.wifi.SoftApConfiguration$Builder": {
+      "declarations": [
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "build",
+          "descriptor": "()Landroid/net/wifi/SoftApConfiguration;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setChannels",
+          "descriptor": "(Landroid/util/SparseIntArray;)Landroid/net/wifi/SoftApConfiguration$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "8a20b1bbd430c2043b5c89853b4057e7f6a1d993ef17dd1c06477d173bd561b4"
+    },
+    "android.net.wifi.WpsInfo": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "BSSID",
+          "descriptor": "Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "DISPLAY",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "INVALID",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "KEYPAD",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "LABEL",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "PBC",
+          "descriptor": "I",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "field",
+          "name": "pin",
+          "descriptor": "Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "field",
+          "name": "setup",
+          "descriptor": "I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "(Landroid/net/wifi/WpsInfo;)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "ce6f384797dbd7dd86c2ec6c2853116c78703fb2c21f3fe96fcd7e5728d9b5e3"
+    }
+  },
+  "total_declarations": 40,
+  "constant_values": "15 runtime reflection checks against SDK-inlined constants in the same corpus",
+  "source_profile": {
+    "aosp_wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+    "selected_source_files": {
+      "SoftApConfiguration.java": "071dc931f5d1884df843e87779d692e13a6bbe6406d0bc8f965636360eb8cd64",
+      "WpsInfo.java": "8e0f8020e96e6a2fe5365df41c8e05d92e5b3da6f03196f04547ffccbe8dbc50"
+    },
+    "base_commit": "d733cc0ffbff9e51892914c726c85b0da5f3c53c",
+    "base_tree": "b5ddb5f5cba80e0394eb92cac9905db45dbfd4b6"
+  },
+  "baseline_distribution": {
+    "source_head": "63d8db3e8e4a7c992d8daa0c027860bb759dcdaa",
+    "checkout": "76ac2cd2be8469ea88acc9145c4c51ffeb313a96",
+    "run_id": 44208723771,
+    "artifact_id": 14386510665,
+    "scope": "Selected framework.jar and gesher-app.jar DEX providers; not a whole boot-path census",
+    "audited_archives": {
+      "framework.jar": {
+        "manifest": {
+          "source_id": "framework.jar",
+          "role": "boot",
+          "name": "framework.jar",
+          "sha256": "fed525b7fd92cfe2b82ac547172d545dd2f4073a6bb67740906b15ec7c8c1bb7",
+          "archive_bytes": 17040072,
+          "entries": 1183,
+          "uncompressed_bytes": 44464732,
+          "class_definitions": 34764,
+          "selected_members": 5,
+          "versions": {
+            "dex_039": 5
+          },
+          "encoded_member_definitions": 456490
+        },
+        "providers": {
+          "android.internal.modules.utils.build.SdkLevel": {
+            "flags": 17,
+            "members": 9
+          },
+          "android.internal.wifi.WifiAnnotations": {
+            "flags": 17,
+            "members": 1
+          },
+          "android.app.compat.CompatChanges": {
+            "flags": 17,
+            "members": 10
+          }
+        }
+      },
+      "gesher-app.jar": {
+        "manifest": {
+          "source_id": "gesher-app.jar",
+          "role": "boot",
+          "name": "gesher-app.jar",
+          "sha256": "6ea29dee02b9ac9239a043bdf169aff73ead17dd10f5fd060792acc4a691441a",
+          "archive_bytes": 1392310,
+          "entries": 1,
+          "uncompressed_bytes": 3350044,
+          "class_definitions": 2403,
+          "selected_members": 1,
+          "versions": {
+            "dex_039": 1
+          },
+          "encoded_member_definitions": 29851
+        },
+        "providers": {}
+      }
+    },
+    "selected_providers": {
+      "android.net.wifi.SoftApConfiguration": [],
+      "android.net.wifi.SoftApConfiguration$Builder": [],
+      "android.net.wifi.WpsInfo": []
+    },
+    "compile_stubs_are_runtime_providers": false
+  },
+  "compiled_dex": {
+    "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "artifact": {
+      "source_id": "candidate.jar",
+      "role": "boot",
+      "name": "candidate.jar",
+      "sha256": "65ca7f469748051831823ccd009ae7f242b723e5a58f82b49f56574764781ea9",
+      "archive_bytes": 91972,
+      "entries": 1,
+      "uncompressed_bytes": 226252,
+      "class_definitions": 125,
+      "selected_members": 1,
+      "versions": {
+        "dex_039": 1
+      },
+      "encoded_member_definitions": 2086
+    },
+    "classes": {
+      "android.net.wifi.SoftApConfiguration": {
+        "declarations": [
+          {
+            "kind": "field",
+            "name": "BAND_2GHZ",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "BAND_5GHZ",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "BAND_60GHZ",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "BAND_6GHZ",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "CREATOR",
+            "descriptor": "Landroid/os/Parcelable$Creator;",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "SECURITY_TYPE_OPEN",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "SECURITY_TYPE_WPA2_PSK",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "SECURITY_TYPE_WPA3_OWE",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "SECURITY_TYPE_WPA3_OWE_TRANSITION",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "SECURITY_TYPE_WPA3_SAE",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "SECURITY_TYPE_WPA3_SAE_TRANSITION",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "method",
+            "name": "describeContents",
+            "descriptor": "()I",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "equals",
+            "descriptor": "(Ljava/lang/Object;)Z",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "getBssid",
+            "descriptor": "()Landroid/net/MacAddress;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "getChannels",
+            "descriptor": "()Landroid/util/SparseIntArray;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "getPassphrase",
+            "descriptor": "()Ljava/lang/String;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "getSecurityType",
+            "descriptor": "()I",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "getSsid",
+            "descriptor": "()Ljava/lang/String;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "getWifiSsid",
+            "descriptor": "()Landroid/net/wifi/WifiSsid;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "hashCode",
+            "descriptor": "()I",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "isHiddenSsid",
+            "descriptor": "()Z",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "toString",
+            "descriptor": "()Ljava/lang/String;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "writeToParcel",
+            "descriptor": "(Landroid/os/Parcel;I)V",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          }
+        ]
+      },
+      "android.net.wifi.SoftApConfiguration$Builder": {
+        "declarations": [
+          {
+            "kind": "method",
+            "name": "<init>",
+            "descriptor": "()V",
+            "sdk_flags": 1,
+            "dex_flags": 65537
+          },
+          {
+            "kind": "method",
+            "name": "build",
+            "descriptor": "()Landroid/net/wifi/SoftApConfiguration;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "setChannels",
+            "descriptor": "(Landroid/util/SparseIntArray;)Landroid/net/wifi/SoftApConfiguration$Builder;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          }
+        ]
+      },
+      "android.net.wifi.WpsInfo": {
+        "declarations": [
+          {
+            "kind": "field",
+            "name": "BSSID",
+            "descriptor": "Ljava/lang/String;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "field",
+            "name": "CREATOR",
+            "descriptor": "Landroid/os/Parcelable$Creator;",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "DISPLAY",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "INVALID",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "KEYPAD",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "LABEL",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "PBC",
+            "descriptor": "I",
+            "sdk_flags": 25,
+            "dex_flags": 25
+          },
+          {
+            "kind": "field",
+            "name": "pin",
+            "descriptor": "Ljava/lang/String;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "field",
+            "name": "setup",
+            "descriptor": "I",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "<init>",
+            "descriptor": "()V",
+            "sdk_flags": 1,
+            "dex_flags": 65537
+          },
+          {
+            "kind": "method",
+            "name": "<init>",
+            "descriptor": "(Landroid/net/wifi/WpsInfo;)V",
+            "sdk_flags": 1,
+            "dex_flags": 65537
+          },
+          {
+            "kind": "method",
+            "name": "describeContents",
+            "descriptor": "()I",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "toString",
+            "descriptor": "()Ljava/lang/String;",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          },
+          {
+            "kind": "method",
+            "name": "writeToParcel",
+            "descriptor": "(Landroid/os/Parcel;I)V",
+            "sdk_flags": 1,
+            "dex_flags": 1
+          }
+        ]
+      }
+    },
+    "declaration_count": 40
+  }
+}

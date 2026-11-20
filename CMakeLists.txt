@@ -143,6 +143,10 @@ add_executable(filesystem_metadata_host_test tests/native/filesystem_metadata_ho
 target_compile_options(filesystem_metadata_host_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(filesystem_metadata_host_test PRIVATE gesher_posix)
 
+add_executable(xattr_fd_host_test tests/native/xattr_fd_host_test.cc)
+target_compile_options(xattr_fd_host_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(xattr_fd_host_test PRIVATE gesher_posix advapi32)
+
 add_executable(sqlite_path_test tests/native/sqlite_path_test.cc)
 target_compile_options(sqlite_path_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(sqlite_path_test PRIVATE sqlite)
@@ -186,6 +190,24 @@ add_executable(elf_load_test tests/native/elf_load_test.cc)
 target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf)
 
+# Original dependency graphs exercise the actual loader, including concurrent
+# publication and constructor reentry. The failure target redirects only its
+# private copy of mprotect; production gesher_elf has no injection mechanism.
+add_executable(elf_load_transaction_test tests/native/elf_load_transaction_test.cc)
+target_compile_options(elf_load_transaction_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(elf_load_transaction_test PRIVATE gesher_elf)
+get_target_property(_elf_transaction_sources gesher_elf SOURCES)
+get_target_property(_elf_transaction_includes gesher_elf INCLUDE_DIRECTORIES)
+add_library(gesher_elf_transaction_failure STATIC ${_elf_transaction_sources})
+target_include_directories(gesher_elf_transaction_failure PUBLIC ${_elf_transaction_includes})
+target_compile_options(gesher_elf_transaction_failure PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(gesher_elf_transaction_failure PRIVATE
+  mprotect=gesher_elf_test_mprotect)
+add_executable(elf_load_transaction_failure_test tests/native/elf_load_transaction_test.cc)
+target_compile_options(elf_load_transaction_failure_test PRIVATE -Wall -Wextra -Werror)
+target_compile_definitions(elf_load_transaction_failure_test PRIVATE GESHER_ELF_TRANSACTION_FAILURE)
+target_link_libraries(elf_load_transaction_failure_test PRIVATE gesher_elf_transaction_failure)
+
 # Compare guest pthread metadata with independently observed Win32 target stacks.
 add_executable(pthread_attributes_target_test tests/native/pthread_attributes_target_test.cc)
 target_compile_options(pthread_attributes_target_test PRIVATE -Wall -Wextra -Werror)
@@ -201,6 +223,11 @@ target_link_libraries(art_shim_test PRIVATE gesher_bionic gesher_elf)
 add_executable(bionic_ftruncate_test tests/native/bionic_ftruncate_test.cc)
 target_compile_options(bionic_ftruncate_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(bionic_ftruncate_test PRIVATE gesher_bionic gesher_elf)
+
+# Real Bionic stream locks and wide I/O through the exported FILE APIs.
+add_executable(bionic_stdio_contract_test tests/native/bionic_stdio_contract_test.cc)
+target_compile_options(bionic_stdio_contract_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(bionic_stdio_contract_test PRIVATE gesher_bionic gesher_elf)
 
 # Raw system calls and code made at run time (ADR 0084), on hand-assembled
 # code through the loader's rewriter; no NDK library needed.
@@ -255,6 +282,14 @@ target_link_libraries(traversal_test PRIVATE gesher_posix)
 add_executable(futex_test tests/native/futex_test.cc)
 target_compile_options(futex_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(futex_test PRIVATE gesher_posix)
+
+add_executable(realtime_signals_test tests/native/realtime_signals_test.cc)
+target_compile_options(realtime_signals_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(realtime_signals_test PRIVATE gesher_posix)
+
+add_executable(realtime_signal_contract_test tests/exec/realtime_signals_contract.c)
+target_compile_options(realtime_signal_contract_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(realtime_signal_contract_test PRIVATE gesher_posix)
 
 add_library(futex_test_module SHARED tests/native/futex_test_module.cc)
 set_target_properties(futex_test_module PROPERTIES PREFIX "")

@@ -13,9 +13,16 @@ visible. The caller's verified **current** signer must match both the new instal
 an existing installer. A rotation capability alone is not certificate equality for this
 API. If there is no current installer, `INSTALL_PACKAGES` is required: applications
 targeting R or later receive `SecurityException`, while older applications are denied
-silently. The decision uses the authenticated application's target SDK; this runtime
-does not yet admit Android shared-user groups. A numeric UID collision does not combine
-identities.
+silently. For an admitted shared user, the decision uses the group's current signing
+identity and throws the missing-permission exception only when every installed member
+targets R or later.
+A numeric UID collision without verified shared-user membership does not combine
+identities. The UID registry retains the shared signing lineage across member removal
+and restart, and resets it only after the final member retires. This snapshot participates
+in the same admission journal as the UID and per-package signer, so failed publication
+cannot advance or erase it. Older registries derive the initial shared snapshot from
+their verified active member records; signer history already discarded by an older
+runtime cannot be reconstructed from those records.
 
 Session APIs also authenticate the process's attached package code. A live process
 with a pending exit keeps its own session authority until death, but cannot create
@@ -26,9 +33,10 @@ failed registry write leaves both the current identity and attribution intact.
 
 The target can see both its current installer and its still-installed initiating
 package. Other callers filter those names independently. After the initiating package
-is removed, only the authenticated target application can retrieve its historical
-identity and signing information. Merely sharing a numeric UID in a legacy profile
-does not grant that access. Each relationship carries
+is removed, the authenticated target application and its admitted shared-user peers can
+retrieve its historical identity and signing information. The caller's exact attached
+installation must still be current and must not be retiring. Merely sharing a numeric
+UID in a legacy profile does not grant that access. Each relationship carries
 an installation-owner UUID, so reinstalling the same package name cannot revive a
 retired relationship.
 
@@ -48,6 +56,10 @@ These rules are based on the `android-16.0.0_r4` implementations of:
 - [InstallSource.setInstallerPackage and removeInstallerPackage](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/pm/InstallSource.java)
 - [AppsFilterUtils.canQueryAsInstaller](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/pm/AppsFilterUtils.java)
 - [PackageManagerServiceUtils.compareSignatures](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/pm/PackageManagerServiceUtils.java)
+- [SharedUserSetting.removePackage and retained signing identity](https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/services/core/java/com/android/server/pm/SharedUserSetting.java)
+- [Settings shared-user lifetime](https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/services/core/java/com/android/server/pm/Settings.java)
+- [ReconcilePackageUtils shared signing-lineage updates](https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/services/core/java/com/android/server/pm/ReconcilePackageUtils.java)
+- [PlatformCompat.isChangeEnabledByUidInternal](https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/services/core/java/com/android/server/compat/PlatformCompat.java)
 
 ## Validation
 
@@ -56,8 +68,9 @@ installer registry and public framework wrapper on a host JVM. It
 uses the repository's signed v2/rotated APK fixtures, constructed manifests and a
 controlled signature-permission catalog; native Binder identity and allocation are
 explicit host boundaries. It checks reassignment, visibility, authenticated caller
-identity, SDK compatibility, retired-owner handling, coherent reads, failed-write
-rollback, metadata restart, and self queries that avoid traversing the package inventory.
+identity, shared-user signing rotation and SDK compatibility, retired-owner handling,
+coherent reads, failed-write rollback, metadata restart, and self queries that avoid
+traversing the package inventory.
 
 Pass `--java-home`, `--framework-classes`, `--core-classes`, `--app-classes`, and `--apksig`
 with the corresponding build paths. An optional `--output` retains its artifacts in a

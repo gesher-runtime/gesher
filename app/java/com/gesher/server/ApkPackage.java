@@ -88,7 +88,10 @@ public final class ApkPackage {
     private String mPrimaryCpuAbi;     // null: no native code (NativeLibs.abiFor)
     private final boolean mHasCode;
     private Boolean mVerifiedMicrogSigner;
-    private final int mUid;
+    private int mUid;
+    // Parsing an archive is not package admission. Only the server's identity
+    // transaction may attach a stable UID after validating the complete candidate.
+    private boolean mUidPending;
     private boolean mSystemAddon;
     private boolean mSigningIdentityChecked;
     private Signature[] mVerifiedSignatures;
@@ -192,7 +195,9 @@ public final class ApkPackage {
         if ("android".equals(packageName)) {
             throw new SecurityException("The platform package name is reserved");
         }
-        mUid = PackageUids.uidFor(packageName);
+        mUid = -1;
+        mUidPending = true;
+        parsed.setUid(-1);
         // Resolve the newly parsed APK, including before an install replaces the old one.
         sharedLibraries = SharedLibraryRegistry.resolve(parsed);
         mHasCode = parsed.isDeclaredHavingCode() && hasDex(apkPath);
@@ -466,6 +471,13 @@ public final class ApkPackage {
     }
 
     public int uid() { return mUid; }
+    public String sharedUserId() { return parsed != null ? parsed.getSharedUserId() : null; }
+    boolean uidPending() { return mUidPending; }
+    void assignUid(int uid) {
+        mUid = uid;
+        mUidPending = uid < 0;
+        parsed.setUid(uid);
+    }
     void setSystemAddon(boolean enabled) {
         if (enabled) {
             Signature[] verified = verifiedSignatures();
@@ -498,37 +510,6 @@ public final class ApkPackage {
             }
         }
         return mVerifiedSignatures == null ? null : mVerifiedSignatures.clone();
-    }
-
-    /** Historical installer attribution uses only fully verified signer data. */
-    synchronized SigningDetails verifiedSigningDetails() {
-        Signature[] current = verifiedSignatures();
-        if (current == null) return null;
-        try {
-            Signature[] past = null;
-            if (mVerifiedLineage != null && current.length == 1) {
-                List<X509Certificate> certificates = mVerifiedLineage.getCertificatesInLineage();
-                if (certificates.size() > 1 && current[0].equals(new Signature(
-                        certificates.get(certificates.size() - 1).getEncoded()))) {
-                    past = new Signature[certificates.size()];
-                    for (int i = 0; i < past.length; i++) {
-                        X509Certificate certificate = certificates.get(i);
-                        past[i] = new Signature(certificate.getEncoded());
-                        var capabilities = mVerifiedLineage.getSignerCapabilities(certificate);
-                        int flags = 0;
-                        if (capabilities.hasInstalledData()) flags |= SigningDetails.CertCapabilities.INSTALLED_DATA;
-                        if (capabilities.hasSharedUid()) flags |= SigningDetails.CertCapabilities.SHARED_USER_ID;
-                        if (capabilities.hasPermission()) flags |= SigningDetails.CertCapabilities.PERMISSION;
-                        if (capabilities.hasRollback()) flags |= SigningDetails.CertCapabilities.ROLLBACK;
-                        if (capabilities.hasAuth()) flags |= SigningDetails.CertCapabilities.AUTH;
-                        past[i].setFlags(flags);
-                    }
-                }
-            }
-            return new SigningDetails(current, mVerifiedSignatureSchemeVersion, past);
-        } catch (java.security.cert.CertificateException | IllegalArgumentException unavailable) {
-            return null;
-        }
     }
 
     public static Signature[] verifySignatures(String path) {
@@ -574,6 +555,37 @@ public final class ApkPackage {
     }
 
     public boolean hasVerifiedSigningIdentity() { return verifiedSignatures() != null; }
+
+    /** Signing lineage derived solely from a successful full APK verifier. */
+    synchronized SigningDetails verifiedSigningDetails() {
+        Signature[] current = verifiedSignatures();
+        if (current == null) return SigningDetails.UNKNOWN;
+        try {
+            Signature[] past = null;
+            if (mVerifiedLineage != null) {
+                List<X509Certificate> certificates = mVerifiedLineage.getCertificatesInLineage();
+                if (!certificates.isEmpty() && current.length == 1
+                        && current[0].equals(new Signature(certificates.get(certificates.size() - 1).getEncoded()))) {
+                    past = new Signature[certificates.size()];
+                    for (int i = 0; i < past.length; i++) {
+                        X509Certificate certificate = certificates.get(i);
+                        past[i] = new Signature(certificate.getEncoded());
+                        var capabilities = mVerifiedLineage.getSignerCapabilities(certificate);
+                        int flags = 0;
+                        if (capabilities.hasInstalledData()) flags |= SigningDetails.CertCapabilities.INSTALLED_DATA;
+                        if (capabilities.hasSharedUid()) flags |= SigningDetails.CertCapabilities.SHARED_USER_ID;
+                        if (capabilities.hasPermission()) flags |= SigningDetails.CertCapabilities.PERMISSION;
+                        if (capabilities.hasRollback()) flags |= SigningDetails.CertCapabilities.ROLLBACK;
+                        if (capabilities.hasAuth()) flags |= SigningDetails.CertCapabilities.AUTH;
+                        past[i].setFlags(flags);
+                    }
+                }
+            }
+            return new SigningDetails(current, mVerifiedSignatureSchemeVersion, past);
+        } catch (Exception invalid) {
+            throw new SecurityException("Invalid verified signing lineage", invalid);
+        }
+    }
 
     public String verifiedSignerSha256() {
         Signature[] signatures = verifiedSignatures();

@@ -47,13 +47,14 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Recording the way apps do it (media3, docs/media.md "Recording"). The microphone is
- * GESHER_AUDIO_SOURCE's file (a second, looped from the start of each recording: 750 Hz
+ * the isolated capture-test binary's GESHER_AUDIO_SOURCE file (one second, looped: 750 Hz
  * for 0.4 s, silence, 1250 Hz for 0.4 s, silence); video is four colors of 0.5 s each
  * (red, lime, blue, white), so what comes back says what went in. What the APIs report is
  * printed as "RecordTest ..." lines for tests/windows/tracks/59-media3.ps1.
@@ -83,7 +84,7 @@ public class RecordActivity extends Activity {
         // activity finishes, which ends the run in both modes (single process, the device).
         {
             String[] steps = {"session", "devices", "audiorecord", "ndk", "codeclist", "aac", "opus", "h264",
-                "h264surface", "muxboth", "recorder", "recordersurface", "recordercamera",
+                "h264surface", "muxboth", "recorder", "recorderlimits", "recordersurface", "recordercamera",
                 "imagereader"};
             for (String step : steps) {
                 try {
@@ -99,6 +100,7 @@ public class RecordActivity extends Activity {
                         case "h264surface": h264Surface(); break;
                         case "muxboth": muxBoth(); break;
                         case "recorder": recorderAudio(); break;
+                        case "recorderlimits": recorderLimits(); break;
                         case "recordersurface": recorderSurface(); break;
                         case "recordercamera": recorderCamera(); break;
                         case "imagereader": imageReader(); break;
@@ -864,6 +866,139 @@ public class RecordActivity extends Activity {
         amp = recordAudio(adts, MediaRecorder.OutputFormat.AAC_ADTS, MediaRecorder.AudioEncoder.AAC, 48000, 1500);
         pcm = decodeAudio(adts, rate);
         say("recorder aac adts: " + amp + ", " + tracks(adts) + ", decoded " + tones(pcm, pcm.length, Math.max(rate[0], 1), 0.05));
+    }
+
+    private static void requireIllegalRecorderState(Runnable operation) {
+        try {
+            operation.run();
+        } catch (IllegalStateException expected) {
+            return;
+        }
+        throw new AssertionError("accepted a recorder operation in the wrong state");
+    }
+
+    void recorderLimits() throws Exception {
+        HandlerThread thread = new HandlerThread("RecorderLimitCallbacks");
+        thread.start();
+        try {
+            Handler callbacks = new Handler(thread.getLooper());
+            verifyRecorderLimit(callbacks, true);
+            verifyRecorderLimit(callbacks, false);
+        } finally {
+            thread.quitSafely();
+            thread.join(3000);
+        }
+    }
+
+    private void verifyRecorderLimit(Handler callbacks, boolean byDuration) throws Exception {
+        // MediaRecorder captures the constructor thread's Looper. Keep that
+        // thread pumping callbacks while this test waits on the activity thread.
+        FutureTask<MediaRecorder> construct = new FutureTask<>(() -> new MediaRecorder(this));
+        callbacks.post(construct);
+        MediaRecorder recorder = construct.get(3, TimeUnit.SECONDS);
+        File output = new File(getFilesDir(), byDuration ? "rec_duration.m4a" : "rec_size.m4a");
+        try {
+            final long sizeLimit = 128 * 1024;
+            final int expected = byDuration ? MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED
+                    : MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED;
+            CountDownLatch done = new CountDownLatch(1);
+            AtomicInteger event = new AtomicInteger();
+            AtomicInteger terminalCount = new AtomicInteger();
+            AtomicInteger approachingCount = new AtomicInteger();
+            AtomicInteger callbackErrors = new AtomicInteger();
+            recorder.setOnInfoListener((r, what, extra) -> {
+                if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING) {
+                    if (byDuration || terminalCount.get() != 0) callbackErrors.incrementAndGet();
+                    approachingCount.incrementAndGet();
+                } else if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED
+                        || what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED) {
+                    event.set(what);
+                    terminalCount.incrementAndGet();
+                    done.countDown();
+                }
+            });
+            recorder.setOnErrorListener((r, what, extra) -> {
+                event.set(-what);
+                callbackErrors.incrementAndGet();
+                done.countDown();
+            });
+            requireIllegalRecorderState(recorder::pause);
+            requireIllegalRecorderState(recorder::resume);
+            requireIllegalRecorderState(recorder::stop);
+            recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            recorder.setAudioSamplingRate(48000);
+            recorder.setAudioEncodingBitRate(96000);
+            if (byDuration) recorder.setMaxDuration(750);
+            else recorder.setMaxFileSize(sizeLimit);
+            recorder.setOutputFile(output.getPath());
+            recorder.prepare();
+            requireIllegalRecorderState(() -> recorder.setMaxDuration(1000));
+            recorder.start();
+            if (byDuration) {
+                Thread.sleep(180);
+                recorder.pause();
+                recorder.pause();
+                if (done.await(900, TimeUnit.MILLISECONDS)) {
+                    throw new AssertionError("paused wall time counted toward duration");
+                }
+                recorder.resume();
+                recorder.resume();
+            }
+            if (!done.await(20, TimeUnit.SECONDS) || event.get() != expected) {
+                throw new AssertionError("limit event " + event.get() + " expected " + expected);
+            }
+            // Android documents the stop as asynchronous: notification is
+            // not a guarantee that the final moov is already visible. Wait
+            // for a readable audio track before decoding, still without an
+            // application stop/release. An 802 notification never ends this wait.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            boolean finalized = false;
+            while (System.nanoTime() < deadline && !finalized) {
+                MediaExtractor probe = new MediaExtractor();
+                try {
+                    probe.setDataSource(output.getPath());
+                    for (int i = 0; i < probe.getTrackCount(); i++) {
+                        if (probe.getTrackFormat(i).getString(MediaFormat.KEY_MIME).startsWith("audio/")) {
+                            probe.selectTrack(i);
+                            finalized = probe.getSampleTime() >= 0;
+                            break;
+                        }
+                    }
+                } catch (java.io.IOException | RuntimeException pendingFinalization) {
+                    // Retry only inside this bounded post-notification wait.
+                } finally {
+                    probe.release();
+                }
+                if (!finalized) Thread.sleep(20);
+            }
+            if (!finalized) throw new AssertionError("limit output was not finalized within 3 seconds");
+            int[] rate = new int[1];
+            float[] pcm = decodeAudio(output, rate);
+            if (rate[0] != 48000 || pcm.length < rate[0] * 2 / 5
+                    || (byDuration && pcm.length > rate[0] * 6 / 5)) {
+                throw new AssertionError("unfinished or unexpected audio: " + pcm.length + " @ " + rate[0]);
+            }
+            long bytes = output.length();
+            if (!byDuration && (bytes <= 0 || bytes > sizeLimit)) {
+                throw new AssertionError("file-size stop produced " + bytes + " bytes");
+            }
+            recorder.stop();
+            requireIllegalRecorderState(recorder::resume);
+            requireIllegalRecorderState(recorder::stop);
+            CountDownLatch callbacksDrained = new CountDownLatch(1);
+            callbacks.post(callbacksDrained::countDown);
+            if (!callbacksDrained.await(3, TimeUnit.SECONDS) || terminalCount.get() != 1
+                    || approachingCount.get() != (byDuration ? 0 : 1) || callbackErrors.get() != 0
+                    || output.length() != bytes) {
+                throw new AssertionError("duplicate callback or output change after limit");
+            }
+            say("recorder " + (byDuration ? "duration" : "file size") + " limit: event "
+                    + expected + " once, finalized within deadline before explicit stop");
+        } finally {
+            recorder.release();
+        }
     }
 
     /** MediaRecorder: video from its Surface (Canvas, the four colors over 2 s) with the microphone. */

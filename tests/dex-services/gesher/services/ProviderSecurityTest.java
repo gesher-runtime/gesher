@@ -188,6 +188,10 @@ public final class ProviderSecurityTest {
         Object owner = apk.getMethod("parse", String.class).invoke(null, args[1]);
         String senderName = (String) apk.getField("packageName").get(sender);
         String ownerName = (String) apk.getField("packageName").get(owner);
+        Class<?> pmType = Class.forName("com.gesher.server.PackageManagerService");
+        // PackageManagerService admits the APK identities before their UID and
+        // provider metadata are used to attach processes or publish providers.
+        Object pm = construct(pmType, new Class<?>[] {Collection.class}, Arrays.asList(sender, owner));
         int senderUid = (Integer) apk.getMethod("uid").invoke(sender);
         int ownerUid = (Integer) apk.getMethod("uid").invoke(owner);
         List<ProviderInfo> declarations = (List<ProviderInfo>) apk.getMethod("providers", long.class)
@@ -199,11 +203,9 @@ public final class ProviderSecurityTest {
         require(privateProvider != null, "Owner APK lacks a private URI-grant provider fixture");
         final ProviderInfo provider = privateProvider;
         final String authority = provider.authority.split(";")[0];
-        Class<?> pmType = Class.forName("com.gesher.server.PackageManagerService");
         Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
         Class<?> amType = Class.forName("com.gesher.server.ActivityManagerService");
         Class<?> notifications = Class.forName("com.gesher.server.NotificationManagerService");
-        Object pm = construct(pmType, new Class<?>[] {Collection.class}, Arrays.asList(sender, owner));
         Object atm = construct(atmType, new Class<?>[] {pmType}, pm);
         Object am = construct(amType, new Class<?>[] {atmType, pmType, notifications}, atm, pm,
                 construct(notifications, new Class<?>[0]));
@@ -266,9 +268,9 @@ public final class ProviderSecurityTest {
                 "AM URI permission inherited the old permissive default");
         require((Integer) check.invoke(grants, uri, 31702, 1000, read, 0) == PackageManager.PERMISSION_DENIED,
                 "forged system UID authorized a non-system PID");
-        grant.invoke(grants, senderName, uri, read, 0);
+        as(31701, ownerUid, () -> grant.invoke(grants, senderName, uri, read, 0));
         require((Integer) check.invoke(grants, uri, 31702, senderUid, read, 0) == PackageManager.PERMISSION_GRANTED,
-                "explicit owner/host read grant missing");
+                "explicit provider-owner read grant missing");
         require((Integer) check.invoke(grants, uri, 31702, senderUid, write, 0) == PackageManager.PERMISSION_DENIED,
                 "read grant became write access");
         require((Integer) check.invoke(grants, uri.buildUpon().appendPath("child").build(), 31702,
@@ -353,27 +355,28 @@ public final class ProviderSecurityTest {
         reaped.setBoolean(ownerProcess, false);
         publish.invoke(providers, ownerProcess, List.of(holder(provider)));
         System.out.println("ProviderSecurityTest: provider counts, connection ownership, lock order and atomic retirement passed");
-        revoke.invoke(grants, senderName, uri, read, 0);
+        as(31701, ownerUid, () -> revoke.invoke(grants, senderName, uri, read, 0));
         require((Integer) check.invoke(grants, uri, 31702, senderUid, read, 0) == PackageManager.PERMISSION_DENIED,
                 "URI revoke did not remove read access");
         denied(() -> get.invoke(providers, senderProcess, senderName, authority));
-        grant.invoke(grants, senderName, uri, read | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION, 0);
+        as(31701, ownerUid, () -> grant.invoke(grants, senderName, uri,
+                read | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION, 0));
         require((Integer) check.invoke(grants, uri.buildUpon().appendPath("child").build(), 31702,
                 senderUid, read, 0) == PackageManager.PERMISSION_GRANTED, "explicit prefix grant missing");
         require((Integer) check.invoke(grants, Uri.parse("content://" + authority + "/shared/items"),
                 31702, senderUid, read, 0) == PackageManager.PERMISSION_DENIED,
                 "URI prefix did not honor a path-segment boundary");
-        revoke.invoke(grants, senderName, uri, read, 0);
+        as(31701, ownerUid, () -> revoke.invoke(grants, senderName, uri, read, 0));
         Class<?> managerType = Class.forName("com.gesher.server.UriGrantsManagerService");
         Object manager = construct(managerType, new Class<?>[] {pmType, atmType, amType}, pm, atm, am);
         Method take = method(managerType, "takePersistableUriPermission", Uri.class, int.class,
                 String.class, int.class);
         try {
             take.invoke(manager, uri, read, senderName, 0);
-            throw new AssertionError("Persistable URI support was invented");
-        } catch (InvocationTargetException unsupported) {
-            require(unsupported.getCause() instanceof UnsupportedOperationException,
-                    "Persistable URI API failed without an explicit unsupported outcome");
+            throw new AssertionError("An absent persistable offer was accepted");
+        } catch (InvocationTargetException rejected) {
+            require(rejected.getCause() instanceof SecurityException,
+                    "A missing persistable offer did not report the Android permission error");
         }
         System.out.println("ProviderSecurityTest: explicit ephemeral URI read grant/revoke, path, UID and user boundaries passed");
         System.out.println("ProviderSecurityTest all passed");

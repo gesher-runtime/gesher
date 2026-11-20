@@ -92,9 +92,14 @@ public final class ContentSecurityTest {
         Harness(String ownerPath, String clientPath) throws Exception {
             owner = apkType.getMethod("parse", String.class).invoke(null, ownerPath);
             client = apkType.getMethod("parse", String.class).invoke(null, clientPath);
+            pm = construct(pmType, new Class<?>[]{Collection.class}, Arrays.asList(owner, client));
+            // Package admission assigns the installed Binder UIDs to parsed APKs.
             ownerUid = (Integer) apkType.getMethod("uid").invoke(owner);
             clientUid = (Integer) apkType.getMethod("uid").invoke(client);
-            pm = construct(pmType, new Class<?>[]{Collection.class}, Arrays.asList(owner, client));
+            require(ownerUid >= android.os.Process.FIRST_APPLICATION_UID,
+                    "Owner fixture did not receive an installed application UID");
+            require(clientUid >= android.os.Process.FIRST_APPLICATION_UID,
+                    "Client fixture did not receive an installed application UID");
             atm = construct(atmType, new Class<?>[]{pmType}, pm);
             Class<?> notifications = Class.forName("com.gesher.server.NotificationManagerService");
             am = (IActivityManager) construct(amType, new Class<?>[]{atmType, pmType, notifications},
