@@ -7,6 +7,7 @@
 
 #include <algorithm>
 
+#include <gesher/perf_trace.h>
 #include <system/window.h>
 
 namespace gesher::media {
@@ -255,7 +256,9 @@ int QueueSurface::unlockAndPost() {
 }
 
 void QueueSurface::Publish() {
+  static gesher::perf::Site copy_site("queue surface: publish a queued frame (copy)");
   std::function<void()> listener;
+  const int64_t start = gesher::perf::Now();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (buffer_ == nullptr || abandoned_) return;
@@ -289,6 +292,7 @@ void QueueSurface::Publish() {
     latest_ = std::move(f);
     listener = listener_;
   }
+  copy_site.Add(gesher::perf::Now() - start);
   if (listener) listener();
 }
 

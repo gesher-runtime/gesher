@@ -46,6 +46,7 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/egl_angle.h>
+#include <gesher/perf_trace.h>
 #include <gesher/elf_loader.h>
 #include <gesher/symbol_table.h>
 
@@ -472,19 +473,31 @@ EGLBoolean BIONIC_SYSV DestroySurface(EGLDisplay dpy, EGLSurface surface) {
 // surfaces track: a child surface's frame goes to its ANativeWindow before ANGLE swaps.
 EGLBoolean BIONIC_SYSV SwapBuffers(EGLDisplay dpy, EGLSurface surface) {
   ChildSurfaceBeforeSwap(dpy, surface);
-  return MS(eglSwapBuffers)(dpy, surface);
+  static gesher::perf::Site site("EGL: ANGLE's eglSwapBuffers");
+  const int64_t start = gesher::perf::Now();
+  const EGLBoolean swapped = MS(eglSwapBuffers)(dpy, surface);
+  site.Add(gesher::perf::Now() - start);
+  return swapped;
 }
 
 EGLBoolean BIONIC_SYSV SwapBuffersWithDamageKhr(EGLDisplay dpy, EGLSurface surface,
                                                 const EGLint* rects, EGLint n_rects) {
   ChildSurfaceBeforeSwap(dpy, surface);
-  return MS(eglSwapBuffersWithDamageKHR)(dpy, surface, rects, n_rects);
+  static gesher::perf::Site site("EGL: ANGLE's eglSwapBuffersWithDamageKHR");
+  const int64_t start = gesher::perf::Now();
+  const EGLBoolean swapped = MS(eglSwapBuffersWithDamageKHR)(dpy, surface, rects, n_rects);
+  site.Add(gesher::perf::Now() - start);
+  return swapped;
 }
 
 EGLBoolean BIONIC_SYSV SwapBuffersWithDamageExt(EGLDisplay dpy, EGLSurface surface,
                                                 const EGLint* rects, EGLint n_rects) {
   ChildSurfaceBeforeSwap(dpy, surface);
-  return MS(eglSwapBuffersWithDamageEXT)(dpy, surface, rects, n_rects);
+  static gesher::perf::Site site("EGL: ANGLE's eglSwapBuffersWithDamageEXT");
+  const int64_t start = gesher::perf::Now();
+  const EGLBoolean swapped = MS(eglSwapBuffersWithDamageEXT)(dpy, surface, rects, n_rects);
+  site.Add(gesher::perf::Now() - start);
+  return swapped;
 }
 
 // --- callbacks -----------------------------------------------------------------------------------

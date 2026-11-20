@@ -2,6 +2,7 @@
 #include "surface_texture_gl.h"
 
 #include <gesher/egl_angle.h>
+#include <gesher/perf_trace.h>
 #include <log/log.h>
 
 #include <cstring>
@@ -205,10 +206,16 @@ int GlTextureConsumer::UpdateTexImage(const std::shared_ptr<const SurfaceFrame>&
     a->glBindTexture(kGlTextureExternalOes, tex_name_);
     return kOk;
   }
+  // Frames the producer queued since the last latch that were never latched.
+  static gesher::perf::Site site("SurfaceTexture: latch a frame (count: frames skipped)");
+  const int64_t start = gesher::perf::Now();
   if (int err = Bind(latest->pixels.data(), latest->width, latest->height); err != kOk) {
     a->glBindTexture(kGlTextureExternalOes, tex_name_);
     return err;
   }
+  site.Add(gesher::perf::Now() - start,
+           latched_number_ != 0 && latest->number > latched_number_ + 1
+               ? static_cast<int64_t>(latest->number - latched_number_ - 1) : 0);
   current_ = latest;
   latched_number_ = latest->number;
   timestamp_ns_ = latest->timestamp_ns;

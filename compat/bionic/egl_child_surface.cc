@@ -20,6 +20,7 @@
 #endif
 
 #include <gesher/egl_angle.h>
+#include <gesher/perf_trace.h>
 
 #include <chrono>
 #include <condition_variable>
@@ -300,6 +301,8 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
   EGLint w = 0, h = 0;
   gl->query_surface(display, surface, EGL_WIDTH, &w);
   gl->query_surface(display, surface, EGL_HEIGHT, &h);
+  static gesher::perf::Site post_site("EGL child surface: read back and post a frame");
+  const int64_t post_start = gesher::perf::Now();
   if (w > 0 && h > 0) {
     // Check the consumer before issuing a synchronous GPU readback.
     ANativeWindow_Buffer b = {};
@@ -371,6 +374,8 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
         if (alignment != 4) gl->pixel_storei(GL_PACK_ALIGNMENT, 4);
         if (c->reverse_rows && reverse_order != desired_reverse)
           gl->pixel_storei(GL_PACK_REVERSE_ROW_ORDER_ANGLE, desired_reverse);
+        static gesher::perf::Site read_site("EGL child surface: glReadPixels of a frame");
+        const int64_t read_start = gesher::perf::Now();
         if (direct) {
           const GLenum format = plan.direct == DirectReadFormat::kBgra ? GL_BGRA_EXT : GL_RGBA;
           gl->read_pixels(0, plan.source_y, plan.width, plan.height,
@@ -380,6 +385,7 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
           gl->read_pixels(0, plan.source_y, plan.width, plan.height, GL_RGBA,
                           GL_UNSIGNED_BYTE, c->pixels.data());
         }
+        read_site.Add(gesher::perf::Now() - read_start);
         if (c->reverse_rows && reverse_order != desired_reverse)
           gl->pixel_storei(GL_PACK_REVERSE_ROW_ORDER_ANGLE, reverse_order);
         if (alignment != 4) gl->pixel_storei(GL_PACK_ALIGNMENT, alignment);
@@ -393,14 +399,24 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
         if (framebuffer != 0) gl->bind_framebuffer(fb_target, static_cast<GLuint>(framebuffer));
         if (!direct) CopyChildReadback(c->pixels.data(), b.bits, plan);
       }
+      static gesher::perf::Site unlock_site("EGL child surface: unlockAndPost a frame");
+      const int64_t unlock_start = gesher::perf::Now();
       ANativeWindow_unlockAndPost(c->window);
+      unlock_site.Add(gesher::perf::Now() - unlock_start);
     }
   }
+  post_site.Add(gesher::perf::Now() - post_start);
   // Paced as a 60 Hz display would (the hidden swap chain is not).
+  static gesher::perf::Site pace_site("EGL child surface: 60 Hz pacing wait (count: ms late)");
   auto now = std::chrono::steady_clock::now();
   auto next = c->last_post + std::chrono::microseconds(16667);
+  const int64_t pace_start = gesher::perf::Now();
   if (now < next) std::this_thread::sleep_for(next - now);
   c->last_post = std::chrono::steady_clock::now();
+  if (now < next) {
+    const auto late = std::chrono::duration_cast<std::chrono::milliseconds>(c->last_post - next);
+    pace_site.Add(gesher::perf::Now() - pace_start, late.count() > 0 ? late.count() : 0);
+  }
 }
 
 }  // namespace gesher::bionic::gl

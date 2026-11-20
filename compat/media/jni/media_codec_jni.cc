@@ -23,6 +23,7 @@
 
 #include <jni.h>
 #include <gesher/clocks.h>
+#include <gesher/perf_trace.h>
 
 #include <media/NdkMediaFormat.h>
 
@@ -677,7 +678,10 @@ class Codec {
       cv_.notify_all();
     }
     if (window != nullptr && frame != nullptr) {
+      static gesher::perf::Site render_site("MediaCodec: render a frame into its Surface");
+      const int64_t start = gesher::perf::Now();
       RenderFrame(window.get(), *frame);
+      render_site.Add(gesher::perf::Now() - start);
       if (frame_rendered_) PostFrameRendered(time_us);
     } else if (reader != nullptr && frame != nullptr) {
       DeliverToReader(reader->get(), *frame, time_us);
@@ -937,7 +941,11 @@ class Codec {
       std::vector<VideoFrame> frames;
       bool ok = true;
       if (!sample.data.empty()) {
+        static gesher::perf::Site video_site("MediaCodec: decode a video sample");
+        static gesher::perf::Site audio_site("MediaCodec: decode an audio sample");
+        const int64_t start = gesher::perf::Now();
         ok = video_ != nullptr ? video_->Decode(sample, &frames) : audio_->Decode(sample, &pcm);
+        (video_ != nullptr ? video_site : audio_site).Add(gesher::perf::Now() - start);
       }
       if (ok && eos) {
         if (video_ != nullptr) {

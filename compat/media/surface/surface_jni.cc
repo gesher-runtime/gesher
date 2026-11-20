@@ -58,6 +58,8 @@
 #include <memory>
 #include <mutex>
 
+#include <gesher/perf_trace.h>
+
 #include "frame_invalidation.h"
 #include "queue_surface.h"
 #include "surface_parcel_bridge.h"
@@ -517,6 +519,7 @@ struct ViewSurface {
   std::atomic<unsigned> requests{0}, failures{0}, draws{0}, consumes{0};
   std::atomic<bool> traced_nonblack{false};
   std::atomic<bool> pending_frame{false};
+  std::atomic<uint64_t> traced_frame{0};  // GESHER_PERF_TRACE: the last frame drawn
 };
 
 bool TraceInvalidation() {
@@ -615,8 +618,19 @@ class ViewSurfaceDrawable : public SkDrawable {
   SkRect onGetBounds() override { return SkRect::MakeIWH(w_, h_); }
 
   void onDraw(SkCanvas* canvas) override {
+    // Each frame of the SurfaceView drawn into its window; the count is the
+    // frames its producer queued since the last one drawn that were never shown.
+    static gesher::perf::Site draw_site("SurfaceView: draw its frame into the window (count: frames not shown)");
+    const int64_t draw_start = gesher::perf::Now();
     const auto frame = vs_->surface->Latest();
     sk_sp<SkImage> image = vs_->images.Get(frame);
+    if (gesher::perf::Enabled() && frame != nullptr) {
+      const uint64_t last = vs_->traced_frame.exchange(frame->number, std::memory_order_relaxed);
+      if (last != frame->number) {
+        draw_site.Add(gesher::perf::Now() - draw_start,
+                      last != 0 && frame->number > last + 1 ? static_cast<int64_t>(frame->number - last - 1) : 0);
+      }
+    }
     if (TraceInvalidation()) {
       const unsigned consume = vs_->consumes.fetch_add(1, std::memory_order_relaxed) + 1;
       if (consume <= 16) {

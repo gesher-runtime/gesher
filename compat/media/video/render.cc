@@ -1,6 +1,8 @@
 // Gesher media: a decoded frame drawn into a Surface (video_decoder.h).
 #include <algorithm>
 
+#include <gesher/perf_trace.h>
+
 #include "video_decoder.h"
 
 // The ANativeWindow functions dalvikvm defines (docs/graphics.md).
@@ -29,9 +31,16 @@ bool RenderFrame(ANativeWindow* window, const VideoFrame& f) {
   ANativeWindow_Buffer b = {};
   if (ANativeWindow_lock(window, &b, nullptr) != 0) return false;
   if (b.format == kRgba8888 || b.format == kRgbx8888) {
+    static gesher::perf::Site convert_site("video frame: I420 to RGBA into the Surface's buffer");
+    const int64_t start = gesher::perf::Now();
     I420ToRgba(f, static_cast<uint32_t*>(b.bits), b.stride, b.width, b.height);
+    convert_site.Add(gesher::perf::Now() - start);
   }
-  return ANativeWindow_unlockAndPost(window) == 0;
+  static gesher::perf::Site post_site("video frame: unlockAndPost (queue to the consumer)");
+  const int64_t start = gesher::perf::Now();
+  const bool posted = ANativeWindow_unlockAndPost(window) == 0;
+  post_site.Add(gesher::perf::Now() - start);
+  return posted;
 }
 
 }  // namespace gesher::media

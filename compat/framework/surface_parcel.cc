@@ -50,6 +50,8 @@
 #include <utils/RefBase.h>
 #include <utils/String16.h>
 
+#include <gesher/perf_trace.h>
+
 #include "android_os_Parcel.h"
 #include "../media/surface/surface_parcel_bridge.h"
 
@@ -131,11 +133,14 @@ class SurfaceSink : public BBinder {
         static_cast<uint64_t>(st.st_size) < bytes) {
       return BAD_VALUE;
     }
+    static gesher::perf::Site site("surface sink: map + post a forwarded frame");
+    const int64_t start = gesher::perf::Now();
     void* pixels = mmap(nullptr, bytes, PROT_READ, MAP_SHARED, fd, 0);
     if (pixels == MAP_FAILED) return NO_MEMORY;
     const bool queued = gesher_surface_post(surface, width, height, width, timestamp,
                                             static_cast<const uint32_t*>(pixels));
     munmap(pixels, bytes);
+    site.Add(gesher::perf::Now() - start);
     return queued ? OK : NO_INIT;
   }
 
@@ -244,7 +249,12 @@ void Forward(void* context, jlong surface, int width, int height, int64_t timest
       f->warned = true;
       return;
     }
+    static gesher::perf::Site copy_site("surface forward: copy a frame into the memfd");
+    static gesher::perf::Site transact_site("surface forward: frame transaction round trip");
+    const int64_t start = gesher::perf::Now();
     memcpy(f->map, pixels, bytes);
+    const int64_t copied = gesher::perf::Now();
+    copy_site.Add(copied - start);
     Parcel data, reply;
     data.writeInterfaceToken(Descriptor());
     data.writeInt32(width);
@@ -252,6 +262,7 @@ void Forward(void* context, jlong surface, int width, int height, int64_t timest
     data.writeInt64(timestamp);
     data.writeFileDescriptor(f->fd);
     const status_t transport = f->sink->transact(kFrame, data, &reply);
+    transact_site.Add(gesher::perf::Now() - copied);
     if (transport == OK) {
       int32_t answer = UNKNOWN_ERROR;
       if (reply.readInt32(&answer) != OK || reply.readInt32(&consumer_width) != OK ||

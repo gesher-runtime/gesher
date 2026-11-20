@@ -38,6 +38,8 @@
 #include "hardware_buffer.h"
 #include "surface_control.h"
 
+#include <gesher/perf_trace.h>
+
 #include "abi_types.h"
 
 #include <gesher/bionic_shim.h>
@@ -722,7 +724,10 @@ void RunJob(gpu::Thread* thread, Job* job) {
   }
   const int64_t latch = MonotonicNs();
   for (Frame& f : job->frames) {
+    static gesher::perf::Site compose_site("SurfaceControl: compose, read back and post a frame");
+    const int64_t start = gesher::perf::Now();
     Compose(&f, job);
+    compose_site.Add(gesher::perf::Now() - start);
     for (DrawOp& op : f.ops) {
       if (op.fence >= 0) close(op.fence);
       if (op.buffer != nullptr) ahb::Release(op.buffer);
