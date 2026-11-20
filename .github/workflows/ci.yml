@@ -815,7 +815,7 @@ jobs:
   framework:
     needs: [source-identity]
     # This immutable policy, not PR-controlled workflow YAML, may use the runner.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@7a45c2468c270bfe68ee5f854aa9d4feaf2208b3
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@3aef652f10e35fff3c54bf04f304efa713544950
     with:
       local-runner: true
 
