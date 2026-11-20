@@ -344,6 +344,7 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
       end.description->peer_uid = self.uid;
       end.description->peer_gid = self.gid;
       end.description->unix_datagram_pair.store(ws_type == ws::Type::kDgram);
+      end.description->unix_stream_pair.store(ws_type == ws::Type::kStream);
     }
   }
   fds[0] = fd_a;
@@ -440,19 +441,44 @@ bool WouldBlock(const SocketFd& state, int flags, int event) {
 }
 
 ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
-                    const sockaddr* addr, socklen_t addrlen) {
+                    const sockaddr* addr, socklen_t addrlen,
+                    const ws::RightsToken* rights = nullptr) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   ws::Address to;
   if (addr != nullptr && (!ToAddress(addr, addrlen, &to) || !MapUnixPath(&to, false))) return -1;
   if (WouldBlock(state, flags, ws::kPollOut)) return -1;
   return ws::SendOwned(state.socket, buffers, count, ToMsgFlags(flags), addr != nullptr ? &to : nullptr,
-                       state.description, (flags & MSG_DONTWAIT) != 0);
+                       state.description, (flags & MSG_DONTWAIT) != 0, rights);
+}
+
+// A stream pair's two loopback ports (SocketDescription::stream_ports), which
+// key its descriptor queue at the broker; false with errno if unknown.
+bool StreamPorts(const SocketFd& state, uint16_t* local, uint16_t* peer) {
+  uint32_t ports = state.description->stream_ports.load();
+  if (ports == 0) {
+    ws::Address self, other;
+    if (ws::GetSockName(state.socket, &self) < 0 || ws::GetPeerName(state.socket, &other) < 0) {
+      return false;
+    }
+    if (self.family != ws::Family::kInet || other.family != ws::Family::kInet ||
+        self.data_len < 2 || other.data_len < 2) {
+      return errno = EOPNOTSUPP, false;
+    }
+    // The port of sockaddr_in, in network order, follows the family field.
+    ports = static_cast<uint32_t>((self.data[0] << 8) | self.data[1]) << 16 |
+            static_cast<uint32_t>((other.data[0] << 8) | other.data[1]);
+    state.description->stream_ports.store(ports);
+  }
+  *local = static_cast<uint16_t>(ports >> 16);
+  *peer = static_cast<uint16_t>(ports);
+  return true;
 }
 
 ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockaddr* addr,
                     socklen_t* addrlen, int* result_flags = nullptr,
-                    ws::UnixCredentials* credentials = nullptr, bool* pass_credentials = nullptr) {
+                    ws::UnixCredentials* credentials = nullptr, bool* pass_credentials = nullptr,
+                    std::vector<int>* rights = nullptr, bool take_stream_rights = false) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   // There is no error queue: Linux reports EAGAIN when it is empty.
@@ -463,9 +489,24 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
                         state.description->pass_credentials.load();
   }
   ws::Address from;
+  ws::RightsToken token;
   ssize_t n = ws::RecvOwned(state.socket, buffers, count, ToMsgFlags(flags),
                        addr != nullptr ? &from : nullptr, state.description,
-                            (flags & MSG_DONTWAIT) != 0, result_flags, credentials);
+                            (flags & MSG_DONTWAIT) != 0, result_flags, credentials,
+                            rights != nullptr ? &token : nullptr);
+  if (n >= 0 && rights != nullptr) {
+    // SCM_RIGHTS (ADR 0088): a datagram's group, or what waits in a stream
+    // pair's queue once bytes sent after it have arrived.
+    if (token.count != 0) {
+      gesher::ClaimRights(token, rights);
+    } else if (n > 0 && (flags & MSG_PEEK) == 0 && take_stream_rights &&
+               state.description->unix_stream_pair.load()) {
+      uint16_t local, peer;
+      if (StreamPorts(state, &local, &peer) && gesher::RightsWaiting(local)) {
+        gesher::TakeRights(static_cast<uint64_t>(local) << 16 | peer, rights);
+      }
+    }
+  }
   if (n >= 0 && addr != nullptr) {
     sockaddr_storage local = {};
     socklen_t actual = sizeof(local), capacity = 0;
@@ -499,10 +540,11 @@ void ReleaseCanceledBuffers(void* raw) {
 // Ancillary data a message may carry (ADR 0088). SCM_CREDENTIALS is accepted on
 // an AF_UNIX datagram pair when it names this process, as Linux allows an
 // unprivileged sender (any other credentials are EPERM); every datagram's
-// header carries them anyway. Nothing else can be transmitted yet (SCM_RIGHTS
-// is phase 2): the complete message is rejected before its payload is sent, so
-// the peer never sees a message without the descriptors it was sent with.
-bool AcceptSendControl(int fd, const msghdr& message) {
+// header carries them anyway. SCM_RIGHTS on an AF_UNIX socketpair gives its
+// descriptors in `rights` (at most SCM_MAX_FD, 253, as on Linux). Anything
+// else rejects the complete message before its payload is sent, so the peer
+// never sees a message without the control data it was sent with.
+bool AcceptSendControl(int fd, const msghdr& message, std::vector<int>* rights) {
   if (message.msg_controllen < sizeof(cmsghdr)) return true;  // no complete header: none
   if (message.msg_controllen > 65536) return errno = ENOBUFS, false;
   std::vector<unsigned char> control(message.msg_controllen);
@@ -517,6 +559,23 @@ bool AcceptSendControl(int fd, const msghdr& message) {
     memcpy(&header, control.data() + at, sizeof(header));
     if (header.cmsg_len < sizeof(cmsghdr) || header.cmsg_len > control.size() - at) {
       return errno = EINVAL, false;
+    }
+    if (header.cmsg_level == SOL_SOCKET && header.cmsg_type == SCM_RIGHTS) {
+      if (!state.description->unix_datagram_pair.load() &&
+          !state.description->unix_stream_pair.load()) {
+        return errno = EOPNOTSUPP, false;
+      }
+      if (!gesher::UnixRightsAvailable()) return errno = EOPNOTSUPP, false;
+      const size_t count = (header.cmsg_len - CMSG_LEN(0)) / sizeof(int);
+      if (rights->size() + count > 253) return errno = EINVAL, false;
+      for (size_t i = 0; i < count; ++i) {
+        int value;
+        memcpy(&value, control.data() + at + CMSG_LEN(0) + i * sizeof(int), sizeof(value));
+        rights->push_back(value);
+      }
+      at += CMSG_ALIGN(header.cmsg_len);
+      if (at > control.size()) break;
+      continue;
     }
     if (header.cmsg_level != SOL_SOCKET || header.cmsg_type != SCM_CREDENTIALS) {
       return errno = EOPNOTSUPP, false;
@@ -554,14 +613,41 @@ ssize_t sendto(int fd, const void* buf, size_t len, int flags, const struct sock
 ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
   msghdr local;
   if (!ws::CopyFromUser(&local, msg, sizeof(local))) return errno = EFAULT, -1;
-  if (!AcceptSendControl(fd, local)) return -1;
+  std::vector<int> rights;
+  if (!AcceptSendControl(fd, local, &rights)) return -1;
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(&local, &buffers)) return -1;
+  // SCM_RIGHTS: the descriptors go to the broker first. A datagram carries the
+  // group's token; on a stream pair the group waits in the connection's queue
+  // before its bytes are written, so the receiver finds it when they arrive.
+  // As on Linux, a stream message without bytes carries no descriptors.
+  ws::RightsToken token;
+  if (!rights.empty()) {
+    SocketFd state;
+    if (!Lookup(fd, &state)) return -1;
+    size_t total = 0;
+    for (const ws::Buffer& b : buffers) total += b.len;
+    if (state.description->unix_datagram_pair.load()) {
+      if (!gesher::DepositRights(rights, 0, &token)) return -1;
+    } else if (total != 0) {
+      uint16_t own, peer;
+      if (!StreamPorts(state, &own, &peer) ||
+          !gesher::DepositRights(rights, static_cast<uint64_t>(peer) << 16 | own, &token)) {
+        return -1;
+      }
+    }
+  }
   ssize_t result;
   pthread_cleanup_push(ReleaseCanceledBuffers, &buffers);
   result = SendBuffers(fd, buffers.data(), buffers.size(), flags,
-                       static_cast<const sockaddr*>(local.msg_name), local.msg_namelen);
+                       static_cast<const sockaddr*>(local.msg_name), local.msg_namelen,
+                       token.count != 0 ? &token : nullptr);
   pthread_cleanup_pop(0);
+  if (result < 0 && token.count != 0) {
+    const int saved = errno;
+    gesher::CancelRights(token);
+    errno = saved;
+  }
   return result;
 }
 
@@ -584,38 +670,63 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   int result_flags = 0;
   ws::UnixCredentials credentials;
   bool pass_credentials = false;
+  // Descriptors are taken only into a control buffer with room for one; a
+  // datagram's are otherwise discarded (Linux), a stream queue's left waiting.
+  const size_t capacity = local.msg_control != nullptr ? local.msg_controllen : 0;
+  std::vector<int> rights;
   ssize_t n;
   pthread_cleanup_push(ReleaseCanceledBuffers, &buffers);
   n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
                  static_cast<sockaddr*>(local.msg_name),
                  local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags,
-                 &credentials, &pass_credentials);
+                 &credentials, &pass_credentials, &rights,
+                 capacity >= CMSG_LEN(sizeof(int)));
   pthread_cleanup_pop(0);
   if (n >= 0) {
     local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
-    size_t control_used = 0;
+    std::vector<unsigned char> control;
+    // Appends one control message, as much of it as fits (Linux's put_cmsg).
+    auto append = [&](int type, const void* data, size_t size) -> bool {
+      const size_t at = control.size();
+      if (capacity - at < CMSG_LEN(size)) return false;
+      cmsghdr header = {};
+      header.cmsg_len = CMSG_LEN(size);
+      header.cmsg_level = SOL_SOCKET;
+      header.cmsg_type = type;
+      const size_t space = CMSG_SPACE(size) < capacity - at ? CMSG_SPACE(size) : capacity - at;
+      control.resize(at + space, 0);
+      memcpy(control.data() + at, &header, sizeof(header));
+      memcpy(control.data() + at + CMSG_LEN(0), data, size);
+      return true;
+    };
     if (pass_credentials) {
       // SO_PASSCRED (ADR 0088): the sender's credentials, from the datagram's
       // header. A control buffer too small for them is MSG_CTRUNC, as on Linux.
-      if (local.msg_control == nullptr || local.msg_controllen < CMSG_LEN(sizeof(ucred))) {
-        local.msg_flags |= MSG_CTRUNC;
-      } else {
-        unsigned char control[CMSG_SPACE(sizeof(ucred))] = {};
-        cmsghdr header = {};
-        header.cmsg_len = CMSG_LEN(sizeof(ucred));
-        header.cmsg_level = SOL_SOCKET;
-        header.cmsg_type = SCM_CREDENTIALS;
-        ucred value = {};
-        value.pid = credentials.pid;
-        value.uid = credentials.uid;
-        value.gid = credentials.gid;
-        memcpy(control, &header, sizeof(header));
-        memcpy(control + CMSG_ALIGN(sizeof(cmsghdr)), &value, sizeof(value));
-        control_used = local.msg_controllen < sizeof(control) ? local.msg_controllen : sizeof(control);
-        if (!ws::CopyToUser(local.msg_control, control, control_used)) return errno = EFAULT, -1;
-      }
+      ucred value = {};
+      value.pid = credentials.pid;
+      value.uid = credentials.uid;
+      value.gid = credentials.gid;
+      if (!append(SCM_CREDENTIALS, &value, sizeof(value))) local.msg_flags |= MSG_CTRUNC;
     }
-    local.msg_controllen = control_used;
+    if (!rights.empty()) {
+      // SCM_RIGHTS: as many descriptors as fit; the others are closed and the
+      // message is MSG_CTRUNC, as Linux does (scm_detach_fds).
+      size_t fit = 0;
+      const size_t room = capacity - control.size();
+      if (room >= CMSG_LEN(sizeof(int))) fit = (room - CMSG_LEN(0)) / sizeof(int);
+      std::vector<int> delivered;
+      for (int received : rights) {
+        if (received < 0) continue;  // could not be adopted here
+        if (delivered.size() < fit) delivered.push_back(received);
+        else close(received);
+      }
+      if (delivered.size() < rights.size()) local.msg_flags |= MSG_CTRUNC;
+      if (!delivered.empty()) append(SCM_RIGHTS, delivered.data(), delivered.size() * sizeof(int));
+    }
+    if (!control.empty() && !ws::CopyToUser(local.msg_control, control.data(), control.size())) {
+      return errno = EFAULT, -1;
+    }
+    local.msg_controllen = control.size();
     uintptr_t base = reinterpret_cast<uintptr_t>(msg);
     if (!ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_namelen)),
                         &local.msg_namelen, sizeof(local.msg_namelen)) ||
@@ -1000,3 +1111,61 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
 }
 
 }  // extern "C"
+
+// --- sockets in Binder transactions (ADR 0088 phase 3) -------------------------
+//
+// Metadata bits after kTransferredSocket; the creator's pid (SO_PEERCRED of a
+// socketpair) fills the rest, divided by 4: Windows process ids are multiples
+// of 4 below 2^26. uid and gid are those of the receiver, every process of a
+// package runs as its uid.
+namespace {
+constexpr uint32_t kTransferUnixDatagram = 0x2;
+constexpr uint32_t kTransferPassCredentials = 0x4;
+constexpr uint32_t kTransferNonBlocking = 0x8;
+constexpr uint32_t kTransferPeerCredentials = 0x10;
+constexpr uint32_t kTransferUnixStream = 0x20;
+constexpr int kTransferPidShift = 6;
+}  // namespace
+
+bool gesher::TransferSocket(int fd, uintptr_t* socket, uint32_t* metadata) {
+  SocketFd state;
+  if (!gesher::LookupSocket(fd, &state)) return false;
+  const ws::SocketDescription& d = *state.description;
+  uint32_t m = kTransferredSocket;
+  if (d.unix_datagram_pair.load()) m |= kTransferUnixDatagram;
+  if (d.unix_stream_pair.load()) m |= kTransferUnixStream;
+  if (d.pass_credentials.load()) m |= kTransferPassCredentials;
+  if (d.nonblocking.load()) m |= kTransferNonBlocking;
+  if (d.has_peer_credentials && d.peer_pid > 0 && d.peer_pid % 4 == 0 &&
+      (static_cast<uint32_t>(d.peer_pid) >> 2) < (1u << (32 - kTransferPidShift))) {
+    m |= kTransferPeerCredentials | (static_cast<uint32_t>(d.peer_pid) >> 2) << kTransferPidShift;
+  }
+  *socket = state.socket;
+  *metadata = m;
+  return true;
+}
+
+int gesher::AdoptSocket(uintptr_t socket, uint32_t metadata) {
+  if (!ws::Startup()) {
+    int saved = errno;
+    ws::Close(socket);
+    return errno = saved, -1;
+  }
+  int fd = RegisterNew(socket, (metadata & kTransferNonBlocking) != 0);
+  if (fd < 0) return -1;
+  SocketFd end;
+  if (gesher::LookupSocket(fd, &end)) {
+    ws::SocketDescription& d = *end.description;
+    d.unix_datagram_pair.store((metadata & kTransferUnixDatagram) != 0);
+    d.unix_stream_pair.store((metadata & kTransferUnixStream) != 0);
+    d.pass_credentials.store((metadata & kTransferPassCredentials) != 0);
+    if ((metadata & kTransferPeerCredentials) != 0) {
+      const ws::UnixCredentials self = ws::LocalCredentials();
+      d.has_peer_credentials = true;
+      d.peer_pid = static_cast<int32_t>((metadata >> kTransferPidShift) << 2);
+      d.peer_uid = self.uid;
+      d.peer_gid = self.gid;
+    }
+  }
+  return fd;
+}

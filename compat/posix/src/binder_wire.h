@@ -58,7 +58,39 @@ enum Op : uint32_t {
   // -> {buffer id, accepted (u32)}; <- {status}. A failed allocation/user
   // copy abandons the delivery, unwinds its transaction and releases it.
   kFinishBuffer = 6,
+
+  // The descriptor broker (ADR 0088 section 3): SCM_RIGHTS on Gesher's AF_UNIX
+  // socketpairs. A process opens one connection for it; the broker knows the
+  // caller by the pipe's client process id, not by anything it claims.
+  // -> {magic, version}; <- {status}
+  kHelloRights = 7,
+  // Hands descriptors to the broker, which duplicates their handles into itself.
+  // -> {queue (u64): 0, or a stream connection's key; count (u32);
+  //     count x {handle (u64), metadata (u32)}}
+  // <- {status, token (2 x u64)}. With a queue, the group also waits in that
+  // connection's queue (kRightsTake), in order.
+  kRightsDeposit = 8,
+  // Moves a deposited group into the caller (closing the broker's handles).
+  // -> {token}; <- {status, count, count x {handle, metadata}}
+  kRightsClaim = 9,
+  // Moves every group waiting in a stream connection's queue into the caller.
+  // -> {queue}; <- {status, count, count x {handle, metadata}}
+  kRightsTake = 10,
+  // Takes a group back out of its queue (its sendmsg failed) and closes it.
+  // -> {token}; <- {status}: -ENOENT if a receiver already took it.
+  kRightsCancel = 11,
 };
+
+// The broker's doorbell for stream queues: a shared section named
+// kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint32 counters, one
+// per receiving loopback port (a queue's key >> 16). A counter is the number
+// of descriptors waiting for that port; recvmsg asks the broker only when it is
+// not zero.
+constexpr const wchar_t kRightsDoorbellPrefix[] = L"Local\\gesher-unix-rights-";
+constexpr uint32_t kRightsDoorbellSlots = 65536;
+// Linux's SCM_MAX_FD, and the broker's limit of descriptors in flight.
+constexpr uint32_t kRightsMaxPerMessage = 253;
+constexpr uint32_t kRightsMaxInFlight = 65536;
 
 // The pipe name of a device: \\.\pipe\gesher-binder-<device>.
 constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";

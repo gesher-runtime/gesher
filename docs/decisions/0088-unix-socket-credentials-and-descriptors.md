@@ -1,7 +1,8 @@
 # 0088: AF_UNIX credentials and descriptor passing
 
 Status: accepted, 2026-11-20 (the maintainer accepted the credentials' trust
-boundary in section 2). Phase 1 is implemented for datagram socketpairs.
+boundary in section 2). Phases 1, 2 and 3 are implemented for socketpairs;
+section 5 records where the implementation differs from sections 1 and 3.
 
 ## Context
 
@@ -141,6 +142,39 @@ Each phase is a PR with contract tests:
   fork/exec children, sockets passed through Binder;
 - byte-level stream/datagram boundary tests;
 - the browsers as e2e evidence.
+
+### 5. As implemented
+
+- **Binder (phase 3)** does not use broker tokens. binderd already duplicates
+  each `BINDER_TYPE_FD` handle into the receiver; a socket's fd sends its
+  `SOCKET` handle, and its description's state (datagram or stream pair,
+  `SO_PASSCRED`, `O_NONBLOCK`, `SO_PEERCRED`'s pid) travels in the fd object's
+  `pad_flags`, which the kernel ABI leaves unused (`TransferSocket`,
+  `AdoptSocket` in `socket.cc`). The receiver registers the duplicated handle as
+  a socket. Sockets are duplicated with `DuplicateHandle`, as inherited
+  sockets are, not `WSADuplicateSocketW`: the broker does not know the
+  receiver when the descriptor is deposited.
+- **The broker (phase 2)** is a third kind of binderd connection
+  (`binder_wire.h`, `kHelloRights`). binderd knows the caller by the pipe's
+  client process id. Tokens are 128 bits from `BCryptGenRandom`. Datagram pairs
+  carry the token after the header (`descriptors` is the count, `size` 40).
+- **Stream pairs are not framed.** A record header cannot keep a nonblocking
+  stream `send`'s partial-write result without buffering bytes Gesher would
+  then have to flush by itself. Instead, a stream pair's descriptors wait in
+  a queue at the broker, keyed by the connection's two loopback ports, and are
+  queued before the bytes sent with them are written. `recvmsg` takes the queue
+  after it has read bytes, when the broker's doorbell (a shared counter per
+  receiving port) says something waits. Differences from Linux, which no
+  known user depends on (Mojo and Gecko's IPC keep received descriptors in
+  arrival order):
+  - descriptors can arrive with a read that returns bytes sent before them,
+    and a read can return the descriptors of several messages;
+  - a read without room for descriptors leaves them queued for the next
+    `recvmsg`, instead of discarding them.
+- **Not done:** descriptors in flight are not released when the receiving end
+  closes (they stay in binderd, within its limit of 65536). `SCM_RIGHTS` on
+  named `AF_UNIX` sockets and on `AF_INET` sockets still fails with
+  `EOPNOTSUPP`; so does `SCM_RIGHTS` without a broker (`$GESHER_BINDER`).
 
 ## Consequences
 

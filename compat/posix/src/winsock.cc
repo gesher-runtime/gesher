@@ -1067,30 +1067,37 @@ struct UnixDatagramHeader {
   int32_t pid;
   uint32_t uid;
   uint32_t gid;
-  uint32_t descriptors;  // SCM_RIGHTS tokens that follow: none until phase 2
+  uint32_t descriptors;  // SCM_RIGHTS: descriptors in the broker group whose token follows
 };
 static_assert(sizeof(UnixDatagramHeader) == 24, "header layout");
 constexpr uint32_t kUnixMagic = 0x58554747;  // "GGUX"
 constexpr uint16_t kUnixVersion = 1;
 constexpr size_t kUnixHeader = sizeof(UnixDatagramHeader);
+// With descriptors, the header is followed by their group's token (two u64),
+// and `size` covers both.
+constexpr size_t kUnixRightsHeader = kUnixHeader + 2 * sizeof(uint64_t);
 constexpr size_t kLoopbackDatagram = 65507;  // the largest IPv4 UDP payload
 constexpr size_t kReceiveBuffer = 65536;
 
 ptrdiff_t SendUnixDatagram(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
-                           std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+                           std::shared_ptr<SocketDescription>& description, bool dont_wait,
+                           const RightsToken* rights) {
+  const bool with_rights = rights != nullptr && rights->count != 0;
+  const size_t header_size = with_rights ? kUnixRightsHeader : kUnixHeader;
   size_t total = 0;
   for (size_t i = 0; i < count; ++i) {
-    if (buffers[i].len > kLoopbackDatagram - kUnixHeader - total) return errno = EMSGSIZE, -1;
+    if (buffers[i].len > kLoopbackDatagram - header_size - total) return errno = EMSGSIZE, -1;
     total += buffers[i].len;
   }
   std::unique_ptr<char, decltype(&std::free)> packet(
-      static_cast<char*>(std::malloc(kUnixHeader + total)), &std::free);
+      static_cast<char*>(std::malloc(header_size + total)), &std::free);
   if (!packet) return errno = ENOMEM, -1;
   const UnixCredentials self = LocalCredentials();
-  UnixDatagramHeader header = {kUnixMagic, kUnixVersion, static_cast<uint16_t>(kUnixHeader),
-                               self.pid, self.uid, self.gid, 0};
+  UnixDatagramHeader header = {kUnixMagic, kUnixVersion, static_cast<uint16_t>(header_size),
+                               self.pid, self.uid, self.gid, with_rights ? rights->count : 0};
   memcpy(packet.get(), &header, kUnixHeader);
-  size_t at = kUnixHeader;
+  if (with_rights) memcpy(packet.get() + kUnixHeader, rights->value, sizeof(rights->value));
+  size_t at = header_size;
   for (size_t i = 0; i < count; ++i) {
     if (!CopyFromUser(packet.get() + at, buffers[i].data, buffers[i].len)) return errno = EFAULT, -1;
     at += buffers[i].len;
@@ -1099,12 +1106,13 @@ ptrdiff_t SendUnixDatagram(Socket s, const Buffer* buffers, size_t count, int fl
   const ptrdiff_t sent = SendOwnedRaw(s, &whole, 1, flags, to, description, dont_wait);
   if (sent < 0) return sent;
   // A datagram is sent whole or not at all.
-  return sent >= static_cast<ptrdiff_t>(kUnixHeader) ? sent - static_cast<ptrdiff_t>(kUnixHeader) : 0;
+  const ptrdiff_t header_bytes = static_cast<ptrdiff_t>(header_size);
+  return sent >= header_bytes ? sent - header_bytes : 0;
 }
 
 ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
                            std::shared_ptr<SocketDescription>& description, bool dont_wait,
-                           int* result_flags, UnixCredentials* credentials) {
+                           int* result_flags, UnixCredentials* credentials, RightsToken* rights) {
   std::unique_ptr<char, decltype(&std::free)> packet(
       static_cast<char*>(std::malloc(kReceiveBuffer)), &std::free);
   if (!packet) return errno = ENOMEM, -1;
@@ -1115,8 +1123,9 @@ ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, A
     if (n < 0) return n;
     UnixDatagramHeader header = {};
     if (static_cast<size_t>(n) >= kUnixHeader) memcpy(&header, packet.get(), kUnixHeader);
-    if (static_cast<size_t>(n) < kUnixHeader || header.magic != kUnixMagic ||
-        header.version != kUnixVersion || header.size != kUnixHeader) {
+    const size_t header_size = header.descriptors != 0 ? kUnixRightsHeader : kUnixHeader;
+    if (static_cast<size_t>(n) < header_size || header.magic != kUnixMagic ||
+        header.version != kUnixVersion || header.size != header_size) {
       // Not from a Gesher AF_UNIX endpoint (another local process wrote to the
       // loopback port): no socketpair on Linux could receive it. Drop it; a
       // peek still has to consume it.
@@ -1127,11 +1136,25 @@ ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, A
       }
       continue;
     }
-    const size_t payload = static_cast<size_t>(n) - kUnixHeader;
+    RightsToken carried;
+    if (header.descriptors != 0) {
+      memcpy(carried.value, packet.get() + kUnixHeader, sizeof(carried.value));
+      carried.count = header.descriptors;
+    }
+    // The descriptors leave the broker with their datagram: to the caller, or
+    // discarded for a reader without control data, as Linux discards them. A
+    // peek leaves the datagram, and them, in place.
+    if ((flags & kMsgPeek) == 0) {
+      if (rights != nullptr) *rights = carried;
+      else if (carried.count != 0) gesher::ClaimRights(carried, nullptr);
+    } else if (rights != nullptr) {
+      *rights = {};
+    }
+    const size_t payload = static_cast<size_t>(n) - header_size;
     size_t copied = 0;
     for (size_t i = 0; i < count && copied < payload; ++i) {
       const size_t part = buffers[i].len < payload - copied ? buffers[i].len : payload - copied;
-      if (!CopyToUser(buffers[i].data, packet.get() + kUnixHeader + copied, part)) {
+      if (!CopyToUser(buffers[i].data, packet.get() + header_size + copied, part)) {
         return errno = EFAULT, -1;
       }
       copied += part;
@@ -1145,20 +1168,22 @@ ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, A
 }  // namespace
 
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
-                    std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait,
+                    const RightsToken* rights) {
   if (description->unix_datagram_pair.load()) {
-    return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait);
+    return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);
   }
   return SendOwnedRaw(s, buffers, count, flags, to, description, dont_wait);
 }
 
 ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
-                    int* result_flags, UnixCredentials* credentials) {
+                    int* result_flags, UnixCredentials* credentials, RightsToken* rights) {
   if (description->unix_datagram_pair.load()) {
     return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
-                            credentials);
+                            credentials, rights);
   }
+  if (rights != nullptr) *rights = {};
   if (credentials != nullptr) *credentials = {};
   return RecvOwnedRaw(s, buffers, count, flags, from, description, dont_wait, result_flags);
 }

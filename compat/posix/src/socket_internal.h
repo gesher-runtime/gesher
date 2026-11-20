@@ -90,9 +90,21 @@ struct SocketDescription {
   // sender's credentials (winsock.cc's UnixDatagramHeader); SO_PASSCRED delivers them.
   std::atomic<bool> unix_datagram_pair{false};
   std::atomic<bool> pass_credentials{false};  // SO_PASSCRED
+  // A stream pair (SOCK_STREAM): SCM_RIGHTS goes through the broker's queue for
+  // the connection, keyed by both loopback ports (stream_ports: local << 16 |
+  // peer, 0 until first needed).
+  std::atomic<bool> unix_stream_pair{false};
+  std::atomic<uint32_t> stream_ports{0};
   bool has_peer_credentials = false;  // SO_PEERCRED: the pair's creator, as on Linux
   int32_t peer_pid = 0;
   uint32_t peer_uid = 0, peer_gid = 0;
+};
+
+// A group of descriptors deposited with binderd's broker (SCM_RIGHTS, ADR 0088
+// section 3): its token, and how many descriptors it holds.
+struct RightsToken {
+  uint64_t value[2] = {};
+  uint32_t count = 0;
 };
 
 // A process's credentials as SCM_CREDENTIALS and SO_PEERCRED carry them.
@@ -153,14 +165,20 @@ bool CopyFromUser(void* destination, const void* source, size_t size);
 bool CopyToUser(void* destination, const void* source, size_t size);
 // Owned UDP keeps native I/O nonblocking; logical blocking, timeout and caller
 // cancellation are implemented without changing the shared native socket mode.
+// On an AF_UNIX datagram pair, `rights` (deposited descriptors) travel in the
+// datagram's header; RecvOwned stores a received datagram's in `rights`, or,
+// when that is null, discards them as Linux does for a reader without control
+// data (a peek leaves them).
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
-                    std::shared_ptr<SocketDescription>& description, bool dont_wait = false);
+                    std::shared_ptr<SocketDescription>& description, bool dont_wait = false,
+                    const RightsToken* rights = nullptr);
 // On an AF_UNIX datagram pair (SocketDescription::unix_datagram_pair) both add
 // and remove the framing header: callers see only the payload. RecvOwned
 // stores the sender's credentials in `credentials` when it is not null.
 ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait = false,
-                    int* result_flags = nullptr, UnixCredentials* credentials = nullptr);
+                    int* result_flags = nullptr, UnixCredentials* credentials = nullptr,
+                    RightsToken* rights = nullptr);
 // Bytes of the next datagram's payload on an AF_UNIX datagram pair (FIONREAD).
 int UnixDatagramPayload(int available);
 
@@ -305,6 +323,22 @@ int ConnectWithObserver(int fd, const void* address, uint32_t length, ConnectObs
 using PollObserver = void (*)(void*);
 int PollWithObserver(void* records, size_t count, int timeout_ms, PollObserver observer, void* context,
                      ws::NativePollObserver native_observer = nullptr, void* native_context = nullptr);
+
+// SCM_RIGHTS through binderd's descriptor broker (unix_rights.cc). Each
+// returns false with errno set; EOPNOTSUPP when there is no broker.
+bool UnixRightsAvailable();
+// Deposits fds' descriptors; `queue` is 0 for a datagram (the token travels in
+// it) or a stream connection's key (local port << 16 | peer port, the receiver's).
+bool DepositRights(const std::vector<int>& fds, uint64_t queue, ws::RightsToken* token);
+// The deposited descriptors as new fds here (-1 for one that could not be
+// adopted). With `fds` null, the descriptors are discarded.
+bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds);
+bool TakeRights(uint64_t queue, std::vector<int>* fds);
+// A sender's deposit whose message was not sent: discarded, if still queued.
+void CancelRights(const ws::RightsToken& token);
+// Whether descriptors wait in the queue of a connection whose receiving end is
+// loopback `port` (the broker's doorbell): a cheap check before TakeRights.
+bool RightsWaiting(uint16_t port);
 
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set
 // (the socket is then closed).

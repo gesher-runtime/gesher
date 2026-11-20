@@ -120,6 +120,22 @@ Check 'native libs: AF_UNIX socketpair credentials (SO_PEERCRED, SO_PASSCRED, SC
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_credentials_test.so")
 } @('unix_credentials: all passed', 'elf_load_test all passed')
 
+# SCM_RIGHTS (ADR 0088 phase 2): pipes, memfds and sockets sent on SOCK_SEQPACKET
+# and SOCK_STREAM pairs through a binderd of the test's own, and without one.
+Check 'native libs: SCM_RIGHTS through the descriptor broker from a .so' {
+  $device = 'rights-' + [guid]::NewGuid().ToString('N')
+  $broker = Start-Process -FilePath "$Dir/binderd.exe" -ArgumentList $device -PassThru -WindowStyle Hidden
+  try {
+    Start-Sleep -Milliseconds 500
+    $env:GESHER_BINDER = $device
+    & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_rights_test.so")
+  } finally {
+    Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
+    Stop-Process -Id $broker.Id -Force -ErrorAction SilentlyContinue
+  }
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_rights_test.so")
+} @('unix_rights: all passed', 'unix_rights: all passed (without a broker)', 'elf_load_test all passed')
+
 Check 'native libs: a UPX-packed .so unpacks itself with raw syscalls and runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/raw_syscall_upx.so")
 } @('unpacks its code at run time (UPX)', 'code unpacked at run time: yes',

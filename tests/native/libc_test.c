@@ -30,6 +30,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>
 #include <sys/xattr.h>
@@ -117,6 +118,31 @@ static void test_strings(void) {
 
 // fnmatch with bionic's flag values (FNM_NOESCAPE 0x01, FNM_PATHNAME 0x02),
 // each flag on its own, so swapped values would fail (Opera's libopera.so).
+// getrlimit answers EFAULT for a buffer it cannot write, as the kernel does:
+// Chromium's ProtectedMemory checks a page is read-only exactly this way
+// (getrlimit(RLIMIT_NPROC, page) must fail with EFAULT, or it traps).
+static void test_getrlimit_fault(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  char* p = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (p == MAP_FAILED) {
+    check("getrlimit fault: mmap", 0);
+    return;
+  }
+  check("getrlimit into a writable page succeeds", getrlimit(RLIMIT_NPROC, (struct rlimit*)p) == 0);
+  check("mprotect PROT_READ", mprotect(p, (size_t)page, PROT_READ) == 0);
+  errno = 0;
+  check("getrlimit into a read-only page fails with EFAULT",
+        getrlimit(RLIMIT_NPROC, (struct rlimit*)p) == -1 && errno == EFAULT);
+  check("mprotect PROT_NONE", mprotect(p, (size_t)page, PROT_NONE) == 0);
+  errno = 0;
+  check("getrlimit into an inaccessible page fails with EFAULT",
+        getrlimit(RLIMIT_NOFILE, (struct rlimit*)p) == -1 && errno == EFAULT);
+  munmap(p, (size_t)page);
+  struct rlimit on_stack;
+  check("getrlimit into the stack succeeds",
+        getrlimit(RLIMIT_NOFILE, &on_stack) == 0 && on_stack.rlim_cur > 0);
+}
+
 static void test_fnmatch(void) {
   check("fnmatch matches and reports FNM_NOMATCH",
         fnmatch("*.so", "libopera.so", 0) == 0 && fnmatch("*.so", "libopera.a", 0) == FNM_NOMATCH);
@@ -866,6 +892,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_timerfd_syscalls();
   test_strings();
   test_fnmatch();
+  test_getrlimit_fault();
   test_ctype_table();
   test_urandom_stdio();
   test_stream_device_contracts();
