@@ -329,6 +329,11 @@ float BIONIC_SYSV Nexttowardf(float x, Quad y) {
     default: return x == 0 ? std::copysign(0.0f, (ybits >> 127) != 0 ? -1.0f : 1.0f) : x;
   }
 }
+// An arm64 guest passes the binary128 in a whole vector register, of which
+// the translator's bridge carries the low 64 bits; gesher_arm64.dll's stub
+// stores it and passes its address here.
+double BIONIC_SYSV Arm64Nexttoward(double x, const Quad* y) { return Nexttoward(x, *y); }
+float BIONIC_SYSV Arm64Nexttowardf(float x, const Quad* y) { return Nexttowardf(x, *y); }
 int64_t BIONIC_SYSV Lrint(double v) { return std::llrint(v); }
 int64_t BIONIC_SYSV Lrintf(float v) { return ::llrintf(v); }
 double BIONIC_SYSV Ldexp(double v, int e) { return std::ldexp(v, e); }
@@ -1378,6 +1383,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("llroundl", Llroundl);
   ENTRY("nexttoward", Nexttoward);
   ENTRY("nexttowardf", Nexttowardf);
+  ENTRY("__gesher_arm64_nexttoward", Arm64Nexttoward);
+  ENTRY("__gesher_arm64_nexttowardf", Arm64Nexttowardf);
   // libdl.
   ENTRY("dlopen", DlOpen);
   ENTRY("android_dlopen_ext", DlOpen);
