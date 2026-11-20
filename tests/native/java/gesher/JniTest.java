@@ -30,6 +30,7 @@ public class JniTest {
     static native long fatalNullRead(boolean host);
     static native boolean onLoadRan();
     static native int hookedTable(String s);
+    static native int sharedMemory();
     // Registered by JNI_OnLoad.
     static native int registeredTwice(int x);
     native long instanceSum(long a);
@@ -86,6 +87,9 @@ public class JniTest {
         int hooked = hookedTable("gesher");
         check("a library that replaces its JNIEnv's table still reaches ART (failure "
                 + hooked + ")", hooked == 0);
+        int shm = sharedMemory();
+        check("ASharedMemory: sealed GROW|SHRINK, setProt(PROT_READ) seals future writes (failure "
+                + shm + ")", shm == 0);
         double expect = 1 + 0.5 + 3 + 0.25 + 50 + 600 + 7000 + 80000 + 1.5 + 2 * 2.5 + 4 * 3.5
                 + 8 * 4.5 + 16 * 5.5 + 32 * 6.5 + 64 * 7.5;
         double got = mix(1, 0.5, 3, 0.25f, 5, 6, 7, 8, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5);

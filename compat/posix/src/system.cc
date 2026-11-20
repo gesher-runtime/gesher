@@ -463,11 +463,14 @@ int fcntl(int fd, int cmd, ...) {
       return 0;
     case F_DUPFD:
     case F_DUPFD_CLOEXEC: {
-      return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
+      const int duplicate = gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
+      if (duplicate >= 0) gesher::CopyMemfdRegistration(fd, duplicate);
+      return duplicate;
     }
     case F_ADD_SEALS:
+      return gesher::AddMemfdSeals(fd, static_cast<unsigned>(arg));
     case F_GET_SEALS:
-      return 0;  // seals are advisory here
+      return gesher::GetMemfdSeals(fd);
     default:
       return errno = EINVAL, -1;
   }
@@ -551,6 +554,8 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
     if (offset < 0 || len <= 0) return EINVAL;
     if (len > std::numeric_limits<off_t>::max() - offset) return EFBIG;
     const off_t end = offset + len;
+    // A memfd sealed with F_SEAL_GROW cannot be extended (memfd_seals.cc).
+    if (const int sealed = gesher::MemfdGrowError(fd, static_cast<uint64_t>(end))) return sealed;
 
     // Keep the descriptor's actual file object stable through inspection and
     // growth. F_GETFL's generic fallback is not evidence of write access.
@@ -754,8 +759,8 @@ int memfd_create(const char* name, unsigned int flags) {
   }
   // A delete-on-close file supplies storage, not enforceable Linux seals or
   // huge pages. Do not report those capabilities merely because a file opens.
-  if ((flags & (MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_NOEXEC_SEAL)) != 0)
-    return errno = EOPNOTSUPP, -1;
+  // Seals are stored on the file and enforced by gesher-base (memfd_seals.cc).
+  if ((flags & (MFD_HUGETLB | MFD_NOEXEC_SEAL)) != 0) return errno = EOPNOTSUPP, -1;
   wchar_t dir[MAX_PATH], path[MAX_PATH];
   DWORD length = GetTempPathW(MAX_PATH, dir);
   if (length == 0) return gesher::FailWithLastError();
@@ -774,10 +779,22 @@ int memfd_create(const char* name, unsigned int flags) {
     DeleteFileW(path);
     return errno = gesher::ErrnoFromWin32(error), -1;
   }
+  // Every memfd carries its seals (F_SEAL_SEAL alone without MFD_ALLOW_SEALING,
+  // as on Linux). A file system that cannot store them cannot seal: refuse
+  // MFD_ALLOW_SEALING rather than accept seals nothing would keep.
+  if (!gesher::InitMemfdSeals(h, (flags & MFD_ALLOW_SEALING) != 0) &&
+      (flags & MFD_ALLOW_SEALING) != 0) {
+    CloseHandle(h);
+    return errno = EOPNOTSUPP, -1;
+  }
   gesher::record_locks::DescriptorGuard descriptor_guard;
   int fd = gesher::CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h),
                            _O_RDWR | _O_BINARY | ((flags & MFD_CLOEXEC) != 0 ? _O_NOINHERIT : 0)));
-  if (fd < 0) CloseHandle(h);
+  if (fd < 0) {
+    CloseHandle(h);
+    return fd;
+  }
+  gesher::RegisterMemfd(fd);
   return fd;
 }
 

@@ -24,7 +24,7 @@
 //    ObbFile; mounting is not supported (the callback reports
 //    AOBB_STATE_ERROR_INTERNAL from another thread, as the platform reports
 //    asynchronously).
-//  - ASharedMemory_create/getSize/setProt over gesher-base's memfd_create.
+//  - ASharedMemory_create/getSize/setProt over gesher-base's sealable memfds.
 //  - ANativeWindow_fromSurface/toSurface over libandroid_runtime's (with the
 //    runtime's JNIEnv); the other ANativeWindow_* are in libandroid_window.cc
 //    and EGL/GLES in egl_gles.cc.
@@ -50,6 +50,7 @@
 #include <utils/Looper.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <io.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -417,13 +418,20 @@ int32_t BIONIC_SYSV ObbInfoGetFlags(ObbInfo* info) { return info->getFlags(); }
 
 // --- ASharedMemory ---------------------------------------------------------------------------------
 
+// libcutils' memfd regions (system/core/libcutils/ashmem-dev.cpp,
+// memfd_create_region and memfd_set_prot_region), which ASharedMemory_* call:
+// a sealable memfd whose size is fixed by F_SEAL_GROW | F_SEAL_SHRINK, made
+// read-only for good by F_SEAL_FUTURE_WRITE. Chromium tells a memfd region by
+// those seals; gesher-base stores and enforces them (memfd_seals.cc).
 int BIONIC_SYSV SharedMemoryCreate(const char* name, size_t size) {
   if (size == 0) return errno = kEINVAL, -1;
-  int fd = memfd_create(name != nullptr ? name : "ashmem", 0);
+  int fd = memfd_create(name != nullptr ? name : "none", MFD_CLOEXEC | MFD_ALLOW_SEALING);
   if (fd < 0) return -1;
-  if (_chsize_s(fd, static_cast<long long>(size)) != 0) {
+  if (gesher_ftruncate(fd, static_cast<off_t>(size)) != 0 ||
+      fcntl(fd, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK) != 0) {
+    const int saved = errno;
     close(fd);
-    return errno = kENOMEM, -1;
+    return errno = saved, -1;
   }
   return fd;
 }
@@ -432,7 +440,16 @@ size_t BIONIC_SYSV SharedMemoryGetSize(int fd) {
   if (fstat(fd, &st) != 0) return 0;
   return static_cast<size_t>(st.st_size);
 }
-int BIONIC_SYSV SharedMemorySetProt(int, int) { return 0; }
+int BIONIC_SYSV SharedMemorySetProt(int fd, int prot) {
+  const int seals = fcntl(fd, F_GET_SEALS);
+  if (seals == -1) return -1;
+  if ((prot & PROT_WRITE) != 0) {
+    // A region made read-only cannot become writable again (ashmem's EINVAL).
+    if ((seals & F_SEAL_FUTURE_WRITE) != 0) return errno = kEINVAL, -1;
+    return 0;
+  }
+  return fcntl(fd, F_ADD_SEALS, F_SEAL_FUTURE_WRITE) == 0 ? 0 : -1;
+}
 
 // --- ANativeWindow_fromSurface/toSurface ------------------------------------------------------
 // The other ANativeWindow_* functions are in libandroid_window.cc. These two

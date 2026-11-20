@@ -317,6 +317,10 @@ int fsync(int fd) {
 }
 int gesher_ftruncate(int fd, off_t length) {
   if (length < 0) return errno = EINVAL, -1;
+  // A memfd sealed against growing or shrinking keeps its size (memfd_seals.cc).
+  if (const int sealed = gesher::MemfdResizeError(fd, static_cast<uint64_t>(length))) {
+    return errno = sealed, -1;
+  }
   // Pin the actual descriptor throughout the resize and cache update. A path
   // lookup or an unguarded fd would allow close/dup2 to change the target.
   gesher::record_locks::DescriptorGuard descriptor_guard;
@@ -551,6 +555,12 @@ ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
 }
 
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
+  // A memfd's seals may forbid the write (memfd_seals.cc).
+  if (offset >= 0) {
+    if (const int sealed = gesher::MemfdWriteError(fd, false, static_cast<uint64_t>(offset), count)) {
+      return errno = sealed, -1;
+    }
+  }
   return PositionedIo(fd, const_cast<void*>(buf), count, offset, true);
 }
 
