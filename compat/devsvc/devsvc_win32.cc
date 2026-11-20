@@ -351,8 +351,13 @@ void CALLBACK DocumentLifetimeTimer(HWND window, UINT, UINT_PTR id, DWORD) {
   DocumentLifetime* state = found->second;
   if (state->window != window || state->timer != id) return;
   if (!state->active(state->context)) {
-    HRESULT status = state->dialog->Close(HRESULT_FROM_WIN32(ERROR_CANCELLED));
-    if (FAILED(status)) state->error = status;
+    // A timer callback is nested inside the shell dialog's message dispatch.
+    // Close can return S_OK there without ending Show. Queue the dialog's normal
+    // cancel message so its own modal loop handles retirement after this callback.
+    if (!PostMessageW(window, WM_CLOSE, 0, 0)) {
+      HRESULT status = HRESULT_FROM_WIN32(GetLastError());
+      state->error = FAILED(status) ? status : E_FAIL;
+    }
   }
 }
 
