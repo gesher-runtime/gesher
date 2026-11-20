@@ -29,14 +29,13 @@ function world(over = {}) {
     comparison: {status: 'diverged', base_commit: {sha: BASE}, merge_base_commit: {sha: OTHER}},
     ...over,
   };
-  // Opt-in native policy model: status persistence and enabling auto-merge can
+  // Opt-in native policy model: status/approval persistence and native merge can
   // close a PR before the controller's next awaited read or cleanup executes.
   // The default recording-only fixture remains useful for ordinary unit cases.
   w.nativeMerges = [];
-  const nativeBoundary = async (stage, args) => {
-    if (!w.nativePolicy) return;
-    if (w.nativePolicyHook) await w.nativePolicyHook(stage, args);
-    if (w.pr.state !== 'open' || w.pr.draft || w.nativeAutoMethod !== 'SQUASH') return;
+  const nativeReady = () => {
+    if (!w.nativePolicy || w.pr.state !== 'open' || w.pr.draft || w.nativePolicy.blocked ||
+        (w.nativeMergeable && w.nativeMergeable !== 'MERGEABLE')) return false;
     const contexts = w.nativePolicy.contexts;
     const green = contexts.every(context => {
       const writer = context === 'qa/gesher-label-approval' ? APP_BOT : ACTIONS_BOT;
@@ -48,12 +47,19 @@ function world(over = {}) {
     });
     const approvals = w.reviews.filter(r => r.state === 'APPROVED' &&
       r.commit_id === w.pr.head.sha).length;
-    if (!green || approvals < (w.nativePolicy.approvals ?? 1) ||
-        !w.checks.length || !w.checks.every(c => c.status === 'completed' && c.conclusion === 'success')) return;
+    return green && approvals >= (w.nativePolicy.approvals ?? 1) &&
+      w.checks.length > 0 && w.checks.every(c => c.status === 'completed' && c.conclusion === 'success');
+  };
+  const recordNativeMerge = stage => {
     w.nativeMerges.push({stage, head: w.pr.head.sha, label: w.pr.labels.length > 0,
       permission: w.permission, receiptState: w.reviews[0]?.state});
     w.pr.state = 'closed';
     w.nativeAutoMethod = null;
+  };
+  const nativeBoundary = async (stage, args) => {
+    if (!w.nativePolicy) return;
+    if (w.nativePolicyHook) await w.nativePolicyHook(stage, args);
+    if (w.nativeAutoMethod === 'SQUASH' && nativeReady()) recordNativeMerge(stage);
   };
   if (!over.runs) w.runs = ['ci', 'arm64-windows'].map((name, i) => ({
     id: 100 + i, workflow_id: 1 + i, check_suite_id: 1000 + i, name, path: '.github/workflows/' + name + '.yml',
@@ -201,13 +207,34 @@ function world(over = {}) {
     },
   }};
   github.graphql = async (query, args) => {
+    if (query.includes('mergeStateStatus')) {
+      w.calls.push(['nativeState', clone(args)]);
+      if (w.hooks.nativeState) await w.hooks.nativeState(args);
+      return {node: {id: w.pr.node_id, state: w.pr.state.toUpperCase(), isDraft: w.pr.draft,
+        headRefOid: w.pr.head.sha, baseRefName: w.pr.base.ref,
+        mergeable: w.nativeMergeable ?? 'MERGEABLE',
+        mergeStateStatus: nativeReady() ? 'CLEAN' : 'BLOCKED', ...w.nativeStateOverride}};
+    }
     if (query.includes('autoMergeRequest')) return {node: {autoMergeRequest: w.nativeAutoMethod ? {mergeMethod: w.nativeAutoMethod} : null}};
     if (query.includes('enablePullRequestAutoMerge')) {
       w.calls.push(['nativeWait', clone(args)]);
       if (w.hooks.nativeWait) await w.hooks.nativeWait(args);
       if (args.head !== w.pr.head.sha) throw new Error('native auto-merge head changed');
+      if (nativeReady()) throw new Error('Pull request Pull request is in clean status');
       w.nativeAutoMethod = 'SQUASH';
       await nativeBoundary('enable', args);
+      if (w.nativeWaitResponseError) throw w.nativeWaitResponseError;
+      return {};
+    }
+    if (query.includes('mergePullRequest')) {
+      w.calls.push(['nativeMerge', clone(args)]);
+      if (w.hooks.nativeMerge) await w.hooks.nativeMerge(args);
+      assert.match(query, /expectedHeadOid: \$head/);
+      assert.match(query, /mergeMethod: SQUASH/);
+      if (args.head !== w.pr.head.sha) throw new Error('native merge head changed');
+      if (!nativeReady()) throw new Error('Native repository policy blocks this merge');
+      recordNativeMerge('merge');
+      if (w.nativeMergeResponseError) throw w.nativeMergeResponseError;
       return {};
     }
     if (query.includes('dequeuePullRequest') || query.includes('disablePullRequestAutoMerge')) {

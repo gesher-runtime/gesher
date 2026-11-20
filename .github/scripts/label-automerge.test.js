@@ -527,7 +527,8 @@ test('verified App success precedes the unchanged Actions gate and is read back'
   ]);
   assert.ok(writes.every(([, a]) => a.sha === HEAD && a.owner === 'o' && a.repo === 'r'));
   assert.ok(w.did('statuses').length >= 3);
-  assert.equal(w.did('nativeWait')[0][1].head, HEAD);
+  assert.equal(w.did('nativeMerge')[0][1].head, HEAD);
+  assert.equal(w.did('nativeWait').length, 0);
   assert.equal(w.did('merge').length, 0);
 });
 
@@ -1022,8 +1023,9 @@ for (const existing of [null, 'MERGE']) {
     seedSuccess(w);
     await w.sweep();
     assert.equal(w.nativeMerges.length, 1);
-    assert.equal(w.nativeMerges[0].stage, 'enable');
-    assert.equal(w.did('nativeWait').length, 1);
+    assert.equal(w.nativeMerges[0].stage, 'merge');
+    assert.equal(w.did('nativeMerge').length, 1);
+    assert.equal(w.did('nativeWait').length, 0);
     bothStates(w, 'success');
   });
 }
@@ -1076,7 +1078,10 @@ for (const [name, revoke] of Object.entries({
 }
 
 function nativeAppWorld(contexts, over = {}) {
-  const w = appStatusWorld({nativePolicy: {contexts}, ...over});
+  const rules = [{type: 'required_status_checks', parameters: {required_status_checks:
+    contexts.map(context => ({context, integration_id:
+      context === appStatus.APP_STATUS ? appStatus.APP_ID : 15368}))}}];
+  const w = appStatusWorld({nativePolicy: {contexts}, rules, ...over});
   // An unrelated native approval keeps GitHub's ordinary one-review rule met
   // when a test dismisses the controller's specific exact-head receipt.
   w.reviews.push({id: 901, node_id: 'PRR_GENERAL', user: {id: 77, login: 'other-maintainer'},
@@ -1084,17 +1089,18 @@ function nativeAppWorld(contexts, over = {}) {
   return w;
 }
 
-for (const contexts of [[appStatus.APP_STATUS], [appStatus.APP_STATUS, appStatus.STATUS]]) {
+for (const contexts of [[appStatus.STATUS], [appStatus.APP_STATUS], [appStatus.APP_STATUS, appStatus.STATUS]]) {
   for (const existing of [null, 'SQUASH', 'MERGE']) {
-    test(`native policy consumes success only at final arming (${contexts.length} gates, existing ${existing})`, async () => {
+    test(`native policy consumes success only at final protected release (${contexts.length} gates, existing ${existing})`, async () => {
       const w = nativeAppWorld(contexts, {nativeAutoMethod: existing});
       await w.ciDone();
       assert.equal(w.pr.state, 'closed');
       assert.equal(w.nativeMerges.length, 1);
-      assert.equal(w.nativeMerges[0].stage, 'enable');
-      assert.equal(w.did('nativeWait').length, 1);
+      assert.equal(w.nativeMerges[0].stage, 'merge');
+      assert.equal(w.did('nativeMerge').length, 1);
+      assert.equal(w.did('nativeWait').length, 0);
       assert.equal(w.did('nativeCancel').length, existing ? 1 : 0);
-      assert.equal(w.calls.at(-1)[0], 'nativeWait', 'no required evidence is read after release');
+      assert.equal(w.calls.at(-1)[0], 'nativeMerge', 'no required evidence is read after release');
       bothStates(w, 'success');
     });
   }
@@ -1156,7 +1162,7 @@ test('App mode disarms an old green request before any publication', async () =>
   seedSuccess(w);
   await w.ciDone();
   assert.equal(w.nativeMerges.length, 1);
-  assert.equal(w.nativeMerges[0].stage, 'enable');
+  assert.equal(w.nativeMerges[0].stage, 'merge');
   assert.ok(w.calls.findIndex(([name]) => name === 'nativeCancel') <
     w.calls.findIndex(([name]) => name === 'app-status'));
 });
@@ -1167,13 +1173,13 @@ test('App label handling disarms before a new approval can consume an old green 
   await w.labeled();
   assert.equal(w.did('app-approve').length, 1);
   assert.equal(w.nativeMerges.length, 1);
-  assert.equal(w.nativeMerges[0].stage, 'enable');
+  assert.equal(w.nativeMerges[0].stage, 'merge');
   assert.ok(w.calls.findIndex(([name]) => name === 'nativeCancel') <
     w.calls.findIndex(([name]) => name === 'app-approve'));
 });
 
 test('App label handling cannot create approval after unconfirmed native cancellation', async () => {
-  const w = appStatusWorld({nativeAutoMethod: 'SQUASH', nativeCancelNoop: true, approved: false});
+  const w = nativeAppWorld([appStatus.APP_STATUS], {nativeAutoMethod: 'SQUASH', nativeCancelNoop: true, approved: false});
   seedSuccess(w);
   await assert.rejects(w.labeled(), /remained armed/);
   assert.equal(w.did('app-approve').length, 0);
@@ -1190,10 +1196,10 @@ test('App mode leaves native waiting off while required CI is pending', async ()
   assert.equal(w.did('nativeWait').length, 0);
 });
 
-test('App mode revokes both statuses if final native arming fails', async () => {
+test('App mode revokes both statuses if final native release fails', async () => {
   const w = nativeAppWorld([appStatus.APP_STATUS]);
-  w.hooks.nativeWait = () => {throw new Error('native arm denied');};
-  await assert.rejects(w.ciDone(), /native arm denied/);
+  w.hooks.nativeMerge = () => {throw new Error('native release denied');};
+  await assert.rejects(w.ciDone(), /native release denied/);
   assert.equal(w.nativeMerges.length, 0);
   assert.equal(w.nativeAutoMethod, null);
   bothStates(w, 'failure');
@@ -1214,7 +1220,7 @@ for (const source of ['schedule', 'bulk manual', 'fork CI']) {
       assert.equal(w.did(action).length, 0);
     await w.drainDispatches();
     assert.equal(w.nativeMerges.length, 1);
-    assert.equal(w.nativeMerges[0].stage, 'enable');
+    assert.equal(w.nativeMerges[0].stage, 'merge');
   });
 }
 
@@ -1382,3 +1388,6 @@ test('with the App status off the schedule reads the legacy gate with the Action
   assert.equal(lastStatus(w, appStatus.STATUS).state, 'success');
   assert.ok(reads.includes('list'));
 });
+
+// Included by the existing CI and runner-probe entrypoint.
+require('./automerge-release-cases.js');

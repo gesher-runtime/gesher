@@ -68,14 +68,21 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
   };
   return {
     enabled,
-    // Attempt both revocations even if one credential fails. Revoke the App
-    // first: if native disarming failed, a legacy write must not wake native
-    // evaluation while a previously successful sole required App gate is green.
-    async set(sha, ok) {
+    // With native waiting confirmed off, both credentials may be attempted.
+    // Otherwise the App must first block an actually required gate, with a
+    // confirmed readback. An unrelated legacy write could wake an old green
+    // App-only request when cancellation and revocation share a failed token.
+    async set(sha, ok, {nativeOff = false} = {}) {
       if (ok !== false && ok !== null) throw new Error('QA success requires two-phase publication');
       if (!enabled) return legacy(sha, ok);
+      // In shadow/legacy-only mode even an App write is unrelated to the
+      // required gate and can wake an old native request. Establish that this
+      // write will block a required gate before touching either credential.
+      if (!nativeOff && !await appRequired(true))
+        throw new Error('Native waiting is unresolved and the App revocation is not a required gate');
       const errors = [];
       try { await app(sha, ok); } catch (error) { errors.push(error); }
+      if (!nativeOff && errors.length) throw errors[0];
       try { await legacy(sha, ok); } catch (error) { errors.push(error); }
       if (errors.length) throw errors[0];
     },

@@ -1,10 +1,12 @@
 # Label-approved native auto-merge
 
 Apply `automerge` after reviewing the current PR head. GitHub performs a native
-SQUASH auto-merge after the required PR CI and exact-head QA gate succeed.
-There is no merge queue and no second full merge-group CI run. The controller
-never calls the merge API or starts another CI build. Its only schedule is the
-recovery described under API quota.
+SQUASH merge after the required PR CI and exact-head QA gate succeed.
+There is no merge queue and no second full merge-group CI run. In App mode the
+trusted label controller selects GitHub's protected immediate merge API when the
+PR is already ready, or native auto-merge waiting when another native rule still
+blocks it. It never bypasses a rule or starts another CI build. Its only schedule
+is the recovery described under API quota.
 
 ## Label authorization and QA
 
@@ -40,7 +42,8 @@ Android-visible contract requirements in CONTRIBUTING.md.
 The label records approval for that head. In legacy-only mode it also enables
 native SQUASH waiting while `qa/label-approval` remains pending. With the App
 status enabled, native waiting stays disarmed through status publication and
-verification, and is enabled only as the final release action. A small metadata-only
+verification. Its final release either submits the protected native SQUASH
+merge or enables native SQUASH waiting. A small metadata-only
 workflow, triggered when ci or arm64-windows completes, verifies the registered
 workflow IDs/paths, pull_request event, exact head/branch, target/source repository
 IDs and successful aggregate check suites from GitHub Actions. Display-name
@@ -105,7 +108,7 @@ URL, current CI and ordinary approval validation all remain valid. A foreign
 same-name success cannot suppress recovery. A failed same-head rerun removes
 the stale label; a pending rerun restores pending rather than keeping old green.
 Recovery also resumes a valid green PR if a controller stopped after publication
-but before the final native SQUASH enable. A valid green gate with native SQUASH
+but before the final native SQUASH release. A valid green gate with native SQUASH
 waiting needs no status rewrites or native mutations. Each labeled
 candidate has one current combined-status scan and a CI evidence pass; settled
 green candidates also recheck approval and current native waiting. Scans paginate
@@ -131,7 +134,10 @@ they require `qa/gesher-label-approval` bound to App integration `5816428` does
 the failure become a warning; the App status, written and read back with the App
 credentials, is then the gate. Otherwise, including an unreadable ruleset or the
 context bound to another integration, the failure stays fatal exactly as before.
-The ruleset is never read while legacy writes succeed.
+Normal disarmed publication does not read rules while legacy writes succeed.
+If native cancellation is unconfirmed, revocation separately reads the current
+rules before any status mutation: an App shadow cannot safely block an old
+required legacy success.
 
 #### Per-PR publication ordering
 
@@ -166,11 +172,23 @@ App-only gating uses the same disarmed publication protocol as dual gating.
 An existing native request is cancelled and its removal verified before any
 status publication or new native approval receipt. The controller authenticates the App success, checks
 approval and CI again, writes the legacy success, then rechecks current approval,
-registered CI and the exact App receipt before enabling native SQUASH pinned to
-the reviewed head. That final mutation can immediately merge the PR; there are
-no further required controller checks after it. If cancellation is rejected or
-cannot be confirmed, no success is published. Failures before release revoke
-both contexts and attempt native cancellation.
+registered CI and the exact App receipt before releasing native SQUASH pinned to
+the reviewed head. GitHub rejects `enablePullRequestAutoMerge` for an already
+ready `CLEAN` PR. Following the [GitHub CLI selection](https://github.com/cli/cli/blob/trunk/pkg/cmd/pr/merge/merge.go),
+`CLEAN`, `HAS_HOOKS` and `UNSTABLE` use `mergePullRequest`; `BLOCKED` and `BEHIND`
+use native waiting. Unknown, conflicting, changed, closed or draft targets do not
+release. Both mutations supply `expectedHeadOid` and remain subject to all native
+required checks, approvals and other rules. This is the authorized label
+controller, not an administrator/manual merge fallback.
+
+The native-state read is a selection hint, not an override of required evidence.
+Current approval, CI and the exact App receipt are checked after it. The chosen
+mutation is the final release action, with no further required controller checks.
+If it fails or its response is lost, the controller first rereads the PR. A
+closed or changed target receives no cleanup writes; an unreadable target is
+reported and deferred. An open unchanged target is disarmed and its status is
+revoked only by the safe protocol below. It never retries through the other
+release API. A subsequent ordinary reconciliation starts again from live state.
 App-enabled controller jobs use the per-PR ordering above through the complete
 publication sequence. Legacy-only publication behavior remains unchanged.
 
@@ -266,15 +284,22 @@ uses the configured read-only App client, with the Actions fallback, and
 paginates current combined-status contexts, avoiding full history scans without
 trusting a partial page.
 
-Pending and failure are published to both contexts, with the App revocation
-attempted first. A successful App revocation also blocks an old green App gate
-when native cancellation fails. The controller attempts both revocations even if one write fails.
+With native waiting confirmed off, pending and failure are published to both
+contexts, and both credentials are attempted even if one fails. If native
+cancellation is unconfirmed, the controller first verifies that the current
+rules require the App context from its exact integration. Only then can it write
+and authenticate a blocking App status. The legacy write is permitted only after
+that required failure/pending status has been read back. If the App is merely a
+shadow, the rules are unreadable, or App revocation/readback fails, no unrelated
+status write is issued; the unresolved revocation is reported. An old armed
+request can still complete independently during lost permissions or delayed
+events, but cleanup must not itself wake it with a still-green required gate.
 Success publication runs with native waiting
 disarmed, including requests that existed before this reconciliation. The App
 success and its authenticated readback do not themselves release an armed PR.
 Current label, review, permission, source and both workflow registrations are
 rechecked after the App write and again after legacy publication. The exact App
-receipt is read back once more before the final expected-head native enable.
+receipt is read back once more before the final expected-head native release.
 Changes or API errors before release cause conservative revocation; a newer
 pending CI attempt restores pending. Guarded label cleanup still preserves
 newer label events and run attempts. API operations are separate requests, not

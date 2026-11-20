@@ -1,6 +1,6 @@
 'use strict';
 
-// Only loaded from main. Approve the exact head and let native auto-merge finish.
+// Only loaded from main. Release an approved exact head through GitHub policy.
 const p = require('./merge-approval.js');
 const qaStatuses = require('./app-qa-status.js');
 const {STATUS} = qaStatuses;
@@ -53,6 +53,48 @@ async function enable(mergeGithub, pr) {
     enablePullRequestAutoMerge(input: {pullRequestId: $id, expectedHeadOid: $head,
       mergeMethod: SQUASH}) { clientMutationId }
   }`, {id: pr.node_id, head: pr.head.sha});
+}
+
+async function nativeReleaseState(github, pr) {
+  const {node} = await github.graphql(`query($id: ID!) {
+    node(id: $id) { ... on PullRequest {
+      id state isDraft headRefOid baseRefName mergeable mergeStateStatus
+    } }
+  }`, {id: pr.node_id});
+  if (node?.id !== pr.node_id || node.state !== 'OPEN' || node.isDraft !== false ||
+      node.headRefOid !== pr.head.sha || node.baseRefName !== pr.base.ref ||
+      node.mergeable !== 'MERGEABLE') throw new Error('Native merge state or reviewed target is unavailable');
+  // GitHub CLI uses the immediate path for these states: auto-merge enable
+  // rejects a CLEAN PR. Both supported mutations still enforce GitHub policy.
+  if (['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(node.mergeStateStatus)) return 'merge';
+  if (['BLOCKED', 'BEHIND'].includes(node.mergeStateStatus)) return 'wait';
+  throw new Error('Native merge state cannot be released: ' + node.mergeStateStatus);
+}
+
+async function release(mergeGithub, pr, mode) {
+  if (mode === 'wait') return enable(mergeGithub, pr);
+  await mergeGithub.graphql(`mutation($id: ID!, $head: GitObjectID!) {
+    mergePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head,
+      mergeMethod: SQUASH}) { clientMutationId }
+  }`, {id: pr.node_id, head: pr.head.sha});
+}
+
+async function invalidate(github, mergeGithub, owner, repo, pr, statuses, core) {
+  // Read back an ambiguous mutation before any cleanup write. Never substitute
+  // another release mutation, and never alter a newer or already closed PR.
+  let current;
+  try { ({data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number})); }
+  catch (error) {
+    core.warning('#' + pr.number + ': release state unavailable; cleanup deferred: ' + error.message);
+    return;
+  }
+  if (current.state !== 'open' || !p.sameTarget(pr, current)) return;
+  let nativeOff = false;
+  try {
+    nativeOff = await disarm(github, mergeGithub, owner, repo, pr);
+  } catch (error) { core.warning('#' + pr.number + ': native disarming unconfirmed: ' + error.message); }
+  try { await statuses.set(pr.head.sha, false, {nativeOff}); }
+  catch (error) { core.warning('#' + pr.number + ': QA revocation unconfirmed: ' + error.message); }
 }
 
 async function ciEvidence(github, owner, repo, pr) {
@@ -148,16 +190,20 @@ async function stuck(github, statusReader, owner, repo, pr, gate) {
   return evidence.ready || Boolean(evidence.failed);
 }
 
-async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses, expectedHead) {
+async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub, publisher, expectedHead) {
   const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
   if (pr.state !== 'open' || (expectedHead && pr.head.sha !== expectedHead)) return;
+  let nativeOff = false;
+  const statuses = {...publisher, set: (sha, ok) => publisher.set(sha, ok, {nativeOff})};
   let approvalChecked = false;
   try {
     // An old green gate may already have native waiting armed. Disarm before
     // any status write, including revocation of an invalid approval: even a
     // legacy status write can wake native evaluation of the existing App gate.
-    if (statuses.enabled && !await disarm(github, mergeGithub, owner, repo, pr))
-      return await statuses.set(pr.head.sha, false);
+    if (statuses.enabled) {
+      nativeOff = await disarm(github, mergeGithub, owner, repo, pr);
+      if (!nativeOff) return;
+    }
     const ok = await approved(github, owner, repo, pr);
     approvalChecked = true;
     if (!ok) {
@@ -217,6 +263,7 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
         await statuses.set(pr.head.sha, false);
         return await cancel(github, owner, repo, pr, mergeGithub);
       }
+      const mode = await nativeReleaseState(github, pr);
       const finalEvent = await p.labelEvent(github, owner, repo, number);
       const finalEvidence = await ciEvidence(github, owner, repo, pr);
       if (finalEvidence.failed) {
@@ -230,19 +277,14 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
         return await cancel(github, owner, repo, pr, mergeGithub);
       }
       await statuses.verifySuccess(pr.head.sha, receipt);
-      // This exact-head mutation is the release point. Do not perform further
-      // required checks after it: GitHub may merge before the response arrives.
-      await enable(mergeGithub, pr);
+      // This policy-enforced, exact-head mutation is the release point. The
+      // native state hint selects one API; an error never retries via the other.
+      nativeOff = false;
+      await release(mergeGithub, pr, mode);
     }
   } catch (error) {
     if (!statuses.enabled && approvalChecked) throw error;
-    // Read/write failures cannot retain a previously successful gate. Try both
-    // contexts and native cancellation even when one cleanup operation fails.
-    const cleanup = await Promise.allSettled([
-      statuses.set(pr.head.sha, false), cancel(github, owner, repo, pr, mergeGithub),
-    ]);
-    for (const result of cleanup) if (result.status === 'rejected')
-      core.warning('#' + pr.number + ': QA cleanup failed: ' + result.reason.message);
+    await invalidate(github, mergeGithub, owner, repo, pr, publisher, core);
     throw error;
   }
 }
@@ -263,7 +305,8 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     throw new Error('The Gesher GitHub App is required for pull request updates');
   }
   let required;
-  const appRequired = () => required ??= qaStatuses.appRequiredByRuleset(github, owner, repo);
+  const appRequired = fresh => fresh ? qaStatuses.appRequiredByRuleset(github, owner, repo) :
+    required ??= qaStatuses.appRequiredByRuleset(github, owner, repo);
   const statuses = qaStatuses({github: actionsGithub, readGithub: github, appGithub: prGithub, owner, repo,
     enabled: appQaStatus, appId, installationId: appInstallationId, appRequired, core});
   prGithub ??= github;
@@ -353,7 +396,7 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
       try {
         if (!await disarm(github, mergeGithub, owner, repo, pr)) return;
       } catch (error) {
-        await statuses.set(pr.head.sha, false);
+        await invalidate(github, mergeGithub, owner, repo, pr, statuses, core);
         throw error;
       }
     }
