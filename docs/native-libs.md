@@ -116,13 +116,16 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     `qsort`/`bsearch` with a System V comparator, libdl over the loader
     (`dlopen`, `dlsym`, `dladdr`, `dl_iterate_phdr`), `__cxa_atexit`/
     `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`. The environment
-    is the CRT's, but `getenv` returns a copy that lives as long as the
-    process (one per distinct `name=value` read), as bionic's results do:
-    bionic never frees a string `setenv`/`putenv`/`unsetenv` replaces, while
-    the CRT does, and mozglue keeps `getenv("MOZ_ANDROID_LIBDIR")` in a
-    static while GeckoLoader `putenv`s it again (the freed bytes became the
-    next allocation: `dlopen failed: cannot open
-    cko_mozglue_GeckoLoader_loadNSSLibsNative/libxul.so`).
+    is the CRT's (`environ` is its `_environ`); gesher-base's `setenv`/
+    `unsetenv`, which `putenv` uses too, keep every string they replace or
+    remove, as bionic does: before a change the CRT gets a copy of the
+    variable's string to free, and the original stays valid, so what
+    `getenv` returned and what `environ` pointed at keep their bytes.
+    mozglue reads `environ` through its own `getenv` and keeps
+    `MOZ_ANDROID_LIBDIR`'s value in a static while GeckoLoader `putenv`s it
+    again (the freed bytes became the next allocation: `dlopen failed:
+    cannot open cko_mozglue_GeckoLoader_loadNSSLibsNative/libxul.so`).
+    Setting the value a variable already has changes nothing.
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
     the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
     `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,
