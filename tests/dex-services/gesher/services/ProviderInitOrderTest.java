@@ -33,7 +33,11 @@ import java.util.Map;
 import java.util.stream.Stream;
 import sun.misc.Unsafe;
 
-/** ContentProviders.providersFor orders providers by initOrder descending and keeps tie order. */
+/**
+ * ContentProviders.providersFor orders providers by initOrder descending and keeps tie
+ * order, with one entry per provider component: a provider declared twice (as merged
+ * library manifests do) is bound once, from its later declaration.
+ */
 public final class ProviderInitOrderTest {
     private static final String PKG = "fixture.provider.initorder";
     private static final int UID = 12346;
@@ -105,6 +109,10 @@ public final class ProviderInitOrderTest {
         addProvider(parsed, "MaxInt", PKG, Integer.MAX_VALUE, true);
         addProvider(parsed, "HundredSecond", PKG, 100, true);
         addProvider(parsed, "ZeroSecond", PKG, 0, true);
+        // Declared twice with one authority, as Firefox declares
+        // androidx.startup.InitializationProvider; Android keeps the later declaration.
+        addProvider(parsed, "Duplicated", PKG, 40, true);
+        addProvider(parsed, "Duplicated", PKG, 50, true);
         parsed.hideAsFinal();
 
         ApkPackage pkg = (ApkPackage) unsafe.allocateInstance(ApkPackage.class);
@@ -154,6 +162,7 @@ public final class ProviderInitOrderTest {
                 PKG + ".MaxInt",
                 PKG + ".HundredFirst",
                 PKG + ".HundredSecond",
+                PKG + ".Duplicated",
                 PKG + ".ZeroFirst",
                 PKG + ".ZeroSecond",
                 PKG + ".Negative",
@@ -162,6 +171,12 @@ public final class ProviderInitOrderTest {
         List<ProviderInfo> byAi = (List<ProviderInfo>) forAi.invoke(providers, mainAi);
         require(names(byAi).equals(expected),
                 "providersFor(ApplicationInfo) wrong order: " + names(byAi));
+
+        for (ProviderInfo info : byAi) {
+            if (info.name.equals(PKG + ".Duplicated")) {
+                require(info.initOrder == 50, "Duplicated provider kept its earlier declaration");
+            }
+        }
 
         List<ProviderInfo> byProcess = (List<ProviderInfo>) forProcess.invoke(providers, process, mainAi);
         require(names(byProcess).equals(expected),
@@ -179,6 +194,7 @@ public final class ProviderInitOrderTest {
         List<String> expectedAfterDisable = List.of(
                 PKG + ".MaxInt",
                 PKG + ".HundredSecond",
+                PKG + ".Duplicated",
                 PKG + ".ZeroFirst",
                 PKG + ".ZeroSecond",
                 PKG + ".Negative",

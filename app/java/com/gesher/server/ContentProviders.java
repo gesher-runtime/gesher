@@ -253,6 +253,20 @@ final class ContentProviders {
         }
     }
 
+    /**
+     * {@code pkg}'s providers, one per component. A manifest can declare the same
+     * provider class twice (merged library manifests do: Firefox declares
+     * androidx.startup.InitializationProvider twice, with one authority). Android keeps
+     * providers by ComponentName (ComponentResolver's ArrayMap, whose put keeps the
+     * later declaration), so an app process is bound with, and publishes, each provider
+     * once. Without this its single authority arrived twice in one publish batch.
+     */
+    static List<ProviderInfo> declaredProviders(ApkPackage pkg, long flags) {
+        Map<String, ProviderInfo> byName = new java.util.LinkedHashMap<>();
+        for (ProviderInfo info : pkg.providers(flags)) byName.put(info.name, info);
+        return new ArrayList<>(byName.values());
+    }
+
     /** The providers a process of {@code ai}'s package installs at bindApplication. */
     List<ProviderInfo> providersFor(ApplicationInfo ai) {
         return providersFor(null, ai);
@@ -263,7 +277,7 @@ final class ContentProviders {
         if (p == null) return List.of();
         List<ProviderInfo> result = new ArrayList<>();
         String processName = mAtm.componentProcess(ai.packageName, ai.processName);
-        for (ProviderInfo info : p.providers(PackageManager.GET_META_DATA
+        for (ProviderInfo info : declaredProviders(p, PackageManager.GET_META_DATA
                 | PackageManager.GET_SHARED_LIBRARY_FILES)) {
             if (processName.equals(mAtm.componentProcess(info.packageName, info.processName))) {
                 result.add(info);
@@ -500,7 +514,7 @@ final class ContentProviders {
             // A late publish cannot recreate it or turn an ordinary race into a crash.
             if (!current(admission) || admission.owner != pkg) continue;
             ProviderInfo declared = null;
-            for (ProviderInfo candidate : pkg.providers(PackageManager.GET_META_DATA
+            for (ProviderInfo candidate : declaredProviders(pkg, PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES | PackageManager.MATCH_DISABLED_COMPONENTS)) {
                 if (candidate.name.equals(info.name)) { declared = candidate; break; }
             }
