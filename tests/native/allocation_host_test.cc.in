@@ -1,10 +1,12 @@
 // Generated from the production memory implementation and symbol registrations.
-// The only host adaptation is Windows' _msize -> glibc's malloc_usable_size.
+// The host adaptations are Windows' _msize -> glibc's malloc_usable_size and
+// the Windows heap walk behind mallinfo, which finds no heap on the host.
 #include "shim_internal.h"
 
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
@@ -13,6 +15,26 @@
 #include <unordered_map>
 
 static size_t _msize(void* p) { return malloc_usable_size(p); }
+
+// mallinfo walks the CRT's Windows heap; the host has no such heap, so its
+// lock fails and mallinfo reports zeros (it is not checked here).
+using HANDLE = void*;
+struct PROCESS_HEAP_ENTRY {
+  void* lpData;
+  unsigned long cbData;
+  unsigned char cbOverhead;
+  unsigned short wFlags;
+  struct {
+    unsigned long dwCommittedSize;
+    void* lpFirstBlock;
+    void* lpLastBlock;
+  } Region;
+};
+constexpr unsigned short PROCESS_HEAP_REGION = 0x1, PROCESS_HEAP_ENTRY_BUSY = 0x4;
+static intptr_t _get_heap_handle() { return 0; }
+static bool HeapLock(HANDLE) { return false; }
+static bool HeapWalk(HANDLE, PROCESS_HEAP_ENTRY*) { return false; }
+static bool HeapUnlock(HANDLE) { return true; }
 
 namespace gesher::bionic {
 namespace {
