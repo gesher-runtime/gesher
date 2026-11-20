@@ -1,6 +1,7 @@
 # 0088: AF_UNIX credentials and descriptor passing
 
-Status: proposed
+Status: accepted, 2026-11-20 (the maintainer accepted the credentials' trust
+boundary in section 2). Phase 1 is implemented for datagram socketpairs.
 
 ## Context
 
@@ -42,7 +43,7 @@ Making `setsockopt(SO_PASSCRED)` succeed without delivering credentials
 would report a capability Gesher does not have, and the next call
 (`SCM_RIGHTS`) would fail anyway. It is not an option.
 
-## Decision (proposed)
+## Decision
 
 ### 1. A framed transport for Gesher's AF_UNIX sockets
 
@@ -82,15 +83,21 @@ semantics.
   allows an unprivileged process.
 - **`SO_PEERCRED`** returns the peer's credentials, exchanged when the
   connection is made: `socketpair`, `connect`/`accept`.
-- **Trust boundary (open question):** Linux's kernel guarantees the
-  credentials. Here they are the sender's claim, as trustworthy as the
-  loopback transport itself: any local process can already connect to the
-  loopback ports that back Gesher's `AF_UNIX` sockets (a pre-existing
-  property of 0009). For datagram sockets, the receiver can verify the claimed
-  pid against the owner of the source port (`GetExtendedUdpTable`) when the
-  sending socket was created by the sender. This needs a decision: is
-  "claimed, verified when possible" acceptable, or is broker attestation
-  (section 3) required for every message that carries credentials?
+- **Trust boundary (decided):** Linux's kernel guarantees the credentials.
+  Here they are the sender's claim, exactly as trustworthy as the loopback
+  transport itself: any local process can already connect to the loopback
+  ports that back Gesher's `AF_UNIX` sockets (a pre-existing property of
+  0009). A datagram without Gesher's header is dropped, so a foreign sender
+  cannot make a message appear without credentials. Broker attestation per
+  message was not required. Verifying the claimed pid against the source
+  port's owner (`GetExtendedUdpTable`) is possible where the sending socket
+  was created by its sender, and is not done in phase 1.
+- **Phase 1 as implemented:**
+  - socketpair datagram pairs (`SOCK_SEQPACKET`, `SOCK_DGRAM`) are framed,
+    with `SO_PASSCRED`, `SCM_CREDENTIALS` and `MSG_CTRUNC`;
+  - `SO_PEERCRED` works on every socketpair;
+  - `SO_PASSCRED` on stream pairs still fails with `ENOPROTOOPT`, until stream
+    framing.
 
 ### 3. Descriptors: a broker for `SCM_RIGHTS` (and Binder)
 
