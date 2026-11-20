@@ -7,6 +7,15 @@ Check 'framework: Wi-Fi data APIs and real native Parcelable round trips' {
   $deepWifiOut
 } @('WifiDataContractTest all passed:', 'parcel=true')
 
+$deepSafetyCenterOut = FixesRun ($dvmFixes + 'gesher.services.SafetyCenterContractTest') 90
+$deepSafetyCenterCode = $LASTEXITCODE
+Check 'framework: android.safetycenter values on the boot class path, no Safety Center service' {
+  $global:LASTEXITCODE = $deepSafetyCenterCode
+  $deepSafetyCenterOut
+} @('SafetyCenterContractTest: no Safety Center service, getSystemService returns null',
+  'SafetyCenterContractTest: values build, validate and round-trip through Parcel',
+  'SafetyCenterContractTest all passed:')
+
 $deepWifiConfigurationOut = FixesRun ($dvmFixes + 'gesher.services.WifiConfigurationContractTest') 90
 $deepWifiConfigurationCode = $LASTEXITCODE
 Check 'framework: Wi-Fi configuration, enterprise certificates and native Parcelable contracts' {
