@@ -113,6 +113,9 @@ static uint64_t next_identity = 1;
 static thread_local DWORD error;
 static int duplicate_fail_after = -1, map_error, handle_information_error;
 static int create_process_error;
+static int allocation_after_duplicate = -1;
+static bool allocation_after_attributes;
+static size_t attribute_lists, create_process_calls;
 static int pipe_mode_sets;
 static bool image_transport = true;
 static size_t last_inherited_handles;
@@ -261,6 +264,10 @@ static BOOL DuplicateHandle(HANDLE, HANDLE source, HANDLE, HANDLE* result, DWORD
   host::owned.insert(fd);
   host::identities[fd] = host::identities[original];
   *result = host::Handle(fd);
+  // Inject only after the OS boundary has acquired its real handle. The next
+  // throwing allocation belongs to the production launch builder.
+  if (inherit && host::allocation_after_duplicate > 0 && --host::allocation_after_duplicate == 0)
+    allocation_failure = 0;
   return TRUE;
 }
 static HANDLE CreateFileMappingW(HANDLE file, SECURITY_ATTRIBUTES* attributes, DWORD protection,
@@ -398,6 +405,7 @@ static HANDLE CreateFileW(const wchar_t* path, DWORD, DWORD, SECURITY_ATTRIBUTES
 static BOOL InitializeProcThreadAttributeList(AttributeList* attributes, DWORD count, DWORD flags, SIZE_T* bytes) {
   host::Require(count == 1 && flags == 0);
   *bytes = sizeof(AttributeList);
+  if (attributes) ++host::attribute_lists;
   return attributes ? TRUE : FALSE;
 }
 static BOOL UpdateProcThreadAttribute(AttributeList* attributes, DWORD, DWORD kind, void* data,
@@ -405,9 +413,16 @@ static BOOL UpdateProcThreadAttribute(AttributeList* attributes, DWORD, DWORD ki
   host::Require(kind == PROC_THREAD_ATTRIBUTE_HANDLE_LIST && size % sizeof(HANDLE) == 0);
   attributes->handles = static_cast<HANDLE*>(data);
   attributes->count = size / sizeof(HANDLE);
+  if (host::allocation_after_attributes) {
+    host::allocation_after_attributes = false;
+    allocation_failure = 0;
+  }
   return TRUE;
 }
-static void DeleteProcThreadAttributeList(AttributeList*) {}
+static void DeleteProcThreadAttributeList(AttributeList*) {
+  host::Require(host::attribute_lists != 0);
+  --host::attribute_lists;
+}
 static BOOL CreateProcessW(const wchar_t*, wchar_t*, void*, void*, BOOL, DWORD, void*, const wchar_t*,
                            STARTUPINFOW*, PROCESS_INFORMATION*);
 
@@ -486,6 +501,7 @@ DWORD SpawnWithFds(const Launch&, const wchar_t*, const std::wstring&,
 static BOOL CreateProcessW(const wchar_t* app, wchar_t* command, void*, void*, BOOL inherit,
                            DWORD flags, void* environment, const wchar_t* cwd,
                            STARTUPINFOW* raw_startup, PROCESS_INFORMATION* info) {
+  ++host::create_process_calls;
   host::Require(!environment && !cwd &&
       (flags & ~EXTENDED_STARTUPINFO_PRESENT) == (CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW));
   auto* startup = reinterpret_cast<STARTUPINFOEXW*>(raw_startup);
@@ -756,6 +772,44 @@ int main(int argc, char** argv) {
   // all transient handles. The original descriptors and status remain live.
   for (const auto& file : fds) Check("promote child description", gesher::ShareFileDescription(file.snapshot) != nullptr);
   const size_t before_failure = host::owned.size();
+  {
+    const std::wstring directory;
+    const size_t before_calls = host::create_process_calls, before_views = host::views.size();
+    const size_t before_attributes = host::attribute_lists;
+    DWORD result = ERROR_SUCCESS;
+    bool escaped = false;
+    // The public HANDLE wrapper builds its ChildFd vector before it reaches
+    // SpawnWithFds. Its allocation must obey the same status-only boundary.
+    allocation_failure = 0;
+    try { result = gesher::exec::Spawn(launch, nullptr, directory, snapshot->handle, nullptr, nullptr, &info); }
+    catch (const std::bad_alloc&) { escaped = true; }
+    allocation_failure = -1;
+    Check("launch wrapper allocation failure returns a Win32 memory error", !escaped && result == ERROR_NOT_ENOUGH_MEMORY);
+    Check("launch wrapper allocation failure retains caller resources", host::owned.size() == before_failure &&
+        host::views.size() == before_views && host::attribute_lists == before_attributes);
+    Check("launch wrapper allocation failure does not start a child", host::create_process_calls == before_calls);
+  }
+  for (bool after_attributes : {false, true}) {
+    const size_t before_views = host::views.size(), before_attributes = host::attribute_lists;
+    const size_t before_calls = host::create_process_calls;
+    // First file + shared-description duplication is followed by ownership
+    // bookkeeping; the late case reaches the command-line copy after the
+    // native attribute list has been initialized. No child may start in either.
+    host::allocation_after_duplicate = after_attributes ? -1 : 2;
+    host::allocation_after_attributes = after_attributes;
+    DWORD result = ERROR_SUCCESS;
+    bool escaped = false;
+    try { result = gesher::exec::SpawnWithFds(launch, nullptr, L"", fds, &info, 0); }
+    catch (const std::bad_alloc&) { escaped = true; }
+    allocation_failure = -1;
+    host::allocation_after_duplicate = -1;
+    host::allocation_after_attributes = false;
+    Check("launch allocation failure returns a Win32 memory error", !escaped && result == ERROR_NOT_ENOUGH_MEMORY);
+    Check("launch allocation failure releases all temporary handles and views",
+        host::owned.size() == before_failure && host::views.size() == before_views);
+    Check("launch allocation failure destroys initialized native attribute lists", host::attribute_lists == before_attributes);
+    Check("launch allocation failure does not start a child", host::create_process_calls == before_calls);
+  }
   host::duplicate_fail_after = 3;
   Check("partial duplicate failure is propagated", gesher::exec::SpawnWithFds(launch, nullptr, L"", fds, &info, 0) == ERROR_NOT_ENOUGH_MEMORY);
   host::duplicate_fail_after = -1;
@@ -841,7 +895,8 @@ int main(int argc, char** argv) {
   close(parent_to_child[1]); close(child_to_parent[0]);
   for (int fd : {37, 38, 39, 42, 50, 7100}) CloseFixture(fd);
   snapshot.reset(); alias.reset();
-  Check("last alias releases mappings and native snapshots", host::owned.empty() && host::views.empty() && host::mutexes.empty());
+  Check("last alias releases mappings and native snapshots", host::owned.empty() && host::views.empty() &&
+      host::mutexes.empty() && host::attribute_lists == 0);
   for (const auto& name : host::mutex_names) shm_unlink(name.c_str());
   std::printf("Production OFD/exec transfer: %d assertions, %d failures\n", checks, failures);
   return failures ? 1 : 0;

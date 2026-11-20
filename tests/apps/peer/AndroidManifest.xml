@@ -8,6 +8,9 @@
     package="com.gesher.peer"
     android:versionCode="1"
     android:versionName="1.0">
+    <queries>
+        <package android:name="com.gesher.components" />
+    </queries>
     <application
         android:label="@string/app_name"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">

@@ -285,16 +285,23 @@ public final class BlobStoreService extends IBlobStoreManager.Stub {
 
     private boolean access(Blob blob, Owner caller, long now) {
         if (blob.handle.isExpired() || !validFile(blob.fileName)) return false;
+        // Authorize the same installation captured by requireOwner. A package
+        // replaced between admission and this lookup must not lend its signer
+        // to the retired caller.
+        ApkPackage recipient = mPm.get(caller.name);
+        if (!caller.equals(installedOwner(caller.name, recipient))
+                || mPm.isRemovalPending(caller.name)) return false;
         Lease lease = blob.leases.get(caller.name);
         if (lease != null && lease.owner.equals(caller) && lease.active(now)) return true;
-        ApkPackage recipient = mPm.get(caller.name);
         for (Contribution contribution : blob.contributions.values()) {
             Owner owner = contribution.owner;
-            if (!currentlyInstalled(owner) || mPm.isRemovalPending(owner.name)) continue;
+            ApkPackage contributor = mPm.get(owner.name);
+            if (!owner.equals(installedOwner(owner.name, contributor))
+                    || mPm.isRemovalPending(owner.name)) continue;
             Access allowed = contribution.access;
             if (owner.equals(caller) || allowed.publiclyReadable) return true;
             if (recipient == null) continue;
-            if (allowed.sameSignature && recipient.signaturesMatch(mPm.get(owner.name))) return true;
+            if (allowed.sameSignature && recipient.signaturesMatch(contributor)) return true;
             for (Grant grant : allowed.grants) {
                 if (grant.name.equals(caller.name) && recipient.hasVerifiedSigningCertificate(grant.sha256)) {
                     return true;

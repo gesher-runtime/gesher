@@ -200,32 +200,42 @@ public final class FrameworkFixesTest {
         infoType.getMethod("setPort", int.class).invoke(info, 4242);
         infoType.getMethod("setAttribute", String.class, String.class).invoke(info, "k", "v");
 
-        List<String> calls = new ArrayList<>();
+        List<String> calls = java.util.Collections.synchronizedList(new ArrayList<>());
+        String browseType = "_gs" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 10) + "._tcp";
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch stopped = new CountDownLatch(1);
+        CountDownLatch registrationFailed = new CountDownLatch(1);
         Executor now = Runnable::run;
         Object onDiscovery = Proxy.newProxyInstance(discovery.getClassLoader(),
                 new Class<?>[] {discovery}, (proxy, method, a) -> {
                     if (method.getDeclaringClass() == Object.class) return identity(proxy, method, a);
                     calls.add(method.getName() + (a != null && a[0] instanceof String ? " " + a[0] : ""));
+                    if (method.getName().equals("onDiscoveryStarted") || method.getName().equals("onStartDiscoveryFailed")) started.countDown();
+                    if (method.getName().equals("onDiscoveryStopped") || method.getName().equals("onStopDiscoveryFailed")) stopped.countDown();
                     return null;
                 });
         Object onRegistration = Proxy.newProxyInstance(registration.getClassLoader(),
                 new Class<?>[] {registration}, (proxy, method, a) -> {
                     if (method.getDeclaringClass() == Object.class) return identity(proxy, method, a);
                     calls.add(method.getName() + (a != null && a.length > 1 ? " " + a[1] : ""));
+                    registrationFailed.countDown();
                     return null;
                 });
         int dnsSd = manager.getField("PROTOCOL_DNS_SD").getInt(null);
         manager.getMethod("discoverServices", String.class, int.class,
                 Class.forName("android.net.Network"), Executor.class, discovery)
-                .invoke(nsd, "_gesher._tcp", dnsSd, null, now, onDiscovery);
+                .invoke(nsd, browseType, dnsSd, null, now, onDiscovery);
+        require(started.await(30, TimeUnit.SECONDS), "NSD start callback missing");
         manager.getMethod("registerService", infoType, int.class, Executor.class, registration)
                 .invoke(nsd, info, dnsSd, now, onRegistration);
         manager.getMethod("unregisterService", registration).invoke(nsd, onRegistration);
         manager.getMethod("stopServiceDiscovery", discovery).invoke(nsd, onDiscovery);
-        require(calls.contains("onDiscoveryStarted _gesher._tcp"), "discovery did not start: " + calls);
+        require(stopped.await(30, TimeUnit.SECONDS), "NSD stop callback missing");
+        require(registrationFailed.await(30, TimeUnit.SECONDS), "NSD unsupported registration callback missing");
+        require(calls.contains("onDiscoveryStarted " + browseType), "discovery did not start: " + calls);
         require(calls.contains("onRegistrationFailed 0"),
                 "registering did not fail with FAILURE_INTERNAL_ERROR: " + calls);
-        require(calls.contains("onDiscoveryStopped _gesher._tcp"),
+        require(calls.contains("onDiscoveryStopped " + browseType),
                 "discovery stop did not use its executor: " + calls);
         require(calls.size() == 3, "unexpected NSD callbacks: " + calls);
         System.out.println("FrameworkFixesTest: android.net.nsd.NsdManager: discovery starts, "

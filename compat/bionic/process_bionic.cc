@@ -254,7 +254,9 @@ int CollectOne(int pid, int* status, int options) {
     }
     if ((options & kWNOHANG) != 0) return 0;
     // Block until a child exits (the watcher sets `exited`), then re-scan.
-    InterruptibleSleep(20, nullptr);
+    int error = 0;
+    InterruptibleSleep(20, nullptr, &error);
+    if (error != 0) return errno = error, -1;
   }
 }
 

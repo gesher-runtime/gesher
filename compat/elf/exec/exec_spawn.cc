@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <new>
 #include <unordered_map>
 
 namespace gesher::exec {
@@ -476,7 +477,7 @@ int PrepareLaunchProgramInPath(const std::string& program, const std::vector<std
 bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
 
 DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,
-                   const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info, DWORD extra_flags) {
+                   const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info, DWORD extra_flags) try {
   struct ImagePin {
     HANDLE value = nullptr;
     ~ImagePin() { if (value) CloseHandle(value); }
@@ -504,6 +505,12 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
       return ERROR_INVALID_PARAMETER;
     count = std::max(count, file.fd + 1);
   }
+  // Reserve ownership slots before acquiring inheritable handles. At most one
+  // file and one shared description exist per selected fd, plus three closed
+  // stdio placeholders and the manifest. A bookkeeping allocation must never
+  // strand a newly duplicated handle outside the cleanup owner.
+  const size_t selected = std::min(fds.size(), static_cast<size_t>(count));
+  owned.values.reserve(selected * (transport ? 2 : 1) + (transport ? 4 : 0));
   std::vector<gesher::DescriptorSnapshotPtr> snapshots(static_cast<size_t>(count));
   std::vector<std::unique_ptr<gesher::NativeFileDescriptionExport>> native_exports;
   for (const ChildFd& file : fds) {
@@ -613,13 +620,16 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   }
   std::vector<char> storage(bytes);
   auto* attributes = bytes ? reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data()) : nullptr;
+  struct AttributeCleanup {
+    LPPROC_THREAD_ATTRIBUTE_LIST value = nullptr;
+    ~AttributeCleanup() { if (value) DeleteProcThreadAttributeList(value); }
+  } attribute_cleanup;
   if (attributes) {
     if (!InitializeProcThreadAttributeList(attributes, 1, 0, &bytes)) return GetLastError();
+    attribute_cleanup.value = attributes;
     if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                                    owned.values.data(), owned.values.size() * sizeof(HANDLE), nullptr, nullptr)) {
-      DWORD error = GetLastError();
-      DeleteProcThreadAttributeList(attributes);
-      return error;
+      return GetLastError();
     }
   }
   STARTUPINFOEXW startup{};
@@ -638,12 +648,14 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
       flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, info);
   DWORD error = started ? ERROR_SUCCESS : GetLastError();
   if (started) for (auto& reservation : native_exports) reservation->Commit();
-  if (attributes) DeleteProcThreadAttributeList(attributes);
   return error;
+} catch (const std::bad_alloc&) {
+  // No allocation exception crosses the Win32-status launch API.
+  return ERROR_NOT_ENOUGH_MEMORY;
 }
 
 DWORD Spawn(const Launch& launch, const wchar_t* environment, const std::wstring& cwd, HANDLE std_in,
-            HANDLE std_out, HANDLE std_err, PROCESS_INFORMATION* info) {
+            HANDLE std_out, HANDLE std_err, PROCESS_INFORMATION* info) try {
   std::vector<ChildFd> fds;
   const HANDLE standard[] = {std_in, std_out, std_err};
   for (int fd = 0; fd < 3; ++fd) {
@@ -651,6 +663,8 @@ DWORD Spawn(const Launch& launch, const wchar_t* environment, const std::wstring
     if (handle != nullptr && handle != INVALID_HANDLE_VALUE) fds.push_back({fd, handle});
   }
   return SpawnWithFds(launch, environment, cwd, fds, info);
+} catch (const std::bad_alloc&) {
+  return ERROR_NOT_ENOUGH_MEMORY;
 }
 
 std::wstring EnvironmentBlock(const std::vector<std::string>& entries) {

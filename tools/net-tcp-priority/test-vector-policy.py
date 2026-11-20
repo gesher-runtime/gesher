@@ -129,9 +129,12 @@ for before, after in policy.TCP_DIAGNOSTIC_REPLACEMENTS:
 rejected('TCP fixture missing required diagnostics', without_diagnostics, target=fixture_path)
 print('TCP diagnostic source policy: six negative controls passed')
 
-rejected('thread census equality relaxation',
+rejected('exact non-pool thread census result ignored',
          fixture.replace(b'actual.handles == baseline.handles && owners_match',
                          b'actual.handles == baseline.handles && true', 1), target=fixture_path)
+rejected('process handle census allows leaked handles',
+         fixture.replace(b'actual.handles == baseline.handles && owners_match',
+                         b'actual.handles >= baseline.handles && owners_match', 1), target=fixture_path)
 rejected('thread census observer forced on successful modes',
          fixture.replace(b'ObserveOwnerThreads(mode, actual.handles != baseline.handles || !owners_match)',
                          b'ObserveOwnerThreads(mode, true)', 1), target=fixture_path)
@@ -146,13 +149,19 @@ rejected('owned socket description retirement unchecked',
                          b'retired_operation.expired() && true', 1), target=fixture_path)
 thread_diagnostic = ROOT / policy.OWNER_THREAD_DIAGNOSTIC_PATH
 thread_source = thread_diagnostic.read_bytes()
+rejected('ordinary thread classified as a system pool worker',
+         thread_source.replace(b'if (start == pool_start) {', b'if (start != nullptr) {', 1),
+         target=thread_diagnostic)
+rejected('exact non-pool thread identities replaced with count equality',
+         thread_source.replace(b'current.product == baseline.product',
+                               b'current.count == baseline.count', 1), target=thread_diagnostic)
 rejected('thread observer querying a reused foreign-process TID',
          thread_source.replace(b'if (owner == GetCurrentProcessId()) {', b'if (true) {', 1),
          target=thread_diagnostic)
 rejected('thread observer leaking its diagnostic handles',
          thread_source.replace(b'if (CloseHandle(thread)) ++closed;', b'if (true) ++closed;', 1),
          target=thread_diagnostic)
-print('thread diagnostic source policy: seven negative controls passed')
+print('thread diagnostic source policy: ten negative controls passed')
 
 receipt_path = ROOT / 'tools/ci/receipt-diagnostics.ps1'
 receipt = receipt_path.read_bytes()

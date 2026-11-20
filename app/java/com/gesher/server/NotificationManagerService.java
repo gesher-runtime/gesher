@@ -127,8 +127,11 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private final PackageManagerService mPackageManager;
     private final ActivityManagerService mActivityManager;
     private final java.util.function.ToIntBiFunction<StatusBarNotification, Boolean> mTestToast;
+    // Server-local removal boundary for migration tests; never a Binder option.
+    private java.util.function.ToIntBiFunction<String, String> mTestToastRemoval;
     private final File mListenerFile = new File(Device.dataDir(), "system/notification-listeners");
     private final Properties mListenerGrants = new Properties();
+    private final NotificationDelegates mDelegates = new NotificationDelegates();
 
     /** The service Services.create made last (for the job scheduler's job notifications). */
     static volatile NotificationManagerService sLast;
@@ -152,11 +155,93 @@ public final class NotificationManagerService extends INotificationManager.Defau
         return pkg + "/" + tag + "/" + id;
     }
 
-    /** The toast's tag (Windows allows 64 characters): the id, and the tag if there is one. */
+    /** Canonical persisted identity. Hex digests cannot alias legacy id|tag names. */
     static String toastTag(String tag, int id) {
+        // Match StatusBarNotification's and this service's existing key equivalence.
+        return NotificationIdentity.digest(id + "/" + String.valueOf(tag));
+    }
+
+    /** Windows representation only; the persisted canonical key stays unchanged. */
+    static String windowsToastTag(String canonical) {
+        if (canonical == null || canonical.length() != 64) {
+            throw new IllegalArgumentException("Expected a canonical notification digest");
+        }
+        byte[] bytes = new byte[32];
+        for (int i = 0; i < canonical.length(); ++i) {
+            char c = canonical.charAt(i);
+            int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+            if (digit < 0) throw new IllegalArgumentException("Expected a canonical notification digest");
+            bytes[i / 2] |= (byte)(digit << ((i & 1) == 0 ? 4 : 0));
+        }
+        // Some Windows builds accept a 64-character Tag but cannot read it back.
+        // All 256 bits fit in 43 Base64url characters. The prefix is disjoint from
+        // both raw hex and the older decimal/id|tag namespace; no bits are dropped.
+        return "sha256-" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    static String legacyToastTag(String tag, int id) {
         String t = tag == null ? String.valueOf(id) : id + "|" + tag;
         if (t.length() > 64) t = id + "|" + Integer.toHexString(tag.hashCode());
         return t;
+    }
+
+    static boolean legacyToastTagMatches(String value, String tag, int id) {
+        return legacyToastTag(tag, id).equals(value)
+                || "null".equals(String.valueOf(tag))
+                    && (legacyToastTag(null, id).equals(value) || legacyToastTag("null", id).equals(value));
+    }
+
+    private int removeWindowsToast(String pkg, String windowsTag, int id, String expectedKey, boolean bridge) {
+        if (expectedKey != null) return removeWindowsToastTag(pkg, windowsTag, id, expectedKey, false);
+        int hr = removeWindowsToastTag(pkg, windowsToastTag(windowsTag), id, null, bridge);
+        // A retained notification from an earlier build may still use raw hex.
+        // Its full digest has the same ownership/identity as the encoded spelling.
+        int old = removeWindowsToastTag(pkg, windowsTag, id, null, false);
+        return hr != 0 ? hr : old;
+    }
+
+    private int removeWindowsToastTag(String pkg, String windowsTag, int id, String expectedKey, boolean bridge) {
+        if (mTestToastRemoval != null) return mTestToastRemoval.applyAsInt(windowsTag, expectedKey);
+        if (mTestToast != null) return 0;
+        String appId = AppShell.appUserModelId(pkg);
+        if (expectedKey != null) return WindowsHost.removeToastIfLaunch(appId, windowsTag, TOAST_GROUP, "n|" + expectedKey);
+        return bridge ? WindowsHost.cancelNotificationBridge(appId, windowsTag, TOAST_GROUP, id)
+                : WindowsHost.removeToast(appId, windowsTag, TOAST_GROUP);
+    }
+
+    private int removeStoredToast(NotificationStore.Stored stored, boolean bridge) {
+        String current = toastTag(stored.tag, stored.id);
+        int hr = removeWindowsToast(stored.packageName, current, stored.id, null, bridge);
+        for (String legacy : legacyWindowsTags(stored)) {
+            int old = removeWindowsToast(stored.packageName, legacy, stored.id, stored.key, false);
+            if (hr == 0) hr = old;
+        }
+        return hr;
+    }
+
+    private static String[] legacyWindowsTags(NotificationStore.Stored stored) {
+        String legacy = stored.legacyWindowsTag != null ? stored.legacyWindowsTag
+                : !stored.windowsTag.equals(toastTag(stored.tag, stored.id)) ? stored.windowsTag : null;
+        if (legacy == null) return new String[0];
+        // Older builds could show both Windows spellings for one Android key.
+        // Each alias still requires its own native XML owner check.
+        return "null".equals(String.valueOf(stored.tag))
+                ? new String[]{legacyToastTag(null, stored.id), legacyToastTag("null", stored.id)}
+                : new String[]{legacy};
+    }
+
+    private void retireLegacyToast(String pkg, String key) {
+        NotificationStore.Stored stored = NotificationStore.load(pkg, key);
+        if (stored == null) return;
+        // Called only after the new physical identity was shown successfully.
+        // Keep that identity; retire the previous raw-hex spelling independently.
+        boolean removed = removeWindowsToastTag(pkg, toastTag(stored.tag, stored.id), stored.id, null, false) == 0;
+        for (String legacy : legacyWindowsTags(stored)) {
+            if (removeWindowsToast(pkg, legacy, stored.id, key, false) != 0) removed = false;
+        }
+        if (removed && stored.legacyWindowsTag != null) {
+            NotificationStore.legacyRemoved(pkg, key, stored.legacyWindowsTag);
+        }
     }
 
     private ActivityManagerService am() {
@@ -186,7 +271,9 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     private void own(String pkg) {
         if (pkg == null) throw new SecurityException("Missing notification owner");
-        callers().requireSystemOrPackage(pkg);
+        // Legacy UID10000 is shared by unrelated apps; authenticate ownership by
+        // the same attached-process rule used for posting and delegation calls.
+        if (!callers().isSystem()) notificationCaller(pkg);
         if (packageFor(pkg) == null && !(callers().isSystem() && "android".equals(pkg))) {
             throw new SecurityException("Unknown notification owner");
         }
@@ -199,6 +286,48 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     private ApkPackage packageFor(String pkg) { return pm() == null ? null : pm().get(pkg); }
+
+    private ApkPackage currentPackage(String name) {
+        ApkPackage pkg = packageFor(name);
+        return pkg != null && !pm().isRemovalPending(name) ? pkg : null;
+    }
+
+    /** Authenticate the attached Binder process before accepting a claimed package. */
+    private ApkPackage notificationCaller(String name) {
+        if (name == null) throw new SecurityException("Missing notification caller");
+        CallerIdentity identity = callers();
+        if (identity.isSystem()) {
+            own(name); // Existing server-local/host control plane, never a remote app exception.
+            return packageFor(name);
+        }
+        String actualName = identity.callerPackage();
+        ApkPackage actual = currentPackage(actualName), claimed = currentPackage(name);
+        if (claimed == null || actual == null || !actualName.equals(name)
+                && !(protectedMode() && actual.uid() == claimed.uid()
+                        && identity.callerUid() == claimed.uid())) {
+            // Legacy mode assigns every package UID10000. That is not Android's
+            // authenticated shared UID and must never authorize another package.
+            throw new SecurityException("Caller does not own notification package " + name);
+        }
+        return claimed;
+    }
+
+    /** Android resolveNotificationUid: ownership/shared UID, then an explicit delegate. */
+    private ApkPackage resolveNotificationOwner(String callingPkg, String targetPkg,
+            boolean allowMissing) {
+        ApkPackage caller = notificationCaller(callingPkg);
+        ApkPackage target = currentPackage(targetPkg);
+        if (target == null) {
+            if (callers().isSystem() && "android".equals(targetPkg)) return null;
+            if (allowMissing) return null;
+            throw new SecurityException("Cannot post for an unknown notification package " + targetPkg);
+        }
+        if (callers().isSystem() || callingPkg.equals(targetPkg)
+                || protectedMode() && caller != null && caller.uid() == target.uid()
+                        && callers().callerUid() == target.uid()
+                || mDelegates.allows(target, caller)) return target;
+        throw new SecurityException("Caller " + callingPkg + " cannot notify as " + targetPkg);
+    }
 
     private boolean mayPost(String pkg) {
         if (pm() != null && pm().isRemovalPending(pkg)) return false;
@@ -306,6 +435,11 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     void postFor(ApkPackage captured, String pkg, String tag, int id, Notification notification) {
+        postFor(captured, pkg, pkg, 0, tag, id, notification, false);
+    }
+
+    private void postFor(ApkPackage captured, String pkg, String opPkg, int callingPid,
+            String tag, int id, Notification notification, boolean authenticate) {
         if (notification == null) return;
         // Foreground-service state lives in ActiveServices; denied posting must not
         // expose its content through toasts, listeners or active-notification queries.
@@ -322,15 +456,16 @@ public final class NotificationManagerService extends INotificationManager.Defau
             }
             channel = capturedChannel;
         }
-        StatusBarNotification sbn = new StatusBarNotification(pkg, pkg, id, tag,
+        StatusBarNotification sbn = new StatusBarNotification(pkg, opPkg, id, tag,
                 packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
-                0, notification, UserHandle.SYSTEM, null,
+                callingPid, notification, UserHandle.SYSTEM, null,
                 System.currentTimeMillis());
         Record r = new Record(sbn, channel, notificationImportance(channel, notification,
                 captured != null && captured.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O));
         Runnable beforePublication = mBeforePostPublication;
         if (beforePublication != null) beforePublication.run();
         synchronized (mPublicationLock) {
+            if (authenticate && resolveNotificationOwner(opPkg, pkg, false) != captured) return;
             if (packageFor(pkg) != captured || captured == null && !"android".equals(pkg) || !mayPost(pkg)) return;
             boolean update;
             synchronized (this) {
@@ -350,9 +485,10 @@ public final class NotificationManagerService extends INotificationManager.Defau
             } else {
                 // Its intents outlive this system server, as its toast does (ADR 0051).
                 if (WindowsHost.inSystemServer()) {
-                    NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification);
+                    NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification, opPkg);
                 }
                 int hr = mTestToast == null ? showToast(r, update) : mTestToast.applyAsInt(sbn, update);
+                if (hr == 0) retireLegacyToast(pkg, sbn.getKey());
                 shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
                         : String.format("no toast (0x%08x)", hr);
             }
@@ -376,7 +512,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 record.n().flags &= ~Notification.FLAG_USER_INITIATED_JOB;
             }
             if (WindowsHost.inSystemServer()) {
-                NotificationStore.save(am(), record.sbn.getKey(), pkg, null, id, record.n());
+                NotificationStore.save(am(), record.sbn.getKey(), pkg, null, id, record.n(), record.sbn.getOpPkg());
             }
         }
         notifyListeners(record, true, 0);
@@ -412,31 +548,45 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     private void cancel(String pkg, String tag, int id, int reason) {
+        cancel(pkg, tag, id, reason, null);
+    }
+
+    private void cancel(String pkg, String tag, int id, int reason, String opPkg) {
         Record r;
-        synchronized (this) {
-            r = mPosted.remove(key(pkg, tag, id));
-        }
-        String sbnKey = new StatusBarNotification(pkg, pkg, id, tag,
-                packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
-                0, new Notification(), UserHandle.SYSTEM, null, 0).getKey();
-        if (r == null) {
-            // Posted by an earlier run of the device: its toast may still be in Windows'
-            // notification center.
-            if (NotificationStore.load(pkg, sbnKey) != null) {
+        synchronized (mPublicationLock) {
+            if (opPkg != null && resolveNotificationOwner(opPkg, pkg, true) == null
+                    && !"android".equals(pkg)) return;
+            String sbnKey = new StatusBarNotification(pkg, pkg, id, tag,
+                    packageFor(pkg) == null ? android.os.Process.SYSTEM_UID : packageFor(pkg).uid(),
+                    0, new Notification(), UserHandle.SYSTEM, null, 0).getKey();
+            NotificationStore.Stored retained;
+            synchronized (this) {
+                r = mPosted.get(key(pkg, tag, id));
+                retained = r == null ? NotificationStore.load(pkg, sbnKey) : null;
+                String poster = r != null ? r.sbn.getOpPkg() : retained != null ? retained.opPkg : null;
+                if (opPkg != null && !pkg.equals(opPkg) && poster != null && !opPkg.equals(poster)) {
+                    throw new SecurityException("A delegate cannot cancel a notification it did not post");
+                }
+                // A concurrent replacement cannot change the poster between
+                // the authorization check and the removal.
+                mPosted.remove(key(pkg, tag, id));
+            }
+            if (r == null) {
+                if (retained == null) return;
                 NotificationStore.delete(pkg, sbnKey);
-                int hr = mTestToast == null ? WindowsHost.removeToast(AppShell.appUserModelId(pkg),
-                        toastTag(tag, id), TOAST_GROUP) : 0;
+                int hr = removeStoredToast(retained, false);
                 SystemServer.log("notification " + id + " of " + pkg + " (an earlier run's)"
                         + " cancelled" + (hr == 0 ? ", its toast removed"
                                 : String.format(" (toast: 0x%08x)", hr)));
+                return;
             }
-            return;
+            NotificationStore.Stored stored = NotificationStore.load(pkg, r.sbn.getKey());
+            NotificationStore.delete(pkg, r.sbn.getKey());
+            int hr = stored != null ? removeStoredToast(stored, true)
+                    : removeWindowsToast(pkg, toastTag(tag, id), id, null, true);
+            SystemServer.log("notification " + id + " of " + pkg + " cancelled"
+                    + (hr == 0 ? ", its toast removed" : String.format(" (toast: 0x%08x)", hr)));
         }
-        NotificationStore.delete(pkg, r.sbn.getKey());
-        int hr = mTestToast == null ? WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg), toastTag(tag, id),
-                TOAST_GROUP, id) : 0;
-        SystemServer.log("notification " + id + " of " + pkg + " cancelled"
-                + (hr == 0 ? ", its toast removed" : String.format(" (toast: 0x%08x)", hr)));
         notifyListeners(r, false, reason);
     }
 
@@ -478,7 +628,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 || (update && (n.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0);
         boolean high = importance >= NotificationManager.IMPORTANCE_HIGH;
         String xml = toastXml(r, large != null ? large : icon, quiet || update);
-        int hr = WindowsHost.showToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()),
+        String windowsTag = windowsToastTag(toastTag(r.sbn.getTag(), r.sbn.getId()));
+        int hr = WindowsHost.showToast(appId, windowsTag,
                 TOAST_GROUP, xml, suppressPopup, high);
         if (hr != 0) {
             // Fall back to Shell_NotifyIcon balloon notification bridge with app icon and title
@@ -486,7 +637,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
             CharSequence text = n.extras != null ? n.extras.getCharSequence(Notification.EXTRA_TEXT) : null;
             File iconFile = large != null ? large : icon;
             hr = WindowsHost.showNotificationBridge(
-                    appId, toastTag(r.sbn.getTag(), r.sbn.getId()), TOAST_GROUP,
+                    appId, windowsTag, TOAST_GROUP,
                     title != null ? title.toString() : "",
                     text != null ? text.toString() : "",
                     iconFile != null ? iconFile.getAbsolutePath() : "",
@@ -721,8 +872,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         }
         if (action < 0 && (s.flags & Notification.FLAG_AUTO_CANCEL) != 0) {
             NotificationStore.delete(s.packageName, key);
-            WindowsHost.removeToast(AppShell.appUserModelId(s.packageName),
-                    toastTag(s.tag, s.id), TOAST_GROUP);
+            removeStoredToast(s, false);
         }
     }
 
@@ -902,17 +1052,17 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id,
             Notification notification, int userId) {
-        ApkPackage captured = packageFor(pkg);
-        user(userId); own(pkg); own(opPkg);
-        if (!callers().isSystem() && !pkg.equals(opPkg)) throw new SecurityException("Invalid notification attribution");
-        postFor(captured, pkg, tag, id, notification);
+        user(userId);
+        if (pkg == null || notification == null) throw new IllegalArgumentException("Notification and owner are required");
+        ApkPackage captured = resolveNotificationOwner(opPkg, pkg, false);
+        postFor(captured, pkg, opPkg, Binder.getCallingPid(), tag, id, notification, true);
     }
 
     @Override
     public void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id,
             int userId) {
-        user(userId); own(pkg); own(opPkg);
-        cancel(pkg, tag, id);
+        user(userId); notificationCaller(opPkg);
+        cancel(pkg, tag, id, NotificationListenerService.REASON_APP_CANCEL, opPkg);
     }
 
     @Override
@@ -930,10 +1080,11 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 return true;
             });
         }
-        String appId = AppShell.appUserModelId(pkg);
         for (Record r : removed) {
+            NotificationStore.Stored stored = NotificationStore.load(pkg, r.sbn.getKey());
             NotificationStore.delete(pkg, r.sbn.getKey());
-            if (mTestToast == null) WindowsHost.removeToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()), TOAST_GROUP);
+            if (stored != null) removeStoredToast(stored, false);
+            else removeWindowsToast(pkg, toastTag(r.sbn.getTag(), r.sbn.getId()), r.sbn.getId(), null, false);
         }
         SystemServer.log("notification: all of " + pkg + " cancelled (" + removed.size() + ")");
         for (Record r : removed) {
@@ -950,6 +1101,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         synchronized (mPublicationLock) { packageRemovedLocked(pkg); }
     }
     private void packageRemovedLocked(String pkg) {
+        mDelegates.remove(pkg);
         synchronized (this) {
             AtomicFile file = channelFile(pkg);
             file.delete();
@@ -978,8 +1130,21 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     @Override
     public ParceledListSlice getAppActiveNotifications(String callingPkg, int userId) {
-        user(userId); own(callingPkg);
-        return new ParceledListSlice<>(active(callingPkg));
+        user(userId); notificationCaller(callingPkg);
+        List<StatusBarNotification> result = new ArrayList<>();
+        synchronized (this) {
+            for (Record record : mPosted.values()) {
+                StatusBarNotification sbn = record.sbn;
+                if ((!callingPkg.equals(sbn.getPackageName()) && !callingPkg.equals(sbn.getOpPkg()))
+                        || !mayPost(sbn.getPackageName())) continue;
+                Notification notification = sbn.getNotification().clone();
+                notification.overrideAllowlistToken(null);
+                result.add(new StatusBarNotification(sbn.getPackageName(), sbn.getOpPkg(),
+                        sbn.getId(), sbn.getTag(), sbn.getUid(), sbn.getInitialPid(), notification,
+                        sbn.getUser(), sbn.getOverrideGroupKey(), sbn.getPostTime()));
+            }
+        }
+        return new ParceledListSlice<>(result);
     }
 
     @Override
@@ -1335,23 +1500,35 @@ public final class NotificationManagerService extends INotificationManager.Defau
     @Override
     public NotificationChannel getNotificationChannel(String callingPkg, int userId,
             String pkg, String channelId) {
-        user(userId); own(callingPkg); own(pkg);
-        synchronized (this) {
-            loadChannelsLocked(pkg);
-            NotificationChannel channel = mChannels.get(channelKey(pkg, channelId));
-            return channel == null || channel.isDeleted() ? null : copyChannel(channel);
+        user(userId); notificationCaller(callingPkg);
+        synchronized (mPublicationLock) {
+            if (!callers().isSystem() && !canNotifyAsPackage(callingPkg, pkg, userId)) {
+                throw new SecurityException("Caller cannot read notification channels for " + pkg);
+            }
+            if (currentPackage(pkg) == null && !"android".equals(pkg)) return null;
+            synchronized (this) {
+                loadChannelsLocked(pkg);
+                NotificationChannel channel = mChannels.get(channelKey(pkg, channelId));
+                return channel == null || channel.isDeleted() ? null : copyChannel(channel);
+            }
         }
     }
 
     @Override
     public ParceledListSlice getNotificationChannels(String callingPkg, String targetPkg,
             int userId) {
-        user(userId); own(callingPkg); own(targetPkg);
+        user(userId); notificationCaller(callingPkg);
         List<NotificationChannel> result = new ArrayList<>();
-        synchronized (this) {
-            loadChannelsLocked(targetPkg);
-            for (Map.Entry<String, NotificationChannel> e : mChannels.entrySet()) {
-                if (e.getKey().startsWith(targetPkg + "/") && !e.getValue().isDeleted()) result.add(copyChannel(e.getValue()));
+        synchronized (mPublicationLock) {
+            if (!callers().isSystem() && !canNotifyAsPackage(callingPkg, targetPkg, userId)) {
+                throw new SecurityException("Caller cannot read notification channels for " + targetPkg);
+            }
+            if (currentPackage(targetPkg) == null && !"android".equals(targetPkg)) return new ParceledListSlice<>(result);
+            synchronized (this) {
+                loadChannelsLocked(targetPkg);
+                for (Map.Entry<String, NotificationChannel> e : mChannels.entrySet()) {
+                    if (e.getKey().startsWith(targetPkg + "/") && !e.getValue().isDeleted()) result.add(copyChannel(e.getValue()));
+                }
             }
         }
         return new ParceledListSlice<>(result);
@@ -1518,16 +1695,16 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private void removeChannelToasts(List<Record> removed) {
         for (Record record : removed) {
             String pkg = record.sbn.getPackageName();
+            NotificationStore.Stored stored = NotificationStore.load(pkg, record.sbn.getKey());
             NotificationStore.delete(pkg, record.sbn.getKey());
-            if (mTestToast == null) WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg),
-                    toastTag(record.sbn.getTag(), record.sbn.getId()), TOAST_GROUP, record.sbn.getId());
+            if (stored != null) removeStoredToast(stored, true);
+            else removeWindowsToast(pkg, toastTag(record.sbn.getTag(), record.sbn.getId()), record.sbn.getId(), null, true);
         }
     }
 
     private void removeRetainedChannelToasts(String pkg, Set<String> channelIds) {
         for (NotificationStore.Stored stored : NotificationStore.deleteChannels(pkg, channelIds)) {
-            if (mTestToast == null) WindowsHost.cancelNotificationBridge(AppShell.appUserModelId(pkg),
-                    toastTag(stored.tag, stored.id), TOAST_GROUP, stored.id);
+            removeStoredToast(stored, true);
         }
     }
 
@@ -1677,9 +1854,34 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     @Override
+    public void setNotificationDelegate(String callingPkg, String delegate) {
+        ApkPackage captured = notificationCaller(callingPkg);
+        if (captured == null) throw new SecurityException("Notification delegation requires an installed owner");
+        synchronized (mPublicationLock) {
+            if (currentPackage(callingPkg) != captured) throw new SecurityException("Notification owner is retiring");
+            ApkPackage target = delegate == null ? null : currentPackage(delegate);
+            // AOSP leaves the existing preference unchanged for an unknown package.
+            if (delegate != null && target == null) return;
+            mDelegates.set(captured, target);
+        }
+        invalidateChannelCaches(true, false);
+    }
+
+    @Override
+    public String getNotificationDelegate(String callingPkg) {
+        ApkPackage owner = notificationCaller(callingPkg);
+        synchronized (mPublicationLock) { return mDelegates.get(owner); }
+    }
+
+    @Override
     public boolean canNotifyAsPackage(String callingPkg, String targetPkg, int userId) {
-        user(userId); own(callingPkg);
-        return callers().isSystem() || callingPkg.equals(targetPkg);
+        user(userId);
+        ApkPackage caller = notificationCaller(callingPkg);
+        if (callingPkg.equals(targetPkg)) return true;
+        synchronized (mPublicationLock) {
+            ApkPackage target = currentPackage(targetPkg);
+            return target != null && mDelegates.allows(target, caller);
+        }
     }
 
     @Override

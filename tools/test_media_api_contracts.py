@@ -45,8 +45,14 @@ def main() -> int:
     extractor = read("compat/media/jni/media_extractor_jni.cc")
     yuv = read("compat/hwui/surfaces/yuv_image.cc")
     audio_disconnect = ("bool SetInputDisconnectedLocked(", "aaudio_result_t CheckInputDisconnectLocked(")
-    audio_disconnect_implementation = (section(audio, *audio_disconnect)
-                                       if audio_disconnect[0] in audio else "")
+    has_input_disconnect = audio_disconnect[0] in audio
+    if not args.source_ref and not has_input_disconnect:
+        raise ValueError("current AAudio source is missing its disconnect contract")
+    # Only an explicitly selected historical source may omit the later input
+    # disconnect contract. The ordinary current-source gate must exercise it.
+    audio_disconnect_implementation = (
+        "#define HAS_INPUT_DISCONNECT " + str(int(has_input_disconnect)) + "\n"
+        + (section(audio, *audio_disconnect) if has_input_disconnect else ""))
     extractor_start = ("ReceiverLease<JniExtractor> GetForDataSource(" if
                        "ReceiverLease<JniExtractor> GetForDataSource(" in extractor else
                        "JniExtractor* GetForDataSource(" if "JniExtractor* GetForDataSource(" in extractor

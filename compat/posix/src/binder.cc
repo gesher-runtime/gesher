@@ -627,24 +627,28 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       const uint64_t wire_bytes = tr.data_size + tr.offsets_size + extra_size +
           static_cast<uint64_t>(description_count) * sizeof(wire::FileDescription);
       if (wire_bytes > static_cast<uint64_t>(r.end - r.p)) return abandon(nullptr, false, EBADF);
-      std::vector<uint8_t> snapshot(data_size);
-      std::vector<uint64_t> snapshot_offsets(offsets_size / sizeof(uint64_t));
-      std::vector<uint8_t> extra(static_cast<size_t>(extra_size));
+      // Receive owns this immutable reply until WriteRead returns. Validate its
+      // byte ranges directly, then copy once into the receiver-owned allocation.
+      // Wire offsets and the descriptor table can follow an odd-sized payload.
+      const uint8_t* data = r.p;
+      const uint8_t* offsets = data + data_size;
+      const uint8_t* extra = offsets + offsets_size;
       std::vector<wire::FileDescription> descriptions(description_count);
-      if (!r.Read(snapshot.data(), snapshot.size()) ||
-          !r.Read(snapshot_offsets.data(), offsets_size) || !r.Read(extra.data(), extra.size()) ||
-          !r.Read(descriptions.data(), descriptions.size() * sizeof(wire::FileDescription))) {
-        return abandon(nullptr, false, EBADF);
+      if (!descriptions.empty()) {
+        memcpy(descriptions.data(), extra + static_cast<size_t>(extra_size),
+               descriptions.size() * sizeof(wire::FileDescription));
       }
+      r.p += static_cast<size_t>(wire_bytes);
       binder_sg::Layout layout;
-      if (!binder_sg::WireLayout(snapshot, snapshot_offsets, extra.size(), &layout) ||
-          !wire::ValidFileDescriptions(snapshot, snapshot_offsets, descriptions))
+      if (!binder_sg::WireLayout(data, data_size, offsets, offsets_size,
+                                static_cast<size_t>(extra_size), &layout) ||
+          !wire::ValidFileDescriptions(data, data_size, offsets, offsets_size, descriptions))
         return abandon(nullptr, false, EBADF);
-      uint8_t* block = file->Allocate(extra_offset + extra.size(), id, !layout.pointers.empty());
+      uint8_t* block = file->Allocate(extra_offset + static_cast<size_t>(extra_size), id, !layout.pointers.empty());
       if (block == nullptr) return abandon(nullptr, false, ENOMEM);
-      if (data_size != 0) memcpy(block, snapshot.data(), data_size);
-      if (offsets_size != 0) memcpy(block + aligned, snapshot_offsets.data(), offsets_size);
-      if (!extra.empty()) memcpy(block + extra_offset, extra.data(), extra.size());
+      if (data_size != 0) memcpy(block, data, data_size);
+      if (offsets_size != 0) memcpy(block + aligned, offsets, offsets_size);
+      if (extra_size != 0) memcpy(block + extra_offset, extra, static_cast<size_t>(extra_size));
       binder_sg::Rebase(block, block + extra_offset, layout);
       if (!BufferResult(pipe, wire::kClaimBuffer, id)) return abandon(block, false, EBADF);
       if (!ReceiveFds(block, data_size, block + aligned, tr.offsets_size, descriptions))

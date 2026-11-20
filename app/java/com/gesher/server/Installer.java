@@ -350,6 +350,9 @@ final class Installer {
                     && !parsed.updateContinuityFrom(previous)) {
                 throw new SecurityException("INSTALL_FAILED_UPDATE_INCOMPATIBLE: " + pkg);
             }
+            try (PackageUids.Admission checked = PackageUids.prepare(List.of(parsed), mPm.packages())) {
+                // Preflight only. Parsing/validation never commits shared membership.
+            }
             File[] incomingSplits = companionSplits(source);
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
@@ -435,6 +438,9 @@ final class Installer {
                     throw new SecurityException("INSTALL_FAILED_CHANGED_SPLIT: " + pkg);
                 }
             }
+            try (PackageUids.Admission checked = PackageUids.prepare(List.of(staged), mPm.packages())) {
+                // Recheck the copied cluster before stopping the working generation.
+            }
             if (old != null || previous != null) mAtm.forceStopPackage(pkg);
             if (previous != null && !previous.hasVerifiedSigningIdentity()) {
                 mPm.permissions().forgetPackage(pkg);
@@ -483,17 +489,23 @@ final class Installer {
 
     /** Owner creation can fail; finish it before committing the installed registry. */
     private void publishInstalled(Entry entry, ApkPackage installed) throws IOException {
-        mPm.prepareAdd(installed);
-        Entry previous = mEntries.put(entry.packageName, entry);
-        try {
-            writeRegistry();
-        } catch (IOException | RuntimeException failure) {
-            if (previous == null) mEntries.remove(entry.packageName);
-            else mEntries.put(entry.packageName, previous);
-            throw failure;
+        synchronized (mPm) {
+            try (PackageUids.Admission identity = mPm.prepareAdd(installed)) {
+                identity.commit();
+                Entry previous = mEntries.put(entry.packageName, entry);
+                try {
+                    writeRegistry();
+                } catch (IOException | RuntimeException failure) {
+                    if (previous == null) mEntries.remove(entry.packageName);
+                    else mEntries.put(entry.packageName, previous);
+                    // Closing the unaccepted transaction rolls back shared membership,
+                    // signer ownership and the tentative record's UID as one snapshot.
+                    throw failure;
+                }
+                identity.acceptPublished();
+                mPm.publishPrepared(installed, this);
+            }
         }
-        // prepareAdd attached this record to the store; publication performs no owner I/O.
-        mPm.add(installed);
     }
 
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
@@ -521,7 +533,7 @@ final class Installer {
                     installed.setSystemAddon(true);
                 }
                 installed.prepareInstalledDataDirectories();
-                mPm.add(installed);
+                mPm.add(installed, this);
             }
         }
         return new String[] {pkg, "unchanged", old.codePath,
@@ -643,11 +655,15 @@ final class Installer {
             if (notifications != null) notifications.packageRemoved(packageName);
             // Retire any background start already queued while capabilities were canceled.
             mAtm.forceStopPackage(packageName);
-            quarantine.stage();
-            mEntries.remove(packageName);
-            writeRegistry();
-            committed = true;
-            mPm.remove(packageName);
+            try (PackageUids.Admission identity = PackageUids.prepareRetire(target)) {
+                quarantine.stage();
+                identity.commit();
+                mEntries.remove(packageName);
+                writeRegistry();
+                committed = true;
+                identity.acceptPublished();
+                mPm.removePrepared(packageName);
+            }
         } catch (IOException | RuntimeException failure) {
             if (!committed) {
                 mEntries.put(packageName, e);

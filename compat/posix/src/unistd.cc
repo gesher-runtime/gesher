@@ -1,6 +1,7 @@
 // gesher-base: <unistd.h> and <stdlib.h> additions.
 
 #include <unistd.h>
+#include <sys/resource.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -128,7 +129,12 @@ long sysconf(int name) {
       return -1;
     case _SC_SEM_VALUE_MAX:
       return 0x7fffffff;
-    case _SC_SIGQUEUE_MAX:
+    case _SC_SIGQUEUE_MAX: {
+      struct rlimit limit;
+      if (getrlimit(RLIMIT_SIGPENDING, &limit) != 0) return -1;
+      return limit.rlim_cur > static_cast<rlim_t>(LONG_MAX) ? LONG_MAX
+                                                         : static_cast<long>(limit.rlim_cur);
+    }
     case _SC_RTSIG_MAX:
       return 32;
     // Supported POSIX options report the version they conform to.

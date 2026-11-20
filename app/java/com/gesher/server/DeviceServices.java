@@ -5,7 +5,6 @@
 package com.gesher.server;
 
 import android.app.AppOpsManager;
-import android.app.ISearchManager;
 import android.app.SyncNotedAppOp;
 import android.app.admin.IDevicePolicyManager;
 import android.app.trust.ITrustManager;
@@ -102,85 +101,6 @@ final class DeviceServices {
     }
 
     /**
-     * {@code appops}: every operation is allowed (Gesher grants an app what it asks for,
-     * as the activity manager's permission checks do); noted and started operations
-     * answer MODE_ALLOWED. Environment.isExternalStorageManager asks it, among others.
-     */
-    static final class AppOpsService extends IAppOpsService.Default {
-        @Override
-        public int checkOperation(int code, int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationRaw(int code, int uid, String packageName,
-                String attributionTag) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationRawForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkAudioOperation(int code, int usage, int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkPackage(int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int permissionToOpCode(String permission) {
-            return AppOpsManager.OP_NONE;
-        }
-
-        @Override
-        public SyncNotedAppOp noteOperation(int code, int uid, String packageName,
-                String attributionTag, boolean shouldCollectAsyncNotedOp, String message,
-                boolean shouldCollectMessage) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp noteOperationForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId, boolean shouldCollectAsyncNotedOp,
-                String message, boolean shouldCollectMessage) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp startOperation(IBinder clientId, int code, int uid,
-                String packageName, String attributionTag, boolean startIfModeDefault,
-                boolean shouldCollectAsyncNotedOp, String message, boolean shouldCollectMessage,
-                int attributionFlags, int attributionChainId) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp startOperationForDevice(IBinder clientId, int code, int uid,
-                String packageName, String attributionTag, int virtualDeviceId,
-                boolean startIfModeDefault, boolean shouldCollectAsyncNotedOp, String message,
-                boolean shouldCollectMessage, int attributionFlags, int attributionChainId) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-    }
-
-    /**
      * {@code appwidget}: a launcher that hosts no widgets yet. Apps ask which of their
      * widgets exist (none) to update them; pinning is not supported.
      */
@@ -215,22 +135,6 @@ final class DeviceServices {
         @Override
         public int getMaxBitmapMemory() {
             return 6 * 1080 * 2400;
-        }
-    }
-
-    /**
-     * {@code search}: no searchable activities and no global search (Activity's
-     * getSystemService(SEARCH_SERVICE) throws without the service; NoNonsense Notes).
-     */
-    static final class SearchService extends ISearchManager.Default {
-        @Override
-        public java.util.List<android.app.SearchableInfo> getSearchablesInGlobalSearch() {
-            return new java.util.ArrayList<>();
-        }
-
-        @Override
-        public java.util.List<android.content.pm.ResolveInfo> getGlobalSearchActivities() {
-            return new java.util.ArrayList<>();
         }
     }
 

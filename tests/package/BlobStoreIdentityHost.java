@@ -4,6 +4,7 @@ package com.gesher.server;
 import android.app.IApplicationThread;
 import android.app.blob.BlobHandle;
 import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.os.Binder;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import java.lang.reflect.Field;
@@ -73,6 +74,60 @@ public final class BlobStoreIdentityHost {
         try (var files = Files.list(root)) {
             return files.map(path -> path.getFileName().toString()).sorted().toArray(String[]::new);
         }
+    }
+    private static Object record(String name, Class<?>[] types, Object... values) throws Exception {
+        var constructor = Class.forName("com.gesher.server.BlobStoreService$" + name)
+                .getDeclaredConstructor(types);
+        constructor.setAccessible(true);
+        return constructor.newInstance(values);
+    }
+
+    /** The exact access boundary after an authenticated installation snapshot was captured. */
+    private static void replacedRecipient(BlobStoreService service, PackageManagerService pm,
+            ActivityTaskManagerService atm, Path root, BlobHandle handle) throws Exception {
+        ApkPackage original = pkg("fixture.blob.recipient", "10");
+        set(original, "mSigningIdentityChecked", true);
+        set(original, "mVerifiedSignatures", new Signature[]{new Signature(new byte[]{1})});
+        pm.add(original);
+        var oldProcess = attach(atm, original, 860005);
+        var require = BlobStoreService.class.getDeclaredMethod("requireOwner", String.class);
+        require.setAccessible(true);
+        Object[] captured = new Object[1];
+        as(oldProcess.pid, oldProcess.uid, () -> captured[0] = require.invoke(service, original.packageName));
+
+        pm.remove(original.packageName);
+        ApkPackage replacement = pkg(original.packageName, "11");
+        byte[] signer = {2};
+        set(replacement, "mSigningIdentityChecked", true);
+        set(replacement, "mVerifiedSignatures", new Signature[]{new Signature(signer)});
+        pm.add(replacement);
+        var replacementProcess = attach(atm, replacement, 860006);
+        Class<?> ownerType = captured[0].getClass();
+        Class<?> accessType = Class.forName("com.gesher.server.BlobStoreService$Access");
+        Object grant = record("Grant", new Class<?>[]{String.class, byte[].class},
+                replacement.packageName, MessageDigest.getInstance("SHA-256").digest(signer));
+        Object access = record("Access", new Class<?>[]{boolean.class, boolean.class, List.class},
+                false, false, List.of(grant));
+        Object donor = record("Owner", new Class<?>[]{String.class, long.class, String.class},
+                "android", 0L, "");
+        Object contribution = record("Contribution", new Class<?>[]{ownerType, long.class, accessType},
+                donor, System.currentTimeMillis(), access);
+        Path bytes = root.resolve("data-recipient-fixture.bin");
+        Files.write(bytes, new byte[]{42});
+        Object blob = record("Blob", new Class<?>[]{long.class, BlobHandle.class, String.class,
+                        long.class, long.class, Map.class, Map.class},
+                99L, handle, bytes.getFileName().toString(), 1L, System.currentTimeMillis(),
+                Map.of("android", contribution), Map.of());
+        var permitted = BlobStoreService.class.getDeclaredMethod("access", blob.getClass(), ownerType, long.class);
+        permitted.setAccessible(true);
+        try {
+            check(!(boolean)permitted.invoke(service, blob, captured[0], System.currentTimeMillis()),
+                    "Captured old owner adopted a replacement installation's signing grant");
+            as(replacementProcess.pid, replacementProcess.uid,
+                    () -> captured[0] = require.invoke(service, replacement.packageName));
+            check((boolean)permitted.invoke(service, blob, captured[0], System.currentTimeMillis()),
+                    "Current replacement lost its own signing grant");
+        } finally { Files.deleteIfExists(bytes); }
     }
     private static void run(boolean openOnly) throws Exception {
         String name = "fixture.blob.identity";
@@ -149,6 +204,35 @@ public final class BlobStoreIdentityHost {
                         "Cache-only compilation retired the attached caller");
                 service.abandonSession(fresh, other.packageName);
             });
+            // The package-admission suite verifies signed shared-UID admission.
+            // At this fixture's explicit metadata boundary, model two admitted
+            // peers with different installation generations and code paths.
+            ApkPackage shared = pkg("fixture.blob.shared", "3");
+            set(shared, "mUid", other.uid());
+            pm.add(shared);
+            var sharedProcess = attach(atm, shared, 860004);
+            as(peer.pid, peer.uid, () -> {
+                check(new CallerIdentity(pm, atm).requireCurrentPackage(shared.packageName) == shared,
+                        "Shared-UID claim must retain the claimed installation, not the caller's code");
+                session[0] = service.createSession(handle, shared.packageName);
+                check(service.openSession(session[0], shared.packageName).getSize() == 0,
+                        "Authenticated shared-UID peer cannot use the claimed package's session");
+            });
+            as(sharedProcess.pid, sharedProcess.uid, () -> check(
+                    service.openSession(session[0], shared.packageName).getSize() == 0,
+                    "Claimed package did not own the session created by its shared-UID peer"));
+            peer.dead = true;
+            as(peer.pid, peer.uid, () -> rejected(
+                    () -> service.openSession(session[0], shared.packageName),
+                    "Dead shared-UID caller acquired its live peer's session"));
+            peer.dead = false;
+            pm.remove(other.packageName);
+            as(peer.pid, peer.uid, () -> rejected(
+                    () -> service.openSession(session[0], shared.packageName),
+                    "Removed shared-UID caller acquired its still-installed peer's session"));
+            as(sharedProcess.pid, sharedProcess.uid,
+                    () -> service.abandonSession(session[0], shared.packageName));
+            replacedRecipient(service, pm, atm, root, handle);
             long system = service.createSession(handle, "android");
             check(service.openSession(system, "android").getSize() == 0, "System blob session rejected");
             service.abandonSession(system, "android");

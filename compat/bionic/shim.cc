@@ -666,8 +666,11 @@ int BIONIC_SYSV Nanosleep(const LinuxTimespec* req, LinuxTimespec* rem) {
     if (milliseconds > 0x7ffffffe) milliseconds = 0x7ffffffe;
     int64_t interrupted_at = 0;
     auto observe = [](void* value) { *static_cast<int64_t*>(value) = MonotonicNanos(); };
-    if (InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe,
-                                  &interrupted_at)) {
+    int error = 0;
+    bool interrupted = InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe,
+                                                  &interrupted_at, &error);
+    if (error != 0) return errno = error, -1;
+    if (interrupted) {
       if (rem != nullptr) {
         // The signal handler may run for longer than the remaining timeout.
         // Its execution is not part of the sleeping interval Linux reports.
