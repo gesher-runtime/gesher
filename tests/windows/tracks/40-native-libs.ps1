@@ -136,6 +136,13 @@ Check 'native libs: SCM_RIGHTS through the descriptor broker from a .so' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_rights_test.so")
 } @('unix_rights: all passed', 'unix_rights: all passed (without a broker)', 'elf_load_test all passed')
 
+# A pointer getenv returned keeps its bytes after the variable is putenv()ed,
+# setenv()ed or unsetenv()ed again, as bionic's (mozglue caches one).
+Check 'native libs: getenv results outlive later setenv/putenv/unsetenv from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/environment_lifetime_test.so")
+} @('the first result keeps its bytes after putenv', 'environment_lifetime: all passed',
+    'elf_load_test all passed')
+
 Check 'native libs: a UPX-packed .so unpacks itself with raw syscalls and runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/raw_syscall_upx.so")
 } @('unpacks its code at run time (UPX)', 'code unpacked at run time: yes',

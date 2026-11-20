@@ -108,7 +108,14 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     (gesher-base's Linux-layout struct with widened `tv_nsec`), `mmap`, libm,
     `qsort`/`bsearch` with a System V comparator, libdl over the loader
     (`dlopen`, `dlsym`, `dladdr`, `dl_iterate_phdr`), `__cxa_atexit`/
-    `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`.
+    `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`. The environment
+    is the CRT's, but `getenv` returns a copy that lives as long as the
+    process (one per distinct `name=value` read), as bionic's results do:
+    bionic never frees a string `setenv`/`putenv`/`unsetenv` replaces, while
+    the CRT does, and mozglue keeps `getenv("MOZ_ANDROID_LIBDIR")` in a
+    static while GeckoLoader `putenv`s it again (the freed bytes became the
+    next allocation: `dlopen failed: cannot open
+    cko_mozglue_GeckoLoader_loadNSSLibsNative/libxul.so`).
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
     the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
     `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,

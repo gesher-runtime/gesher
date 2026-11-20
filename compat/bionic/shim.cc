@@ -43,6 +43,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace gesher::bionic {
@@ -429,7 +430,35 @@ void BIONIC_SYSV SetAbortMessage(const char* msg) {
   std::fprintf(stderr, "gesher bionic: abort message: %s\n", msg ? msg : "");
 }
 
-char* BIONIC_SYSV Getenv(const char* name) { return std::getenv(name); }
+// bionic's getenv points into the environment's own strings, and those stay
+// valid for the life of the process: putenv(3) keeps the caller's string,
+// setenv(3) and unsetenv(3) never free one they replace or remove (OpenBSD's
+// setenv.c, which bionic uses). Code relies on it: mozglue caches
+// getenv("MOZ_ANDROID_LIBDIR") in a static, and GeckoLoader putenv()s that
+// assignment again before each of its library loads. The CRT frees a value
+// _putenv_s replaces, so its getenv pointer would dangle (and the next
+// allocation reuses the bytes). This getenv returns an interned copy instead,
+// kept for the life of the process: one per distinct name=value pair read, as
+// bionic keeps every assignment.
+char* BIONIC_SYSV Getenv(const char* name) {
+  if (name == nullptr) return nullptr;
+  // A copy made under the CRT's environment lock, which a concurrent
+  // setenv/unsetenv cannot free while it is read.
+  char* value = nullptr;
+  size_t size = 0;
+  if (_dupenv_s(&value, &size, name) != 0 || value == nullptr) return nullptr;
+  std::string assignment(name);
+  const size_t prefix = assignment.size() + 1;
+  assignment += '=';
+  assignment += value;
+  std::free(value);
+  static std::mutex mutex;
+  // Never destroyed: code may read the environment from atexit handlers and
+  // static destructors. Elements of an unordered_set keep their addresses.
+  static auto* const kept = new std::unordered_set<std::string>();
+  std::lock_guard<std::mutex> lock(mutex);
+  return const_cast<char*>(kept->insert(std::move(assignment)).first->c_str()) + prefix;
+}
 int BIONIC_SYSV Setenv(const char* name, const char* value, int overwrite) {
   if (auto result = gesher::WriteFontEnvironment(name, value, overwrite))
     return *result == 0 ? 0 : -1;
