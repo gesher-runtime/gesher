@@ -366,10 +366,22 @@ std::map<uintptr_t, Region>::iterator SplitEntry(State& s,
 
 // A new placeholder reservation of `len` bytes at `at` (exactly) or, with
 // nullptr, anywhere: one hole. Returns its start, or 0.
+//
+// A reservation starts on an allocation granularity boundary. Given an
+// address that is not on one, VirtualAlloc2 does not fail: it rounds the
+// start down and reserves through the rounded-up end, a range other than
+// the one recorded here (MEM_REPLACE_PLACEHOLDER of `len` bytes then fails).
+// Such an address cannot be reserved exactly, so it is refused, as is any
+// result other than `at`.
 uintptr_t Reserve(State& s, void* at, size_t len) {
+  if (at != nullptr && reinterpret_cast<uintptr_t>(at) % s.granularity != 0) return 0;
   void* p = Placeholders().alloc2(GetCurrentProcess(), at, len,
                                   MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0);
   if (p == nullptr) return 0;
+  if (at != nullptr && p != at) {
+    VirtualFree(p, 0, MEM_RELEASE);
+    return 0;
+  }
   const uintptr_t start = reinterpret_cast<uintptr_t>(p);
   Region hole;
   hole.kind = Kind::kHole;
@@ -381,9 +393,11 @@ uintptr_t Reserve(State& s, void* at, size_t len) {
 
 // A reservation for a mapping with a hint (not MAP_FIXED): at the hint, else
 // at the next allocation granularity boundary after it (reservations start at
-// one), else anywhere. The second try keeps ART's search for free address
-// space in the low 4 GiB, which steps through pages, from ending up anywhere
-// at each page that is not on a boundary.
+// one), else anywhere. As on Linux, a hint never makes the mapping fail. The
+// second try keeps ART's search for free address space in the low 4 GiB, which
+// steps through pages, from ending up anywhere at each page that is not on a
+// boundary; it also places hints that are not on a boundary (PartitionAlloc's
+// randomized pool addresses are only page aligned).
 uintptr_t ReserveNear(State& s, void* hint, size_t len) {
   uintptr_t at = 0;
   if (hint != nullptr) {
