@@ -10,6 +10,9 @@
 #include <string>
 
 #include "../../compat/framework/services_zygote.h"
+#ifdef GESHER_RESTART_AUDIT
+#include "restart_resource_audit.h"
+#endif
 
 namespace {
 int checks = 0;
@@ -99,6 +102,13 @@ void Worker(uint32_t expected, const wchar_t* payload) {
   DWORD before = 0, after = 0;
   Check(GetProcessHandleCount(GetCurrentProcess(), &before) != FALSE, "initial handle count");
   std::printf("supervisor before restart\n"); std::fflush(stdout);
+#ifdef GESHER_RESTART_AUDIT
+  gesher::zygote::RestartAudit("after-first-stdio", nullptr, TRUE, ERROR_SUCCESS);
+  restart_audit::Entries initial_handles;
+  DWORD capture = restart_audit::Capture(&initial_handles);
+  gesher::zygote::RestartAudit("initial-snapshot-cleaned", nullptr, capture == ERROR_SUCCESS, capture);
+  Check(capture == ERROR_SUCCESS, "capture initial diagnostic handle types");
+#endif
   uint32_t result = 0;
   uint32_t restart_error = gesher::zygote::RestartWithUid(10037, &result);
   if (restart_error != 0) {
@@ -113,6 +123,29 @@ void Worker(uint32_t expected, const wchar_t* payload) {
     std::fprintf(stderr, "restart handles before=%lu after=%lu counted=%d error=%lu child-exit=%u\n",
         before, after, counted, error, result);
     std::fflush(stderr);
+#ifdef GESHER_RESTART_AUDIT
+    restart_audit::Entries first_handles;
+    capture = restart_audit::Capture(&first_handles);
+    gesher::zygote::RestartAudit("first-call-snapshot-cleaned", nullptr,
+        capture == ERROR_SUCCESS, capture);
+    Check(capture == ERROR_SUCCESS, "capture first-call diagnostic handle types");
+    restart_audit::Delta("first-call", initial_handles, first_handles);
+    // Keep the original first-call comparison below fatal. This additional real
+    // call only distinguishes one-time initialization from continuing growth.
+    if (expected == 0) {
+      LARGE_INTEGER rewind{};
+      Check(SetFilePointerEx(GetStdHandle(STD_INPUT_HANDLE), rewind, nullptr, FILE_BEGIN) != FALSE,
+          "rewind real stdin for resource diagnostic repetition");
+      uint32_t repeated_exit = 0;
+      uint32_t repeated_error = gesher::zygote::RestartWithUid(10037, &repeated_exit);
+      std::printf("restart audit repetition native-error=%u child-exit=%u\n",
+          repeated_error, repeated_exit);
+      restart_audit::Entries repeated_handles;
+      capture = restart_audit::Capture(&repeated_handles);
+      Check(capture == ERROR_SUCCESS, "capture repeated diagnostic handle types");
+      restart_audit::Delta("repetition", first_handles, repeated_handles);
+    }
+#endif
   }
   Check(counted != FALSE && before == after,
       "restart releases process, thread, job, stdio and attribute resources");
@@ -180,7 +213,11 @@ void Run(uint32_t expected) {
     DWORD code = 0;
     BOOL queried = GetExitCodeProcess(process.value, &code);
     DWORD query_error = queried ? ERROR_SUCCESS : GetLastError();
-    if (!queried || code != expected) {
+    if (!queried || code != expected
+#ifdef GESHER_RESTART_AUDIT
+        || expected == 0
+#endif
+        ) {
       std::string child_output = output.Read(), child_error = error.Read();
       std::fprintf(stderr,
           "restart exit expected=%u (0x%08x) observed=%lu (0x%08lx) queried=%d error=%lu supervisor=%lu\n",

@@ -21,6 +21,14 @@
 
 namespace gesher {
 namespace zygote {
+#ifdef GESHER_RESTART_AUDIT
+// Linked only by the isolated native restart fixture, never by the runtime build.
+void RestartAudit(const char* stage, const void* resource, BOOL success, DWORD error);
+#define RESTART_AUDIT(stage, resource, success, error) \
+  RestartAudit(stage, resource, success, error)
+#else
+#define RESTART_AUDIT(stage, resource, success, error) ((void)0)
+#endif
 namespace {
 
 std::mutex g_lock;
@@ -53,7 +61,13 @@ std::u16string EnvironmentBlock(const std::vector<std::u16string>& set,
     for (const wchar_t* p = env; *p != L'\0'; p += wcslen(p) + 1) {
       entries.push_back(U(p, wcslen(p)));
     }
+#ifdef GESHER_RESTART_AUDIT
+    BOOL freed = FreeEnvironmentStringsW(env);
+    DWORD error = freed ? ERROR_SUCCESS : GetLastError();
+    RESTART_AUDIT("free-environment", env, freed, error);
+#else
     FreeEnvironmentStringsW(env);
+#endif
   }
   auto drop = [&entries](const std::u16string& name) {
     for (auto it = entries.begin(); it != entries.end();) {
@@ -95,14 +109,27 @@ struct OwnedHandle {
   OwnedHandle(const OwnedHandle&) = delete;
   OwnedHandle& operator=(const OwnedHandle&) = delete;
   ~OwnedHandle() {
-    if (value != nullptr && value != INVALID_HANDLE_VALUE) CloseHandle(value);
+    if (value != nullptr && value != INVALID_HANDLE_VALUE) {
+#ifdef GESHER_RESTART_AUDIT
+      BOOL closed = CloseHandle(value);
+      DWORD error = closed ? ERROR_SUCCESS : GetLastError();
+      RESTART_AUDIT("close-owned-handle", value, closed, error);
+#else
+      CloseHandle(value);
+#endif
+    }
   }
 };
 
 struct HandleList {
   std::vector<char> storage;
   LPPROC_THREAD_ATTRIBUTE_LIST value = nullptr;
-  ~HandleList() { if (value != nullptr) DeleteProcThreadAttributeList(value); }
+  ~HandleList() {
+    if (value != nullptr) {
+      DeleteProcThreadAttributeList(value);
+      RESTART_AUDIT("delete-attributes", value, TRUE, ERROR_SUCCESS);
+    }
+  }
 
   DWORD Initialize(HANDLE* handles, size_t count) {
     SIZE_T size = 0;
@@ -193,6 +220,12 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
 
 uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
   if (uid < 10000 || exit_code == nullptr) return ERROR_INVALID_PARAMETER;
+#ifdef GESHER_RESTART_AUDIT
+  struct AuditExit {
+    ~AuditExit() { RestartAudit("after-owned-cleanup", nullptr, TRUE, ERROR_SUCCESS); }
+  } audit_exit;
+  RESTART_AUDIT("entry", nullptr, TRUE, ERROR_SUCCESS);
+#endif
   std::u16string exe = ExePath(), command = CommandLine();
   if (exe.empty() || command.empty()) return ERROR_INVALID_PARAMETER;
   // This is a loop guard, never evidence of package admission. The new VM parses
@@ -202,6 +235,7 @@ uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
   std::u16string environment = EnvironmentBlock(
       {u"GESHER_UID=" + identity, u"GESHER_BINDER_UID=" + identity,
        u"GESHER_STANDALONE_RESTARTED=1"}, {});
+  RESTART_AUDIT("environment-ready", nullptr, TRUE, ERROR_SUCCESS);
 
   OwnedHandle input, output, error, job, process, thread;
   const DWORD kinds[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
@@ -220,12 +254,16 @@ uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
       return GetLastError();
     }
     handles[i] = copies[i]->value;
+    RESTART_AUDIT(i == 0 ? "owned-input" : i == 1 ? "owned-output" : "owned-error",
+                  handles[i], TRUE, ERROR_SUCCESS);
   }
   HandleList attributes;
   DWORD failure = attributes.Initialize(handles, 3);
   if (failure != ERROR_SUCCESS) return failure;
+  RESTART_AUDIT("attributes-ready", attributes.value, TRUE, ERROR_SUCCESS);
   job.value = CreateJobObjectW(nullptr, nullptr);
   if (job.value == nullptr) return GetLastError();
+  RESTART_AUDIT("owned-job", job.value, TRUE, ERROR_SUCCESS);
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
   if (!SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits,
@@ -247,17 +285,23 @@ uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
   }
   process.value = child.hProcess;
   thread.value = child.hThread;
+  RESTART_AUDIT("owned-process", process.value, TRUE, ERROR_SUCCESS);
+  RESTART_AUDIT("owned-thread", thread.value, TRUE, ERROR_SUCCESS);
   // Bind lifetime ownership before the child can execute any runtime or APK code.
   if (!AssignProcessToJobObject(job.value, process.value)) {
     failure = GetLastError();
     if (TerminateProcess(process.value, 1)) WaitForSingleObject(process.value, INFINITE);
     return failure;
   }
+  RESTART_AUDIT("job-assigned", nullptr, TRUE, ERROR_SUCCESS);
   // Transfer only the foreground permission Windows actually gives this launcher.
   // Failure leaves the normal OS focus rules in force; it never fabricates focus.
   AllowSetForegroundWindow(child.dwProcessId);
+  RESTART_AUDIT("foreground-permission", nullptr, TRUE, ERROR_SUCCESS);
   if (ResumeThread(thread.value) == static_cast<DWORD>(-1)) return GetLastError();
+  RESTART_AUDIT("child-resumed", nullptr, TRUE, ERROR_SUCCESS);
   if (WaitForSingleObject(process.value, INFINITE) != WAIT_OBJECT_0) return GetLastError();
+  RESTART_AUDIT("child-terminated", nullptr, TRUE, ERROR_SUCCESS);
   DWORD code = 0;
   if (!GetExitCodeProcess(process.value, &code)) return GetLastError();
   *exit_code = code;
