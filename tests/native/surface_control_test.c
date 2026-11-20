@@ -405,6 +405,23 @@ static void TestEgl(void) {
             status == EGL_SIGNALED_KHR,
         "a native fence from an fd: eglWaitSyncKHR, eglClientWaitSyncKHR, type/condition/status");
   if (imported != EGL_NO_SYNC_KHR) p_destroy_sync(g_display, imported);
+  // EGL_KHR_fence_sync, which the native fences are written against.
+  EGLSyncKHR fence_sync = p_create_sync(g_display, EGL_SYNC_FENCE_KHR, NULL);
+  type = condition = status = 0;
+  CHECK(HasExtension(ext, "EGL_KHR_fence_sync") && HasExtension(ext, "EGL_KHR_wait_sync") &&
+            fence_sync != EGL_NO_SYNC_KHR &&
+            p_client_wait(g_display, fence_sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, EGL_FOREVER_KHR) ==
+                EGL_CONDITION_SATISFIED_KHR &&
+            p_wait_sync(g_display, fence_sync, 0) == EGL_TRUE &&
+            p_sync_attrib(g_display, fence_sync, EGL_SYNC_TYPE_KHR, &type) &&
+            p_sync_attrib(g_display, fence_sync, EGL_SYNC_CONDITION_KHR, &condition) &&
+            p_sync_attrib(g_display, fence_sync, EGL_SYNC_STATUS_KHR, &status) && type == EGL_SYNC_FENCE_KHR &&
+            condition == EGL_SYNC_PRIOR_COMMANDS_COMPLETE_KHR && status == EGL_SIGNALED_KHR,
+        "EGL_KHR_fence_sync and EGL_KHR_wait_sync: a fence sync waited for, its type/condition/status");
+  CHECK(fence_sync != EGL_NO_SYNC_KHR && p_dup_fence(g_display, fence_sync) == EGL_NO_NATIVE_FENCE_FD_ANDROID &&
+            eglGetError() == EGL_BAD_PARAMETER,
+        "eglDupNativeFenceFDANDROID of a fence sync that is not native: EGL_BAD_PARAMETER");
+  if (fence_sync != EGL_NO_SYNC_KHR) p_destroy_sync(g_display, fence_sync);
   // The CPU lock waits for the fence (and owns it): it sees what the GPU drew.
   wrong = Mismatches(b, fence, GpuPattern);
   CHECK(wrong == 0, "a CPU lock after the fence reads what the GPU drew (%ld wrong)", wrong);
