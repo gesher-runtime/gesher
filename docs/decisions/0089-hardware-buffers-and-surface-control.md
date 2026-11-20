@@ -66,15 +66,22 @@ scope (CONTRIBUTING.md). The contracts are implemented instead.
 
 ### 2. A GPU thread per process holds each buffer's texture
 
-A thread with an ANGLE ES 3 context of its own on Android's default display
-(`compat/bionic/gpu_interop.cc`) creates a texture for a buffer when it is
-first used by the GPU, and an EGLImage from it (`EGL_GL_TEXTURE_2D_KHR`).
-That EGLImage is what `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` returns
-(the same image for every import of the buffer, released after as many
-destroys); every sibling, the app's textures and the compositor's, is one
-Direct3D 11 resource inside ANGLE, which executes all contexts of a display on
-one device in call order. Memory and texture are synchronized at Android's
-synchronization points:
+A thread per process (`compat/bionic/gpu_interop.cc`) owns a Direct3D 11
+device of its own, created on the adapter of ANGLE's device (Android's default
+EGL display; `EGL_EXT_device_query`, `EGL_ANGLE_device_d3d`). It creates a
+buffer's texture when the buffer is first used by the GPU, as a shared
+resource that ANGLE's device opens (`OpenSharedResource`, a free-threaded
+device method). Each `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` makes an
+EGLImage of ANGLE's view of that texture (`EGL_ANGLE_image_d3d11_texture`;
+RGBX, RGB and RGB565 buffers are RGBA8 textures whose images are RGB), which
+holds a reference to the buffer until it is destroyed; the app's textures of
+those images and the compositor sample one storage. The thread never makes an
+ANGLE context current: ANGLE's Direct3D 11 back end keeps one device context
+and state cache per display, which an extra context of Gesher's beside the
+app's would corrupt (section 6). Work crosses devices only after it is
+complete: the thread waits for its own uploads before ANGLE's device reads
+them, and the app's writes are complete when the fences of section 3 signal.
+Memory and texture are synchronized at Android's synchronization points:
 
 - a CPU lock reads the texture back when the GPU may have drawn into it (the
   buffer has been imported as an image), within the locked rectangle;
@@ -96,9 +103,11 @@ through the same table as the other handwritten EGL entry points (the bionic
 shim's symbols and `eglGetProcAddress`), and adds
 `EGL_ANDROID_get_native_client_buffer`, `EGL_ANDROID_image_native_buffer`,
 `EGL_KHR_fence_sync`, `EGL_KHR_wait_sync` and `EGL_ANDROID_native_fence_sync`
-to `eglQueryString(EGL_EXTENSIONS)` when ANGLE has `EGL_KHR_image_base` and
-`EGL_KHR_gl_texture_2D_image`. Errors are left in ANGLE's per-thread error
-state, so `eglGetError` reports them.
+to `eglQueryString(EGL_EXTENSIONS)`, the buffer names when ANGLE has what the
+images are made with (`EGL_KHR_image_base`, `EGL_ANGLE_image_d3d11_texture`,
+`EGL_EXT_device_query`; the GPU thread starts only when a buffer is used).
+Errors are left in ANGLE's per-thread error state, so `eglGetError` reports
+them.
 
 - An AHardwareBuffer has GraphicBuffer's layout: its first 16 bytes stand for
   RefBase (a vtable and `mRefs`) and an `ANativeWindowBuffer` follows, filled
@@ -144,9 +153,9 @@ state, so `eglGetError` reports them.
 - `ASurfaceTransaction_apply` applies a transaction's changes atomically and
   in order under one lock, snapshots every window whose tree changed (the
   buffers it shows, their acquire fences) and queues the snapshot to the GPU
-  thread, which waits for the fences, draws the layers into a framebuffer of
-  the window's size and reads it back into the window, as the window's
-  producer would post a frame. Every applied transaction is presented in the
+  thread, which waits for the fences, draws the layers on its device into a
+  render target of the window's size and copies it into the window's buffer
+  (through a staging texture), as the window's producer would post a frame. Every applied transaction is presented in the
   order applied; none is dropped, so `setEnableBackPressure` holds either way.
   A window whose last layer leaves gets an empty (transparent) frame.
 - Callbacks run on a thread of their own, as Android's binder threads:
@@ -186,7 +195,7 @@ handling input in the browser process, as before.
 
 - Chromium's GPU process loads its SurfaceControl set and presents through it:
   each frame is drawn by the GPU into an AHardwareBuffer, composed by the GPU
-  thread, read back once (glReadPixels into the window's buffer) and
+  thread, read back once (a staging copy into the window's buffer) and
   forwarded to the browser's SurfaceView. That is one GPU read-back and the
   existing forwarding copies per frame, the same order of cost as the EGL
   child surfaces of ADR 0056.
@@ -204,10 +213,14 @@ handling input in the browser process, as before.
 - **Native fences returned as -1**: Chromium treats the extension as present
   once its entry point resolves; failing every fence would make its accesses
   unsynchronized and log an error per frame.
-- **Direct3D 11 textures created by Gesher on ANGLE's device**
-  (`EGL_ANGLE_image_d3d11_texture`): the device's immediate context is ANGLE's
-  and is not safe to use beside it; the GPU thread keeps every GPU operation
-  inside ANGLE's API.
+- **An ANGLE context on the GPU thread** (textures, images
+  `EGL_GL_TEXTURE_2D_KHR` and composition through ANGLE's GLES): the first
+  design. ANGLE's Direct3D 11 back end resets its per-display state cache only
+  in `eglMakeCurrent`, so the GPU thread's draws and Chromium's, on contexts
+  current on different threads, went to each other's render targets
+  (Chromium's frames came out black after the first one).
+- **Using ANGLE's own device context**: it is ANGLE's and not safe to use
+  beside it; only free-threaded device methods are called on ANGLE's device.
 - **CPU composition**: the buffers are GPU textures; a GPU composition needs
   one read-back per frame instead of one per buffer.
 

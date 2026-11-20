@@ -4,11 +4,11 @@
 //
 // A buffer is shared memory (a memfd, mapped in every process that has it:
 // AHardwareBuffer_sendHandleToUnixSocket passes the memfd), described as
-// AHardwareBuffer_Desc. Its GPU side is per process: a texture of the
-// process's GPU thread (gpu_interop.h) and an EGLImage made from it, which is
-// what eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID) gives the app; every
-// sibling of that image (the app's textures, the compositor's) is the same
-// Direct3D 11 storage inside ANGLE. Memory and texture are kept coherent at
+// AHardwareBuffer_Desc. Its GPU side is per process: a Direct3D 11 texture of
+// the process's GPU thread (gpu_interop.h), shared with ANGLE's device, where
+// each eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID) makes an EGLImage of it
+// (EGL_ANGLE_image_d3d11_texture); the app's textures of those images and the
+// compositor sample one storage. Memory and texture are kept coherent at
 // Android's synchronization points: a CPU lock reads the texture back when the
 // GPU may have written it, a CPU unlock after writing uploads, a buffer a
 // SurfaceControl transaction or an import takes is uploaded when its memory may
@@ -27,6 +27,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+namespace gesher::bionic::gpu {
+struct Texture;
+}
 
 namespace gesher::bionic::ahb {
 
@@ -47,20 +51,20 @@ const AHardwareBuffer_Desc& Desc(const Buffer* b);
 
 // --- the GPU side (each runs on the GPU thread; callable from any thread) ----
 
-// For eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID): the EGLImage aliasing the
-// buffer's texture on `display`, made (with the buffer's contents) on first
-// use. One more app reference to it and to the buffer. EGL_NO_IMAGE_KHR, with
-// *egl_error set, when the buffer has no GPU form (format, usage, no device).
+// For eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID): a new EGLImage of the
+// buffer's texture on `display` (the texture made, with the buffer's
+// contents, on first use), holding a reference to the buffer.
+// EGL_NO_IMAGE_KHR, with *egl_error set, when the buffer has no GPU form
+// (format, usage, no device).
 EGLImageKHR AcquireAppImage(Buffer* b, EGLDisplay display, EGLint* egl_error);
-// For eglDestroyImageKHR: 1 when one app reference to `image` was dropped, 0
-// when `image` is not a buffer's (ANGLE's own), -1 when it is a buffer's image
-// without app references left (EGL_BAD_PARAMETER).
+// For eglDestroyImageKHR: 1 when `image` was one AcquireAppImage made (it is
+// destroyed and its reference to the buffer dropped), 0 when it is not.
 int ReleaseAppImage(EGLImageKHR image);
 
 // On the GPU thread, for the compositor: the GPU thread's texture holding the
-// buffer's current contents (made or uploaded as needed), or 0 when the
-// buffer has no GPU form.
-GLuint CompositorTexture(Buffer* b);
+// buffer's current contents (made or uploaded as needed), or null when the
+// buffer has no GPU form. *opaque_format: the format has no alpha.
+gpu::Texture* CompositorTexture(Buffer* b, bool* opaque_format);
 
 // A SurfaceControl transaction took the buffer: memory written by another
 // process becomes visible to the next composition.

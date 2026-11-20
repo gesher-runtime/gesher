@@ -599,26 +599,6 @@ struct Job {
 
 // --- composition (GPU thread) --------------------------------------------------------------------
 
-struct Target {
-  GLuint fbo = 0, texture = 0;
-  int width = 0, height = 0;
-};
-
-std::unordered_map<ANativeWindow*, Target>& Targets() {  // GPU thread only
-  static auto* map = new std::unordered_map<ANativeWindow*, Target>();
-  return *map;
-}
-
-// Drops the GPU thread's target of a window that has no layers any more.
-void ForgetTarget(gpu::Thread* thread, ANativeWindow* window) {
-  auto it = Targets().find(window);
-  if (it == Targets().end()) return;
-  const gpu::Gl& g = thread->gl();
-  g.glDeleteFramebuffers(1, &it->second.fbo);
-  g.glDeleteTextures(1, &it->second.texture);
-  Targets().erase(it);
-}
-
 int64_t WaitFence(int fd) {
   pollfd p{fd, POLLIN, 0};
   for (;;) {
@@ -634,75 +614,73 @@ int64_t WaitFence(int fd) {
   return MonotonicNs();
 }
 
-void Compose(gpu::Thread* thread, Frame* f, Job* job) {
-  const gpu::Gl& g = thread->gl();
+// GESHER_TRACE_SURFACE_CONTROL: what the first frames composed (and every
+// 300th after), on stderr: the layers drawn and how much of the read-back
+// frame is not black.
+bool Trace() {
+  static const bool on = std::getenv("GESHER_TRACE_SURFACE_CONTROL") != nullptr;
+  return on;
+}
+
+void TraceFrame(const Frame* f, const std::vector<gpu::ComposeOp>& ops, int w, int h,
+                const ANativeWindow_Buffer& out, int rw, int rh) {
+  static std::atomic<unsigned> frames{0};
+  const unsigned n = frames.fetch_add(1) + 1;
+  if (n > 20 && n % 300 != 0) return;
+  size_t lit = 0;
+  uint32_t center = 0;
+  if (out.bits != nullptr && (out.format == WINDOW_FORMAT_RGBA_8888 || out.format == WINDOW_FORMAT_RGBX_8888)) {
+    for (int y = 0; y < rh; ++y) {
+      const uint32_t* row = static_cast<const uint32_t*>(out.bits) + static_cast<size_t>(y) * out.stride;
+      for (int x = 0; x < rw; ++x) lit += (row[x] & 0xffffffu) != 0;
+    }
+    if (rw > 0 && rh > 0) {
+      center = static_cast<const uint32_t*>(out.bits)[static_cast<size_t>(rh / 2) * out.stride + rw / 2];
+    }
+  }
+  std::fprintf(stderr,
+               "gesher SurfaceControl: frame %u: window %p %dx%d (buffer %dx%d format %d), %zu op(s) drawn of %zu, "
+               "%zu of %d pixels not black, center 0x%08x\n",
+               n, static_cast<void*>(f->window), w, h, out.width, out.height, out.format, ops.size(),
+               f->ops.size(), lit, rw * rh, center);
+  for (const DrawOp& op : f->ops) {
+    const AHardwareBuffer_Desc* d = op.buffer != nullptr ? &ahb::Desc(op.buffer) : nullptr;
+    std::fprintf(stderr,
+                 "gesher SurfaceControl:   %s %ux%u format %u: dst (%.0f,%.0f)-(%.0f,%.0f) uv (%.3f,%.3f)-(%.3f,%.3f) "
+                 "scissor %d,%d %dx%d opaque %d alpha %.2f\n",
+                 d != nullptr ? "buffer" : "color", d != nullptr ? d->width : 0, d != nullptr ? d->height : 0,
+                 d != nullptr ? d->format : 0, op.quad[0][0], op.quad[0][1], op.quad[3][0], op.quad[3][1],
+                 op.quad[0][2], op.quad[0][3], op.quad[3][2], op.quad[3][3], op.scissor[0], op.scissor[1],
+                 op.scissor[2], op.scissor[3], op.opaque, op.alpha);
+  }
+  std::fflush(stderr);
+}
+
+void Compose(Frame* f, Job* job) {
   ANativeWindow* window = f->window;
   const int w = std::max(1, ANativeWindow_getWidth(window));
   const int h = std::max(1, ANativeWindow_getHeight(window));
-  Target& t = Targets()[window];
-  if (t.width != w || t.height != h || t.fbo == 0) {
-    if (t.fbo != 0) g.glDeleteFramebuffers(1, &t.fbo);
-    if (t.texture != 0) g.glDeleteTextures(1, &t.texture);
-    g.glGenTextures(1, &t.texture);
-    g.glBindTexture(GL_TEXTURE_2D, t.texture);
-    g.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, w, h);
-    g.glGenFramebuffers(1, &t.fbo);
-    g.glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-    g.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.texture, 0);
-    t.width = w;
-    t.height = h;
-  }
-  g.glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-  g.glViewport(0, 0, w, h);
-  g.glDisable(GL_SCISSOR_TEST);
-  g.glClearColor(0, 0, 0, 0);
-  g.glClear(GL_COLOR_BUFFER_BIT);
-  const gpu::Thread::Program& p = thread->program();
-  g.glUseProgram(p.id);
-  g.glUniform2f(p.viewport, static_cast<float>(w), static_cast<float>(h));
-  g.glUniform1i(p.texture, 0);
-  g.glActiveTexture(GL_TEXTURE0);
-  g.glBindBuffer(GL_ARRAY_BUFFER, p.vbo);
-  g.glEnableVertexAttribArray(0);
-  g.glEnableVertexAttribArray(1);
-  g.glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
-  g.glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
-                          reinterpret_cast<const void*>(2 * sizeof(float)));
-  g.glEnable(GL_SCISSOR_TEST);
+  std::vector<gpu::ComposeOp> ops;
+  ops.reserve(f->ops.size());
   for (DrawOp& op : f->ops) {
     if (op.fence >= 0) {
       job->acquire_times[op.layer] = WaitFence(op.fence);
       op.fence = -1;
     }
-    if (op.scissor[2] <= 0 || op.scissor[3] <= 0) continue;
-    GLuint texture = 0;
+    gpu::ComposeOp c;
+    c.opaque = op.opaque;
     if (op.buffer != nullptr) {
-      texture = ahb::CompositorTexture(op.buffer);
-      if (texture == 0) continue;  // no GPU form (a BLOB): nothing to show
-      g.glBindVertexArray(0);
-      g.glUseProgram(p.id);
-      g.glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-      g.glBindBuffer(GL_ARRAY_BUFFER, p.vbo);
-      g.glBindTexture(GL_TEXTURE_2D, texture);
-      g.glUniform1f(p.mode, 0);
-    } else {
-      g.glUniform1f(p.mode, 1);
-      g.glUniform4f(p.color, op.color[0], op.color[1], op.color[2], op.color[3]);
+      bool opaque_format = false;
+      c.texture = ahb::CompositorTexture(op.buffer, &opaque_format);
+      if (c.texture == nullptr) continue;  // no GPU form (a BLOB): nothing to show
+      c.opaque = c.opaque || opaque_format;
     }
-    g.glUniform1f(p.alpha, op.alpha);
-    g.glUniform1f(p.opaque, op.opaque ? 1.0f : 0.0f);
-    if (op.opaque && op.alpha >= 1.0f) {
-      g.glDisable(GL_BLEND);
-    } else {
-      g.glEnable(GL_BLEND);
-      g.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);  // premultiplied
-    }
-    g.glScissor(op.scissor[0], op.scissor[1], op.scissor[2], op.scissor[3]);
-    g.glBufferData(GL_ARRAY_BUFFER, sizeof op.quad, op.quad, GL_STREAM_DRAW);
-    g.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    std::memcpy(c.quad, op.quad, sizeof c.quad);
+    std::memcpy(c.scissor, op.scissor, sizeof c.scissor);
+    std::memcpy(c.color, op.color, sizeof c.color);
+    c.alpha = op.alpha;
+    ops.push_back(c);
   }
-  g.glDisable(GL_SCISSOR_TEST);
-  g.glDisable(GL_BLEND);
 
   // The frame to the window, as its producer: RGBA rows, top first.
   ANativeWindow_setBuffersGeometry(window, 0, 0, WINDOW_FORMAT_RGBA_8888);
@@ -717,36 +695,22 @@ void Compose(gpu::Thread* thread, Frame* f, Job* job) {
   }
   const int rw = std::min(w, out.width), rh = std::min(h, out.height);
   if (out.bits != nullptr && rw > 0 && rh > 0) {
-    g.glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    if (out.format == WINDOW_FORMAT_RGBA_8888 || out.format == WINDOW_FORMAT_RGBX_8888) {
-      g.glPixelStorei(GL_PACK_ROW_LENGTH, out.stride);
-      g.glReadPixels(0, 0, rw, rh, GL_RGBA, GL_UNSIGNED_BYTE, out.bits);
-      g.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-    } else {
-      // BGRA (5) or 16-bit windows: converted from an RGBA read-back.
-      std::vector<uint8_t> px(static_cast<size_t>(rw) * rh * 4);
-      g.glReadPixels(0, 0, rw, rh, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    if (out.format == WINDOW_FORMAT_RGBA_8888 || out.format == WINDOW_FORMAT_RGBX_8888 || out.format == 5) {
+      gpu::Compose(window, w, h, ops.data(), ops.size(), static_cast<uint8_t*>(out.bits), out.stride, out.width,
+                   out.height, /*bgra=*/out.format == 5);
+    } else if (out.format == WINDOW_FORMAT_RGB_565) {
+      std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+      gpu::Compose(window, w, h, ops.data(), ops.size(), px.data(), w, w, h, false);
       for (int y = 0; y < rh; ++y) {
-        const uint8_t* s = &px[static_cast<size_t>(y) * rw * 4];
-        if (out.format == WINDOW_FORMAT_RGB_565) {
-          auto* d = static_cast<uint16_t*>(out.bits) + static_cast<size_t>(y) * out.stride;
-          for (int x = 0; x < rw; ++x) {
-            d[x] = static_cast<uint16_t>((s[x * 4] >> 3) << 11 | (s[x * 4 + 1] >> 2) << 5 |
-                                         (s[x * 4 + 2] >> 3));
-          }
-        } else {
-          auto* d = static_cast<uint8_t*>(out.bits) + static_cast<size_t>(y) * out.stride * 4;
-          for (int x = 0; x < rw; ++x) {
-            d[x * 4 + 0] = s[x * 4 + 2];
-            d[x * 4 + 1] = s[x * 4 + 1];
-            d[x * 4 + 2] = s[x * 4 + 0];
-            d[x * 4 + 3] = s[x * 4 + 3];
-          }
+        const uint8_t* s = &px[static_cast<size_t>(y) * w * 4];
+        auto* d = static_cast<uint16_t*>(out.bits) + static_cast<size_t>(y) * out.stride;
+        for (int x = 0; x < rw; ++x) {
+          d[x] = static_cast<uint16_t>((s[x * 4] >> 3) << 11 | (s[x * 4 + 1] >> 2) << 5 | (s[x * 4 + 2] >> 3));
         }
       }
     }
   }
-  g.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  if (Trace()) TraceFrame(f, ops, w, h, out, rw, rh);
   ANativeWindow_unlockAndPost(window);
 }
 
@@ -758,7 +722,7 @@ void RunJob(gpu::Thread* thread, Job* job) {
   }
   const int64_t latch = MonotonicNs();
   for (Frame& f : job->frames) {
-    Compose(thread, &f, job);
+    Compose(&f, job);
     for (DrawOp& op : f.ops) {
       if (op.fence >= 0) close(op.fence);
       if (op.buffer != nullptr) ahb::Release(op.buffer);
@@ -767,7 +731,7 @@ void RunJob(gpu::Thread* thread, Job* job) {
   }
   job->frames.clear();
   if (thread != nullptr) {
-    for (ANativeWindow* w : job->forget) ForgetTarget(thread, w);
+    for (ANativeWindow* w : job->forget) gpu::ForgetTarget(w);
   }
   // Buffers replaced by this transaction were last read by an earlier
   // composition: released now (with their release callbacks), before OnComplete.

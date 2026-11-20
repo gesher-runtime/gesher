@@ -604,10 +604,11 @@ framework.yml (surfaceapp), compat/hwui/graphics_runtime.cc, cmake/aosp/hwui.cma
 pieces are listed in [native-libs.md](native-libs.md) ("Graphics").
 
 - `AHardwareBuffer_*` are memfd-backed buffers; their GPU form is a texture of
-  the process's GPU thread (an ANGLE ES 3 context of its own) and an EGLImage
-  made from it, which `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` gives the
-  app. CPU locks read the texture back when the GPU may have drawn; unlocks
-  after writing upload.
+  the process's GPU thread (a Direct3D 11 device of its own beside ANGLE's),
+  shared with ANGLE's device, where each
+  `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` makes an EGLImage of it
+  (`EGL_ANGLE_image_d3d11_texture`). CPU locks read the texture back when the
+  GPU may have drawn; unlocks after writing upload.
 - `ASurfaceControl_*`: each window an ASurfaceControl tree hangs from (a
   SurfaceView's surface, the forwarding Surface Chromium's GPU process holds,
   a Gesher window) is composed on the GPU thread after every applied
@@ -615,7 +616,8 @@ pieces are listed in [native-libs.md](native-libs.md) ("Graphics").
   visibility, plane alpha) and the frame is posted to that window as its
   producer would. This is how Chromium's display compositor
   (`GLSurfaceEGLSurfaceControl`) reaches the browser's SurfaceView: one
-  glReadPixels per frame, then the forwarding of surface_parcel.cc.
+  read-back per frame (a staging copy), then the forwarding of
+  surface_parcel.cc.
 - `EGL_ANDROID_native_fence_sync` fences wait for their GPU work when made
   (ANGLE's Direct3D 11 display has no EGL fences); input receivers on layers
   are refused (no embedded input windows).

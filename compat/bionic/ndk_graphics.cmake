@@ -48,8 +48,9 @@ add_library(gesher_ndk_graphics OBJECT
 target_include_directories(gesher_ndk_graphics PRIVATE ${CMAKE_CURRENT_LIST_DIR} ${_gl_gen}
   ${_gl_include} ${CMAKE_SOURCE_DIR}/compat/hwui/window)
 # graphics_native_headers (cmake/aosp/hwui.cmake): <android/native_window.h>.
+# d3d11: the GPU thread's own device (gpu_interop.cc).
 target_link_libraries(gesher_ndk_graphics PRIVATE gesher_bionic gesher_elf graphics_native_headers
-  user32)
+  user32 d3d11)
 target_compile_options(gesher_ndk_graphics PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(dalvikvm PRIVATE gesher_ndk_graphics)
 

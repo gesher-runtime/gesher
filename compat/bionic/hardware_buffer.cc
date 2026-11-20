@@ -14,8 +14,11 @@
 //    output only with float color buffers;
 //  - not protected content, video encoding, sensor data, GPU data buffers or
 //    front-buffer rendering: those allocations fail.
-// The buffer's GPU form is a texture of the GPU thread and an EGLImage made
-// from it (hardware_buffer.h explains when memory and texture are synchronized).
+// The buffer's GPU form is a texture of the GPU thread's Direct3D 11 device,
+// shared with ANGLE's device, where each eglCreateImageKHR of the buffer makes
+// an EGLImage of it (hardware_buffer.h explains when memory and texture are
+// synchronized). RGBX, RGB and RGB565 buffers are RGBA8 textures whose images
+// are RGB (alpha 1), converted at uploads and read-backs.
 // AHardwareBuffer_sendHandleToUnixSocket sends the description and the memfd
 // over the socket (SCM_RIGHTS, ADR 0088's broker between processes);
 // AHardwareBuffer_recvHandleFromUnixSocket maps the same memory.
@@ -44,8 +47,11 @@
 #include <unordered_set>
 #include <vector>
 
-#ifndef GL_HALF_FLOAT
-#define GL_HALF_FLOAT 0x140B
+#ifndef EGL_D3D11_TEXTURE_ANGLE
+#define EGL_D3D11_TEXTURE_ANGLE 0x3484
+#endif
+#ifndef EGL_TEXTURE_INTERNAL_FORMAT_ANGLE
+#define EGL_TEXTURE_INTERNAL_FORMAT_ANGLE 0x345D
 #endif
 
 namespace gesher::bionic::ahb {
@@ -68,25 +74,24 @@ constexpr uint64_t kServedUsage = kCpuMask | kGpuUsage | kVendorUsage;
 
 struct Format {
   uint32_t format;
-  int bytes;              // per pixel (BLOB: per byte)
-  bool gpu;               // has a texture form
-  GLenum internal;        // texture storage
-  GLenum upload_format;   // glTexSubImage2D source (after conversion, see Upload)
-  GLenum upload_type;
-  bool opaque;            // no alpha channel
+  int bytes;                  // per pixel (BLOB: per byte)
+  bool gpu;                   // has a texture form
+  gpu::TextureFormat texture;  // how the texture keeps it
+  int texture_bytes;          // per texel
+  uint32_t image_format;      // the GL internal format apps' images see, if not the texture's
+  bool opaque;                // no alpha channel
 };
 
 const Format kFormats[] = {
-    {AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM, 4, true, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, false},
-    // Stored as RGBA8 in memory, sampled with alpha 1 (an RGB8 texture).
-    {AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM, 4, true, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE, true},
-    {AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM, 3, true, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE, true},
-    {AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM, 2, true, GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, true},
-    {AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT, 8, true, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT, false},
-    {AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM, 4, true, GL_RGB10_A2, GL_RGBA,
-     GL_UNSIGNED_INT_2_10_10_10_REV, false},
-    {AHARDWAREBUFFER_FORMAT_R8_UNORM, 1, true, GL_R8, GL_RED, GL_UNSIGNED_BYTE, true},
-    {AHARDWAREBUFFER_FORMAT_BLOB, 1, false, 0, 0, 0, true},
+    {AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM, 4, true, gpu::TextureFormat::kRgba8, 4, 0, false},
+    // RGBA8 textures whose images are RGB (sampled alpha 1).
+    {AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM, 4, true, gpu::TextureFormat::kRgba8, 4, GL_RGB, true},
+    {AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM, 3, true, gpu::TextureFormat::kRgba8, 4, GL_RGB, true},
+    {AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM, 2, true, gpu::TextureFormat::kRgba8, 4, GL_RGB, true},
+    {AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT, 8, true, gpu::TextureFormat::kRgba16f, 8, 0, false},
+    {AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM, 4, true, gpu::TextureFormat::kRgb10a2, 4, 0, false},
+    {AHARDWAREBUFFER_FORMAT_R8_UNORM, 1, true, gpu::TextureFormat::kR8, 1, 0, true},
+    {AHARDWAREBUFFER_FORMAT_BLOB, 1, false, gpu::TextureFormat::kRgba8, 0, 0, true},
 };
 
 const Format* FindFormat(uint32_t format) {
@@ -185,7 +190,7 @@ bool Served(const AHardwareBuffer_Desc* desc) {
         desc->height > static_cast<uint32_t>(thread->max_texture_size())) {
       return false;
     }
-    if (f->internal == GL_RGBA16F && (desc->usage & AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER) != 0 &&
+    if (f->texture == gpu::TextureFormat::kRgba16f && (desc->usage & AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER) != 0 &&
         !thread->color_buffer_float()) {
       return false;
     }
@@ -201,11 +206,7 @@ uint64_t NextId() {
 }  // namespace
 
 struct GpuState {
-  GLuint texture = 0;
-  GLuint fbo = 0;
-  EGLImageKHR image = EGL_NO_IMAGE_KHR;
-  EGLDisplay display = EGL_NO_DISPLAY;
-  int app_images = 0;  // app references to `image`
+  gpu::Texture* texture = nullptr;
 };
 
 // What an AHardwareBuffer* points to on Android is a GraphicBuffer: its
@@ -274,6 +275,7 @@ struct Buffer {
   bool memory_newer = false;  // memory has writes the texture lacks
   bool gpu_written = false;   // an app image exists or existed: the texture may be newer
   bool has_texture = false;   // gpu.texture exists (also readable off the GPU thread)
+  int app_images = 0;         // the app's EGLImages of it
   GpuState gpu;               // GPU thread only
 
   size_t row_bytes() const { return static_cast<size_t>(desc.stride) * format->bytes; }
@@ -287,9 +289,13 @@ std::unordered_set<Buffer*>& Registry() {
   return *set;
 }
 
+struct ImageEntry {
+  Buffer* buffer = nullptr;
+  EGLDisplay display = EGL_NO_DISPLAY;
+};
 std::mutex g_images_mutex;
-std::unordered_map<EGLImageKHR, Buffer*>& Images() {
-  static auto* map = new std::unordered_map<EGLImageKHR, Buffer*>();
+std::unordered_map<EGLImageKHR, ImageEntry>& Images() {
+  static auto* map = new std::unordered_map<EGLImageKHR, ImageEntry>();
   return *map;
 }
 
@@ -314,177 +320,144 @@ ARect Union(const ARect& a, const ARect& b) {
                std::max(a.bottom, b.bottom)};
 }
 
-// IEEE half <-> float, for RGBA16F read-backs.
-uint16_t FloatToHalf(float value) {
-  uint32_t f;
-  std::memcpy(&f, &value, 4);
-  const uint32_t sign = (f >> 16) & 0x8000u;
-  const int32_t exponent = static_cast<int32_t>((f >> 23) & 0xff) - 127 + 15;
-  uint32_t mantissa = f & 0x7fffffu;
-  if (((f >> 23) & 0xff) == 0xff) return static_cast<uint16_t>(sign | 0x7c00u | (mantissa ? 0x200u : 0));
-  if (exponent >= 31) return static_cast<uint16_t>(sign | 0x7c00u);
-  if (exponent <= 0) {
-    if (exponent < -10) return static_cast<uint16_t>(sign);
-    mantissa |= 0x800000u;
-    const uint32_t shift = static_cast<uint32_t>(14 - exponent);
-    uint32_t half = mantissa >> shift;
-    if ((mantissa >> (shift - 1)) & 1u) half += 1;  // round half up
-    return static_cast<uint16_t>(sign | half);
-  }
-  uint32_t half = sign | (static_cast<uint32_t>(exponent) << 10) | (mantissa >> 13);
-  if (mantissa & 0x1000u) half += 1;  // round to nearest (carries into the exponent correctly)
-  return static_cast<uint16_t>(half);
+// GESHER_TRACE_SURFACE_CONTROL: buffers' textures and images, on stderr.
+bool Trace() {
+  static const bool on = std::getenv("GESHER_TRACE_SURFACE_CONTROL") != nullptr;
+  return on;
 }
 
 // --- on the GPU thread ----------------------------------------------------------------------------
 
-const gpu::Gl& G() { return gpu::Thread::Get()->gl(); }
+// The texture's layout of rect `r` of the buffer's memory (converted when the
+// texture stores the format another way); `row_bytes` set.
+std::vector<uint8_t> ToTexture(const Buffer* b, const ARect& r, size_t* row_bytes) {
+  const Format* f = b->format;
+  const int w = r.right - r.left, h = r.bottom - r.top;
+  const int tb = f->texture_bytes;
+  std::vector<uint8_t> out(static_cast<size_t>(w) * h * tb);
+  *row_bytes = static_cast<size_t>(w) * tb;
+  for (int y = 0; y < h; ++y) {
+    const uint8_t* s = b->data + (static_cast<size_t>(r.top + y) * b->desc.stride + r.left) * f->bytes;
+    uint8_t* d = &out[static_cast<size_t>(y) * w * tb];
+    switch (f->format) {
+      case AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM:
+        // X is undefined in memory; the texture's alpha is 1, which ANGLE
+        // keeps for an RGB image (it masks alpha writes to emulated RGB).
+        for (int x = 0; x < w; ++x) {
+          std::memcpy(d + x * 4, s + x * 4, 3);
+          d[x * 4 + 3] = 0xff;
+        }
+        break;
+      case AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM:
+        for (int x = 0; x < w; ++x) {
+          d[x * 4 + 0] = s[x * 3 + 0];
+          d[x * 4 + 1] = s[x * 3 + 1];
+          d[x * 4 + 2] = s[x * 3 + 2];
+          d[x * 4 + 3] = 0xff;
+        }
+        break;
+      case AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM:
+        for (int x = 0; x < w; ++x) {
+          uint16_t v;
+          std::memcpy(&v, s + x * 2, 2);
+          const int r5 = v >> 11, g6 = (v >> 5) & 63, b5 = v & 31;
+          d[x * 4 + 0] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+          d[x * 4 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+          d[x * 4 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+          d[x * 4 + 3] = 0xff;
+        }
+        break;
+      default:  // the same layout
+        std::memcpy(d, s, static_cast<size_t>(w) * tb);
+        break;
+    }
+  }
+  return out;
+}
+
+// Rect `r` read from the texture (its layout) into the buffer's memory.
+void FromTexture(Buffer* b, const ARect& r, const uint8_t* px) {
+  const Format* f = b->format;
+  const int w = r.right - r.left, h = r.bottom - r.top;
+  const int tb = f->texture_bytes;
+  for (int y = 0; y < h; ++y) {
+    const uint8_t* s = px + static_cast<size_t>(y) * w * tb;
+    uint8_t* d = b->data + (static_cast<size_t>(r.top + y) * b->desc.stride + r.left) * f->bytes;
+    switch (f->format) {
+      case AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM:
+        for (int x = 0; x < w; ++x) {
+          d[x * 3 + 0] = s[x * 4 + 0];
+          d[x * 3 + 1] = s[x * 4 + 1];
+          d[x * 3 + 2] = s[x * 4 + 2];
+        }
+        break;
+      case AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM:
+        for (int x = 0; x < w; ++x) {
+          const uint8_t* p = s + x * 4;
+          const uint16_t v = static_cast<uint16_t>(((p[0] * 31 + 127) / 255) << 11 |
+                                                   ((p[1] * 63 + 127) / 255) << 5 | ((p[2] * 31 + 127) / 255));
+          std::memcpy(d + x * 2, &v, 2);
+        }
+        break;
+      default:
+        std::memcpy(d, s, static_cast<size_t>(w) * tb);
+        break;
+    }
+  }
+}
 
 // Uploads rect `r` of the buffer's memory into its texture.
 void UploadRect(Buffer* b, const ARect& r) {
-  if (b->gpu.texture == 0 || Empty(r)) return;
-  const gpu::Gl& g = G();
-  const Format* f = b->format;
-  const int w = r.right - r.left, h = r.bottom - r.top;
-  g.glBindTexture(GL_TEXTURE_2D, b->gpu.texture);
-  if (f->format == AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM) {
-    // RGBX in memory, RGB to the RGB8 texture.
-    std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
-    for (int y = 0; y < h; ++y) {
-      const uint8_t* s = b->data + (static_cast<size_t>(r.top + y) * b->desc.stride + r.left) * 4;
-      uint8_t* d = &rgb[static_cast<size_t>(y) * w * 3];
-      for (int x = 0; x < w; ++x) {
-        d[x * 3 + 0] = s[x * 4 + 0];
-        d[x * 3 + 1] = s[x * 4 + 1];
-        d[x * 3 + 2] = s[x * 4 + 2];
-      }
-    }
-    g.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    g.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    g.glTexSubImage2D(GL_TEXTURE_2D, 0, r.left, r.top, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
-  } else {
-    g.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    g.glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(b->desc.stride));
-    const uint8_t* src = b->data + (static_cast<size_t>(r.top) * b->desc.stride + r.left) * f->bytes;
-    g.glTexSubImage2D(GL_TEXTURE_2D, 0, r.left, r.top, w, h, f->upload_format, f->upload_type, src);
-    g.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-  }
-  g.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-  g.glBindTexture(GL_TEXTURE_2D, 0);
+  if (b->gpu.texture == nullptr || Empty(r)) return;
+  size_t row_bytes = 0;
+  std::vector<uint8_t> px = ToTexture(b, r, &row_bytes);
+  gpu::UpdateTexture(b->gpu.texture, r.left, r.top, r.right - r.left, r.bottom - r.top, px.data(), row_bytes);
 }
 
 // Creates the texture (with the memory's contents) if the buffer has none.
 bool EnsureTexture(Buffer* b) {
-  if (b->gpu.texture != 0) return true;
+  if (b->gpu.texture != nullptr) return true;
   if (!b->format->gpu) return false;
-  const gpu::Gl& g = G();
-  GLuint texture = 0;
-  g.glGenTextures(1, &texture);
-  g.glBindTexture(GL_TEXTURE_2D, texture);
-  g.glTexStorage2D(GL_TEXTURE_2D, 1, b->format->internal, static_cast<GLsizei>(b->desc.width),
-                   static_cast<GLsizei>(b->desc.height));
-  g.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  g.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  g.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  g.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  g.glBindTexture(GL_TEXTURE_2D, 0);
-  GLenum error = g.glGetError();
-  if (error != GL_NO_ERROR) {
-    std::fprintf(stderr, "gesher AHardwareBuffer: no %ux%u texture (format 0x%x): GL error 0x%x\n",
-                 b->desc.width, b->desc.height, b->desc.format, error);
-    g.glDeleteTextures(1, &texture);
+  size_t row_bytes = 0;
+  std::vector<uint8_t> px = ToTexture(b, Clip(b, nullptr), &row_bytes);
+  gpu::Texture* texture = gpu::CreateTexture(b->format->texture, static_cast<int>(b->desc.width),
+                                             static_cast<int>(b->desc.height), px.data(), row_bytes);
+  if (texture == nullptr) {
+    std::fprintf(stderr, "gesher AHardwareBuffer: no %ux%u texture (format 0x%x)\n", b->desc.width,
+                 b->desc.height, b->desc.format);
+    std::fflush(stderr);
     return false;
   }
   b->gpu.texture = texture;
-  UploadRect(b, Clip(b, nullptr));
   {
     std::lock_guard<std::mutex> lock(b->mutex);
     b->memory_newer = false;
     b->has_texture = true;
+  }
+  if (Trace()) {
+    std::fprintf(stderr, "gesher AHardwareBuffer: buffer 0x%llx %ux%u format 0x%x: texture %p\n",
+                 static_cast<unsigned long long>(b->id), b->desc.width, b->desc.height, b->desc.format,
+                 static_cast<void*>(texture));
   }
   return true;
 }
 
 // Reads rect `r` of the texture back into memory.
 void ReadbackRect(Buffer* b, const ARect& r) {
-  if (b->gpu.texture == 0 || Empty(r)) return;
-  const gpu::Gl& g = G();
-  const Format* f = b->format;
-  if (b->gpu.fbo == 0) g.glGenFramebuffers(1, &b->gpu.fbo);
-  g.glBindFramebuffer(GL_FRAMEBUFFER, b->gpu.fbo);
-  g.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, b->gpu.texture, 0);
-  if (g.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+  if (b->gpu.texture == nullptr || Empty(r)) return;
+  const int w = r.right - r.left, h = r.bottom - r.top;
+  const size_t row_bytes = static_cast<size_t>(w) * b->format->texture_bytes;
+  std::vector<uint8_t> px(row_bytes * h);
+  if (!gpu::ReadTexture(b->gpu.texture, r.left, r.top, w, h, px.data(), row_bytes)) {
     static std::atomic<bool> said{false};
-    LogOnce(&said, "a buffer's texture cannot be read back (incomplete framebuffer): CPU reads see "
-                   "the last CPU contents");
-    g.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    LogOnce(&said, "a buffer's texture could not be read back: CPU reads see the last CPU contents");
     return;
   }
-  const int w = r.right - r.left, h = r.bottom - r.top;
-  g.glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  if (f->format == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM ||
-      f->format == AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM ||
-      f->format == AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM) {
-    // Straight into memory: rows of the texture are rows of the buffer.
-    g.glPixelStorei(GL_PACK_ROW_LENGTH, static_cast<GLint>(b->desc.stride));
-    uint8_t* dst = b->data + (static_cast<size_t>(r.top) * b->desc.stride + r.left) * 4;
-    const GLenum type = f->format == AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM
-                            ? GL_UNSIGNED_INT_2_10_10_10_REV : GL_UNSIGNED_BYTE;
-    g.glReadPixels(r.left, r.top, w, h, GL_RGBA, type, dst);
-    g.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-  } else if (f->format == AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT) {
-    std::vector<float> px(static_cast<size_t>(w) * h * 4);
-    g.glReadPixels(r.left, r.top, w, h, GL_RGBA, GL_FLOAT, px.data());
-    for (int y = 0; y < h; ++y) {
-      auto* d = reinterpret_cast<uint16_t*>(b->data + (static_cast<size_t>(r.top + y) * b->desc.stride +
-                                                       r.left) * 8);
-      for (int i = 0; i < w * 4; ++i) d[i] = FloatToHalf(px[static_cast<size_t>(y) * w * 4 + i]);
-    }
-  } else {
-    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
-    g.glReadPixels(r.left, r.top, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    for (int y = 0; y < h; ++y) {
-      const uint8_t* s = &px[static_cast<size_t>(y) * w * 4];
-      uint8_t* d = b->data + (static_cast<size_t>(r.top + y) * b->desc.stride + r.left) * f->bytes;
-      for (int x = 0; x < w; ++x) {
-        const uint8_t* p = s + x * 4;
-        switch (f->format) {
-          case AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM:
-            d[x * 3 + 0] = p[0];
-            d[x * 3 + 1] = p[1];
-            d[x * 3 + 2] = p[2];
-            break;
-          case AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM: {
-            const uint16_t v = static_cast<uint16_t>(((p[0] * 31 + 127) / 255) << 11 |
-                                                     ((p[1] * 63 + 127) / 255) << 5 |
-                                                     ((p[2] * 31 + 127) / 255));
-            std::memcpy(d + x * 2, &v, 2);
-            break;
-          }
-          case AHARDWAREBUFFER_FORMAT_R8_UNORM:
-            d[x] = p[0];
-            break;
-          default:
-            break;
-        }
-      }
-    }
-  }
-  g.glPixelStorei(GL_PACK_ALIGNMENT, 4);
-  g.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  FromTexture(b, r, px.data());
 }
 
 void FreeGpu(Buffer* b) {
-  const gpu::Gl& g = G();
-  if (b->gpu.image != EGL_NO_IMAGE_KHR) {
-    {
-      std::lock_guard<std::mutex> lock(g_images_mutex);
-      Images().erase(b->gpu.image);
-    }
-    g.eglDestroyImageKHR(b->gpu.display, b->gpu.image);
-  }
-  if (b->gpu.fbo != 0) g.glDeleteFramebuffers(1, &b->gpu.fbo);
-  if (b->gpu.texture != 0) g.glDeleteTextures(1, &b->gpu.texture);
+  gpu::DestroyTexture(b->gpu.texture);
   b->gpu = GpuState();
 }
 
@@ -497,7 +470,7 @@ void Destroy(Buffer* b) {
     // A stale eglDestroyImageKHR no longer finds the buffer's image.
     std::lock_guard<std::mutex> lock(g_images_mutex);
     for (auto it = Images().begin(); it != Images().end();) {
-      it = it->second == b ? Images().erase(it) : std::next(it);
+      it = it->second.buffer == b ? Images().erase(it) : std::next(it);
     }
   }
   b->magic = 0;
@@ -621,66 +594,70 @@ EGLImageKHR AcquireAppImage(Buffer* b, EGLDisplay display, EGLint* egl_error) {
     *egl_error = EGL_BAD_DISPLAY;
     return EGL_NO_IMAGE_KHR;
   }
-  EGLImageKHR image = EGL_NO_IMAGE_KHR;
+  void* angle_texture = nullptr;
   thread->Run([&] {
-    if (!EnsureTexture(b)) {
-      *egl_error = EGL_BAD_ALLOC;
-      return;
-    }
-    if (b->gpu.image == EGL_NO_IMAGE_KHR) {
-      const gpu::Gl& g = thread->gl();
-      const EGLint attribs[] = {EGL_GL_TEXTURE_LEVEL_KHR, 0, EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
-      b->gpu.image = g.eglCreateImageKHR(thread->display(), thread->context(), EGL_GL_TEXTURE_2D_KHR,
-                                         reinterpret_cast<EGLClientBuffer>(
-                                             static_cast<uintptr_t>(b->gpu.texture)),
-                                         attribs);
-      if (b->gpu.image == EGL_NO_IMAGE_KHR) {
-        *egl_error = g.eglGetError();
-        std::fprintf(stderr, "gesher AHardwareBuffer: no EGLImage for a %ux%u texture: 0x%x\n",
-                     b->desc.width, b->desc.height, *egl_error);
-        return;
-      }
-      b->gpu.display = thread->display();
-    }
-    b->gpu.app_images++;
-    image = b->gpu.image;
+    if (EnsureTexture(b)) angle_texture = gpu::AngleTexture(b->gpu.texture);
   });
-  if (image == EGL_NO_IMAGE_KHR) return image;
+  if (angle_texture == nullptr) {
+    *egl_error = EGL_BAD_ALLOC;
+    return EGL_NO_IMAGE_KHR;
+  }
+  // A new image of the texture ANGLE's device shares (no context of the
+  // app's or of the GPU thread is involved).
+  std::vector<EGLint> attribs;
+  if (b->format->image_format != 0) {
+    attribs.push_back(EGL_TEXTURE_INTERNAL_FORMAT_ANGLE);
+    attribs.push_back(static_cast<EGLint>(b->format->image_format));
+  }
+  attribs.push_back(EGL_NONE);
+  const gpu::Gl* g = gpu::Functions();
+  EGLImageKHR image = g->eglCreateImageKHR(display, EGL_NO_CONTEXT, EGL_D3D11_TEXTURE_ANGLE,
+                                           static_cast<EGLClientBuffer>(angle_texture), attribs.data());
+  if (image == EGL_NO_IMAGE_KHR) {
+    *egl_error = g->eglGetError();
+    std::fprintf(stderr, "gesher AHardwareBuffer: no EGLImage of a %ux%u format 0x%x texture: 0x%x\n",
+                 b->desc.width, b->desc.height, b->desc.format, *egl_error);
+    std::fflush(stderr);
+    return EGL_NO_IMAGE_KHR;
+  }
   Acquire(b);  // the app's image holds the buffer, as on Android
+  int images;
   {
     std::lock_guard<std::mutex> lock(b->mutex);
     b->gpu_written = true;  // the app may render into it from now on
+    images = ++b->app_images;
+  }
+  if (Trace()) {
+    std::fprintf(stderr, "gesher AHardwareBuffer: buffer 0x%llx: EGLImage %p, %d app image(s)\n",
+                 static_cast<unsigned long long>(b->id), image, images);
   }
   std::lock_guard<std::mutex> lock(g_images_mutex);
-  Images()[image] = b;  // until the buffer goes (FreeGpu)
+  Images()[image] = ImageEntry{b, display};
   return image;
 }
 
 int ReleaseAppImage(EGLImageKHR image) {
-  Buffer* b = nullptr;
+  ImageEntry entry;
   {
     std::lock_guard<std::mutex> lock(g_images_mutex);
     auto it = Images().find(image);
     if (it == Images().end()) return 0;
-    b = it->second;
-    // Held for the call: the buffer's GPU form (and this entry) go with it.
-    Acquire(b);
+    entry = it->second;
+    Images().erase(it);
   }
-  bool released = false;
-  gpu::Thread::Get()->Run([&] {
-    if (b->gpu.app_images > 0) {
-      b->gpu.app_images--;
-      released = true;
-    }
-  });
-  if (released) Release(b);  // the app image's reference
-  Release(b);
-  return released ? 1 : -1;
+  gpu::Functions()->eglDestroyImageKHR(entry.display, image);
+  {
+    std::lock_guard<std::mutex> lock(entry.buffer->mutex);
+    entry.buffer->app_images--;
+  }
+  Release(entry.buffer);  // the image's reference
+  return 1;
 }
 
-GLuint CompositorTexture(Buffer* b) {
-  if (!b->format->gpu) return 0;
-  if (!EnsureTexture(b)) return 0;
+gpu::Texture* CompositorTexture(Buffer* b, bool* opaque_format) {
+  *opaque_format = b->format->opaque;
+  if (!b->format->gpu) return nullptr;
+  if (!EnsureTexture(b)) return nullptr;
   bool upload;
   {
     std::lock_guard<std::mutex> lock(b->mutex);

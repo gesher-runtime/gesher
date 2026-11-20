@@ -7,10 +7,11 @@
 //    gives the buffer's ANativeWindowBuffer, 16 bytes into it, as on Android
 //    (hardware_buffer.cc: code in apps relies on that layout);
 //  - EGL_ANDROID_image_native_buffer: eglCreateImageKHR / eglCreateImage with
-//    EGL_NATIVE_BUFFER_ANDROID give the buffer's EGLImage (hardware_buffer.h:
-//    an ANGLE image of the GPU thread's texture, so whatever the app draws
+//    EGL_NATIVE_BUFFER_ANDROID give an EGLImage of the buffer (hardware_buffer.h:
+//    an ANGLE image, EGL_ANGLE_image_d3d11_texture, of the Direct3D 11 texture
+//    the GPU thread's device shares with ANGLE's, so whatever the app draws
 //    into it through glEGLImageTargetTexture2DOES is the buffer's content);
-//    creating it twice gives the same image, released after as many destroys;
+//    each holds a reference to the buffer until it is destroyed;
 //  - EGL_KHR_fence_sync, EGL_KHR_wait_sync and EGL_ANDROID_native_fence_sync:
 //    ANGLE's Direct3D 11 display has no EGL fence syncs to build on, so a
 //    fence sync (EGL_SYNC_FENCE_KHR, or EGL_SYNC_NATIVE_FENCE_ANDROID without
@@ -23,9 +24,10 @@
 //    before later commands are issued, which keeps the order the server wait
 //    promises. The cost is CPU/GPU overlap: making a fence blocks until the
 //    GPU has caught up. Reusable syncs stay ANGLE's.
-// eglQueryString(EGL_EXTENSIONS) adds the names for the default display when
-// ANGLE has what the images are built on (EGL_KHR_image_base,
-// EGL_KHR_gl_texture_2D_image). Everything else is ANGLE's.
+// eglQueryString(EGL_EXTENSIONS) adds the fence names for the default display,
+// and the buffer names when ANGLE has what the images are made with
+// (EGL_KHR_image_base, EGL_ANGLE_image_d3d11_texture, EGL_EXT_device_query).
+// Everything else is ANGLE's.
 // Errors are left in ANGLE's per-thread error state (an ANGLE call that fails
 // with the same code), so eglGetError stays ANGLE's.
 #include "gpu_interop.h"  // first: the EGL/GL prototype macros
@@ -211,12 +213,7 @@ EGLImage BIONIC_SYSV CreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target,
 }
 
 EGLBoolean DestroyImageImpl(EGLDisplay dpy, EGLImageKHR image) {
-  const int released = ahb::ReleaseAppImage(image);
-  if (released > 0) return EGL_TRUE;
-  if (released < 0) {
-    SetError(EGL_BAD_PARAMETER);
-    return EGL_FALSE;
-  }
+  if (ahb::ReleaseAppImage(image) > 0) return EGL_TRUE;  // a buffer's image
   return G()->eglDestroyImageKHR(dpy, image);
 }
 
@@ -467,17 +464,26 @@ const char* BIONIC_SYSV QueryString(EGLDisplay dpy, EGLint name) {
   std::lock_guard<std::mutex> lock(mutex);
   if (extended == nullptr) {
     std::string list = s;
-    if (HasExtension(s, "EGL_KHR_image_base") && HasExtension(s, "EGL_KHR_gl_texture_2D_image")) {
-      // EGL_ANDROID_native_fence_sync is written against EGL_KHR_fence_sync,
-      // and code built on Android's EGL (ANGLE's GL back end) loads the sync
-      // entry points only with EGL_KHR_fence_sync and EGL_KHR_wait_sync named.
-      for (const char* add : {"EGL_ANDROID_get_native_client_buffer", "EGL_ANDROID_image_native_buffer",
-                              "EGL_KHR_fence_sync", "EGL_KHR_wait_sync", "EGL_ANDROID_native_fence_sync"}) {
-        if (!HasExtension(s, add)) {
-          if (!list.empty() && list.back() != ' ') list += ' ';
-          list += add;
-        }
-      }
+    auto add = [&list, s](const char* name) {
+      if (HasExtension(s, name)) return;
+      if (!list.empty() && list.back() != ' ') list += ' ';
+      list += name;
+    };
+    // EGL_ANDROID_native_fence_sync is written against EGL_KHR_fence_sync,
+    // and code built on Android's EGL (ANGLE's GL back end) loads the sync
+    // entry points only with EGL_KHR_fence_sync and EGL_KHR_wait_sync named.
+    add("EGL_KHR_fence_sync");
+    add("EGL_KHR_wait_sync");
+    add("EGL_ANDROID_native_fence_sync");
+    // The images: ANGLE images of Direct3D 11 textures shared with ANGLE's
+    // device, which EGL_EXT_device_query gives (gpu_interop.h). Decided from
+    // ANGLE's extensions, so a process that never uses a buffer does not
+    // start the GPU thread for this query.
+    const char* client = g->eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+    if (HasExtension(s, "EGL_KHR_image_base") && HasExtension(s, "EGL_ANGLE_image_d3d11_texture") &&
+        client != nullptr && HasExtension(client, "EGL_EXT_device_query")) {
+      add("EGL_ANDROID_get_native_client_buffer");
+      add("EGL_ANDROID_image_native_buffer");
     }
     extended = new std::string(std::move(list));
   }

@@ -125,6 +125,18 @@ static uint32_t Yellow(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
   (void)x; (void)y; (void)w; (void)h;
   return YELLOW;
 }
+static uint32_t Green(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+  (void)x; (void)y; (void)w; (void)h;
+  return GREEN;
+}
+// An RGBX buffer's contents with X = 0, and how the GPU sees them (alpha 1).
+static uint32_t RgbxCpu(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+  (void)w; (void)h;
+  return RGBA(x * 16, 255 - y * 16, 0x40, 0);
+}
+static uint32_t RgbxGpu(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+  return RgbxCpu(x, y, w, h) | 0xff000000u;
+}
 
 static int HasExtension(const char* list, const char* name) {
   size_t n = strlen(name);
@@ -451,6 +463,40 @@ static void TestEgl(void) {
   CHECK(p_destroy_image(g_display, image) == EGL_FALSE && eglGetError() == EGL_BAD_PARAMETER,
         "eglDestroyImageKHR of a destroyed image: EGL_BAD_PARAMETER");
   AHardwareBuffer_release(b);
+
+  // RGBX: the GPU samples and reads alpha 1 whatever the X byte holds, and
+  // what it draws reaches the CPU's R, G and B.
+  AHardwareBuffer_Desc xd = {16, 16, 1, AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM, kCpu | kGpu, 0, 0, 0};
+  AHardwareBuffer* x = NULL;
+  CHECK(AHardwareBuffer_isSupported(&xd) == 1 && AHardwareBuffer_allocate(&xd, &x) == 0 && x != NULL,
+        "an RGBX buffer with CPU and GPU usage");
+  if (x != NULL) {
+    Target tx;
+    CHECK(Fill(x, RgbxCpu) == 0 && Attach(x, &tx), "an RGBX buffer's image as a framebuffer");
+    wrong = GlMismatches(16, 16, RgbxGpu);
+    CHECK(wrong == 0, "the GPU reads an RGBX buffer with alpha 1 (%ld wrong)", wrong);
+    glViewport(0, 0, 16, 16);
+    glClearColor(0, 1, 0, 0.5f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    wrong = GlMismatches(16, 16, Green);
+    CHECK(wrong == 0, "an RGBX buffer cleared with alpha 0.5 reads alpha 1 on the GPU (%ld wrong)", wrong);
+    fence = NativeFence();
+    void* px = NULL;
+    long rgb_wrong = -1;
+    if (AHardwareBuffer_lock(x, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, fence, NULL, &px) == 0) {
+      AHardwareBuffer_Desc got;
+      AHardwareBuffer_describe(x, &got);
+      rgb_wrong = 0;
+      for (uint32_t y = 0; y < 16; ++y) {
+        const uint32_t* row = (const uint32_t*)px + (size_t)y * got.stride;
+        for (uint32_t i = 0; i < 16; ++i) rgb_wrong += (row[i] & 0xffffffu) != (GREEN & 0xffffffu);
+      }
+      AHardwareBuffer_unlock(x, NULL);
+    }
+    CHECK(rgb_wrong == 0, "a CPU lock reads the RGB the GPU drew into an RGBX buffer (%ld wrong)", rgb_wrong);
+    Detach(&tx);
+    AHardwareBuffer_release(x);
+  }
 }
 
 // --- SurfaceControl ------------------------------------------------------------------------------

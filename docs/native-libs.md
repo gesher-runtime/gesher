@@ -259,8 +259,10 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     `hardware_buffer.cc` (`AHardwareBuffer_*`: buffers are memfds shared with
     `send`/`recvHandleFromUnixSocket`; `isSupported` answers what is served:
     RGBA8/RGBX8/RGB8/RGB565/RGBA16F/RGBA1010102/R8/BLOB, one layer, CPU and
-    GPU/composer usage), `gpu_interop.cc` (the process's GPU thread, an ANGLE
-    ES 3 context that keeps each buffer's texture and composes),
+    GPU/composer usage), `gpu_interop.cc` (the process's GPU thread: a
+    Direct3D 11 device of its own beside ANGLE's, which keeps each buffer's
+    texture, shared with ANGLE's device, and composes; it makes no ANGLE
+    context current),
     `egl_native_buffer.cc` (`eglGetNativeClientBufferANDROID`, EGLImages of
     buffers, `EGL_ANDROID_native_fence_sync`; the three extensions are added
     to the default display's `EGL_EXTENSIONS`), `surface_control.cc`
