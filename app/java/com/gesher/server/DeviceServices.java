@@ -196,6 +196,16 @@ final class DeviceServices {
         public int getSimStateForSlotIndex(int slotIndex) {
             return android.telephony.TelephonyManager.SIM_STATE_ABSENT;
         }
+
+        /**
+         * No cellular network: TelephonyManager.getNetworkCountryIso() is @NonNull and
+         * returns "" when unavailable (including when ITelephony is absent); Default's
+         * null trips Kotlin non-null checks in apps such as Meta Muse.
+         */
+        @Override
+        public String getNetworkCountryIsoForPhone(int phoneId) {
+            return "";
+        }
     }
 
     /**

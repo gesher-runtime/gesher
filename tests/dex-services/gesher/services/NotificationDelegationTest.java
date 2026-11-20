@@ -39,6 +39,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.ToIntBiFunction;
 import java.util.zip.ZipEntry;
@@ -124,10 +129,12 @@ public final class NotificationDelegationTest {
         set(code, "sharedLibraries", field(type("SharedLibraryGraph"), "EMPTY").get(null));
         return code;
     }
-    private static final class Harness {
+    private static final class Harness implements AutoCloseable {
         final boolean protectedMode = GmsSignatureSpoofing.isEnabled();
         final Map<String, ApkPackage> packages = new LinkedHashMap<>();
         final Map<String, Object> processes = new LinkedHashMap<>();
+        final ConcurrentLinkedQueue<Future<?>> packageEvents = new ConcurrentLinkedQueue<>();
+        final ExecutorService packageExecutor;
         final PackageManagerService pm;
         final ActivityTaskManagerService atm;
         final ActivityManagerService am;
@@ -139,7 +146,10 @@ public final class NotificationDelegationTest {
             packages.put(DELEGATE, code(DELEGATE, protectedMode ? 13202 : 10000, 1, null));
             packages.put(OTHER, code(OTHER, protectedMode ? 13203 : 10000, 1, null));
             packages.put(SHARED, code(SHARED, packages.get(OWNER).uid(), 1, null));
-            if (parcel) pm = new PackageManagerService(packages.values());
+            if (parcel) {
+                pm = new PackageManagerService(packages.values());
+                packageExecutor = null;
+            }
             else {
                 // Skip the package service's unrelated Binder callback registration
                 // on the host; retain its actual package and installation-owner logic.
@@ -148,6 +158,12 @@ public final class NotificationDelegationTest {
                 set(pm, "mRemoving", new LinkedHashMap<>());
                 set(pm, "mPackageRemoval", new ArrayList<>());
                 set(pm, "mPackageRemovalChecks", new ArrayList<>());
+                // Run the actual deferred callbacks on a serial worker, preserving
+                // their wait for add() to release the publication/package monitors.
+                // Retain each result so failures cannot disappear on a worker thread.
+                packageExecutor = Executors.newSingleThreadExecutor();
+                set(pm, "mPackageEventExecutor", (java.util.concurrent.Executor)task ->
+                        packageEvents.add(packageExecutor.submit(task)));
                 set(pm, "mPermissions", make(type("PermissionPolicy"), new Class<?>[]{PackageManagerService.class}, pm));
                 invoke(PackageManagerService.class, pm, "enabledStore", new Class<?>[]{});
             }
@@ -256,7 +272,53 @@ public final class NotificationDelegationTest {
             ApkPackage replacement = code(name, before.uid(), version, signedApk);
             invoke(PackageManagerService.class, pm, "add", new Class<?>[]{ApkPackage.class}, replacement);
             packages.put(name, replacement);
+            if (!parcel) {
+                check(!packageEvents.isEmpty(), "Package replacement did not enqueue permission publication");
+                drainPackageEvents();
+            }
         }
+        private void drainPackageEvents() throws Exception {
+            Future<?> event;
+            while ((event = packageEvents.poll()) != null) event.get(5, TimeUnit.SECONDS);
+        }
+        @Override public void close() throws Exception {
+            if (packageExecutor == null) return;
+            try { drainPackageEvents(); }
+            finally {
+                packageExecutor.shutdown();
+                if (!packageExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    packageExecutor.shutdownNow();
+                    throw new AssertionError("Host package publication worker did not terminate");
+                }
+            }
+        }
+    }
+
+    private static void channelOwnership(Harness h) throws Exception {
+        h.as(OWNER, () -> {
+            h.wire.createNotificationChannels(OWNER, new ParceledListSlice<>(List.of(
+                    new NotificationChannel("owner-check", "Owner", NotificationManager.IMPORTANCE_LOW))));
+            check(h.wire.getNotificationChannel(OWNER, 0, OWNER, "owner-check") != null,
+                    "Authenticated owner cannot create its channel");
+        });
+        for (String name : List.of(DELEGATE, OTHER, SHARED)) h.as(name, () -> {
+            ParceledListSlice<NotificationChannel> requested = new ParceledListSlice<>(List.of(
+                    new NotificationChannel("shared-check", "Shared", NotificationManager.IMPORTANCE_LOW)));
+            if (name.equals(SHARED) && h.protectedMode) {
+                h.wire.createNotificationChannels(OWNER, requested);
+            } else rejects(SecurityException.class, () -> h.wire.createNotificationChannels(OWNER, requested),
+                    "Unrelated or delegated app mutated another owner's channel");
+        });
+        h.as(OWNER, () -> check((h.wire.getNotificationChannel(OWNER, 0, OWNER, "shared-check") != null)
+                == h.protectedMode, "Channel mutation did not distinguish authenticated shared UID from legacy UID10000"));
+        h.identity(android.os.Process.myPid(), android.os.Process.SYSTEM_UID, () -> {
+            for (String owner : List.of(OWNER, "android")) {
+                h.wire.createNotificationChannels(owner, new ParceledListSlice<>(List.of(
+                        new NotificationChannel("system-check", "System", NotificationManager.IMPORTANCE_LOW))));
+                check(h.wire.getNotificationChannel(owner, 0, owner, "system-check") != null,
+                        "System caller cannot manage a known or virtual Android owner");
+            }
+        });
     }
 
     private static void ownership(Harness h) throws Exception {
@@ -459,8 +521,9 @@ public final class NotificationDelegationTest {
     public static int run(boolean useParcel, boolean useStorage, String signedApk) throws Exception {
         parcel = useParcel; storage = useStorage; checks = 0;
         PropertyInvalidatedCache.setTestMode(true);
-        Harness h = new Harness();
-        ownership(h); posting(h); retained(h); lifecycle(h, signedApk);
+        try (Harness h = new Harness()) {
+            ownership(h); channelOwnership(h); posting(h); retained(h); lifecycle(h, signedApk);
+        }
         return checks;
     }
     public static void main(String[] args) throws Exception {

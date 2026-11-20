@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 #include <utils/Timers.h>  // nsecs_t, which hostgraphics' Surface.h uses unincluded
@@ -58,6 +59,8 @@ class QueueSurface : public android::Surface {
 
   int lock(ANativeWindow_Buffer* out_buffer, ARect* in_out_dirty) override;
   int unlockAndPost() override;
+  // Set a timestamp for this frame alone, preserving the native producer setting.
+  int UnlockAndPostWithTimestamp(int64_t timestamp_ns);
   int query(int what, int* value) const override;
 
  protected:
@@ -77,7 +80,10 @@ class QueueSurface : public android::Surface {
   void Size(int* width, int* height) const;
   void UpdateFrameGeometry();  // with mutex_ held; drops obsolete reusable pixels
   void EnsureBuffer();  // with mutex_ held
-  void Publish();       // copies buffer_ as the latest frame (mutex_ not held)
+  int UnlockAndPost(std::optional<int64_t> timestamp_ns);
+  // Copies buffer_ as the latest frame with mutex_ held. Invoke the returned
+  // listener after unlocking, so it can read back the published frame.
+  std::function<void()> PublishLocked(std::optional<int64_t> timestamp_ns);
 
   static int HookSetSwapInterval(ANativeWindow* window, int interval);
   static int HookQueueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fence_fd);

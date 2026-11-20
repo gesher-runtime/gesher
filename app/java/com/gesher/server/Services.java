@@ -140,7 +140,7 @@ public final class Services {
                 new InputMethodManagerService()).asBinder());
         services.put(Context.TEXT_SERVICES_MANAGER_SERVICE, StandIn.of(
                 com.android.internal.textservice.ITextServicesManager.class,
-                new TextServicesManagerService()).asBinder());
+                new TextServicesManagerService(am, pm)).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
         UiModeManagerService uiMode = new UiModeManagerService(pm, atm, persistentAccounts);

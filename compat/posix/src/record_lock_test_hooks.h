@@ -8,6 +8,9 @@ struct WaitTestHooks {
   bool cleanup = false;
   bool fail_begin = false, fail_commit = false;
   unsigned begin_failures = 0, commit_failures = 0, event_failures = 0;
+  // Fixture scheduling only; absent from the uninstrumented runtime.
+  void (*before_recheck)(ULONGLONG deadline) = nullptr;
+  unsigned deadline_barriers = 0;
   uint64_t token_low = 0, token_high = 0;
   DWORD event_error = 0;
 };

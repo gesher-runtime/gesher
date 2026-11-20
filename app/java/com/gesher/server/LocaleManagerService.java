@@ -481,7 +481,10 @@ public final class LocaleManagerService extends ILocaleManager.Default
      * every change; otherwise GesherAppDriver relaunches it, preserving saved state.
      */
     private static void applyInProcess(Configuration config, String why) {
-        new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
-                android.app.GesherAppDriver.applyConfiguration(config));
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+            android.app.GesherAppDriver.applyConfiguration(config);
+            SystemServer.log(TAG + "configuration change in this process (" + why + "): "
+                    + config.getLocales().toLanguageTags());
+        });
     }
 }

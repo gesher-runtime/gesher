@@ -348,6 +348,10 @@ public final class WifiP2pNsdValuesContractTest {
 
     /** Production Windows boot topology, checked before any ordinary native record. */
     public static void main(String[] args) throws Exception {
+        String root = System.getenv("ANDROID_ROOT");
+        if (root == null || root.isEmpty()) throw new IllegalStateException("ANDROID_ROOT is required");
+        com.gesher.app.Main.bootstrap("wifi-p2p-nsd-values", root + "/build.prop",
+                root + "/framework/framework-res.apk");
         ClassLoader boot = Parcel.class.getClassLoader();
         check(boot == null || boot.getClass().getName().endsWith("BootClassLoader"), "genuine boot Parcel provider");
         for (String name : new String[] {"WifiP2pServiceInfo", "WifiP2pServiceRequest", "WifiP2pDnsSdServiceInfo",

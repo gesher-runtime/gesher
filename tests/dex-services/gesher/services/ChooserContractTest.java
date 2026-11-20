@@ -319,6 +319,39 @@ public final class ChooserContractTest {
         check(h.owner.results.size() == 1 && h.owner.results.get(0).mResultCode == 17,
                 "Chosen activity's result did not reach the original caller");
     }
+    private static void parcelledSharePreparation() throws Exception {
+        if (!realBinder) return; // This regression needs the real Android Parcel reader.
+        Harness h = new Harness();
+        Method prepare = type("IntentChooser").getDeclaredMethod("prepare", Intent.class,
+                Intent.class, android.content.pm.ApplicationInfo.class);
+        prepare.setAccessible(true);
+        Uri first = Uri.parse("content://" + OWNER + ".files/first");
+        Uri second = Uri.parse("content://" + OWNER + ".files/second");
+        for (boolean multiple : new boolean[]{false, true}) {
+            Intent original = new Intent(multiple ? Intent.ACTION_SEND_MULTIPLE : Intent.ACTION_SEND)
+                    .setType("text/plain").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            if (multiple) original.putParcelableArrayListExtra(Intent.EXTRA_STREAM,
+                    new ArrayList<>(List.of(first, second)));
+            else original.putExtra(Intent.EXTRA_STREAM, first).putExtra(Intent.EXTRA_TEXT, "shared text");
+            Parcel parcel = Parcel.obtain();
+            Intent transported;
+            try {
+                original.writeToParcel(parcel, 0); parcel.setDataPosition(0);
+                transported = Intent.CREATOR.createFromParcel(parcel);
+            } finally { parcel.recycle(); }
+            check(transported.getExtras().isParcelled(), "Fixture did not retain a parcelled share payload");
+            Intent prepared = (Intent)prepare.invoke(null, transported,
+                    Intent.createChooser(new Intent(), "Transported"), h.sender.applicationInfo(0));
+            ClipData clip = prepared.getClipData();
+            check(clip != null && clip.getItemCount() == (multiple ? 2 : 1)
+                    && first.equals(clip.getItemAt(0).getUri())
+                    && (!multiple || second.equals(clip.getItemAt(1).getUri()))
+                    && (multiple || "shared text".contentEquals(clip.getItemAt(0).getText()))
+                    && (prepared.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0
+                    && (prepared.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0,
+                    "Parcelled share lost its exact payload or broadened URI permission");
+        }
+    }
     private static void cancellation() throws Exception {
         Harness h = new Harness(); h.start(chooser()); h.ui.displayed();
         check(h.start(chooser()) == ActivityManager.START_CANCELED, "Second pending chooser replaced the first");
@@ -843,12 +876,17 @@ public final class ChooserContractTest {
     public static int run(boolean binder) throws Exception {
         realBinder = binder; checks = 0;
         idleOwnership(); detachedOverlap();
-        validation(); selectionAndGrants(); cancellation(); initialsAndSingle(); sharedUid(); selectors(); providerTypes();
+        validation(); parcelledSharePreparation(); selectionAndGrants(); cancellation(); initialsAndSingle(); sharedUid(); selectors(); providerTypes();
         retirement(); flagsAndSuspension(); callback();
         return checks;
     }
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
+        // This isolated service fixture does not run SystemServer's bootstrap.
+        // Component retirement invalidates the real package-info nonce, so own
+        // the same writable native region before constructing any services.
+        com.android.internal.os.ApplicationSharedMemory.setInstance(
+                com.android.internal.os.ApplicationSharedMemory.create());
         android.content.res.AssetManager.createSystemAssetsInZygoteLocked(false, System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         System.out.println("ChooserContractTest all passed: " + run(true) + " checks (actual AIDL/Parcel, production launches and grants; scripted user-input boundary)");
     }

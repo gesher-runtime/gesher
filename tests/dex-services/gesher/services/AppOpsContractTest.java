@@ -124,7 +124,11 @@ public final class AppOpsContractTest {
         final AppOpsService service;
         final IAppOpsService ops;
         final IPermissionChecker checker;
-        @SuppressWarnings("unchecked") Harness() throws Exception {
+        Harness() throws Exception { this(null); }
+        @SuppressWarnings("unchecked") Harness(Integer ownerTarget, String... permissions) throws Exception {
+            // Metadata must be final before PM boot admission reconciles the UID's
+            // legacy/runtime grant basis. Mutating an admitted owner is not an install.
+            if (ownerTarget != null) requested(owner, ownerTarget, permissions);
             pm = (PackageManagerService)make(PackageManagerService.class, new Class<?>[]{Collection.class, boolean.class}, List.of(owner, peer), false);
             // This isolated PM has no remote broadcast transport; keep its production
             // publication executor and lifecycle listeners, replacing only that boundary.
@@ -160,6 +164,9 @@ public final class AppOpsContractTest {
                     definitions.put(name, info);
                 }
                 set(catalog, "mLoaded", true);
+                // Native ART had the real catalog during PM construction. The host
+                // boundary must perform that same production boot reconciliation now.
+                call(pm.permissions(), "initializePackages", new Class<?>[0]);
             }
             service = pm.appOps();
             ops = binder ? IAppOpsService.Stub.asInterface(parcelTransport(StandIn.of(IAppOpsService.class, service).asBinder())) : service;
@@ -1144,8 +1151,7 @@ public final class AppOpsContractTest {
 
     /** Real uninstall stages and killUid/processDied, with only APK, client death and disk boundaries controlled. */
     private static void sharedRetirement(boolean stillRequested, boolean legacy, boolean failDisk) throws Exception {
-        Harness h = new Harness();
-        requested(h.owner, legacy ? 22 : 36, Manifest.permission.READ_CONTACTS);
+        Harness h = new Harness(legacy ? 22 : 36, Manifest.permission.READ_CONTACTS);
         ApkPackage sibling = pkg("fixture.appops.remaining", UID, (byte)7);
         requested(sibling, 36, stillRequested ? new String[]{Manifest.permission.READ_CONTACTS} : new String[0]);
         call(h.pm, "add", new Class<?>[]{ApkPackage.class}, sibling);

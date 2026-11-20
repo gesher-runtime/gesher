@@ -155,10 +155,28 @@ public final class NotificationManagerService extends INotificationManager.Defau
         return pkg + "/" + tag + "/" + id;
     }
 
-    /** Windows allows 64 characters. Hex digests cannot alias legacy id|tag names. */
+    /** Canonical persisted identity. Hex digests cannot alias legacy id|tag names. */
     static String toastTag(String tag, int id) {
         // Match StatusBarNotification's and this service's existing key equivalence.
         return NotificationIdentity.digest(id + "/" + String.valueOf(tag));
+    }
+
+    /** Windows representation only; the persisted canonical key stays unchanged. */
+    static String windowsToastTag(String canonical) {
+        if (canonical == null || canonical.length() != 64) {
+            throw new IllegalArgumentException("Expected a canonical notification digest");
+        }
+        byte[] bytes = new byte[32];
+        for (int i = 0; i < canonical.length(); ++i) {
+            char c = canonical.charAt(i);
+            int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+            if (digit < 0) throw new IllegalArgumentException("Expected a canonical notification digest");
+            bytes[i / 2] |= (byte)(digit << ((i & 1) == 0 ? 4 : 0));
+        }
+        // Some Windows builds accept a 64-character Tag but cannot read it back.
+        // All 256 bits fit in 43 Base64url characters. The prefix is disjoint from
+        // both raw hex and the older decimal/id|tag namespace; no bits are dropped.
+        return "sha256-" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     static String legacyToastTag(String tag, int id) {
@@ -174,6 +192,15 @@ public final class NotificationManagerService extends INotificationManager.Defau
     }
 
     private int removeWindowsToast(String pkg, String windowsTag, int id, String expectedKey, boolean bridge) {
+        if (expectedKey != null) return removeWindowsToastTag(pkg, windowsTag, id, expectedKey, false);
+        int hr = removeWindowsToastTag(pkg, windowsToastTag(windowsTag), id, null, bridge);
+        // A retained notification from an earlier build may still use raw hex.
+        // Its full digest has the same ownership/identity as the encoded spelling.
+        int old = removeWindowsToastTag(pkg, windowsTag, id, null, false);
+        return hr != 0 ? hr : old;
+    }
+
+    private int removeWindowsToastTag(String pkg, String windowsTag, int id, String expectedKey, boolean bridge) {
         if (mTestToastRemoval != null) return mTestToastRemoval.applyAsInt(windowsTag, expectedKey);
         if (mTestToast != null) return 0;
         String appId = AppShell.appUserModelId(pkg);
@@ -206,7 +233,9 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private void retireLegacyToast(String pkg, String key) {
         NotificationStore.Stored stored = NotificationStore.load(pkg, key);
         if (stored == null) return;
-        boolean removed = true;
+        // Called only after the new physical identity was shown successfully.
+        // Keep that identity; retire the previous raw-hex spelling independently.
+        boolean removed = removeWindowsToastTag(pkg, toastTag(stored.tag, stored.id), stored.id, null, false) == 0;
         for (String legacy : legacyWindowsTags(stored)) {
             if (removeWindowsToast(pkg, legacy, stored.id, key, false) != 0) removed = false;
         }
@@ -242,7 +271,9 @@ public final class NotificationManagerService extends INotificationManager.Defau
 
     private void own(String pkg) {
         if (pkg == null) throw new SecurityException("Missing notification owner");
-        callers().requireSystemOrPackage(pkg);
+        // Legacy UID10000 is shared by unrelated apps; authenticate ownership by
+        // the same attached-process rule used for posting and delegation calls.
+        if (!callers().isSystem()) notificationCaller(pkg);
         if (packageFor(pkg) == null && !(callers().isSystem() && "android".equals(pkg))) {
             throw new SecurityException("Unknown notification owner");
         }
@@ -597,7 +628,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 || (update && (n.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0);
         boolean high = importance >= NotificationManager.IMPORTANCE_HIGH;
         String xml = toastXml(r, large != null ? large : icon, quiet || update);
-        int hr = WindowsHost.showToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()),
+        String windowsTag = windowsToastTag(toastTag(r.sbn.getTag(), r.sbn.getId()));
+        int hr = WindowsHost.showToast(appId, windowsTag,
                 TOAST_GROUP, xml, suppressPopup, high);
         if (hr != 0) {
             // Fall back to Shell_NotifyIcon balloon notification bridge with app icon and title
@@ -605,7 +637,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
             CharSequence text = n.extras != null ? n.extras.getCharSequence(Notification.EXTRA_TEXT) : null;
             File iconFile = large != null ? large : icon;
             hr = WindowsHost.showNotificationBridge(
-                    appId, toastTag(r.sbn.getTag(), r.sbn.getId()), TOAST_GROUP,
+                    appId, windowsTag, TOAST_GROUP,
                     title != null ? title.toString() : "",
                     text != null ? text.toString() : "",
                     iconFile != null ? iconFile.getAbsolutePath() : "",

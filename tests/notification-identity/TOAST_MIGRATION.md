@@ -6,12 +6,29 @@ mapping shortened long Android tags with Java `hashCode`, so distinct tags such
 as `"Aa".repeat(40)` and `"BB".repeat(40)` replaced each other's Windows toasts.
 A shortened tag could also collide with an ordinary short literal tag.
 
-All newly posted Windows identities now use a 64-character SHA-256 digest of
+Canonical persisted identities use a 64-character SHA-256 digest of
 the ID and the service/platform's existing tag-key equivalence. The Android key,
 application tag, content, permissions and callback workflows are unchanged.
 In particular, actual `StatusBarNotification.getKey()` treats a null tag and the
 literal `"null"` as equivalent; this change preserves that existing equivalence.
 New hex-only identities are disjoint from legacy `id|tag` and decimal-ID names.
+
+At the Windows boundary, `windowsToastTag` encodes all 32 digest bytes as
+unpadded Base64url with a `sha256-` prefix (50 characters total). This representation
+retains every bit, including leading zeroes, and its prefix is disjoint from both
+canonical hex and legacy names. The adapter rejects noncanonical input. Actual
+Windows Server 2025 diagnostics showed a 64-character Tag setter returning S_OK
+while its immediate getter returned E_INVALIDARG; the same 64-character input
+round-tripped on Server 2022, and 63/32/16-character inputs round-tripped on both.
+This measured boundary behavior motivates the representation; it is not a
+truncated digest or an assumed 16-character platform limit.
+
+The store format, canonical digest, Android keys and XML activation payloads stay
+unchanged. New posts use the encoded physical Tag. After a successful post, the
+service retires the old raw-hex spelling through per-tag removal; cancellation
+tries both spellings and preserves any removal error. Native kept handles use
+the same physical Tag as Show. Legacy decimal/id|tag aliases continue to require
+the XML owner check below. No migration operation clears unrelated notifications.
 
 The standalone toast branch's store version4 records the current Windows identity
 and an optional legacy alias. The combined delegation/toast writer now uses

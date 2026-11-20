@@ -3,6 +3,7 @@
 // section and its registration table to exercise these failure paths without
 // a Windows/AOSP build. See tools/test_bionic_allocations.py.
 #include <malloc.h>
+#include <sys/mman.h>
 
 // A libc contract test must call the exported implementation. At -O2 Clang
 // may remove malloc/calloc/memalign/free pairs, assume their errno effects are
@@ -279,6 +280,37 @@ static void test_realloc_zero_size(void) {
   allocation_free(p);
 }
 
+static void test_page_aligned_mprotect_free(void) {
+  const size_t aligns[] = {4096, 65536, 131072};
+  const size_t sizes[] = {128, 4096, 4096 + 65536};
+  for (size_t i = 0; i < sizeof(aligns) / sizeof(aligns[0]); ++i) {
+    void* p = NULL;
+    int err = posix_memalign(&p, aligns[i], sizes[i]);
+    check("page-aligned posix_memalign succeeds",
+          err == 0 && p != NULL && ((uintptr_t)p & (aligns[i] - 1)) == 0);
+    if (err != 0 || p == NULL) continue;
+    memset(p, 0x2b, sizes[i]);
+    check("page-aligned allocation is guard-protectable before free",
+          mprotect(p, 4096, PROT_NONE) == 0);
+    allocation_free(p);
+  }
+  const size_t probe_sizes[] = {4096 + 65536, 128};
+  for (size_t s = 0; s < sizeof(probe_sizes) / sizeof(probe_sizes[0]); ++s) {
+    int ok = 1;
+    for (int k = 0; k < 4; ++k) {
+      unsigned char* b = (unsigned char*)allocation_malloc(probe_sizes[s]);
+      if (b == NULL) {
+        ok = 0;
+        continue;
+      }
+      memset(b, 0x55, probe_sizes[s]);
+      for (size_t j = 0; j < probe_sizes[s]; ++j) ok &= b[j] == 0x55;
+      allocation_free(b);
+    }
+    check("general heap remains writable after freeing guarded page allocation", ok);
+  }
+}
+
 static void test_allocation_contracts(void) {
   test_calloc_zero_size();
   test_allocation_overflow();
@@ -287,4 +319,5 @@ static void test_allocation_contracts(void) {
   test_realloc_failure();
   test_reallocarray_contract();
   test_realloc_zero_size();
+  test_page_aligned_mprotect_free();
 }

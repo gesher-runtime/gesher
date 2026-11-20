@@ -36,7 +36,7 @@ def main() -> None:
             cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
             "-I" + str(args.java_home / "include"),
             "-I" + str(args.java_home / "include/linux"),
-            str(ROOT / "tests/uri/framework_host.c"), "-o", str(library),
+            str(ROOT / "tests/uri/intent_framework_host.c"), "-o", str(library),
         ], check=True)
         sources = [ROOT / "app/java/com/gesher/server/UriPermissionModes.java",
                    ROOT / "tests/uri/UriPermissionModesOracleTest.java"]
@@ -53,7 +53,14 @@ def main() -> None:
         environment = os.environ.copy()
         environment["ANDROID_DATA"] = str(work / "data")
         environment["GESHER_MICROG_SPOOF"] = "1"
-        command = [str(args.java_home / "bin/java"), "-Djava.io.tmpdir=" + str(work),
+        # Current package lifecycle callbacks initialize actual local Binder objects.
+        # Reuse the existing owned holder/free adapter and pinned core Cleaner.
+        cleaner = work / "cleaner" / "sun/misc"
+        cleaner.mkdir(parents=True)
+        for source in (args.core_classes / "sun/misc").glob("Cleaner*.class"):
+            shutil.copy2(source, cleaner / source.name)
+        command = [str(args.java_home / "bin/java"), "--patch-module",
+                   "jdk.unsupported=" + str(work / "cleaner"), "-Djava.io.tmpdir=" + str(work),
                    "-cp", str(classes) + os.pathsep + classpath]
         subprocess.run(command + ["com.gesher.server.UriPermissionModesOracleTest", str(library)],
                        env=environment, check=True, timeout=90)
