@@ -38,8 +38,10 @@ enum Event : int32_t {
   kFailed = 2,         // arg: HRESULT; a: what failed
   kPageStarted = 3,    // id: navigation id; arg: 1 if the app started it; a: url
   kPageFinished = 4,   // id: HTTP status (0 unknown); arg: -1 success, else
-                       // COREWEBVIEW2_WEB_ERROR_STATUS; a: url
-  kSourceChanged = 5,  // arg: 1 new document, 0 same document; a: url
+                       // COREWEBVIEW2_WEB_ERROR_STATUS; a: url; b: the last Navigate
+                       // number handed to WebView2 when it started (decimal)
+  kSourceChanged = 5,  // arg: 1 new document, 0 same document; a: url; id: the
+                       // last Navigate number handed to WebView2
   kHistory = 6,        // arg: 1 can go back | 2 can go forward
   kTitle = 7,          // a: title
   kContentLoading = 8, // arg: 1 for an error page
@@ -159,6 +161,10 @@ class Host {
   // GET (postUrl: POST) sends `body`.
   void Navigate(const std::wstring& url, const std::wstring& headers,
                 const std::wstring& method = L"GET", std::vector<uint8_t> body = {});
+  // The next Navigate is the Java side's load `number` (ApiNavigations; numbers
+  // increase): kPageFinished reports the last number handed to WebView2 when its
+  // navigation started.
+  void NumberNextNavigate(int64_t number);
   void NavigateToString(const std::wstring& html);
   void SetBridgeEndpoint(const std::wstring& path);
   enum Command : int32_t {

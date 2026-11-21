@@ -199,13 +199,22 @@ public final class WebView2Host {
     }
 
     public void navigate(String url, String headers) {
-        navigate(url, headers, "GET", null);
+        navigate(url, headers, "GET", null, 0);
+    }
+
+    /**
+     * {@code number}: the load's number in the provider's ApiNavigations (0 for none);
+     * EVENT_PAGE_FINISHED reports the last number WebView2 had been handed when its
+     * navigation started, EVENT_SOURCE_CHANGED (id) the last one when it was raised.
+     */
+    public void navigate(String url, String headers, long number) {
+        navigate(url, headers, "GET", null, number);
     }
 
     /** A method other than GET sends {@code body} (postUrl). */
-    public void navigate(String url, String headers, String method, byte[] body) {
+    public void navigate(String url, String headers, String method, byte[] body, long number) {
         long h = mHandle;
-        if (h != 0) nNavigate(h, url, headers, method, body);
+        if (h != 0) nNavigate(h, url, headers, method, body, number);
     }
 
     /** The message event of chrome.webview in the page. */
@@ -498,7 +507,7 @@ public final class WebView2Host {
     private static native void nDestroy(long h);
     private static native long nContainer(long h);
     private static native void nNavigate(long h, String url, String headers, String method,
-            byte[] body);
+            byte[] body, long number);
     private static native void nPostWebMessage(long h, String json);
     private static native void nCallDevTools(long h, String method, String params,
             long callbackId);

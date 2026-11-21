@@ -89,16 +89,16 @@
       "sha256": "ae8aa96794fc55d58916d8fe3a217912fbcc9edd5ec9fb72c547f90d97d3c0ea",
       "license": "GPL-3.0-or-later",
       "source": "https://github.com/billthefarmer/notes",
-      "why": "A notes app that shows its note as Markdown in a WebView (loadDataWithBaseURL with the note's file:/// folder, assets' styles, JavaScript, a WebViewClient) under a floating edit button; pure Java, no AndroidX (docs/webview.md). A fresh install has no note. If the app asks for all-files access, dismiss the prompt and use its blank editor. Type a word and accept to render it.",
+      "why": "A notes app that shows its note as Markdown in a WebView (loadDataWithBaseURL with the note's file:/// folder, assets' styles, JavaScript, a WebViewClient) under a floating edit button; pure Java, no AndroidX (docs/webview.md). A fresh install has no note. If the app asks for all-files access, dismiss the prompt and use its blank editor. Type a Markdown heading and accept to render it (the preview shows it as a heading, not as the editor's text).",
       "expectLog": [ "gesher-webview: WebView2 Runtime ", "view(s) over the WebView cut out of its window: ", "gesher-webview: first page loaded: file:///" ],
       "startupDialog": {
         "title": "Access all files",
         "size": [380, 284],
         "cancel": [171, 237],
         "focus": [96, 75],
-        "actions": [ { "keys": "hello" }, { "click": [344, 744] } ]
+        "actions": [ { "keys": "# hello" }, { "click": [344, 744], "render": { "log": " finished (file, ok)", "region": [8, 64, 240, 160], "minTextPixels": 150, "minChangedPixels": 150 } } ]
       },
-      "actions": [ { "click": [344, 744] }, { "keys": "hello" }, { "click": [344, 744] } ]
+      "actions": [ { "click": [344, 744] }, { "keys": "# hello" }, { "click": [344, 744], "render": { "log": " finished (file, ok)", "region": [8, 64, 240, 160], "minTextPixels": 150, "minChangedPixels": 150 } } ]
     },
     {
       "package": "name.boyle.chris.sgtpuzzles",

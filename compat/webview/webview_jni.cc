@@ -235,9 +235,11 @@ std::vector<uint8_t> Bytes(JNIEnv* env, jbyteArray a) {
 }
 
 void JNICALL WebView2Host_navigate(JNIEnv* env, jclass, jlong h, jstring url, jstring headers,
-                                   jstring method, jbyteArray body) {
+                                   jstring method, jbyteArray body, jlong number) {
   std::wstring m = Str(env, method);
-  Get(h)->Navigate(Str(env, url), Str(env, headers), m.empty() ? L"GET" : m, Bytes(env, body));
+  Host* host = Get(h);
+  if (number > 0) host->NumberNextNavigate(static_cast<int64_t>(number));
+  host->Navigate(Str(env, url), Str(env, headers), m.empty() ? L"GET" : m, Bytes(env, body));
 }
 
 void JNICALL WebView2Host_postWebMessage(JNIEnv* env, jclass, jlong h, jstring json) {
@@ -440,7 +442,7 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(&WebView2Host_create)},
     {"nDestroy", "(J)V", reinterpret_cast<void*>(&WebView2Host_destroy)},
     {"nContainer", "(J)J", reinterpret_cast<void*>(&WebView2Host_container)},
-    {"nNavigate", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V",
+    {"nNavigate", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[BJ)V",
      reinterpret_cast<void*>(&WebView2Host_navigate)},
     {"nPostWebMessage", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_postWebMessage)},
