@@ -95,7 +95,13 @@ without stopping the job, a notice is logged and reads fall back to `GITHUB_TOKE
 Same-repository `workflow_run` events use the PRs GitHub names in the event
 instead of listing every open PR; fork runs still list open PRs. In App mode,
 only the first named PR shares that event's concurrency key; any other matched
-PR is routed to its own metadata job as described below. Native
+PR is routed to its own metadata job as described below. A CI completion for
+an open PR at the run's head with no `automerge` label, no native waiting and
+no `success` in either QA context (trusted or not) ends after that PR read and
+one current-context scan, the same rule the recovery schedule applies to
+unlabeled PRs. Such a PR's gate is already not green, so a full pass would only
+repeat its revocation with an App status write and a legacy write on the shared
+`GITHUB_TOKEN` quota. Every other matched PR is reconciled as before. Native
 auto-merge cancellation reads its state from the REST pull request it already
 fetched. Registered workflow identities, paths and enabled states are reread at
 each CI evidence pass, including after App status publication. Title or body

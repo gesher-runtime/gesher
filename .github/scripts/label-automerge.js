@@ -183,6 +183,23 @@ async function stuck(github, statusReader, owner, repo, pr, gate) {
   return evidence.ready || Boolean(evidence.failed);
 }
 
+// An unlabeled open PR without native waiting needs a controller run only to
+// revoke a leftover green QA context, as the recovery schedule already assumes.
+// Otherwise a completed CI run would repeat its revocation: several reads, an
+// App status write and a legacy write on the repository's GITHUB_TOKEN quota.
+// Any success in either QA context, trusted or not, still takes the full path.
+async function unlabeledAndSettled(github, statusReader, owner, repo, number, head) {
+  const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: number});
+  if (current.state !== 'open' || current.head.sha !== head || p.hasLabel(current) || current.auto_merge)
+    return false;
+  const values = await p.list(async args => {
+    const response = await statusReader.rest.repos.getCombinedStatusForRef(args);
+    if (response.data.sha !== head) throw new Error('QA settlement status head mismatch');
+    return response;
+  }, {owner, repo, ref: head}, 'statuses');
+  return !values.some(s => [STATUS, qaStatuses.APP_STATUS].includes(s.context) && s.state === 'success');
+}
+
 async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub, publisher, expectedHead) {
   const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
   if (pr.state !== 'open' || (expectedHead && pr.head.sha !== expectedHead)) return;
@@ -311,7 +328,13 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
       x.base.repo?.id === baseRepositoryId && Number.isSafeInteger(x.number));
     const prs = named.length ? named :
       await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
+    // The read token requests statuses access only while the App status is on.
+    const statusReader = appQaStatus ? github : actionsGithub;
     for (const pr of prs.filter(x => x.head.sha === run.head_sha && x.head.repo?.id === run.head_repository.id)) {
+      if (await unlabeledAndSettled(github, statusReader, owner, repo, pr.number, run.head_sha)) {
+        core.info('#' + pr.number + ': no automerge label, native waiting or green QA context; nothing to reconcile');
+        continue;
+      }
       if (appQaStatus && pr.number !== run.pull_requests?.[0]?.number) {
         const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
         if (current.head.sha === run.head_sha && current.head.repo?.id === run.head_repository.id)

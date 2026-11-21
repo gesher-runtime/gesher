@@ -1371,3 +1371,35 @@ test('with the App status off the schedule reads the legacy gate with the Action
 // Included by the existing CI and runner-probe entrypoint.
 require('./automerge-release-cases.js');
 require('./automerge-exact-release-cases.js');
+
+for (const appQaStatus of [false, true]) {
+  const make = over => appQaStatus ? appStatusWorld(over) : world(over);
+  const writes = w => w.calls.filter(([name]) =>
+    ['status', 'app-status', 'app-dispatch', 'nativeCancel', 'nativeWait', 'nativeMerge'].includes(name));
+  test(`CI completion for an unlabeled PR without a green QA context writes nothing (App status ${appQaStatus})`, async () => {
+    const w = make();
+    w.pr.labels = [];
+    w.statuses.unshift({id: w.nextStatusId++, context: appStatus.STATUS, state: 'failure'});
+    await w.ciDone();
+    assert.deepEqual(writes(w), []);
+    assert.equal(w.did('getPR').length, 1);
+    assert.equal(w.did('statuses').length, 1);
+  });
+  for (const context of [appStatus.STATUS, appStatus.APP_STATUS]) {
+    test(`a leftover green ${context} on an unlabeled PR still takes the revocation path (App status ${appQaStatus})`, async () => {
+      const w = make();
+      w.pr.labels = [];
+      w.statuses.unshift({id: w.nextStatusId++, context, state: 'success'});
+      await w.ciDone();
+      assert.equal(lastStatus(w, appStatus.STATUS)?.state, 'failure');
+      if (appQaStatus) assert.equal(lastStatus(w, appStatus.APP_STATUS)?.state, 'failure');
+    });
+  }
+  test(`armed native waiting on an unlabeled PR is still cancelled after CI (App status ${appQaStatus})`, async () => {
+    const w = make({nativeAutoMethod: 'SQUASH'});
+    w.pr.labels = [];
+    await w.ciDone();
+    assert.equal(w.did('nativeCancel').length, 1);
+    assert.equal(lastStatus(w, appStatus.STATUS)?.state, 'failure');
+  });
+}
