@@ -79,17 +79,28 @@ jobs:
           python3 .github/scripts/test_automerge_workflows.py
           python3 tools/ci/test_release_workflows.py
           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
-  app-identity-restart:
+  # Short Windows host contracts share one runner per OS: separate jobs each
+  # paid for a runner, checkout and queue slot to run a minute of checks.
+  # Every check step runs even after an earlier one fails, so one failure
+  # does not hide another.
+  windows-host-contracts:
     needs: [source-identity]
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.13'
       - name: Build actual app identity restart implementation
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
@@ -98,19 +109,50 @@ jobs:
         run: |
           & .\app-identity-restart.exe
           if ($LASTEXITCODE -ne 0) { throw 'Native application identity restart gate failed' }
+      - name: Exact native reader ownership and handle reuse controls
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/test-process-reader-handles.ps1
+      - name: Release updater and control panel contracts on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/PreferredLanguagesChecks.ps1
+          tests/windows/shell/MicrogDefaultsChecks.ps1
+          tests/windows/shell/ControlPanelRefreshChecks.ps1
+          tests/windows/shell/ControlPanelIconCacheChecks.ps1
+          tests/windows/shell/ControlPanelVirtualizationChecks.ps1
+          tests/windows/shell/ControlPanelActionChecks.ps1
+          tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/UpdateChecks.ps1
+          tests/windows/shell/UpdateTransportChecks.ps1
+          tests/windows/shell/ControlPanelUpdateChecks.ps1
+          tests/windows/shell/RuntimeFileChecks.ps1
+          tests/windows/shell/InstallErrorChecks.ps1
+      - name: Production modal dialogs on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        shell: powershell
+        run: tests/windows/shell/Issue32And33Contracts.ps1
+      - name: API 37 report gate failure and selection contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          # Exercise the host's ordinary file encoding; report writers choose UTF-8.
+          PYTHONUTF8: '0'
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest discover -s tools/ci -p test_run_api37_report_tests.py -v
+      - name: API 37 SDK, NDK, ELF and source report suites
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHONUTF8: '0'
+          PYTHONIOENCODING: utf-8
+        run: python tools/ci/run_api37_report_tests.py --profile windows
   api37-report-tests:
     needs: [source-identity]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            profile: linux
-          - os: windows-2022
-            profile: windows
-          - os: windows-2025
-            profile: windows
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       # Exercise the host's ordinary file encoding; report writers choose UTF-8.
@@ -132,54 +174,7 @@ jobs:
         run: python -m unittest discover -s tools/ci -p test_run_api37_report_tests.py -v
       - name: SDK, NDK, ELF and source report suites
         shell: bash
-        run: python tools/ci/run_api37_report_tests.py --profile ${{ matrix.profile }}
-  update-contracts:
-    needs: [source-identity]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            tools/package
-            tests/windows/shell
-      - name: Release updater and control panel contracts on Windows PowerShell 5.1
-        shell: powershell
-        run: |
-          tests/windows/shell/UiLocalizationChecks.ps1
-          tests/windows/shell/PreferredLanguagesChecks.ps1
-          tests/windows/shell/MicrogDefaultsChecks.ps1
-          tests/windows/shell/ControlPanelRefreshChecks.ps1
-          tests/windows/shell/ControlPanelIconCacheChecks.ps1
-          tests/windows/shell/ControlPanelVirtualizationChecks.ps1
-          tests/windows/shell/ControlPanelActionChecks.ps1
-          tests/windows/shell/ControlPanelRequestChecks.ps1
-          tests/windows/shell/UpdateChecks.ps1
-          tests/windows/shell/UpdateTransportChecks.ps1
-          tests/windows/shell/ControlPanelUpdateChecks.ps1
-          tests/windows/shell/RuntimeFileChecks.ps1
-          tests/windows/shell/InstallErrorChecks.ps1
-      - name: Production modal dialogs on Windows PowerShell 5.1
-        timeout-minutes: 2
-        shell: powershell
-        run: tests/windows/shell/Issue32And33Contracts.ps1
-  reader-ownership:
-    needs: [source-identity]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Exact native reader ownership and handle reuse controls
-        shell: pwsh
-        run: tests/windows/test-process-reader-handles.ps1
+        run: python tools/ci/run_api37_report_tests.py --profile linux
   union-tsf:
     needs: [source-identity]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -192,7 +187,7 @@ jobs:
   # Host-only contract tests. Builds no longer wait for them: they run
   # alongside the build jobs and ci-required still requires them to pass.
   artifact-preflight:
-    needs: [source-identity, reader-ownership]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -2378,7 +2373,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, app-identity-restart, api37-report-tests, update-contracts, reader-ownership, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job
