@@ -69,6 +69,7 @@ struct Library {
   uint8_t* base = nullptr;
   uint8_t* load_bias = nullptr;
   size_t map_size = 0;
+  std::string load_notes;  // the loader's per-library notes, written once
   std::vector<std::pair<uintptr_t, uintptr_t>> writable;
   std::set<uintptr_t> made_writable;
   const Elf64_Phdr* file_phdr = nullptr;

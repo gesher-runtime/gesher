@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 /**
@@ -53,6 +54,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         return thread;
     });
     private Consumer<Intent> mPackageEventSender = PackageManagerService::broadcastPackageEvent;
+    private final List<Consumer<Intent>> mPackageEventListeners = new CopyOnWriteArrayList<>();
     private Consumer<ApkPackage> mEnabledStateKiller = this::restartEnabledPackage;
     private volatile Consumer<EnabledChange> mEnabledStateListener;
     private volatile Consumer<EnabledChange> mEnabledStateRestarter;
@@ -115,6 +117,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (Consumer<String> action : cleanup) action.accept(name);
     }
 
+    boolean hasTransientPackageState() { return mTransientEnabled; }
     private volatile AppOpsService mAppOps;
     private final java.util.concurrent.CopyOnWriteArrayList<Consumer<ApkPackage>> mPackageChanges =
             new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -307,11 +310,21 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     private void sendPackageEvent(Intent intent) {
+        // Server-local listeners observe committed events after the installer/PM locks
+        // are released. An app cannot inject these callbacks by sending a broadcast.
+        for (Consumer<Intent> listener : mPackageEventListeners) {
+            try { listener.accept(new Intent(intent)); }
+            catch (RuntimeException failure) {
+                SystemServer.log("package listener failed: " + failure.getClass().getSimpleName());
+            }
+        }
         try { mPackageEventSender.accept(intent); }
         catch (RuntimeException failure) {
             SystemServer.log("package event unavailable: " + failure.getClass().getSimpleName());
         }
     }
+
+    void onPackageEvent(Consumer<Intent> listener) { mPackageEventListeners.add(listener); }
 
     private static void broadcastPackageEvent(Intent intent) {
         long identity = Binder.clearCallingIdentity();
@@ -476,6 +489,19 @@ public final class PackageManagerService extends IPackageManager.Default {
                     flags));
         }
         return result;
+    }
+
+    /** Visibility to an installed service, from the already authenticated caller's package. */
+    synchronized boolean canSeeInstalledPackage(String source, String target) {
+        Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
+        for (String removing : mRemoving.keySet()) packages.remove(removing);
+        ApkPackage caller = packages.get(source);
+        if (caller == null) return false;
+        PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
+                this::isProtectedBroadcast);
+        // Package admission assigns isolated or authenticated shared identities
+        // in both signature-spoofing modes.
+        return visibility.canSee(caller.uid(), target);
     }
 
     /** The services {@code intent} resolves to, in every package. */

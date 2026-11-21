@@ -62,10 +62,18 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <activity android:name=".SpellCheckerActivity" android:exported="true" />
         <service android:name=".CounterService" android:exported="false">
             <property android:name="com.gesher.components.CONTRACT_PROPERTY" android:resource="@string/app_name" />
         </service>
         <service android:name=".LocalService" android:exported="false" />
+        <service android:name=".TestSpellChecker" android:exported="true"
+            android:permission="android.permission.BIND_TEXT_SERVICE" android:process=":checker">
+            <intent-filter>
+                <action android:name="android.service.textservice.SpellCheckerService" />
+            </intent-filter>
+            <meta-data android:name="android.view.textservice.scs" android:resource="@xml/test_spell_checker" />
+        </service>
         <service
             android:name=".ForegroundService"
             android:foregroundServiceType="specialUse"

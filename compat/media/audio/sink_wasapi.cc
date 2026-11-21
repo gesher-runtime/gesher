@@ -26,6 +26,8 @@
 #include <vector>
 
 #include "engine.h"
+
+#include <gesher/perf_trace.h>
 #include "log.h"
 #include "shared_state.h"
 #include "sink.h"
@@ -288,6 +290,10 @@ class WasapiSink : public Sink {
       if (FAILED(hr)) return Lost(hr);
       uint32_t target = std::min(target_frames_, g.buffer_frames);
       if (padding < target) {
+        // GESHER_PERF_TRACE: how long a refill takes, and how often the device
+        // had played everything it was given (an audible gap) before it.
+        static gesher::perf::Site refill_site("audio engine: WASAPI refill (count: device buffer found empty)");
+        const int64_t start = gesher::perf::Now();
         uint32_t n = target - padding;
         BYTE* data = nullptr;
         hr = g.render->GetBuffer(n, &data);
@@ -295,6 +301,7 @@ class WasapiSink : public Sink {
         mixer->MixGroup(i, reinterpret_cast<float*>(data), n);
         hr = g.render->ReleaseBuffer(n, 0);
         if (FAILED(hr)) return Lost(hr);
+        refill_site.Add(gesher::perf::Now() - start, g.running && padding == 0 ? 1 : 0);
       }
       if (!g.running) {
         hr = g.client->Start();
