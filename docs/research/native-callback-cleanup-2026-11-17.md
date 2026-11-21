@@ -147,8 +147,8 @@ the 80-case same-thread callback corpus (`callback_longjmp_contract.c`) against
 the pinned PR #120 artifacts of run `44162241853`, through
 `prepare-callback-baseline.py` and `run-callback-baseline.ps1`. Those artifacts
 expire, so the jobs would start failing for reasons unrelated to any change;
-they, the two scripts and the fixture were removed before merge. That
-collection was never a callback semantic pass.
+the workflow jobs were removed before merge. The two scripts and fixture remain
+as manual historical tools. That collection was never a callback semantic pass.
 
 Production translator cleanup, correct Jit owner selection, guest masks/FP
 state, allowed boundary discovery and an actual translated corpus pass remain
