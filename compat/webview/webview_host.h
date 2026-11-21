@@ -40,7 +40,8 @@ enum Event : int32_t {
   kPageFinished = 4,   // id: HTTP status (0 unknown); arg: -1 success, else
                        // COREWEBVIEW2_WEB_ERROR_STATUS; a: url; b: the last Navigate
                        // number handed to WebView2 when it started (decimal)
-  kSourceChanged = 5,  // arg: 1 new document, 0 same document; a: url
+  kSourceChanged = 5,  // arg: 1 new document, 0 same document; a: url; id: the
+                       // last Navigate number handed to WebView2
   kHistory = 6,        // arg: 1 can go back | 2 can go forward
   kTitle = 7,          // a: title
   kContentLoading = 8, // arg: 1 for an error page

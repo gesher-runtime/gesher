@@ -120,8 +120,9 @@ public final class WebViewOwnedResponsesHost {
             client.onEvent(EVENT_PAGE_FINISHED, 200, status, url, String.valueOf(started == null ? 0 : started),
                     null, null);
         }
+        /** SourceChanged: id is the last number handed over (api_number). */
         void sourceChanged(String url, boolean newDocument) {
-            client.onEvent(EVENT_SOURCE_CHANGED, 0, newDocument ? 1 : 0, url, null, null, null);
+            client.onEvent(EVENT_SOURCE_CHANGED, apiNumber, newDocument ? 1 : 0, url, null, null, null);
         }
         /** A WebResourceRequested for the main frame's or a frame's document. */
         void request(long id, String url, int context) {
@@ -511,6 +512,18 @@ public final class WebViewOwnedResponsesHost {
             host.sourceChanged(url + "#part", false);
             check(provider.mApiNavigations.size() == 0, "the fragment load stayed outstanding");
             check(host.starting(url + "#part", true, false) < 0, "a fragment load's URL stayed exempt");
+        });
+        scenario("the page's pushState to a pending load's URL leaves the load own", () -> {
+            for (String target : new String[] {"https://push.example/next", "https://push.example/next#part"}) {
+                WebViewOwnedResponsesHost provider = taking(new WebViewOwnedResponsesHost());
+                WebView2Host host = provider.mHost;
+                provider.loadUrl0(target);  // not handed to WebView2 yet
+                host.sourceChanged(target, false);  // history.pushState(target)
+                host.execute();
+                host.apiNavigation = false;  // another load took WebView2Host's flag
+                check(host.starting(target, false, false) > 0 && provider.mClient.overrides.get() == 0,
+                        "loadUrl(" + target + ") was asked about after the page's pushState to its URL");
+            }
         });
         if (scenarioFailures != 0) throw new AssertionError(scenarioFailures + " navigation scenarios failed");
     }

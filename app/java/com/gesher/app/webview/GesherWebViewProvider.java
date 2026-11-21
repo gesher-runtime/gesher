@@ -1920,8 +1920,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             // with the same URL is not left to take a later page navigation for its own.
             mApiNavigations.ended(number(b));
         } else if (type == WebView2Host.EVENT_SOURCE_CHANGED && arg == 0) {
-            // A load within the same document raises no NavigationStarting.
-            mApiNavigations.abandoned(a);
+            // A load within the same document (a fragment) raises no NavigationStarting;
+            // the page's pushState/replaceState does not end a load (id: the last number
+            // WebView2 had been handed).
+            mApiNavigations.sameDocument(a, id);
         }
         if (type == WebView2Host.EVENT_PARKED) {
             CountDownLatch parked = mParked;

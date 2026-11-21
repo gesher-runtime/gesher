@@ -69,13 +69,32 @@ final class ApiNavigations {
         return true;
     }
 
-    /** {@code url}'s load will not start (Navigate failed, or it was a fragment change). */
+    /** {@code url}'s load will not start (its Navigate failed). */
     synchronized void abandoned(String url) {
         String key = canonical(url);
         if (key == null) return;
         Iterator<Entry> i = mIssued.iterator();
         while (i.hasNext()) {
             if (key.equals(i.next().url)) {
+                i.remove();
+                return;
+            }
+        }
+    }
+
+    /**
+     * The main frame's document moved to {@code url} without a NavigationStarting
+     * (a fragment navigation, or the page's history.pushState/replaceState), after
+     * WebView2 had been handed the loads up to {@code handed}. Only a fragment load the
+     * WebView issued and WebView2 had already been given ends here.
+     */
+    synchronized void sameDocument(String url, long handed) {
+        String key = canonical(url);
+        if (key == null || key.indexOf('#') < 0) return;
+        Iterator<Entry> i = mIssued.iterator();
+        while (i.hasNext()) {
+            Entry e = i.next();
+            if (e.number <= handed && key.equals(e.url)) {
                 i.remove();
                 return;
             }

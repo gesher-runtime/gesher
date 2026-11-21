@@ -205,7 +205,7 @@ public final class WebView2Host {
     /**
      * {@code number}: the load's number in the provider's ApiNavigations (0 for none);
      * EVENT_PAGE_FINISHED reports the last number WebView2 had been handed when its
-     * navigation started.
+     * navigation started, EVENT_SOURCE_CHANGED (id) the last one when it was raised.
      */
     public void navigate(String url, String headers, long number) {
         navigate(url, headers, "GET", null, number);

@@ -1230,7 +1230,8 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         sender->get_Source(source.Put());
                         BOOL new_document = TRUE; // Fail closed: never invent a fragment finish.
                         args->get_IsNewDocument(&new_document);
-                        impl->Report(kSourceChanged, 0, new_document ? 1 : 0, source.str());
+                        impl->Report(kSourceChanged, impl->api_number, new_document ? 1 : 0,
+                                     source.str());
                         return S_OK;
                       })
           .get(),
