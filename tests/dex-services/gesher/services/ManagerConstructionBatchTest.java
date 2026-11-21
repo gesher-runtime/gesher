@@ -126,6 +126,10 @@ public final class ManagerConstructionBatchTest {
                         && SubscriptionManager.getPhoneId(0) == SubscriptionManager.DEFAULT_PHONE_INDEX,
                 "absent subscription mapping invented a slot or lost Android's phone sentinel");
         SubscriptionContractTest.verifyService(ISub.Stub.asInterface(created.get("isub")));
+        TelephonyManager telephony = context.getSystemService(TelephonyManager.class);
+        require(telephony != null && "".equals(telephony.getNetworkCountryIso())
+                        && "".equals(telephony.getSimCountryIso()),
+                "no-SIM TelephonyManager returned null or unexpected country ISO");
         for (int slot = 0; slot < TelephonyManager.getDefault().getActiveModemCount(); slot++) {
             require(SubscriptionManager.getSubscriptionId(slot) == SubscriptionManager.INVALID_SUBSCRIPTION_ID
                             && subscriptions.getEnabledSubscriptionId(slot)

@@ -33,11 +33,18 @@ expected. Windows-only execution tests continue on GitHub-hosted Windows.
 ## Trust and rollout
 
 The CI caller pins `framework.yml` to
-`93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7`. That policy pins the runner-route
+`7a45c2468c270bfe68ee5f854aa9d4feaf2208b3`. That policy pins the runner-route
 and local-cache actions to `b9510513a538d80669895521d1061b54fbe11aff`.
 Changes to PR workflow files cannot change the policy authorized by the runner
 group. Publishing a replacement requires reviewing/pinning a new immutable
 policy and explicitly updating the group allowlist.
+
+The pinned `framework.yml` is the one CI runs, also on GitHub-hosted runners,
+so a change to `framework.yml` on `main` takes effect only once the pin moves
+to a `main` commit that contains it (the framework steps added after the
+previous pin, such as building `crashnotice.apk` for the package job, did not
+run until then). Update the `gesher-build-trial` allowlist to the same commit
+before turning `GESHER_SELF_HOSTED_PRS` back on.
 
 The route job runs on GitHub, without checking out PR code. It permits local
 execution only when all of these hold:
@@ -58,7 +65,7 @@ The organization group `gesher-build-trial` permits only this repository and:
 
 ```
 gesher-runtime/gesher/.github/workflows/arm64-windows-self-hosted.yml@refs/heads/main
-gesher-runtime/gesher/.github/workflows/framework.yml@93239cc6ea2702ff5f97c7bbe7c8dd64ea6110c7
+gesher-runtime/gesher/.github/workflows/framework.yml@7a45c2468c270bfe68ee5f854aa9d4feaf2208b3
 ```
 
 The first entry remains for explicit ARM64 diagnostics. Turn off its automatic

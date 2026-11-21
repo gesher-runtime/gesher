@@ -17,7 +17,8 @@ jobs:
       github.event.workflow_run.head_repository.id == github.event.repository.id &&
       startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # About 30 GitHub reads; each may wait up to 15 minutes for a quota reset.
+    timeout-minutes: 35
     concurrency:
       group: gesher-release-publish
       queue: max

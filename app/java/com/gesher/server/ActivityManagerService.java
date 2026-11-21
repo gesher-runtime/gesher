@@ -12,6 +12,7 @@ import android.app.IApplicationThread;
 import android.app.IServiceConnection;
 import android.app.Notification;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.IIntentReceiver;
 import android.content.IIntentSender;
 import android.content.Intent;
@@ -69,6 +70,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         mProviders = new ContentProviders(pm, atm);
         mPendingIntents = new PendingIntents(this, pm);
         atm.setActivityManager(this);
+        pm.appOps().attach(mCallers, this::appOpsUidStates);
         pm.setEnabledStateListener(this::cleanupDisabledPackageComponents,
                 change -> atm.restartForEnabledState(change.pkg, () -> change.restartCurrent(pm)));
     }
@@ -84,6 +86,14 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     CallerIdentity callers() { return mCallers; }
+
+    SettingsProvider settingsProvider() { return mProviders.settingsProvider(); }
+    private java.util.Map<Integer, AppOpsService.UidState> appOpsUidStates() {
+        java.util.Map<Integer, AppOpsService.UidState> states = mAtm.appOpsUidStates();
+        mServices.addAppOpsForegroundServices(states);
+        return states;
+    }
+
 
     void setAccountManager(AccountManagerService accounts) { mAtm.setAccountManager(accounts); }
 
@@ -108,6 +118,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
     /** An app process is gone: its services, receivers and providers too. */
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
         mServices.processDied(app);
+        mPm.appOps().requestUidStateRefresh();
         mBroadcasts.processDied(app);
         // Providers it used: their processes may have no other client left.
         for (ActivityTaskManagerService.ProcessRecord p : mProviders.processDied(app)) {
@@ -311,6 +322,65 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     // --- content providers (ContentProviders) -------------------------------------------
 
+    /** Internal chooser metadata resolution. Android's IntentResolver has
+     * GET_ANY_PROVIDER_TYPE; this server-owned chooser uses its platform identity
+     * for that metadata lookup only. The resolver/provider handle is never given to
+     * the creator, whose identity still controls activity and URI-grant admission. */
+    android.content.ContentResolver mimeResolver(ApplicationInfo creator,
+            ActivityTaskManagerService.ProcessRecord process) {
+        ApplicationInfo info = mPm.getApplicationInfo("android", 0, 0);
+        // The caller process owns only the temporary provider reference, not the
+        // lookup authority. Release it before showing or launching any choice.
+        ActivityTaskManagerService.ProcessRecord client = process != null
+                && creator.packageName.equals(process.packageName) ? process : null;
+        android.content.Context context = new android.content.ContextWrapper(null) {
+            @Override public String getPackageName() { return info.packageName; }
+            @Override public String getOpPackageName() { return info.packageName; }
+            @Override public ApplicationInfo getApplicationInfo() { return info; }
+            @Override public int getUserId() { return 0; }
+            @Override public android.content.AttributionSource getAttributionSource() {
+                return new android.content.AttributionSource(info.uid, info.packageName, null);
+            }
+        };
+        return new android.content.ContentResolver(context) {
+            private final java.util.IdentityHashMap<android.content.IContentProvider,
+                    java.util.ArrayDeque<ContentProviderHolder>> held = new java.util.IdentityHashMap<>();
+            @Override protected android.content.IContentProvider acquireProvider(android.content.Context ignored, String authority) {
+                if (!mCallers.isSystem()) throw new SecurityException("Chooser MIME lookup requires server identity");
+                if (android.content.ContentProvider.getUserIdFromAuthority(authority, 0) != 0) {
+                    throw new SecurityException("Only user 0 is available");
+                }
+                ContentProviderHolder holder = mProviders.getContentProvider(client, info.packageName,
+                        android.content.ContentProvider.getAuthorityWithoutUserId(authority), true, true);
+                if (holder == null || holder.provider == null) return null;
+                synchronized (held) {
+                    held.computeIfAbsent(holder.provider, ignoredProvider -> new java.util.ArrayDeque<>()).add(holder);
+                }
+                return holder.provider;
+            }
+            @Override public boolean releaseProvider(android.content.IContentProvider provider) {
+                ContentProviderHolder holder;
+                synchronized (held) {
+                    java.util.ArrayDeque<ContentProviderHolder> holders = held.get(provider);
+                    if (holders == null || holders.isEmpty()) return false;
+                    holder = holders.removeFirst();
+                    if (holders.isEmpty()) held.remove(provider);
+                }
+                if (!holder.noReleaseNeeded && holder.connection != null) mProviders.removeContentProvider(holder.connection, true);
+                return true;
+            }
+            @Override protected android.content.IContentProvider acquireUnstableProvider(android.content.Context context, String authority) {
+                throw new UnsupportedOperationException("MIME resolution uses stable provider acquisition");
+            }
+            @Override public boolean releaseUnstableProvider(android.content.IContentProvider provider) {
+                throw new UnsupportedOperationException("MIME resolution uses stable provider acquisition");
+            }
+            @Override public void unstableProviderDied(android.content.IContentProvider provider) {
+                throw new UnsupportedOperationException("MIME resolution uses stable provider acquisition");
+            }
+        };
+    }
+
     @Override
     public ContentProviderHolder getContentProvider(IApplicationThread caller,
             String callingPackage, String name, int userId, boolean stable) {
@@ -408,6 +478,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     UriGrants uriGrants() { return mProviders.uriGrants(); }
+    DocumentsStorageProvider documents() { return mProviders.documents(); }
 
     @Override
     public void grantUriPermission(IApplicationThread caller, String targetPackage,
@@ -624,6 +695,13 @@ public final class ActivityManagerService extends IActivityManager.Default {
             String instanceName, String callingPackage, int userId) {
         return mServices.bindService(caller, service, resolvedType, connection, flags,
                 callingPackage);
+    }
+
+    /** The text-services server may bind only the provider generation it selected. */
+    int bindSpellChecker(Intent service, IServiceConnection connection,
+            java.util.function.BooleanSupplier current) {
+        return mServices.bindService(null, service, null, connection,
+                Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT_BACKGROUND, "android", current);
     }
 
     @Override

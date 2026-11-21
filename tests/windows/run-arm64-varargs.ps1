@@ -43,7 +43,7 @@ function InvokeVarargs([string] $Exe, [string[]] $Arguments, [int] $ExpectedExit
 
 $smoke = InvokeVarargs (Join-Path $Dir 'arm64_smoke_test.exe') @()
 if ($smoke -notmatch 'arm64_smoke_test all passed' -or
-    @([regex]::Matches($smoke, 'incompatible host va_list ABI rejected\s+ok')).Count -ne 4 -or
+    @([regex]::Matches($smoke, 'incompatible host va_list ABI rejected\s+ok')).Count -ne 5 -or
     $smoke -notmatch 'null host rejected before initialization\s+ok') { throw 'Missing API rejection/smoke proof' }
 foreach ($mode in 'shallow', 'deep') {
   $text = InvokeVarargs (Join-Path $Dir 'arm64_elf_test.exe') @((Join-Path $Dir 'arm64_varargs_baseline.so'), $mode)

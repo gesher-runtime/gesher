@@ -397,7 +397,10 @@ awaits combined CI.
 
 The raw DNS worker uses the chosen adapter's configured servers and bound
 UDP, up to three servers (one with NO_RETRY), cache bypass and TCP fallback
-for truncated answers. Only a completion byte uses its pollable socketpair;
+for truncated answers. Like Android's DnsResolver it makes two rounds over the
+servers, waiting 5 seconds on the first and its scaled timeout (at least one
+second) on the others, so one lost or slow answer from a runner's single
+server is retried instead of failing with ETIMEDOUT. Only a completion byte uses its pollable socketpair;
 the full answer remains available until nresult consumes/closes the fd.
 Cancellation shuts down the active query. Forced truncation/TCP fallback,
 cache transitions (including mixed Java/NDK binding) and IPv6-only default

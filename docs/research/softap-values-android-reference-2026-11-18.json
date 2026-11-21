@@ -1,0 +1,398 @@
+{
+  "schema_version": 1,
+  "selected_api_profile": "SDK36 public/protected SoftApConfiguration, Builder and WpsInfo; 40 declarations",
+  "wire_reference": {
+    "profile": "android16-r4",
+    "aosp_wifi_commit": "e3f09203409da7a91d2c5cf9f0109da6d5243319",
+    "kind": "Independently compiled hash-pinned complete upstream values and original Environment helper, executing Android native Parcel",
+    "upstream_sources": {
+      "SoftApConfiguration.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/SoftApConfiguration.java",
+        "raw_sha256": "3c5d8887e861393f3d83a3dbcd4eb9fcfba552ce49a1812ee595c1cb58990f2a",
+        "compiled_source_sha256": "685b9a97338c2a4a37ea6fbfd50d4c284fff6c2738e2f5ea7eb7e564d6e90587",
+        "removed_build_annotations": 44,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar imports"
+        ]
+      },
+      "WpsInfo.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/WpsInfo.java",
+        "raw_sha256": "8e0f8020e96e6a2fe5365df41c8e05d92e5b3da6f03196f04547ffccbe8dbc50",
+        "compiled_source_sha256": "8e0f8020e96e6a2fe5365df41c8e05d92e5b3da6f03196f04547ffccbe8dbc50",
+        "removed_build_annotations": 0,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar imports"
+        ]
+      },
+      "util/Environment.java": {
+        "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/e3f09203409da7a91d2c5cf9f0109da6d5243319/framework/java/android/net/wifi/util/Environment.java",
+        "raw_sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d",
+        "compiled_source_sha256": "883021cad62185fd0ff650ef7b309888f4661268179b0f48b61caac3dd6a106d",
+        "removed_build_annotations": 0,
+        "adaptations": [
+          "Unavailable build annotations removed",
+          "Genuine framework jarjar imports"
+        ]
+      }
+    },
+    "compile_only_excluded": [
+      "android/net/wifi/WifiManager.class"
+    ]
+  },
+  "stock_image": {
+    "sdk": 36,
+    "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+    "schema_difference": "All eight complete stock SoftAP payloads are four bytes shorter. Pinned r4 retains mIsBandOptimizationEnabled at the end; stock source predates that field. No fields or bytes were removed or normalized. All four WPS payloads match all profiles.",
+    "source_comparison": {
+      "url": "https://android.googlesource.com/platform/packages/modules/Wifi/+/android-16.0.0_r1/framework/java/android/net/wifi/SoftApConfiguration.java",
+      "sha256": "96ec3d4e81d0cb3d776887cd521db8807fdaaa82877ddda3d4b60ed073687cfd"
+    }
+  },
+  "wire_cases": [
+    {
+      "case": "softap_default",
+      "bytes": 124,
+      "sha256": "a54c39dd1d75fda23b0bf34ec27ccb7b85ad57fbe21f236c085c9553427935e7"
+    },
+    {
+      "case": "softap_single6",
+      "bytes": 124,
+      "sha256": "21fc0215070bbbbde718e7ae3992c558c402e31eb5ca074c939fe3592978bb79"
+    },
+    {
+      "case": "softap_pair",
+      "bytes": 132,
+      "sha256": "4589293fcb098a3ac80fdd777013bbf37d0eeabedb0bb644c07ad0e80dd96964"
+    },
+    {
+      "case": "softap_composite",
+      "bytes": 132,
+      "sha256": "00c269bc548ae7fa85987d265d3497b5069b86ab2841bdf5090a0c818ea372f3"
+    },
+    {
+      "case": "softap_full",
+      "bytes": 396,
+      "sha256": "11fee18b32b3831d1868a14f2395fce7f6582b572a79964d048948521a04e5fb"
+    },
+    {
+      "case": "softap_binary_ssid",
+      "bytes": 184,
+      "sha256": "8c7381ebe027a2299af1923daed0d70f84d5e023f4ae85a66efbd82941376e7f"
+    },
+    {
+      "case": "softap_owe",
+      "bytes": 184,
+      "sha256": "77226c0113e5594e16902dcca492aaa92910c44f94b965c7abbb69e5e83f225a"
+    },
+    {
+      "case": "softap_vendor",
+      "bytes": 584,
+      "sha256": "cddd77000bfb2c93e6e1458ea7bb184b2de2e4d9537bff859f297367b1ee8dd0"
+    },
+    {
+      "case": "wps_default",
+      "bytes": 12,
+      "sha256": "35ddf5c90eb41b8cea336554434d1a1a047b4f49338adcb74f118301553fff8a"
+    },
+    {
+      "case": "wps_null_copy",
+      "bytes": 12,
+      "sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1"
+    },
+    {
+      "case": "wps_full",
+      "bytes": 68,
+      "sha256": "c77859ee8e08d6fd7b173e273ca53c0240de465ec24836c6db98a355e8ea2558"
+    },
+    {
+      "case": "wps_unchecked",
+      "bytes": 44,
+      "sha256": "1b6c7700d240b4bc9bfd5ec874f50c530685293ec73826ee4d6032c7ecc519cb"
+    }
+  ],
+  "native_profiles": {
+    "reference": {
+      "checks": 1252,
+      "exit_code": 0,
+      "seconds": 4.961,
+      "wire_cases": [
+        {
+          "case": "softap_default",
+          "bytes": 120,
+          "sha256": "03d7559e9e148914850c64f33899708a3e32b9d3785fedb7f1e02cab907b3818"
+        },
+        {
+          "case": "softap_single6",
+          "bytes": 120,
+          "sha256": "c8c190e763120c3bbf209e384f3393a46ef2318ccf8f4c3102226840b9b43e43"
+        },
+        {
+          "case": "softap_pair",
+          "bytes": 128,
+          "sha256": "da139714a6dc890ba41e4528f8d615072e02c4d6091dfc8074b31659c96ab25f"
+        },
+        {
+          "case": "softap_composite",
+          "bytes": 128,
+          "sha256": "9d09ade9668fbe2f003c0fd330ab896240dfc9974783294f43f6c1ce619d627f"
+        },
+        {
+          "case": "softap_full",
+          "bytes": 392,
+          "sha256": "85cbddd82bf25423759985e3c953be8c46dede821e873719e58c59aeabc7d5ae"
+        },
+        {
+          "case": "softap_binary_ssid",
+          "bytes": 180,
+          "sha256": "f593ffe68305e049307a85915f92fe28ae4c7c653d6ea0dab46808e227366f01"
+        },
+        {
+          "case": "softap_owe",
+          "bytes": 180,
+          "sha256": "7b65c04f2095029b10fce9132913352d7824bd259d8e5dd0b361d10d29aafb9f"
+        },
+        {
+          "case": "softap_vendor",
+          "bytes": 580,
+          "sha256": "523fc4cbf86d3cdfde71126d68073fbb568c5f02cdb5fd35a940b5464a9d72ea"
+        },
+        {
+          "case": "wps_default",
+          "bytes": 12,
+          "sha256": "35ddf5c90eb41b8cea336554434d1a1a047b4f49338adcb74f118301553fff8a"
+        },
+        {
+          "case": "wps_null_copy",
+          "bytes": 12,
+          "sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1"
+        },
+        {
+          "case": "wps_full",
+          "bytes": 68,
+          "sha256": "c77859ee8e08d6fd7b173e273ca53c0240de465ec24836c6db98a355e8ea2558"
+        },
+        {
+          "case": "wps_unchecked",
+          "bytes": 44,
+          "sha256": "1b6c7700d240b4bc9bfd5ec874f50c530685293ec73826ee4d6032c7ecc519cb"
+        }
+      ],
+      "receipt_sha256": "2a3258fe0885889228319d66e1a82091e431307e099b186e11d887c501d08f60",
+      "output_sha256": "a45a5996e41df152a92c467b1c6e927a86d3a1b7076ef845d726f50b909f2e4f",
+      "output": "SoftAP/WPS oracle mode=reference; SDK=36; fingerprint=Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys\nprovider android.net.wifi.SoftApConfiguration=java.lang.BootClassLoader@85093c2\nprovider android.net.wifi.WpsInfo=java.lang.BootClassLoader@85093c2\nprovider android.net.wifi.WifiSsid=java.lang.BootClassLoader@85093c2\nprovider android.net.wifi.ScanResult=java.lang.BootClassLoader@85093c2\nprovider android.net.MacAddress=java.lang.BootClassLoader@85093c2\nSOFTAP_VALUES_PARCEL softap_default bytes=120 sha256=03d7559e9e148914850c64f33899708a3e32b9d3785fedb7f1e02cab907b3818\nSOFTAP_VALUES_PARCEL softap_single6 bytes=120 sha256=c8c190e763120c3bbf209e384f3393a46ef2318ccf8f4c3102226840b9b43e43\nSOFTAP_VALUES_PARCEL softap_pair bytes=128 sha256=da139714a6dc890ba41e4528f8d615072e02c4d6091dfc8074b31659c96ab25f\nSOFTAP_VALUES_PARCEL softap_composite bytes=128 sha256=9d09ade9668fbe2f003c0fd330ab896240dfc9974783294f43f6c1ce619d627f\nSOFTAP_VALUES_PARCEL softap_full bytes=392 sha256=85cbddd82bf25423759985e3c953be8c46dede821e873719e58c59aeabc7d5ae\nSOFTAP_VALUES_PARCEL softap_binary_ssid bytes=180 sha256=f593ffe68305e049307a85915f92fe28ae4c7c653d6ea0dab46808e227366f01\nSOFTAP_VALUES_PARCEL softap_owe bytes=180 sha256=7b65c04f2095029b10fce9132913352d7824bd259d8e5dd0b361d10d29aafb9f\nSOFTAP_VALUES_PARCEL softap_vendor bytes=580 sha256=523fc4cbf86d3cdfde71126d68073fbb568c5f02cdb5fd35a940b5464a9d72ea\nSOFTAP_VALUES_PARCEL wps_default bytes=12 sha256=35ddf5c90eb41b8cea336554434d1a1a047b4f49338adcb74f118301553fff8a\nSOFTAP_VALUES_PARCEL wps_null_copy bytes=12 sha256=a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1\nSOFTAP_VALUES_PARCEL wps_full bytes=68 sha256=c77859ee8e08d6fd7b173e273ca53c0240de465ec24836c6db98a355e8ea2558\nSOFTAP_VALUES_PARCEL wps_unchecked bytes=44 sha256=1b6c7700d240b4bc9bfd5ec874f50c530685293ec73826ee4d6032c7ecc519cb\nSoftApValuesContractTest all passed: 1252 checks; parcel=true; profile=stock-api36\nSoftAP/WPS oracle reference complete with real Android native Parcel\n"
+    },
+    "pinned-r4": {
+      "checks": 1257,
+      "exit_code": 0,
+      "seconds": 4.338,
+      "wire_cases": [
+        {
+          "case": "softap_default",
+          "bytes": 124,
+          "sha256": "a54c39dd1d75fda23b0bf34ec27ccb7b85ad57fbe21f236c085c9553427935e7"
+        },
+        {
+          "case": "softap_single6",
+          "bytes": 124,
+          "sha256": "21fc0215070bbbbde718e7ae3992c558c402e31eb5ca074c939fe3592978bb79"
+        },
+        {
+          "case": "softap_pair",
+          "bytes": 132,
+          "sha256": "4589293fcb098a3ac80fdd777013bbf37d0eeabedb0bb644c07ad0e80dd96964"
+        },
+        {
+          "case": "softap_composite",
+          "bytes": 132,
+          "sha256": "00c269bc548ae7fa85987d265d3497b5069b86ab2841bdf5090a0c818ea372f3"
+        },
+        {
+          "case": "softap_full",
+          "bytes": 396,
+          "sha256": "11fee18b32b3831d1868a14f2395fce7f6582b572a79964d048948521a04e5fb"
+        },
+        {
+          "case": "softap_binary_ssid",
+          "bytes": 184,
+          "sha256": "8c7381ebe027a2299af1923daed0d70f84d5e023f4ae85a66efbd82941376e7f"
+        },
+        {
+          "case": "softap_owe",
+          "bytes": 184,
+          "sha256": "77226c0113e5594e16902dcca492aaa92910c44f94b965c7abbb69e5e83f225a"
+        },
+        {
+          "case": "softap_vendor",
+          "bytes": 584,
+          "sha256": "cddd77000bfb2c93e6e1458ea7bb184b2de2e4d9537bff859f297367b1ee8dd0"
+        },
+        {
+          "case": "wps_default",
+          "bytes": 12,
+          "sha256": "35ddf5c90eb41b8cea336554434d1a1a047b4f49338adcb74f118301553fff8a"
+        },
+        {
+          "case": "wps_null_copy",
+          "bytes": 12,
+          "sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1"
+        },
+        {
+          "case": "wps_full",
+          "bytes": 68,
+          "sha256": "c77859ee8e08d6fd7b173e273ca53c0240de465ec24836c6db98a355e8ea2558"
+        },
+        {
+          "case": "wps_unchecked",
+          "bytes": 44,
+          "sha256": "1b6c7700d240b4bc9bfd5ec874f50c530685293ec73826ee4d6032c7ecc519cb"
+        }
+      ],
+      "receipt_sha256": "c9999668dc803a58496ddbf606b7589b9963c2c23ae3b256502b740d2f32699c",
+      "output_sha256": "82fab0bd003714d9d46eb029da6760d73e9571c262c5bfed5d65aa20dd55e357",
+      "output": "SoftAP/WPS oracle mode=pinned-r4; SDK=36; fingerprint=Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys\nprovider android.net.wifi.SoftApConfiguration=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.WpsInfo=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.util.Environment=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/pinned-r4.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nSOFTAP_VALUES_PARCEL softap_default bytes=124 sha256=a54c39dd1d75fda23b0bf34ec27ccb7b85ad57fbe21f236c085c9553427935e7\nSOFTAP_VALUES_PARCEL softap_single6 bytes=124 sha256=21fc0215070bbbbde718e7ae3992c558c402e31eb5ca074c939fe3592978bb79\nSOFTAP_VALUES_PARCEL softap_pair bytes=132 sha256=4589293fcb098a3ac80fdd777013bbf37d0eeabedb0bb644c07ad0e80dd96964\nSOFTAP_VALUES_PARCEL softap_composite bytes=132 sha256=00c269bc548ae7fa85987d265d3497b5069b86ab2841bdf5090a0c818ea372f3\nSOFTAP_VALUES_PARCEL softap_full bytes=396 sha256=11fee18b32b3831d1868a14f2395fce7f6582b572a79964d048948521a04e5fb\nSOFTAP_VALUES_PARCEL softap_binary_ssid bytes=184 sha256=8c7381ebe027a2299af1923daed0d70f84d5e023f4ae85a66efbd82941376e7f\nSOFTAP_VALUES_PARCEL softap_owe bytes=184 sha256=77226c0113e5594e16902dcca492aaa92910c44f94b965c7abbb69e5e83f225a\nSOFTAP_VALUES_PARCEL softap_vendor bytes=584 sha256=cddd77000bfb2c93e6e1458ea7bb184b2de2e4d9537bff859f297367b1ee8dd0\nSOFTAP_VALUES_PARCEL wps_default bytes=12 sha256=35ddf5c90eb41b8cea336554434d1a1a047b4f49338adcb74f118301553fff8a\nSOFTAP_VALUES_PARCEL wps_null_copy bytes=12 sha256=a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1\nSOFTAP_VALUES_PARCEL wps_full bytes=68 sha256=c77859ee8e08d6fd7b173e273ca53c0240de465ec24836c6db98a355e8ea2558\nSOFTAP_VALUES_PARCEL wps_unchecked bytes=44 sha256=1b6c7700d240b4bc9bfd5ec874f50c530685293ec73826ee4d6032c7ecc519cb\nSoftApValuesContractTest all passed: 1257 checks; parcel=true; profile=android16-r4\nSoftAP/WPS oracle pinned-r4 complete with real Android native Parcel\n"
+    },
+    "candidate": {
+      "checks": 1257,
+      "exit_code": 0,
+      "seconds": 4.972,
+      "wire_cases": [
+        {
+          "case": "softap_default",
+          "bytes": 124,
+          "sha256": "a54c39dd1d75fda23b0bf34ec27ccb7b85ad57fbe21f236c085c9553427935e7"
+        },
+        {
+          "case": "softap_single6",
+          "bytes": 124,
+          "sha256": "21fc0215070bbbbde718e7ae3992c558c402e31eb5ca074c939fe3592978bb79"
+        },
+        {
+          "case": "softap_pair",
+          "bytes": 132,
+          "sha256": "4589293fcb098a3ac80fdd777013bbf37d0eeabedb0bb644c07ad0e80dd96964"
+        },
+        {
+          "case": "softap_composite",
+          "bytes": 132,
+          "sha256": "00c269bc548ae7fa85987d265d3497b5069b86ab2841bdf5090a0c818ea372f3"
+        },
+        {
+          "case": "softap_full",
+          "bytes": 396,
+          "sha256": "11fee18b32b3831d1868a14f2395fce7f6582b572a79964d048948521a04e5fb"
+        },
+        {
+          "case": "softap_binary_ssid",
+          "bytes": 184,
+          "sha256": "8c7381ebe027a2299af1923daed0d70f84d5e023f4ae85a66efbd82941376e7f"
+        },
+        {
+          "case": "softap_owe",
+          "bytes": 184,
+          "sha256": "77226c0113e5594e16902dcca492aaa92910c44f94b965c7abbb69e5e83f225a"
+        },
+        {
+          "case": "softap_vendor",
+          "bytes": 584,
+          "sha256": "cddd77000bfb2c93e6e1458ea7bb184b2de2e4d9537bff859f297367b1ee8dd0"
+        },
+        {
+          "case": "wps_default",
+          "bytes": 12,
+          "sha256": "35ddf5c90eb41b8cea336554434d1a1a047b4f49338adcb74f118301553fff8a"
+        },
+        {
+          "case": "wps_null_copy",
+          "bytes": 12,
+          "sha256": "a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1"
+        },
+        {
+          "case": "wps_full",
+          "bytes": 68,
+          "sha256": "c77859ee8e08d6fd7b173e273ca53c0240de465ec24836c6db98a355e8ea2558"
+        },
+        {
+          "case": "wps_unchecked",
+          "bytes": 44,
+          "sha256": "1b6c7700d240b4bc9bfd5ec874f50c530685293ec73826ee4d6032c7ecc519cb"
+        }
+      ],
+      "receipt_sha256": "ae1bda8bd50c05fff9192b18e9115da4a6aab8e6ab30c6d29fe5912da1bd887f",
+      "output_sha256": "49c9d58ffa51fa4adb664b0162bb15d4130e76b2a9f3e957bf25bd57a0277a32",
+      "output": "SoftAP/WPS oracle mode=candidate; SDK=36; fingerprint=Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys\nprovider android.net.wifi.SoftApConfiguration=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.WpsInfo=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.WifiInfo=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.WifiConfiguration=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.WifiEnterpriseConfig=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.SecurityParams=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.ParcelUtil=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.OuiKeyedData=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.util.PersistableBundleUtils=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.WifiSsid=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.util.HexEncoding=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.SupplicantState=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.MloLink=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.ScanResult=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.ScanResultSecurity=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.wifi.AnqpInformationElement=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.MacAddress=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nprovider android.net.TransportInfo=gesher.services.SoftApValuesOracle$OwnedLoader[DexPathList[[zip file \"/data/local/tmp/gesher-softap-values-65ca7f469748/candidate.jar\"],nativeLibraryDirectories=[/system/lib64, /system_ext/lib64]]]\nSOFTAP_VALUES_PARCEL softap_default bytes=124 sha256=a54c39dd1d75fda23b0bf34ec27ccb7b85ad57fbe21f236c085c9553427935e7\nSOFTAP_VALUES_PARCEL softap_single6 bytes=124 sha256=21fc0215070bbbbde718e7ae3992c558c402e31eb5ca074c939fe3592978bb79\nSOFTAP_VALUES_PARCEL softap_pair bytes=132 sha256=4589293fcb098a3ac80fdd777013bbf37d0eeabedb0bb644c07ad0e80dd96964\nSOFTAP_VALUES_PARCEL softap_composite bytes=132 sha256=00c269bc548ae7fa85987d265d3497b5069b86ab2841bdf5090a0c818ea372f3\nSOFTAP_VALUES_PARCEL softap_full bytes=396 sha256=11fee18b32b3831d1868a14f2395fce7f6582b572a79964d048948521a04e5fb\nSOFTAP_VALUES_PARCEL softap_binary_ssid bytes=184 sha256=8c7381ebe027a2299af1923daed0d70f84d5e023f4ae85a66efbd82941376e7f\nSOFTAP_VALUES_PARCEL softap_owe bytes=184 sha256=77226c0113e5594e16902dcca492aaa92910c44f94b965c7abbb69e5e83f225a\nSOFTAP_VALUES_PARCEL softap_vendor bytes=584 sha256=cddd77000bfb2c93e6e1458ea7bb184b2de2e4d9537bff859f297367b1ee8dd0\nSOFTAP_VALUES_PARCEL wps_default bytes=12 sha256=35ddf5c90eb41b8cea336554434d1a1a047b4f49338adcb74f118301553fff8a\nSOFTAP_VALUES_PARCEL wps_null_copy bytes=12 sha256=a726945aefa97eb220a4cb0ea8dcf9d5bbe181b5414f90ae37dc20fa50af7aa1\nSOFTAP_VALUES_PARCEL wps_full bytes=68 sha256=c77859ee8e08d6fd7b173e273ca53c0240de465ec24836c6db98a355e8ea2558\nSOFTAP_VALUES_PARCEL wps_unchecked bytes=44 sha256=1b6c7700d240b4bc9bfd5ec874f50c530685293ec73826ee4d6032c7ecc519cb\nSoftApValuesContractTest all passed: 1257 checks; parcel=true; profile=android16-r4\nSoftAP/WPS oracle candidate complete with real Android native Parcel\n"
+    }
+  },
+  "build": {
+    "manifest_sha256": "bbfa56c3c0fcee3dc563d43cf1628a5a2b07d790e1b97ee7a0caa007dbc34713",
+    "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+    "d8_sha256": "e0c2803fbf9a1258051c3202daad46a2e00f33a0eb91258ac9fd373df0a832ce",
+    "artifacts": {
+      "candidate-classes.jar": {
+        "sha256": "15be59cee103725ffddc18fa99f39ec072fa030da784756e47d14bd90e488d9d",
+        "bytes": 162524
+      },
+      "candidate.jar": {
+        "sha256": "65ca7f469748051831823ccd009ae7f242b723e5a58f82b49f56574764781ea9",
+        "bytes": 91972
+      },
+      "launcher-classes.jar": {
+        "sha256": "a71c50b6afe36c047411c98cda98a903e3160ea6de52af43f2b0e064a14bb5f5",
+        "bytes": 3907
+      },
+      "launcher.jar": {
+        "sha256": "d9edec6f69e72c9cca5941d685f1c55232795fba0b5e043e1708b75885c16b84",
+        "bytes": 3434
+      },
+      "pinned-r4-classes.jar": {
+        "sha256": "aa635c018a77cab9e15ca2b24ab17a2b8a50bcc6bcaecf10795c70cf123002ad",
+        "bytes": 34738
+      },
+      "pinned-r4.jar": {
+        "sha256": "915cd72fdc443943d6bc8223e8020feba45ed771f6b9e53b508574a9b01c20f5",
+        "bytes": 27151
+      },
+      "reference-classes.jar": {
+        "sha256": "2a45f05f07686b5f511a03a7e188d17ba036c07b7eba6c0888ae7a828dc65cc0",
+        "bytes": 13864
+      },
+      "reference.jar": {
+        "sha256": "1d4048078a66003d9b1d165ca6be263508f8bcd83e6ee8937e1e5983efb31a79",
+        "bytes": 14977
+      }
+    },
+    "source_files": {
+      "tests/dex-services/gesher/services/SoftApValuesContractTest.java": "4f6b55b1080c5fa4bb6f5cc2f30e53e7ade2861da9e967ef74d4b9093cb1113a",
+      "tests/softap-values/SoftApValuesOracle.java": "104540f3b07635d2e39cbed65708a51ce73ad13049fd204db3f083a303f007dd",
+      "app/java/android/net/wifi/SoftApConfiguration.java": "071dc931f5d1884df843e87779d692e13a6bbe6406d0bc8f965636360eb8cd64",
+      "app/java/android/net/wifi/WpsInfo.java": "8e0f8020e96e6a2fe5365df41c8e05d92e5b3da6f03196f04547ffccbe8dbc50",
+      "app/java/android/net/wifi/WifiInfo.java": "628ad87acf898a63138692e374ab309a061a6ca7edd0c8f43f9fb0df450c2c89",
+      "app/java/android/net/wifi/WifiConfiguration.java": "235b0da14843357decf6c20a0f12966982018166ddfb730c92f405ed2e6dba3a",
+      "app/java/android/net/wifi/WifiEnterpriseConfig.java": "7c7f53a802c07704d42700aa2db3a185c4753368c4fbeb3800d0b3dd9539deb0",
+      "app/java/android/net/wifi/SecurityParams.java": "9aaccf30c9a81f6365248f97d63bf633eac06d0dfdb59e260c8c384dc7ebb060",
+      "app/java/android/net/wifi/ParcelUtil.java": "a35e0d2b112833ae5e8eb74b266f845bb40f6249d473f841e11e29f2d0f454c8",
+      "app/java/android/net/wifi/OuiKeyedData.java": "670ea134264cbc80ae7eca2f7beed833475c9aa6f03443cc2ee9582c76b0734a",
+      "app/java/android/net/wifi/util/PersistableBundleUtils.java": "82a38ffde5621d1a0c7c6b8c71ce535502f8c71a68397eb8586742f171094730",
+      "app/java/android/net/wifi/WifiSsid.java": "a7a2bbcc8769f6bfe14d0ad7affccb8da16d9aed72132cda3d1b0f56184aa287",
+      "app/java/android/net/wifi/util/HexEncoding.java": "99e9186f20fd88e3de58cf3e64b9718042854229772797515396a4f1c1bdac92",
+      "app/java/android/net/wifi/SupplicantState.java": "101c373c45666294c634b55ec4a331b468fd4823a4015cc83b40a49ee28a4e6a",
+      "app/java/android/net/wifi/MloLink.java": "e8c01629ba773b8afd5a2f3df7f661a2fa23aca039f0e98ad0f236dace83f5e0",
+      "app/java/android/net/wifi/ScanResult.java": "d199a7f827ad88b8039f60ff964b663f7c4a72cfd5a66f22f3e2c99f90c3ff3f",
+      "app/java/android/net/wifi/ScanResultSecurity.java": "19d2b4cf717ee710738f9cfe8b1c4ea53e5d16aa85d5e2ce8c6850ea685d81d2",
+      "app/java/android/net/wifi/AnqpInformationElement.java": "565f496f653ac76d3c6a75da4512ba37388fd3726cdf85e676f1615da58e5661",
+      "app/java/android/net/MacAddress.java": "03985501545223e3641065512efb48656bf1dd5d5b55bedaf5feb8685912eac8",
+      "app/java/android/net/TransportInfo.java": "493dfc6ee465779b6b7dc80fc23aea18787266e168dfcc74c7fa42c426447f32",
+      "tools/prepare_softap_values_oracle.py": "b36b4f3e301f5ceab6a6cf5e94ede8394359edac6bc348ae50b4081537af80f4",
+      "tools/test_softap_values_contracts.py": "83e508105413336b9b330b421c85c77f78acfcab401d1270e7359baab47ee3ce"
+    }
+  },
+  "qualification_limits": [
+    "Native reference and candidate ran on actual Android API36, not Windows.",
+    "Windows 2022/2025 services execution remains pending; canceled workflows were not restarted.",
+    "Host code uses genuine production values with a declared native-initialization boundary; host Parcel was not substituted.",
+    "The local generated compat table proves the two selected Wi-Fi changes only; the cached framework source is sparse. The CI build retains its full framework source input and appends Wi-Fi sources.",
+    "The selected runtime provider audit covers framework.jar and gesher-app.jar, not the full boot path.",
+    "Value construction does not provide hotspot/WPS radio operations, network admission or permissions."
+  ]
+}

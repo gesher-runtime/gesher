@@ -14,6 +14,7 @@
 
 #include <time.h>
 #include <gesher/clocks.h>
+#include <gesher/perf_trace.h>
 
 #include <algorithm>
 #include <atomic>
@@ -256,6 +257,7 @@ void CallbackLoop(AAudioStream* s) {
   RaiseAudioThreadPriority(true);
   const int32_t callback_frames = s->b.frames_per_callback;
   std::vector<uint8_t> buf(static_cast<size_t>(callback_frames) * s->frame_size);
+  uint32_t traced_underruns = 0;
   for (;;) {
     uint64_t generation;
     {
@@ -272,7 +274,14 @@ void CallbackLoop(AAudioStream* s) {
       if (s->quit) return;
       if (s->state != kStateStarted || s->generation != generation) continue;
     }
+    static gesher::perf::Site callback_site("AAudio: output data callback (count: engine underruns)");
+    const int64_t start = gesher::perf::Now();
     int32_t r = s->b.data_cb(s, s->b.data_user, buf.data(), callback_frames);
+    if (gesher::perf::Enabled()) {
+      const uint32_t underruns = s->track->underrun_count();
+      callback_site.Add(gesher::perf::Now() - start, underruns - traced_underruns);
+      traced_underruns = underruns;
+    }
     std::lock_guard<std::mutex> lock(s->mu);
     if (s->quit) return;
     if (s->state != kStateStarted || s->generation != generation) continue;
@@ -518,6 +527,13 @@ aaudio_result_t SYSV OpenStream(Builder* b, AAudioStream** out) {
     return kErrorInternal;
   }
   s->b.capacity = static_cast<int32_t>(s->track->buffer_capacity_frames());
+  if (gesher::perf::Enabled()) {
+    fprintf(stderr, "gesher perf: AAudio output stream: %d Hz, %d channels, format %d, burst %d, "
+            "capacity %d frames, %d frames a callback, performance mode %d, %s\n",
+            s->b.sample_rate, s->b.channels, s->b.format, s->burst, s->b.capacity,
+            s->b.frames_per_callback, s->b.performance, s->b.data_cb != nullptr ? "callback" : "write");
+    fflush(stderr);
+  }
   AAudioStream* raw = s.release();
   if (raw->b.data_cb != nullptr) raw->callback_thread = std::thread([raw] { CallbackLoop(raw); });
   *out = raw;
@@ -721,7 +737,13 @@ aaudio_result_t SYSV SetBufferSizeInFrames(AAudioStream* s, int32_t frames) {
   if (s == nullptr) return kErrorNull;
   if (frames < 0) return kErrorOutOfRange;
   if (s->capture != nullptr) return s->b.capacity;
-  return s->track->SetBufferSizeFrames(static_cast<uint32_t>(std::max(frames, 1)));
+  const int32_t set = static_cast<int32_t>(
+      s->track->SetBufferSizeFrames(static_cast<uint32_t>(std::max(frames, 1))));
+  if (gesher::perf::Enabled()) {
+    fprintf(stderr, "gesher perf: AAudio setBufferSizeInFrames(%d) = %d\n", frames, set);
+    fflush(stderr);
+  }
+  return set;
 }
 int32_t SYSV GetBufferSizeInFrames(AAudioStream* s) {
   if (s == nullptr) return kErrorNull;

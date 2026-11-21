@@ -105,7 +105,8 @@ set(_input_jni_files
   core/jni/android_view_KeyCharacterMap.cpp
   core/jni/android_view_KeyEvent.cpp
   core/jni/android_view_MotionEvent.cpp
-  core/jni/android_view_VelocityTracker.cpp)
+  core/jni/android_view_VelocityTracker.cpp
+  core/jni/android_window_InputTransferToken.cpp)
 set(_input_jni_srcs)
 set(_input_jni_inputs)
 foreach(_f ${_input_jni_files})
@@ -128,6 +129,8 @@ add_library(input_jni STATIC ${_input_jni_srcs} ${_cin}/input_jni.cc
 target_include_directories(input_jni PRIVATE
   ${_fwbase}/core/jni ${_fwbase}/core/jni/include ${CMAKE_SOURCE_DIR}/compat/framework/include
   ${_native}/libs/binderthreadstate/include
+  # gui/InputTransferToken.h and private/gui/ParcelUtils.h, alone of libgui (aosp.lock).
+  ${_native}/libs/gui/include
   # FrameInfo.h, FrameMetricsObserver.h; android/graphics/matrix.h (AMatrix).
   ${_fwbase}/libs/hwui ${_fwbase}/libs/hwui/apex/include)
 target_link_libraries(input_jni PUBLIC gesher_input android_input hwui nativehelper androidfw

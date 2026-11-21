@@ -67,17 +67,77 @@ function DevsvcCheck([string] $Name, [string[]] $Problems, [string] $Details) {
   }
 }
 
+# Keep diagnostic projection reads out of the assertion output. Native trace and
+# these records compare the same real history object; neither supplies fallback XML.
+$projectionScript = Join-Path $root 'devsvc-toast-projection.ps1'
+$historyTrace = Join-Path $root 'devsvc-toast-history-projection.jsonl'
+$xmlTrace = Join-Path $root 'devsvc-toast-xml-projection.jsonl'
+Set-Content -Path $projectionScript -Encoding UTF8 -Value @'
+function Write-ToastProjectionTrace([object] $Toast, [string] $TracePath, [string] $ExpectedTag = '') {
+  if (-not $TracePath -or $env:GESHER_TRACE_TOAST_IDENTITY -ne '1') { return }
+  $record = [ordered]@{ utc = [DateTime]::UtcNow.ToString('o'); expectedTag = $ExpectedTag }
+  try {
+    $dynamicTag = [string] $Toast.Tag
+    $dynamicGroup = [string] $Toast.Group
+    [Windows.UI.Notifications.ToastNotification] $typed = $Toast
+    $typedTag = [string] $typed.Tag
+    $typedGroup = [string] $typed.Group
+    $record['dynamicTag'] = $dynamicTag
+    $record['dynamicTagLength'] = $dynamicTag.Length
+    $record['dynamicGroup'] = $dynamicGroup
+    $record['dynamicGroupLength'] = $dynamicGroup.Length
+    $record['typedTag'] = $typedTag
+    $record['typedTagLength'] = $typedTag.Length
+    $record['typedGroup'] = $typedGroup
+    $record['typedGroupLength'] = $typedGroup.Length
+    $record['runtimeType'] = $Toast.GetType().FullName
+    if (-not $dynamicTag -or $dynamicTag -cne $typedTag -or $dynamicGroup -cne $typedGroup -or
+        ($ExpectedTag -and $dynamicTag -cne $ExpectedTag)) {
+      $actualXml = [string] $typed.Content.GetXml()
+      $record['actualXmlLength'] = $actualXml.Length
+      $record['actualXml'] = $actualXml.Substring(0, [Math]::Min(4096, $actualXml.Length))
+      $record['xmlTruncated'] = $actualXml.Length -gt 4096
+    }
+  } catch { $record['readError'] = $_.Exception.ToString() }
+  [IO.File]::AppendAllText($TracePath, (($record | ConvertTo-Json -Compress -Depth 4) + [Environment]::NewLine),
+      [Text.UTF8Encoding]::new($false))
+}
+'@
+function Show-ToastProjectionTrace([string] $Path) {
+  if ($env:GESHER_TRACE_TOAST_IDENTITY -eq '1' -and (Test-Path $Path)) {
+    foreach ($line in Get-Content $Path -Tail 16) { Write-Host "TOAST_PROJECTION $line" }
+  }
+}
+
 # Windows' toast history for the app (WinRT: Windows PowerShell 5.1 has the
 # projection, PowerShell 7 does not): the tags, one per line.
 $historyScript = Join-Path $root 'devsvc-toast-history.ps1'
 Set-Content -Path $historyScript -Encoding UTF8 -Value @'
-param([string] $AppId)
+param([string] $AppId, [string] $ProjectionScript, [string] $TracePath)
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) { 'tag=' + $t.Tag + ' group=' + $t.Group }
+[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+. $ProjectionScript
+foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) {
+  Write-ToastProjectionTrace $t $TracePath
+  'tag=' + $t.Tag + ' group=' + $t.Group
+}
 '@
 function ToastTags {
-  $lines = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $historyScript -AppId $devsvcAppId 2>&1 | Out-String
+  $lines = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $historyScript -AppId $devsvcAppId `
+    -ProjectionScript $projectionScript -TracePath $historyTrace 2>&1 | Out-String
+  Show-ToastProjectionTrace $historyTrace
   return $lines
+}
+
+function DevsvcToastTag([int] $Id, [string] $Tag = 'null') {
+  # The Windows spelling retains the full SHA-256 of the big-endian UTF-16 key.
+  $hash = [Security.Cryptography.SHA256]::Create()
+  try {
+    $key = [Text.Encoding]::BigEndianUnicode.GetBytes("$Id/$Tag")
+    return 'sha256-' + [Convert]::ToBase64String($hash.ComputeHash($key)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+  } finally {
+    $hash.Dispose()
+  }
 }
 
 # Gesher's toast activator (hwsvc2, ADR 0051) as the installer registers it: a local
@@ -224,7 +284,7 @@ DevsvcCheck 'devsvc: accounts: addAccount goes to the app''s authenticator (getA
 
 # --- notifications -----------------------------------------------------------------
 # Two notifications are two toasts of the app's AppUserModelID in Windows' toast
-# history (tags 7 and 8|second); cancel removes one, cancelAll the other. The
+# history (Android ids 7 and 8, the second tagged); cancel removes one, cancelAll the other. The
 # app's notification listener is bound and told.
 $mark = (DevsvcText $devsvcLog).Length
 $t = DevsvcLaunch 'NotifyActivity'
@@ -242,11 +302,13 @@ $code = $LASTEXITCODE
 $log = DevsvcSince $mark
 $problems = @()
 if (-not ($posted -and $cancelled -and $all)) { $problems += 'the app did not post and cancel' }
-if (-not ($tags1.Contains('tag=7 group=android') -and $tags1.Contains('tag=8|second group=android'))) { $problems += "after posting the history has: $($tags1.Trim())" }
-if ($tags2.Contains('tag=7 group=android') -or -not $tags2.Contains('tag=8|second')) { $problems += "after cancel(7) the history has: $($tags2.Trim())" }
+$toast7 = "tag=$(DevsvcToastTag 7) group=android"
+$toast8 = "tag=$(DevsvcToastTag 8 'second') group=android"
+if (-not ($tags1.Contains($toast7) -and $tags1.Contains($toast8))) { $problems += "after posting the history has: $($tags1.Trim())" }
+if ($tags2.Contains($toast7) -or -not $tags2.Contains($toast8)) { $problems += "after cancel(7) the history has: $($tags2.Trim())" }
 if ($tags3.Contains('tag=')) { $problems += "after cancelAll the history has: $($tags3.Trim())" }
 if ($code -ne 0) { $problems += "launch exit $code" }
-DevsvcCheck "devsvc: notifications: posted notifications are toasts of $devsvcAppId in Windows' toast history (ToastNotificationManager.History), removed by cancel and cancelAll" $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'notification' | Out-String))
+DevsvcCheck "devsvc: notifications: posted notifications are toasts of $devsvcAppId in Windows' toast history (ToastNotificationManager.History), removed by cancel and cancelAll" $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'notification|TOAST_IDENTITY' | Out-String))
 $problems = @()
 foreach ($e in 'devsvc: listener: connected', 'devsvc: listener: posted com.gesher.devsvc 7 "Gesher notification"', 'devsvc: listener: removed com.gesher.devsvc 7') {
   if (-not $log.Contains($e)) { $problems += "no '$e'" }
@@ -281,7 +343,7 @@ if ($server.Contains('Fatal signal')) { $problems += 'the system server took a f
 if ($serverBefore -and $serverAfter -and $serverBefore['system_server'] -ne $serverAfter['system_server']) {
   $problems += "the system server changed (pid $($serverBefore['system_server']) -> $($serverAfter['system_server']))"
 }
-if ($tags.Contains('tag=9 group=android') -or $tags.Contains('tag=10 group=android')) { $problems += "after the cancels the history has: $($tags.Trim())" }
+if ($tags.Contains("tag=$(DevsvcToastTag 9) group=android") -or $tags.Contains("tag=$(DevsvcToastTag 10) group=android")) { $problems += "after the cancels the history has: $($tags.Trim())" }
 if ($code -ne 0) { $problems += "launch exit $code" }
 DevsvcCheck 'devsvc: notifications: an ongoing progress notification with a Hebrew title, updated five times and cancelled at once, leaves the system server running and its toast removed' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + $server)
 
@@ -549,9 +611,14 @@ public static class GesherToastActivation {
 }
 $xmlScript = Join-Path $root 'devsvc-toast-xml.ps1'
 Set-Content -Path $xmlScript -Encoding UTF8 -Value @'
-param([string] $AppId, [string] $Tag)
+param([string] $AppId, [string] $Tag, [string] $ProjectionScript, [string] $TracePath)
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) { if ($t.Tag -eq $Tag) { $t.Content.GetXml() } }
+[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+. $ProjectionScript
+foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) {
+  Write-ToastProjectionTrace $t $TracePath $Tag
+  if ($t.Tag -eq $Tag) { $t.Content.GetXml() }
+}
 '@
 $mark = (DevsvcText $devsvcLog).Length
 $t = DevsvcLaunch 'ClickActivity'
@@ -559,14 +626,17 @@ $posted = DevsvcWait $mark @('devsvc: click: posted 21') 300
 $out = WaitTimed $t 120
 Start-Sleep 2
 $customActivator = (Get-ItemProperty "HKCU:\Software\Classes\AppUserModelId\$devsvcAppId" -ErrorAction SilentlyContinue).CustomActivator
-$xml = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $xmlScript -AppId $devsvcAppId -Tag '21' 2>&1 | Out-String
+$clickToastTag = DevsvcToastTag 21
+$xml = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $xmlScript -AppId $devsvcAppId -Tag $clickToastTag `
+  -ProjectionScript $projectionScript -TracePath $xmlTrace 2>&1 | Out-String
+Show-ToastProjectionTrace $xmlTrace
 $launchArgs = if ($xml -match '<toast[^>]* launch="([^"]+)"') { [Net.WebUtility]::HtmlDecode($Matches[1]) } else { '' }
 $buttonArgs = if ($xml -match '<action[^>]* arguments="([^"]+)"') { [Net.WebUtility]::HtmlDecode($Matches[1]) } else { '' }
 $stateBefore = DeviceState
 $null = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'shutdown') 120
 Start-Sleep 2
 $stopped = $stateBefore -and -not (DeviceAlive $stateBefore)
-$kept = (ToastTags).Contains('tag=21 group=android')
+$kept = (ToastTags).Contains("tag=$clickToastTag group=android")
 $serverCommand = (Get-Item "$activatorKey\LocalServer32").GetValue('')
 $mark = (DevsvcText $devsvcLog).Length
 $r1 = [GesherToastActivation]::Activate($activatorClsid, $serverCommand, $devsvcAppId, $launchArgs, 120)

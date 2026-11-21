@@ -64,6 +64,7 @@ const IID kIidCodecApi = {0x901DB4C7, 0x31CE, 0x41A2, {0x85, 0xDC, 0x8F, 0xA0, 0
 const GUID kApiGopSize = {0x95F31B26, 0x95A4, 0x41AA, {0x93, 0x03, 0x24, 0x6A, 0x7F, 0xC6, 0xEE, 0xF1}};
 const GUID kApiForceKeyFrame = {0x398C1B98, 0x8353, 0x475A, {0x9E, 0xF2, 0x8F, 0x26, 0x5D, 0x26, 0x03, 0x45}};
 const GUID kApiLowLatency = {0x9C27891A, 0xED7A, 0x40E1, {0x88, 0xE8, 0xB2, 0x27, 0x27, 0xA0, 0x24, 0xEE}};
+const GUID kApiMeanBitrate = {0xF7222374, 0x2144, 0x4815, {0xB5, 0x50, 0xA3, 0x7F, 0x8E, 0x12, 0xEE, 0x52}};
 
 struct MfApi {
   HRESULT(WINAPI* Startup)(ULONG, DWORD) = nullptr;
@@ -259,15 +260,17 @@ struct CodecApi : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE SetValue(const GUID*, VARIANT*) = 0;
 };
 
-void SetCodecApi(IMFTransform* t, const GUID& api, uint32_t value) {
+bool SetCodecApi(IMFTransform* t, const GUID& api, uint32_t value, bool require_modifiable = false) {
   CodecApi* c = nullptr;
-  if (FAILED(t->QueryInterface(kIidCodecApi, reinterpret_cast<void**>(&c))) || c == nullptr) return;
+  if (FAILED(t->QueryInterface(kIidCodecApi, reinterpret_cast<void**>(&c))) || c == nullptr) return false;
   VARIANT v;
   memset(&v, 0, sizeof(v));
   v.vt = VT_UI4;
   v.ulVal = value;
-  c->SetValue(&api, &v);
+  const bool applied = (!require_modifiable || c->IsModifiable(&api) == S_OK) &&
+                       c->SetValue(&api, &v) == S_OK;
   c->Release();
+  return applied;
 }
 
 // --- H.264 --------------------------------------------------------------------------
@@ -335,6 +338,10 @@ class MfH264Encoder : public VideoEncoder {
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
     return true;
+  }
+
+  bool SetBitrate(int bitrate) override {
+    return bitrate > 0 && SetCodecApi(t_, kApiMeanBitrate, static_cast<uint32_t>(bitrate), true);
   }
 
   bool Encode(const VideoFrame& f, bool key, std::vector<EncodedPacket>* out) override {
@@ -432,6 +439,7 @@ class MfAacEncoder : public AudioEncoder {
   }
 
   std::string Name() const override { return "mf aac encoder"; }
+  int ConfiguredBitrate() const override { return p_.bitrate; }
 
   bool Init(const AudioEncoderParams& p, std::string* error) {
     if (p.aac_profile != 2) {
@@ -485,6 +493,7 @@ class MfAacEncoder : public AudioEncoder {
       *error = "AAC encoder: SetOutputType " + Hex(hr);
       return false;
     }
+    p_.bitrate = static_cast<int>(bytes * 8);
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
     return true;

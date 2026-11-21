@@ -21,6 +21,7 @@ def main() -> int:
     parser.add_argument("--source-ref")
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     parser.add_argument("--sanitize", action="store_true")
+    parser.add_argument("--measure", action="store_true", help="print comparable first-read and buffer measurements")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="gesher-http-source-") as temporary:
         work = Path(temporary)
@@ -42,7 +43,7 @@ def main() -> int:
             command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
                         "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, timeout=120)
-        return subprocess.run([str(binary)], check=False, timeout=60).returncode
+        return subprocess.run([str(binary)] + (["measure"] if args.measure else []), check=False, timeout=60).returncode
 
 
 if __name__ == "__main__":

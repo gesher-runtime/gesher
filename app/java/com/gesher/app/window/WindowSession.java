@@ -354,6 +354,20 @@ public final class WindowSession extends IWindowSession.Stub {
         return sInstance;
     }
 
+    /** Whether a real, shown application window exists in this process. */
+    public boolean hasShownApplicationWindow() {
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow w = mWindows.valueAt(i);
+                if (w.shown && w.nativeWindow != null && isApplicationWindow(w.attrs.type)
+                        && shownOnDesktop(w)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     public void setActivityVisibility(IBinder token, boolean shown) {
         if (token == null) throw new IllegalArgumentException("Missing activity token");
         synchronized (mWindows) { mActivityVisibility.put(token, shown); }

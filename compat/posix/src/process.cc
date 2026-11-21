@@ -238,11 +238,38 @@ void InitLimits() {
   g_limits_ready = true;
 }
 
+// Whether the caller's buffer can be written, as the kernel's copy_to_user
+// decides: committed memory whose protection allows writing (a stack's guard
+// page grows the stack). Linux answers EFAULT for any other buffer, and
+// callers rely on it: Chromium's ProtectedMemory checks that a page is
+// read-only by passing it to getrlimit and requiring EFAULT.
+bool Writable(void* buffer, size_t size) {
+  uintptr_t at = reinterpret_cast<uintptr_t>(buffer);
+  if (at == 0 || size > UINTPTR_MAX - at) return false;
+  const uintptr_t end = at + size;
+  while (at < end) {
+    MEMORY_BASIC_INFORMATION region{};
+    if (VirtualQuery(reinterpret_cast<const void*>(at), &region, sizeof(region)) != sizeof(region) ||
+        region.State != MEM_COMMIT) {
+      return false;
+    }
+    const DWORD protection = region.Protect & 0xff;
+    if (protection != PAGE_READWRITE && protection != PAGE_WRITECOPY &&
+        protection != PAGE_EXECUTE_READWRITE && protection != PAGE_EXECUTE_WRITECOPY) {
+      return false;
+    }
+    const uintptr_t next = reinterpret_cast<uintptr_t>(region.BaseAddress) + region.RegionSize;
+    if (next <= at) return false;
+    at = next;
+  }
+  return true;
+}
+
 }  // namespace
 
 int getrlimit(int resource, struct rlimit* rlim) {
   if (resource < 0 || resource >= kLimits) return errno = EINVAL, -1;
-  if (rlim == nullptr) return errno = EFAULT, -1;
+  if (!Writable(rlim, sizeof(*rlim))) return errno = EFAULT, -1;
   std::lock_guard<std::mutex> lock(g_limits_mutex);
   InitLimits();
   *rlim = g_limits[resource];

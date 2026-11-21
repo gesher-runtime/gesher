@@ -30,15 +30,44 @@ def source_text(relative: str, ref: str | None) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def method(source: str, marker: str) -> str:
+    if source.count(marker) != 1:
+        raise ValueError("production method boundary changed: " + marker)
+    start = source.index(marker)
+    end = source.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start:end]
+
+
 def generate(component: str, ref: str | None) -> str:
     if component == "codec":
         source = source_text("compat/media/jni/media_codec_jni.cc", ref)
         template = (ROOT / "tests/media/codec_window_host.cc.in").read_text(encoding="utf-8")
         replacements = {
-            "@SET_SURFACE@": section(source, "  void SetSurface(JNIEnv* env, jobject surface)",
+            "@THROW_CODEC_EXCEPTION@": section(source, "void ThrowCodecException(JNIEnv* env,",
+                                               "// A MediaFormat's keys"),
+            "@SET_SURFACE@": section(source, "  void SetSurface(JNIEnv* env, jobject surface",
                                       "  bool has_surface() const"),
             "@RELEASE_OUTPUT@": section(source, "  bool ReleaseOutput(int index, bool render,",
-                                        "  jobject InputBuffer(JNIEnv* env, int index)")}
+                                        "  jobject InputBuffer(JNIEnv* env, int index)"),
+            "@JNI_RELEASE_OUTPUT@": section(source, "void JNICALL MC_releaseOutputBuffer(JNIEnv* env,",
+                                            "void JNICALL MC_signalEndOfInputStream(")}
+        for name, marker in {
+            "START": "  bool Start(", "STOP": "  void Stop(",
+            "STOP_LOCKED": "  void StopLocked(", "STOP_WORKER": "  void StopWorker(",
+            "RESET": "  void Reset(", "FLUSH": "  void Flush(",
+            "RELEASE": "  void Release(", "POST_FATAL": "  void PostFatalErrorLocked(",
+            "DEQUEUE_INPUT": "  int DequeueInput(", "DEQUEUE_OUTPUT": "  int DequeueOutput(",
+            "JNI_DEQUEUE_INPUT": "jint JNICALL MC_dequeueInputBuffer(",
+            "JNI_DEQUEUE_OUTPUT": "jint JNICALL MC_dequeueOutputBuffer(",
+            "JNI_SET_SURFACE": "void JNICALL MC_setSurface(",
+            "JNI_START": "void JNICALL MC_start(", "JNI_STOP": "void JNICALL MC_stop(",
+            "JNI_FLUSH": "void JNICALL MC_flush(",
+        }.items():
+            replacements["@" + name + "@"] = method(source, marker)
     else:
         source = source_text("compat/media/surface/queue_surface.cc", ref)
         header = source_text("compat/media/surface/queue_surface.h", ref)
@@ -46,11 +75,21 @@ def generate(component: str, ref: str | None) -> str:
         if len(members) != 1:
             raise ValueError("timestamp member boundary changed")
         template = (ROOT / "tests/media/surface_timestamp_host.cc.in").read_text(encoding="utf-8")
+        pool_members = pool_classes = ""
+        if "class QueueSurface::FramePool {" in source:
+            pool_members = ("class FramePool; class RecycledFrame;\n"
+                            "  std::shared_ptr<FramePool> frame_pool_;\n  QueueSurface();")
+            pool_classes = section(source, "class QueueSurface::FramePool {",
+                                   "class QueueSurface::Buffer")
+            pool_classes += ("\nQueueSurface::QueueSurface() : frame_pool_(std::make_shared<FramePool>()) {\n"
+                             "  frame_pool_->Configure(buffer_->width, buffer_->height);\n}\n")
         replacements = {
+            "@FRAME_POOL_MEMBERS@": pool_members,
+            "@FRAME_POOL_CLASSES@": pool_classes,
             "@TIMESTAMP_MEMBER@": members[0].strip(),
             "@TIMESTAMP_DISPATCH@": section(source, "    case NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP: {",
                                             "    case NATIVE_WINDOW_GET_REFRESH_CYCLE_DURATION:"),
-            "@PUBLISH@": section(source, "void QueueSurface::Publish() {",
+            "@PUBLISH@": section(source, "int QueueSurface::unlockAndPost() {",
                                   "int QueueSurface::dequeueBuffer(")}
         source += header
     for marker, body in replacements.items():

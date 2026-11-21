@@ -1,6 +1,7 @@
 // gesher-base: <unistd.h> and <stdlib.h> additions.
 
 #include <unistd.h>
+#include <sys/resource.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -15,6 +16,7 @@
 #include <gesher/font_environment.h>
 
 #include <atomic>
+#include <mutex>
 #include <string>
 
 #include "internal.h"
@@ -57,6 +59,42 @@ bool FinalPath(HANDLE h, std::string* out) {
   }
   *out = gesher::LinuxPath(buf);
   return true;
+}
+
+// setenv, putenv and unsetenv on Linux (bionic, glibc) never free an
+// environment string they replace or remove: what getenv returned, and what
+// environ pointed at, stays valid. Android code keeps such pointers: mozglue
+// has its own getenv over environ, and caches MOZ_ANDROID_LIBDIR's value while
+// GeckoLoader puts the same assignment again before each of its loads. The CRT
+// frees the string _putenv_s replaces, so before a change the CRT's string for
+// the variable is swapped for a copy, which the CRT frees, and the original is
+// kept for the life of the process. Gesher's own writes are serialized here.
+std::mutex& EnvironmentWrites() {
+  static std::mutex* mutex = new std::mutex();
+  return *mutex;
+}
+
+void KeepEnvironmentString(const char* name) {
+  if (_environ == nullptr) return;
+  const size_t length = strlen(name);
+  for (char** entry = _environ; *entry != nullptr; ++entry) {
+    // The CRT matches names without regard to case.
+    if (_strnicmp(*entry, name, length) != 0 || (*entry)[length] != '=') continue;
+    if (char* copy = _strdup(*entry)) *entry = copy;
+    return;
+  }
+}
+
+// _putenv_s(name, value), or the removal of name for nullptr, keeping the
+// replaced string. Setting the value it already has changes nothing.
+int PutEnvironment(const char* name, const char* value) {
+  if (name == nullptr || *name == '\0' || strchr(name, '=') != nullptr) return errno = EINVAL, -1;
+  std::lock_guard<std::mutex> lock(EnvironmentWrites());
+  const char* current = getenv(name);
+  if (value != nullptr ? current != nullptr && strcmp(current, value) == 0 : current == nullptr)
+    return 0;
+  KeepEnvironmentString(name);
+  return _putenv_s(name, value != nullptr ? value : "") == 0 ? 0 : (errno = EINVAL, -1);
 }
 
 }  // namespace
@@ -125,7 +163,12 @@ long sysconf(int name) {
       return -1;
     case _SC_SEM_VALUE_MAX:
       return 0x7fffffff;
-    case _SC_SIGQUEUE_MAX:
+    case _SC_SIGQUEUE_MAX: {
+      struct rlimit limit;
+      if (getrlimit(RLIMIT_SIGPENDING, &limit) != 0) return -1;
+      return limit.rlim_cur > static_cast<rlim_t>(LONG_MAX) ? LONG_MAX
+                                                         : static_cast<long>(limit.rlim_cur);
+    }
     case _SC_RTSIG_MAX:
       return 32;
     // Supported POSIX options report the version they conform to.
@@ -311,6 +354,10 @@ int fsync(int fd) {
 }
 int gesher_ftruncate(int fd, off_t length) {
   if (length < 0) return errno = EINVAL, -1;
+  // A memfd sealed against growing or shrinking keeps its size (memfd_seals.cc).
+  if (const int sealed = gesher::MemfdResizeError(fd, static_cast<uint64_t>(length))) {
+    return errno = sealed, -1;
+  }
   // Pin the actual descriptor throughout the resize and cache update. A path
   // lookup or an unguarded fd would allow close/dup2 to change the target.
   gesher::record_locks::DescriptorGuard descriptor_guard;
@@ -545,6 +592,12 @@ ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
 }
 
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
+  // A memfd's seals may forbid the write (memfd_seals.cc).
+  if (offset >= 0) {
+    if (const int sealed = gesher::MemfdWriteError(fd, false, static_cast<uint64_t>(offset), count)) {
+      return errno = sealed, -1;
+    }
+  }
   return PositionedIo(fd, const_cast<void*>(buf), count, offset, true);
 }
 
@@ -646,14 +699,15 @@ char* realpath(const char* path, char* resolved_path) {
 int setenv(const char* name, const char* value, int overwrite) {
   if (auto result = gesher::WriteFontEnvironment(name, value, overwrite))
     return *result == 0 ? 0 : (errno = EINVAL, -1);
-  if (!overwrite && getenv(name) != nullptr) return 0;
-  return _putenv_s(name, value) == 0 ? 0 : (errno = EINVAL, -1);
+  if (!overwrite && name != nullptr && getenv(name) != nullptr) return 0;
+  if (value == nullptr) return errno = EINVAL, -1;
+  return PutEnvironment(name, value);
 }
 
 int unsetenv(const char* name) {
   if (auto result = gesher::WriteFontEnvironment(name, "", 1))
     return *result == 0 ? 0 : (errno = EINVAL, -1);
-  return _putenv_s(name, "") == 0 ? 0 : (errno = EINVAL, -1);
+  return PutEnvironment(name, nullptr);
 }
 
 }  // extern "C"
