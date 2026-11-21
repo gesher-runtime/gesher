@@ -321,14 +321,28 @@ public final class PackageQueryContractTest {
                 "Permission-holder query lost the matching subset or fabricated grant metadata");
         holders = client.getPackagesHoldingPermissions(new String[]{heldPermission},
                 PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS | flags));
-        require(holders.size() == 1 && Arrays.equals(holders.get(0).requestedPermissions,
-                        new String[]{heldPermission, "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
-                                "android.permission.WRITE_SETTINGS"})
-                && holders.get(0).requestedPermissionsFlags.length == 3
-                && (holders.get(0).requestedPermissionsFlags[0] & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0
-                && (holders.get(0).requestedPermissionsFlags[2] & PackageInfo.REQUESTED_PERMISSION_GRANTED) == 0
-                && holders.get(0).activities != null,
-                "GET_PERMISSIONS did not retain complete manifest/grant/component metadata");
+        require(holders.size() == 1,
+                "GET_PERMISSIONS changed the matching package count: " + holders.size());
+        PackageInfo permissionHolder = holders.get(0);
+        packageInfo(permissionHolder, expected, true);
+        // Parsed permissions are keyed by name; metadata order need not match the manifest.
+        List<String> requested = permissionHolder.requestedPermissions == null
+                ? Collections.emptyList() : Arrays.asList(permissionHolder.requestedPermissions);
+        require(requested.size() == 3 && requested.containsAll(Arrays.asList(heldPermission,
+                        "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+                        "android.permission.WRITE_SETTINGS")),
+                "GET_PERMISSIONS changed the complete manifest permission inventory: " + requested);
+        int[] permissionFlags = permissionHolder.requestedPermissionsFlags;
+        require(permissionFlags != null && permissionFlags.length == requested.size(),
+                "GET_PERMISSIONS lost parallel permission flags: " + Arrays.toString(permissionFlags));
+        require((permissionFlags[requested.indexOf(heldPermission)]
+                        & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0,
+                "GET_PERMISSIONS lost the foreground-service grant: "
+                        + requested + " / " + Arrays.toString(permissionFlags));
+        require((permissionFlags[requested.indexOf("android.permission.WRITE_SETTINGS")]
+                        & PackageInfo.REQUESTED_PERMISSION_GRANTED) == 0,
+                "GET_PERMISSIONS fabricated a WRITE_SETTINGS permission grant: "
+                        + requested + " / " + Arrays.toString(permissionFlags));
         holders = client.getPackagesHoldingPermissions(new String[]{heldPermission,
                 "fixture.absent.permission", heldPermission}, 0);
         require(holders.size() == 1 && Arrays.equals(holders.get(0).requestedPermissions,
