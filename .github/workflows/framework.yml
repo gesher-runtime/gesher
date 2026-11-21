@@ -55,7 +55,7 @@ jobs:
     outputs:
       runner: ${{ steps.route.outputs.runner }}
     steps:
-      - uses: gesher-runtime/gesher/.github/actions/runner-route@b9510513a538d80669895521d1061b54fbe11aff
+      - uses: gesher-runtime/gesher/.github/actions/runner-route@5d76cae649c2257c376aaf87a5283099c99f111c
         id: route
         with:
           requested: ${{ inputs.local-runner }}
@@ -653,6 +653,12 @@ jobs:
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 
+      - name: Geolocation request and timeout lifetime contracts
+        run: |
+          python3 tools/test_geolocation_retention.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Audio effect capability and constructor contracts
         run: |
           python3 tools/test_audio_effect_contracts.py --java-home "$JAVA_HOME" \
@@ -753,6 +759,18 @@ jobs:
       - name: SDK36 Wi-Fi Direct values, provider and copy contracts
         run: |
           python3 tools/test_wifi_p2p_values.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 suggestion and Passpoint value contracts
+        run: |
+          python3 tools/test_wifi_suggestion_values.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 Wi-Fi network specifier and matcher contracts
+        run: |
+          python3 tools/test_wifi_network_specifier_contracts.py --java-home "$JAVA_HOME" \
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
