@@ -7,6 +7,22 @@ Check 'framework: Wi-Fi data APIs and real native Parcelable round trips' {
   $deepWifiOut
 } @('WifiDataContractTest all passed:', 'parcel=true')
 
+$deepSafetyCenterOut = FixesRun ($dvmFixes + 'gesher.services.SafetyCenterContractTest') 90
+$deepSafetyCenterCode = $LASTEXITCODE
+Check 'framework: android.safetycenter values on the boot class path, no Safety Center service' {
+  $global:LASTEXITCODE = $deepSafetyCenterCode
+  $deepSafetyCenterOut
+} @('SafetyCenterContractTest: no Safety Center service, getSystemService returns null',
+  'SafetyCenterContractTest: values build, validate and round-trip through Parcel',
+  'SafetyCenterContractTest all passed:')
+
+$deepOsIdentityOut = FixesRun ($dvmFixes + 'gesher.services.OsIdentityContractTest') 60
+$deepOsIdentityCode = $LASTEXITCODE
+Check 'framework: os.name and Os.uname() report Linux; the release claims no kernel version' {
+  $global:LASTEXITCODE = $deepOsIdentityCode
+  $deepOsIdentityOut
+} @('OsIdentityContractTest: os.name=Linux', 'OsIdentityContractTest all passed:')
+
 $deepWifiConfigurationOut = FixesRun ($dvmFixes + 'gesher.services.WifiConfigurationContractTest') 90
 $deepWifiConfigurationCode = $LASTEXITCODE
 Check 'framework: Wi-Fi configuration, enterprise certificates and native Parcelable contracts' {
@@ -29,6 +45,61 @@ Check 'framework: WifiInfo Builder, MLO, redaction and native Parcelable contrac
   if ($deepWifiInfoWireOK) { 'WifiInfo native Parcel bytes match Android reference: 9 cases' }
   else { $global:LASTEXITCODE = 1; "WifiInfo native Parcel evidence failed: $deepWifiInfoWireFailure" }
 } @('WifiInfoContractTest all passed:', 'parcel=true', 'WifiInfo native Parcel bytes match Android reference: 9 cases')
+
+$deepSoftApOut = FixesRun ($dvmFixes + 'gesher.services.SoftApValuesContractTest') 90
+$deepSoftApCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertSoftApValuesParcel.ps1"
+$deepSoftApWireOK = $false
+$deepSoftApWireFailure = ''
+try {
+  Assert-SoftApValuesParcelEvidence -Output $deepSoftApOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/softap-values-android-reference-2026-11-18.json')
+  $deepSoftApWireOK = $true
+} catch { $deepSoftApWireFailure = $_.Exception.Message }
+Check 'framework: SoftAP/WPS values, target SDK guards and native Parcelable contracts' {
+  $global:LASTEXITCODE = $deepSoftApCode
+  $deepSoftApOut
+  if ($deepSoftApWireOK) { 'SoftAP/WPS native Parcel bytes match pinned Android16-r4: 12 cases' }
+  else { $global:LASTEXITCODE = 1; "SoftAP/WPS native Parcel evidence failed: $deepSoftApWireFailure" }
+} @('SoftApValuesContractTest all passed:', 'parcel=true', 'profile=android16-r4',
+    'SoftAP generated target-SDK table matches 4 boundaries',
+    'SoftAP/WPS native Parcel bytes match pinned Android16-r4: 12 cases')
+
+$deepP2pOut = FixesRun ($dvmFixes + 'gesher.services.WifiP2pValuesContractTest') 90
+$deepP2pCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiP2pValuesParcel.ps1"
+$deepP2pWireOK = $false
+$deepP2pWireFailure = ''
+try {
+  Assert-WifiP2pValuesParcelEvidence -Output $deepP2pOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-p2p-values-android-reference-2026-11-18.json')
+  $deepP2pWireOK = $true
+} catch { $deepP2pWireFailure = $_.Exception.Message }
+Check 'framework: Wi-Fi Direct values, coherent boot providers and native Parcelable readers' {
+  $global:LASTEXITCODE = $deepP2pCode
+  $deepP2pOut
+  if ($deepP2pWireOK) { 'P2P native Parcel readers and Android16-r4 bytes qualified: 23 cases' }
+  else { $global:LASTEXITCODE = 1; "P2P native Parcel evidence failed: $deepP2pWireFailure" }
+} @('WifiP2pValuesContractTest passed:', 'WifiP2pValuesExtendedTest passed:',
+    'P2P_VALUES_PROVIDERS coherent production boot graph; Parcel=null-loader Device identity verified',
+    'P2P native Parcel readers and Android16-r4 bytes qualified: 23 cases')
+
+$deepP2pNsdOut = FixesRun ($dvmFixes + 'gesher.services.WifiP2pNsdValuesContractTest') 90
+$deepP2pNsdCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiP2pNsdValuesParcel.ps1"
+$deepP2pNsdWireOK = $false
+$deepP2pNsdWireFailure = ''
+try {
+  Assert-WifiP2pNsdValuesParcelEvidence -Output $deepP2pNsdOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-p2p-nsd-values-android-reference-2026-11-18.json')
+  $deepP2pNsdWireOK = $true
+} catch { $deepP2pNsdWireFailure = $_.Exception.Message }
+Check 'framework: Wi-Fi Direct NSD values, coherent providers and complete native readers' {
+  $global:LASTEXITCODE = $deepP2pNsdCode
+  $deepP2pNsdOut
+  if ($deepP2pNsdWireOK) { 'P2P NSD native readers and Android16-r4 initial/rewrite bytes qualified: 20 cases' }
+  else { $global:LASTEXITCODE = 1; "P2P NSD native Parcel evidence failed: $deepP2pNsdWireFailure" }
+} @('WifiP2pNsdValuesContractTest passed:', 'WifiP2pNsdValuesExtendedTest passed:',
+    'P2P_NSD_PROVIDERS coherent production boot graph; complete original readers',
+    'P2P_NSD_PROFILE android16-r4; bp4a; sdk36; declarations=40',
+    'P2P NSD native readers and Android16-r4 initial/rewrite bytes qualified: 20 cases')
 
 $deepNetworkOut = FixesRun ($dvmFixes + 'gesher.services.NetworkSnapshotContractTest') 90
 $deepNetworkCode = $LASTEXITCODE

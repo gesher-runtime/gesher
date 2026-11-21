@@ -73,11 +73,18 @@ int Run() {
     auto surface = android::sp<QueueSurface>::make(3840, 2160);
     ANativeWindow_Buffer buffer = {};
     Check(surface->lock(&buffer, nullptr) == 0, "lock before abandonment");
+    ANativeWindow_Buffer rejected = {};
+    Check(surface->lock(&rejected, nullptr) == -ENOSYS,
+          "second CPU lock preserves Surface INVALID_OPERATION");
     surface->Abandon();
+    Check(surface->lock(&rejected, nullptr) == -ENOSYS,
+          "an existing CPU lock is checked before abandoned consumer state");
     Check(live_pixels == baseline + kPixelsBytes, "outstanding raw CPU lock keeps pixels valid");
     static_cast<uint32_t*>(buffer.bits)[0] = 0xffabcdef;
     Check(surface->unlockAndPost() == -ENODEV, "unlock retires abandoned CPU buffer without publication");
     Check(live_pixels == baseline && surface->Latest() == nullptr, "unlock frees deferred CPU storage");
+    Check(surface->lock(&rejected, nullptr) == -ENODEV,
+          "fresh CPU lock on abandoned consumer reports NO_INIT");
   }
   for (bool queue : {false, true}) {
     auto surface = android::sp<QueueSurface>::make(3840, 2160);

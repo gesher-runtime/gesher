@@ -19,7 +19,6 @@ import android.os.Process;
 import android.os.ServiceManager;
 import com.gesher.app.Main;
 import com.gesher.server.Services;
-import com.gesher.server.StandIn;
 import com.gesher.server.SystemServer;
 import java.io.File;
 import java.nio.file.Files;
@@ -39,10 +38,8 @@ public final class SettingsProviderRemoteTest {
         Main.bootstrap("settings-contract", root + "/build.prop", root + "/framework/framework-res.apk");
         check(Process.myUid() == Process.SYSTEM_UID, "Server must run as the system UID");
         Map<String, IBinder> services = Services.create(Collections.emptyList());
-        // ContentProvider.getType asks this same policy-backed service in production.
-        services.put("permission_checker", StandIn.of(
-                android.permission.IPermissionChecker.class,
-                new Services.PermissionChecker()).asBinder());
+        // Exercise the same shared policy service that production registers.
+        check(services.get("permission_checker") != null, "Real permission checker registered");
         for (Map.Entry<String, IBinder> service : services.entrySet()) ServiceManager.addService(service.getKey(), service.getValue());
         IActivityManager am = IActivityManager.Stub.asInterface(services.get("activity"));
         ContentProviderHolder holder = am.getContentProviderExternal("settings", 0, null, "settings-contract");

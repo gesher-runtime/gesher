@@ -34,6 +34,8 @@ static bool unbound_standard_input;
 }
 namespace gesher {
 static int ErrnoFromWin32(DWORD error) { return static_cast<int>(error); }
+// The host has no sealed memfds (memfd_seals.cc): no seal forbids growth.
+[[maybe_unused]] static int MemfdGrowError(int, uint64_t) { return 0; }
 [[maybe_unused]] static HANDLE HandleFromFd(int fd) {
   if (unbound_standard_input && fd == STDIN_FILENO) return -2;
   return fcntl(fd, F_GETFD) < 0 ? -1 : fd;

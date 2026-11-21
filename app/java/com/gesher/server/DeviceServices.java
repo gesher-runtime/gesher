@@ -46,8 +46,23 @@ final class DeviceServices {
     private DeviceServices() {
     }
 
-    /** No Android thermal HAL: no sensors, forecasts, or thermal listener capability. */
+    /**
+     * No Android thermal HAL: no sensors, forecasts, headroom listeners or thermal events.
+     * The thermal status is THROTTLING_NONE, and, as ThermalManagerService does whether or
+     * not a HAL is present, a status listener registers (RemoteCallbackList: a repeated
+     * registration replaces the earlier one) and is told the current status once
+     * registered, on another thread; nothing changes it afterwards. PowerManager.addThermalStatusListener throws when registration
+     * answers false (Chromium's PowerMonitor registers one at startup).
+     */
     static final class ThermalService extends IThermalService.Default {
+        private final android.os.RemoteCallbackList<android.os.IThermalStatusListener>
+                mStatusListeners = new android.os.RemoteCallbackList<>();
+        private final java.util.concurrent.Executor mStatusCallbacks =
+                java.util.concurrent.Executors.newSingleThreadExecutor(work -> {
+                    Thread thread = new Thread(work, "thermal-status-callbacks");
+                    thread.setDaemon(true);
+                    return thread;
+                });
         @Override public android.os.Temperature[] getCurrentTemperatures() {
             return new android.os.Temperature[0];
         }
@@ -84,11 +99,21 @@ final class DeviceServices {
         }
         @Override public boolean registerThermalStatusListener(android.os.IThermalStatusListener l) {
             java.util.Objects.requireNonNull(l, "listener");
-            return false;
+            if (!mStatusListeners.register(l)) return false;
+            final int status = getCurrentThermalStatus();
+            mStatusCallbacks.execute(() -> {
+                try {
+                    l.onStatusChange(status);
+                } catch (android.os.RemoteException | RuntimeException e) {
+                    // As ThermalManagerService: a failed callback is only logged.
+                    System.err.println("thermal: status callback failed: " + e);
+                }
+            });
+            return true;
         }
         @Override public boolean unregisterThermalStatusListener(android.os.IThermalStatusListener l) {
             java.util.Objects.requireNonNull(l, "listener");
-            return false;
+            return mStatusListeners.unregister(l);
         }
         @Override public boolean registerThermalHeadroomListener(android.os.IThermalHeadroomListener l) {
             java.util.Objects.requireNonNull(l, "listener");
@@ -97,85 +122,6 @@ final class DeviceServices {
         @Override public boolean unregisterThermalHeadroomListener(android.os.IThermalHeadroomListener l) {
             java.util.Objects.requireNonNull(l, "listener");
             return false;
-        }
-    }
-
-    /**
-     * {@code appops}: every operation is allowed (Gesher grants an app what it asks for,
-     * as the activity manager's permission checks do); noted and started operations
-     * answer MODE_ALLOWED. Environment.isExternalStorageManager asks it, among others.
-     */
-    static final class AppOpsService extends IAppOpsService.Default {
-        @Override
-        public int checkOperation(int code, int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationRaw(int code, int uid, String packageName,
-                String attributionTag) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkOperationRawForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkAudioOperation(int code, int usage, int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int checkPackage(int uid, String packageName) {
-            return AppOpsManager.MODE_ALLOWED;
-        }
-
-        @Override
-        public int permissionToOpCode(String permission) {
-            return AppOpsManager.OP_NONE;
-        }
-
-        @Override
-        public SyncNotedAppOp noteOperation(int code, int uid, String packageName,
-                String attributionTag, boolean shouldCollectAsyncNotedOp, String message,
-                boolean shouldCollectMessage) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp noteOperationForDevice(int code, int uid, String packageName,
-                String attributionTag, int virtualDeviceId, boolean shouldCollectAsyncNotedOp,
-                String message, boolean shouldCollectMessage) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp startOperation(IBinder clientId, int code, int uid,
-                String packageName, String attributionTag, boolean startIfModeDefault,
-                boolean shouldCollectAsyncNotedOp, String message, boolean shouldCollectMessage,
-                int attributionFlags, int attributionChainId) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
-        }
-
-        @Override
-        public SyncNotedAppOp startOperationForDevice(IBinder clientId, int code, int uid,
-                String packageName, String attributionTag, int virtualDeviceId,
-                boolean startIfModeDefault, boolean shouldCollectAsyncNotedOp, String message,
-                boolean shouldCollectMessage, int attributionFlags, int attributionChainId) {
-            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
-                    packageName);
         }
     }
 
@@ -249,6 +195,16 @@ final class DeviceServices {
         @Override
         public int getSimStateForSlotIndex(int slotIndex) {
             return android.telephony.TelephonyManager.SIM_STATE_ABSENT;
+        }
+
+        /**
+         * No cellular network: TelephonyManager.getNetworkCountryIso() is @NonNull and
+         * returns "" when unavailable (including when ITelephony is absent); Default's
+         * null trips Kotlin non-null checks in apps such as Meta Muse.
+         */
+        @Override
+        public String getNetworkCountryIsoForPhone(int phoneId) {
+            return "";
         }
     }
 

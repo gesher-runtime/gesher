@@ -157,6 +157,17 @@ int main() {
   input.error = true;
   Check(Read(&reader, received, 1, 0) == kErrorInternal, "read engine error");
 
+#if HAS_INPUT_DISCONNECT
+  input.error = false; input.disconnect_at = input.position;
+  Check(Read(&reader, received, 1, 0) == kErrorDisconnected, "dead capture reports disconnect");
+  Check(GetState(&reader) == kStateDisconnected && reader.generation == 1,
+        "dead capture changes production state once");
+  Check(Read(&reader, received, 1, 0) == kErrorDisconnected && reader.generation == 1,
+        "later read retains disconnected state");
+  reader.disconnected = false;
+  input.disconnect_at = std::numeric_limits<size_t>::max();
+#endif
+
   int32_t next = -1;
   Check(WaitForStateChange(&reader, 4, &next, INT64_MAX) == kOk && next == 2,
         "already changed state accepts large duration");
@@ -170,6 +181,7 @@ int main() {
   state_to_change = nullptr;
   Check(WaitForStateChange(nullptr, 2, &next, 0) == kErrorNull, "null state-change stream");
 
+#if HAS_INPUT_DISCONNECT
   Backend disconnected;
   disconnected.disconnect_at = 0;
   AAudioStream disconnected_reader;
@@ -193,6 +205,7 @@ int main() {
   Check(GetState(&partial_reader) == kStateDisconnected && partial.state_wakeups == 1,
         "a source loss after partial transfer still publishes the terminal state");
   Check(GetState(nullptr) == kStateUninitialized, "null state query");
+#endif
 
   std::printf("AAudio contracts: %d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;

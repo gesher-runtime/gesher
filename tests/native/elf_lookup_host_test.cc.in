@@ -1,5 +1,6 @@
 // The production graph walk with observing symbol tables. Real ELF parsing,
 // relocations and Android guest calls are exercised by lookup_graph.c in CI.
+#include <mutex>
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 
+std::recursive_mutex g_mutex;
 struct Elf64_Sym { int value; };
 struct Library {
   std::vector<Library*> dependencies;

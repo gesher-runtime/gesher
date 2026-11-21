@@ -13,6 +13,7 @@
 #include <limits>
 #include <new>
 #include <random>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -53,7 +54,11 @@ using Elf64_Relr = uint64_t;
 bool operator==(const Elf64_Rela& a, const Elf64_Rela& b) {
   return a.r_offset == b.r_offset && a.r_info == b.r_info && a.r_addend == b.r_addend;
 }
-constexpr uint32_t PT_LOAD = 1, PF_R = 4;
+constexpr uint32_t PT_LOAD = 1, PF_X = 1, PF_W = 2, PF_R = 4;
+constexpr int PROT_READ = 1, PROT_WRITE = 2;
+constexpr size_t kPageSize = 0x1000;
+size_t PageDown(size_t value) { return value & ~(kPageSize - 1); }
+size_t PageUp(size_t value) { return PageDown(value + kPageSize - 1); }
 struct Elf64_Phdr {
   uint32_t p_type = 0, p_flags = 0;
   uint64_t p_vaddr = 0, p_memsz = 0;
@@ -64,9 +69,12 @@ struct Library {
   uint8_t* base = nullptr;
   uint8_t* load_bias = nullptr;
   size_t map_size = 0;
+  std::string load_notes;  // the loader's per-library notes, written once
   std::vector<std::pair<uintptr_t, uintptr_t>> writable;
+  std::set<uintptr_t> made_writable;
   const Elf64_Phdr* file_phdr = nullptr;
   uint16_t file_phnum = 0;
+  bool overlapping_load_pages = false;
   bool is_aarch64 = false;
   const Elf64_Relr* relr = nullptr;
   const uint8_t* android_rela = nullptr;
@@ -90,6 +98,11 @@ struct Library {
   Relocator relocate = nullptr;
   bool reenter_ok = true;
 };
+// Model the readable/writable bits of the loader's Windows protection boundary.
+int LoadProt(const Library* lib, uint32_t flags) {
+  return ((flags & PF_R) || (lib->is_aarch64 && (flags & PF_X)) ? PROT_READ : 0) |
+      (flags & PF_W ? PROT_WRITE : 0);
+}
 // The host owns these bounded byte arrays instead of a Windows mapping.
 // Keep the production range validator intact and describe the available span.
 void MappedBytes(Library& lib, const uint8_t* data, size_t size) {
@@ -418,6 +431,54 @@ void MappedRanges(Relocator relocate) {
       segments[0] = {PT_LOAD, PF_R, virtual_base, 6};
       run(mapped, true, "nonzero ELF virtual base preserves readable coverage");
     }
+
+    // Observe the effective permissions without altering real process memory.
+    // The later unaligned segment covers neither metadata byte directly, but
+    // its page-rounded protection overrides the earlier readable range.
+    alignas(kPageSize) std::array<uint8_t, 2 * kPageSize> shared{};
+    std::copy_n(bytes.begin(), 6, shared.begin() + kPageSize - 4);
+    std::copy_n(bytes.begin(), 6, shared.begin() + kPageSize + 16);
+    std::copy_n(bytes.begin(), 6, shared.begin() + 16);
+    Library overlap;
+    overlap.base = overlap.load_bias = shared.data();
+    overlap.map_size = shared.size();
+    overlap.overlapping_load_pages = true;
+    segments[0] = {PT_LOAD, PF_R, 0, shared.size()};
+    segments[1] = {PT_LOAD, 0, kPageSize + 128, 32};
+    overlap.file_phdr = segments.data(); overlap.file_phnum = segments.size();
+    overlap.android_rela = shared.data() + kPageSize - 4; overlap.android_rela_size = 6;
+    run(overlap, false, "packed body rejects a later non-readable page protection");
+    overlap.android_rela = shared.data() + kPageSize + 16;
+    run(overlap, false, "packed header rejects a later non-readable page protection");
+    overlap.android_rela = shared.data() + 16;
+    run(overlap, true, "metadata stays readable when the denied page lies outside it");
+    overlap.android_rela = shared.data() + kPageSize - 4;
+    segments[1].p_flags = PF_R | PF_W;
+    run(overlap, true, "packed metadata may span legitimate readable overlapping mappings");
+    segments[1].p_flags = 0;
+    overlap.made_writable.insert(reinterpret_cast<uintptr_t>(shared.data()) + kPageSize);
+    run(overlap, true, "earlier relocation may have made the affected page readable and writable");
+
+    overlap.made_writable.clear();
+    segments[0].p_flags = PF_W;
+    segments[1].p_flags = PF_W;
+    run(overlap, true, "Windows writable segments supply readable packed metadata");
+    segments[1].p_flags = 0;
+    run(overlap, false, "later denied page still overrides a writable metadata extent");
+    segments[0].p_flags = PF_X;
+    segments[1].p_flags = PF_X;
+    run(overlap, arch, "only translated execute-only segments supply readable metadata");
+    overlap.overlapping_load_pages = false;
+    segments[1] = {};
+    run(overlap, arch, "the same translated protection applies without overlapping pages");
+
+    overlap.overlapping_load_pages = true;
+    overlap.android_rela = shared.data() + 16;
+    segments[0] = {PT_LOAD, PF_W, 16, 3};
+    segments[1] = {PT_LOAD, PF_W, 19, 3};
+    run(overlap, true, "adjacent writable byte extents cover metadata on a shared page");
+    segments[1] = {PT_LOAD, PF_W, 20, 2};
+    run(overlap, false, "a readable shared page cannot authorize an undeclared byte gap");
   }
 }
 

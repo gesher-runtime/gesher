@@ -141,7 +141,7 @@ public final class DeviceProfile {
                 | Configuration.SCREENLAYOUT_LAYOUTDIR_LTR
                 | Configuration.SCREENLAYOUT_ROUND_NO;
         c.setLayoutDirection(locales.get(0));  // right to left for Hebrew, Arabic...
-        c.uiMode = Configuration.UI_MODE_TYPE_NORMAL | Configuration.UI_MODE_NIGHT_NO;
+        c.uiMode = Configuration.UI_MODE_TYPE_NORMAL | com.gesher.server.UiModeManagerService.getUiModeNight();
         c.touchscreen = Configuration.TOUCHSCREEN_FINGER;
         c.keyboard = Configuration.KEYBOARD_NOKEYS;
         c.keyboardHidden = Configuration.KEYBOARDHIDDEN_YES;

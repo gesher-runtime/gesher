@@ -3,6 +3,9 @@
 # compiled against framework.jar's classes as app/build.sh compiles gesher-app.
 #
 #   tests/dex-graphics/build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>]
+#       [--app-classes <gesher-app-classes.jar>]
+# By default use the complete app classes built in the same output directory.
+# This also preserves the calling convention of pinned reusable CI workflows.
 #
 # Needs a JDK 17+ and curl; d8 comes from Google's Maven repository (R8_JAR to use a
 # local copy). Runs on Linux and in Git Bash on Windows.
@@ -12,16 +15,21 @@ R8_VERSION=9.5.26
 here=$(cd "$(dirname "$0")" && pwd)
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
-framework= core=
+framework= core= app_classes="$out/gesher-app-classes.jar"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --framework-classes) framework=$2; shift 2 ;;
     --core-classes) core=$2; shift 2 ;;
+    --app-classes) app_classes=$2; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
-if [[ -z $framework ]]; then
-  echo "usage: build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>]" >&2
+if [[ -z $framework || -z $app_classes ]]; then
+  echo "usage: build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>] [--app-classes <jar>]" >&2
+  exit 2
+fi
+if [[ ! -f $app_classes ]]; then
+  echo "app compile classes not found: $app_classes (run app/build.sh first)" >&2
   exit 2
 fi
 
@@ -32,6 +40,10 @@ else
   native() { echo "$1"; }
   native_list() { :; }
 fi
+
+separator=:
+if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then separator=';'; fi
+classpath="$(native "$app_classes")$separator$(native "$framework")"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -54,11 +66,11 @@ mkdir -p "$work/classes" "$work/dex"
 find "$here" -name '*.java' > "$work/sources.txt"
 native_list "$work/sources.txt"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
-  -cp "$(native "$framework")" -sourcepath "$(native "$here/../../app/java")" \
+  -cp "$classpath" \
   -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
-# gesher-app's classes (com.gesher.app.window.NativeWindow) are compiled from
-# app/java for javac (-sourcepath) but not dexed: gesher-app.jar is on the boot
-# class path at run time.
+# Compile against the same complete app classes used by the runtime, including
+# its generated classes and declared dependencies. Only graphics tests are dexed;
+# gesher-app.jar is on the boot class path at run time.
 ( cd "$work" && find classes/gesher -name '*.class' ) > "$work/dex.txt"
 (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
   --output "$(native "$work/dex")" @dex.txt)

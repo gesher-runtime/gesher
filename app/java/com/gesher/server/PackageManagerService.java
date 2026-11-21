@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 /**
@@ -51,6 +52,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         return thread;
     });
     private Consumer<Intent> mPackageEventSender = PackageManagerService::broadcastPackageEvent;
+    private final List<Consumer<Intent>> mPackageEventListeners = new CopyOnWriteArrayList<>();
     private Consumer<ApkPackage> mEnabledStateKiller = this::restartEnabledPackage;
     private volatile Consumer<EnabledChange> mEnabledStateListener;
     private volatile Consumer<EnabledChange> mEnabledStateRestarter;
@@ -72,16 +74,32 @@ public final class PackageManagerService extends IPackageManager.Default {
         Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
         next.put(original.packageName, original); mRemoving = next;
     }
-    synchronized void endPackageRemoval(ApkPackage original) {
-        if (mRemoving.get(original.packageName) != original) return;
-        Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
-        next.remove(original.packageName); mRemoving = next;
+    void endPackageRemoval(ApkPackage original) {
+        boolean restored;
+        synchronized (this) {
+            if (mRemoving.get(original.packageName) != original) return;
+            Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
+            next.remove(original.packageName); mRemoving = next;
+            restored = mPermissions.finishPackageRemoval(original);
+        }
+        if (restored) mPermissions.packageRemovalRestored(original);
     }
     /** Installer holds its monitor and has restored every unresolved precommit journal. */
-    synchronized void recoveredPackageRemovals() { mRemoving = new LinkedHashMap<>(); }
+    void recoveredPackageRemovals() {
+        List<ApkPackage> restored = new ArrayList<>();
+        synchronized (this) {
+            List<ApkPackage> previous = new ArrayList<>(mRemoving.values());
+            mRemoving = new LinkedHashMap<>();
+            for (ApkPackage original : previous) {
+                if (mPermissions.finishPackageRemoval(original)) restored.add(original);
+            }
+        }
+        for (ApkPackage original : restored) mPermissions.packageRemovalRestored(original);
+    }
 
     /** Server-local capability cleanup; never callable through the package Binder. */
     synchronized void onPackageRemoval(Consumer<String> cleanup) { mPackageRemoval.add(cleanup); }
+    synchronized void removePackageRemovalListener(Consumer<String> cleanup) { mPackageRemoval.remove(cleanup); }
 
     synchronized void onPackageRemovalCheck(Consumer<String> check) { mPackageRemovalChecks.add(check); }
 
@@ -97,7 +115,30 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (Consumer<String> action : cleanup) action.accept(name);
     }
 
+    boolean hasTransientPackageState() { return mTransientEnabled; }
+    private volatile AppOpsService mAppOps;
+    private final java.util.concurrent.CopyOnWriteArrayList<Consumer<ApkPackage>> mPackageChanges =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
     public PermissionPolicy permissions() { return mPermissions; }
+
+    /** One policy/operation ledger shared by the Binder and all server consumers. */
+    public AppOpsService appOps() {
+        AppOpsService service = mAppOps;
+        if (service != null) return service;
+        synchronized (this) {
+            if (mAppOps == null) mAppOps = new AppOpsService(this, mTransientEnabled ? null
+                    : new java.io.File(Device.dataDir(), "system/appops.xml"));
+            return mAppOps;
+        }
+    }
+
+    /** Runs after durable publication, outside the installer and package monitors. */
+    public AutoCloseable onPackageChange(Consumer<ApkPackage> listener) {
+        mPackageChanges.add(java.util.Objects.requireNonNull(listener));
+        return () -> mPackageChanges.remove(listener);
+    }
+
 
     @Override public String[] getSystemSharedLibraryNames() {
         try {
@@ -138,10 +179,15 @@ public final class PackageManagerService extends IPackageManager.Default {
         mTransientEnabled = !persistentEnabled;
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
-            map.put(p.packageName, p);
+            if (map.put(p.packageName, p) != null) throw new IllegalArgumentException("Duplicate installed package");
         }
-        mPackages = map;
-        enabledStore();
+        try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
+            identity.commit();
+            mPackages = map;
+            enabledStore();
+            identity.accept();
+        }
+        mPermissions.initializePackages();
     }
 
     private synchronized PackageEnabledStore enabledStore() {
@@ -157,22 +203,59 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     /** Finish owner I/O before an installer commits its durable package registry. */
-    synchronized void prepareAdd(ApkPackage p) {
-        PackageEnabledStore store = enabledStore();
-        if (!p.hasEnabledState(store)) p.attachEnabledState(store, store.owner(p.packageName));
+    synchronized PackageUids.Admission prepareAdd(ApkPackage p) {
+        PackageUids.Admission identity = PackageUids.prepare(List.of(p), mPackages.values());
+        try {
+            PackageEnabledStore store = enabledStore();
+            if (!p.hasEnabledState(store)) p.attachEnabledState(store, store.owner(p.packageName));
+            return identity;
+        } catch (RuntimeException failure) {
+            identity.close(); throw failure;
+        }
     }
 
     /** Adds or replaces a package (an install or an update). */
-    synchronized void add(ApkPackage p) {
-        prepareAdd(p);
+    void add(ApkPackage p) { add(p, this); }
+
+    synchronized void add(ApkPackage p, Object publicationLock) {
+        try (PackageUids.Admission identity = prepareAdd(p)) {
+            identity.commit();
+            identity.accept();
+            publishPrepared(p, publicationLock);
+        }
+    }
+
+    /** Caller already committed the durable identity and package registry together. */
+    void publishPrepared(ApkPackage p) { publishPrepared(p, this); }
+
+    synchronized void publishPrepared(ApkPackage p, Object publicationLock) {
+        if (p.uidPending() || p.uid() < 0) throw new IllegalStateException("Package identity was not admitted");
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         map.put(p.packageName, p);
-        mPackages = map;
-        PackageManager.invalidatePackageInfoCache();
+        Runnable permissions = mPermissions.publishPackage(p, () -> {
+            mPackages = map;
+            PackageManager.invalidatePackageInfoCache();
+        }, publicationLock);
+        mPackageEventExecutor.execute(() -> {
+            synchronized (publicationLock) { }
+            synchronized (PackageManagerService.this) { }
+            long identity = Binder.clearCallingIdentity();
+            try { permissions.run(); }
+            finally { Binder.restoreCallingIdentity(identity); }
+        });
     }
 
     /** Removes a package (an uninstall); returns it, or null. */
     synchronized ApkPackage remove(String packageName) {
+        try (PackageUids.Admission identity = PackageUids.prepareRetire(mPackages.get(packageName))) {
+            identity.commit();
+            ApkPackage removed = removePrepared(packageName);
+            identity.accept();
+            return removed;
+        }
+    }
+
+    synchronized ApkPackage removePrepared(String packageName) {
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         ApkPackage p = map.get(packageName);
         if (p != null) enabledStore().retire(packageName, p.enabledStateOwner());
@@ -193,6 +276,11 @@ public final class PackageManagerService extends IPackageManager.Default {
             // A session also holds the installer monitor around its final consent/code
             // checks. Do not call application Binders until that outer lock is released.
             synchronized (publicationLock) { }
+            if (get(name) != pkg || isRemovalPending(name)) return;
+            for (Consumer<ApkPackage> listener : mPackageChanges) {
+                if (get(name) != pkg || isRemovalPending(name)) return;
+                listener.accept(pkg);
+            }
             Intent added = new Intent(Intent.ACTION_PACKAGE_ADDED, Uri.fromParts("package", name, null))
                     .putExtra(Intent.EXTRA_UID, uid)
                     .putExtra(Intent.EXTRA_REPLACING, replacing);
@@ -220,11 +308,21 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     private void sendPackageEvent(Intent intent) {
+        // Server-local listeners observe committed events after the installer/PM locks
+        // are released. An app cannot inject these callbacks by sending a broadcast.
+        for (Consumer<Intent> listener : mPackageEventListeners) {
+            try { listener.accept(new Intent(intent)); }
+            catch (RuntimeException failure) {
+                SystemServer.log("package listener failed: " + failure.getClass().getSimpleName());
+            }
+        }
         try { mPackageEventSender.accept(intent); }
         catch (RuntimeException failure) {
             SystemServer.log("package event unavailable: " + failure.getClass().getSimpleName());
         }
     }
+
+    void onPackageEvent(Consumer<Intent> listener) { mPackageEventListeners.add(listener); }
 
     private static void broadcastPackageEvent(Intent intent) {
         long identity = Binder.clearCallingIdentity();
@@ -391,6 +489,19 @@ public final class PackageManagerService extends IPackageManager.Default {
         return result;
     }
 
+    /** Visibility to an installed service, from the already authenticated caller's package. */
+    synchronized boolean canSeeInstalledPackage(String source, String target) {
+        Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
+        for (String removing : mRemoving.keySet()) packages.remove(removing);
+        ApkPackage caller = packages.get(source);
+        if (caller == null) return false;
+        PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
+                this::isProtectedBroadcast);
+        // Package admission assigns isolated or authenticated shared identities
+        // in both signature-spoofing modes.
+        return visibility.canSee(caller.uid(), target);
+    }
+
     /** The services {@code intent} resolves to, in every package. */
     synchronized List<ResolveInfo> services(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
@@ -467,6 +578,16 @@ public final class PackageManagerService extends IPackageManager.Default {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentContentProviders(intent, resolvedType, flags));
         }
+        if (android.provider.DocumentsContract.PROVIDER_INTERFACE.equals(intent.getAction())
+                && (intent.getPackage() == null || "android".equals(intent.getPackage()))
+                && intent.getComponent() == null) {
+            ProviderInfo docProvider = hostedProvider(DocumentsStorageProvider.AUTHORITY);
+            if (docProvider != null) {
+                ResolveInfo info = new ResolveInfo();
+                info.providerInfo = docProvider;
+                result.add(info);
+            }
+        }
         return new ParceledListSlice<>(result);
     }
 
@@ -486,7 +607,25 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
+        if (userId != 0) return null;
+        ProviderInfo hosted = hostedProvider(name);
+        if (hosted != null) return hosted;
         return provider(name, flags);
+    }
+
+    private volatile ContentProviders mHostedProviders;
+
+    void setHostedProviders(ContentProviders providers) { mHostedProviders = providers; }
+
+    private ProviderInfo hostedProvider(String authority) {
+        ContentProviders providers = mHostedProviders;
+        ContentProviders.RegisteredProvider registration = providers == null ? null
+                : providers.registeredProvider(authority);
+        if (registration == null) return null;
+        if (ContentProviders.declaredProvider(this, authority) != null) {
+            throw new SecurityException("Conflicting hosted provider authority");
+        }
+        return new ProviderInfo(registration.info);
     }
 
     @Override
@@ -870,9 +1009,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getNameForUid(int uid) {
-        if (uid == android.os.Process.SYSTEM_UID) return "android.uid.system";
-        String[] names = getPackagesForUid(uid);
-        return names == null || names.length == 0 ? null : names[0];
+        return nameForUid(uid, false);
     }
 
     @Override
@@ -881,15 +1018,36 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (uids == null || uids.length == 0) return null;
         String[] names = new String[uids.length];
         for (int i = 0; i < uids.length; i++) {
-            names[i] = uids[i] == android.os.Process.SYSTEM_UID
-                    ? "shared:android.uid.system" : getNameForUid(uids[i]);
+            names[i] = nameForUid(uids[i], true);
         }
         return names;
+    }
+
+    private String nameForUid(int uid, boolean bulk) {
+        if (uid == android.os.Process.SYSTEM_UID) {
+            return sharedUidName("android.uid.system", uid, bulk);
+        }
+        if (uid == android.os.Process.SHELL_UID) {
+            return sharedUidName("android.uid.shell", uid, bulk);
+        }
+        for (ApkPackage pkg : mPackages.values()) {
+            if (pkg.uid() != uid) continue;
+            String shared = pkg.sharedUserId();
+            if (shared == null || shared.isEmpty()) return pkg.packageName;
+            return sharedUidName(shared, uid, bulk);
+        }
+        return null;
+    }
+
+    private static String sharedUidName(String shared, int uid, boolean bulk) {
+        // AOSP distinguishes the singular UID identity from the bulk diagnostic name.
+        return bulk ? "shared:" + shared : shared + ":" + android.os.UserHandle.getAppId(uid);
     }
 
     @Override
     public String[] getPackagesForUid(int uid) {
         if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
+        if (uid == android.os.Process.SHELL_UID) return new String[] {"com.android.shell"};
         List<String> result = new ArrayList<>();
         for (ApkPackage pkg : mPackages.values()) if (pkg.uid() == uid) result.add(pkg.packageName);
         return result.isEmpty() ? null : result.toArray(new String[0]);
@@ -897,7 +1055,10 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public int getPackageUid(String name, long flags, int userId) {
-        ApplicationInfo info = userId == 0 ? getApplicationInfo(name, flags, userId) : null;
+        if (userId != 0) return -1;
+        if ("android".equals(name)) return android.os.Process.SYSTEM_UID;
+        if ("com.android.shell".equals(name)) return android.os.Process.SHELL_UID;
+        ApplicationInfo info = getApplicationInfo(name, flags, userId);
         return info == null ? -1 : info.uid;
     }
 
