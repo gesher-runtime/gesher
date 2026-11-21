@@ -4,6 +4,8 @@
  */
 package com.gesher.server;
 
+import android.content.pm.PackageManager;
+import android.content.pm.PackageParser.PackageParserException;
 import android.content.pm.dex.DexMetadataHelper;
 import android.content.pm.parsing.result.ParseResult;
 import android.content.pm.parsing.result.ParseTypeImpl;
@@ -295,6 +297,8 @@ final class Installer {
             return unchanged(apk, recorded.packageName, parsed, recorded);
         }
         File tempDir = null;
+        File pendingCode = null;
+        String pendingPackage = null;
         try {
             if (source.getName().toLowerCase().endsWith(".xapk")
                     || source.getName().toLowerCase().endsWith(".apks")) {
@@ -331,11 +335,15 @@ final class Installer {
                 // Native code only for ABIs Gesher cannot run (32-bit armeabi-v7a, x86):
                 // refused, as a device refuses it, instead of an app whose libraries
                 // never load (and an update that replaces a working install).
-                throw new IllegalArgumentException("INSTALL_FAILED_NO_MATCHING_ABIS: "
+                String message = "INSTALL_FAILED_NO_MATCHING_ABIS: "
                         + source.getName() + " has native code only for "
                         + String.join(", ", foreign) + "; Gesher runs "
                         + String.join(" and ", NativeLibs.SUPPORTED)
-                        + " (use the app's arm64-v8a, x86_64 or universal APK)");
+                        + " (use the app's arm64-v8a, x86_64 or universal APK)";
+                if (sessionMetadata != null) {
+                    throw new PackageParserException(PackageManager.INSTALL_FAILED_NO_MATCHING_ABIS, message);
+                }
+                throw new IllegalArgumentException(message);
             }
             Entry old = mEntries.get(pkg);
             ApkPackage previous = mPm.get(pkg);
@@ -394,38 +402,33 @@ final class Installer {
                 code = new File(appRoot, pkg + "-" + (++n));
             }
             Files.createDirectory(code.toPath());
+            pendingCode = code;
+            pendingPackage = pkg;
             File base = new File(code, "base.apk");
-            copy(source, base);
-            if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));
+            boolean syncCode = sessionMetadata != null;
+            copy(source, base, syncCode);
+            if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode);
             File[] companionSplits = companionSplits(source);
             if (companionSplits != null) {
                 for (File split : companionSplits) {
                     String targetName = split.getName().startsWith("split_")
                             ? split.getName() : "split_" + split.getName();
-                    copy(split, new File(code, targetName));
+                    copy(split, new File(code, targetName), syncCode);
                     File splitMetadata = dexMetadata(split);
                     if (splitMetadata.isFile()) copy(splitMetadata,
-                            new File(code, InstallSessionMetadata.dexName(targetName)));
+                            new File(code, InstallSessionMetadata.dexName(targetName)), syncCode);
                 }
             }
             if (sessionMetadata != null) sessionMetadata.copyTo(code);
             // Verification must apply to the bytes being published, not a mutable
             // download that could change after its initial parse/verification.
-            ApkPackage staged;
-            try {
-                staged = ApkPackage.parseCodeDirectory(code.getPath());
-            } catch (Exception invalidCluster) {
-                // Malformed/mismatched splits must not stop or replace the working app.
-                deleteTree(code);
-                throw invalidCluster;
-            }
+            ApkPackage staged = ApkPackage.parseCodeDirectory(code.getPath());
             android.content.pm.Signature[] stagedSigners = staged.verifiedSignatures();
             if (!pkg.equals(staged.packageName) || staged.versionCode() != parsed.versionCode()
                     || !Arrays.equals(newSigners, stagedSigners)
                     || (stagedSigners == null && hasSigningMaterial(base))
                     || (previous != null && previous.hasVerifiedSigningIdentity()
                             && !staged.updateContinuityFrom(previous))) {
-                deleteTree(code);
                 throw new SecurityException("INSTALL_FAILED_CHANGED_APK: " + pkg);
             }
             for (String copied : apksOf(code.getPath())) {
@@ -434,18 +437,11 @@ final class Installer {
                 android.content.pm.Signature[] copiedSigners = ApkPackage.verifySignatures(copied);
                 if (!Arrays.equals(stagedSigners, copiedSigners)
                         || (copiedSigners == null && hasSigningMaterial(split))) {
-                    deleteTree(code);
                     throw new SecurityException("INSTALL_FAILED_CHANGED_SPLIT: " + pkg);
                 }
             }
             try (PackageUids.Admission checked = PackageUids.prepare(List.of(staged), mPm.packages())) {
                 // Recheck the copied cluster before stopping the working generation.
-            }
-            if (old != null || previous != null) mAtm.forceStopPackage(pkg);
-            if (previous != null && !previous.hasVerifiedSigningIdentity()) {
-                mPm.permissions().forgetPackage(pkg);
-                NotificationManagerService notifications = NotificationManagerService.sLast;
-                if (notifications != null) notifications.packageRemoved(pkg);
             }
             // The package's ABI over base.apk and its splits: an ABI split's libraries
             // (an .xapk's config.arm64_v8a.apk) go to lib/arm64 and the package runs as
@@ -471,6 +467,13 @@ final class Installer {
             // Boot preparation used the committed manifest before any update;
             // changing defaultToDeviceProtectedStorage later does not migrate CE.
             installed.prepareInstallDataDirectories(old != null || previous != null);
+            // Keep the running generation until parsing and native extraction succeed.
+            if (old != null || previous != null) mAtm.forceStopPackage(pkg);
+            if (previous != null && !previous.hasVerifiedSigningIdentity()) {
+                mPm.permissions().forgetPackage(pkg);
+                NotificationManagerService notifications = NotificationManagerService.sLast;
+                if (notifications != null) notifications.packageRemoved(pkg);
+            }
             publishInstalled(entry, installed);
             if (old != null && !old.codePath.equals(entry.codePath)) {
                 delete(new File(old.codePath));
@@ -483,6 +486,12 @@ final class Installer {
             mPm.packageInstalled(installed, old != null || previous != null, this);
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
         } finally {
+            if (pendingCode != null) {
+                // The registry is the commit point. An unpublished generation can
+                // be removed without touching the previous package or its data.
+                Entry committed = mEntries.get(pendingPackage);
+                if (committed == null || !committed.codePath.equals(pendingCode.getPath())) delete(pendingCode);
+            }
             if (tempDir != null) deleteTree(tempDir);
         }
     }
@@ -521,16 +530,20 @@ final class Installer {
                 SystemServer.log("install " + pkg + ": shared-library context/content changed");
             }
             Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-            ApkPackage installed = open(old);
-            ApkPackage previous = mPm.get(pkg);
-            if (previous != null && previous.isSystemAddon()) {
-                if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
-                    throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+            // Rebuilding a missing oat file does not change the installed code.
+            // Preserve its identity for attached processes and their session handles.
+            if (libraryChange || mPm.get(pkg) == null) {
+                ApkPackage installed = open(old);
+                ApkPackage previous = mPm.get(pkg);
+                if (previous != null && previous.isSystemAddon()) {
+                    if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
+                        throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+                    }
+                    installed.setSystemAddon(true);
                 }
-                installed.setSystemAddon(true);
+                installed.prepareInstalledDataDirectories();
+                mPm.add(installed, this);
             }
-            installed.prepareInstalledDataDirectories();
-            mPm.add(installed, this);
         }
         return new String[] {pkg, "unchanged", old.codePath,
                 String.valueOf(parsed.versionCode())};
@@ -729,13 +742,14 @@ final class Installer {
         return total;
     }
 
-    private static void copy(File from, File to) throws IOException {
+    private static void copy(File from, File to, boolean sync) throws IOException {
         byte[] buffer = new byte[64 * 1024];
         try (InputStream in = new FileInputStream(from);
-                OutputStream out = new FileOutputStream(to)) {
+                FileOutputStream out = new FileOutputStream(to)) {
             for (int n; (n = in.read(buffer)) > 0; ) {
                 out.write(buffer, 0, n);
             }
+            if (sync) out.getFD().sync();
         }
     }
 
