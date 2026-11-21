@@ -1634,6 +1634,48 @@ public final class WindowSession extends IWindowSession.Stub {
         return !windows.isEmpty();
     }
 
+    /** How long after Back a stop of the task's Activity is taken as its move to the back. */
+    private static final long BACK_STOP_MS = 10_000;
+    /** Tasks Back was pressed in (onBackPressed), by task id: when (uptime). */
+    private final android.util.SparseLongArray mBackPressed = new android.util.SparseLongArray();
+
+    /**
+     * Back reached the system server for {@code activityToken} (Activity.onBackPressed on a
+     * task root, a oneway call): it finishes the Activity, or moves the task to the back if
+     * home launched it (Android's rule). In the latter case the Activity stops without
+     * finishing, and its windows are minimized then (relayout), as for moveTaskToBack.
+     */
+    public void backPressed(IBinder activityToken) {
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (!v.popup && v.attrs.token == activityToken && v.taskId >= 0) {
+                    mBackPressed.put(v.taskId, SystemClock.uptimeMillis());
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether {@code root}'s Activity stops because Back moved its task to the back: Back was
+     * pressed in its task, the Activity is not finishing, and no other task of the app
+     * covered it (ADR 0088). Clears the mark.
+     */
+    private boolean stoppedByBack(AppWindow root) {
+        long at;
+        synchronized (mWindows) {
+            int i = mBackPressed.indexOfKey(root.taskId);
+            if (root.taskId < 0 || i < 0) return false;
+            at = mBackPressed.valueAt(i);
+            mBackPressed.removeAt(i);
+        }
+        if (SystemClock.uptimeMillis() - at > BACK_STOP_MS || root.coverHidden) return false;
+        ActivityThread thread = ActivityThread.currentActivityThread();
+        android.app.Activity a = thread == null ? null : thread.getActivity(root.attrs.token);
+        return a != null && !a.isFinishing();
+    }
+
     /** Remembers where a top-level window of a task is, as it goes or is hidden. */
     private void rememberTaskScreen(AppWindow w) {
         if (w.taskId < 0 || w.nativeWindow == null) return;
@@ -2525,6 +2567,12 @@ public final class WindowSession extends IWindowSession.Stub {
         } else {
             if (outSurface != null) outSurface.release();
             if (w.nativeWindow != null && w.shown) {
+                AppWindow r = root(w);
+                if (!r.minimized && r == w && stoppedByBack(r)) {
+                    // Back moved its task to the back (its root, which home launched): the
+                    // window is minimized, not hidden (its taskbar button stays).
+                    minimizeTask(r.attrs.token);
+                }
                 if (root(w).minimized) {
                     // Its Activity stopped as the user minimized its window: the window
                     // stays minimized (its taskbar button), not hidden, until restored.

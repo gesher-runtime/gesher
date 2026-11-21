@@ -5,8 +5,6 @@
 package com.gesher.app.window;
 
 import android.app.ActivityClient;
-import android.app.ActivityManager;
-import android.app.ActivityThread;
 import android.app.ActivityTaskManager;
 import android.app.IActivityClientController;
 import android.os.IBinder;
@@ -16,7 +14,6 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
-import java.util.List;
 
 /**
  * What an app process's Activities ask of the activity task manager about themselves
@@ -27,8 +24,9 @@ import java.util.List;
  *       (the process draws them: WindowSession.minimizeTask), as a desktop's window manager
  *       does with a task sent to the back, instead of their being hidden as stopped
  *       Activities' windows are;
- *   <li>{@code onBackPressed} on a task root the home screen launched moves the task to the
- *       back in the system server (Android's rule), which minimizes its windows here too;
+ *   <li>{@code onBackPressed} (oneway) on a task root the home screen launched moves the task
+ *       to the back in the system server (Android's rule): its windows are minimized here
+ *       when its Activity then stops (WindowSession.backPressed);
  *   <li>gesher-app's single process, which has no system server for its one Activity
  *       (its token is its own), answers for that Activity itself ({@link Local}):
  *       {@code setRequestedOrientation} turns its window, {@code getRequestedOrientation},
@@ -121,13 +119,11 @@ public final class ActivityClientHook implements InvocationHandler {
                     break;
             }
         }
-        int backTask = -1;
         if (name.equals("onBackPressed") && token != null) {
-            try {
-                backTask = server().getTaskForActivity(token, false);
-            } catch (RemoteException | RuntimeException e) {
-                backTask = -1;
-            }
+            // The server answers later (a oneway call): finishing the Activity, or moving its
+            // task to the back, which stops it; the stop then minimizes its windows.
+            WindowSession session = WindowSession.get();
+            if (session != null) session.backPressed(token);
         }
         Object result;
         try {
@@ -141,30 +137,6 @@ public final class ActivityClientHook implements InvocationHandler {
             WindowSession session = WindowSession.get();
             if (session != null) session.minimizeTask(token);
         }
-        if (backTask >= 0 && movedToBack(backTask)) {
-            // Back moved the task to the back instead of finishing the Activity
-            // (ActivityClientController.onBackPressed decides before it returns).
-            WindowSession session = WindowSession.get();
-            if (session != null) session.minimizeTask(token);
-        }
         return result;
-    }
-
-    /** Whether the system server has {@code taskId} at the back now (not visible-requested). */
-    private static boolean movedToBack(int taskId) {
-        try {
-            android.app.Application app = ActivityThread.currentApplication();
-            if (app == null) return false;
-            ActivityManager am = app.getSystemService(ActivityManager.class);
-            if (am == null) return false;
-            List<ActivityManager.AppTask> tasks = am.getAppTasks();
-            for (ActivityManager.AppTask t : tasks) {
-                ActivityManager.RecentTaskInfo info = t.getTaskInfo();
-                if (info != null && info.taskId == taskId) return !info.isVisibleRequested;
-            }
-        } catch (RuntimeException e) {
-            // The task ended meanwhile: nothing to minimize.
-        }
-        return false;
     }
 }
