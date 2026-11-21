@@ -265,6 +265,9 @@ final class SettingsProvider extends ContentProvider {
         global.put(Settings.Global.DEVICE_NAME, "Gesher");
 
         mStore = new SettingsStore(file, mTables);
+        String recognizer = SpeechRecognitionManagerService.configuredDefault(pm,
+                System.getenv("GESHER_SPEECH_RECOGNIZER"));
+        if (recognizer != null) mStore.addDefault(SECURE, Settings.Secure.VOICE_RECOGNITION_SERVICE, recognizer);
         // Single-process mode executes app code in the server's own PID and cannot
         // authenticate a privileged writer. Never expose its process to host selection state.
         mTextStore = mPm != null && mPm.hasTransientPackageState() ? null

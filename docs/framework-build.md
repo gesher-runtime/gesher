@@ -87,20 +87,25 @@ framework build: the `framework-classes` artifact of a CI run (the `ci`
 workflow's framework job; `framework-classes.zip` and `coremod.zip`, unzipped)
 has both. CompatChangesGen reads `@ChangeId` fields from frameworks/base's Java
 sources, which `tools/fetch-aosp.sh`'s sparse set leaves out (the framework
-build's `--checkout` widens it). Without them it finds no changes and every
-app-compat change is enabled for every app. On Windows (Git Bash, a JDK 21 on
-PATH):
+build's `--checkout` widens it). Incomplete sources can omit disabled and
+target-SDK guards even when generation succeeds: for example, the JobScheduler
+abandoned-job override is declared in `apex/jobscheduler/framework/java`.
+On Windows (Git Bash, a JDK 21 on PATH):
 
 ```
 tools/fetch-aosp.sh D:/gesher-dev/aosp
 git -C D:/gesher-dev/aosp/frameworks/base sparse-checkout add core/java/ graphics/java/ \
-  media/java/ location/java/ telephony/java/ keystore/java/
+  media/java/ location/java/ telephony/java/ keystore/java/ \
+  apex/jobscheduler/framework/java/ telecomm/framework/java/ rs/java/ \
+  packages/NetworkSecurityConfig/platform/src/
 gh run download <run> -R gesher-runtime/gesher -n framework-classes -D fc   # then unzip coremod.zip into core/
 AOSP_DIR=D:/gesher-dev/aosp R8_JAR=<r8.jar> app/build.sh out/app \
   --framework-classes fc/framework-classes.zip --core-classes core
 ```
 
-CompatChangesGen then reports its changes (164 at android-16.0.0_r4). Take the
-artifact from a run whose framework sources match the checkout. gesher-app.jar
+CompatChangesGen then reports its changes (184 at android-16.0.0_r4, including
+the local Wi-Fi and role guards). Compare its counts and unresolved declarations
+with the producing CI run's framework job. Take the artifact from a run whose
+framework sources match the checkout. gesher-app.jar
 is in the boot image (`framework/x86_64/boot-gesher-app.*`), so a jar built
 this way does not match an installed image's.

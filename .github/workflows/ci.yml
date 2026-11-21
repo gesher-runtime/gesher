@@ -318,6 +318,7 @@ jobs:
           python3 tools/test_jni_argument_storage.py --sanitize
           python3 tools/test_art_jni_dispatch.py --sanitize
           python3 tools/test_audio_mixer_allocations.py --sanitize
+          python3 tools/test_audio_unity_rate.py --sanitize
           python3 tools/test_audio_capture_allocations.py --sanitize
           python3 tools/test_capture_stream_selection.py --sanitize
           python3 tools/test_audio_file_source.py --sanitize
@@ -373,6 +374,7 @@ jobs:
           python3 tools/test_media_source_contracts.py --sanitize
           python3 tools/test_media_callback_state.py --sanitize
           python3 tools/test_media_http_contracts.py --sanitize
+          python3 tools/test_mf_encoder_input.py --sanitize
           python3 tools/test_media_surface_contracts.py --sanitize
           cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
             tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"

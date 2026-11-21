@@ -25,6 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify independent Android observations and pinned parser source
         run: |
+          python3 probes/native3/binary128/test_prepare_sources.py
           python3 probes/native3/binary128/generate_expected.py --check
           python3 probes/native3/binary128/prepare_sources.py "$RUNNER_TEMP/quad-aosp" --fetch
       - name: Build the production parser component and source reference tests

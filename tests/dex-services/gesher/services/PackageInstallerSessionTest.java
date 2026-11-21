@@ -448,11 +448,32 @@ public final class PackageInstallerSessionTest {
         method(serviceClass, "attach", atmClass, installerClass).invoke(service, atm, backend);
         callbacks(service, serviceClass);
         rejected(() -> create(service, "not.the.caller", pkg), SecurityException.class);
-        PackageInstaller.SessionParams advanced = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_INHERIT_EXISTING);
-        rejected(() -> service.createSession(advanced, pkg, null, 0), UnsupportedOperationException.class);
+        PackageInstaller.SessionParams advanced = new PackageInstaller.SessionParams(-1);
+        rejected(() -> service.createSession(advanced, pkg, null, 0), IllegalArgumentException.class);
         PackageInstaller.SessionParams apex = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         apex.setInstallAsApex();
         rejected(() -> service.createSession(apex, pkg, null, 0), UnsupportedOperationException.class);
+        File sessionRoot = new File(data, "system/install-sessions");
+        String[] stagesBefore = sessionRoot.list();
+        int sessionsBefore = service.getAllSessions(0).getList().size();
+        int jobsBefore = jobs.size(), promptsBefore = prompts.get();
+        PackageInstaller.SessionParams noKill = new PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_INHERIT_EXISTING);
+        noKill.appPackageName = pkg;
+        noKill.setDontKillApp(true);
+        rejected(() -> service.createSession(noKill, pkg, null, 0), UnsupportedOperationException.class);
+        require(service.getAllSessions(0).getList().size() == sessionsBefore
+                && Arrays.equals(stagesBefore, sessionRoot.list())
+                && jobs.size() == jobsBefore && prompts.get() == promptsBefore,
+                "Unsupported no-kill install allocated a session or started work");
+        PackageInstaller.SessionParams inherit = new PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_INHERIT_EXISTING);
+        inherit.appPackageName = pkg;
+        int inherited = service.createSession(inherit, pkg, null, 0);
+        require(service.getSessionInfo(inherited).getMode() == PackageInstaller.SessionParams.MODE_INHERIT_EXISTING,
+                "Default inherited install mode was rejected or changed");
+        service.abandonSession(inherited);
+        require(service.getSessionInfo(inherited) == null, "Inherited positive control session survived abandonment");
         int first = create(service, pkg, pkg);
         IPackageInstallerSession held = service.openSession(first);
         require(service.getSessionInfo(first).getRequireUserAction()

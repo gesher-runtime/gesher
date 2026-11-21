@@ -2208,7 +2208,11 @@ extern "C" __declspec(dllexport) const gesher_arm64_api* gesher_arm64_init(
     uint32_t tlsdesc[] = {0xF9400400u /* ldr x0, [x0, #8] */, kRet};
     g_tlsdesc_static = EmitGuestCode(tlsdesc, 2);
   }
-  InitGuestLibc();
+  if (g_return_stub == 0 || g_tlsdesc_static == nullptr) {
+    std::fputs("gesher arm64: cannot emit the translator's guest stubs\n", stderr);
+    return nullptr;
+  }
+  if (!InitGuestLibc()) return nullptr;
   // First in the chain, so an execute fault in guest code (a host call to a
   // guest callback) is redirected before gesher-base turns it into a signal.
   AddVectoredExceptionHandler(1, VectoredHandler);

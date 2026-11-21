@@ -10,6 +10,8 @@ import android.content.pm.IPackageInstaller;
 import android.content.pm.IPackageInstallerCallback;
 import android.content.pm.IPackageInstallerSession;
 import android.content.pm.PackageInstaller;
+import android.content.pm.PackageManager;
+import android.content.pm.PackageParser.PackageParserException;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.Signature;
 import android.content.pm.parsing.ApkLite;
@@ -34,13 +36,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
-/** Full APK sessions with fresh host consent for every commit. No store receives silent-install authority. */
+/** APK sessions with fresh host consent for every commit. No store receives silent-install authority. */
 public final class PackageInstallerService extends IPackageInstaller.Default {
     static final long MAX_FILE_BYTES = 1024L * 1024 * 1024;
     static final long MAX_SESSION_BYTES = 2 * MAX_FILE_BYTES;
     static final long MAX_DEX_METADATA_BYTES = 64L * 1024 * 1024;
     private static final AtomicInteger TRACE_WRITES = new AtomicInteger();
     private static final AtomicInteger TRACE_REMOVALS = new AtomicInteger();
+    private static final String REMOVED_SUFFIX = ".removed";
     private static final int MAX_SESSIONS = 16, MAX_OWNER_SESSIONS = 4, MAX_FILES = 64;
     interface Consent { boolean allow(String installer, String target, long version); }
     interface UninstallConsent { boolean allow(String requester, String target, long version); }
@@ -158,11 +161,21 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         String actual = caller();
         String owner = owner(pkg, user, actual);
         if (mInstaller == null) throw new UnsupportedOperationException("No persistent package installer");
-        if (p == null || p.mode != PackageInstaller.SessionParams.MODE_FULL_INSTALL || p.isMultiPackage
-                || p.isStaged || p.dataLoaderParams != null || p.abiOverride != null
+        if (p == null) throw new IllegalArgumentException("Missing installation parameters");
+        if (p.mode != PackageInstaller.SessionParams.MODE_FULL_INSTALL
+                && p.mode != PackageInstaller.SessionParams.MODE_INHERIT_EXISTING) {
+            throw new IllegalArgumentException("Invalid installation mode");
+        }
+        if (p.isMultiPackage || p.isStaged || p.dataLoaderParams != null || p.abiOverride != null
                 || p.volumeUuid != null || p.getEnableRollback()
                 || (p.installFlags & 0x00020000) != 0) { // AOSP INSTALL_APEX, hidden in framework export.
-            throw new UnsupportedOperationException("Only ordinary full APK installs are supported");
+            throw new UnsupportedOperationException("Only ordinary APK installs are supported");
+        }
+        if (p.mode == PackageInstaller.SessionParams.MODE_INHERIT_EXISTING
+                && (p.installFlags & PackageManager.INSTALL_DONT_KILL_APP) != 0) {
+            // Publication currently restarts an installed package. Do not accept
+            // an additive install's explicit promise to keep its processes alive.
+            throw new UnsupportedOperationException("Inherited installs without an app restart are unsupported");
         }
         if (p.sizeBytes < -1 || p.sizeBytes > MAX_SESSION_BYTES) {
             throw new IllegalArgumentException("Invalid installation size");
@@ -189,7 +202,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 Files.createDirectories(root.toPath());
                 File stage = Files.createTempDirectory(root.toPath(), "session-").toFile();
                 int id = mIds.getAndIncrement();
-                created = new Session(id, owner, ownerCode, p.appPackageName, p.sizeBytes,
+                created = new Session(id, owner, ownerCode, p.appPackageName, p.mode, p.sizeBytes,
                         PackageInstallSource.category(p.packageSource), !"android".equals(actual), stage);
                 mSessions.put(id, created);
             } catch (IOException e) { throw io(); }
@@ -219,7 +232,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         for (Session s : snapshot) {
             if (s.ownerCurrent() && ("android".equals(owner) || owner.equals(s.owner))) list.add(s.info());
         }
-        // Revalidate the attached installation after collecting session metadata.
+        // Snapshot collection can race with replacement of the attached installation.
+        // Validate the caller again before exposing the collected session metadata.
         caller();
         return new ParceledListSlice<>(list);
     }
@@ -463,6 +477,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             SystemServer.log("package install result unavailable: " + e.getClass().getSimpleName());
         }
     }
+    private static boolean removalMarker(String name) {
+        return name.toLowerCase(Locale.ROOT).endsWith(REMOVED_SUFFIX);
+    }
     private static ServiceSpecificException io() {
         return new ServiceSpecificException(android.system.OsConstants.EIO, "Installation I/O failure");
     }
@@ -488,7 +505,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     }
 
     public final class Session extends IPackageInstallerSession.Default {
-        final int id;
+        final int id, mode;
         final String owner, expectedPackage;
         final ApkPackage ownerCode;
         final long expectedSize, created = System.currentTimeMillis();
@@ -502,10 +519,10 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         boolean sealed, committing, destroyed, writeFailed;
         float progress;
         long bytes;
-        Session(int id, String owner, ApkPackage code, String pkg, long size, int packageSource,
+        Session(int id, String owner, ApkPackage code, String pkg, int mode, long size, int packageSource,
                 boolean hasApplicationInitiator, File stage) {
             this.id = id; this.owner = owner; ownerCode = code; expectedPackage = pkg;
-            expectedSize = size;
+            this.mode = mode; expectedSize = size;
             this.packageSource = packageSource;
             this.hasApplicationInitiator = hasApplicationInitiator;
             this.stage = stage;
@@ -539,7 +556,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             PackageInstaller.SessionInfo i = new PackageInstaller.SessionInfo();
             i.sessionId = id; i.userId = 0; i.installerPackageName = owner;
             i.installerUid = ownerCode == null ? android.os.Process.SYSTEM_UID : ownerCode.uid();
-            i.mode = PackageInstaller.SessionParams.MODE_FULL_INSTALL; i.progress = progress;
+            i.mode = mode; i.progress = progress;
             i.sealed = sealed; i.active = !writes.isEmpty() || committing;
             i.sizeBytes = expectedSize; i.appPackageName = expectedPackage;
             i.packageSource = packageSource;
@@ -559,8 +576,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         @Override public synchronized ParcelFileDescriptor openWrite(String name, long offset, long length) {
             writable(); traceWrite(name); File file = file(name);
-            if (InstallSessionMetadata.auxiliary(name)) {
-                throw new IllegalArgumentException("Use the dedicated session metadata API");
+            if (InstallSessionMetadata.auxiliary(name) || removalMarker(name)) {
+                throw new IllegalArgumentException("Use the dedicated session API");
             }
             if (name.endsWith(".idsig")) {
                 throw new UnsupportedOperationException("V4 filesystem verification sidecars unsupported");
@@ -621,17 +638,29 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             try { mExecutor.execute(() -> install(receiver)); }
             catch (RuntimeException e) { committing = false; throw e; }
         }
+        private boolean inheritsExisting() {
+            return mode == PackageInstaller.SessionParams.MODE_INHERIT_EXISTING;
+        }
+
         private void install(IntentSender receiver) {
             int status = PackageInstaller.STATUS_FAILURE_INVALID;
             String pkg = expectedPackage, message = "Invalid APK set";
             File frozen = null;
             try {
                 frozen = Files.createTempDirectory(stage.toPath().getParent(), "commit-").toFile();
+                File snapshots = new File(frozen, "snapshots");
+                Files.createDirectory(snapshots.toPath());
                 File[] all = stage.listFiles();
                 Map<String, File> sidecars = new HashMap<>();
                 List<File> files = new ArrayList<>();
+                Set<String> removals = new LinkedHashSet<>();
                 if (all != null) for (File source : all) {
-                    File snapshot = new File(frozen, source.getName());
+                    if (removalMarker(source.getName())) {
+                        removals.add(source.getName().substring(0,
+                                source.getName().length() - REMOVED_SUFFIX.length()));
+                        continue;
+                    }
+                    File snapshot = new File(snapshots, source.getName());
                     Files.copy(source.toPath(), snapshot.toPath());
                     if (source.getName().equals(InstallSessionMetadata.APP_METADATA)) {
                         InstallSessionMetadata.validateMetadata(snapshot);
@@ -642,9 +671,15 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                         throw new IllegalArgumentException("Unsupported staged sidecar");
                     } else files.add(snapshot); // APK names are arbitrary; parse the actual bytes.
                 }
-                if (files.isEmpty()) throw new IllegalArgumentException("Empty APK set");
-                ApkLite first = null; Signature[] signers = null; boolean base = false;
+                if (files.isEmpty() && (removals.isEmpty()
+                        || new File(snapshots, InstallSessionMetadata.APP_METADATA).exists())) {
+                    throw new IllegalArgumentException("Empty APK set");
+                }
+                ApkLite first = null;
+                Signature[] signers = null;
                 Map<File, ApkLite> parsedFiles = new LinkedHashMap<>();
+                Map<String, ApkLite> stagedSplits = new LinkedHashMap<>();
+                Set<String> canonicalNames = new HashSet<>();
                 for (File snapshot : files) {
                     ParseResult<ApkLite> parsed = ApkLiteParseUtils.parseApkLite(
                             ParseTypeImpl.forParsingWithoutPlatformCompat(), snapshot, 0);
@@ -652,25 +687,33 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                     ApkLite lite = parsed.getResult();
                     parsedFiles.put(snapshot, lite);
                     Signature[] current = ApkPackage.verifySignatures(snapshot.getPath());
-                    if (current == null) throw new SecurityException("Store installs must be signed");
+                    if (current == null) {
+                        if (inheritsExisting()) throw InstalledSplitSet.invalid("Staged APK could not be verified");
+                        throw new SecurityException("Store installs must be signed");
+                    }
                     if (first == null) { first = lite; signers = current; }
                     else if (!first.getPackageName().equals(lite.getPackageName())
                             || first.getLongVersionCode() != lite.getLongVersionCode()
-                            || !Arrays.equals(signers, current)) throw new SecurityException("Mismatched APK set");
-                    if (lite.getSplitName() == null) { if (base) throw new IllegalArgumentException("Multiple bases"); base = true; }
+                            || !Arrays.equals(signers, current)) {
+                        if (inheritsExisting()) throw InstalledSplitSet.invalid("Staged APKs are inconsistent");
+                        throw new SecurityException("Mismatched APK set");
+                    }
+                    String split = lite.getSplitName();
+                    if (!canonicalNames.add(InstalledSplitSet.apkName(split).toLowerCase(Locale.ROOT))) {
+                        throw new IllegalArgumentException("Duplicate base or split name");
+                    }
+                    stagedSplits.put(split, lite);
                 }
-                if (!base) throw new IllegalArgumentException("Missing base APK");
-                // A unique private canonical path bypasses the mutable-source cache. The
-                // client has no writable FD to either snapshot or final installer input.
+                if (!inheritsExisting() && !stagedSplits.containsKey(null)) {
+                    throw new IllegalArgumentException("Missing base APK");
+                }
+                // Keep canonical inputs outside the installer-named snapshot directory.
+                // The unique private path also bypasses the mutable-source cache.
                 File canonical = new File(frozen, "apks"); Files.createDirectory(canonical.toPath());
                 Set<String> consumedChecksums = new HashSet<>();
                 for (Map.Entry<File, ApkLite> entry : parsedFiles.entrySet()) {
                     File source = entry.getKey(); ApkLite lite = entry.getValue();
-                    String split = lite.getSplitName();
-                    if (split != null && !split.matches("[A-Za-z0-9_][A-Za-z0-9_.-]{0,120}")) {
-                        throw new IllegalArgumentException("Invalid split name");
-                    }
-                    String name = split == null ? "base.apk" : "split_" + split + ".apk";
+                    String name = InstalledSplitSet.apkName(lite.getSplitName());
                     File dm = sidecars.remove(InstallSessionMetadata.dexName(source.getName()));
                     if (dm != null) {
                         ParseResult<?> valid = android.content.pm.dex.DexMetadataHelper.validateDexMetadataFile(
@@ -687,18 +730,43 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 }
                 if (!sidecars.isEmpty()) throw new IllegalArgumentException("Dex metadata has no APK");
                 if (consumedChecksums.size() != checksums.size()) throw new IllegalArgumentException("Checksums have no APK");
-                File appMetadata = new File(frozen, InstallSessionMetadata.APP_METADATA);
+                File appMetadata = new File(snapshots, InstallSessionMetadata.APP_METADATA);
                 if (appMetadata.isFile()) Files.move(appMetadata.toPath(),
                         new File(canonical, InstallSessionMetadata.APP_METADATA).toPath());
-                pkg = first.getPackageName();
-                if (expectedPackage != null && !expectedPackage.equals(pkg)) throw new SecurityException("Wrong package");
-                ApkPackage targetCode = mPm.get(pkg);
-                if (!ownerCurrent()) throw new SecurityException("Installer changed");
+                if (first != null) pkg = first.getPackageName();
+                if (expectedPackage != null && !expectedPackage.equals(pkg)) {
+                    if (inheritsExisting()) throw InstalledSplitSet.invalid("Specified package differs from staged APKs");
+                    throw new SecurityException("Wrong package");
+                }
+                ApkPackage targetCode;
+                InstalledSplitSet installedSplits = null;
+                long version;
+                synchronized (mInstaller) {
+                    if (!ownerCurrent()) throw new SecurityException("Installer changed");
+                    // Android 16 resolves inherit sessions against the package specified in
+                    // SessionParams. A manifest-derived name alone does not authorize inheritance.
+                    if (inheritsExisting() && (expectedPackage == null || expectedPackage.isEmpty())) {
+                        throw InstalledSplitSet.invalid("An installed package must be specified for split inheritance");
+                    }
+                    targetCode = mPm.get(pkg);
+                    if (inheritsExisting() || !removals.isEmpty()) {
+                        if (!mInstaller.ordinaryInstalled(targetCode)) {
+                            throw InstalledSplitSet.invalid("Missing ordinary installed base package");
+                        }
+                        installedSplits = new InstalledSplitSet(targetCode, removals);
+                        if (inheritsExisting()) installedSplits.validate(stagedSplits, signers);
+                    }
+                    version = first == null ? targetCode.versionCode() : first.getLongVersionCode();
+                }
                 status = PackageInstaller.STATUS_FAILURE_ABORTED; message = "Installation not approved";
-                if (!mConsent.allow(owner, pkg, first.getLongVersionCode())) return;
-                // The installer's own lock covers both stale-consent checks and publication.
+                if (!mConsent.allow(owner, pkg, version)) return;
+                // Resolve inherited paths and publish under the same lock used by
+                // ordinary installs and uninstall. An approval cannot follow a newer code generation.
                 synchronized (mInstaller) {
                     if (!ownerCurrent() || mPm.get(pkg) != targetCode) throw new SecurityException("Package code changed");
+                    if (inheritsExisting()) {
+                        installedSplits.materialize(canonical, canonicalNames, stagedSplits.keySet(), removals);
+                    }
                     String[] installed = mInstaller.install(new File(canonical, "base.apk").getPath(),
                             new InstallSessionMetadata(canonical), PackageInstallSource.fromSession(
                                     hasApplicationInitiator ? ownerCode : null, packageSource));
@@ -707,7 +775,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 status = PackageInstaller.STATUS_SUCCESS; message = "Installed";
             } catch (SecurityException e) {
                 status = PackageInstaller.STATUS_FAILURE_BLOCKED; message = "Package identity or consent changed";
-            } catch (android.content.pm.PackageParser.PackageParserException e) {
+            } catch (PackageParserException e) {
                 // Validation failures retain Android's public status category; a
                 // missing required split is incompatible, not a storage failure.
                 status = android.content.pm.PackageManager.installStatusToPublicStatus(e.error);
@@ -742,7 +810,18 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         @Override public synchronized int getParentSessionId() { checkOwner(); return -1; }
         @Override public void transfer(String pkg) { throw new UnsupportedOperationException("Transfer unsupported"); }
         @Override public void stageViaHardLink(String path) { throw new SecurityException("Host paths cannot be staged"); }
-        @Override public void removeSplit(String split) { throw new UnsupportedOperationException("Inheritance unsupported"); }
+        @Override public synchronized void removeSplit(String split) {
+            writable();
+            if (expectedPackage == null || expectedPackage.isEmpty()) {
+                throw new IllegalStateException("Must specify a package to remove a split");
+            }
+            InstalledSplitSet.checkSplitName(split);
+            File marker = file(split + REMOVED_SUFFIX);
+            if (marker.exists()) return;
+            if (getNames().length >= MAX_FILES) throw new IllegalStateException("Too many staged files");
+            try { Files.createFile(marker.toPath()); }
+            catch (IOException failure) { throw io(); }
+        }
         @Override public void addChildSessionId(int child) { throw new UnsupportedOperationException("Multi-package unsupported"); }
         @Override public void removeChildSessionId(int child) { throw new UnsupportedOperationException("Multi-package unsupported"); }
         @Override public void addFile(int location, String name, long length, byte[] metadata, byte[] signature) {
@@ -762,7 +841,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             if (supplied.length == 0) return;
             if (checksums.containsKey(name)) throw new IllegalStateException("Checksums already supplied");
             if (checksums.size() >= MAX_FILES) throw new IllegalStateException("Too many checksum records");
-            if (name.endsWith(".dm") || name.endsWith(".idsig") || InstallSessionMetadata.auxiliary(name)) {
+            if (name.endsWith(".dm") || name.endsWith(".idsig") || removalMarker(name)
+                    || InstallSessionMetadata.auxiliary(name)) {
                 throw new IllegalArgumentException("Checksums require an APK filename");
             }
             checksums.put(name, new InstallSessionMetadata.Digests(supplied, signature));
@@ -793,14 +873,19 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             try { Files.deleteIfExists(file.toPath()); bytes -= previous; }
             catch (IOException e) { throw io(); }
         }
-        @Override public List<String> fetchPackageNames() {
+        @Override public synchronized List<String> fetchPackageNames() {
             checkOwner();
-            java.util.LinkedHashSet<String> packages = new java.util.LinkedHashSet<>();
+            Set<String> packages = new LinkedHashSet<>();
             File[] files = stage.listFiles();
             if (files != null) for (File file : files) {
-                if (!file.isFile() || Files.isSymbolicLink(file.toPath())) continue;
-                try { packages.add(ApkPackage.parse(file.getPath()).packageName); }
-                catch (Exception incomplete) { /* A still-open staged APK has no resolved package yet. */ }
+                String name = file.getName();
+                if (!file.isFile() || Files.isSymbolicLink(file.toPath()) || writes.containsKey(name)
+                        || removalMarker(name) || name.endsWith(".dm") || name.endsWith(".idsig")
+                        || InstallSessionMetadata.auxiliary(name)) continue;
+                // A split manifest can establish a staged package name without a base.
+                ParseResult<ApkLite> parsed = ApkLiteParseUtils.parseApkLite(
+                        ParseTypeImpl.forParsingWithoutPlatformCompat(), file, 0);
+                if (!parsed.isError()) packages.add(parsed.getResult().getPackageName());
             }
             return new ArrayList<>(packages);
         }

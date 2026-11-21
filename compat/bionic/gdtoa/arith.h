@@ -3,7 +3,10 @@
 #pragma once
 
 // Little-endian IEEE binary64, 32-bit int; output is Android binary128 even
-// on Windows LLP64. ParseBinary128 serializes all upstream shared caches.
+// on Windows LLP64. As in Bionic, MULTIPLE_THREADS enables gdtoa's own short
+// locks (thread_private.h); ParseBinary128 makes the remaining shared state
+// safe to use from concurrent parses.
+#define MULTIPLE_THREADS
 #define IEEE_8087
 #define Long int
 #define INFNAN_CHECK

@@ -8,7 +8,6 @@ import android.app.AppOpsManager;
 import android.app.SyncNotedAppOp;
 import android.app.admin.IDevicePolicyManager;
 import android.app.trust.ITrustManager;
-import android.app.usage.IUsageStatsManager;
 import android.content.ComponentName;
 import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
@@ -173,10 +172,6 @@ final class DeviceServices {
     /**
      * {@code usagestats}: no collected usage history or Android app standby.
      */
-    static final class UsageStatsService extends DesktopUsageStatsService {
-        UsageStatsService(PackageManagerService packages) { super(packages); }
-    }
-
     /**
      * {@code device_policy}: no Android administrators; Android encryption is unsupported.
      */
