@@ -376,6 +376,23 @@ public final class BluetoothRequestFixture {
         check(!handles(selector, null), "outer explicit component ignored");
     }
     private static void routing() throws Exception {
+        // These routes originate from the Android system (no application thread).
+        // Explicitly install an authenticated system Binder identity: the ART host
+        // can otherwise inherit an application UID with the server's own PID,
+        // which correctly triggers production's standalone-admission guard.
+        long savedIdentity = Binder.clearCallingIdentity();
+        try {
+            Binder.restoreCallingIdentity(((long) android.os.Process.SYSTEM_UID << 32)
+                    | (android.os.Process.myPid() & 0xffffffffL));
+            check(Binder.getCallingUid() == android.os.Process.SYSTEM_UID,
+                    "system request routing fixture lacks authenticated system identity");
+            routingAsSystem();
+        } finally {
+            Binder.restoreCallingIdentity(savedIdentity);
+        }
+    }
+
+    private static void routingAsSystem() throws Exception {
         Harness h = new Harness();
         Object atm = construct(ActivityTaskManagerService.class, new Class<?>[]{PackageManagerService.class}, h.pm);
         set(atm, "mBluetoothRequests", h.requests);
