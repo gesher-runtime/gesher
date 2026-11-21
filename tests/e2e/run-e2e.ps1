@@ -195,6 +195,16 @@ function RenderReadiness($expect, $px, $since) {
   return @{ Ready = ($problems.Count -eq 0); Problems = $problems }
 }
 
+# A capture as a base64 PNG (for the job log); empty when there is none.
+function PngBase64($px) {
+  if ($null -eq $px) { return '' }
+  $file = [IO.Path]::GetTempFileName()
+  try {
+    SavePng $px $file
+    return [Convert]::ToBase64String([IO.File]::ReadAllBytes($file))
+  } finally { Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue }
+}
+
 function SavePng($px, [string] $path) {
   if ($null -eq $px) { return }
   $w = $px[0]; $h = $px[1]
@@ -425,6 +435,12 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
         $detail = (RenderReadiness $act.render $after $since).Problems -join '; '
         if (-not $detail) { $detail = 'the completed content did not stabilize' }
         $res.Problems += "rendered content did not become ready within the existing 20-second capture budget: $detail"
+        # Failure-only diagnostic: the job log carries the captures too, for when
+        # the uploaded results cannot be downloaded.
+        foreach ($shot in @(@('before', $before), @('after', $after))) {
+          $b64 = PngBase64 $shot[1]
+          if ($b64) { $res.Info += "render diagnostic $what, capture $($shot[0]) the action (PNG, base64): $b64" }
+        }
       }
       $changed = PixelDiff $before $after
       SavePng $after (Join-Path $OutDir "$pkg.$tag.after-$i.png")

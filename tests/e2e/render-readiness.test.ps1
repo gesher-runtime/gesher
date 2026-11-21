@@ -92,6 +92,7 @@ function WaitFirstFrame { return [IntPtr]1 }
 function FrontWindow { return [IntPtr]1 }
 function DismissStartupDialog { return $true }
 function SavePng { }
+function PngBase64 { return '' }
 # The logs grow: the startup page load at once, the action's own one at PageAt.
 function ReadText([string] $file) {
   $text = "gesher-webview: first page loaded: file:///actual/`ngesher-webview: page 1 finished (file, ok)`n"

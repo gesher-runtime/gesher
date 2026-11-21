@@ -91,6 +91,7 @@
       "source": "https://github.com/billthefarmer/notes",
       "why": "A notes app that shows its note as Markdown in a WebView (loadDataWithBaseURL with the note's file:/// folder, assets' styles, JavaScript, a WebViewClient) under a floating edit button; pure Java, no AndroidX (docs/webview.md). A fresh install has no note. If the app asks for all-files access, dismiss the prompt and use its blank editor. Type a Markdown heading and accept to render it (the preview shows it as a heading, not as the editor's text).",
       "expectLog": [ "gesher-webview: WebView2 Runtime ", "view(s) over the WebView cut out of its window: ", "gesher-webview: first page loaded: file:///" ],
+      "diagnoseLog": "gesher-webview|WebView|gesher-app: window",
       "startupDialog": {
         "title": "Access all files",
         "size": [380, 284],
