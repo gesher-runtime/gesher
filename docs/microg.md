@@ -68,7 +68,8 @@ libraries for its best ABI in `system/priv-app/<package>/lib/<isa>` (its
 such as Dynamite modules (`cronet_dynamite`), find them on disk. Libraries already
 identical to the verified APK's are not rewritten, changed ones are restored and
 ones the APK no longer has are removed. If that directory cannot be prepared (for
-example, it is a link), startup logs it and the addon keeps its per-launch
+example, it is a link, or a library the APK no longer has cannot be removed),
+startup logs it, does not use that directory, and the addon keeps its per-launch
 extraction. `-Remove` deletes these extracted libraries too.
 
 The normal launcher uses `%LOCALAPPDATA%/Gesher` and enables

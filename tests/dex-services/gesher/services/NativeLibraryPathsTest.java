@@ -175,6 +175,50 @@ public final class NativeLibraryPathsTest {
             Files.delete(junction);
         }
 
+        // A stale library that cannot be removed fails the sync (not a silent success).
+        Path held = Files.createDirectories(root.resolve("held/lib/x86_64"));
+        NativeLibs.syncDirectory(apk.toString(), held.toString(), "x86_64");
+        Path stale = held.resolve("libgone.so");
+        Files.write(stale, PAYLOAD);
+        boolean blocked = false;
+        java.io.Closeable release = null;
+        if (System.getProperty("os.name", "").startsWith("Windows")) {
+            // java.io opens without FILE_SHARE_DELETE: the file cannot be deleted.
+            release = new java.io.FileInputStream(stale.toFile());
+            blocked = true;
+        } else {
+            try {
+                Files.setPosixFilePermissions(held,
+                        java.nio.file.attribute.PosixFilePermissions.fromString("r-xr-xr-x"));
+                Path probe = held.resolve("probe");
+                try {
+                    Files.createFile(probe);  // privileged: permissions do not block it
+                    Files.delete(probe);
+                } catch (IOException denied) {
+                    blocked = true;
+                }
+                if (!blocked) {
+                    Files.setPosixFilePermissions(held,
+                            java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+                }
+            } catch (UnsupportedOperationException | IOException noPosix) {
+                blocked = false;
+            }
+        }
+        if (blocked) {
+            boolean failed = false;
+            try { NativeLibs.syncDirectory(apk.toString(), held.toString(), "x86_64"); }
+            catch (IOException expected) { failed = true; }
+            finally {
+                if (release != null) release.close();
+                else Files.setPosixFilePermissions(held,
+                        java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+            }
+            check(failed, "Unremovable stale library fails the sync");
+            NativeLibs.syncDirectory(apk.toString(), held.toString(), "x86_64");
+            check(!Files.exists(stale), "Stale library removed once it is free");
+        }
+
         // Windows names are case-insensitive: a differently cased listed library stays.
         Path cased = Files.createDirectories(root.resolve("cased/lib/x86_64"));
         Files.write(cased.resolve("LibKeep.so"), PAYLOAD);

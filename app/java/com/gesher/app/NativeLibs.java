@@ -128,7 +128,9 @@ public final class NativeLibs {
      * directory: {@code dir} holds exactly the APK's libraries for {@code abi}, extracted
      * as {@link #extract} does, with {@code .so} files the APK no longer has removed.
      * A {@code dir} (or its {@code lib} parent) that is a link or not a directory is
-     * refused, before anything is written. Returns how many libraries the APK has.
+     * refused, before anything is written. If a stale library cannot be removed (a
+     * process still maps it), this throws: the directory is then not a faithful library
+     * path for the APK. Returns how many libraries the APK has.
      */
     public static int syncDirectory(String apk, String dir, String abi) throws IOException {
         Path target = new File(dir).toPath();
@@ -146,10 +148,13 @@ public final class NativeLibs {
                             || !Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) {
                         continue;
                     }
+                    // A library the APK no longer has must not stay loadable from the
+                    // package's library path: failing to remove it fails the sync.
                     try {
                         Files.deleteIfExists(entry);
-                    } catch (IOException inUse) {
-                        // A process may still map it; no package lists it any more.
+                    } catch (IOException e) {
+                        throw new IOException("Cannot remove native library the APK no longer has: "
+                                + entry, e);
                     }
                 }
             }
