@@ -38,9 +38,12 @@ void Check(bool ok, const char* what) {
   }
 }
 bool PumpWait(HANDLE event, DWORD timeout) { return gesher::windows::WaitPumping(event, timeout); }
-bool Open(HWND owner) {
+bool Open(HWND owner, DWORD* error = nullptr) {
   for (int attempt = 0; attempt != 20; ++attempt) {
-    if (OpenClipboard(owner)) return true;
+    if (error) SetLastError(ERROR_SUCCESS);
+    const BOOL opened = OpenClipboard(owner);
+    if (error) *error = GetLastError();
+    if (opened) return true;
     Sleep(10);
   }
   return false;
@@ -349,21 +352,31 @@ struct NativeReader {
   HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   std::thread thread;
+  const char* phase;
+  bool rendering = false;
   bool acquired = false, read = false, closed = false;
-  NativeReader() {
+  DWORD open_thread = 0, close_thread = 0;
+  DWORD open_error = 0, data_error = 0, lock_error = 0, close_error = 0;
+  explicit NativeReader(const char* name) : phase(name) {
     Check(opened && release && done, "native reader owns its synchronization events");
     if (!opened || !release || !done) ExitProcess(3);
   }
   void Start(bool render) {
+    rendering = render;
     thread = std::thread([this, render] {
-      acquired = Open(nullptr);
+      open_thread = GetCurrentThreadId();
+      acquired = Open(nullptr, &open_error);
       SetEvent(opened);
       if (acquired) {
         if (render) {
           // OleSetClipboard has just accepted a fresh delayed-rendered object.
           // GetClipboardData needs its owning STA to dispatch WM_RENDERFORMAT.
+          SetLastError(ERROR_SUCCESS);
           HANDLE value = GetClipboardData(CF_UNICODETEXT);
+          data_error = GetLastError();
+          SetLastError(ERROR_SUCCESS);
           const void* bytes = value ? GlobalLock(value) : nullptr;
+          lock_error = GetLastError();
           const auto expected = WideBytes(OwnText());
           read = bytes && GlobalSize(value) >= expected.size()
               && std::memcmp(bytes, expected.data(), expected.size()) == 0;
@@ -372,7 +385,10 @@ struct NativeReader {
           Check(WaitForSingleObject(release, 5000) == WAIT_OBJECT_0,
                 "held native reader is released after the actual competing open");
         }
+        close_thread = GetCurrentThreadId();
+        SetLastError(ERROR_SUCCESS);
         closed = CloseClipboard() != 0;
+        close_error = GetLastError();
       }
       SetEvent(done);
     });
@@ -383,6 +399,13 @@ struct NativeReader {
     Check(ended, "native reader and delayed rendering finish within their bound");
     if (!ended) ExitProcess(3);
     thread.join();
+    // Report the worker's immediate API errors, not Finish's thread-local error.
+    std::printf("CLIPBOARD_NATIVE_READER phase=%s render=%d acquired=%d read=%d closed=%d "
+        "open_thread=%lu close_thread=%lu open_error=%lu data_error=%lu lock_error=%lu close_error=%lu\n",
+        phase, rendering, acquired, read, closed,
+        static_cast<unsigned long>(open_thread), static_cast<unsigned long>(close_thread),
+        static_cast<unsigned long>(open_error), static_cast<unsigned long>(data_error),
+        static_cast<unsigned long>(lock_error), static_cast<unsigned long>(close_error));
     Check(acquired && closed, "native reader acquired and released actual clipboard access");
   }
   ~NativeReader() {
@@ -596,7 +619,7 @@ void NativeReadContention() {
   uint32_t sequence = 0;
   Check(PublishKind(1, &sequence), "native reader starts from an actual publication");
   for (bool clear : {false, true}) {
-    NativeReader reader;
+    NativeReader reader(clear ? "clear-contention" : "write-contention");
     reader.Start(false);
     Check(PumpWait(reader.opened, 5000), "native consumer holds the actual clipboard before publication");
     const unsigned before = contended_set_calls.load();
@@ -611,7 +634,7 @@ void NativeReadContention() {
     if (clear) Check(CountClipboardFormats() == 0, "contended clear still removes every actual format");
   }
   {
-    NativeReader reader;
+    NativeReader reader("delayed-render");
     completion_reader.store(&reader, std::memory_order_release);
     const bool published = PublishKind(1, &sequence);
     completion_reader.store(nullptr, std::memory_order_release);
@@ -623,7 +646,7 @@ void NativeReadContention() {
   for (bool stop : {false, true}) {
     const auto before_clipboard = Read();
     std::atomic<bool> cancelled{false}, stopping{false};
-    NativeReader reader;
+    NativeReader reader(stop ? "stop-retry" : "cancel-retry");
     reader.Start(false);
     Check(PumpWait(reader.opened, 5000), "native reader holds clipboard before a cancelled retry");
     held_reader.store(&reader, std::memory_order_release);
