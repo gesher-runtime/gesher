@@ -33,7 +33,9 @@ def main():
                         '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include/linux'),
                         str(ROOT / 'tests/component-caller/framework_host.c'), '-o', str(library)], check=True)
         sources = [ROOT / 'app/java/com/gesher/net/WindowsNsd.java',
+                   ROOT / 'app/java/com/gesher/net/WindowsNsdResolver.java',
                    ROOT / 'app/java/android/net/nsd/NsdManager.java']
+        sources.extend((ROOT / 'app/java/com/gesher/net/mdns').glob('*.java'))
         for name in ('NsdContractTest', 'NsdBrowseTransportTest'):
             sources.append(ROOT / ('tests/dex-services/gesher/services/' + name + '.java'))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',

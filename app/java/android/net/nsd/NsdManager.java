@@ -11,6 +11,7 @@ import android.net.NetworkRequest;
 import android.os.Handler;
 import android.os.HandlerThread;
 import com.gesher.net.WindowsNsd;
+import com.gesher.net.WindowsNsdResolver;
 
 import java.io.IOException;
 import java.util.IdentityHashMap;
@@ -20,10 +21,9 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
 /**
- * Android 16 NSD API backed by real Windows DNS-SD browsing. Registration,
- * resolution and service-info subscriptions remain explicitly unavailable:
- * Windows' string-only TXT API cannot represent Android's arbitrary bytes.
- * See docs/research/nsd-windows-browse-2026-11-18.md.
+ * Android 16 NSD browsing and one-shot resolution over actual Windows networks.
+ * Resolution uses raw DNS packets to preserve binary TXT. Registration and
+ * service-info subscriptions remain explicitly unavailable.
  */
 public final class NsdManager {
     public static final String ACTION_NSD_STATE_CHANGED = "android.net.nsd.STATE_CHANGED";
@@ -88,8 +88,22 @@ public final class NsdManager {
     private final Executor mMainExecutor = Runnable::run;
     private final Executor mServiceExecutor;
     private final WindowsNsd.Factory mBackend;
+    private final WindowsNsdResolver.Factory mResolverBackend;
     private final Context mContext;
     private final Map<DiscoveryListener, Discovery> mDiscoveries = new IdentityHashMap<>();
+    // Both identity maps use mDiscoveries as their common lock: an object that
+    // implements both interfaces cannot be active in both operation kinds.
+    private final Map<ResolveListener, Resolution> mResolutions = new IdentityHashMap<>();
+
+    private static final class Resolution {
+        final NsdServiceInfo original;
+        final Executor executor;
+        WindowsNsdResolver.Session session;
+        boolean stopPending;
+        Resolution(NsdServiceInfo original, Executor executor) {
+            this.original = original; this.executor = executor;
+        }
+    }
 
     private static final class CallbackThread {
         static final Executor EXECUTOR;
@@ -129,6 +143,7 @@ public final class NsdManager {
         WindowsNsd.enforceInternetPermission();
         mServiceExecutor = CallbackThread.EXECUTOR;
         mBackend = WindowsNsd.factory();
+        mResolverBackend = WindowsNsdResolver.factory();
     }
 
     // Explicit fixture injection; ordinary construction always selects WindowsNsd.
@@ -137,9 +152,15 @@ public final class NsdManager {
     }
 
     private NsdManager(Context context, Executor serviceExecutor, WindowsNsd.Factory backend) {
+        this(context, serviceExecutor, backend, WindowsNsdResolver.factory());
+    }
+
+    private NsdManager(Context context, Executor serviceExecutor, WindowsNsd.Factory backend,
+            WindowsNsdResolver.Factory resolverBackend) {
         mContext = context;
         mServiceExecutor = Objects.requireNonNull(serviceExecutor);
         mBackend = Objects.requireNonNull(backend);
+        mResolverBackend = Objects.requireNonNull(resolverBackend);
     }
 
     // --- registering ---------------------------------------------------------------
@@ -245,7 +266,7 @@ public final class NsdManager {
             // API36 rejects an already-used listener before the NetworkRequest
             // tracker reaches ConnectivityManager's permission check. Do not
             // reserve a new listener if that permission check then fails.
-            if (mDiscoveries.containsKey(listener)) throw new IllegalArgumentException("listener already in use");
+            if (mDiscoveries.containsKey(listener) || mResolutions.containsKey(listener)) throw new IllegalArgumentException("listener already in use");
         }
         if (request != null && mContext != null) {
             mContext.enforcePermission("android.permission.ACCESS_NETWORK_STATE",
@@ -255,8 +276,11 @@ public final class NsdManager {
         boolean overLimit;
         synchronized (mDiscoveries) {
             // Another thread may have registered it during permission checking.
-            if (mDiscoveries.containsKey(listener)) throw new IllegalArgumentException("listener already in use");
-            overLimit = mDiscoveries.size() >= 200;
+            if (mDiscoveries.containsKey(listener) || mResolutions.containsKey(listener)) throw new IllegalArgumentException("listener already in use");
+            // The service applies discovery's quota to the whole active client
+            // request map. The Java one-shot resolve path has no such admission
+            // check, but its active requests still count when discovery starts.
+            overLimit = mDiscoveries.size() + mResolutions.size() >= 200;
             mDiscoveries.put(listener, discovery);
         }
         if (overLimit) {
@@ -386,13 +410,64 @@ public final class NsdManager {
         checkServiceInfo(serviceInfo);
         Objects.requireNonNull(executor, "executor cannot be null");
         Objects.requireNonNull(listener, "listener cannot be null");
-        NsdServiceInfo info = new NsdServiceInfo(serviceInfo);
-        mServiceExecutor.execute(() -> executor.execute(() ->
-                listener.onResolveFailed(info, FAILURE_INTERNAL_ERROR)));
+        Resolution resolution = new Resolution(serviceInfo, executor);
+        synchronized (mDiscoveries) {
+            if (mDiscoveries.containsKey(listener) || mResolutions.containsKey(listener)) {
+                throw new IllegalArgumentException("listener already in use");
+            }
+            mResolutions.put(listener, resolution);
+        }
+        try {
+            WindowsNsdResolver.Session session = mResolverBackend.start(serviceInfo,
+                    new WindowsNsdResolver.Callback() {
+                        public void resolved(NsdServiceInfo result) {
+                            dispatchResolution(listener, resolution, () -> listener.onServiceResolved(result));
+                        }
+                        public void stopped() {
+                            dispatchResolution(listener, resolution, () -> listener.onResolutionStopped(resolution.original));
+                        }
+                        public void failed(int error) {
+                            dispatchResolution(listener, resolution, () -> listener.onResolveFailed(resolution.original, error));
+                        }
+                        public void stopFailed(int error) {
+                            dispatchResolution(listener, resolution, () -> listener.onStopResolutionFailed(resolution.original, error));
+                        }
+                    });
+            synchronized (mDiscoveries) {
+                resolution.session = session;
+                if (resolution.stopPending) session.stop();
+            }
+        } catch (RuntimeException | Error error) {
+            synchronized (mDiscoveries) {
+                if (mResolutions.get(listener) == resolution) mResolutions.remove(listener);
+                if (resolution.session != null) resolution.session.stop();
+            }
+            throw error;
+        }
+    }
+
+    private void dispatchResolution(ResolveListener listener, Resolution resolution, Runnable callback) {
+        mServiceExecutor.execute(() -> {
+            synchronized (mDiscoveries) {
+                if (mResolutions.get(listener) != resolution) return;
+                mResolutions.remove(listener);
+            }
+            // The backend has already released its resources. Listener removal
+            // precedes executor submission, allowing reuse from terminal callbacks.
+            resolution.executor.execute(callback);
+        });
     }
 
     public void stopServiceResolution(ResolveListener listener) {
         Objects.requireNonNull(listener, "listener cannot be null");
+        synchronized (mDiscoveries) {
+            Resolution resolution = mResolutions.get(listener);
+            if (resolution == null) throw new IllegalArgumentException("listener not registered");
+            // Coalesce cancellation while the listener is still registered.
+            if (resolution.stopPending) return;
+            resolution.stopPending = true;
+            if (resolution.session != null) resolution.session.stop();
+        }
     }
 
     public void registerServiceInfoCallback(NsdServiceInfo serviceInfo, Executor executor,

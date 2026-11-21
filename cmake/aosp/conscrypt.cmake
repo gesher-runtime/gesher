@@ -32,8 +32,20 @@ target_link_libraries(dalvikvm PRIVATE conscrypt_jni)
 # com.gesher.net.WindowsNetworks's natives (the built-in library libgesher_net.so):
 # Windows' networks for the connectivity service, and the INTERNET permission's
 # switch (<gesher/inet.h>), plus the libgesher_nsd.so multicast query transport.
-add_library(gesher_net_natives OBJECT ${_net}/windows_networks.cc ${_net}/windows_nsd.cc)
+add_library(gesher_net_natives OBJECT ${_net}/windows_networks.cc ${_net}/windows_nsd.cc
+  ${_net}/windows_nsd_resolve.cc)
 target_include_directories(gesher_net_natives PRIVATE ${_net}/include)
 target_compile_options(gesher_net_natives PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(gesher_net_natives PUBLIC nativehelper iphlpapi ole32 oleaut32 ws2_32)
 target_link_libraries(dalvikvm PRIVATE gesher_net_natives)
+
+# Link the full NSD transport alongside the real guest socket/select exports.
+# MinGW import members define callable thunks as well as __imp_* slots; direct
+# Winsock imports with these names must not be selected by the transport.
+# This is a link gate, not native socket/runtime qualification.
+add_executable(nsd_windows_link_test
+  ${CMAKE_SOURCE_DIR}/tests/net/nsd_windows_link_test.cc
+  ${_net}/windows_nsd_resolve.cc)
+target_include_directories(nsd_windows_link_test PRIVATE ${_net}/include)
+target_compile_options(nsd_windows_link_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(nsd_windows_link_test PRIVATE gesher_posix nativehelper iphlpapi ws2_32)
