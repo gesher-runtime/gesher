@@ -244,7 +244,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '680480d891ae925427a347e1ee23b9e1fd3927aad908d9eb2354bd70c81def4e'
+OFD_QUALIFICATION_SHA256 = '8bf665b00e2904657075d20c1899dc9172c3abbb25f7f507f8c4a224c3f71846'
 # Valid pipes can now fail a control operation explicitly. These two exact
 # non-socket dispatch substitutions are the only PollFdsImpl changes allowed;
 # normalize them before comparing every byte of the original native poll core.

@@ -33,7 +33,7 @@
     "compat/elf/exec/gesher_shell.cc": "3a0a1a45ef0ad4e7fe43cbc45e8194221379033f02e97de43c4e103e6992d6cf",
     "compat/elf/exec/shell_execute.inc": "08f1f451b15ab64a7dfe28a0c6743e899aa4bea093261001ebd28957be815d0c",
     "compat/bionic/process_bionic.cc": "8466c7c43143d4129926010cce198e1a0b21f6c3990a99be02ca48d23b4c77a9",
-    "compat/posix/src/revocable_file.cc": "851ab074cf5a08dfe1e4e815e56a07c144521512532b75e8663bc3f980a077ce",
+    "compat/posix/src/revocable_file.cc": "336971b549052cb1ac3710773c3eae3903bcc6075ac8505039800981414a6c84",
     "compat/posix/src/revocable_internal.h": "cb19a942c0caa10ad314ecb0c9ea123281d33185acaf73a9ff491ce9771e219a",
     "compat/bionic/stdio_windows_lock.h": "86063fcea2901b3bc3acd57d49cef57880125fc0c9ddee9cc3e70917b2e5671c",
     "compat/bionic/extra_bionic.cc": "0e0958142d26aa1dbe87acf44e416507d87969c5ba100e478356ffc9ba942bc3",

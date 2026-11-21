@@ -254,7 +254,7 @@ int main() {
     close(ready[0]); close(proceed[1]);
     int received = Adopt(snapshot);
     if (received < 0 || Write(received, " child", 6) != 6) _exit(2);
-    write(ready[1], "r", 1);
+    if (write(ready[1], "r", 1) != 1) _exit(5);
     char byte;
     if (read(proceed[0], &byte, 1) != 1) _exit(3);
     int result = Write(received, "late", 4);
