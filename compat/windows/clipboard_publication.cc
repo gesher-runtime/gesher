@@ -224,9 +224,10 @@ class Publication final : public IDataObject {
 
 bool WaitPumping(HANDLE event, DWORD timeout);
 
-bool OpenForRead() {
+bool OpenForRead(HWND read_window) {
+  if (!read_window) return false;
   for (int attempt = 0; attempt != 20; ++attempt) {
-    if (OpenClipboard(nullptr)) return true;
+    if (OpenClipboard(read_window)) return true;
     // A reader can own the clipboard while requesting this STA's delayed
     // formats. Let it finish and close before retrying the completion proof.
     if (attempt != 19 && !WaitPumping(nullptr, 10)) return false;
@@ -247,10 +248,10 @@ bool SameNativeBytes(const FormatBytes& expected) {
 // This is a one-call completion proof, not an equality-based adoption path.
 // Full replacement invalidates the private OLE identity, even for copied public
 // data. In-place changes are caught by complete buffers and format precedence.
-uint32_t CompletionSequence(Publication* object) {
+uint32_t CompletionSequence(Publication* object, HWND read_window) {
   if (!object || OleIsCurrentClipboard(object) != S_OK) return 0;
   const DWORD before = GetClipboardSequenceNumber();
-  if (!before || !OpenForRead()) return 0;
+  if (!before || !OpenForRead(read_window)) return 0;
   const bool wants_text = object->Find(CF_UNICODETEXT) != nullptr;
   const bool has_unicode = IsClipboardFormatAvailable(CF_UNICODETEXT) != 0;
   const bool has_text = has_unicode || IsClipboardFormatAvailable(CF_TEXT) != 0;
@@ -271,9 +272,9 @@ uint32_t CompletionSequence(Publication* object) {
       && OleIsCurrentClipboard(object) == S_OK ? after : 0;
 }
 
-uint32_t EmptyCompletionSequence() {
+uint32_t EmptyCompletionSequence(HWND read_window) {
   const DWORD before = GetClipboardSequenceNumber();
-  if (!before || !OpenForRead()) return 0;
+  if (!before || !OpenForRead(read_window)) return 0;
   SetLastError(ERROR_SUCCESS);
   const bool empty = CountClipboardFormats() == 0 && GetLastError() == ERROR_SUCCESS;
   const DWORD locked = GetClipboardSequenceNumber();
@@ -393,7 +394,16 @@ class Publisher final {
         static_cast<std::shared_ptr<Publisher>*>(parameter));
     const auto self = *start;
     start.reset();
-    const HRESULT initialized = OleInitialize(nullptr);
+    HRESULT initialized = OleInitialize(nullptr);
+    HWND read_window = nullptr;
+    if (SUCCEEDED(initialized)) {
+      // A distinct open association prevents our completion read from sharing
+      // a NULL-window consumer's open state in this process. This window has no
+      // request protocol or authority; OLE identity still proves publication.
+      read_window = CreateWindowExW(0, L"STATIC", nullptr, 0, 0, 0, 0, 0,
+          HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+      if (!read_window) { OleUninitialize(); initialized = E_FAIL; }
+    }
     self->initialized_.store(initialized, std::memory_order_release);
     SetEvent(self->ready_);
     if (FAILED(initialized)) return 1;
@@ -417,14 +427,14 @@ class Publisher final {
             if (request->formats.empty()) {
               if (SetClipboardRetrying(nullptr, request->cancelled, self->stopping_) == S_OK) {
                 if (current) { current->Release(); current = nullptr; }
-                request->sequence = EmptyCompletionSequence();
+                request->sequence = EmptyCompletionSequence(read_window);
               }
             } else {
               auto* next = new (std::nothrow) Publication(std::move(request->formats));
               if (next && SetClipboardRetrying(next, request->cancelled, self->stopping_) == S_OK) {
                 if (current) current->Release();
                 current = next;
-                request->sequence = CompletionSequence(current);
+                request->sequence = CompletionSequence(current, read_window);
               } else if (next) next->Release();
             }
           }
@@ -445,7 +455,7 @@ class Publisher final {
     // Never re-publish a stale object over an external replacement or in-place
     // mutation. Flush only the exact still-current, unchanged native buffers.
     if (current) {
-      if (CompletionSequence(current)) OleFlushClipboard();
+      if (CompletionSequence(current, read_window)) OleFlushClipboard();
       current->Release();
     }
     {
@@ -453,6 +463,7 @@ class Publisher final {
       for (const auto& request : self->requests_) Complete(request);
       self->requests_.clear();
     }
+    DestroyWindow(read_window);
     OleUninitialize();
     return 0;
   }

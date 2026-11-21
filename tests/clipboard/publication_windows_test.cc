@@ -720,6 +720,10 @@ void ErrorAndResources() {
   gesher::windows::ReleaseClipboardPublisher();
   DWORD before = 0, after = 0;
   Check(GetProcessHandleCount(GetCurrentProcess(), &before) != 0, "record native handle baseline after warm-up");
+  SetLastError(ERROR_SUCCESS);
+  const DWORD user_before = GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
+  Check(user_before != 0 || GetLastError() == ERROR_SUCCESS,
+        "record native USER-object baseline after warm-up");
   for (int pass = 0; pass != 16; ++pass) {
     Check(gesher::windows::RetainClipboardPublisher(), "re-entry takes a fresh service lease");
     Check(PublishKind(pass % 3, &sequence), "re-entered service publishes through a live STA");
@@ -729,7 +733,13 @@ void ErrorAndResources() {
   }
   Check(GetProcessHandleCount(GetCurrentProcess(), &after) != 0 && after <= before + 1,
         "repeated service lifetimes release native thread, request and event handles");
-  std::printf("CLIPBOARD_RESOURCES before=%lu after=%lu\n", static_cast<unsigned long>(before), static_cast<unsigned long>(after));
+  SetLastError(ERROR_SUCCESS);
+  const DWORD user_after = GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS);
+  Check((user_after != 0 || GetLastError() == ERROR_SUCCESS) && user_after == user_before,
+        "repeated service lifetimes release every private read window");
+  std::printf("CLIPBOARD_RESOURCES before=%lu after=%lu user_before=%lu user_after=%lu\n",
+      static_cast<unsigned long>(before), static_cast<unsigned long>(after),
+      static_cast<unsigned long>(user_before), static_cast<unsigned long>(user_after));
 }
 struct ImageInput { const char* name; std::vector<uint8_t> bytes; };
 std::vector<uint8_t> ImageFixture(DWORD header_size, WORD bits, DWORD compression,
