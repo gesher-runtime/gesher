@@ -3,6 +3,7 @@
 
 #include "devsvc_win32.h"
 #include "toast_identity.h"
+#include "../windows/clipboard_publication.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -39,15 +40,7 @@ std::u16string U16(const wchar_t* s, size_t n) {
 
 std::u16string U16(const wchar_t* s) { return s ? U16(s, wcslen(s)) : std::u16string(); }
 
-std::string Utf8(const std::u16string& s) {
-  if (s.empty()) return std::string();
-  int n = WideCharToMultiByte(CP_UTF8, 0, W(s), static_cast<int>(s.size()), nullptr, 0,
-                              nullptr, nullptr);
-  std::string out(static_cast<size_t>(n), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, W(s), static_cast<int>(s.size()), out.data(), n, nullptr,
-                      nullptr);
-  return out;
-}
+
 
 std::u16string FromUtf8(const char* s, size_t len) {
   if (len == 0) return std::u16string();
@@ -664,23 +657,7 @@ long HeaderNumber(const std::string& data, const char* name) {
 }
 
 // CF_HTML around a fragment (UTF-8; the offsets count its bytes).
-std::string CfHtml(const std::string& fragment) {
-  const char* kHeader =
-      "Version:0.9\r\nStartHTML:%010zu\r\nEndHTML:%010zu\r\n"
-      "StartFragment:%010zu\r\nEndFragment:%010zu\r\n";
-  const std::string kBefore = "<html><body>\r\n<!--StartFragment-->";
-  const std::string kAfter = "<!--EndFragment-->\r\n</body>\r\n</html>";
-  char probe[256];
-  size_t header = static_cast<size_t>(std::snprintf(probe, sizeof(probe), kHeader,
-                                                    size_t{0}, size_t{0}, size_t{0},
-                                                    size_t{0}));
-  size_t start_fragment = header + kBefore.size();
-  size_t end_fragment = start_fragment + fragment.size();
-  size_t end_html = end_fragment + kAfter.size();
-  char head[256];
-  std::snprintf(head, sizeof(head), kHeader, header, end_html, start_fragment, end_fragment);
-  return std::string(head) + kBefore + fragment + kAfter;
-}
+
 
 }  // namespace
 
@@ -711,36 +688,9 @@ bool ClipboardHtml(std::u16string* html) {
   return ok;
 }
 
-bool SetClipboard(const std::u16string& text, const std::u16string& html) {
-  if (!OpenClipboardRetrying()) return false;
-  bool ok = EmptyClipboard() != 0;
-  if (ok && !text.empty()) {
-    size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (g != nullptr) {
-      void* p = GlobalLock(g);
-      std::memcpy(p, text.c_str(), bytes);
-      GlobalUnlock(g);
-      if (SetClipboardData(CF_UNICODETEXT, g) == nullptr) {
-        GlobalFree(g);
-        ok = false;
-      }
-    } else {
-      ok = false;
-    }
-  }
-  if (ok && !html.empty() && HtmlFormat() != 0) {
-    std::string data = CfHtml(Utf8(html));
-    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, data.size() + 1);
-    if (g != nullptr) {
-      void* p = GlobalLock(g);
-      std::memcpy(p, data.c_str(), data.size() + 1);
-      GlobalUnlock(g);
-      if (SetClipboardData(HtmlFormat(), g) == nullptr) GlobalFree(g);
-    }
-  }
-  CloseClipboard();
-  return ok;
+bool SetClipboard(const std::u16string& text, const std::u16string& html,
+                  uint32_t* written_sequence, bool has_text) {
+  return windows::PublishClipboard(text, has_text, html, nullptr, 0, written_sequence);
 }
 
 uint32_t ClipboardSequence() { return GetClipboardSequenceNumber(); }

@@ -1,0 +1,40 @@
+name: binary128-parsing
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'aosp.lock'
+      - 'compat/bionic/binary128_parse*'
+      - 'compat/bionic/gdtoa/**'
+      - 'compat/bionic/locale_bionic.cc'
+      - 'compat/arm64/dll/numeric_fenv.h'
+      - 'tests/native/arm64_numeric_fenv_test.cc'
+      - 'tests/native/arm64_numeric_return*'
+      - 'tests/binary128/**'
+      - 'probes/native3/binary128/**'
+      - '.github/workflows/binary128-parsing.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-components:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify independent Android observations and pinned parser source
+        run: |
+          python3 probes/native3/binary128/generate_expected.py --check
+          python3 probes/native3/binary128/prepare_sources.py "$RUNNER_TEMP/quad-aosp" --fetch
+      - name: Build the production parser component and source reference tests
+        run: |
+          cmake -S tests/binary128 -B "$RUNNER_TEMP/quad-build" -G Ninja \
+            -DAOSP_DIR="$RUNNER_TEMP/quad-aosp" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/quad-build" --parallel 4
+      - name: Check exact rational rounding, Bionic wide grammar, concurrency and numeric fenv
+        run: |
+          python3 tests/binary128/finite_oracle.py "$RUNNER_TEMP/quad-build/binary128_records"
+          "$RUNNER_TEMP/quad-build/binary128_prefix"
+          "$RUNNER_TEMP/quad-build/binary128_concurrency"
+          "$RUNNER_TEMP/quad-build/arm64_numeric_fenv_test"

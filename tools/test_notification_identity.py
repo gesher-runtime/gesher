@@ -50,7 +50,8 @@ def main():
         subprocess.run([javac, '-encoding', 'UTF-8', '-cp', cp, '-d', str(classes), *sources,
             str(ROOT / 'tests/dex-services/com/gesher/server/ToastIdentityDevice.java'),
             str(ROOT / 'tests/dex-services/com/gesher/server/NotificationStoreFormatDevice.java'),
-            str(ROOT / 'tests/dex-services/gesher/services/NotificationChannelGroupsTest.java')], check=True)
+            str(ROOT / 'tests/dex-services/gesher/services/NotificationChannelGroupsTest.java'),
+            str(ROOT / 'tests/dex-services/gesher/services/FixtureServiceContext.java')], check=True)
         subprocess.run([javac, '-encoding', 'UTF-8', '-cp', str(classes) + os.pathsep + cp,
             '-d', str(classes), *map(str, (ROOT / 'tests/notification-identity').glob('*.java'))], check=True)
         environment = os.environ.copy()

@@ -17,7 +17,7 @@ ARCHIVE_SHA = "5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4"
 URL = f"https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/{NAME}.tar.xz"
 PRODUCTION = "compat/arm64/dll/thunks.S"
 SOURCES = [
-    PRODUCTION, "compat/arm64/dll/arm64_unwind_test.S",
+    PRODUCTION, "compat/arm64/dll/host_call.h", "compat/arm64/dll/arm64_unwind_test.S",
     "compat/arm64/dll/arm64_unwind_test.cc", "tools/arm64/build-unwind.py",
     "tools/arm64/run-unwind.ps1", ".github/workflows/arm64-unwind.yml",
     "docs/research/arm64-thunk-unwind-2026-11-17.md",
