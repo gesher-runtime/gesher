@@ -56,30 +56,48 @@ public final class WebViewOwnedResponsesHost {
                     body != null && nativeCopy ? body.clone() : body));
         }
         final ArrayList<String> navigations = new ArrayList<>();
-        void navigate(String url, String headers) { navigated = url; navigationHeaders = headers; navigations.add(url); queued.add(url); }
+        void navigate(String url, String headers) { navigate(url, headers, 0); }
+        void navigate(String url, String headers, long number) {
+            navigated = url; navigationHeaders = headers; navigations.add(url);
+            queued.add(new Object[] {url, number});
+        }
+        void navigate(String url, String headers, String method, byte[] body, long number) {
+            navigate(url, headers, number);
+        }
         void navigateToString(String value) { html = value; }
 
         // webview_host.cc's navigation state, a declared boundary model: Host::Navigate
-        // runs later on the WebView thread, its NavigationStarting handler reports
-        // EVENT_PAGE_STARTED (arg 1 for the one API navigation its flag covers) or asks
-        // the Listener, and WebResourceRequested's mainFrame is url == main_document.
+        // (after NumberNextNavigate) runs later on the WebView thread, its
+        // NavigationStarting handler reports EVENT_PAGE_STARTED (arg 1 for the one API
+        // navigation its flag covers) or asks the Listener, NavigationCompleted reports
+        // the number the navigation started with, and WebResourceRequested's mainFrame
+        // is url == main_document.
         static final int EVENT_FAILED = 2, EVENT_PAGE_STARTED = 3, EVENT_PAGE_FINISHED = 4,
                 EVENT_SOURCE_CHANGED = 5, EVENT_SCRIPT_RESULT = 10, EVENT_CAPTURE = 17,
                 EVENT_PARKED = 18, EVENT_DEVTOOLS_RESULT = 20;
         WebViewOwnedResponsesHost client;
-        final ArrayDeque<String> queued = new ArrayDeque<>();
+        final ArrayDeque<Object[]> queued = new ArrayDeque<>();
         boolean apiNavigation;
+        long apiNumber;
+        final Map<Long, Long> startedNumbers = new HashMap<>();
         String mainDocument;
         long nextNavigation = 1;
         /** The Navigate calls issued so far run (before any NavigationStarting). */
         void execute() {
-            while (!queued.isEmpty()) { queued.removeFirst(); apiNavigation = true; }
+            while (!queued.isEmpty()) {
+                long number = (Long) queued.removeFirst()[1];
+                apiNavigation = true;
+                apiNumber = Math.max(apiNumber, number);
+            }
         }
         /** The next Navigate call runs and fails. */
         void executeFailing() {
-            String url = queued.removeFirst();
+            Object[] call = queued.removeFirst();
+            long number = (Long) call[1];
+            apiNavigation = true;
+            apiNumber = Math.max(apiNumber, number);
             apiNavigation = false;
-            client.onEvent(EVENT_FAILED, 0, 0x80004005, "Navigate " + url + ": 0x80004005", null, null, null);
+            client.onEvent(EVENT_FAILED, 0, 0x80004005, "Navigate " + call[0] + ": 0x80004005", null, null, null);
         }
         void reload() { apiNavigation = true; }
         /** NavigationStarting: the navigation's id, or -1 when the Listener took it. */
@@ -89,11 +107,17 @@ public final class WebViewOwnedResponsesHost {
             long navigation = nextNavigation++;
             if (!api && client.onNavigationStarting(url, user, redirect)) return -1;
             mainDocument = url;
-            if (!redirect) client.onEvent(EVENT_PAGE_STARTED, navigation, api ? 1 : 0, url, null, null, null);
+            if (!redirect) {
+                startedNumbers.put(navigation, apiNumber);
+                client.onEvent(EVENT_PAGE_STARTED, navigation, api ? 1 : 0, url, null, null, null);
+            }
             return navigation;
         }
+        /** NavigationCompleted: status -1 for success, 14 for a superseded navigation. */
         void completed(long navigation, int status, String url) {
-            client.onEvent(EVENT_PAGE_FINISHED, 200, status, url, null, null, null);
+            Long started = startedNumbers.remove(navigation);
+            client.onEvent(EVENT_PAGE_FINISHED, 200, status, url, String.valueOf(started == null ? 0 : started),
+                    null, null);
         }
         void sourceChanged(String url, boolean newDocument) {
             client.onEvent(EVENT_SOURCE_CHANGED, 0, newDocument ? 1 : 0, url, null, null, null);
@@ -294,16 +318,42 @@ public final class WebViewOwnedResponsesHost {
             host.execute();  // both Navigate calls run before WebView2 raises NavigationStarting
             long first = host.starting(url, false, false);   // WebView2Host's flag
             host.request(1, url, CONTEXT_DOCUMENT);
+            host.completed(first, 14, url);  // superseded: it ends no other load
             long second = host.starting(url, false, false);  // the provider's ApiNavigations
             check(first > 0 && second > 0 && provider.mClient.overrides.get() == 0,
                     "shouldOverrideUrlLoading was asked about loadDataWithBaseURL");
-            host.completed(first, 14, url);  // superseded
             host.request(2, url, CONTEXT_DOCUMENT);
             check(Arrays.equals(last(provider).body, bytes("second")), "the second load's document was lost");
             host.completed(second, -1, url);
             // The page's own navigation to the same URL is the app's to take.
             check(host.starting(url, true, false) < 0 && provider.mClient.overrides.get() == 1
                     && provider.mClient.request.url.equals(BASE), "a page navigation did not reach shouldOverrideUrlLoading");
+        });
+        scenario("two identical loads, one NavigationStarting: a later page navigation is the app's", () -> {
+            WebViewOwnedResponsesHost provider = taking(pending(BASE, "first", "text/html", "UTF-8"));
+            provider.loadDataWithBaseURL(BASE, "second", "text/html", "UTF-8", null);
+            WebView2Host host = provider.mHost;
+            host.execute();
+            long only = host.starting(url, false, false);  // WebView2 started the second only
+            host.request(1, url, CONTEXT_DOCUMENT);
+            check(only > 0 && Arrays.equals(last(provider).body, bytes("second")), "the load's document was lost");
+            host.completed(only, -1, url);
+            check(host.starting(url, true, false) < 0 && provider.mClient.overrides.get() == 1
+                    && provider.mClient.request.url.equals(BASE),
+                    "a page navigation to the URL of an unstarted duplicate load skipped shouldOverrideUrlLoading");
+        });
+        scenario("a load issued before a navigation finishes but handed over after it stays own", () -> {
+            WebViewOwnedResponsesHost provider = taking(new WebViewOwnedResponsesHost());
+            WebView2Host host = provider.mHost;
+            provider.loadUrl0("https://first.example/");
+            host.execute();
+            long first = host.starting("https://first.example/", false, false);
+            provider.loadUrl0("https://second.example/");  // still on its way to the WebView thread
+            host.completed(first, -1, "https://first.example/");
+            host.execute();
+            host.apiNavigation = false;  // a page navigation took WebView2Host's flag first
+            check(host.starting("https://second.example/", false, false) > 0 && provider.mClient.overrides.get() == 0,
+                    "a load handed over after the finished navigation started was asked about");
         });
         scenario("a page navigation leaves the published document", () -> {
             WebViewOwnedResponsesHost provider = pending(BASE, "published", "text/html", "UTF-8");

@@ -467,6 +467,24 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   // An API navigation (Navigate, reload, history) is on its way: its
   // NavigationStarting is not the page's, so the Listener is not asked.
   bool api_navigation = false;
+  // The number (Java's ApiNavigations) of the last Navigate handed to WebView2, and
+  // for each main-frame navigation started since, the number when it started:
+  // its kPageFinished reports that one, so Java ends the loads it handed over
+  // before a navigation that was not superseded.
+  int64_t api_number = 0;
+  std::map<UINT64, int64_t> started_numbers;
+  void NavigationStarted(UINT64 nav) {
+    // Superseded navigations' completions may not come: keep the newest only.
+    if (started_numbers.size() >= 64) started_numbers.erase(started_numbers.begin());
+    started_numbers[nav] = api_number;
+  }
+  int64_t NavigationEnded(UINT64 nav) {
+    auto it = started_numbers.find(nav);
+    if (it == started_numbers.end()) return 0;
+    int64_t number = it->second;
+    started_numbers.erase(it);
+    return number;
+  }
   std::wstring main_document;  // the URL of the main frame's navigation
   std::set<UINT64> cancelled;  // navigations the Listener took
   // Basic authentication of the main document: WebView2 ends the navigation
@@ -481,6 +499,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
     int http = 0;
     int32_t status = -1;
     std::wstring url;
+    int64_t started_number = 0;
   } auth_finish;
 
   std::wstring document_script_id;
@@ -1121,6 +1140,9 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         if (!impl->auth_retry.empty() && url == impl->auth_retry && !redirect) {
                           impl->auth_retry.clear();
                           impl->main_document = url;
+                          UINT64 nav = 0;
+                          args->get_NavigationId(&nav);
+                          impl->NavigationStarted(nav);
                           return S_OK;
                         }
                         impl->auth_retry.clear();
@@ -1140,6 +1162,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           CancelBridgeRequests(impl.get());
                           UINT64 nav = 0;
                           args->get_NavigationId(&nav);
+                          impl->NavigationStarted(nav);
                           impl->Report(kPageStarted, static_cast<int64_t>(nav), api ? 1 : 0, url);
                         }
                         return S_OK;
@@ -1173,11 +1196,13 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         sender->get_Source(source.Put());
                         std::wstring url = source.str();
                         if (url.empty() || url == L"about:blank") url = impl->main_document;
+                        int64_t started = impl->NavigationEnded(nav);
                         if (auth_wait) {
-                          impl->auth_finish = {true, http, static_cast<int32_t>(status), url};
+                          impl->auth_finish = {true, http, static_cast<int32_t>(status), url, started};
                           return S_OK;
                         }
-                        impl->Report(kPageFinished, http, ok ? -1 : static_cast<int32_t>(status), url);
+                        impl->Report(kPageFinished, http, ok ? -1 : static_cast<int32_t>(status), url,
+                                     std::to_wstring(started));
                         return S_OK;
                       })
           .get(),
@@ -2103,6 +2128,12 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
   });
 }
 
+void Host::NumberNextNavigate(int64_t number) {
+  Do(impl_, [number](Impl* impl) {
+    if (number > impl->api_number) impl->api_number = number;
+  });
+}
+
 void Host::NavigateToString(const std::wstring& html) {
   Do(impl_, [html](Impl* impl) {
     impl->api_navigation = true;
@@ -2501,7 +2532,10 @@ void Host::CompleteBasicAuth(int64_t id, bool proceed, const std::wstring& user,
       Impl::Finish held = shared->auth_finish;
       shared->auth_finish = {};
       // Cancelled: the 401 page is what loaded.
-      if (!proceed && held.held) shared->Report(kPageFinished, held.http, held.status, held.url);
+      if (!proceed && held.held) {
+        shared->Report(kPageFinished, held.http, held.status, held.url,
+                       std::to_wstring(held.started_number));
+      }
     }
     d.deferral->Complete();
   });

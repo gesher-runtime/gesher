@@ -578,8 +578,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             return;
         }
         mPendingData.set(data);
-        mApiNavigations.issued(webView2Url);
-        mHost.navigate(webView2Url, headers);
+        mHost.navigate(webView2Url, headers, mApiNavigations.issued(webView2Url));
     }
 
     @Override
@@ -597,9 +596,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         }
         // NavigateWithWebResourceRequest with the body, form-encoded as Android posts it.
         mPendingData.set(null);
-        mApiNavigations.issued(url);
         mHost.navigate(url, "Content-Type: application/x-www-form-urlencoded\r\n", "POST",
-                postData != null ? postData : new byte[0]);
+                postData != null ? postData : new byte[0], mApiNavigations.issued(url));
     }
 
     @Override
@@ -1903,6 +1901,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             if (end > "Navigate ".length()) {
                 mApiNavigations.abandoned(a.substring("Navigate ".length(), end));
             }
+        } else if (type == WebView2Host.EVENT_PAGE_FINISHED && arg != 14 /* OPERATION_CANCELED */) {
+            // A main-frame navigation that was not superseded: the loads WebView2 had been
+            // handed when it started (b) have started or never will. Another one issued
+            // with the same URL is not left to take a later page navigation for its own.
+            mApiNavigations.ended(number(b));
         } else if (type == WebView2Host.EVENT_SOURCE_CHANGED && arg == 0) {
             // A load within the same document raises no NavigationStarting.
             mApiNavigations.abandoned(a);
@@ -2949,6 +2952,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 return WebViewClient.ERROR_PROXY_AUTHENTICATION;
             default:
                 return WebViewClient.ERROR_UNKNOWN;
+        }
+    }
+
+    private static long number(String decimal) {
+        try {
+            return decimal != null && !decimal.isEmpty() ? Long.parseLong(decimal) : 0;
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 

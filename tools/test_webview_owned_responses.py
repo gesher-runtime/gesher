@@ -89,6 +89,10 @@ def main() -> None:
         'private static byte[] readAll(InputStream in)',
         'private static Map<String, String> parseHeaders(String headers)',
     )]
+    # Helpers newer than an old-source control's production code.
+    pieces += [method(production, marker) for marker in (
+        'private static long number(String decimal)',
+    ) if marker in production]
     if 'private static final class PendingData' in production:
         fields = ['private final AtomicReference<PendingData> mPendingData = new AtomicReference<>();',
                   'private final ApiNavigations mApiNavigations = new ApiNavigations();',

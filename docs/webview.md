@@ -107,7 +107,11 @@ hangs the other for long:
   overrides either `shouldOverrideUrlLoading` and only for navigations the
   page or the user started (not `loadUrl`, `reload`, back/forward). The
   WebView's own loads are told apart even when several are issued before
-  WebView2 starts the first (`ApiNavigations`; WebView2 starts each one).
+  WebView2 starts the first (`ApiNavigations`; WebView2 starts each one, or
+  only the last of identical ones). A load stops counting as the WebView's
+  own once a main-frame navigation that started after WebView2 was handed it
+  ends without being superseded (the native host numbers the loads it hands
+  over), so a page navigation to the same URL later reaches the app.
 - HTTP(S) `@JavascriptInterface` calls remain synchronous for JavaScript, but
   execute in order on a per-view JavaBridge worker. A deferred reserved request
   leaves WebView2's STA free to answer synchronous Android cookie APIs. Other
