@@ -1780,7 +1780,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
-        shard: [native, desktop, services, media, compilation]
+        shard: [native, desktop, windowing, services, contracts, media, compilation]
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
     timeout-minutes: 120
@@ -1951,7 +1951,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run offline identity and retirement regressions
-        if: matrix.shard == 'services'
+        if: matrix.shard == 'contracts'
         shell: pwsh
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/run-microg-security.ps1 -Dir dist -EvidenceDir "${{ runner.temp }}/microg-security" | Tee-Object -FilePath microg-security-results.txt
@@ -1994,7 +1994,7 @@ jobs:
 
       - name: Upload offline regression evidence
         uses: actions/upload-artifact@v4
-        if: ${{ always() && matrix.shard == 'services' }}
+        if: ${{ always() && matrix.shard == 'contracts' }}
         with:
           name: microg-security-${{ matrix.os }}
           path: |
