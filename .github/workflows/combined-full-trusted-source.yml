@@ -95,7 +95,7 @@ jobs:
            'tests/native2/net_udp_fault_observer.c': '2d63237ca4d2891e84c4c1a21c16448bbdfee2eb',
            'tests/native2/net_udp_guarded_copy_probe.cpp': '35b571e3f253950f5f0a96117d9458ee4f1b6e39',
            'tests/native2/net_udp_trunc.cpp': '4d2d46badfa7a0b90a1f134537ee4a90f72a2e17',
-           'tests/windows/tracks/50-services.ps1': 'acaed0ca6823d1b88ebf8aabde0c8403ce57eb8b',
+           'tests/windows/tracks/50-services.ps1': '24940cd78943c31d195ddb998fe5a538bb04aa15',
            'tests/windows/tracks/89-net-udp-trunc.ps1': '9823b72c58bb77918bbb57a40d50664d1001105b',
            'tools/net-udp-component/payload.py': 'db22caed0012086fa90b257b3ef74e963ab2df87',
            'tools/net-udp-component/source.json': '92b0538e27f9e39aba040e30bfb362400c18724a',

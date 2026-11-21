@@ -96,9 +96,9 @@
         "size": [380, 284],
         "cancel": [171, 237],
         "focus": [96, 75],
-        "actions": [ { "keys": "hello" }, { "click": [344, 744] } ]
+        "actions": [ { "keys": "hello" }, { "click": [344, 744], "render": { "log": "gesher-webview: first page loaded: file:///", "region": [8, 64, 128, 112], "minTextPixels": 150 } } ]
       },
-      "actions": [ { "click": [344, 744] }, { "keys": "hello" }, { "click": [344, 744] } ]
+      "actions": [ { "click": [344, 744] }, { "keys": "hello" }, { "click": [344, 744], "render": { "log": "gesher-webview: first page loaded: file:///", "region": [8, 64, 128, 112], "minTextPixels": 150 } } ]
     },
     {
       "package": "name.boyle.chris.sgtpuzzles",

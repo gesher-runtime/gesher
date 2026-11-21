@@ -20,6 +20,7 @@ import java.util.function.ToIntBiFunction;
 
 /** Real notification/store publication races; the toast sink never calls Windows UI. */
 public final class NotificationRetirementTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     private static final AtomicInteger checks = new AtomicInteger();
     private static void require(boolean value, String why) { if (!value) throw new AssertionError(why); checks.incrementAndGet(); }
     private static Field field(Class<?> type, String name) throws Exception {
@@ -84,8 +85,7 @@ public final class NotificationRetirementTest {
             service = make(notifications, new Class<?>[]{pmType, amType, ToIntBiFunction.class}, pm, null, toast);
             Object am = make(amType, new Class<?>[]{atmType, pmType, notifications}, atm, pm, service);
             Class<?> services = Class.forName("com.gesher.server.Services");
-            Class<?> created = Class.forName("com.gesher.server.Services$Created");
-            field(services, "sLast").set(null, make(created, new Class<?>[]{pmType, atmType, amType}, pm, atm, am));
+            field(services, "sLast").set(null, serviceContexts.runtime(pm, atm, am));
             policy = pmType.getMethod("permissions").invoke(pm);
             grant();
         }
@@ -182,6 +182,14 @@ public final class NotificationRetirementTest {
     }
 
     public static void main(String[] args) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            runWithServiceContext(args);
+        } finally { serviceContexts = previous; }
+    }
+
+    private static void runWithServiceContext(String[] args) throws Exception {
         require(args.length == 1, "Pass the synthetic devsvc APK requesting POST_NOTIFICATIONS");
         require("1000".equals(System.getenv("GESHER_BINDER_UID")), "Explicit system-UID service fixture required for real store path");
         System.loadLibrary("android_runtime");
