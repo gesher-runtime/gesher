@@ -62,7 +62,11 @@ public final class SettingsWriteAccessTest {
         try { Binder.restoreCallingIdentity(((long)pkg.uid() << 32) | pid); work.run(); }
         finally { Binder.restoreCallingIdentity(identity); }
     }
-    @SuppressWarnings("unchecked") public static int run(boolean nativeFramework) throws Exception {
+    public static int run(boolean nativeFramework) throws Exception {
+        int remote = run(nativeFramework, false);
+        return remote + run(nativeFramework, true);
+    }
+    @SuppressWarnings("unchecked") private static int run(boolean nativeFramework, boolean inProcess) throws Exception {
         checks = 0;
         ApkPackage ordinary = pkg("fixture.settings.ordinary", 12811, (byte)7, Manifest.permission.WRITE_SETTINGS);
         ApkPackage peer = pkg("fixture.settings.peer", 12812, (byte)8, Manifest.permission.WRITE_SETTINGS);
@@ -88,7 +92,9 @@ public final class SettingsWriteAccessTest {
             definitions.put(privileged.name, privileged); set(catalog, "mLoaded", true);
         }
         List<ApkPackage> apps = List.of(ordinary, peer, signed, secure);
-        int basePid = 887810;
+        // Run the same permission/AppOp/CRUD cases for an attached remote app and
+        // for an ordinary app sharing the provider's process, as standalone does.
+        int basePid = inProcess ? android.os.Process.myPid() : 887810;
         for (int i = 0; i < apps.size(); i++) {
             ApkPackage app = apps.get(i); int pid = basePid + i;
             as(app, pid, () -> {

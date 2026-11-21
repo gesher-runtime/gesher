@@ -157,7 +157,8 @@ public final class ClipboardFixture implements AutoCloseable {
     @SuppressWarnings("unchecked") ClipboardFixture(boolean binder, boolean realHost) throws Exception {
         owner = pkg(OWNER, UID, (byte)7, Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND, Manifest.permission.SET_CLIP_SOURCE);
         peer = pkg(PEER, UID + 1, (byte)8);
-        privileged = pkg(PRIVILEGED, UID + 2, (byte)42, Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND, Manifest.permission.SET_CLIP_SOURCE);
+        privileged = pkg(PRIVILEGED, UID + 2, (byte)42, Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND,
+                Manifest.permission.SET_CLIP_SOURCE, Manifest.permission.WRITE_SECURE_SETTINGS);
         ime = pkg(IME, UID + 3, (byte)9);
         hostPackage = pkg(HOST_PACKAGE, UID + 4, (byte)10);
         ApkPackage platform = pkg("android", android.os.Process.SYSTEM_UID, (byte)42);
@@ -176,6 +177,11 @@ public final class ClipboardFixture implements AutoCloseable {
                         ? PermissionInfo.PROTECTION_FLAG_ROLE : PermissionInfo.PROTECTION_FLAG_RECENTS);
                 definitions.put(name, info);
             }
+            PermissionInfo settings = new PermissionInfo();
+            settings.name = Manifest.permission.WRITE_SECURE_SETTINGS; settings.packageName = "android";
+            settings.protectionLevel = PermissionInfo.PROTECTION_SIGNATURE | PermissionInfo.PROTECTION_FLAG_PRIVILEGED
+                    | PermissionInfo.PROTECTION_FLAG_DEVELOPMENT | PermissionInfo.PROTECTION_FLAG_ROLE | PermissionInfo.PROTECTION_FLAG_INSTALLER;
+            definitions.put(settings.name, settings);
             set(catalog, "mLoaded", true);
         }
         ops = pm.appOps();
@@ -229,7 +235,12 @@ public final class ClipboardFixture implements AutoCloseable {
     }
     void ime(String value) throws Exception {
         Bundle values = new Bundle(); values.putString("value", value);
-        call(settings, "call", new Class<?>[]{String.class, String.class, Bundle.class}, "PUT_secure", Settings.Secure.DEFAULT_INPUT_METHOD, values);
+        call(settings, "call", new Class<?>[]{String.class, String.class, Bundle.class},
+                "PUT_secure", Settings.Secure.DEFAULT_INPUT_METHOD, values);
+    }
+    void configureIme(String value) throws Exception {
+        // Setup is a real privileged settings write by the fixture administrator.
+        as(privileged, () -> ime(value));
     }
     void add(ApkPackage code, Listener listener) throws Exception {
         // Local callback/death fixtures use the production list directly. The Windows test

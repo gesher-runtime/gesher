@@ -92,19 +92,19 @@ public final class ClipboardSecurityContractTest {
         read(h, h.owner, false, "Unprivileged app cannot assign itself as the secure default IME");
         read(h, h.ime, false, "No configured IME");
         read(h, h.hostPackage, false, "Built-in package name alone gives no IME authority");
-        h.ime(IME + "/.Keyboard"); read(h, h.ime, true, "Actual secure default IME setting");
-        h.ime("malformed"); read(h, h.ime, false, "Malformed configured component");
-        h.ime(PEER + "/.Keyboard"); read(h, h.ime, false, "IME configuration changed");
-        read(h, h.peer, true, "New configured IME"); h.ime(null);
+        h.configureIme(IME + "/.Keyboard"); read(h, h.ime, true, "Actual secure default IME setting");
+        h.configureIme("malformed"); read(h, h.ime, false, "Malformed configured component");
+        h.configureIme(PEER + "/.Keyboard"); read(h, h.ime, false, "IME configuration changed");
+        read(h, h.peer, true, "New configured IME"); h.configureIme(null);
         check(h.pm.permissions().checkPermission(PRIVILEGED, Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND)
                 == PackageManager.PERMISSION_GRANTED, "Platform signature grants the requested Android permission");
         read(h, h.privileged, true, "Granted background clipboard permission");
         h.nativeState.lockState = 1;
         read(h, h.privileged, false, "Lock also gates privileged getters");
         h.as(h.privileged, () -> check(h.api.getPrimaryClipSource(PRIVILEGED, null, 0, 0) == null, "Locked source is unavailable"));
-        h.ime(IME + "/.Keyboard"); read(h, h.ime, false, "Lock also gates the default IME");
+        h.configureIme(IME + "/.Keyboard"); read(h, h.ime, false, "Lock also gates the default IME");
         h.nativeState.lockState = -1; read(h, h.privileged, false, "Unknown lock state fails closed");
-        h.nativeState.lockState = 0; h.ime(null);
+        h.nativeState.lockState = 0; h.configureIme(null);
     }
     private static void appOps(ClipboardFixture h) throws Exception {
         h.nativeState.foreground = new long[]{PID, CREATED};
@@ -119,9 +119,9 @@ public final class ClipboardSecurityContractTest {
         h.ops.setMode(OP_READ_CLIPBOARD, h.privileged.uid(), PRIVILEGED, MODE_IGNORED);
         read(h, h.privileged, false, "Permission does not bypass AppOps");
         h.ops.setMode(OP_READ_CLIPBOARD, h.privileged.uid(), PRIVILEGED, MODE_ALLOWED);
-        h.ime(IME + "/.Keyboard"); h.ops.setMode(OP_READ_CLIPBOARD, h.ime.uid(), IME, MODE_IGNORED);
+        h.configureIme(IME + "/.Keyboard"); h.ops.setMode(OP_READ_CLIPBOARD, h.ime.uid(), IME, MODE_IGNORED);
         read(h, h.ime, false, "IME does not bypass AppOps");
-        h.ops.setMode(OP_READ_CLIPBOARD, h.ime.uid(), IME, MODE_ALLOWED); h.ime(null);
+        h.ops.setMode(OP_READ_CLIPBOARD, h.ime.uid(), IME, MODE_ALLOWED); h.configureIme(null);
         int writes = h.nativeState.writes, clears = h.nativeState.clears;
         h.ops.setMode(OP_WRITE_CLIPBOARD, UID, OWNER, MODE_IGNORED);
         h.write("denied write");
@@ -132,7 +132,7 @@ public final class ClipboardSecurityContractTest {
         h.nativeState.foreground = null; h.write("background write");
         check("background write".equals(h.nativeState.text), "Unfocused writes remain allowed");
         long before = noted(h, h.peer);
-        h.ime(PEER + "/.Keyboard");
+        h.configureIme(PEER + "/.Keyboard");
         h.as(h.peer, () -> {
             h.api.hasPrimaryClip(PEER, "clipboard", 0, 0);
             h.api.hasClipboardText(PEER, "clipboard", 0, 0);
@@ -141,7 +141,7 @@ public final class ClipboardSecurityContractTest {
         check(noted(h, h.peer) == before, "Metadata checks do not note clipboard reads");
         h.as(h.peer, () -> h.api.getPrimaryClip(PEER, "clipboard", 0, 0));
         var attributed = h.ops.getOpsForPackage(h.peer.uid(), PEER, new int[]{OP_READ_CLIPBOARD}).get(0).getOps().get(0).getAttributedOpEntries();
-        check(attributed.containsKey("clipboard") && noted(h, h.peer) >= before, "A data read notes the declared attribution"); h.ime(null);
+        check(attributed.containsKey("clipboard") && noted(h, h.peer) >= before, "A data read notes the declared attribution"); h.configureIme(null);
     }
     private static void sourceAndStorage(ClipboardFixture h) throws Exception {
         h.as(h.privileged, () -> {

@@ -314,10 +314,24 @@ final class SettingsProvider extends ContentProvider {
         if (text && mTextStore == null) {
             throw new SecurityException("Spell-checker settings require the device system server");
         }
-        if (android.os.Binder.getCallingPid() == Process.myPid()) return;
-        if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
-        if (mCallers.isSystem()) return;
-        String actual = mCallers.callerPackage();
+        int pid = Binder.getCallingPid();
+        // A standalone APK and this provider share a PID. Its authenticated
+        // application identity must take precedence over server-local authority.
+        String actual = mCallers == null ? null : mCallers.packageForPid(pid);
+        if (actual == null) {
+            boolean local = pid == Process.myPid();
+            if (local && (mPm == null || !mPm.hasTransientPackageState()
+                    || Process.myUid() < Process.FIRST_APPLICATION_UID)) return;
+            if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
+            if (!local && mCallers.isSystem()) return;
+            // An ordinary standalone process before binding or after retirement
+            // does not become a privileged writer when its attachment is absent.
+            throw new SecurityException("Unrecognized settings writer identity");
+        }
+        ApkPackage owner = mPm.get(actual);
+        if (owner == null || mPm.isRemovalPending(actual) || owner.uid() != Binder.getCallingUid()) {
+            throw new SecurityException("Unrecognized application Binder identity");
+        }
         // AOSP's system-table special access is an AppOp for ordinary apps.
         // Secure/global still require the actual privileged permission; its holders
         // may also write system settings independently of the special-access AppOp.
