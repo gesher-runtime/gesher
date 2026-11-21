@@ -48,16 +48,16 @@ for (const contexts of [[app.STATUS], [app.APP_STATUS], [app.STATUS, app.APP_STA
     });
   }
   for (const state of ['BLOCKED', 'BEHIND']) {
-    test(`protected ${state} enables waiting without bypass under ${contexts.join(',')}`, async () => {
+    test(`protected ${state} stays disarmed without bypass under ${contexts.join(',')}`, async () => {
       const w = setup(contexts, {nativePolicy: {contexts, blocked: true},
         nativeStateOverride: {mergeStateStatus: state}});
       await w.ciDone();
       assert.equal(w.pr.state, 'open');
       assert.equal(w.nativeMerges.length, 0);
       assert.equal(w.did('nativeMerge').length, 0);
-      assert.deepEqual(w.did('nativeWait')[0][1], {id: 'PR_7', head: HEAD});
-      assert.equal(w.nativeAutoMethod, 'SQUASH');
-      assert.equal(w.calls.at(-1)[0], 'nativeWait');
+      assert.equal(w.did('nativeWait').length, 0);
+      assert.equal(w.nativeAutoMethod, null);
+      assert.equal(last(w, app.APP_STATUS).state, 'success');
     });
   }
 }
@@ -109,14 +109,18 @@ for (const [name, revoke] of Object.entries({
   });
 }
 
-test('a CLEAN response after a stale waiting-state read never falls back to a merge mutation', async () => {
+test('a stale blocked-state read defers release until a fresh ordinary reconciliation', async () => {
   const w = setup(undefined, {nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
-  await assert.rejects(w.ciDone(), /clean status/);
+  await w.ciDone();
   assert.equal(w.pr.state, 'open');
-  assert.equal(w.did('nativeWait').length, 1);
+  assert.equal(w.did('nativeWait').length, 0);
   assert.equal(w.did('nativeMerge').length, 0);
   assert.equal(w.nativeAutoMethod, null);
-  assert.equal(last(w, app.APP_STATUS).state, 'failure');
+  assert.equal(last(w, app.APP_STATUS).state, 'success');
+  delete w.nativeStateOverride;
+  await w.sweep();
+  assert.equal(w.nativeMerges.length, 1);
+  assert.equal(w.nativeMerges[0].stage, 'merge');
 });
 
 test('an ambiguous completed merge is read back without cleanup writes or another release', async () => {
@@ -131,17 +135,18 @@ test('an ambiguous completed merge is read back without cleanup writes or anothe
   assert.equal(last(w, app.APP_STATUS).state, 'success');
 });
 
-test('an ambiguous waiting mutation is read back and safely disarmed, never merged as fallback', async () => {
+test('a blocked target retires old waiting without issuing another waiting mutation', async () => {
   const w = setup(undefined, {nativePolicy: {contexts: [app.APP_STATUS], blocked: true},
+    nativeAutoMethod: 'SQUASH',
     nativeWaitResponseError: new Error('waiting response lost')});
-  await assert.rejects(w.ciDone(), /waiting response lost/);
-  assert.equal(w.did('nativeWait').length, 1);
+  await w.ciDone();
+  assert.equal(w.did('nativeWait').length, 0);
   assert.equal(w.did('nativeMerge').length, 0);
   assert.equal(w.did('nativeCancel').length, 1);
   assert.equal(w.nativeAutoMethod, null);
-  const at = w.calls.findIndex(([name]) => name === 'nativeWait');
+  const at = w.calls.findIndex(([name]) => name === 'nativeCancel');
   assert.equal(w.calls[at + 1][0], 'getPR');
-  assert.equal(last(w, app.APP_STATUS).state, 'failure');
+  assert.equal(last(w, app.APP_STATUS).state, 'success');
 });
 
 test('an unreadable ambiguous release state stops writes until later reconciliation', async () => {

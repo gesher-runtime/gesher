@@ -66,6 +66,10 @@ public final class DetachedNativeUiContractTest {
     }
 
     public static void contracts(String order) throws Exception {
+        withServiceContext(() -> contractsWithServiceContext(order));
+    }
+
+    private static void contractsWithServiceContext(String order) throws Exception {
         field(Class.forName("com.gesher.app.locale.SystemLocale"), "sIs24Hour").set(null, Boolean.TRUE);
         File dir = Files.createTempDirectory("gesher-native-ui-detached-").toFile();
         try {

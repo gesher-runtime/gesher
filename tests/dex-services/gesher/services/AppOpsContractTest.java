@@ -43,6 +43,7 @@ import static android.content.PermissionChecker.*;
 /** AOSP Android 16 contracts, using real installed metadata, caller policy and delivery code.
  * Only APK construction and explicit Binder/native boundary fixtures are synthetic. */
 public final class AppOpsContractTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     private static final int UID = 12772, PID = 887720;
     private static final String NAME = "fixture.appops.owner", PEER = "fixture.appops.peer";
     private static int checks;
@@ -943,8 +944,7 @@ public final class AppOpsContractTest {
 
     private static Object activateServices(Harness h) throws Exception {
         Object previous = field(type("Services"), "sLast").get(null);
-        field(type("Services"), "sLast").set(null, make(type("Services$Created"),
-                new Class<?>[]{PackageManagerService.class, h.atm.getClass(), h.am.getClass()}, h.pm, h.atm, h.am));
+        field(type("Services"), "sLast").set(null, serviceContexts.runtime(h.pm, h.atm, h.am));
         return previous;
     }
 
@@ -1164,8 +1164,7 @@ public final class AppOpsContractTest {
         android.util.AtomicFile originalFile = (android.util.AtomicFile)get(policy, "mPermissionFile");
         ControlledFile disk = new ControlledFile(originalFile.getBaseFile()); disk.failFinish = failDisk;
         Object previousServices = field(type("Services"), "sLast").get(null);
-        Object currentServices = make(type("Services$Created"),
-                new Class<?>[]{PackageManagerService.class, h.atm.getClass(), h.am.getClass()}, h.pm, h.atm, h.am);
+        Object currentServices = serviceContexts.runtime(h.pm, h.atm, h.am);
         Token operation = new Token(), delivery = new Token(), secondOperation = new Token(), unrelatedOperation = new Token();
         AtomicInteger exits = new AtomicInteger(), secondExits = new AtomicInteger(), unrelatedExits = new AtomicInteger();
         java.util.concurrent.atomic.AtomicBoolean unlocked = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -1326,8 +1325,7 @@ public final class AppOpsContractTest {
         check(blocked.await(5, TimeUnit.SECONDS), "The lifecycle race holds only the explicit callback boundary");
         Object previousServices = field(type("Services"), "sLast").get(null);
         try {
-            field(type("Services"), "sLast").set(null, make(type("Services$Created"),
-                    new Class<?>[]{PackageManagerService.class, h.atm.getClass(), h.am.getClass()}, h.pm, h.atm, h.am));
+            field(type("Services"), "sLast").set(null, serviceContexts.runtime(h.pm, h.atm, h.am));
             call(h.pm, "beginPackageRemoval", new Class<?>[]{ApkPackage.class}, h.owner);
             call(h.pm, "revokePackageCapabilities", new Class<?>[]{String.class}, NAME);
             h.pm.permissions().forgetPackage(NAME);
@@ -1481,6 +1479,14 @@ public final class AppOpsContractTest {
         return service;
     }
     public static int run(boolean parcel) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            return runWithServiceContext(parcel);
+        } finally { serviceContexts = previous; }
+    }
+
+    private static int runWithServiceContext(boolean parcel) throws Exception {
         binder = parcel; checks = 0;
         Harness h = new Harness(); modes(h); lifetimes(h); watchers(h); foreground(h); restrictions(h); delivery(h); persistence(h);
         permissionCheckerEdges();

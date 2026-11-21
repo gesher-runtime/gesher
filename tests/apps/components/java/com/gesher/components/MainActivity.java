@@ -204,6 +204,8 @@ public class MainActivity extends ReportingActivity {
                 + Settings.Secure.getString(cr, Settings.Secure.ANDROID_ID)
                 + ", Settings.Global auto_time=" + Settings.Global.getInt(cr,
                         Settings.Global.AUTO_TIME, -1));
+        if (!Settings.System.canWrite(this)) throw new AssertionError("Explicit WRITE_SETTINGS special access was not observed by the application");
+        Report.line("Settings.System.canWrite true under app uid " + android.os.Process.myUid());
         Settings.System.putInt(cr, "gesher_test", 7);
         Report.line("Settings.System gesher_test after putInt: "
                 + Settings.System.getInt(cr, "gesher_test", -1));
