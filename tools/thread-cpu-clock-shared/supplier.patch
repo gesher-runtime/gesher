@@ -1,0 +1,657 @@
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -73,6 +73,8 @@
+ static size_t idListCnt = 0;
+ static size_t idListMax = 0;
+ static pthread_t idListNextId = 0;
++/* Zero is the permanently exhausted state, never a reusable generation. */
++static unsigned long long cpu_generation_next = 1;
+ 
+ #if defined(__SEH__) && (!defined(__clang__) || __clang_major__ >= 7)
+ #define SEH_INLINE_ASM
+@@ -333,6 +335,16 @@
+   return NULL;
+ }
+ 
++/* The authority owns the original kernel handle until registry retirement.
++   Legacy join/detach/TLS bookkeeping must not close that same handle early.
++   An unrelated temporary handle still follows its original close path. */
++static void
++ReleaseThreadHandleAlias (_pthread_v *thread, HANDLE handle)
++{
++  if (handle != thread->cpu_handle)
++    CloseHandle (handle);
++}
++
+ /* Save a _pthread_v element for reuse in pool.  */
+ static void
+ push_pthread_mem (_pthread_v *sv)
+@@ -342,6 +354,11 @@
+   pthread_mutex_lock (&mtx_pthr_locked);
+   if (sv->x != 0)
+     __pthread_deregister_pointer (sv->x);
++  /* This retirement lock is also held by the atomic duplicate API. */
++  if (sv->cpu_handle != NULL)
++    CloseHandle (sv->cpu_handle);
++  sv->cpu_handle = NULL;
++
+   if (sv->keyval)
+     free (sv->keyval);
+   if (sv->keyval_set)
+@@ -367,6 +384,12 @@
+   _pthread_v *r = NULL;
+ 
+   pthread_mutex_lock (&mtx_pthr_locked);
++  if (cpu_generation_next == 0)
++    {
++      pthread_mutex_unlock (&mtx_pthr_locked);
++      return NULL;
++    }
++
+   if ((r = pthr_root) == NULL)
+     {
+       if ((r = (_pthread_v *)calloc (1,sizeof(struct _pthread_v))) != NULL)
+@@ -378,6 +401,8 @@
+ 	      r = NULL;
+ 	    }
+ 	}
++      if (r != NULL)
++        r->cpu_generation = cpu_generation_next++;
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return r;
+     }
+@@ -391,6 +416,8 @@
+ 
+       r->next = NULL;
+     }
++  if (r != NULL)
++    r->cpu_generation = cpu_generation_next++;
+   pthread_mutex_unlock (&mtx_pthr_locked);
+   return r;
+ }
+@@ -458,68 +485,46 @@
+ static void WINAPI
+ __dyn_tls_pthread (HANDLE hDllHandle, DWORD dwReason, LPVOID lpreserved)
+ {
+-  _pthread_v *t = NULL;
++  _pthread_v *t;
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+-
++  (void) hDllHandle;
++  (void) lpreserved;
+   if (dwReason == DLL_PROCESS_DETACH)
+-    {
+-      free_pthread_mem ();
+-    }
+-  else if (dwReason == DLL_PROCESS_ATTACH)
+-    {
+-    }
++    free_pthread_mem ();
+   else if (dwReason == DLL_THREAD_DETACH)
+     {
+-      if (_pthread_tls != 0xffffffff)
+-	t = (_pthread_v *)TlsGetValue(_pthread_tls);
+-      if (t && t->thread_noposix != 0)
+-	{
+-	  _pthread_cleanup_dest (t->x);
+-	  if (t->h != NULL)
+-	    {
+-	      CloseHandle (t->h);
+-	      if (t->evStart)
+-		CloseHandle (t->evStart);
+-	      t->evStart = NULL;
+-	      t->h = NULL;
+-	    }
+-	  pthread_mutex_destroy (&t->p_clock);
+-	  replace_spin_keys (&t->spin_keys, new_spin_keys);
+-	  push_pthread_mem (t);
+-	  t = NULL;
+-	  TlsSetValue (_pthread_tls, t);
+-	}
+-      else if (t && t->ended == 0)
+-	{
+-	  if (t->evStart)
+-	    CloseHandle(t->evStart);
+-	  t->evStart = NULL;
+-	  t->ended = 1;
+-	  _pthread_cleanup_dest (t->x);
+-	  if ((t->p_state & PTHREAD_CREATE_DETACHED) == PTHREAD_CREATE_DETACHED)
+-	    {
+-	      t->valid = DEAD_THREAD;
+-	      if (t->h != NULL)
+-		CloseHandle (t->h);
+-	      t->h = NULL;
+-	      pthread_mutex_destroy(&t->p_clock);
+-	      replace_spin_keys (&t->spin_keys, new_spin_keys);
+-	      push_pthread_mem (t);
+-	      t = NULL;
+-	      TlsSetValue (_pthread_tls, t);
+-	      return;
+-	    }
+-	  pthread_mutex_destroy(&t->p_clock);
+-	  replace_spin_keys (&t->spin_keys, new_spin_keys);
+-	}
+-      else if (t)
+-	{
+-	  if (t->evStart)
+-	    CloseHandle (t->evStart);
+-	  t->evStart = NULL;
+-	  pthread_mutex_destroy (&t->p_clock);
+-	  replace_spin_keys (&t->spin_keys, new_spin_keys);
+-	}
++      if (_pthread_tls == TLS_OUT_OF_INDEXES)
++        return;
++      t = (_pthread_v *) TlsGetValue (_pthread_tls);
++      if (t == NULL)
++        return;
++      /* Detach cannot pool a TLS-owned record. Keep that ownership through
++         user key destructors, which can themselves call pthread APIs. */
++      if (!t->ended)
++        _pthread_cleanup_dest (t->x);
++      pthread_mutex_lock (&mtx_pthr_locked);
++      if (!TlsSetValue (_pthread_tls, NULL))
++        abort ();
++      t->tls_pending = 0;
++      t->ended = 1;
++      if (t->evStart)
++        CloseHandle (t->evStart);
++      t->evStart = NULL;
++      pthread_mutex_destroy (&t->p_clock);
++      t->p_clock = PTHREAD_MUTEX_INITIALIZER;
++      replace_spin_keys (&t->spin_keys, new_spin_keys);
++      /* Implicit native attachments always auto-retire. POSIX-created
++         joinable records remain until join or a later detach consumes them. */
++      if (t->thread_noposix || !t->h || (t->p_state & PTHREAD_CREATE_DETACHED))
++        {
++          t->valid = DEAD_THREAD;
++          if (t->h)
++            ReleaseThreadHandleAlias (t, t->h);
++          t->h = NULL;
++          push_pthread_mem (t);
++        }
++      /* No record access after retirement or after releasing its registry. */
++      pthread_mutex_unlock (&mtx_pthr_locked);
+     }
+ }
+ 
+@@ -1072,9 +1077,13 @@
+   t->h = NULL; //GetCurrentThread();
+   if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &t->h, 0, FALSE, DUPLICATE_SAME_ACCESS))
+     abort ();
++  pthread_mutex_lock (&mtx_pthr_locked);
++  t->cpu_handle = t->h;
++  pthread_mutex_unlock (&mtx_pthr_locked);
+   t->sched.sched_priority = GetThreadPriority(t->h);
+   t->ended = 0;
+   t->thread_noposix = 1;
++  t->tls_pending = 1;
+ 
+   /* Save for later */
+   if (!TlsSetValue(_pthread_tls, t))
+@@ -1100,6 +1109,40 @@
+   return (!t ? NULL : t->evStart);
+ }
+ 
++/* Versioned atomic capability acquisition. Invalid pthread_t values are
++   map keys only: never dereference a caller-supplied integer as a pointer.
++   cpu_handle cannot be closed/reused until push_pthread_mem takes this lock. */
++int
++gesher_winpthread_dup_cpu_handle_v1 (pthread_t thread, void **owned_handle,
++                                     unsigned long long *generation)
++{
++  _pthread_v *record;
++  HANDLE duplicate = NULL;
++  int result = ESRCH;
++  if (owned_handle == NULL || generation == NULL)
++    return EINVAL;
++  pthread_mutex_lock (&mtx_pthr_locked);
++  record = __pthread_get_pointer (thread);
++  if (record != NULL && record->cpu_handle != NULL
++      && record->cpu_generation != 0
++      && WaitForSingleObject (record->cpu_handle, 0) == WAIT_TIMEOUT)
++    {
++      if (DuplicateHandle (GetCurrentProcess (), record->cpu_handle,
++                           GetCurrentProcess (), &duplicate,
++                           THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
++                           FALSE, 0))
++        {
++          *owned_handle = duplicate;
++          *generation = record->cpu_generation;
++          result = 0;
++        }
++      else
++        result = EAGAIN;
++    }
++  pthread_mutex_unlock (&mtx_pthr_locked);
++  return result;
++}
++
+ /* Internal helper for getting thread handle of thread T.  */
+ void *
+ pthread_gethandle (pthread_t t)
+@@ -1144,37 +1187,16 @@
+   if (id->thread_noposix == 0)
+     longjmp(id->jb, 1);
+ 
+-  /* Make sure we free ourselves if we are detached */
+-  if ((t = (_pthread_v *)TlsGetValue(_pthread_tls)) != NULL)
+-    {
+-      if (!t->h)
+-	{
+-	  t->valid = DEAD_THREAD;
+-	  if (t->evStart)
+-	    CloseHandle (t->evStart);
+-	  t->evStart = NULL;
+-	  rslt = (unsigned) (size_t) t->ret_arg;
+-	  push_pthread_mem(t);
+-	  t = NULL;
+-	  TlsSetValue (_pthread_tls, t);
+-	}
+-      else
+-	{
+-	  rslt = (unsigned) (size_t) t->ret_arg;
+-	  t->ended = 1;
+-	  if (t->evStart)
+-	    CloseHandle (t->evStart);
+-	  t->evStart = NULL;
+-	  if ((t->p_state & PTHREAD_CREATE_DETACHED) == PTHREAD_CREATE_DETACHED)
+-	    {
+-	      t->valid = DEAD_THREAD;
+-	      CloseHandle (t->h);
+-	      t->h = NULL;
+-	      push_pthread_mem(t);
+-	      t = NULL;
+-	      TlsSetValue(_pthread_tls, t);
+-	    }
+-	}
++  /* Native attachments retain their TLS owner through _endthreadex. The
++     final DLL callback auto-retires them, including the ordinary joinable
++     default; publishing ended alone never transfers that ownership. */
++  t = (_pthread_v *) TlsGetValue (_pthread_tls);
++  if (t != NULL)
++    {
++      pthread_mutex_lock (&mtx_pthr_locked);
++      rslt = (unsigned) (size_t) t->ret_arg;
++      t->ended = 1; /* key destructors have already run above */
++      pthread_mutex_unlock (&mtx_pthr_locked);
+     }
+   /* Time to die */
+   _endthreadex(rslt);
+@@ -1562,7 +1584,9 @@
+   pthread_mutex_lock (&mtx_pthr_locked);
+   pthread_mutex_lock (&tv->p_clock);
+   _pthread_once_raw(&_pthread_tls_once, pthread_tls_init);
+-  TlsSetValue(_pthread_tls, tv);
++  tv->tls_pending = 1;
++  if (!TlsSetValue(_pthread_tls, tv))
++    abort ();
+   tv->tid = GetCurrentThreadId();
+   pthread_mutex_unlock (&tv->p_clock);
+ 
+@@ -1584,28 +1608,16 @@
+ 
+   pthread_mutex_lock (&tv->p_clock);
+   rslt = (unsigned) (size_t) tv->ret_arg;
+-  /* Make sure we free ourselves if we are detached */
+   if (tv->evStart)
+     CloseHandle (tv->evStart);
+   tv->evStart = NULL;
+-  if (!tv->h)
+-    {
+-      tv->valid = DEAD_THREAD;
+-      pthread_mutex_unlock (&tv->p_clock);
+-      pthread_mutex_destroy (&tv->p_clock);
+-      push_pthread_mem (tv);
+-      tv = NULL;
+-      TlsSetValue (_pthread_tls, tv);
+-    }
+-  else
+-    {
+-      pthread_mutex_unlock (&tv->p_clock);
+-      pthread_mutex_destroy (&tv->p_clock);
+-      /* Reinitialise p_clock, since there may be attempts at
+-         destroying it again in __dyn_tls_thread later on. */
+-      tv->p_clock = PTHREAD_MUTEX_INITIALIZER;
+-      tv->ended = 1;
+-    }
++  pthread_mutex_unlock (&tv->p_clock);
++  pthread_mutex_destroy (&tv->p_clock);
++  tv->p_clock = PTHREAD_MUTEX_INITIALIZER;
++  /* Both joinable and detached records remain TLS-owned until the final
++     supplier callback. A peer can detach after this publication while CRT
++     and DLL callbacks are still running; it must not recycle our record. */
++  tv->ended = 1;
+   while (pthread_mutex_unlock (&mtx_pthr_locked) == 0)
+    Sleep (0);
+   _endthreadex (rslt);
+@@ -1707,12 +1719,15 @@
+     }
+     SetThreadPriority (thrd, pr);
+   }
++  pthread_mutex_lock (&mtx_pthr_locked);
++  tv->cpu_handle = thrd;
++  pthread_mutex_unlock (&mtx_pthr_locked);
+   ResetEvent (tv->evStart);
+   if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0)
+     {
+       tv->h = 0;
+       ResumeThread (thrd);
+-      CloseHandle (thrd);
++      /* No record access after resume: a detached thread may retire now. */
+     }
+   else
+     {
+@@ -1723,23 +1738,48 @@
+   return 0;
+ }
+ 
++/* Caller holds the recursive thread registry. This checks the validated
++   record's existing native object, never attaches the calling thread and never
++   creates a duplicate handle. A numeric TID match alone is insufficient: an old
++   signaled thread object can retain a TID which Windows later reuses. */
++static int
++is_current_native_thread_locked (_pthread_v *target, pthread_t id)
++{
++  DWORD current=GetCurrentThreadId ();
++  if (!target || __pthread_get_pointer(id)!=target || target->x!=id ||
++      target->tid!=current || !TEST_HANDLE(target->h))
++    return 0;
++  HANDLE native=target->h;
++  DWORD actual=GetThreadId (native);
++  return actual!=0 && actual==current &&
++      WaitForSingleObject(native,0)==WAIT_TIMEOUT;
++}
++
+ int
+ pthread_join (pthread_t t, void **res)
+ {
+-  struct _pthread_v *tv = __pth_gpointer_locked (t);
++  struct _pthread_v *tv;
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+ 
+-  CHECK_OBJECT(tv, ESRCH);
+-
+-  if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0)
+-    return EINVAL;
+-  if (pthread_equal(pthread_self(), t))
+-    return EDEADLK;
++  pthread_mutex_lock (&mtx_pthr_locked);
++  tv=__pthread_get_pointer(t);
++  /* Same CHECK_OBJECT handle test, with registry released on every error. */
++  if (!tv || !TEST_HANDLE(tv->h)) {
++    pthread_mutex_unlock (&mtx_pthr_locked); return ESRCH;
++  }
++  if ((tv->p_state & PTHREAD_CREATE_DETACHED) != 0) {
++    pthread_mutex_unlock (&mtx_pthr_locked); return EINVAL;
++  }
++  if (is_current_native_thread_locked(tv,t)) {
++    pthread_mutex_unlock (&mtx_pthr_locked); return EDEADLK;
++  }
++  /* Never hold registry across the existing blocking native join wait. */
++  pthread_mutex_unlock (&mtx_pthr_locked);
+ 
+   /* pthread_testcancel (); */
+   if (tv->ended == 0 || (tv->h != NULL && tv->h != INVALID_HANDLE_VALUE))
+     WaitForSingleObject (tv->h, INFINITE);
+-  CloseHandle (tv->h);
++  ReleaseThreadHandleAlias (tv, tv->h);
+   if (tv->evStart)
+     CloseHandle (tv->evStart);
+   tv->evStart = NULL;
+@@ -1773,21 +1813,20 @@
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return EINVAL;
+     }
+-  if (pthread_equal(pthread_self(), t))
++  if (is_current_native_thread_locked(tv,t))
+     {
+       pthread_mutex_unlock (&mtx_pthr_locked);
+       return EDEADLK;
+     }
+-  if(tv->ended == 0 && WaitForSingleObject(tv->h, 0))
+-    {
+-      if (tv->ended == 0)
+-        {
+-	      pthread_mutex_unlock (&mtx_pthr_locked);
+-	      /* pthread_testcancel (); */
+-	      return EBUSY;
+-	    }
+-    }
+-  CloseHandle (tv->h);
++  /* ended is published before CRT callbacks can finish. Only actual kernel
++     completion permits consuming/recycling this existing native object. */
++  if (WaitForSingleObject(tv->h,0)!=WAIT_OBJECT_0)
++    {
++      pthread_mutex_unlock (&mtx_pthr_locked);
++      /* pthread_testcancel (); */
++      return EBUSY;
++    }
++  ReleaseThreadHandleAlias (tv, tv->h);
+   if (tv->evStart)
+     CloseHandle (tv->evStart);
+   tv->evStart = NULL;
+@@ -1809,11 +1848,12 @@
+ pthread_detach (pthread_t t)
+ {
+   int r = 0;
+-  struct _pthread_v *tv = __pth_gpointer_locked (t);
++  struct _pthread_v *tv;
+   HANDLE dw;
+   pthread_spinlock_t new_spin_keys = PTHREAD_SPINLOCK_INITIALIZER;
+ 
+   pthread_mutex_lock (&mtx_pthr_locked);
++  tv = __pthread_get_pointer (t);
+   if (!tv || !TEST_HANDLE(tv->h))
+     {
+       pthread_mutex_unlock (&mtx_pthr_locked);
+@@ -1831,8 +1871,11 @@
+   _ReadWriteBarrier();
+   if (dw)
+     {
+-      CloseHandle (dw);
+-      if (tv->ended)
++      ReleaseThreadHandleAlias (tv, dw);
++      /* An ended wrapper can still have pending CRT/DLL TLS callbacks.
++         The final callback retires a detached record; if it already ran,
++         detach is the final owner and may reclaim without blocking. */
++      if (tv->ended && !tv->tls_pending)
+ 	{
+ 	  if (tv->evStart)
+ 	    CloseHandle (tv->evStart);
+--- a/mingw-w64-libraries/winpthreads/src/thread.h
++++ b/mingw-w64-libraries/winpthreads/src/thread.h
+@@ -39,7 +39,10 @@
+     void *(* func)(void *);
+     _pthread_cleanup *clean;
+     int nobreak;
+-    HANDLE h;
++    HANDLE h; /* bookkeeping alias; cpu_handle owns the kernel handle */
++    HANDLE cpu_handle;
++    unsigned long long cpu_generation;
++    int tls_pending; /* final TLS callback still owns this record */
+     HANDLE evStart;
+     pthread_mutex_t p_clock;
+     int cancelled : 2;
+--- a/mingw-w64-libraries/winpthreads/include/pthread.h
++++ b/mingw-w64-libraries/winpthreads/include/pthread.h
+@@ -146,7 +146,6 @@
+ #define pthread_atfork(F1,F2,F3) 0
+ 
+ /* unsupported stuff: */
+-#define pthread_getcpuclockid(T, C) ENOTSUP
+ #define pthread_attr_getguardsize(A, S) ENOTSUP
+ #define pthread_attr_setguardsize(A, S) ENOTSUP
+ 
+@@ -312,6 +311,14 @@
+ WINPTHREAD_API int         pthread_setspecific(pthread_key_t key, const void *value);
+ 
+ WINPTHREAD_API pthread_t pthread_self(void);
++WINPTHREAD_API int __cdecl pthread_getcpuclockid(pthread_t, clockid_t *);
++/* Gesher private supplier ABI. MS/Windows calling convention, not bionic.
++   On success the caller owns *owned_handle and must CloseHandle it.
++   Outputs are unchanged on error. The generation never recycles. */
++#define GESHER_WINPTHREAD_CPU_AUTHORITY_API 1
++WINPTHREAD_API int gesher_winpthread_dup_cpu_handle_v1
++  (pthread_t thread, void **owned_handle, unsigned long long *generation);
++
+ WINPTHREAD_API int       pthread_once(pthread_once_t *o, void (*func)(void));
+ WINPTHREAD_API void      pthread_testcancel(void);
+ WINPTHREAD_API int       pthread_equal(pthread_t t1, pthread_t t2);
+--- a/mingw-w64-libraries/winpthreads/src/clock.c
++++ b/mingw-w64-libraries/winpthreads/src/clock.c
+@@ -20,6 +20,8 @@
+ 
+ /* public header files */
+ #include "pthread_time.h"
++#include "pthread.h"
++#include <limits.h>
+ /* internal header files */
+ #include "misc.h"
+ 
+@@ -38,6 +40,112 @@
+         return -1;
+     }
+     return 0;
++}
++
++/* N28 component: one shared winpthread DLL owns both pthread identities and
++   dynamic clock IDs. This is not enabled in the Gesher product build yet. */
++typedef struct {
++    HANDLE handle;
++    unsigned long long generation;
++    clockid_t id;
++} gesher_cpu_clock_slot;
++
++static SRWLOCK gesher_cpu_clock_lock = SRWLOCK_INIT;
++static gesher_cpu_clock_slot gesher_cpu_clocks[256];
++/* Opaque host clock IDs keep Linux's per-thread/SCHED low bits, but do not
++   encode a reusable Windows TID. They never overlap fixed clocks or recycle. */
++#define GESHER_CPU_CLOCK_FIRST (-1073741818)
++static int64_t gesher_cpu_clock_next = GESHER_CPU_CLOCK_FIRST;
++
++static void gesher_cpu_clock_reap(void)
++{
++    unsigned i;
++    for (i = 0; i < 256; ++i) {
++        gesher_cpu_clock_slot *slot = &gesher_cpu_clocks[i];
++        if (slot->handle && WaitForSingleObject(slot->handle, 0) == WAIT_OBJECT_0) {
++            CloseHandle(slot->handle);
++            *slot = (gesher_cpu_clock_slot){0};
++        }
++    }
++}
++
++int pthread_getcpuclockid(pthread_t thread, clockid_t *out)
++{
++    void *owned = NULL;
++    unsigned long long generation = 0;
++    unsigned i;
++    int result, saved_errno = errno;
++    if (!out) return EINVAL;
++    result = gesher_winpthread_dup_cpu_handle_v1(thread, &owned, &generation);
++    if (result) { errno = saved_errno; return result; }
++    AcquireSRWLockExclusive(&gesher_cpu_clock_lock);
++    gesher_cpu_clock_reap();
++    if (WaitForSingleObject(owned, 0) != WAIT_TIMEOUT) {
++        result = ESRCH;
++        goto done;
++    }
++    for (i = 0; i < 256; ++i) {
++        if (gesher_cpu_clocks[i].handle && gesher_cpu_clocks[i].generation == generation) {
++            *out = gesher_cpu_clocks[i].id;
++            result = 0;
++            goto done;
++        }
++    }
++    result = EAGAIN;
++    if (gesher_cpu_clock_next >= INT_MIN) {
++        for (i = 0; i < 256; ++i) {
++            if (!gesher_cpu_clocks[i].handle) {
++                gesher_cpu_clocks[i] = (gesher_cpu_clock_slot){owned, generation, (clockid_t)gesher_cpu_clock_next};
++                gesher_cpu_clock_next -= 8;
++                *out = gesher_cpu_clocks[i].id;
++                owned = NULL;
++                result = 0;
++                break;
++            }
++        }
++    }
++done:
++    ReleaseSRWLockExclusive(&gesher_cpu_clock_lock);
++    if (owned) CloseHandle(owned);
++    errno = saved_errno;
++    return result;
++}
++
++static int gesher_cpu_clock_read(clockid_t id, struct _timespec64 *out, int resolution)
++{
++    unsigned i;
++    int result = EINVAL;
++    AcquireSRWLockExclusive(&gesher_cpu_clock_lock);
++    gesher_cpu_clock_reap();
++    for (i = 0; i < 256; ++i) {
++        FILETIME created, exited, kernel, user;
++        uint64_t ticks;
++        if (!gesher_cpu_clocks[i].handle || gesher_cpu_clocks[i].id != id) continue;
++        if (resolution) {
++            DWORD adjustment, increment;
++            BOOL disabled;
++            /* Match this provider's fixed thread CPU clock resolution.
++               FILETIME's 100-ns representation is not clock precision. */
++            if (!GetSystemTimeAdjustment(&adjustment, &increment, &disabled)) break;
++            if (out) {
++                uint64_t nanos = (uint64_t)increment * 100;
++                out->tv_sec = nanos / POW10_9;
++                out->tv_nsec = (long)(nanos % POW10_9);
++            }
++            result = 0;
++            break;
++        }
++        if (!out) { result = EFAULT; break; }
++        if (!GetThreadTimes(gesher_cpu_clocks[i].handle, &created, &exited, &kernel, &user)) break;
++        ticks = ((uint64_t)kernel.dwHighDateTime << 32) | kernel.dwLowDateTime;
++        ticks += ((uint64_t)user.dwHighDateTime << 32) | user.dwLowDateTime;
++        out->tv_sec = ticks / POW10_7;
++        out->tv_nsec = (long)((ticks % POW10_7) * 100);
++        result = 0;
++        break;
++    }
++    ReleaseSRWLockExclusive(&gesher_cpu_clock_lock);
++    return lc_set_errno(result);
+ }
+ 
+ /**
+@@ -62,6 +170,7 @@
+ static int __clock_getres(clockid_t clock_id, struct _timespec64 *res)
+ {
+     clockid_t id = clock_id;
++    if (clock_id <= GESHER_CPU_CLOCK_FIRST) return gesher_cpu_clock_read(clock_id, res, 1);
+ 
+     if (id == CLOCK_REALTIME && _pthread_get_system_time_best_as_file_time == GetSystemTimeAsFileTime)
+         id = CLOCK_REALTIME_COARSE; /* GetSystemTimePreciseAsFileTime() not available */
+@@ -124,6 +233,7 @@
+ static int __clock_gettime(clockid_t clock_id, struct _timespec64 *tp)
+ {
+     unsigned __int64 t;
++    if (clock_id <= GESHER_CPU_CLOCK_FIRST) return gesher_cpu_clock_read(clock_id, tp, 0);
+     LARGE_INTEGER pf, pc;
+     union {
+         unsigned __int64 u64;
+@@ -297,6 +407,8 @@
+ {
+     struct _timespec64 tp64 = {0};
+ 
++    if (!tp && clock_id <= GESHER_CPU_CLOCK_FIRST)
++        return __clock_getres (clock_id, NULL);
+     if (__clock_getres (clock_id, &tp64) == -1)
+         return -1;
+ 
+@@ -310,6 +422,8 @@
+ {
+     struct _timespec64 tp64 = {0};
+ 
++    if (!tp && clock_id <= GESHER_CPU_CLOCK_FIRST)
++        return __clock_gettime (clock_id, NULL);
+     if (__clock_gettime (clock_id, &tp64) == -1)
+         return -1;
+ 
