@@ -522,6 +522,22 @@ int BIONIC_SYSV Sigismember(const uint64_t* set, int sig) {
   return (*set & Bit(sig)) != 0 ? 1 : 0;
 }
 
+// Android 16 Bionic's filter_reserved_signals, applied to a requested set
+// before pthread_sigmask/sigprocmask and sigsuspend use it: signal 32 belongs
+// to POSIX timers and stays blocked; runtime signals 33..41 must not become
+// blocked through the public mask functions. For SIG_UNBLOCK the roles swap.
+// sigsuspend filters its mask with SIG_SETMASK semantics.
+uint64_t FilterReservedSignals(uint64_t set, int how) {
+  if (how == kSigUnblock) {
+    set &= ~Bit(32);
+    for (int sig = 33; sig < kSigrtMin; ++sig) set |= Bit(sig);
+  } else {
+    set |= Bit(32);
+    for (int sig = 33; sig < kSigrtMin; ++sig) set &= ~Bit(sig);
+  }
+  return set;
+}
+
 int BIONIC_SYSV PthreadSigmask(int how, const uint64_t* set, uint64_t* old) {
   ThreadState* self = Self();
   if (self == nullptr) return kEAGAIN;
@@ -532,19 +548,9 @@ int BIONIC_SYSV PthreadSigmask(int how, const uint64_t* set, uint64_t* old) {
   }
   if (set != nullptr) {
     if (how != kSigBlock && how != kSigUnblock && how != kSigSetmask) return kEINVAL;
-    // Match Android 16 Bionic's filter_reserved_signals on the REQUEST,
-    // before applying the operation. Filtering the resulting mask instead
+    // Filtering the request, not the resulting mask: filtering the result
     // would change pre-existing reserved bits even for SIG_BLOCK/UNBLOCK.
-    // Signal 32 belongs to POSIX timers; runtime signals 33..41 must not be
-    // newly blocked through the public mask functions.
-    uint64_t requested = *set;
-    if (how == kSigUnblock) {
-      requested &= ~Bit(32);
-      for (int sig = 33; sig < kSigrtMin; ++sig) requested |= Bit(sig);
-    } else {
-      requested |= Bit(32);
-      for (int sig = 33; sig < kSigrtMin; ++sig) requested &= ~Bit(sig);
-    }
+    uint64_t requested = FilterReservedSignals(*set, how);
     uint64_t next;
     switch (how) {
       case kSigBlock: next = current | requested; break;
@@ -688,36 +694,49 @@ int TakeWaiting(ThreadState* self, uint64_t want, BionicSiginfo* info,
   }
 }
 
+// Android 16 sigtimedwait64 (and sigwait64/sigwaitinfo64 through it) passes
+// the set through filter_reserved_signals(set, SIG_SETMASK): signal 32 is
+// added and 33..SIGRTMIN-1 are removed. rt_sigtimedwait then drops SIGKILL and
+// SIGSTOP and fails with EFAULT for a null set before reading the timeout.
+uint64_t WaitSet(uint64_t set) {
+  return FilterReservedSignals(set, kSigSetmask) & ~(Bit(kSigkill) | Bit(kSigstop));
+}
+
 int BIONIC_SYSV Sigwait(const uint64_t* set, int* sig) {
+  if (set == nullptr) return kEFAULT;
   ThreadState* self = Self();
   if (self == nullptr) return kEAGAIN;
-  int s = TakeWaiting(self, *set, nullptr, nullptr);
+  int s = TakeWaiting(self, WaitSet(*set), nullptr, nullptr);
   *sig = s;
   return 0;
 }
 int BIONIC_SYSV Sigwaitinfo(const uint64_t* set, BionicSiginfo* info) {
+  if (set == nullptr) return errno = kEFAULT, -1;
   ThreadState* self = Self();
   if (self == nullptr) return errno = kEAGAIN, -1;
-  return TakeWaiting(self, *set, info, nullptr);
+  return TakeWaiting(self, WaitSet(*set), info, nullptr);
 }
 int BIONIC_SYSV Sigtimedwait(const uint64_t* set, BionicSiginfo* info, const LinuxTimespec* ts) {
+  if (set == nullptr) return errno = kEFAULT, -1;
   if (ts == nullptr) return Sigwaitinfo(set, info);
   if (ts->tv_sec < 0 || ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000) return errno = kEINVAL, -1;
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(ts->tv_sec) +
                   std::chrono::nanoseconds(ts->tv_nsec);
   ThreadState* self = Self();
   if (self == nullptr) return errno = kEAGAIN, -1;
-  int sig = TakeWaiting(self, *set, info, &deadline);
+  int sig = TakeWaiting(self, WaitSet(*set), info, &deadline);
   return sig != 0 ? sig : (errno = kEAGAIN, -1);
 }
 
 // sigsuspend: with `mask` in place, waits for a signal it lets through, runs
-// it and returns -1/EINTR with the old mask back.
+// it and returns -1/EINTR with the old mask back. Like rt_sigsuspend, a null
+// mask fails with EFAULT.
 int BIONIC_SYSV Sigsuspend(const uint64_t* mask) {
+  if (mask == nullptr) return errno = kEFAULT, -1;
   ThreadState* self = Self();
   if (self == nullptr) return errno = kEAGAIN, -1;
   uint64_t saved = self->mask;
-  self->mask = *mask & ~(Bit(kSigkill) | Bit(kSigstop));
+  self->mask = FilterReservedSignals(*mask, kSigSetmask) & ~(Bit(kSigkill) | Bit(kSigstop));
   BionicSiginfo info;
   for (;;) {
     BionicSigaction act;
@@ -734,10 +753,10 @@ int BIONIC_SYSV Sigsuspend(const uint64_t* mask) {
   DeliverAll(self);
   return errno = kEINTR, -1;
 }
+// Android 16 pause() is sigsuspend64 with an empty set, so it waits with only
+// the reserved timer signal blocked, not with the caller's current mask.
 int BIONIC_SYSV Pause() {
-  ThreadState* self = Self();
-  if (self == nullptr) return errno = kEAGAIN, -1;
-  uint64_t mask = self->mask;
+  const uint64_t mask = 0;
   return Sigsuspend(&mask);
 }
 

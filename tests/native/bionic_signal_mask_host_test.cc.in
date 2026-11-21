@@ -5,10 +5,14 @@
 // Translator code classification and handler invocation are explicit boundaries;
 // accepting native SA_SIGINFO here does not qualify its Windows ucontext frame.
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cerrno>
+#include <cstdlib>
 #include <mutex>
+#include <thread>
 #include <vector>
 #include "gesher/pending_signals.h"
 #define BIONIC_SYSV __attribute__((sysv_abi))
@@ -25,9 +29,11 @@ struct ThreadState {
   gesher::signals::Pending<BionicSiginfo> pending;
   std::atomic<bool> any_pending{false};
   BionicStack alt_stack{nullptr, 2 /* SS_DISABLE */, 0};
+  uint64_t waiting_for = 0;
 };
 struct State {
   std::mutex mutex;
+  std::condition_variable sent;
   BionicSigaction actions[kNsig] = {};
   gesher::signals::Pending<BionicSiginfo> process_pending;
 };
@@ -53,6 +59,8 @@ struct Delivery {
   BionicSiginfo info;
   BionicSigaction action;
   uint64_t mask;
+  uint64_t return_mask;
+  bool has_return_mask;
 };
 static std::vector<Delivery> dispatched;
 static int deliveries, change_before_delivery, change_after_dispatch;
@@ -68,8 +76,9 @@ static void ChangeAction(int& sig) {
   sig = 0;
 }
 void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info,
-              const BionicSigaction& action) {
-  dispatched.push_back({sig, info, action, self->mask});
+              const BionicSigaction& action, const uint64_t* return_mask = nullptr) {
+  dispatched.push_back({sig, info, action, self->mask,
+                        return_mask != nullptr ? *return_mask : 0, return_mask != nullptr});
   ChangeAction(change_after_dispatch);
 }
 namespace production_delivery {
@@ -85,6 +94,11 @@ int DeliverAll(ThreadState* self) {
 }
 
 @ENTRY_POINTS@
+
+// sigwait/sigsuspend/pause and the production wait they use. Every case queues
+// an already-deliverable record first or uses a zero timeout, so a correct wait
+// returns without blocking; a watchdog fails a wait that blocks instead.
+@SUSPEND@
 
 static int checks, failures;
 static const char* phase = "original";
@@ -401,7 +415,131 @@ static void DeliveryFailures() {
   }
 }
 
+// Android 16 sigsuspend64 filters its mask with filter_reserved_signals(set,
+// SIG_SETMASK): signal 32 is blocked and runtime signals 33..41 are not while
+// the call waits; the previous mask comes back unchanged afterwards.
+static void SuspendMasks() {
+  phase = "sigsuspend reserved-signal filter";
+  constexpr uint64_t runtime = UINT64_C(0x1ff) << 32;
+  constexpr uint64_t unmaskable = (UINT64_C(1) << 8) | (UINT64_C(1) << 18);
+  struct SuspendCase { const char* name; uint64_t initial, input, expected; bool pause; };
+  const SuspendCase cases[] = {
+    {"empty sigsuspend mask keeps the timer signal blocked", timer_bit | high_bit, 0, timer_bit, false},
+    {"reserved sigsuspend mask leaves runtime signals unblocked", 0, timer_bit | runtime, timer_bit, false},
+    {"full sigsuspend mask except the awaited signal", timer_bit,
+     UINT64_MAX & ~low_bit, UINT64_MAX & ~low_bit & ~runtime & ~unmaskable, false},
+    // Android 16 pause() is sigsuspend64 with an empty set: it waits with only
+    // the timer signal blocked, whatever the caller's current mask is.
+    {"pause waits with an empty filtered mask", timer_bit | high_bit, 0, timer_bit, true},
+    {"pause delivers a pending signal the thread blocks", timer_bit | low_bit, 0, timer_bit, true},
+  };
+  for (const auto& c : cases) {
+    ++variation;
+    Reset(c.initial);
+    Queue(false, 10, 801);
+    uint64_t input = c.input;
+    errno = ERANGE;
+    const int rc = c.pause ? Pause() : Sigsuspend(&input);
+    const int observed_errno = errno;
+    check(c.name, dispatched.size() == 1 && dispatched[0].sig == 10 &&
+                  dispatched[0].mask == c.expected);
+    check("sigsuspend reports the previous mask as the handler's return mask",
+          dispatched.size() == 1 && dispatched[0].has_return_mask &&
+          dispatched[0].return_mask == c.initial);
+    check("sigsuspend returns -1/EINTR with the previous mask restored",
+          rc == -1 && observed_errno == EINTR && state.mask == c.initial);
+    check("sigsuspend leaves its input unchanged", input == c.input);
+    check("sigsuspend consumes the delivered record", state.pending.Mask() == 0);
+  }
+}
+
+// Android 16 sigtimedwait64/sigwait64/sigwaitinfo64 filter the wait set with
+// filter_reserved_signals(set, SIG_SETMASK) and rt_sigtimedwait drops SIGKILL
+// and SIGSTOP. A null set fails with EFAULT before the timeout is examined.
+static void WaitSets() {
+  phase = "sigwait reserved-signal filter";
+  const LinuxTimespec zero{0, 0};
+  variation = 0;
+  Reset(timer_bit);
+  Queue(false, 33, 901);
+  uint64_t set = Bit(33);
+  BionicSiginfo info{};
+  errno = ERANGE;
+  int rc = Sigtimedwait(&set, &info, &zero);
+  check("a runtime-reserved signal is removed from the wait set",
+        rc == -1 && errno == EAGAIN && set == Bit(33));
+  CheckRetained(false, 33, 901);
+
+  variation = 1;
+  Reset(timer_bit);
+  Queue(false, 32, 902);
+  set = 0;
+  info = {};
+  rc = Sigtimedwait(&set, &info, &zero);
+  check("the timer signal is added to the wait set",
+        rc == 32 && IsRecord(info, 32, 902) && set == 0 && state.pending.Mask() == 0);
+
+  variation = 2;
+  Reset(timer_bit);
+  // Raw pending SIGKILL state: rt_sigtimedwait never waits for it.
+  Queue(false, kSigkill, 903);
+  Queue(false, 10, 904);
+  set = Bit(kSigkill) | low_bit;
+  info = {};
+  rc = Sigwaitinfo(&set, &info);
+  check("SIGKILL is removed from the wait set", rc == 10 && IsRecord(info, 10, 904));
+  CheckRetained(false, kSigkill, 903);
+
+  variation = 3;
+  Reset(timer_bit | low_bit);
+  Queue(true, 10, 905);
+  set = low_bit;
+  int sig = 0;
+  errno = ERANGE;
+  rc = Sigwait(&set, &sig);
+  check("sigwait takes a blocked public signal and preserves errno",
+        rc == 0 && sig == 10 && errno == ERANGE && S().process_pending.Mask() == 0 &&
+        state.mask == (timer_bit | low_bit) && dispatched.empty());
+
+  phase = "null signal sets";
+  variation = 0;
+  Reset(timer_bit | low_bit);
+  Queue(false, 10, 906);
+  errno = ERANGE;
+  rc = Sigsuspend(nullptr);
+  check("sigsuspend(nullptr) fails with EFAULT", rc == -1 && errno == EFAULT);
+  check("failed sigsuspend keeps mask and record",
+        state.mask == (timer_bit | low_bit) && dispatched.empty() && deliveries == 0);
+  sig = -7;
+  errno = ERANGE;
+  rc = Sigwait(nullptr, &sig);
+  check("sigwait(nullptr) returns EFAULT without writing sig or errno",
+        rc == EFAULT && sig == -7 && errno == ERANGE);
+  errno = ERANGE;
+  rc = Sigwaitinfo(nullptr, &info);
+  check("sigwaitinfo(nullptr) fails with EFAULT", rc == -1 && errno == EFAULT);
+  const LinuxTimespec invalid{0, -1};
+  errno = ERANGE;
+  rc = Sigtimedwait(nullptr, &info, &invalid);
+  check("sigtimedwait(nullptr) fails with EFAULT before checking the timeout",
+        rc == -1 && errno == EFAULT);
+  CheckRetained(false, 10, 906);
+}
+
+static std::mutex watchdog_mutex;
+static std::condition_variable watchdog_done;
+static bool finished;
+
 int main() {
+  // A wait that blocks would hang forever; report it as a failure instead.
+  std::thread watchdog([] {
+    std::unique_lock<std::mutex> lock(watchdog_mutex);
+    if (!watchdog_done.wait_for(lock, std::chrono::seconds(5), [] { return finished; })) {
+      std::fprintf(stderr, "FAIL a signal wait blocked instead of returning\n");
+      std::fflush(stderr);
+      std::_Exit(1);
+    }
+  });
   constexpr uint64_t timer=UINT64_C(1)<<31;
   constexpr uint64_t runtime=UINT64_C(0x1ff)<<32;
   constexpr uint64_t public_pair=(UINT64_C(1)<<9)|(UINT64_C(1)<<63);
@@ -455,9 +593,17 @@ int main() {
   UnsupportedPreflight();
   SupportedActions();
   DeliveryFailures();
+  SuspendMasks();
+  WaitSets();
   Reset(timer_bit);
   check("all fixture-owned pending records are released", queued_records == 0);
   std::printf("Bionic mask entry points: %d checks, %d failures; actual pending/action/delivery helpers; "
               "explicit registration/dispatch/accounting fixture\n", checks, failures);
+  {
+    std::lock_guard<std::mutex> lock(watchdog_mutex);
+    finished = true;
+  }
+  watchdog_done.notify_all();
+  watchdog.join();
   return failures?1:0;
 }

@@ -10,7 +10,10 @@ namespace gesher_arm64::jump {
 
 // Bionic's public ARM64 jmp_buf has 32 64-bit words (sigjmp_buf has 33).
 // Its representation is private. Keep the mask and AAPCS64 register groups
-// in the Android 16 layout, without importing libc's process-private cookie.
+// in the Android 16 layout, without importing libc's process-private cookie:
+// word 0 holds only the saved-mask flag and registers are stored unmangled.
+// Android's checksum is kept: word 24 is the XOR of words 0..23, written last
+// by every save and verified before a restore changes any state.
 // Android saves x18's low 14 shadow-stack offset bits, retaining the current
 // shadow-stack base on restore (SCS_SIZE=16KiB in bionic_constants.h).
 // Only the low 64 bits of v8-v15 are callee-saved. FPCR/FPSR are not restored
@@ -32,9 +35,21 @@ inline void Pointer(std::vector<uint32_t>& code, uint64_t address) {
 
 enum class SaveMask { Argument, Always, Never };
 
+constexpr uint32_t kChecksumWord = 24;
+
+// x12 = XOR of jmp_buf words 0..23 at x0 (Bionic's m_calculate_checksum);
+// clobbers only x2 and x12.
+inline void Checksum(std::vector<uint32_t>& code) {
+  code.push_back(0xD280000Cu);  // mov x12, #0
+  for (uint32_t word = 0; word < kChecksumWord; ++word) {
+    code.push_back(0xF9400002u | (word << 10));  // ldr x2, [x0, #word*8]
+    code.push_back(0xCA02018Cu);                 // eor x12, x12, x2
+  }
+}
+
 inline std::vector<uint32_t> Save(uint64_t sigprocmask, SaveMask mode, uint64_t invalid_flag) {
   std::vector<uint32_t> code;
-  code.reserve(40);
+  code.reserve(96);
   if (mode != SaveMask::Argument)
     code.push_back(mode == SaveMask::Always ? 0x52800021u : 0x52800001u); // mov w1, #1/0
   if (mode == SaveMask::Argument) {
@@ -69,14 +84,28 @@ inline std::vector<uint32_t> Save(uint64_t sigprocmask, SaveMask mode, uint64_t 
   code.push_back(0xD63F0200u); // blr x16
   code.push_back(0xA8C17BE0u); // ldp x0, x30, [sp], #16
   code[skip] = 0x34000002u | (static_cast<uint32_t>(code.size() - skip) << 5);
+  // After the flag and the saved mask: the checksum covers both.
+  Checksum(code);
+  code.push_back(0xF900600Cu); // str x12, [x0, #192]: checksum word
   code.push_back(0x52800000u); // mov w0, #0
   code.push_back(0xD65F03C0u); // ret
   return code;
 }
 
-inline std::vector<uint32_t> Restore(uint64_t sigprocmask) {
+// `checksum_mismatch` is a non-returning host entry: Android 16 siglongjmp
+// branches to __bionic_setjmp_checksum_mismatch, which aborts with
+// "setjmp checksum mismatch", before it touches the mask or any register.
+inline std::vector<uint32_t> Restore(uint64_t sigprocmask, uint64_t checksum_mismatch) {
   std::vector<uint32_t> code;
-  code.reserve(32);
+  code.reserve(96);
+  Checksum(code);
+  code.push_back(0xF9406002u); // ldr x2, [x0, #192]: stored checksum
+  code.push_back(0xEB0C005Fu); // cmp x2, x12
+  std::size_t valid = code.size();
+  code.push_back(0);           // b.eq checksum matches
+  Pointer(code, checksum_mismatch);
+  code.push_back(0xD61F0200u); // br x16: non-returning Android abort path
+  code[valid] = 0x54000000u | (static_cast<uint32_t>(code.size() - valid) << 5);
   code.push_back(0xB9400002u); // ldr w2, [x0]: saved-mask flag
   std::size_t skip = code.size();
   code.push_back(0);           // cbz w2, restore registers

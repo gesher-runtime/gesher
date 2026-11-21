@@ -3,8 +3,11 @@
 PR120's actual Windows2022/2025 ABI runs aborted on the missing
 `__libc_current_sigrtmin` after three ordinary setjmp checks. The public
 `SIGRTMIN` macro calls this export; substituting a fixture constant would hide
-the missing runtime API. The repair implements and registers both public range
-functions in the shared Bionic provider, preserving errno and mutable state.
+the missing runtime API. Current main already registers both public range
+functions (`LibcCurrentSigrtmin`/`LibcCurrentSigrtmax`) in the shared Bionic
+provider; this PR moves and renames them (`CurrentSigrtmin`/`CurrentSigrtmax`)
+next to the mask entry points and derives the minimum from `kSigrtMin`. The
+exported names, values, errno and mutable state are unchanged.
 
 ## Android contract
 
@@ -96,3 +99,43 @@ across suspended native callbacks remain a separate, documented failure.
 Fresh source checks and cross-compilation do not constitute a new Windows
 or shipped ART execution result. Earlier Windows receipts remain tied to
 their earlier source; required CI must execute the integrated candidate.
+
+## Review follow-up: sigsuspend and remaining sigmask limits
+
+Android 16 r4
+[`sigsuspend64`](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/signal.cpp)
+passes its mask through `filter_reserved_signals(set, SIG_SETMASK)` before
+`rt_sigsuspend`; `sigsuspend` reaches the same path, and
+[`pause`](https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/pause.cpp)
+calls `sigsuspend64` with an empty set, so it waits with only signal 32
+blocked rather than with the caller's current mask. `Sigsuspend`
+previously installed the caller's mask with only SIGKILL/SIGSTOP removed, so an
+empty mask unblocked the timer signal 32 and a full mask blocked 33–41 while
+the call waited. Both entry points now share one `FilterReservedSignals` helper
+with `PthreadSigmask`. `tools/test_bionic_signal_masks.py` runs the unchanged
+production `Sigsuspend`, `Pause` and `TakeWaiting` bodies with an already
+deliverable record and checks the mask in place at dispatch, the handler's
+return mask, `-1`/`EINTR` and the restored mask; the previous source fails
+three of these cases.
+
+Second follow-up: `Pause` previously passed the thread's current mask to
+`Sigsuspend`, so a signal the thread blocked stayed blocked and `pause` could
+wait forever while it was pending; it now passes an empty mask, as Bionic does.
+`sigtimedwait64` (and `sigwait64`/`sigwaitinfo64` through it) also filters the
+wait set with `filter_reserved_signals(set, SIG_SETMASK)`, which adds signal 32
+and removes 33–41, and `rt_sigtimedwait` drops SIGKILL and SIGSTOP; the shim
+waits now apply the same set. A null set or `sigsuspend` mask fails with
+`EFAULT` as the kernel does instead of being dereferenced (`sigwait` returns
+`EFAULT`, the others return `-1`/`EFAULT` before examining the timeout). The
+host fixture adds a `pause` case with a blocked pending SIGUSR1, zero-timeout
+wait-set cases and null-set cases; the previous source blocks in the `pause`
+case (reported by the fixture's watchdog), and with only `pause` corrected it
+fails the three wait-set cases and crashes on the null sets.
+
+Known remaining limit: `ppoll`, `pselect` and `epoll_pwait` in
+`compat/bionic/socket_bionic.cc` accept and ignore their `sigmask` argument.
+Android installs that mask atomically for the duration of the wait (after the
+same reserved-signal filtering), so a signal the caller unblocks only for the
+wait is not delivered during it here and one it blocks only for the wait is
+not held back. Implementing this requires integrating those waits with the
+shim's signal wait and delivery, which this PR does not do.

@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const run = require('./label-automerge.js');
+// Stale-state re-reads are bounded by count; the fixture needs no wall-clock delay.
+run.RELEASE_STATE.delayMs = 0;
 const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const BASE = 'c'.repeat(40);

@@ -123,6 +123,26 @@ test('a stale blocked-state read defers release until a fresh ordinary reconcili
   assert.equal(w.nativeMerges[0].stage, 'merge');
 });
 
+test('a briefly stale blocked state after the gate write is re-read and released in the same pass', async () => {
+  const w = setup(undefined, {nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+  let reads = 0;
+  w.hooks.nativeState = () => { if (++reads === 3) delete w.nativeStateOverride; };
+  await w.ciDone();
+  assert.equal(w.pr.state, 'closed');
+  assert.equal(w.nativeMerges.length, 1);
+  assert.equal(w.nativeMerges[0].stage, 'merge');
+  assert.equal(w.did('nativeWait').length, 0);
+  assert.equal(w.did('nativeState').length, 3);
+});
+
+test('a persistently blocked state is re-read a bounded number of times before deferring', async () => {
+  const w = setup(undefined, {nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+  await w.ciDone();
+  assert.equal(w.pr.state, 'open');
+  assert.equal(w.did('nativeMerge').length, 0);
+  assert.equal(w.did('nativeState').length, require('./label-automerge.js').RELEASE_STATE.attempts);
+});
+
 test('an ambiguous completed merge is read back without cleanup writes or another release', async () => {
   const w = setup(undefined, {nativeMergeResponseError: new Error('response lost')});
   await assert.rejects(w.ciDone(), /response lost/);

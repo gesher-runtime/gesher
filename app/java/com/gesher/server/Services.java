@@ -194,6 +194,7 @@ public final class Services {
                 new DeviceServices.AppWidgetService()).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new SearchManagerService(pm, am.callers())).asBinder());
+        services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 clipboard).asBinder());
         // Construct the network provider before jobs subscribe to its changes.
@@ -255,6 +256,7 @@ public final class Services {
         // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
         // their authenticators.
         AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
+        accounts.setSyncRetirement(sync::accountsRemoved);
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
                 accounts).asBinder());
         sync.start(accounts::syncableAccounts, accounts::canAccessAccount);
@@ -262,9 +264,13 @@ public final class Services {
         services.put(Context.DROPBOX_SERVICE, StandIn.of(
                 com.android.internal.os.IDropBoxManagerService.class,
                 new DeviceServices.DropBoxManagerService()).asBinder());
+        DesktopUsageStatsService usageStats = new DesktopUsageStatsService(pm, am.callers(),
+                persistentAccounts
+                        ? java.nio.file.Path.of(Device.dataDir(), "system", "activity-usage.bin")
+                        : null);
+        if (persistentAccounts) atm.setUsageStats(usageStats);
         services.put(Context.USAGE_STATS_SERVICE, StandIn.of(
-                android.app.usage.IUsageStatsManager.class,
-                new DeviceServices.UsageStatsService(pm)).asBinder());
+                android.app.usage.IUsageStatsManager.class, usageStats).asBinder());
         // StorageStatsManager: app and volume sizes for file managers and cleaners.
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,

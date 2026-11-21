@@ -54,11 +54,63 @@ the host assumptions. Every compiled upstream helper/table is prefixed
 `gesher_gdtoa_`, so it does not replace a CRT conversion routine.
 
 The upstream free list, private allocation arena, powers-of-five cache and
-hex digit table are shared. A real private mutex covers the complete parser
-call, including lazy initialization. This deliberately serializes simultaneous
-parsing calls; it avoids introducing races into the old cache algorithm.
-The measured concurrency test reports elapsed time rather than claiming a
-throughput guarantee. Allocation and numeric errors remain upstream behavior.
+hex digit table are shared. As in Bionic, the parser is compiled with
+`MULTIPLE_THREADS`; `compat/bionic/gdtoa/thread_private.h` maps upstream's two
+dtoa locks to hooks in `binary128_parse.cc`, and those locks are held only
+around free-list/arena updates (lock 0) and powers-of-five cache growth
+(lock 1). Simultaneous conversions therefore run in parallel; a 200,000-digit
+conversion (about 1.3 s here) no longer blocks every other caller.
+
+Two upstream details need more than the per-structure locks, and are handled
+without changing upstream function bodies:
+
+- `pow5mult` reads the 5^(2^k) chain without a lock, while a grower publishes
+  a new node before clearing its `next` field, and `Balloc` does not reset
+  `next` on a recycled Bigint. Each conversion holds a shared gate, and lock 1
+  takes it exclusively, so no other conversion reads the chain while it
+  grows. Taking it exclusively waits for every conversion in flight, and
+  conversions that start meanwhile can queue behind that request. Before the
+  first conversion, inside the same `std::call_once` that fills the hex
+  table, the chain is therefore grown to 5^(2^15) (nodes 5^4 through
+  5^32768, about 20 KiB, about 1.5 ms once). `strtodg` passes `pow5mult` the
+  magnitude of the decimal exponent less the fraction-digit count, with the
+  explicit exponent capped at 19999, so this covers every input with fewer
+  than about 45,000 fraction digits: the whole binary128 range, including
+  the exact 16,494-fraction-digit expansion of the least subnormal and the
+  halfway points below it. Only a longer digit string still grows the chain
+  after that, once per new node and process. That conversion then waits for
+  the conversions in flight, and other conversions that start meanwhile wait
+  for it and for the growth itself; while another long conversion is in
+  flight, that stall can last until it finishes. With no other long
+  conversion running, a 200,000-digit conversion's growth stalled short
+  conversions for about 15 ms here.
+- `Balloc` and `pow5mult` return NULL after an allocation failure with their
+  lock still held; with Bionic's mutexes that lock stays held. Lock 0 is
+  re-entrant for the failing thread, and the parse gate releases any lock
+  still held when the conversion returns. The allocation failure itself is
+  still reported as upstream does.
+
+The hex digit table is filled once with `std::call_once` before any
+conversion, instead of upstream's unsynchronized lazy check.
+`binary128_concurrency` keeps the eight-thread exact-bits check and adds a
+contention check: short conversions must complete while a 200,000-digit
+conversion is still running, with exact results for both. The previous
+whole-parse mutex fails it (no short conversion completes during the long
+one). A first-use check runs before any other conversion in the
+process, without a serial run that grows the chain: while a 200,000-digit
+conversion runs, a first `1.000000000000000000000000000000000000001e4900`
+conversion and a stream of short conversions must each finish within a
+quarter of the long conversion's time and before it ends, with results equal
+to serial ones. Without the pre-growth, the `1e4900` conversion and short
+conversions waited about 0.9–1.0 s for the long one and the check fails; with
+it, the `1e4900` conversion took under 0.1 ms and the slowest short
+conversion about 15 ms (the long conversion's own growth).
+No regression test reproduces the stale `next` race that the gate prevents:
+it needs a reader to follow a node in the few instructions between its
+publication and the clearing of its `next` field, during one of a handful of
+growths per process, so replacing the gate with a plain lock 1 does not fail
+any deterministic test. The allocation-failure release path is not exercised by a test.
+Allocation and numeric errors remain upstream behavior.
 
 All supported Bionic locales use the C numeric syntax. `USE_LOCALE` is not
 enabled, and `_l` aliases ignore their locale argument as Bionic does. Host CRT

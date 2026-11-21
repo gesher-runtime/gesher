@@ -633,3 +633,17 @@ Check 'services: a v2-signed APK answers its key, an unsigned one none' {
   $signingOut
 } @('SigningTest: a v2-signed APK answers its key, an unsigned one none',
   'SigningTest all passed')
+
+$recognitionBrokerOut = FixesRun ($dvmFixes + 'com.gesher.server.SpeechRecognitionContractTest') 45
+$recognitionBrokerCode = $LASTEXITCODE
+Check 'services: speech provider ownership, lifecycle, support and download callbacks' {
+  $global:LASTEXITCODE = $recognitionBrokerCode
+  $recognitionBrokerOut
+} @('SpeechRecognitionContractTest all passed:')
+
+$recognizerClientOut = FixesRun ($dvmFixes + 'gesher.services.SpeechRecognizerConnectionTest') 45
+$recognizerClientCode = $LASTEXITCODE
+Check 'framework: SpeechRecognizer connection callback and cancellation contracts' {
+  $global:LASTEXITCODE = $recognizerClientCode
+  $recognizerClientOut
+} @('SpeechRecognizerConnectionTest all passed:')

@@ -533,6 +533,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: PackageInstaller attached identity contracts
+        run: |
+          python3 tools/test_package_installer_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: AppOps and permission data delivery contracts
         run: |
           python3 tools/test_appops.py --java-home "$JAVA_HOME" \
@@ -582,6 +589,12 @@ jobs:
           path: work/sdk-36/android.jar
           key: sdk-public-api-36-r02-d9eb9da824d9
 
+      - name: Speech recognition dispatch and client lifecycle contracts
+        run: |
+          python3 tools/test_speech_recognition.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Durable Settings provider contracts
         run: |
           python3 tools/test_settings_provider.py --java-home "$JAVA_HOME" \
@@ -616,6 +629,15 @@ jobs:
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Persisted activity usage history contracts
+        run: |
+          "$JAVA_HOME/bin/javac" -encoding UTF-8 -d "$RUNNER_TEMP/activity-usage-classes" \
+            app/java/com/gesher/server/ActivityUsageHistory.java \
+            tests/activity-usage/ActivityUsageHistoryTest.java
+          "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/activity-usage-classes" \
+            com.gesher.server.ActivityUsageHistoryTest
+
       - name: Notification delegation ownership and durable policy contracts
         run: |
           python3 tools/test_notification_delegation.py --with-storage --java-home "$JAVA_HOME" \

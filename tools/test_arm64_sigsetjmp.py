@@ -21,6 +21,8 @@ import unicorn.arm64_const as arm
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HELPER = 0x180000
 INVALID_FLAG = 0x181000
+CHECKSUM_MISMATCH = 0x182000
+CHECKSUM_WORD = 24
 STOP = 0x1FF000
 OTHER_STOP = STOP + 0x100
 STACK = 0x218000
@@ -54,6 +56,9 @@ std::vector<uint32_t> Restore(uint64_t) { return {std::begin(kLongjmp), std::end
 }
 """
     (directory / "guest_setjmp.h").write_text(text)
+    # A historical ref may predate the checksum-mismatch entry.
+    restore = ("Restore(0x180000, 0x182000)" if "uint64_t checksum_mismatch" in text
+               else "Restore(0x180000)")
     generator = directory / "emit.cc"
     generator.write_text("""
 #include <fstream>
@@ -69,9 +74,9 @@ int main(int argc, char** argv) {
   save(argv[1], "setjmp", Save(0x180000, SaveMask::Always, 0x181000));
   save(argv[1], "_setjmp", Save(0x180000, SaveMask::Never, 0x181000));
   save(argv[1], "sigsetjmp", Save(0x180000, SaveMask::Argument, 0x181000));
-  save(argv[1], "longjmp", Restore(0x180000));
+  save(argv[1], "longjmp", RESTORE);
 }
-""")
+""".replace("RESTORE", restore))
     executable = directory / "emit"
     subprocess.run([cxx, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", str(generator), "-o", str(executable)], check=True)
     subprocess.run([str(executable), str(directory)], check=True)
@@ -94,12 +99,16 @@ class Machine:
         self.cpu.hook_add(unicorn.UC_HOOK_CODE, self.on_instruction)
         self.calls = 0
         self.invalid = None
+        self.mismatch = False
         self.returned = 0
         self.seed(1)
 
     def on_instruction(self, cpu, address, _size, _data):
         if address in (STOP, OTHER_STOP):
             self.returned = address
+            cpu.emu_stop()
+        elif address == CHECKSUM_MISMATCH:
+            self.mismatch = True
             cpu.emu_stop()
         elif address == INVALID_FLAG:
             self.invalid = cpu.reg_read(arm.UC_ARM64_REG_X0)
@@ -146,7 +155,8 @@ class Machine:
         self.cpu.reg_write(arm.UC_ARM64_REG_LR, return_address)
         self.returned = 0
         self.cpu.emu_start(ENTRIES[name], 0, count=10000)
-        assert self.returned != 0 or self.invalid is not None, f"{name} did not return within the bounded instruction budget"
+        assert self.returned != 0 or self.invalid is not None or self.mismatch, (
+            f"{name} did not return within the bounded instruction budget")
         return self.cpu.reg_read(arm.UC_ARM64_REG_X0) & 0xFFFFFFFF
 
 
@@ -201,6 +211,42 @@ def nested_and_reused(code):
     assert current_mask() == MASK_B, "_setjmp reuse must clear a prior setjmp saved-mask flag"
 
 
+def words(machine, buffer):
+    return list(struct.unpack("<32Q", machine.cpu.mem_read(buffer, 256)))
+
+
+def checksum_contract(code):
+    # Android 16 stores the XOR of words 0..23 in word 24 after the flag and
+    # mask, and siglongjmp verifies it before touching the mask or registers.
+    for name, flag in (("setjmp", 0), ("_setjmp", 0), ("sigsetjmp", 0), ("sigsetjmp", 1)):
+        m = Machine(code)
+        m.cpu.mem_write(BUFFER, bytes([0xA7]) * 256)
+        signal.pthread_sigmask(signal.SIG_SETMASK, MASK_A)
+        m.run(name, BUFFER, flag)
+        saved = words(m, BUFFER)
+        expected = 0
+        for word in saved[:CHECKSUM_WORD]:
+            expected ^= word
+        assert saved[CHECKSUM_WORD] == expected, f"{name}({flag}) stores Bionic's checksum word"
+    for word in (16, 23, 1, CHECKSUM_WORD, 0, 2, 3, 14, 15):
+        for name, flag in (("_setjmp", 0), ("sigsetjmp", 1)):
+            m = Machine(code)
+            m.cpu.mem_write(BUFFER, bytes([0xA7]) * 256)
+            signal.pthread_sigmask(signal.SIG_SETMASK, MASK_A)
+            m.run(name, BUFFER, flag)
+            calls = m.calls
+            corrupted = words(m, BUFFER)
+            corrupted[word] ^= 1 << 40
+            m.cpu.mem_write(BUFFER, struct.pack("<32Q", *corrupted))
+            signal.pthread_sigmask(signal.SIG_SETMASK, MASK_B)
+            m.seed(5, STACK - 256)
+            before = m.snapshot()
+            m.run("longjmp", BUFFER, 3, OTHER_STOP)
+            assert m.mismatch and m.returned == 0, f"corrupted word {word} after {name} reaches the checksum abort"
+            assert m.calls == calls and current_mask() == MASK_B, "checksum abort precedes mask restoration"
+            assert m.snapshot() == before, "checksum abort precedes register restoration"
+
+
 def assembly_caller(code, directory: pathlib.Path, cc: str):
     output = directory / "registers.elf"
     subprocess.run([cc, "-nostdlib", "-static", "-Wl,--no-undefined", "-Wl,-Ttext=0x110000",
@@ -241,6 +287,7 @@ def main():
                 assert machine.invalid == flag & ((1 << 64) - 1), "Android rejects flags other than 0/1"
                 assert machine.calls == 0 and current_mask() == before_mask
             nested_and_reused(code)
+            checksum_contract(code)
             def worker(index):
                 saved = current_mask()
                 try:
@@ -252,7 +299,7 @@ def main():
                 list(pool.map(worker, range(4)))
             if args.arm_cc:
                 assembly_caller(code, directory, args.arm_cc)
-            print(f"ARM64 setjmp bytecode: {cases + 48} execution cases passed; nested/reuse/thread masks and invalid-flag routing passed"
+            print(f"ARM64 setjmp bytecode: {cases + 48} execution cases passed; nested/reuse/thread masks, checksum and invalid-flag routing passed"
                   + ("; independent compiled register/FP caller passed" if args.arm_cc else ""))
             print("Boundary: Unicorn CPU + real Linux thread mask; not Windows/Dynarmic or Android Bionic execution.")
     finally:

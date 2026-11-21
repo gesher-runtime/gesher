@@ -64,6 +64,22 @@ async function nativeReleaseState(github, pr) {
   throw new Error('Native merge state cannot be released: ' + node.mergeStateStatus);
 }
 
+// The controller republishes the required QA status immediately before it reads
+// the native state, and GitHub recomputes mergeStateStatus asynchronously. An
+// immediate BLOCKED read is therefore usually stale. Without native waiting,
+// returning on it strands a green PR: every later reconciliation republishes
+// the gate first and reads the same stale state. Re-read a bounded number of
+// times before deferring. Required evidence is still rechecked after this read.
+const RELEASE_STATE = {attempts: 7, delayMs: 5000};
+async function settledReleaseState(github, pr) {
+  let mode = await nativeReleaseState(github, pr);
+  for (let attempt = 1; mode === 'blocked' && attempt < RELEASE_STATE.attempts; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, RELEASE_STATE.delayMs));
+    mode = await nativeReleaseState(github, pr);
+  }
+  return mode;
+}
+
 async function release(mergeGithub, pr) {
   await mergeGithub.graphql(`mutation($id: ID!, $head: GitObjectID!) {
     mergePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head,
@@ -258,7 +274,7 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
         await statuses.set(pr.head.sha, false);
         return await cancel(github, owner, repo, pr, mergeGithub);
       }
-      const mode = await nativeReleaseState(github, pr);
+      const mode = await settledReleaseState(github, pr);
       const finalEvent = await p.labelEvent(github, owner, repo, number);
       const finalEvidence = await ciEvidence(github, owner, repo, pr);
       if (finalEvidence.failed) {
@@ -439,6 +455,7 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
   await reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses);
 };
 module.exports.approved = approved;
+module.exports.RELEASE_STATE = RELEASE_STATE;
 module.exports.ciReady = ciReady;
 module.exports.STATUS = STATUS;
 module.exports.APP_SLUG = p.APP_SLUG;

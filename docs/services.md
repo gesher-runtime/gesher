@@ -409,6 +409,67 @@ the shared view's media on the host files. Component enabled states, memory info
 state and provider intent queries answer as Android (ADR 0087). Tests:
 tests/dex-services `SettingsIntentsTest` (tests/windows/tracks/95-browser.ps1).
 
+## Activity usage history
+
+The managed system server records confirmed activity resume, pause and stop transitions.
+Teardown closes any still-open activity interval. A covered launch can enter PAUSED
+without first resuming: that counts as visible time and never as foreground time.
+Package aggregates count overlapping activities only once per package. Filtered event
+queries use an inclusive start and an exclusive end.
+
+Daily, weekly, monthly and yearly intervals use Android's fixed 24-hour, 7-day,
+30-day and 365-day lengths, with their actual service-load/rollover origins. They
+are not aligned to Unix-epoch multiples or civil-calendar months. Queries return
+whole overlapping intervals. `INTERVAL_BEST` uses the nearest available saved
+origin at or before the query beginning, with the Android daily fallback when no
+stored interval exists.
+
+Public events remain capped at 30 days and 12,000 recent transitions. Separate
+interval totals and live instance state prevent event eviction from erasing usage.
+The interval stores use Android's 10-day, 4-week, 6-month and 2-year pruning windows
+and maximum record counts of 100, 50, 12 and 10, respectively. Completed intervals
+retain cumulative totals, not live activity maps. Public queries copy only the
+selected interval data or event suffix.
+An ordinary query returns recorded values; it does not accrue usage or roll the
+timeline. Lifecycle events and actual periodic flushes advance accounting.
+
+A background writer atomically checkpoints updates at 30-second intervals, and
+shutdown flushes pending work. Recovery ends the previous broker lifetime at the
+last saved accounting point; broker downtime adds no usage. Wall-clock corrections
+greater than two seconds rebase timestamps and interval origins together while
+preserving already recorded usage. A public query reconciles an observed clock
+correction through Android's persist/reload boundary, which drops live activity
+maps without inventing a resumed continuation. Actual rollover processing
+publishes origins before a later BEST query selects from the saved index.
+Uninstall synchronously purges the affected package's events and interval totals
+before its name can be installed again. Checkpoint decoding is transactional, and
+a 64 MiB read/write budget fails an oversized save without replacing the previous
+valid checkpoint.
+Version 3 migrates the published contributor version-2 origins, package totals,
+events and instance-ID counter directly. It stores each package's end at the
+containing interval bound so subsequent activity after an offline backward clock
+change cannot make the next checkpoint unreadable.
+
+Version 1 checkpoints can recover their surviving event suffix, but cannot recover
+already-evicted events or the real interval origins that the old format never
+stored. Migration preserves their known legacy origins and starts subsequent
+intervals at actual load times. A wall correction occurring while the broker is
+down has no trustworthy elapsed anchor: recovery does not invent a shift or
+attribute the intervening downtime to an activity.
+
+The single-process launcher provides empty usage history and never reads the
+managed device's usage file. Source contracts, format boundaries and validation
+limits are recorded in [the usage-history contract notes](research/activity-usage-contracts.md).
+
+An authenticated app can query its own events. Global queries honor the actual
+package/UID `OP_GET_USAGE_STATS` mode: allowed grants access, default falls back to
+the authenticated `PACKAGE_USAGE_STATS` permission, ignored denies access, and
+errored raises Android's `SecurityException`. Trusted control-plane callers retain
+their exemption. Gesher has no Usage Access
+permission UI yet. The activity history does not add Android Doze, app standby,
+usage-limit observers, foreground-service usage, or configuration and screen-state
+telemetry.
+
 ## Status and next steps
 
 ### Done and verified
