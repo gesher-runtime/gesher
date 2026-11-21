@@ -257,6 +257,9 @@ final class SettingsProvider extends ContentProvider {
         global.put(Settings.Global.DEVICE_NAME, "Gesher");
 
         mStore = new SettingsStore(file, mTables);
+        String recognizer = SpeechRecognitionManagerService.configuredDefault(pm,
+                System.getenv("GESHER_SPEECH_RECOGNIZER"));
+        if (recognizer != null) mStore.addDefault(SECURE, Settings.Secure.VOICE_RECOGNITION_SERVICE, recognizer);
         // Single-process mode executes app code in the server's own PID and cannot
         // authenticate a privileged writer. Never expose its process to host selection state.
         mTextStore = mPm != null && mPm.hasTransientPackageState() ? null
@@ -302,11 +305,13 @@ final class SettingsProvider extends ContentProvider {
     }
 
     private void enforceWrite(String table, String name) {
+        // Selecting the recognizer controls which APK may receive other apps' audio.
+        boolean recognizer = SECURE.equals(table) && Settings.Secure.VOICE_RECOGNITION_SERVICE.equals(name);
         boolean text = textKey(table, name);
         if (text && mTextStore == null) {
             throw new SecurityException("Spell-checker settings require the device system server");
         }
-        if (!text && !GmsSignatureSpoofing.isEnabled()) return;
+        if (!recognizer && !text && !GmsSignatureSpoofing.isEnabled()) return;
         if (android.os.Binder.getCallingPid() == Process.myPid()) return;
         if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
         if (mCallers.isSystem()) return;
