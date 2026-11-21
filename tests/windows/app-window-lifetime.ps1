@@ -209,8 +209,11 @@ public static class GesherAppTaskMenu {
     [void][GesherWin32]::PostMessageW($remaining.Window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
     AWGone $remaining
     AWRequire (-not $minimized.Process.HasExited) 'Last minimized owner did not survive a second X-close'
+    $mark = W3Mark $read
     [void][GesherW3Win32]::ShowWindowAsync($minimized.Window, 9)
     AWRequire (AWWait { -not [GesherW3Win32]::IsIconic($minimized.Window) -and [GesherWin32]::IsWindowVisible($minimized.Window) }) 'Minimized surviving task did not restore'
+    # The restored window takes input once its Activity resumes; a stopped window drops it, as on Android.
+    AWRequire ((W3Wait $read $mark 'SecondRemoteWindowActivity onTopResumedActivityChanged true' 30).Success) 'Restored minimized task did not resume'
     AWClick $minimized finish
     AWGone $minimized
 
