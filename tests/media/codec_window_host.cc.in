@@ -17,6 +17,17 @@
 #include <thread>
 #include <vector>
 
+// <gesher/perf_trace.h>'s timing sites as production runs them without
+// GESHER_PERF_TRACE (docs/media.md, "Measuring playback"): off.
+namespace gesher::perf {
+inline bool Enabled() { return false; }
+inline int64_t Now() { return 0; }
+struct Site {
+  constexpr explicit Site(const char*, int64_t = 0) {}
+  void Add(int64_t, int64_t = 0) {}
+};
+}  // namespace gesher::perf
+
 int checks = 0, failures = 0;
 void Check(bool ok, const char* reason) {
   ++checks;

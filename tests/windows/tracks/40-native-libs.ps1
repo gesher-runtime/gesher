@@ -114,6 +114,47 @@ Check 'native libs: raw syscalls, syscall(2), ptrace and regex from a .so; code 
     'raw_syscall: stack guard in code written at run time PASS',
     'raw_syscall: all passed', 'elf_load_test all passed')
 
+# AF_UNIX socketpair credentials (ADR 0088): SO_PEERCRED, SO_PASSCRED and
+# SCM_CREDENTIALS on a SOCK_SEQPACKET pair, whose framed datagrams keep their
+# boundaries, MSG_TRUNC, MSG_PEEK and FIONREAD; SCM_RIGHTS still refused.
+Check 'native libs: AF_UNIX socketpair credentials (SO_PEERCRED, SO_PASSCRED, SCM_CREDENTIALS) from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_credentials_test.so")
+} @('unix_credentials: all passed', 'elf_load_test all passed')
+
+# SCM_RIGHTS (ADR 0088 phase 2): pipes, memfds and sockets sent on SOCK_SEQPACKET
+# and SOCK_STREAM pairs through a binderd of the test's own, and without one. On
+# a SOCK_STREAM pair descriptors come with the read that returns the first byte
+# sent with them, never before it, also after the receiving end has moved.
+Check 'native libs: SCM_RIGHTS through the descriptor broker from a .so' {
+  $device = 'rights-' + [guid]::NewGuid().ToString('N')
+  $broker = Start-Process -FilePath "$Dir/binderd.exe" -ArgumentList $device -PassThru -WindowStyle Hidden
+  try {
+    Start-Sleep -Milliseconds 500
+    $env:GESHER_BINDER = $device
+    & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_rights_test.so")
+  } finally {
+    Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
+    Stop-Process -Id $broker.Id -Force -ErrorAction SilentlyContinue
+  }
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/unix_rights_test.so")
+} @('a read of the ten bytes gets no descriptor', 'the moved end reads the byte before it without a descriptor',
+    'unix_rights: all passed', 'unix_rights: all passed (without a broker)', 'elf_load_test all passed')
+
+# What getenv returned and what environ pointed at keep their bytes after the
+# variable is putenv()ed, setenv()ed or unsetenv()ed again, as bionic's
+# (mozglue's own getenv reads environ, and it caches one).
+Check 'native libs: getenv results and environ entries outlive later setenv/putenv/unsetenv from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/environment_lifetime_test.so")
+} @('the first result keeps its bytes after putenv', 'the first environ entry keeps its bytes after a new value',
+    'environment_lifetime: all passed', 'elf_load_test all passed')
+
+# The NDK's MediaDrm/MediaCrypto with no DRM plugin: no scheme is supported and
+# no object is created, as Android answers for an unsupported scheme.
+Check 'native libs: MediaDrm/MediaCrypto report no crypto scheme from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/media_drm_test.so")
+} @('AMediaDrm_isCryptoSchemeSupported is false for every scheme', 'media_drm: all passed',
+    'elf_load_test all passed')
+
 Check 'native libs: a UPX-packed .so unpacks itself with raw syscalls and runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/raw_syscall_upx.so")
 } @('unpacks its code at run time (UPX)', 'code unpacked at run time: yes',
@@ -258,6 +299,79 @@ Check 'native libs: the same EGL/GLES window surfaces on WARP' {
   $glWarpOut
 } @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device', 'readpixels=ok, swap=ok',
     'gl_window_test: GL windows read back from Windows', 'gl_window_test all passed')
+
+# AHardwareBuffer, the EGL native buffer/fence extensions and ASurfaceControl
+# (ADR 0089): surface_control_test.so (tests/native/surface_control_test.c)
+# checks buffers (CPU locks, ids, errors), images of buffers drawn by the GPU
+# and read by the CPU and the other way round (RGBA and RGBX), native fences,
+# GLES contexts current on two threads drawing in turns (ANGLE's
+# angle_force_context_check_every_call), and a SurfaceControl tree whose
+# transactions complete in order with their stats;
+# surface_control_host_test.exe reads the composed frame back from its window
+# (PrintWindow) and the empty frame once the layers leave. With a binderd of
+# the test's own, a buffer also travels over an AF_UNIX socket (SCM_RIGHTS);
+# without one that send fails. Then the same on WARP.
+Check 'native libs: AHardwareBuffer, EGL images and native fences, and ASurfaceControl composed into a Gesher window' {
+  $device = 'ahb-' + [guid]::NewGuid().ToString('N')
+  $broker = Start-Process -FilePath "$Dir/binderd.exe" -ArgumentList $device -PassThru -WindowStyle Hidden
+  try {
+    Start-Sleep -Milliseconds 500
+    $env:GESHER_BINDER = $device
+    & "$Dir/surface_control_host_test.exe" (NoDrive "$Dir/surface_control_test.so")
+  } finally {
+    Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
+    Stop-Process -Id $broker.Id -Force -ErrorAction SilentlyContinue
+  }
+} @('surface_control: ok: send/recvHandleFromUnixSocket: 0, 0',
+    'surface_control: ok: what the receiver writes, the sender reads (shared memory)',
+    'surface_control: ok: a CPU lock after the fence reads what the GPU drew (0 wrong)',
+    'surface_control: ok: the GPU reads an RGBX buffer with alpha 1 (0 wrong)',
+    'surface_control: ok: contexts current on two threads draw into their own framebuffers',
+    'surface_control: ok: transactions complete in the order applied',
+    'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
+    'ok: the window after its layers left: 0 pixel(s) not black',
+    'surface_control_test all passed')
+
+Check 'native libs: the same AHardwareBuffer and ASurfaceControl checks on WARP, without a descriptor broker' {
+  $env:GESHER_EGL_DEVICE = 'warp'
+  try {
+    & "$Dir/surface_control_host_test.exe" (NoDrive "$Dir/surface_control_test.so")
+  } finally {
+    Remove-Item Env:GESHER_EGL_DEVICE -ErrorAction SilentlyContinue
+  }
+} @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device',
+    'surface_control: ok: sendHandleToUnixSocket without a descriptor broker fails',
+    'ok: the composed layers read back from the window: 0 probe(s) wrong, 0 yellow pixel(s)',
+    'surface_control_test all passed')
+
+# The GPU kept from sleeping between the frames Gesher reads back (child
+# surfaces, SurfaceControl composition; compat/bionic/gpu_keepalive.h): on a
+# hardware adapter it gives the GPU work in the gaps of frames coming 25 a
+# second, none while frames come faster than every 10 ms, and stops a second
+# after the last frame until the next; on a software adapter (the runners'
+# Basic Render Driver, WARP) and with GESHER_GPU_KEEPALIVE=0 it stays off.
+Check 'native libs: the GPU keep-alive between frames read back (off on a software adapter)' {
+  & "$Dir/gpu_keepalive_test.exe"
+} @('gpu_keepalive_test all passed')
+
+Check 'native libs: GESHER_GPU_KEEPALIVE=0 turns the GPU keep-alive off' {
+  $env:GESHER_GPU_KEEPALIVE = '0'
+  try {
+    & "$Dir/gpu_keepalive_test.exe"
+  } finally {
+    Remove-Item Env:GESHER_GPU_KEEPALIVE -ErrorAction SilentlyContinue
+  }
+} @('GESHER_GPU_KEEPALIVE=0: the keep-alive stays off', 'gpu_keepalive_test all passed')
+
+# eglGetProcAddress and dlsym return the functions of every GL extension the
+# context advertises, ANGLE's own (gl2ext_angle.h) included: WebRender calls
+# glProvokingVertexANGLE for GL_ANGLE_provoking_vertex, and Firefox's GPU
+# process panicked when it was null. The provoking vertex set through the
+# returned pointer is read back.
+Check 'native libs: the entry points of every advertised GL extension from an NDK .so' {
+  & "$Dir/gl_extension_test.exe" (NoDrive "$Dir/gl_extension_procs_test.so")
+} @('GL_ANGLE_provoking_vertex: glProvokingVertexANGLE', 'is read back',
+    'gl_extension_procs: all passed', 'gl_extension_test all passed')
 
 # Through gesher-app: glapp.apk's Activity makes windows with gesher-app's
 # NativeWindow and passes their android.view.Surface to the library, which

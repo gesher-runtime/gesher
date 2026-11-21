@@ -11,6 +11,8 @@
 //    onto the shim's functions, shared with raw `SVC #0` in guest code;
 //  - getauxval(AT_HWCAP): arm64 capability bits, only those the translator
 //    implements (no LSE atomics, so outline-atomics code takes LL/SC paths);
+//  - mallinfo: AAPCS64 passes its struct return's address in x8;
+//  - nexttoward(f): their long double is a whole q register;
 //  - setjmp/longjmp: they save and restore registers, so they must be guest
 //    code (AArch64, emitted here), not the host's;
 //  - the floating-point environment (FPCR/FPSR, fenv_t, FE_* values);
@@ -844,6 +846,42 @@ void InitGuestLibc() {
   g_overrides["sigsetjmp"] = emit(jump::Save(mask, jump::SaveMask::Argument, invalid_flag));
   void* restore = emit(jump::Restore(mask));
   for (const char* name : {"longjmp", "_longjmp", "siglongjmp"}) g_overrides[name] = restore;
+
+  // mallinfo returns an 80-byte struct in memory: AAPCS64 passes its address
+  // in x8, System V as the hidden first argument (rdi), which the bridge fills
+  // from x0. A guest stub moves x8 to x0 and goes on to the shim's mallinfo.
+  if (void* mallinfo = Host("mallinfo")) {
+    const uint64_t host = reinterpret_cast<uint64_t>(BindHost(mallinfo, -1));
+    const uint32_t stub[] = {
+        0xAA0803E0u,  // mov x0, x8
+        0x58000070u,  // ldr x16, the address below
+        0xD61F0200u,  // br x16
+        0xD503201Fu,  // nop (aligns the address)
+        static_cast<uint32_t>(host), static_cast<uint32_t>(host >> 32),
+    };
+    g_overrides["mallinfo"] = EmitGuestCode(stub, sizeof(stub) / 4);
+  }
+
+  // nexttoward(f)'s long double is a binary128 in q1, of which the bridge
+  // carries only the low 64 bits: a guest stub stores q1 and passes its
+  // address (x0) to the shim's pointer form; x stays in v0.
+  for (const char* name : {"nexttoward", "nexttowardf"}) {
+    void* fn = Host((std::string("__gesher_arm64_") + name).c_str());
+    if (fn == nullptr) continue;
+    const uint64_t host = reinterpret_cast<uint64_t>(BindHost(fn, -1));
+    const uint32_t stub[] = {
+        0xA9BE7BFDu,  // stp x29, x30, [sp, #-32]!
+        0x3D8007E1u,  // str q1, [sp, #16]
+        0x910043E0u,  // add x0, sp, #16
+        0x580000B0u,  // ldr x16, the address below
+        0xD63F0200u,  // blr x16
+        0xA8C27BFDu,  // ldp x29, x30, [sp], #32
+        0xD65F03C0u,  // ret
+        0xD503201Fu,  // nop (aligns the address)
+        static_cast<uint32_t>(host), static_cast<uint32_t>(host >> 32),
+    };
+    g_overrides[name] = EmitGuestCode(stub, sizeof(stub) / 4);
+  }
 }
 
 }  // namespace gesher_arm64
