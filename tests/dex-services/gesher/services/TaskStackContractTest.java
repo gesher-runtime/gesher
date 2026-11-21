@@ -1561,6 +1561,65 @@ public final class TaskStackContractTest {
         return com.gesher.app.window.AppWindowTasks.finishNonMinimized(appTask(handle).asBinder());
     }
 
+    private static boolean rawWindowClose(IBinder target, String descriptor, boolean trailing,
+            int flags, boolean withReply) throws RemoteException {
+        Parcel request = Parcel.obtain();
+        Parcel reply = withReply ? Parcel.obtain() : null;
+        try {
+            request.writeInterfaceToken(descriptor);
+            if (trailing) request.writeInt(0x4720);
+            check(target.transact(com.gesher.app.window.AppWindowTasks.FINISH_NON_MINIMIZED,
+                    request, reply, flags), "Conditional-close transaction was not handled");
+            if (reply == null) return false;
+            reply.readException();
+            return reply.readBoolean();
+        } finally {
+            if (reply != null) reply.recycle();
+            request.recycle();
+        }
+    }
+
+    private static void conditionalCloseProtocol() throws Exception {
+        Harness h = new Harness();
+        h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        Object root = h.record("Root"); h.acknowledge("activityResumed", root);
+        IBinder handle = h.api.getAppTasks(PKG).get(0);
+        long identity = Binder.clearCallingIdentity();
+        try {
+            // Knowing the package UID does not admit an unregistered process. An
+            // attached PID also cannot borrow a different UID with its old handle.
+            Binder.restoreCallingIdentity(((long)UID << 32) | (PID + 301));
+            rejects(SecurityException.class, () -> closeOwnedTask(handle));
+            check(live(h, root), "Unknown caller closed the owned task");
+            Binder.restoreCallingIdentity(((long)(UID + 1) << 32) | PID);
+            rejects(SecurityException.class, () -> closeOwnedTask(handle));
+            check(live(h, root), "Mismatched caller UID closed the owned task");
+        } finally { Binder.restoreCallingIdentity(identity); }
+        // The host does not simulate Parcel. These malformed requests run only in
+        // the maintained ART fixture, through the same forced-remote local transport
+        // used by the other generated-AIDL controls in this test.
+        if (!realBinder) return;
+        IBinder transport = appTask(handle).asBinder();
+        String descriptor = com.gesher.app.window.AppWindowTasks.DESCRIPTOR;
+        h.asApp(() -> {
+            rejects(SecurityException.class,
+                    () -> rawWindowClose(transport, "android.app.IAppTask", false, 0, true));
+            check(live(h, root), "Wrong descriptor changed task lifetime");
+            rejects(android.os.BadParcelableException.class,
+                    () -> rawWindowClose(transport, descriptor, true, 0, true));
+            check(live(h, root), "Trailing transaction data changed task lifetime");
+            rejects(IllegalArgumentException.class,
+                    () -> rawWindowClose(transport, descriptor, false, IBinder.FLAG_ONEWAY, true));
+            check(live(h, root), "One-way conditional close changed task lifetime");
+            rejects(IllegalArgumentException.class,
+                    () -> rawWindowClose(transport, descriptor, false, 0, false));
+            check(live(h, root), "Reply-less conditional close changed task lifetime");
+            check(rawWindowClose(transport, descriptor, false, 0, true),
+                    "Valid conditional close failed after rejected requests");
+        });
+        check(!live(h, root), "Valid transaction answered success without closing its task");
+    }
+
     @SuppressWarnings("unchecked")
     private static void conditionalCloseOwnership() throws Exception {
         Harness h = new Harness();
@@ -1826,7 +1885,7 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
         if (selected.equals("all") || selected.equals("back")) backOnTaskRoot();
         if (selected.equals("all") || selected.equals("windowclose")) {
-            closeMinimizedAppTasks(); conditionalCloseOwnership();
+            closeMinimizedAppTasks(); conditionalCloseOwnership(); conditionalCloseProtocol();
         }
         if (selected.equals("all") || selected.equals("windowmode")) packageWindowModeLifetime();
         return checks;
