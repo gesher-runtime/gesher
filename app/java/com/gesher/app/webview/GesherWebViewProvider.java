@@ -308,14 +308,18 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     /**
-     * loadDataWithBaseURL: the document every main-frame request for its base URL is
-     * answered with, until another load or a page's own navigation replaces it. WebView2
-     * may ask more than once (a superseded navigation's request can come first; a reload).
+     * loadDataWithBaseURL: the document the main-frame request for its base URL is
+     * answered with, once for each of the WebView's own navigations of that URL (a
+     * superseded navigation's request can come first, then the next one's; a reload), until
+     * another load or a page's own navigation replaces it. Other requests for the URL (a
+     * frame of the same URL, as Android loads the URL itself there) are not answered with it.
      */
     private static final class PendingData {
         final String url;
         final String mime;
         final byte[] body;
+        /** An own navigation of the URL started and its main document was not answered yet. */
+        final AtomicBoolean answer = new AtomicBoolean();
 
         PendingData(String url, String mime, byte[] body) {
             this.url = url;
@@ -1894,8 +1898,16 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             boolean own = arg == 1 || mStartingApi;
             mStartingApi = false;
             if (arg == 1) mApiNavigations.started(a);
-            // A page's own navigation leaves loadDataWithBaseURL's document.
-            if (!own) mPendingData.set(null);
+            PendingData published = mPendingData.get();
+            if (published != null && !own) {
+                // A page's own navigation leaves loadDataWithBaseURL's document (not a
+                // newer one the Looper published meanwhile).
+                mPendingData.compareAndSet(published, null);
+            } else if (published != null && a != null && a.equals(published.url)) {
+                // Each of the WebView's own navigations of the base URL (a superseded one
+                // and the next, a reload) has its main document answered once.
+                published.answer.set(true);
+            }
         } else if (type == WebView2Host.EVENT_FAILED && a != null && a.startsWith("Navigate ")) {
             int end = a.lastIndexOf(": ");
             if (end > "Navigate ".length()) {
@@ -1985,10 +1997,12 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         try {
             String appUrl = FileUrls.fromWebView2(url);
             PendingData data = mPendingData.get();
-            if (data != null && context == CONTEXT_DOCUMENT && url.equals(data.url)) {
+            if (data != null && context == CONTEXT_DOCUMENT && mainFrame && url.equals(data.url)
+                    && data.answer.compareAndSet(true, false)) {
                 // The published document's own array, which nothing changes (JNI copies
                 // it). App-supplied streams still take the read/close path below, even
                 // ByteArrayInputStreams. A later publication replaces the whole snapshot.
+                // Once claimed, other requests for the URL take the ordinary path below.
                 ownedBody = data.body;
                 response = new WebResourceResponse(data.mime, "UTF-8", null);
             }

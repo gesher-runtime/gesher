@@ -147,10 +147,12 @@ Pages see the https origin: same-origin requests between assets work without
   Android loads it.
 - `loadDataWithBaseURL`: with an http(s) or file base, the base URL is
   navigated to and its main document answered with the data (so relative
-  URLs and the origin are the base's; every main-document request for the
-  base URL gets it until another load or a page's own navigation, since a
-  superseded load's request can come first and a reload asks again); without
-  one, `NavigateToString`,
+  URLs and the origin are the base's). Each of the WebView's own navigations
+  of the base URL has its main-document request answered with the data once
+  (a superseded load's request can come first, then the next load's; a
+  reload asks again), until another load or a page's own navigation; any
+  other request for the URL, such as a frame of the same URL, loads the URL
+  itself, as on Android. Without a base URL, `NavigateToString`,
   its `file:///android_asset/` and `file:///android_res/` URLs (which
   Android's page loads, as Gmail's compose editor its script) made the
   file origin's.
