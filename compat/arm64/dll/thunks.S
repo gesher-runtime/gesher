@@ -18,8 +18,9 @@
 //                     const uint64_t* xmm;   // +16: V0..V7 low 64 bits
 //                     const uint64_t* stack; // +24: X6, X7, then guest stack args
 //                     uint64_t nstack;       // +32: count of `stack`
-//                     uint64_t out_xmm0;     // +40: written with the result's xmm0
-//                     uint64_t out_rdx; };   // +48: written with the result's rdx
+//                     uint64_t out_xmm0;     // +40: result's xmm0 low 64 bits
+//                     uint64_t out_rdx;      // +48: result's rdx
+//                     uint64_t out_xmm0_hi; }// +56: result's xmm0 high 64 bits
 //
 // Calls System V `fn` with X0..X5 in rdi,rsi,rdx,rcx,r8,r9 and V0..V7 in
 // xmm0..xmm7, the `stack` words as System V stack arguments (System V's 7th and
@@ -108,6 +109,7 @@ gesher_call_host_sysv:
 	call qword ptr [rbx + 0]         // fn
 	movsd qword ptr [rbx + 40], xmm0 // out_xmm0
 	mov  qword ptr [rbx + 48], rdx   // out_rdx
+	movhpd qword ptr [rbx + 56], xmm0 // out_xmm0_hi (binary128 result)
 	lea  rsp, [rbp - 192]            // the xmm save area (24 + 168 below rbp)
 	movdqu xmm6, xmmword ptr [rsp + 0]
 	movdqu xmm7, xmmword ptr [rsp + 16]

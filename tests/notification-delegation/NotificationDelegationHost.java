@@ -7,7 +7,11 @@ public final class NotificationDelegationHost {
                 new java.net.URL[]{NotificationDelegationHost.class.getProtectionDomain().getCodeSource().getLocation()},
                 NotificationDelegationHost.class.getClassLoader()) {
             @Override protected Class<?> loadClass(String requested, boolean resolve) throws ClassNotFoundException {
-                if (!requested.equals(name) && !requested.startsWith(name + "$")) return super.loadClass(requested, resolve);
+                String context = "gesher.services.FixtureServiceContext";
+                if (!requested.equals(name) && !requested.startsWith(name + "$")
+                        && !requested.equals(context) && !requested.startsWith(context + "$")) {
+                    return super.loadClass(requested, resolve);
+                }
                 synchronized (getClassLoadingLock(requested)) {
                     Class<?> loaded = findLoadedClass(requested);
                     if (loaded == null) loaded = findClass(requested);

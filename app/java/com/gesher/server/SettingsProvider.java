@@ -5,6 +5,7 @@
 package com.gesher.server;
 
 import android.app.ContentProviderHolder;
+import android.app.AppOpsManager;
 import android.content.ComponentName;
 import android.content.ContentProvider;
 import android.content.ContentValues;
@@ -175,6 +176,13 @@ final class SettingsProvider extends ContentProvider {
     /** The provider of this process (the system server's), for {@link #putSystem}. */
     private static volatile SettingsProvider sInstance;
 
+    /** Server-local view of the actual secure setting; absent configuration stays absent. */
+    static String secureString(String name) {
+        SettingsProvider provider = sInstance;
+        if (provider == null) return null;
+        synchronized (provider) { return provider.mTables.get(SECURE).get(name); }
+    }
+
     /** Server-local numeric global setting, with the same malformed-value fallback as Settings. */
     static long globalLong(String name, long defaultValue) {
         SettingsProvider provider = sInstance;
@@ -306,17 +314,43 @@ final class SettingsProvider extends ContentProvider {
         if (text && mTextStore == null) {
             throw new SecurityException("Spell-checker settings require the device system server");
         }
-        if (!text && !GmsSignatureSpoofing.isEnabled()) return;
-        if (android.os.Binder.getCallingPid() == Process.myPid()) return;
-        if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
-        if (mCallers.isSystem()) return;
-        String actual = mCallers.callerPackage();
-        String permission = SYSTEM.equals(table) ? "android.permission.WRITE_SETTINGS"
-                : "android.permission.WRITE_SECURE_SETTINGS";
-        if (mPm.permissions().checkPermission(actual, permission)
-                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            throw new SecurityException("Settings write permission denied");
+        int pid = Binder.getCallingPid();
+        // A standalone APK and this provider share a PID. Its authenticated
+        // application identity must take precedence over server-local authority.
+        String actual = mCallers == null ? null : mCallers.packageForPid(pid);
+        if (actual == null) {
+            boolean local = pid == Process.myPid();
+            if (local && (mPm == null || !mPm.hasTransientPackageState()
+                    || Process.myUid() < Process.FIRST_APPLICATION_UID)) return;
+            if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
+            if (!local && mCallers.isSystem()) return;
+            // An ordinary standalone process before binding or after retirement
+            // does not become a privileged writer when its attachment is absent.
+            throw new SecurityException("Unrecognized settings writer identity");
         }
+        ApkPackage owner = mPm.get(actual);
+        if (owner == null || mPm.isRemovalPending(actual) || owner.uid() != Binder.getCallingUid()) {
+            throw new SecurityException("Unrecognized application Binder identity");
+        }
+        // AOSP's system-table special access is an AppOp for ordinary apps.
+        // Secure/global still require the actual privileged permission; its holders
+        // may also write system settings independently of the special-access AppOp.
+        if (mPm.permissions().checkPermission(actual, android.Manifest.permission.WRITE_SECURE_SETTINGS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+        if (SYSTEM.equals(table)) {
+            int uid = Binder.getCallingUid();
+            String attribution = getCallingAttributionTag();
+            int mode;
+            long identity = Binder.clearCallingIdentity();
+            try {
+                mode = mPm.appOps().noteOperation(AppOpsManager.OP_WRITE_SETTINGS, uid, actual,
+                        attribution, false, null, false).getOpMode();
+            } finally { Binder.restoreCallingIdentity(identity); }
+            if (mode == AppOpsManager.MODE_ALLOWED || mode == AppOpsManager.MODE_DEFAULT
+                    && mPm.permissions().checkPermission(actual, android.Manifest.permission.WRITE_SETTINGS)
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+        }
+        throw new SecurityException("Settings write permission denied");
     }
 
     @Override
