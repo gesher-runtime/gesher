@@ -298,6 +298,25 @@ $servicemanager = Start-ReadyServiceManager $binderd $device "$logs/apps-service
 Own-ManualService $servicemanager servicemanager
 $dvmApp = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false')
+function SettingsFixtureSetup([string[]] $Arguments) {
+  $savedUid = $env:GESHER_UID; $savedBinderUid = $env:GESHER_BINDER_UID
+  try {
+    $env:GESHER_UID = '1000'; $env:GESHER_BINDER_UID = '1000'
+    RunTimed "$Dir/dalvikvm.exe" ($dvmApp + '-cp', (NoDrive "$Dir/services-tests.dex"),
+      'gesher.services.FixtureSettingsSetup' + $Arguments) 90
+  } finally {
+    $env:GESHER_UID = $savedUid; $env:GESHER_BINDER_UID = $savedBinderUid
+  }
+}
+# A declared special permission is not a runtime/signature grant. Commit the
+# actual fixture's WRITE_SETTINGS AppOp before the server loads its policy snapshot.
+$settingsSetup = SettingsFixtureSetup @((NoDrive "$Dir/components.apk"))
+if ($LASTEXITCODE -ne 0 -or $settingsSetup -notmatch 'FixtureSettingsSetup persisted special access UID ([0-9]+) package com\.gesher\.components') {
+  throw "Components special-access setup failed: $settingsSetup"
+}
+$componentsUid = [int]$Matches[1]
+if ($componentsUid -lt 10000 -or $componentsUid -gt 19999) { throw 'Components fixture requires an ordinary admitted UID' }
+Write-Host $settingsSetup
 $server = Start-Process "$Dir/dalvikvm.exe" -PassThru -NoNewWindow `
   -ArgumentList ($dvmApp + 'com.gesher.server.SystemServer', (NoDrive "$Dir/lifecycle.apk"), (NoDrive "$Dir/components.apk")) `
   -RedirectStandardOutput "$logs/system_server.out" -RedirectStandardError "$logs/system_server.err"
@@ -364,25 +383,6 @@ if ($LASTEXITCODE -ne 0 -or -not $grantOut.Contains('Permission grant completed 
   throw "Lifecycle CAMERA prerequisite grant failed: $grantOut"
 }
 try {
-function SettingsFixtureSetup([string[]] $Arguments) {
-  $savedUid = $env:GESHER_UID; $savedBinderUid = $env:GESHER_BINDER_UID
-  try {
-    $env:GESHER_UID = '1000'; $env:GESHER_BINDER_UID = '1000'
-    RunTimed "$Dir/dalvikvm.exe" ($dvmApp + '-cp', (NoDrive "$Dir/services-tests.dex"),
-      'gesher.services.FixtureSettingsSetup' + $Arguments) 90
-  } finally {
-    $env:GESHER_UID = $savedUid; $env:GESHER_BINDER_UID = $savedBinderUid
-  }
-}
-# A declared special permission is not a runtime/signature grant. Authorize the
-# actual fixture through the real persistent WRITE_SETTINGS AppOp before it runs.
-$settingsSetup = SettingsFixtureSetup @((NoDrive "$Dir/components.apk"))
-if ($LASTEXITCODE -ne 0 -or $settingsSetup -notmatch 'FixtureSettingsSetup persisted special access UID ([0-9]+) package com\.gesher\.components') {
-  throw "Components standalone special-access setup failed: $settingsSetup"
-}
-$componentsUid = [int]$Matches[1]
-if ($componentsUid -lt 10000 -or $componentsUid -gt 19999) { throw 'Components fixture requires an ordinary admitted UID' }
-Write-Host $settingsSetup
 $appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server', '--keep-task',
   '--ez', 'com.gesher.lifecycle.REQUEST_PERMISSIONS', 'true', (NoDrive "$Dir/lifecycle.apk")) 400
 $appCode = $LASTEXITCODE
@@ -491,7 +491,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $s = 'system_server: '
 $null = CheckSequences 'services: system_server drives components.apk: NewIntentItem, ActivityResultItem, services, receivers, providers, notifications' $serverOut @(
-  ,@("${s}com.gesher.components parsed by PackageParser2: 8 activities, 4 services, 1 receivers, 1 providers",
+  ,@("${s}com.gesher.components parsed by PackageParser2: 9 activities, 4 services, 1 receivers, 1 providers",
     "${s}publishContentProviders: com.gesher.components.items (com.gesher.components.ItemsProvider)",
     "${s}scheduleTransaction NewIntentItem to com.gesher.components/com.gesher.components.SingleTopActivity",
     "${s}scheduleTransaction ActivityResultItem, ResumeActivityItem to com.gesher.components/com.gesher.components.MainActivity",

@@ -222,10 +222,14 @@ class Publication final : public IDataObject {
   const std::vector<FormatBytes> formats_;
 };
 
+bool WaitPumping(HANDLE event, DWORD timeout);
+
 bool OpenForRead() {
   for (int attempt = 0; attempt != 20; ++attempt) {
     if (OpenClipboard(nullptr)) return true;
-    Sleep(10);
+    // A reader can own the clipboard while requesting this STA's delayed
+    // formats. Let it finish and close before retrying the completion proof.
+    if (attempt != 19 && !WaitPumping(nullptr, 10)) return false;
   }
   return false;
 }
@@ -284,19 +288,37 @@ uint32_t EmptyCompletionSequence() {
 bool WaitPumping(HANDLE event, DWORD timeout) {
   const ULONGLONG start = GetTickCount64();
   for (;;) {
-    if (WaitForSingleObject(event, 0) == WAIT_OBJECT_0) return true;
+    if (event && WaitForSingleObject(event, 0) == WAIT_OBJECT_0) return true;
     const ULONGLONG elapsed = GetTickCount64() - start;
-    if (elapsed >= timeout) return false;
-    const DWORD ready = MsgWaitForMultipleObjectsEx(1, &event,
+    if (elapsed >= timeout) return event == nullptr;
+    // A null event is a bounded delay that still services this apartment.
+    const DWORD count = event ? 1 : 0;
+    const DWORD ready = MsgWaitForMultipleObjectsEx(count, event ? &event : nullptr,
         timeout - static_cast<DWORD>(elapsed), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-    if (ready == WAIT_OBJECT_0) return true;
-    if (ready != WAIT_OBJECT_0 + 1) return false;
+    if (event && ready == WAIT_OBJECT_0) return true;
+    if (ready == WAIT_TIMEOUT) return event == nullptr;
+    if (ready != WAIT_OBJECT_0 + count) return false;
     MSG message;
     for (unsigned n = 0; n != 64 && PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE); ++n) {
       if (message.message == WM_QUIT) { PostQuitMessage(static_cast<int>(message.wParam)); return false; }
       TranslateMessage(&message); DispatchMessageW(&message);
     }
   }
+}
+
+HRESULT SetClipboardRetrying(IDataObject* object, const std::atomic<bool>& cancelled,
+                             const std::atomic<bool>& stopping) {
+  HRESULT result = CLIPBRD_E_CANT_OPEN;
+  for (int attempt = 0; attempt != 20; ++attempt) {
+    if (cancelled.load(std::memory_order_acquire)
+        || stopping.load(std::memory_order_acquire)) return E_ABORT;
+    result = OleSetClipboard(object);
+    // Only an unsuccessful open is safe to retry: no publication happened.
+    // Never replay a completed write or a partial/finalization error.
+    if (result != CLIPBRD_E_CANT_OPEN || attempt == 19
+        || !WaitPumping(nullptr, 10)) break;
+  }
+  return result;
 }
 
 class Publisher final {
@@ -393,13 +415,13 @@ class Publisher final {
         if (request) {
           if (!self->Stopping() && !request->cancelled.load(std::memory_order_acquire)) {
             if (request->formats.empty()) {
-              if (OleSetClipboard(nullptr) == S_OK) {
+              if (SetClipboardRetrying(nullptr, request->cancelled, self->stopping_) == S_OK) {
                 if (current) { current->Release(); current = nullptr; }
                 request->sequence = EmptyCompletionSequence();
               }
             } else {
               auto* next = new (std::nothrow) Publication(std::move(request->formats));
-              if (next && OleSetClipboard(next) == S_OK) {
+              if (next && SetClipboardRetrying(next, request->cancelled, self->stopping_) == S_OK) {
                 if (current) current->Release();
                 current = next;
                 request->sequence = CompletionSequence(current);
