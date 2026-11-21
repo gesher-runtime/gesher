@@ -170,7 +170,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         /** Ended by the idle reaper: its services bound by others start again (ActiveServices). */
         volatile boolean reaped;
         boolean spawned;     // started by this server (startProcess), not by itself
-        /** Original retained native child identity, copied from its PendingProcess. */
+        /** Actual native generation: a retained child handle or trusted local startup. */
         long nativeStartTime;
         long startSeq;       // distinguishes a late exit from a newer process of this package
         /** When something last used it (uptime): the idle reaper's clock. */
@@ -187,6 +187,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ProcessExitStatus.Generation exitGeneration;
         /** The configuration it was given last (bindApplication, ConfigurationChangeItem). */
         Configuration config;
+        /** Actual manual-driver lifecycle; null for a server-driven application. */
+        State inProcessActivityState;
         final List<ActivityRecord> activities = new ArrayList<>();
 
         ProcessRecord(int pid, IApplicationThread thread) {
@@ -494,6 +496,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || mPm.isRemovalPending(app.packageName)) continue;
             int state = android.app.AppOpsManager.UID_STATE_CACHED;
             int capabilities = 0;
+            if (app.inProcessActivityState == State.RESUMING
+                    || app.inProcessActivityState == State.RESUMED) {
+                state = android.app.AppOpsManager.UID_STATE_TOP;
+                capabilities = android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_LOCATION
+                        | android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA
+                        | android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_MICROPHONE
+                        | android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL;
+            } else if (app.inProcessActivityState == State.STARTED
+                    || app.inProcessActivityState == State.PAUSED) {
+                state = android.app.AppOpsManager.UID_STATE_FOREGROUND;
+            }
             for (ActivityRecord activity : app.activities) {
                 if (activity.finishing || mHiddenTasks.contains(activity.taskId)) continue;
                 if (activity.state == State.RESUMED || activity.state == State.RESUMING) {
@@ -518,6 +531,70 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     UriGrants uriGrants() {
         return mAm != null ? mAm.uriGrants() : null;
+    }
+
+    /** Resolves a native foreground observation to a current, authenticated application. */
+    synchronized boolean ownsForegroundProcess(int uid, long[] foreground) {
+        if (foreground == null || foreground.length != 2 || foreground[0] <= 0
+                || foreground[0] > Integer.MAX_VALUE || foreground[1] <= 0) return false;
+        ProcessRecord app = attachedProcessByPid((int) foreground[0]);
+        return app != null && app.ready && !app.dead && !app.exiting && !app.pidSuperseded
+                && app.uid == uid && app.nativeStartTime == foreground[1]
+                && app.packageCode != null && app.packageCode.uid() == uid
+                && mPm.get(app.packageName) == app.packageCode
+                && !mPm.isRemovalPending(app.packageName);
+    }
+
+    /**
+     * Runtime-only admission for the manual ActivityThread driver. No caller package claim
+     * or synthetic focus is accepted: the exact admitted APK, native UID/PID and live
+     * Windows process generation must agree before any APK classes are loaded.
+     */
+    synchronized ProcessRecord attachInProcessApplication(ApkPackage owner,
+            IApplicationThread thread) {
+        int pid = android.os.Process.myPid();
+        int uid = android.os.Process.myUid();
+        if (mStarter != null || owner == null || owner != mPm.get(owner.packageName)
+                || owner.uidPending() || owner.uid() != uid
+                || mPm.isRemovalPending(owner.packageName)
+                || Binder.getCallingPid() != pid || Binder.getCallingUid() != uid
+                || thread == null || attachedProcessByPid(pid) != null) {
+            throw new SecurityException("Standalone process does not match its admitted APK");
+        }
+        long startTime = Zygote.startTime(pid);
+        if (startTime <= 0) {
+            throw new IllegalStateException("Standalone native process identity is unavailable");
+        }
+        ProcessRecord app = new ProcessRecord(pid, thread);
+        app.packageCode = owner;
+        app.nativeStartTime = startTime;
+        app.inProcessActivityState = State.STOPPED;
+        assignPackage(app, owner.packageName, componentProcess(owner.packageName, null));
+        app.ready = true;
+        registerAttachedProcess(app);
+        updateIdle();
+        return app;
+    }
+
+    /** Manual-driver lifecycle is used for AppOps state, never as proof of Windows focus. */
+    synchronized void inProcessActivityState(ProcessRecord app, State state) {
+        if (app.inProcessActivityState == null || app.dead || app.exiting
+                || !mProcesses.contains(app) || app.packageCode != mPm.get(app.packageName)
+                || mPm.isRemovalPending(app.packageName)) return;
+        app.inProcessActivityState = state;
+        updateIdle();
+    }
+
+    void retireInProcessApplication(ProcessRecord app) {
+        synchronized (this) {
+            if (app.inProcessActivityState == null) {
+                throw new IllegalArgumentException("Not a standalone process admission");
+            }
+            app.ready = false;
+            app.exiting = true;
+            app.inProcessActivityState = State.STOPPED;
+        }
+        processDied(app);
     }
 
     void setAccountManager(AccountManagerService accounts) { mAccounts = accounts; }
@@ -2999,6 +3076,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     void maybeExit(ProcessRecord app) {
         if (app == null) return;
+        // The standalone session owns the manual driver's activity and lifetime;
+        // absence from the server's transaction/activity lists is not an idle exit.
+        if (app.inProcessActivityState != null) return;
         // Work in it just ended: the idle reaper counts from now.
         app.markActive(SystemClock.uptimeMillis());
         synchronized (this) {
@@ -3464,6 +3544,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     void attachApplication(IApplicationThread thread, int pid, long startSeq) {
         ProcessRecord app = new ProcessRecord(pid, thread);
+        if (startSeq <= 0) {
+            // Legacy self-attached applications still need a native process generation
+            // before they can own input focus. Unknown identity never grants focus.
+            try { app.nativeStartTime = Zygote.startTime(pid); }
+            catch (UnsatisfiedLinkError unavailable) { app.nativeStartTime = 0; }
+        }
         boolean bind = false;
         synchronized (this) {
             PendingProcess started = startSeq > 0 ? mStarting.get(startSeq) : null;

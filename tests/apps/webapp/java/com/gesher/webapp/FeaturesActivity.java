@@ -91,6 +91,10 @@ public class FeaturesActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        say("app location permission uid " + android.os.Process.myUid() + " pid "
+                + android.os.Process.myPid() + " fine "
+                + checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                + " coarse " + checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION));
         String server = System.getenv("GESHER_WEBAPP_SERVER");
         if (server != null && server.trim().contains(" ")) {
             String[] ports = server.trim().split("\\s+");

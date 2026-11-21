@@ -78,7 +78,11 @@
       "51-windows3.ps1",
       "54-windows4.ps1"
     ],
-    "helpers": {}
+    "helpers": {
+      "50-services.ps1": [
+        "RunTimed"
+      ]
+    }
   },
   "services": {
     "tracks": [
