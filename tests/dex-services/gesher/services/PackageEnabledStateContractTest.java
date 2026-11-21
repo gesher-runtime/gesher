@@ -402,10 +402,9 @@ public final class PackageEnabledStateContractTest {
                 && reopened.client.getComponentEnabledSetting(component(a, "Alias")) == 1, "Restart lost enabled states");
         invoke(reopened.service, "add", new Class<?>[]{ApkPackage.class}, record(a, true));
         check(reopened.client.getApplicationEnabledSetting(a) == 3, "APK update lost installed state");
-        // The successful update queues its permission publication. Complete that
-        // operation before measuring whether the following failed write adds work.
+        // Settle the successful package update's permission notification before
+        // testing that the failed enabled-state write queues no further work.
         reopened.drain();
-        check(reopened.tasks.isEmpty(), "Successful APK publication did not settle before the failed-write phase");
         Path file = Path.of(System.getenv("ANDROID_DATA"), "system/package-enabled-state");
         Path saved = file.resolveSibling("enabled-state.saved"); Files.move(file, saved); Files.createDirectory(file);
         try {

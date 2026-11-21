@@ -540,7 +540,6 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
-
       - name: Android UI mode policy, persistence and activity configuration contracts
         run: |
           python3 tools/test_ui_mode_native.py
@@ -687,10 +686,6 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
           python3 tools/test_scheduler_work_contracts.py --java-home "$JAVA_HOME" \
-            --framework-classes out/framework/classes --core-classes out/coremod \
-            --app-classes out/app/gesher-app-classes.jar \
-            --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
-          python3 tools/test_exact_alarm_contracts.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"

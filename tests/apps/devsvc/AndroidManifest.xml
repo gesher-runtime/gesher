@@ -13,9 +13,7 @@
     package="com.gesher.devsvc"
     android:versionCode="1"
     android:versionName="1.0">
-    <!-- Delivery and suspend fixtures need exact alarms without interactive special
-         access. ExactAlarmContractTest covers SCHEDULE_EXACT_ALARM denial and grants. -->
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
