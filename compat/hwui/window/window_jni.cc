@@ -91,6 +91,18 @@ void JNICALL NativeWindow_setTitle(JNIEnv* env, jclass, jlong ptr, jstring title
   Get(ptr)->window()->SetTitle(Utf8(env, title));
 }
 
+void JNICALL NativeWindow_setTaskMenu(JNIEnv* env, jclass, jlong ptr, jobjectArray labels,
+                                      jint checked) {
+  std::vector<std::string> items;
+  const jsize n = labels != nullptr ? env->GetArrayLength(labels) : 0;
+  for (jsize i = 0; i < n; i++) {
+    auto label = static_cast<jstring>(env->GetObjectArrayElement(labels, i));
+    items.push_back(label != nullptr ? Utf8(env, label) : std::string());
+    if (label != nullptr) env->DeleteLocalRef(label);
+  }
+  Get(ptr)->window()->SetTaskMenu(items, checked);
+}
+
 void JNICALL NativeWindow_setResizable(JNIEnv*, jclass, jlong ptr, jboolean resizable) {
   Get(ptr)->window()->SetResizable(resizable);
 }
@@ -307,6 +319,8 @@ const JNINativeMethod kMethods[] = {
     {"nHide", "(J)V", reinterpret_cast<void*>(&NativeWindow_hide)},
     {"nMinimize", "(J)V", reinterpret_cast<void*>(&NativeWindow_minimize)},
     {"nSetTitle", "(JLjava/lang/String;)V", reinterpret_cast<void*>(&NativeWindow_setTitle)},
+    {"nSetTaskMenu", "(J[Ljava/lang/String;I)V",
+     reinterpret_cast<void*>(&NativeWindow_setTaskMenu)},
     {"nSetResizable", "(JZ)V", reinterpret_cast<void*>(&NativeWindow_setResizable)},
     {"nSetClientSize", "(JII)V", reinterpret_cast<void*>(&NativeWindow_setClientSize)},
     {"nSetMinClientSize", "(JII)V", reinterpret_cast<void*>(&NativeWindow_setMinClientSize)},

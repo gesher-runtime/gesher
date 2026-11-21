@@ -23,7 +23,8 @@ def main() -> None:
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--source-ref")
     parser.add_argument("--case", choices=("all", "history", "validation", "tasks", "recents",
-                                          "attach", "visibility", "permissions", "pending"), default="all")
+                                          "attach", "visibility", "permissions", "pending",
+                                          "back", "appwindow", "windowclose", "windowmode"), default="all")
     args = parser.parse_args()
     compiler = shutil.which("cc")
     if not compiler:
@@ -39,8 +40,18 @@ def main() -> None:
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
                         str(ROOT / "tests/activity-finish/framework_host.c"), "-o", str(library)], check=True)
         sources = []
-        for name in ("ActivityTaskManagerService", "ActivityManagerService", "PendingIntents"):
+        for name in ("ActivityTaskManagerService", "ActivityManagerService", "PendingIntents", "ActivityClientController"):
             relative = "app/java/com/gesher/server/" + name + ".java"
+            source = ROOT / relative
+            if args.source_ref:
+                source = work / (name + ".java")
+                source.write_bytes(subprocess.run(["git", "show", args.source_ref + ":" + relative],
+                        cwd=ROOT, capture_output=True, check=True).stdout)
+            sources.append(str(source))
+        # These production clients own the new desktop task contract. For an old-source
+        # control, compile their exact old bodies too; do not silently use fixed jar code.
+        for name in ("AppWindows", "WindowSession"):
+            relative = "app/java/com/gesher/app/window/" + name + ".java"
             source = ROOT / relative
             if args.source_ref:
                 source = work / (name + ".java")
