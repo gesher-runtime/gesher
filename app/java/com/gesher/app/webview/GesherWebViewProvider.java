@@ -91,6 +91,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -108,6 +109,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     static volatile boolean sDevTools;
     /** The process's first page load is logged (tests/e2e: expectLog). */
     private static boolean sFirstPage;
+    /** Main-frame loads finished in this process, numbered in their log lines. */
+    private static final AtomicInteger sPagesFinished = new AtomicInteger();
     private static final ExecutorService sRequests = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "WebView requests");
         t.setDaemon(true);
@@ -304,7 +307,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         return rules.clone();
     }
 
-    /** loadDataWithBaseURL: one unclaimed document, with its own body and metadata. */
+    /**
+     * loadDataWithBaseURL: the document every main-frame request for its base URL is
+     * answered with, until another load or a page's own navigation replaces it. WebView2
+     * may ask more than once (a superseded navigation's request can come first; a reload).
+     */
     private static final class PendingData {
         final String url;
         final String mime;
@@ -317,6 +324,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         }
     }
     private final AtomicReference<PendingData> mPendingData = new AtomicReference<>();
+    /** The WebView's own loads not started yet (onNavigationStarting). */
+    private final ApiNavigations mApiNavigations = new ApiNavigations();
+    /** The WebView thread's last NavigationStarting was one of the WebView's own loads. */
+    private boolean mStartingApi;
 
     // Bounds (the WebView's Looper).
     private boolean mAttached;
@@ -557,10 +568,17 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     private void navigate(String webView2Url, String headers) {
+        navigate(webView2Url, headers, null);
+    }
+
+    /** A load of the WebView's own; {@code data} answers its main document (or none). */
+    private void navigate(String webView2Url, String headers, PendingData data) {
         if (mHost == null) {
             GesherWebView.log("loading " + webView2Url + ": WebView2 is unavailable");
             return;
         }
+        mPendingData.set(data);
+        mApiNavigations.issued(webView2Url);
         mHost.navigate(webView2Url, headers);
     }
 
@@ -578,6 +596,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             return;
         }
         // NavigateWithWebResourceRequest with the body, form-encoded as Android posts it.
+        mPendingData.set(null);
+        mApiNavigations.issued(url);
         mHost.navigate(url, "Content-Type: application/x-www-form-urlencoded\r\n", "POST",
                 postData != null ? postData : new byte[0]);
     }
@@ -622,14 +642,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             String html = new String(bytes, StandardCharsets.UTF_8)
                     .replace("file:///android_asset/", FileUrls.toWebView2("file:///android_asset/"))
                     .replace("file:///android_res/", FileUrls.toWebView2("file:///android_res/"));
+            mPendingData.set(null);
             mHost.navigateToString(html);
             return;
         }
         // The base URL is loaded, and its main document is answered with the data.
         String url = FileUrls.toWebView2(baseUrl);
-        mPendingData.set(new PendingData(url, mimeType, bytes));
         mOriginalUrl = baseUrl;
-        navigate(url, "");
+        navigate(url, "", new PendingData(url, mimeType, bytes));
     }
 
     @Override
@@ -1870,7 +1890,23 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void onEvent(int type, long id, int arg, String a, String b, String c, byte[] bytes) {
-        if (type == WebView2Host.EVENT_PAGE_STARTED) mBridgeDispatcher.navigationStarted();
+        if (type == WebView2Host.EVENT_PAGE_STARTED) {
+            mBridgeDispatcher.navigationStarted();
+            // arg 1: WebView2Host took it for one of the WebView's own loads.
+            boolean own = arg == 1 || mStartingApi;
+            mStartingApi = false;
+            if (arg == 1) mApiNavigations.started(a);
+            // A page's own navigation leaves loadDataWithBaseURL's document.
+            if (!own) mPendingData.set(null);
+        } else if (type == WebView2Host.EVENT_FAILED && a != null && a.startsWith("Navigate ")) {
+            int end = a.lastIndexOf(": ");
+            if (end > "Navigate ".length()) {
+                mApiNavigations.abandoned(a.substring("Navigate ".length(), end));
+            }
+        } else if (type == WebView2Host.EVENT_SOURCE_CHANGED && arg == 0) {
+            // A load within the same document raises no NavigationStarting.
+            mApiNavigations.abandoned(a);
+        }
         if (type == WebView2Host.EVENT_PARKED) {
             CountDownLatch parked = mParked;
             if (parked != null) parked.countDown();
@@ -1894,6 +1930,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect) {
+        // WebView2Host knows one outstanding load of the WebView's own at a time; a second
+        // one issued before the first started reaches here too. Android does not ask the
+        // app about either (a WebViewClient that takes its base URL would cancel the load).
+        mStartingApi = !redirect && mApiNavigations.started(url);
+        if (mStartingApi) return false;
         if (!mOverridesNavigation) return false;
         String appUrl = FileUrls.fromWebView2(url);
         final WebViewClient client = mClient;
@@ -1941,12 +1982,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         try {
             String appUrl = FileUrls.fromWebView2(url);
             PendingData data = mPendingData.get();
-            if (data != null && context == CONTEXT_DOCUMENT && url.equals(data.url)
-                    && mPendingData.compareAndSet(data, null)) {
-                // Only this private response owns the array. App-supplied streams
-                // still take the read/close path below, even ByteArrayInputStreams.
-                // A failed claim leaves a replacement for its next request and
-                // falls through to the ordinary interception/file/network path.
+            if (data != null && context == CONTEXT_DOCUMENT && url.equals(data.url)) {
+                // The published document's own array, which nothing changes (JNI copies
+                // it). App-supplied streams still take the read/close path below, even
+                // ByteArrayInputStreams. A later publication replaces the whole snapshot.
                 ownedBody = data.body;
                 response = new WebResourceResponse(data.mime, "UTF-8", null);
             }
@@ -2075,6 +2114,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                     });
                 }
                 setProgress(100);
+                // Each main-frame load's outcome, without its address: the scheme only.
+                GesherWebView.log("page " + sPagesFinished.incrementAndGet() + " finished ("
+                        + scheme(mUrl) + ", " + (http >= 400 ? "HTTP " + http
+                        : arg == 14 ? "canceled" : arg >= 0 ? "net::" + errorName(arg) : "ok")
+                        + ")");
                 if (!sFirstPage) {
                     sFirstPage = true;
                     GesherWebView.log("first page loaded: " + mUrl);
@@ -2906,6 +2950,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             default:
                 return WebViewClient.ERROR_UNKNOWN;
         }
+    }
+
+    private static String scheme(String url) {
+        int colon = url != null ? url.indexOf(':') : -1;
+        return colon > 0 ? url.substring(0, colon) : "none";
     }
 
     private static String errorName(int status) {

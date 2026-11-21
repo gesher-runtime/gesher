@@ -8,12 +8,13 @@ import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
-/** JNI/native copying, file-resource loading and app callbacks are declared boundaries. */
+/** JNI/native copying, file-resource loading, the UI thread and app callbacks are declared boundaries. */
 @SuppressWarnings("deprecation")
 public final class WebViewOwnedResponsesHost {
     private static final int CONTEXT_DOCUMENT = 1, CONTEXT_IMAGE = 3;
@@ -23,9 +24,12 @@ public final class WebViewOwnedResponsesHost {
     private volatile Runnable beforeClaim;
     private String mOriginalUrl;
     private boolean mInterceptsRequests;
+    private volatile boolean mOverridesNavigation;
+    private static final long WAIT_FOR_UI_MS = 5000;
+    private final Ui mUi = new Ui();
     private final FixtureContext mContext = new FixtureContext();
     private final Settings mSettings = new Settings();
-    private final Client mClient = new Client(this);
+    private final WebViewClient mClient = new WebViewClient(this);
     private final Object mView = new Object();
 
     private static final class Delivery {
@@ -50,7 +54,8 @@ public final class WebViewOwnedResponsesHost {
             deliveries.add(new Delivery(id, status, reason, headers,
                     body != null && nativeCopy ? body.clone() : body));
         }
-        void navigate(String url, String headers) { navigated = url; navigationHeaders = headers; }
+        final ArrayList<String> navigations = new ArrayList<>();
+        void navigate(String url, String headers) { navigated = url; navigationHeaders = headers; navigations.add(url); }
         void navigateToString(String value) { html = value; }
     }
     private static final class Settings {
@@ -68,12 +73,19 @@ public final class WebViewOwnedResponsesHost {
             this.url = url; this.mainFrame = mainFrame; this.method = method; this.headers = headers;
         }
     }
-    private static final class Client {
+    /** The WebView's Looper: runs what is posted at once (the waiting WebView thread is the caller). */
+    private static final class Ui { boolean post(Runnable r) { r.run(); return true; } }
+    private static final class WebViewClient {
         final WebViewOwnedResponsesHost owner;
-        final AtomicInteger calls = new AtomicInteger();
+        final AtomicInteger calls = new AtomicInteger(), overrides = new AtomicInteger();
         volatile Supplier<WebResourceResponse> response;
         volatile Request request;
-        Client(WebViewOwnedResponsesHost owner) { this.owner = owner; }
+        volatile boolean takes;
+        WebViewClient(WebViewOwnedResponsesHost owner) { this.owner = owner; }
+        boolean shouldOverrideUrlLoading(Object view, Request request) {
+            overrides.incrementAndGet(); this.request = request;
+            return takes;
+        }
         WebResourceResponse shouldInterceptRequest(Object view, Request request) {
             if (Thread.holdsLock(owner)) throw new AssertionError("app callback ran under a provider lock");
             calls.incrementAndGet(); this.request = request;
@@ -100,9 +112,9 @@ public final class WebViewOwnedResponsesHost {
         Runnable hook = beforeClaim;
         if (hook != null) hook.run();
     }
-    private <T> boolean fixtureClaim(AtomicReference<T> slot, T expected, T update) {
+    private <T> T fixtureRead(AtomicReference<T> slot) {
         fixtureBeforeClaim();
-        return slot.compareAndSet(expected, update);
+        return slot.get();
     }
     private byte[] pendingBody() { @BODY@ }
     private String pendingMime() { @MIME@ }
@@ -146,7 +158,11 @@ public final class WebViewOwnedResponsesHost {
                     check(Arrays.equals(reply.body, expected), "owned response bytes changed");
                     check(provider.mHost.deliveries.size() == 1 && provider.mClient.calls.get() == 0,
                             "owned response was duplicated or intercepted");
-                    check(provider.pendingBody() == null && provider.pendingUrl() == null, "owned response not consumed once");
+                    check(provider.pendingBody() == privateBody, "published document was not kept for a later request");
+                    // A superseded navigation's request or a reload asks again: same document.
+                    answer(provider, 32, base, CONTEXT_DOCUMENT);
+                    check(last(provider).id == 32 && last(provider).status == 200 && Arrays.equals(last(provider).body, expected)
+                            && provider.mClient.calls.get() == 0, "a second request for the published document lost it");
                     // JNI's snapshot must survive later source-array changes.
                     if (expected.length != 0) {
                         byte[] snapshot = reply.body.clone(); privateBody[0] ^= 0x7f;
@@ -176,9 +192,14 @@ public final class WebViewOwnedResponsesHost {
         answer(image, 2, "https://other.example/", CONTEXT_DOCUMENT);
         check(image.pendingBody() == original && last(image).status == 0, "nonmatching URL consumed private body");
         answer(image, 3, BASE, CONTEXT_DOCUMENT);
-        check(Arrays.equals(last(image).body, bytes("private")) && image.pendingBody() == null, "matching document lost deferred body");
+        check(Arrays.equals(last(image).body, bytes("private")) && image.pendingBody() == original, "matching document lost deferred body");
         answer(image, 4, BASE, CONTEXT_DOCUMENT);
-        check(last(image).status == 0 && image.pendingBody() == null, "consumed private document became a reload cache");
+        check(Arrays.equals(last(image).body, bytes("private")) && image.pendingBody() == original,
+                "a repeated request (superseded navigation, reload) lost the published document");
+        // Another load of the WebView's own replaces it: the base URL is then the URL's own.
+        image.navigate(FileUrls.toWebView2(BASE), "");
+        answer(image, 5, BASE, CONTEXT_DOCUMENT);
+        check(last(image).status == 0 && image.pendingBody() == null, "loadUrl of the base URL still answered the old document");
         WebView2Host saved = image.mHost;
         image.loadDataWithBaseURL(BASE, "not answered", "text/html", "UTF-8", null);
         original = image.pendingBody(); image.mHost = null;
@@ -186,6 +207,43 @@ public final class WebViewOwnedResponsesHost {
         check(image.pendingBody() == original, "unavailable host consumed a document");
         image.mHost = saved;
     }
+    /** WebView2Host's single flag took the first of two loads; WebView2 starts both. */
+    private static void navigationCases() {
+        WebViewOwnedResponsesHost provider = pending(BASE, "first", "text/html", "UTF-8");
+        provider.loadDataWithBaseURL(BASE, "second", "text/html", "UTF-8", null);
+        String url = FileUrls.toWebView2(BASE);
+        provider.mOverridesNavigation = true;
+        provider.mClient.takes = true;  // an app that opens its own folder's links itself
+        check(provider.mHost.navigations.size() == 2, "two loads were not both issued");
+        // NavigationStarting #1: WebView2Host's flag (EVENT_PAGE_STARTED arg 1).
+        check(provider.mApiNavigations.started(url), "the first load was not the WebView's own");
+        // NavigationStarting #2: WebView2Host asks the provider.
+        check(!provider.onNavigationStarting(url, false, false) && provider.mStartingApi
+                && provider.mClient.overrides.get() == 0, "shouldOverrideUrlLoading was asked about loadDataWithBaseURL");
+        answer(provider, 1, BASE, CONTEXT_DOCUMENT);
+        answer(provider, 2, BASE, CONTEXT_DOCUMENT);
+        check(Arrays.equals(last(provider).body, bytes("second")), "the second load's document was lost");
+        // The page's own navigation to the same URL is the app's to take.
+        provider.mStartingApi = false;
+        check(provider.onNavigationStarting(url, true, false) && provider.mClient.overrides.get() == 1
+                && provider.mClient.request.url.equals(BASE), "a page navigation did not reach shouldOverrideUrlLoading");
+        // A redirect of the WebView's own load is the app's too (Android asks about redirects).
+        provider.loadUrl0(BASE);
+        check(provider.onNavigationStarting("https://redirect.example/", false, true)
+                && provider.mClient.overrides.get() == 2, "a redirect skipped shouldOverrideUrlLoading");
+        check(!provider.onNavigationStarting(url, false, false) && provider.mClient.overrides.get() == 2,
+                "a load issued before a redirect was asked about");
+        // Loads that never start do not exempt later page navigations forever.
+        for (int i = 0; i < ApiNavigations.LIMIT + 4; ++i) provider.navigate("https://stale.example/" + i, "");
+        check(provider.mApiNavigations.size() == ApiNavigations.LIMIT, "unstarted loads were kept without bound");
+        check(provider.mApiNavigations.started("https://stale.example/" + (ApiNavigations.LIMIT + 3))
+                && provider.mApiNavigations.size() == 0, "a later load's start kept superseded ones");
+        check(provider.onNavigationStarting("https://stale.example/1", true, false), "a superseded load's URL stayed exempt");
+        provider.navigate("https://fail.example/", "");
+        provider.mApiNavigations.abandoned("https://fail.example/");
+        check(provider.onNavigationStarting("https://fail.example/", true, false), "a failed load's URL stayed exempt");
+    }
+    private void loadUrl0(String url) { navigate(FileUrls.toWebView2(url), ""); }
     private static final class TrackingBytes extends ByteArrayInputStream {
         int reads, closes;
         boolean transform, failRead, failClose, zeroFirst;
@@ -279,7 +337,7 @@ public final class WebViewOwnedResponsesHost {
         WebViewOwnedResponsesHost failure = pending(BASE, "one-shot", "text/html", "UTF-8");
         failure.mHost.failRespond = true;
         try { answer(failure, 12, BASE, CONTEXT_DOCUMENT); throw new AssertionError("native failure swallowed"); }
-        catch (IllegalStateException expected) { check(failure.pendingBody() == null, "failed response was not consumed at admission"); }
+        catch (IllegalStateException expected) { check(failure.pendingBody() != null, "a failed response dropped the published document"); }
     }
     private static void fallback(WebViewOwnedResponsesHost provider) {
         provider.mInterceptsRequests = true;
@@ -299,15 +357,18 @@ public final class WebViewOwnedResponsesHost {
                 provider.loadDataWithBaseURL(replacementUrl, "new", "text/new", "UTF-8", null);
             };
             answer(provider, 1, BASE, CONTEXT_DOCUMENT);
-            check(last(provider).headers.equals("Content-Type: text/fallback; charset=UTF-8\r\n")
-                    && Arrays.equals(last(provider).body, bytes("app fallback")),
-                    "failed owned claim did not use ordinary interception fallback");
+            boolean same = replacementUrl.equals(BASE);
+            check(same ? last(provider).headers.equals("Content-Type: text/new; charset=UTF-8\r\n")
+                            && Arrays.equals(last(provider).body, bytes("new"))
+                    : last(provider).headers.equals("Content-Type: text/fallback; charset=UTF-8\r\n")
+                            && Arrays.equals(last(provider).body, bytes("app fallback")),
+                    "a request during a replacement mixed documents or skipped the ordinary fallback");
             check(Arrays.equals(provider.pendingBody(), bytes("new")) && provider.pendingMime().equals("text/new"),
-                    "old claim cleared/mixed a replacement document");
+                    "a request cleared/mixed a replacement document");
             answer(provider, 2, replacementUrl, CONTEXT_DOCUMENT);
             check(last(provider).headers.equals("Content-Type: text/new; charset=UTF-8\r\n")
                     && Arrays.equals(last(provider).body, bytes("new")), "replacement body/MIME snapshot changed");
-            check(provider.pendingBody() == null && provider.mClient.calls.get() == 1, "replacement admission duplicated app callback");
+            check(provider.mClient.calls.get() == (same ? 0 : 1), "replacement answer duplicated app callback");
         }
         for (int run = 0; run < 80; ++run) {
             WebViewOwnedResponsesHost provider = pending(BASE, "one owner", "text/owned", "UTF-8");
@@ -328,8 +389,9 @@ public final class WebViewOwnedResponsesHost {
             if (failure.get() != null) throw new AssertionError(failure.get());
             check(provider.mHost.deliveries.size() == 2, "document response was lost/duplicated");
             long owners = provider.mHost.deliveries.stream().filter(d -> Arrays.equals(d.body, bytes("one owner"))).count();
-            check(owners == 1 && provider.mClient.calls.get() == 1 && provider.pendingBody() == null,
-                    "two document workers claimed the same private body");
+            // Two navigations' requests (the first one superseded) both get the document.
+            check(owners == 2 && provider.mClient.calls.get() == 0 && provider.pendingBody() != null,
+                    "concurrent requests for the published document did not both get it");
         }
         WebViewOwnedResponsesHost admitted = pending(BASE, "old snapshot", "text/old", "UTF-8");
         admitted.mHost.beforeRespond = () -> {
@@ -373,7 +435,7 @@ public final class WebViewOwnedResponsesHost {
     }
     public static void main(String[] args) throws Exception {
         switch (args[0]) {
-            case "behavior": ownedCases(); streamsAndHeaders(); break;
+            case "behavior": ownedCases(); streamsAndHeaders(); navigationCases(); break;
             case "concurrency": concurrency(); break;
             case "measurement": measurement(args[1].equals("gate")); break;
             default: throw new IllegalArgumentException(args[0]);
