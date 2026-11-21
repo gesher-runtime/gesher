@@ -11,6 +11,9 @@ import android.content.IntentSender;
 import android.content.pm.IPackageInstaller;
 import android.content.pm.IPackageInstallerSession;
 import android.content.pm.IPackageInstallerCallback;
+import android.content.pm.IPackageManager;
+import android.content.pm.InstallSourceInfo;
+import android.content.pm.Signature;
 import android.content.pm.PackageInstaller;
 import android.content.res.AssetManager;
 import android.os.Bundle;
@@ -301,6 +304,94 @@ public final class PackageInstallerSessionTest {
                 && !new File(replacementCode, "base.dm").exists() && manager.getAppMetadataFd(pkg, 0) == null,
                 "Same-content session incorrectly retained metadata from its previous install");
     }
+    private static void installSource(IPackageInstaller service, IPackageManager pm,
+            File fixtures, String pkg, Object backend, Class<?> installerClass,
+            AtomicReference<String> caller, List<Runnable> jobs, AtomicReference<Intent> result)
+            throws Exception {
+        File v2 = new File(fixtures, "v2only.apk"), rotated = new File(fixtures, "rotated.apk");
+        InstallSourceInfo unknown = pm.getInstallSourceInfo(pkg, 0);
+        require(unknown != null && unknown.getInstallingPackageName() == null
+                && unknown.getInitiatingPackageName() == null && pm.getInstallerPackageName(pkg) == null,
+                "Host install invented package attribution");
+        require(pm.getInstallSourceInfo("fixture.missing", 0) == null,
+                "Unknown target acquired install-source metadata");
+        rejected(() -> pm.getInstallerPackageName("fixture.missing"), IllegalArgumentException.class);
+
+        caller.set(pkg);
+        PackageInstaller.SessionParams params =
+                new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        params.setAppPackageName(pkg);
+        params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_STORE);
+        params.setInstallerPackageName("fixture.fake.store");
+        rejected(() -> service.createSession(params, pkg, null, 0), SecurityException.class);
+        params.setInstallerPackageName(null);
+        int id = service.createSession(params, pkg, null, 0);
+        params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE);
+        require(service.getSessionInfo(id).getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE,
+                "Session retained mutable package source input");
+        stage(service, id, rotated, "download.apk");
+        service.openSession(id).commit(receiver(result), false);
+        jobs.remove(0).run();
+        require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                == PackageInstaller.STATUS_SUCCESS, "Rotated installer session did not update");
+        InstallSourceInfo source = pm.getInstallSourceInfo(pkg, 0);
+        Signature[] original = com.gesher.server.ApkPackage.verifySignatures(v2.getPath());
+        require(pkg.equals(source.getInitiatingPackageName()) && pkg.equals(source.getInstallingPackageName())
+                && pkg.equals(pm.getInstallerPackageName(pkg)), "Session owner was not recorded as installer");
+        require(source.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE
+                && source.getUpdateOwnerPackageName() == null && source.getOriginatingPackageName() == null,
+                "Attribution invented an update owner or originating package");
+        require(Arrays.equals(original, source.getInitiatingPackageSigningInfo().getApkContentsSigners()),
+                "Installer certificates were taken from new target code instead of the initiating snapshot");
+
+        // An identical session reinstall still updates provenance, with no new APK generation.
+        id = service.createSession(params, pkg, null, 0);
+        com.gesher.server.ApkPackage currentCode = ((com.gesher.server.PackageManagerService)pm).get(pkg);
+        String currentPath = currentCode.apkPath;
+        // Losing disposable compiled output must not retire the still-installed code.
+        File oat = (File)method(Class.forName("com.gesher.server.Dexopt"), "oatDir", String.class)
+                .invoke(null, new File(currentPath).getParent());
+        Files.deleteIfExists(new File(oat, "base.odex").toPath());
+        stage(service, id, rotated, "download.apk");
+        service.openSession(id).commit(receiver(result), false);
+        jobs.remove(0).run();
+        require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                == PackageInstaller.STATUS_SUCCESS, "Identical source-attribution session failed");
+        require(currentPath.equals(((com.gesher.server.PackageManagerService)pm).get(pkg).apkPath),
+                "Attribution-only reinstall manufactured a new code generation");
+        require(currentCode == ((com.gesher.server.PackageManagerService)pm).get(pkg),
+                "Cache-only compilation retired the installed package identity");
+        InstallSourceInfo current = pm.getInstallSourceInfo(pkg, 0);
+        require(current.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE
+                && current.getInitiatingPackageSigningInfo().getSigningCertificateHistory().length == 2,
+                "Attribution-only reinstall lost declared category or verified signing lineage");
+
+        method(installerClass, "install", String.class).invoke(backend, rotated.getPath());
+        @SuppressWarnings("unchecked") Collection<com.gesher.server.ApkPackage> reopened = (Collection<
+                com.gesher.server.ApkPackage>)method(installerClass, "loadInstalled").invoke(null);
+        IPackageManager restarted = new com.gesher.server.PackageManagerService(reopened);
+        InstallSourceInfo reloaded = restarted.getInstallSourceInfo(pkg, 0);
+        require(pkg.equals(reloaded.getInstallingPackageName())
+                && reloaded.getPackageSource() == current.getPackageSource()
+                && Arrays.equals(reloaded.getInitiatingPackageSigningInfo().getSigningCertificateHistory(),
+                        current.getInitiatingPackageSigningInfo().getSigningCertificateHistory()),
+                "Host reopen or durable registry reload lost installer attribution");
+
+        caller.set("android");
+        params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE);
+        id = service.createSession(params, "android", null, 0);
+        stage(service, id, rotated, "download.apk");
+        service.openSession(id).commit(receiver(result), false);
+        jobs.remove(0).run();
+        require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                == PackageInstaller.STATUS_SUCCESS, "Session without an app installer did not commit");
+        InstallSourceInfo categoryOnly = pm.getInstallSourceInfo(pkg, 0);
+        require(categoryOnly.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE
+                && categoryOnly.getInstallingPackageName() == null
+                && categoryOnly.getInitiatingPackageName() == null,
+                "Session lost its declared category or fabricated an app identity");
+    }
+
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
         AssetManager.createSystemAssetsInZygoteLocked(false, System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
@@ -460,6 +551,8 @@ public final class PackageInstallerSessionTest {
         service.abandonSession(recovered);
         metadata(service, new File(args[0]), apk, pkg, lite.getResult().getLongVersionCode(),
                 pm, apkClass, pmClass, caller, allow, prompts, jobs, result);
+        installSource(service, (IPackageManager)pm, new File(args[0]), pkg, backend, installerClass,
+                caller, jobs, result);
         System.out.println("PackageInstallerSessionTest all passed: " + checks + " checks");
     }
 }

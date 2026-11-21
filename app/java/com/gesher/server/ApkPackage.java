@@ -81,6 +81,7 @@ public final class ApkPackage {
     private final List<String> mLauncherActivities = new ArrayList<>();
     private long mInstallTime = System.currentTimeMillis();
     private long mUpdateTime = mInstallTime;
+    private volatile PackageInstallSource mInstallSource = PackageInstallSource.UNKNOWN;
     private String mDataDir;
     private AppDataStorage mDataStorage;
     private String mNativeLibraryDir;  // null: <data dir>/lib
@@ -450,6 +451,15 @@ public final class ApkPackage {
     public void setInstallTimes(long firstInstallTime, long lastUpdateTime) {
         mInstallTime = firstInstallTime;
         mUpdateTime = lastUpdateTime;
+    }
+
+    void setInstallSource(PackageInstallSource source) {
+        mInstallSource = source;
+    }
+
+    PackageInstallSource installSource() {
+        PackageInstallSource source = mInstallSource;
+        return source != null ? source : PackageInstallSource.UNKNOWN;
     }
 
     public long firstInstallTime() {

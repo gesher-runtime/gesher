@@ -107,10 +107,33 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     private String caller() {
         if (mTestCaller != null) return mTestCaller.get();
         if (mCallers == null) throw new UnsupportedOperationException("No persistent package installer");
-        return mCallers.callerPackage();
+        String name = mCallers.callerPackage();
+        if (!"android".equals(name)) {
+            // A surviving old process must not acquire a replacement installation's
+            // session authority or signer snapshot by resolving only its package name.
+            ApkPackage code = mAtm.authenticatedPackageCodeForPid(
+                    mCallers.callerPid(), mCallers.callerUid());
+            if (code == null || !name.equals(code.packageName)) {
+                throw new SecurityException("Installer process belongs to retired package code");
+            }
+        }
+        return name;
     }
+    boolean isCallingPackage(String packageName) {
+        CallerIdentity callers = mCallers;
+        if (callers == null || callers.isSystem()) return false;
+        try {
+            return packageName.equals(callers.callerPackage());
+        } catch (SecurityException unknownCaller) {
+            return false;
+        }
+    }
+
     private String owner(String claimed, int userId) {
-        String actual = caller();
+        return owner(claimed, userId, caller());
+    }
+
+    private String owner(String claimed, int userId, String actual) {
         if (userId != 0) throw new SecurityException("Only user 0 is supported");
         if (claimed == null || (!"android".equals(actual) && !actual.equals(claimed))
                 || (!"android".equals(claimed) && mPm.get(claimed) == null)) {
@@ -132,7 +155,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     }
     @Override public int createSession(PackageInstaller.SessionParams p, String pkg, String tag, int user) {
         ApkPackage ownerCode = mPm.get(pkg);
-        String owner = owner(pkg, user);
+        String actual = caller();
+        String owner = owner(pkg, user, actual);
         if (mInstaller == null) throw new UnsupportedOperationException("No persistent package installer");
         if (p == null || p.mode != PackageInstaller.SessionParams.MODE_FULL_INSTALL || p.isMultiPackage
                 || p.isStaged || p.dataLoaderParams != null || p.abiOverride != null
@@ -142,6 +166,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         if (p.sizeBytes < -1 || p.sizeBytes > MAX_SESSION_BYTES) {
             throw new IllegalArgumentException("Invalid installation size");
+        }
+        if (p.installerPackageName != null && !owner.equals(p.installerPackageName)) {
+            throw new SecurityException("Installer package override is unsupported");
         }
         reapStaleSessions();
         if (ownerCode == null && !"android".equals(owner)) throw new SecurityException("Installer disappeared");
@@ -162,7 +189,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 Files.createDirectories(root.toPath());
                 File stage = Files.createTempDirectory(root.toPath(), "session-").toFile();
                 int id = mIds.getAndIncrement();
-                created = new Session(id, owner, ownerCode, p.appPackageName, p.sizeBytes, stage);
+                created = new Session(id, owner, ownerCode, p.appPackageName, p.sizeBytes,
+                        PackageInstallSource.category(p.packageSource), !"android".equals(actual), stage);
                 mSessions.put(id, created);
             } catch (IOException e) { throw io(); }
         }
@@ -191,6 +219,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         for (Session s : snapshot) {
             if (s.ownerCurrent() && ("android".equals(owner) || owner.equals(s.owner))) list.add(s.info());
         }
+        // Revalidate the attached installation after collecting session metadata.
+        caller();
         return new ParceledListSlice<>(list);
     }
     @Override public ParceledListSlice<PackageInstaller.SessionInfo> getMySessions(String pkg, int user) {
@@ -201,6 +231,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         for (Session s : snapshot) {
             if (owner.equals(s.owner) && s.ownerCurrent()) list.add(s.info());
         }
+        owner(pkg, user);
         return new ParceledListSlice<>(list);
     }
     @Override public ParceledListSlice<PackageInstaller.SessionInfo> getStagedSessions() {
@@ -461,6 +492,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         final String owner, expectedPackage;
         final ApkPackage ownerCode;
         final long expectedSize, created = System.currentTimeMillis();
+        final int packageSource;
+        final boolean hasApplicationInitiator;
         final File stage;
         final IPackageInstallerSession binder;
         final Map<String, InstallFileBridge> writes = new HashMap<>();
@@ -469,9 +502,13 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         boolean sealed, committing, destroyed, writeFailed;
         float progress;
         long bytes;
-        Session(int id, String owner, ApkPackage code, String pkg, long size, File stage) {
+        Session(int id, String owner, ApkPackage code, String pkg, long size, int packageSource,
+                boolean hasApplicationInitiator, File stage) {
             this.id = id; this.owner = owner; ownerCode = code; expectedPackage = pkg;
-            expectedSize = size; this.stage = stage;
+            expectedSize = size;
+            this.packageSource = packageSource;
+            this.hasApplicationInitiator = hasApplicationInitiator;
+            this.stage = stage;
             binder = StandIn.of(IPackageInstallerSession.class, this).asInterface();
         }
         void checkOwner() {
@@ -505,6 +542,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             i.mode = PackageInstaller.SessionParams.MODE_FULL_INSTALL; i.progress = progress;
             i.sealed = sealed; i.active = !writes.isEmpty() || committing;
             i.sizeBytes = expectedSize; i.appPackageName = expectedPackage;
+            i.packageSource = packageSource;
             i.requireUserAction = PackageInstaller.SessionParams.USER_ACTION_REQUIRED;
             i.createdMillis = created; i.updatedMillis = created; return i;
         }
@@ -662,7 +700,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 synchronized (mInstaller) {
                     if (!ownerCurrent() || mPm.get(pkg) != targetCode) throw new SecurityException("Package code changed");
                     String[] installed = mInstaller.install(new File(canonical, "base.apk").getPath(),
-                            new InstallSessionMetadata(canonical));
+                            new InstallSessionMetadata(canonical), PackageInstallSource.fromSession(
+                                    hasApplicationInitiator ? ownerCode : null, packageSource));
                     if (!pkg.equals(installed[0]) || mPm.get(pkg) == null) throw new IllegalStateException("Not published");
                 }
                 status = PackageInstaller.STATUS_SUCCESS; message = "Installed";
