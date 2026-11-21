@@ -2260,6 +2260,34 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         if (info == null) {
             if (requiredTask == null && BluetoothRequests.handles(intent, resolvedType)) {
+                // Standalone services share the APK's PID and UID. Local Binder calls
+                // are normally trusted control-plane work, but must not turn that
+                // admitted APK (or a retired admission) into the Android system caller.
+                // A verified PendingIntent creator already carries its own authority.
+                if (!internalCreator && originalPid == android.os.Process.myPid()
+                        && originalUid >= android.os.Process.FIRST_APPLICATION_UID) {
+                    synchronized (this) {
+                        ApkPackage owner = originalProcess == null ? null : originalProcess.packageCode;
+                        if (originalProcess == null || originalProcess.inProcessActivityState == null
+                                || !originalProcess.ready || processByPid(originalPid) != originalProcess
+                                || originalProcess.uid != originalUid || owner == null
+                                || owner.uid() != originalUid || mPm.get(owner.packageName) != owner
+                                || mPm.isRemovalPending(owner.packageName)
+                                || !owner.matchesEnabledApplication(0)
+                                || originalProcess.enabledProcessLifetime != null
+                                    && !originalProcess.enabledProcessLifetime.getAsBoolean()
+                                || caller == null || originalProcess.thread == null
+                                || !originalProcess.thread.asBinder().equals(caller.asBinder())) {
+                            throw new SecurityException("Bluetooth request requires its live standalone admission");
+                        }
+                        ApkPackage claimed = mPm.get(callingPackage);
+                        if (!owner.packageName.equals(callingPackage)
+                                && (claimed == null || claimed.uid() != owner.uid())) {
+                            throw new SecurityException("Bluetooth caller cannot act for another package");
+                        }
+                        verifiedCaller = owner.packageName;
+                    }
+                }
                 return requestBluetoothState(intent, verifiedCaller, originalProcess,
                         internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
             }

@@ -108,7 +108,9 @@ and Settings' [RequestPermissionActivity](https://android.googlesource.com/platf
 `BluetoothAdapter.ACTION_REQUEST_ENABLE` and `ACTION_REQUEST_DISABLE` use the
 system activity path, including for applications targeting API 33 or newer. They
 require the caller's `BLUETOOTH_CONNECT` grant on API 31+, or its declared
-`BLUETOOTH` permission below that target. A desktop consent prompt runs outside
+`BLUETOOTH` permission below that target. Standalone applications retain their
+admitted APK identity and permissions even when services share their process.
+A desktop consent prompt runs outside
 the activity/Binder thread. Success is returned only after an existing adapter is
 observed in the requested state; a rejected prompt, missing adapter, failed
 operation or transition timeout returns `Activity.RESULT_CANCELED`. A radio that

@@ -3,6 +3,7 @@ package com.gesher.server;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.IApplicationThread;
 import android.app.ResultInfo;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -11,6 +12,7 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.Signature;
 import android.net.Uri;
 import android.os.IBinder;
+import android.os.Binder;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedActivityImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
@@ -535,7 +537,124 @@ public final class BluetoothRequestFixture {
                 && results.get(0).mRequestCode == 73 && "forwarded-who".equals(results.get(0).mResultWho),
                 "trampoline death lost saved recipient's forwarded result");
     }
+
+    /** The real starter must retain the admitted APK's identity in standalone mode. */
+    private static final class StandaloneRoute {
+        final Harness h = new Harness();
+        final ApkPackage owner = h.modern("fixture.bt.standalone");
+        final Object atm = construct(ActivityTaskManagerService.class,
+                new Class<?>[]{PackageManagerService.class}, h.pm);
+        final Object process;
+        final IApplicationThread thread = appThread();
+        final Method starter;
+
+        static IApplicationThread appThread() {
+            return new IApplicationThread.Default() {
+                private final IBinder token = new Binder();
+                @Override public IBinder asBinder() { return token; }
+            };
+        }
+
+        @SuppressWarnings({"unchecked", "rawtypes"}) StandaloneRoute() throws Exception {
+            set(atm, "mBluetoothRequests", h.requests);
+            Object am = UNSAFE.allocateInstance(ActivityManagerService.class);
+            set(am, "mAtm", atm); set(am, "mPm", h.pm);
+            set(am, "mCallers", new CallerIdentity(h.pm, (ActivityTaskManagerService) atm));
+            set(atm, "mAm", am);
+            Class<?> processType = type("ActivityTaskManagerService$ProcessRecord");
+            process = UNSAFE.allocateInstance(processType);
+            set(process, "pid", android.os.Process.myPid()); set(process, "uid", owner.uid());
+            set(process, "packageName", owner.packageName); set(process, "processName", owner.packageName);
+            set(process, "packageCode", owner); set(process, "ready", true); set(process, "thread", thread);
+            set(process, "activities", new ArrayList<>());
+            set(process, "inProcessActivityState",
+                    Enum.valueOf((Class) type("ActivityTaskManagerService$State"), "STOPPED"));
+            ((List<Object>) get(atm, "mProcesses")).add(process);
+            Method selected = null;
+            for (Method method : atm.getClass().getDeclaredMethods())
+                if (method.getName().equals("start") && method.getParameterCount() == 8) selected = method;
+            if (selected == null) throw new AssertionError("Activity starter unavailable");
+            starter = selected; starter.setAccessible(true);
+        }
+
+        int launch(String action, String claimed, IApplicationThread caller) throws Exception {
+            long saved = Binder.clearCallingIdentity();
+            try {
+                Binder.restoreCallingIdentity(((long) owner.uid() << 32)
+                        | (android.os.Process.myPid() & 0xffffffffL));
+                check(Binder.getCallingPid() == android.os.Process.myPid()
+                        && Binder.getCallingUid() == owner.uid(), "standalone fixture identity unavailable");
+                try {
+                    return (int) starter.invoke(atm, caller, new Intent(action), null,
+                            claimed, null, null, -1, null);
+                } catch (InvocationTargetException failure) { return (int) rethrow(failure.getCause()); }
+            } finally { Binder.restoreCallingIdentity(saved); }
+        }
+
+        void untouched() {
+            check(h.queue.work.isEmpty() && h.radio.reads == 0 && h.radio.confirms == 0
+                    && h.radio.switches == 0, "declined standalone launch reached host work");
+        }
+    }
+
+    @SuppressWarnings("unchecked") private static void standaloneIdentity() throws Exception {
+        StandaloneRoute denied = new StandaloneRoute();
+        denied.h.grant(denied.owner, CONNECT, false); denied.h.grant(denied.owner, ADVERTISE, false);
+        for (String action : List.of(ENABLE, DISABLE, DISCOVERABLE))
+            expect(SecurityException.class, () -> denied.launch(action, denied.owner.packageName, denied.thread),
+                    "standalone caller did not retain its permission requirements");
+        denied.untouched();
+
+        StandaloneRoute allowed = new StandaloneRoute();
+        check(allowed.launch(ENABLE, allowed.owner.packageName, allowed.thread) == ActivityManager.START_SUCCESS,
+                "granted standalone caller was rejected");
+        allowed.h.queue.next();
+        check(allowed.h.radio.on && allowed.h.radio.switches == 1, "granted standalone operation was lost");
+
+        StandaloneRoute identity = new StandaloneRoute();
+        expect(SecurityException.class, () -> identity.launch(ENABLE, "android", identity.thread),
+                "standalone package claim replaced its admitted owner");
+        expect(SecurityException.class, () -> identity.launch(ENABLE, identity.owner.packageName,
+                StandaloneRoute.appThread()), "standalone caller thread did not match its admission");
+        expect(SecurityException.class, () -> identity.launch(ENABLE, identity.owner.packageName, null),
+                "standalone launch without an admitted thread was accepted");
+        identity.untouched();
+
+        for (String state : List.of("absent", "exiting", "dead", "unready", "replaced", "removing", "disabled")) {
+            StandaloneRoute retired = new StandaloneRoute();
+            switch (state) {
+                case "absent" -> ((List<?>) get(retired.atm, "mProcesses")).clear();
+                case "exiting" -> set(retired.process, "exiting", true);
+                case "dead" -> set(retired.process, "dead", true);
+                case "unready" -> set(retired.process, "ready", false);
+                case "replaced" -> retired.h.packages.put(retired.owner.packageName,
+                        code(retired.owner.packageName, retired.owner.uid(), 36, CONNECT));
+                case "removing" -> retired.h.removing.put(retired.owner.packageName, retired.owner);
+                case "disabled" -> ((PackageImpl) retired.owner.parsed).setEnabled(false);
+            }
+            expect(SecurityException.class, () -> retired.launch(ENABLE, retired.owner.packageName, retired.thread),
+                    "standalone admission was no longer current: " + state);
+            retired.untouched();
+        }
+
+        StandaloneRoute published = new StandaloneRoute();
+        published.h.grant(published.owner, CONNECT, false);
+        ThreadLocal<String> creator = (ThreadLocal<String>) get(published.atm, "mVerifiedCreator");
+        try {
+            creator.set(published.owner.packageName);
+            expect(SecurityException.class, () -> published.launch(ENABLE, "android", null),
+                    "verified application creator lost its permission requirements");
+            published.untouched();
+            creator.set("android");
+            check(published.launch(ENABLE, "android", null) == ActivityManager.START_SUCCESS,
+                    "verified system creator was changed to the local application's identity");
+            published.h.queue.next();
+            check(published.h.radio.on, "verified system request did not complete");
+        } finally { creator.remove(); }
+    }
+
     public static int run() throws Exception {
-        checks = 0; stateMachine(); permissionsAndLifetimes(); admission(); matching(); routing(); resultRoutes(); return checks;
+        checks = 0; stateMachine(); permissionsAndLifetimes(); admission(); matching(); routing();
+        resultRoutes(); standaloneIdentity(); return checks;
     }
 }
