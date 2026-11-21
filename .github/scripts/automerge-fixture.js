@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const run = require('./label-automerge.js');
+// Stale-state re-reads are bounded by count; the fixture needs no wall-clock delay.
+run.RELEASE_STATE.delayMs = 0;
 const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const BASE = 'c'.repeat(40);
@@ -45,8 +47,11 @@ function world(over = {}) {
         .sort((a, b) => b.id - a.id)[0];
       return latest?.state === 'success';
     });
+    // The deployed rules keep approvals when main advances. Native policy can
+    // therefore count an older-head review; only the controller receipt binds
+    // authorization to this PR's current head. Model both policy settings.
     const approvals = w.reviews.filter(r => r.state === 'APPROVED' &&
-      r.commit_id === w.pr.head.sha).length;
+      (!w.nativePolicy.dismissStaleReviews || r.commit_id === w.pr.head.sha)).length;
     return green && approvals >= (w.nativePolicy.approvals ?? 1) &&
       w.checks.length > 0 && w.checks.every(c => c.status === 'completed' && c.conclusion === 'success');
   };
@@ -61,6 +66,7 @@ function world(over = {}) {
     if (w.nativePolicyHook) await w.nativePolicyHook(stage, args);
     if (w.nativeAutoMethod === 'SQUASH' && nativeReady()) recordNativeMerge(stage);
   };
+  w.evaluateNative = () => nativeBoundary('external-native-evaluation', {});
   if (!over.runs) w.runs = ['ci', 'arm64-windows'].map((name, i) => ({
     id: 100 + i, workflow_id: 1 + i, check_suite_id: 1000 + i, name, path: '.github/workflows/' + name + '.yml',
     event: 'pull_request', status: 'completed', conclusion: 'success', run_attempt: 1, created_at: T(10),
@@ -213,7 +219,7 @@ function world(over = {}) {
       return {node: {id: w.pr.node_id, state: w.pr.state.toUpperCase(), isDraft: w.pr.draft,
         headRefOid: w.pr.head.sha, baseRefName: w.pr.base.ref,
         mergeable: w.nativeMergeable ?? 'MERGEABLE',
-        mergeStateStatus: nativeReady() ? 'CLEAN' : 'BLOCKED', ...w.nativeStateOverride}};
+        mergeStateStatus: !w.nativePolicy || nativeReady() ? 'CLEAN' : 'BLOCKED', ...w.nativeStateOverride}};
     }
     if (query.includes('autoMergeRequest')) return {node: {autoMergeRequest: w.nativeAutoMethod ? {mergeMethod: w.nativeAutoMethod} : null}};
     if (query.includes('enablePullRequestAutoMerge')) {
@@ -232,8 +238,8 @@ function world(over = {}) {
       assert.match(query, /expectedHeadOid: \$head/);
       assert.match(query, /mergeMethod: SQUASH/);
       if (args.head !== w.pr.head.sha) throw new Error('native merge head changed');
-      if (!nativeReady()) throw new Error('Native repository policy blocks this merge');
-      recordNativeMerge('merge');
+      if (w.nativePolicy && !nativeReady()) throw new Error('Native repository policy blocks this merge');
+      if (w.nativePolicy) recordNativeMerge('merge');
       if (w.nativeMergeResponseError) throw w.nativeMergeResponseError;
       return {};
     }

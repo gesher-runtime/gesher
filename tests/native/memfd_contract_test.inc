@@ -82,8 +82,8 @@ static void test_memfd_route(memfd_create_fn create, const char* route) {
                "memfd EXEC and NOEXEC_SEAL conflict");
   // These are explicit backend boundaries, not claims that Android lacks
   // these features. Successful creation must not advertise unenforced policy.
-  const unsigned unsupported[] = {MFD_ALLOW_SEALING, MFD_HUGETLB, MFD_NOEXEC_SEAL,
-                                  MFD_ALLOW_SEALING | MFD_EXEC, MFD_HUGETLB | (21U << 26)};
+  // (MFD_ALLOW_SEALING is supported: gesher-base stores and enforces seals.)
+  const unsigned unsupported[] = {MFD_HUGETLB, MFD_NOEXEC_SEAL, MFD_HUGETLB | (21U << 26)};
   for (size_t i = 0; i < sizeof(unsupported) / sizeof(unsupported[0]); ++i)
     memfd_reject(create, "unsupported", unsupported[i], EOPNOTSUPP,
                  "memfd unsupported policy never claims success");
@@ -106,9 +106,107 @@ static void test_memfd_route(memfd_create_fn create, const char* route) {
   }
 }
 
+// Seals (fcntl F_ADD_SEALS/F_GET_SEALS) with Linux's semantics: each seal
+// refuses exactly what it forbids, on every write path, through every
+// descriptor of the file. (ASharedMemory, which libcutils builds on them, is
+// JniTest's: libandroid is not in elf_load_test's host.)
+static void test_memfd_seals(memfd_create_fn create) {
+  printf("memfd seals\n");
+  const long page = sysconf(_SC_PAGESIZE);
+  char buf[16] = "sealed";
+  int fd = create("seals", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+  check("memfd MFD_ALLOW_SEALING is created", fd >= 0);
+  if (fd < 0) return;
+  check("a sealable memfd starts without seals", fcntl(fd, F_GET_SEALS) == 0);
+  check("it is sized", ftruncate(fd, page) == 0);
+  errno = 0;
+  check("unknown seal bits are EINVAL", fcntl(fd, F_ADD_SEALS, 0x400) == -1 && errno == EINVAL);
+  check("F_SEAL_GROW | F_SEAL_SHRINK", fcntl(fd, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK) == 0 &&
+                                           fcntl(fd, F_GET_SEALS) == (F_SEAL_GROW | F_SEAL_SHRINK));
+  errno = 0;
+  check("F_SEAL_GROW refuses a larger ftruncate", ftruncate(fd, page * 2) == -1 && errno == EPERM);
+  errno = 0;
+  check("F_SEAL_SHRINK refuses a smaller ftruncate", ftruncate(fd, page / 2) == -1 && errno == EPERM);
+  check("the same size is allowed", ftruncate(fd, page) == 0);
+  check("a write inside the size is allowed", pwrite(fd, buf, 6, 0) == 6);
+  errno = 0;
+  check("F_SEAL_GROW refuses a write past the end", pwrite(fd, buf, 6, page - 2) == -1 && errno == EPERM);
+  check("fallocate inside the size is allowed", fallocate(fd, 0, 0, page) == 0);
+  errno = 0;
+  check("F_SEAL_GROW refuses fallocate past the end", fallocate(fd, 0, 0, page * 2) == -1 && errno == EPERM);
+
+  char* writable = (char*)mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  check("a writable shared mapping before the write seal", writable != MAP_FAILED);
+  check("F_SEAL_FUTURE_WRITE", fcntl(fd, F_ADD_SEALS, F_SEAL_FUTURE_WRITE) == 0 &&
+                                   (fcntl(fd, F_GET_SEALS) & F_SEAL_FUTURE_WRITE) != 0);
+  errno = 0;
+  check("F_SEAL_FUTURE_WRITE refuses write", write(fd, buf, 1) == -1 && errno == EPERM);
+  errno = 0;
+  check("F_SEAL_FUTURE_WRITE refuses pwrite", pwrite(fd, buf, 1, 0) == -1 && errno == EPERM);
+  errno = 0;
+  check("F_SEAL_FUTURE_WRITE refuses a writable shared mapping",
+        mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) == MAP_FAILED && errno == EPERM);
+  char* reader = (char*)mmap(NULL, page, PROT_READ, MAP_SHARED, fd, 0);
+  check("a read-only shared mapping is allowed", reader != MAP_FAILED && reader[0] == 's');
+  errno = 0;
+  check("which mprotect cannot make writable (EACCES)",
+        reader != MAP_FAILED && mprotect(reader, page, PROT_READ | PROT_WRITE) == -1 && errno == EACCES);
+  char* copy = (char*)mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  check("a private writable mapping is allowed", copy != MAP_FAILED);
+  if (copy != MAP_FAILED) { copy[0] = 'x'; munmap(copy, page); }
+  if (writable != MAP_FAILED) {
+    writable[1] = 'E';
+    check("the mapping made before the seal stays writable", reader != MAP_FAILED && reader[1] == 'E');
+    munmap(writable, page);
+  }
+  if (reader != MAP_FAILED) munmap(reader, page);
+  int dup_fd = dup(fd);
+  errno = 0;
+  check("another descriptor of the file sees and obeys the seals",
+        dup_fd >= 0 && (fcntl(dup_fd, F_GET_SEALS) & F_SEAL_FUTURE_WRITE) != 0 &&
+            write(dup_fd, buf, 1) == -1 && errno == EPERM);
+  if (dup_fd >= 0) close(dup_fd);
+  check("F_SEAL_SEAL", fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL) == 0);
+  errno = 0;
+  check("F_SEAL_SEAL refuses further seals", fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EPERM);
+  close(fd);
+
+  fd = create("seal-write", MFD_ALLOW_SEALING);
+  check("F_SEAL_WRITE on an unmapped memfd", fd >= 0 && ftruncate(fd, page) == 0 &&
+                                                 fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == 0);
+  errno = 0;
+  check("F_SEAL_WRITE refuses write", fd >= 0 && write(fd, buf, 1) == -1 && errno == EPERM);
+  errno = 0;
+  check("F_SEAL_WRITE refuses a writable shared mapping",
+        fd >= 0 && mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) == MAP_FAILED && errno == EPERM);
+  if (fd >= 0) close(fd);
+  fd = create("seal-write-busy", MFD_ALLOW_SEALING);
+  char* busy = fd >= 0 && ftruncate(fd, page) == 0
+      ? (char*)mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) : (char*)MAP_FAILED;
+  errno = 0;
+  check("F_SEAL_WRITE with a writable shared mapping is EBUSY",
+        busy != MAP_FAILED && fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EBUSY);
+  if (busy != MAP_FAILED) munmap(busy, page);
+  if (fd >= 0) close(fd);
+
+  fd = create("unsealable", 0);
+  errno = 0;
+  check("without MFD_ALLOW_SEALING: F_SEAL_SEAL, and no seal can be added",
+        fd >= 0 && fcntl(fd, F_GET_SEALS) == F_SEAL_SEAL &&
+            fcntl(fd, F_ADD_SEALS, F_SEAL_GROW) == -1 && errno == EPERM);
+  if (fd >= 0) close(fd);
+  int pipe_fds[2];
+  errno = 0;
+  check("F_GET_SEALS on a pipe is EINVAL",
+        pipe(pipe_fds) == 0 && fcntl(pipe_fds[0], F_GET_SEALS) == -1 && errno == EINVAL);
+  close(pipe_fds[0]);
+  close(pipe_fds[1]);
+}
+
 static void test_memfd_contracts(void) {
   memfd_create_fn create = (memfd_create_fn)dlsym(RTLD_DEFAULT, "memfd_create");
   check("memfd_create is a callable Android export", create != NULL);
   if (create != NULL) test_memfd_route(create, "direct export");
   test_memfd_route(memfd_from_syscall, "raw architecture syscall");
+  test_memfd_seals(create != NULL ? create : memfd_from_syscall);
 }

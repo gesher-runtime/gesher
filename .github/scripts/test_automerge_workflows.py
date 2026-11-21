@@ -77,8 +77,25 @@ class QueueWorkflows(unittest.TestCase):
         script = (ROOT / '.github/scripts/label-automerge.js').read_text()
         self.assertNotIn('pulls.merge(', script)
         self.assertIn('expectedHeadOid: $head', script)
+        self.assertNotIn('enablePullRequestAutoMerge(', script)
+        self.assertIn('mergePullRequest(input:', script)
         rules = json.loads((ROOT / '.github/automerge-ruleset.json').read_text())
         self.assertNotIn('merge_queue', [rule['type'] for rule in rules['rules']])
+
+    def test_base_advance_keeps_review_but_gate_stays_exact_head(self):
+        # GitHub's merge-base dismissal discarded exact-head approvals whenever
+        # main advanced; the exact-head QA gate and controller cover pushes.
+        rules = json.loads((ROOT / '.github/automerge-ruleset.json').read_text())
+        review = next(r['parameters'] for r in rules['rules'] if r['type'] == 'pull_request')
+        self.assertIs(review['dismiss_stale_reviews_on_push'], False)
+        self.assertEqual(review['required_approving_review_count'], 1)
+        checks = next(r['parameters']['required_status_checks'] for r in rules['rules']
+                      if r['type'] == 'required_status_checks')
+        self.assertIn({'context': 'qa/label-approval', 'integration_id': 15368}, checks)
+        script = (ROOT / '.github/scripts/label-automerge.js').read_text()
+        self.assertIn("payload.action === 'synchronize'", script)
+        self.assertIn('p.dismissStaleApprovals(', script)
+        self.assertIn("return 'blocked'", script)
 
     def test_app_write_events_are_skipped_before_the_shared_job_queue(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())

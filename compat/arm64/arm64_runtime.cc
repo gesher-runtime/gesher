@@ -66,7 +66,10 @@ void Load() {
   }
   g_api = init(&host);
   if (g_api == nullptr || g_api->version != GESHER_ARM64_API_VERSION) {
-    std::fprintf(stderr, "gesher arm64: %s version mismatch\n", GESHER_ARM64_DLL);
+    // The DLL also refuses an API version it does not implement; any other
+    // refusal is reported by the DLL itself just before this.
+    std::fprintf(stderr, "gesher arm64: %s failed to initialize or has a different API version\n",
+                 GESHER_ARM64_DLL);
     g_api = nullptr;
     return;
   }

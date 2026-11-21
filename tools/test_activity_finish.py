@@ -16,7 +16,7 @@ def main() -> None:
     for name in ("framework-classes", "core-classes", "app-classes", "apksig", "java-home"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--controller-source-ref", help="Compile a prior controller as a regression control")
-    parser.add_argument("--group", choices=("all", "task", "affinity", "sub"), default="all")
+    parser.add_argument("--group", choices=("all", "task", "affinity", "sub", "usage"), default="all")
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:

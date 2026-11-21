@@ -12,6 +12,7 @@ import android.app.IApplicationThread;
 import android.app.IServiceConnection;
 import android.app.Notification;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.IIntentReceiver;
 import android.content.IIntentSender;
 import android.content.Intent;
@@ -86,6 +87,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     CallerIdentity callers() { return mCallers; }
 
+    SettingsProvider settingsProvider() { return mProviders.settingsProvider(); }
     private java.util.Map<Integer, AppOpsService.UidState> appOpsUidStates() {
         java.util.Map<Integer, AppOpsService.UidState> states = mAtm.appOpsUidStates();
         mServices.addAppOpsForegroundServices(states);
@@ -687,12 +689,26 @@ public final class ActivityManagerService extends IActivityManager.Default {
                 callingPackage);
     }
 
+    int bindSystemService(Intent service, IServiceConnection connection,
+            java.util.function.BooleanSupplier lifetime) {
+        if (!mCallers.isSystem()) throw new SecurityException("System binding requires host authority");
+        return mServices.bindService(null, service, null, connection,
+                android.content.Context.BIND_AUTO_CREATE, "android", lifetime);
+    }
+
     @Override
     public int bindServiceInstance(IApplicationThread caller, IBinder token, Intent service,
             String resolvedType, IServiceConnection connection, long flags,
             String instanceName, String callingPackage, int userId) {
         return mServices.bindService(caller, service, resolvedType, connection, flags,
                 callingPackage);
+    }
+
+    /** The text-services server may bind only the provider generation it selected. */
+    int bindSpellChecker(Intent service, IServiceConnection connection,
+            java.util.function.BooleanSupplier current) {
+        return mServices.bindService(null, service, null, connection,
+                Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT_BACKGROUND, "android", current);
     }
 
     @Override
@@ -738,6 +754,13 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     // --- broadcasts (BroadcastController) ------------------------------------------------
+
+    /** Internal account event with authority pinned to the recipient's install lifetime. */
+    void broadcastAccountChange(Intent intent, java.util.function.BooleanSupplier lifetime) {
+        if (!mCallers.isSystem()) throw new SecurityException("Account broadcasts require the system");
+        mBroadcasts.broadcastIntent(intent, null, null, Binder.getCallingPid(),
+                null, null, null, lifetime);
+    }
 
     @Override
     public Intent registerReceiverWithFeature(IApplicationThread caller, String callerPackage,

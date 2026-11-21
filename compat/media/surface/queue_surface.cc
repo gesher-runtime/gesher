@@ -7,6 +7,7 @@
 
 #include <algorithm>
 
+#include <gesher/perf_trace.h>
 #include <system/window.h>
 
 namespace gesher::media {
@@ -153,6 +154,37 @@ void QueueSurface::Abandon() {
   if (!locked_) buffer_ = nullptr;
 }
 
+bool QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* pixels,
+                             int64_t timestamp_ns) {
+  if (width <= 0 || height <= 0 || stride < width || pixels == nullptr) return false;
+  // The copy is made unlocked: a large frame does not hold up this surface's
+  // own producer or its readers.
+  auto f = std::make_shared<RecycledFrame>(frame_pool_, width, height);
+  f->width = width;
+  f->height = height;
+  f->pixels.resize(static_cast<size_t>(width) * height);
+  if (stride == width) {
+    memcpy(f->pixels.data(), pixels, f->pixels.size() * sizeof(uint32_t));
+  } else {
+    for (int y = 0; y < height; y++) {
+      memcpy(&f->pixels[static_cast<size_t>(y) * width], pixels + static_cast<size_t>(y) * stride,
+             static_cast<size_t>(width) * 4);
+    }
+  }
+  f->timestamp_ns = timestamp_ns == NATIVE_WINDOW_TIMESTAMP_AUTO
+                        ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns;
+  std::function<void()> listener;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (abandoned_) return false;
+    f->number = ++frames_;
+    latest_ = std::move(f);
+    listener = listener_;
+  }
+  if (listener) listener();
+  return true;
+}
+
 void QueueSurface::Size(int* width, int* height) const {
   if (requested_width_ > 0 && requested_height_ > 0) {
     *width = requested_width_;
@@ -184,7 +216,9 @@ void QueueSurface::EnsureBuffer() {
 
 int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (locked_ || abandoned_) return -EINVAL;
+  // Surface::lock rejects a second CPU lock before consulting the consumer.
+  if (locked_) return -ENOSYS;  // Android INVALID_OPERATION.
+  if (abandoned_) return -ENODEV;
   EnsureBuffer();
   locked_ = true;
   out->width = buffer_->width;
@@ -210,6 +244,15 @@ int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
 }
 
 int QueueSurface::unlockAndPost() {
+  return UnlockAndPost(std::nullopt);
+}
+
+int QueueSurface::UnlockAndPostWithTimestamp(int64_t timestamp_ns) {
+  return UnlockAndPost(timestamp_ns);
+}
+
+int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns) {
+  std::function<void()> listener;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!locked_) return -EINVAL;
@@ -218,47 +261,49 @@ int QueueSurface::unlockAndPost() {
       buffer_ = nullptr;
       return -ENODEV;
     }
+    listener = PublishLocked(timestamp_ns);
   }
-  Publish();
+  if (listener) listener();
   return 0;
 }
 
-void QueueSurface::Publish() {
-  std::function<void()> listener;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (buffer_ == nullptr || abandoned_) return;
-    buffer_contents_valid_ = true;
-    auto f = std::make_shared<RecycledFrame>(frame_pool_, buffer_->width, buffer_->height);
-    f->width = buffer_->width;
-    f->height = buffer_->height;
-    const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
-    const bool bgra = buffer_->format == HAL_PIXEL_FORMAT_BGRA_8888;
-    f->pixels.resize(static_cast<size_t>(f->width) * f->height);
-    if (!opaque && !bgra && buffer_->stride == f->width) {
-      // Ordinary RGBA producer storage is already packed. Let memcpy handle
-      // the complete frame instead of restarting its copy loop on every row.
-      memcpy(f->pixels.data(), buffer_->pixels.data(), f->pixels.size() * sizeof(uint32_t));
-    } else for (int y = 0; y < f->height; y++) {
-      const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y) * buffer_->stride];
-      uint32_t* d = &f->pixels[static_cast<size_t>(y) * f->width];
-      if (!opaque && !bgra) {
-        memcpy(d, s, static_cast<size_t>(f->width) * 4);
-        continue;
-      }
-      for (int x = 0; x < f->width; x++) {
-        uint32_t p = s[x];
-        if (bgra) p = (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu);
-        d[x] = opaque ? (p | 0xff000000u) : p;
-      }
+std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timestamp_ns) {
+  static gesher::perf::Site copy_site("queue surface: publish a queued frame (copy)");
+  const int64_t start = gesher::perf::Now();
+  if (buffer_ == nullptr) return {};
+  buffer_contents_valid_ = true;
+  auto f = std::make_shared<RecycledFrame>(frame_pool_, buffer_->width, buffer_->height);
+  f->width = buffer_->width;
+  f->height = buffer_->height;
+  const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
+  const bool bgra = buffer_->format == HAL_PIXEL_FORMAT_BGRA_8888;
+  f->pixels.resize(static_cast<size_t>(f->width) * f->height);
+  if (!opaque && !bgra && buffer_->stride == f->width) {
+    // Ordinary RGBA producer storage is already packed. Let memcpy handle
+    // the complete frame instead of restarting its copy loop on every row.
+    memcpy(f->pixels.data(), buffer_->pixels.data(), f->pixels.size() * sizeof(uint32_t));
+  } else for (int y = 0; y < f->height; y++) {
+    const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y) * buffer_->stride];
+    uint32_t* d = &f->pixels[static_cast<size_t>(y) * f->width];
+    if (!opaque && !bgra) {
+      memcpy(d, s, static_cast<size_t>(f->width) * 4);
+      continue;
     }
-    f->timestamp_ns = timestamp_ns_ == NATIVE_WINDOW_TIMESTAMP_AUTO
-                          ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns_;
-    f->number = ++frames_;
-    latest_ = std::move(f);
-    listener = listener_;
+    for (int x = 0; x < f->width; x++) {
+      uint32_t p = s[x];
+      if (bgra) p = (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu);
+      d[x] = opaque ? (p | 0xff000000u) : p;
+    }
   }
-  if (listener) listener();
+  // A per-frame codec timestamp is data, including INT64_MIN. Only the native
+  // producer's persistent setting gives that value its AUTO sentinel meaning.
+  f->timestamp_ns = timestamp_ns.has_value() ? *timestamp_ns
+      : timestamp_ns_ == NATIVE_WINDOW_TIMESTAMP_AUTO
+          ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns_;
+  f->number = ++frames_;
+  latest_ = std::move(f);
+  copy_site.Add(gesher::perf::Now() - start);
+  return listener_;
 }
 
 int QueueSurface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
@@ -283,6 +328,7 @@ int QueueSurface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
 }
 
 int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
+  std::function<void()> listener;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
@@ -293,8 +339,9 @@ int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
       }
     }
     if (abandoned_) return -ENODEV;
+    listener = PublishLocked(std::nullopt);
   }
-  Publish();
+  if (listener) listener();
   return 0;
 }
 

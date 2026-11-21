@@ -407,8 +407,8 @@ Gesher supplies a fresh default-No host confirmation for each request. This is a
 user-mediated runtime extension: it does not grant Android's `DELETE_PACKAGES`
 permission or give a store silent removal authority. The original caller process,
 caller code, target code and requested version are checked again after approval.
-System addons and authenticators that still own accounts are rejected. Remove
-those accounts through their normal account workflow first.
+System addons are rejected. A committed authenticator uninstall retires its owned
+accounts and their sync work; other providers' accounts remain intact.
 
 Removal retires the original installed generation before stopping its processes.
 It revokes client grants and pending work, quarantines code and app-specific data,

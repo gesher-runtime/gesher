@@ -96,6 +96,14 @@ Check 'services: concurrent clipboard callbacks and native Windows clipboard upd
   $clipboardCallbacksOut
 } @('ClipboardCallbackTest all passed:')
 
+$clipboardSecurityOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ClipboardSecurityContractTest') 90
+$clipboardSecurityCode = $LASTEXITCODE
+Check 'services: clipboard security caller focus check and default IME contract' {
+  $global:LASTEXITCODE = $clipboardSecurityCode
+  $clipboardSecurityOut
+} @('ClipboardSecurityContractTest all passed:')
+
 $receiverExportOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'ReceiverExportContractTest') 90
 $receiverExportCode = $LASTEXITCODE
@@ -207,9 +215,11 @@ Check 'runtime: UNC File/NIO operations and temporary storage on a private local
 } @('UncFileBootstrapTest all passed: real file and temporary-directory I/O; share removed')
 
 # Query through the real PackageManager client and generated Binder parcels, using
-# properties parsed from this build's synthetic components.apk.
+# properties parsed from this build's signed synthetic components.apk, plus the
+# existing unsigned APK for the unverified system-addon rejection contract.
 $packageQueryOut = FixesRun ($dvmFixes + 'gesher.services.PackageQueryContractTest' +
-  (NoDrive "$Dir/components.apk")) 90
+  (NoDrive "$Dir/components.apk"),
+  (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/unsigned.apk'))) 90
 $packageQueryCode = $LASTEXITCODE
 Check 'services: package versions, permissions, identities and parsed manifest properties' {
   $global:LASTEXITCODE = $packageQueryCode
@@ -623,3 +633,17 @@ Check 'services: a v2-signed APK answers its key, an unsigned one none' {
   $signingOut
 } @('SigningTest: a v2-signed APK answers its key, an unsigned one none',
   'SigningTest all passed')
+
+$recognitionBrokerOut = FixesRun ($dvmFixes + 'com.gesher.server.SpeechRecognitionContractTest') 45
+$recognitionBrokerCode = $LASTEXITCODE
+Check 'services: speech provider ownership, lifecycle, support and download callbacks' {
+  $global:LASTEXITCODE = $recognitionBrokerCode
+  $recognitionBrokerOut
+} @('SpeechRecognitionContractTest all passed:')
+
+$recognizerClientOut = FixesRun ($dvmFixes + 'gesher.services.SpeechRecognizerConnectionTest') 45
+$recognizerClientCode = $LASTEXITCODE
+Check 'framework: SpeechRecognizer connection callback and cancellation contracts' {
+  $global:LASTEXITCODE = $recognizerClientCode
+  $recognizerClientOut
+} @('SpeechRecognizerConnectionTest all passed:')

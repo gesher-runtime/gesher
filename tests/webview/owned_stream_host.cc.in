@@ -1,5 +1,6 @@
-// Production OwnedStream, Host::Navigate, Host::RespondToRequest and Do, with
-// declared COM/WebView/task-queue adapters. No browser, network or JNI is used.
+// Production OwnedStream, Host::Navigate, Host::RespondToRequest, Do and
+// NavigationStarting, with declared COM/WebView/task-queue adapters.
+// No browser, network or JNI is used.
 #include <objbase.h>
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -90,7 +92,11 @@ namespace gesher::webview {
 @COM_POINTER@
 
 constexpr IID IID_ICoreWebView2_2{10}, IID_ICoreWebView2Environment2{11};
-constexpr int kFailed = 7;
+constexpr int kFailed = 7, kPageStarted = 3;
+using UINT64 = uint64_t;
+using BOOL = int;
+constexpr BOOL FALSE = 0, TRUE = 1;
+#define NUMBERED_NAVIGATION @NUMBERED_NAVIGATION@
 constexpr size_t kBridgeBodyLimit = 1024 * 1024;
 uint64_t tick = 100;
 ULONGLONG GetTickCount64() { return tick; }
@@ -140,9 +146,41 @@ struct ICoreWebView2_2 : RecordedObject<ICoreWebView2_2> {
   HRESULT result = S_OK;
   std::wstring url;
   Com<ICoreWebView2WebResourceRequest> request;
-  HRESULT Navigate(LPCWSTR value) { ++plain; url = value; return result; }
+  std::function<void()> on_navigate;
+  HRESULT Navigate(LPCWSTR value) {
+    ++plain; url = value; if (on_navigate) on_navigate(); return result;
+  }
   HRESULT NavigateWithWebResourceRequest(ICoreWebView2WebResourceRequest* value) {
-    ++sent; request = Com<ICoreWebView2WebResourceRequest>(value); return result;
+    ++sent; request = Com<ICoreWebView2WebResourceRequest>(value);
+    if (on_navigate) on_navigate();
+    return result;
+  }
+};
+using ICoreWebView2 = ICoreWebView2_2;
+struct CoString {
+  wchar_t* value = nullptr;
+  wchar_t** Put() { return &value; }
+  std::wstring str() const { return value ? value : L""; }
+};
+// SDK ownership is an explicit adapter: get_Uri lends the argument's stable
+// string for this call. Production callback statements are extracted unchanged.
+struct ICoreWebView2NavigationStartingEventArgs {
+  std::wstring url;
+  UINT64 id;
+  BOOL user = FALSE, redirect = FALSE, cancelled = FALSE;
+  HRESULT get_Uri(wchar_t** out) { *out = url.data(); return S_OK; }
+  HRESULT get_IsUserInitiated(BOOL* out) { *out = user; return S_OK; }
+  HRESULT get_IsRedirected(BOOL* out) { *out = redirect; return S_OK; }
+  HRESULT get_NavigationId(UINT64* out) { *out = id; return S_OK; }
+  HRESULT put_Cancel(BOOL value) { cancelled = value; return S_OK; }
+};
+struct StartListener {
+  int calls = 0;
+  int64_t handed = -1;
+  std::function<bool()> callback;
+  // The default preserves the old three-argument handler in negative controls.
+  bool OnNavigationStarting(const std::wstring&, bool, bool, int64_t number = -1) {
+    ++calls; handed = number; return callback ? callback() : false;
   }
 };
 struct Deferral { int completed = 0; void Complete() { ++completed; } };
@@ -159,6 +197,11 @@ struct Impl {
     std::shared_ptr<RequestArgs> args = std::make_shared<RequestArgs>();
   };
   bool api_navigation = false, destroyed = false, closing = false, failed = false, ready = true;
+@NAVIGATION_STATE@
+  std::wstring main_document, auth_retry;
+  std::set<UINT64> cancelled;
+  StartListener* listener = nullptr;
+  int bridge_cancellations = 0;
   bool bridge_guarded = true;
   uint64_t bridge_generation = 7;
   int reports = 0;
@@ -167,11 +210,17 @@ struct Impl {
   std::map<int64_t, Request> requests;
   Com<ICoreWebView2_2> webview{new ICoreWebView2_2, false};
   Com<ICoreWebView2Environment2> env{new ICoreWebView2Environment2, false};
-  void Report(int, int64_t, int32_t error, const std::wstring&) { ++reports; reported = error; }
+  struct Event { int type; int64_t id; int32_t arg; std::wstring a, b; };
+  std::vector<Event> events;
+  void Report(int type, int64_t id, int32_t error, const std::wstring& a,
+              const std::wstring& b = L"") {
+    ++reports; reported = error; events.push_back({type, id, error, a, b});
+  }
 };
 struct Host {
   explicit Host(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {}
-  void Navigate(const std::wstring&, const std::wstring&, const std::wstring&, std::vector<uint8_t>);
+  @NAVIGATE_DECLARATION@
+  @NUMBER_DECLARATION@
   void RespondToRequest(int64_t, int32_t, const std::wstring&, const std::wstring&, std::vector<uint8_t>);
   std::shared_ptr<Impl> impl_;
 };
@@ -185,6 +234,11 @@ void PostToWebViewThread(std::function<void()> task) {
 void RunTasks() {
   auto running = std::move(tasks);
   for (auto& task : running) task();
+}
+void RunOneTask() {
+  Check(!tasks.empty(), "one queued task is available");
+  if (tasks.empty()) return;
+  auto task = std::move(tasks.front()); tasks.erase(tasks.begin()); task();
 }
 @DO@
 
@@ -201,7 +255,21 @@ void RunTasks() {
 }
 
 @NAVIGATE@
+@NUMBER_FUNCTION@
 @RESPOND@
+@DOCUMENT_MATCH@
+bool MainResource(Impl* impl, const std::wstring& url, bool document) {
+  // The exact production WebResourceRequested main-frame predicate.
+  return @RESOURCE_MATCH@;
+}
+void CancelBridgeRequests(Impl* impl) { ++impl->bridge_cancellations; }
+@NAV_START_CALLBACK@
+#if NUMBERED_NAVIGATION
+void NavigateNumbered(Host& host, const std::wstring& url, const std::wstring& headers,
+                       const std::wstring& method, std::vector<uint8_t> body, int64_t number) {
+  @NUMBERED_CALL@
+}
+#endif
 }  // namespace gesher::webview
 
 using namespace gesher::webview;
@@ -451,6 +519,140 @@ void DispatchContracts() {
   }
 }
 
+void NavigationIdentityContracts() {
+  auto impl = std::make_shared<Impl>();
+  struct Case { const wchar_t* document; const wchar_t* request; bool same; };
+  for (const auto& c : {
+      Case{L"https://example.test/note#part", L"https://example.test/note", true},
+      Case{L"https://example.test/note?x=1#part", L"https://example.test/note?x=1", true},
+      Case{L"https://example.test/note#part", L"https://example.test/note#other", true},
+      Case{L"https://example.test/note#", L"https://example.test/note", true},
+      Case{L"https://example.test/note?x=1#part", L"https://example.test/note?x=2", false},
+      Case{L"https://example.test/note#part", L"https://example.test/other", false},
+      Case{L"https://example.test/note%23part", L"https://example.test/note", false},
+      Case{L"https://example.test/note%23part#anchor", L"https://example.test/note%23part", true},
+      Case{L"https://example.test/note?x=%23part#anchor", L"https://example.test/note?x=%23part", true},
+      Case{L"https://example.test/note?x=%23part", L"https://example.test/note?x=", false},
+      Case{L"https://example.test/note%2523part", L"https://example.test/note%23part", false},
+      Case{L"https://example.test/Note", L"https://example.test/note", false}}) {
+    impl->main_document = c.document;
+    Check(MainResource(impl.get(), c.request, true) == c.same,
+          "document resource ignores only literal fragments");
+    Check(!MainResource(impl.get(), c.request, false), "subresource never becomes the main document");
+  }
+#if NUMBERED_NAVIGATION
+  for (bool held : {false, true}) {
+    auto state = std::make_shared<Impl>(); Host host(state);
+    state->api_number = 4;
+    state->ready = !held;
+    state->webview->on_navigate = [&] {
+      Check(state->api_number == 5, "number is published before the actual WebView handoff");
+    };
+    NavigateNumbered(host, L"https://example.test/next", L"", L"GET", {}, 5);
+    Check(state->api_number == 4 && state->webview->plain == 0,
+          "queuing a navigation does not publish its number");
+    Check(tasks.size() == 1, "number and navigation use one queued task");
+    if (held) {
+      RunTasks();
+      Check(state->api_number == 4 && state->webview->plain == 0,
+            "unready navigation does not publish its number");
+      Check(state->pending.size() == 1, "readiness holds number and navigation together");
+      state->ready = true;
+      auto pending = std::move(state->pending);
+      pending.front()(state.get());
+      Check(state->api_number == 5 && state->webview->plain == 1,
+            "first held callback hands off both number and navigation");
+      for (size_t i = 1; i < pending.size(); ++i) pending[i](state.get());
+    } else {
+      RunOneTask();
+      Check(state->api_number == 5 && state->webview->plain == 1,
+            "one dispatch cannot expose a number without its navigation");
+      RunTasks();
+    }
+    state->webview->on_navigate = nullptr;
+    NavigateNumbered(host, L"https://example.test/unnumbered", L"", L"GET", {}, 0);
+    RunTasks();
+    Check(state->api_number == 5, "unnumbered native probe does not reset handed watermark");
+    NavigateNumbered(host, L"https://example.test/earlier", L"", L"GET", {}, 3);
+    RunTasks();
+    Check(state->api_number == 5, "older number does not lower handed watermark");
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    auto state = std::make_shared<Impl>(); Host host(state); state->api_number = 4;
+    if (mode == 0) state->destroyed = true;
+    if (mode == 1) state->closing = true;
+    if (mode == 2) state->failed = true;
+    if (mode == 3) reject_posted = true;
+    NavigateNumbered(host, L"https://example.test/dropped", L"", L"GET", {}, 5);
+    RunTasks(); reject_posted = false;
+    Check(state->api_number == 4 && state->webview->plain == 0,
+          "rejected or unavailable dispatch cannot advance the watermark");
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    auto state = std::make_shared<Impl>(); Host host(state); state->api_number = 4;
+    if (mode == 0) marshal_error = E_OUTOFMEMORY;
+    if (mode == 1) fail_nothrow = true;
+    if (mode == 2) state->env->result = E_FAIL;
+    if (mode == 3) state->webview->result = E_FAIL;
+    NavigateNumbered(host, L"https://example.test/post", L"", L"POST", Payload(10), 5);
+    RunTasks(); marshal_error = S_OK; fail_nothrow = false;
+    Check(state->reports == 1 && !state->api_navigation, "numbered submission failure is reported");
+    Check(state->api_number == (mode == 3 ? 5 : 4),
+          "only an actual WebView call advances number, including its synchronous failure");
+    Check(state->webview->sent == (mode == 3 ? 1 : 0), "failed preparation never submits a request");
+  }
+  {
+    auto state = std::make_shared<Impl>(); Host host(state); state->api_number = 4;
+    StartListener listener; state->listener = &listener;
+    listener.callback = [&] {
+      NavigateNumbered(host, L"https://example.test/same", L"", L"GET", {}, 5);
+      Check(state->api_number == 4, "client-queued same-URL load is not handed yet");
+      return false;
+    };
+    ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/same", 42};
+    Check(NavigationStartHandler(state)(nullptr, &args) == S_OK, "actual native starting handler succeeds");
+    Check(listener.calls == 1 && listener.handed == 4, "client receives only previously handed loads");
+    Check(state->events.size() == 1 && state->events[0].type == kPageStarted &&
+          state->events[0].id == 42 && state->events[0].arg == 0 && state->events[0].b == L"4",
+          "PAGE_STARTED carries original handed cutoff after client queues a load");
+    Check(state->NavigationEnded(42) == 4 && state->NavigationEnded(42) == 0,
+          "completion consumes the same start cutoff exactly once");
+    RunTasks();
+    Check(state->api_number == 5, "newer queued load becomes handed after starting callback");
+  }
+  {
+    // A controlled callback boundary stresses capture-before-client ordering;
+    // it does not simulate a nested WebView2 event (those are serialized).
+    auto state = std::make_shared<Impl>(); state->api_number = 4;
+    StartListener listener; state->listener = &listener;
+    listener.callback = [&] { state->api_number = 9; return false; };
+    ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/old", 43};
+    NavigationStartHandler(state)(nullptr, &args);
+    Check(listener.handed == 4 && state->events.back().b == L"4" && state->NavigationEnded(43) == 4,
+          "listener, start and finish use one number captured before the callback");
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    auto state = std::make_shared<Impl>(); state->api_number = 4;
+    StartListener listener; state->listener = &listener;
+    ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/start", 44};
+    if (mode == 0) { state->auth_retry = args.url; }
+    if (mode == 1) { listener.callback = [] { return true; }; }
+    if (mode == 2) { state->api_navigation = true; }
+    if (mode == 3) { args.redirect = TRUE; }
+    NavigationStartHandler(state)(nullptr, &args);
+    if (mode == 0) Check(listener.calls == 0 && state->events.empty() &&
+                        state->NavigationEnded(44) == 4, "authentication retry retains completion cutoff without a duplicate start");
+    if (mode == 1) Check(args.cancelled && state->cancelled.count(44) == 1 && state->events.empty() &&
+                        state->NavigationEnded(44) == 0, "client cancellation emits no start or retained finish");
+    if (mode == 2) Check(listener.calls == 0 && state->events.size() == 1 &&
+                        state->events[0].arg == 1 && state->events[0].b == L"4" &&
+                        state->NavigationEnded(44) == 4, "API start carries its cutoff without asking the page client");
+    if (mode == 3) Check(listener.calls == 1 && listener.handed == 4 && state->events.empty() &&
+                        state->NavigationEnded(44) == 0, "redirect keeps client cutoff without duplicating the start");
+  }
+#endif
+}
+
 void BeginMeasure() {
   allocation_count = 0; allocation_bytes = 0; payload_count = 0; payload_bytes = 0;
   tasks.reserve(32); tracking = true;
@@ -489,7 +691,7 @@ void Measure(bool gates) {
 int main(int argc, char**) {
   bool measure_only = argc > 1;
   if (!measure_only) {
-    StreamContracts(); ConcurrentCursors(); DispatchContracts();
+    StreamContracts(); ConcurrentCursors(); DispatchContracts(); NavigationIdentityContracts();
   }
   Measure(!measure_only);
   tasks.clear();

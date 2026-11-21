@@ -140,6 +140,11 @@ namespace record_locks {
 static std::recursive_mutex descriptor_mutex;
 struct DescriptorGuard { std::lock_guard<std::recursive_mutex> guard{descriptor_mutex}; };
 }
+// memfd_seals.cc stores a memfd's seals with its file and registers its fd;
+// seals are JniTest's and libc_test's (memfd_contract_test.inc), not this
+// fixture's: every file here can hold seals, and registration is a boundary.
+static bool InitMemfdSeals(HANDLE, bool) { return true; }
+static void RegisterMemfd(int) {}
 }
 
 #define memfd_create GesherMemfd
@@ -210,7 +215,7 @@ static void test_faults() {
   }
   fault = Fault::none;
   size_t before = created_files;
-  memfd_reject(GesherMemfd, "unsupported", MFD_ALLOW_SEALING, EOPNOTSUPP,
+  memfd_reject(GesherMemfd, "unsupported", MFD_HUGETLB, EOPNOTSUPP,
                "memfd rejects unsupported policy before file creation");
   memfd_reject(GesherMemfd, "bad", 0x20U, EINVAL, "memfd rejects unknown flags before file creation");
   check("memfd invalid requests allocate no native file", created_files == before);

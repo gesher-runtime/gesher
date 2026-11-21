@@ -52,6 +52,7 @@ import sun.misc.Unsafe;
 
 /** Real notification/caller/permission policy with explicitly constructed package/process metadata. */
 public final class NotificationDelegationTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     private static final String PREFIX = "fixture.notificationdelegation.";
     private static final String OWNER = PREFIX + "owner", DELEGATE = PREFIX + "delegate";
     private static final String OTHER = PREFIX + "other", SHARED = PREFIX + "shared";
@@ -158,6 +159,9 @@ public final class NotificationDelegationTest {
                 set(pm, "mRemoving", new LinkedHashMap<>());
                 set(pm, "mPackageRemoval", new ArrayList<>());
                 set(pm, "mPackageRemovalChecks", new ArrayList<>());
+                // Match the production observer collection; real clipboard scopes
+                // subscribe here and actual publication callbacks notify it.
+                set(pm, "mPackageChanges", new java.util.concurrent.CopyOnWriteArrayList<>());
                 // Run the actual deferred callbacks on a serial worker, preserving
                 // their wait for add() to release the publication/package monitors.
                 // Retain each result so failures cannot disappear on a worker thread.
@@ -429,9 +433,7 @@ public final class NotificationDelegationTest {
     private static void retained(Harness h) throws Exception {
         if (!storage) return;
         Field last = field(type("Services"), "sLast"); Object before = last.get(null);
-        last.set(null, make(type("Services$Created"),
-                new Class<?>[]{PackageManagerService.class, ActivityTaskManagerService.class, ActivityManagerService.class},
-                h.pm, h.atm, h.am));
+        last.set(null, serviceContexts.runtime(h.pm, h.atm, h.am));
         Class<?> store = type("NotificationStore");
         try {
             h.grant(DELEGATE);
@@ -519,6 +521,14 @@ public final class NotificationDelegationTest {
     }
 
     public static int run(boolean useParcel, boolean useStorage, String signedApk) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            return runWithServiceContext(useParcel, useStorage, signedApk);
+        } finally { serviceContexts = previous; }
+    }
+
+    private static int runWithServiceContext(boolean useParcel, boolean useStorage, String signedApk) throws Exception {
         parcel = useParcel; storage = useStorage; checks = 0;
         PropertyInvalidatedCache.setTestMode(true);
         try (Harness h = new Harness()) {

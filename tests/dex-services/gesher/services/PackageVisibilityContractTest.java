@@ -25,7 +25,6 @@ import com.android.internal.pm.pkg.component.ParsedProviderImpl;
 import com.android.internal.pm.pkg.component.ParsedServiceImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import com.gesher.server.ApkPackage;
-import com.gesher.server.GmsSignatureSpoofing;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.PackageUids;
 import com.gesher.server.StandIn;
@@ -152,7 +151,7 @@ public final class PackageVisibilityContractTest {
         // inherited Binder implementation returns null and the wrapper indexes [0].
         check(client.canPackageQuery(A, A), "Public self-package query failed");
         boolean shared = a.uid() == b.uid();
-        check(shared != GmsSignatureSpoofing.isEnabled(), "Fixture did not use actual runtime UID mode");
+        check(!shared, "Unrelated packages shared an identity in the current runtime UID mode");
         check(client.canPackageQuery(A, B) == shared, "Unrelated distinct UID became visible");
         check(Arrays.equals(client.canPackageQuery(A, new String[]{B, A, "android", B}),
                 new boolean[]{shared, true, true, shared}), "Bulk query lost order, duplicate or false values");
@@ -282,9 +281,40 @@ public final class PackageVisibilityContractTest {
         check(f.hasAction(ACTION) && !f.hasAction("*") && f.countDataTypes() == 1,
                 "Visibility matching mutated installed filters");
     }
+    private static boolean serviceQuery(PackageManagerService pm, String source, String target)
+            throws Exception {
+        var query = PackageManagerService.class.getDeclaredMethod(
+                "canSeeInstalledPackage", String.class, String.class);
+        query.setAccessible(true);
+        return (Boolean) query.invoke(pm, source, target);
+    }
+    private static void authenticatedServiceVisibility() throws Exception {
+        ApkPackage a = record(parsed(A)), b = record(parsed(B));
+        PackageManagerService hidden = service(a, b);
+        check(serviceQuery(hidden, A, A), "Authenticated service lookup hid its own package");
+        check(!serviceQuery(hidden, A, B), "Authenticated service lookup exposed an unrelated package");
+        check(!serviceQuery(hidden, "absent", B), "Unknown service caller gained visibility");
+        PackageImpl queries = parsed(A); queries.addQueriesPackage(B);
+        PackageManagerService visible = service(record(queries), b);
+        check(serviceQuery(visible, A, B), "Authenticated service lookup ignored manifest queries");
+        set(visible, "mRemoving", Map.of(B, b));
+        check(!serviceQuery(visible, A, B), "Removing provider remained visible to service lookup");
+        PackageImpl siblingQueries = parsed(C); siblingQueries.addQueriesPackage(B);
+        ApkPackage sibling = record(siblingQueries); set(sibling, "mUid", a.uid());
+        PackageManagerService shared = service(a, sibling, b);
+        check(serviceQuery(shared, A, C), "Authenticated shared UID lost sibling visibility");
+        check(serviceQuery(shared, A, B), "Authenticated shared UID lost sibling provider queries");
+        set(shared, "mPackages", Map.of(A, a, B, b));
+        check(!serviceQuery(shared, A, B), "Removed shared UID sibling kept its provider queries");
+        PackageImpl legacy = parsed(A); legacy.setTargetSdkVersion(29);
+        check(serviceQuery(service(record(legacy), b), A, B), "Legacy target lost provider visibility");
+        PackageImpl all = parsed(A); permission(all, Manifest.permission.QUERY_ALL_PACKAGES);
+        check(serviceQuery(service(record(all), b), A, B), "QUERY_ALL_PACKAGES lost provider visibility");
+    }
     public static int run(boolean onArt) throws Exception {
         art = onArt; checks = 0; shapesAndCallers();
-        if (GmsSignatureSpoofing.isEnabled()) { declarations(); components(); }
+        authenticatedServiceVisibility();
+        declarations(); components();
         return checks;
     }
     public static void main(String[] args) throws Exception {

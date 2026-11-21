@@ -31,8 +31,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 /**
@@ -51,6 +53,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         return thread;
     });
     private Consumer<Intent> mPackageEventSender = PackageManagerService::broadcastPackageEvent;
+    private final List<Consumer<Intent>> mPackageEventListeners = new CopyOnWriteArrayList<>();
     private Consumer<ApkPackage> mEnabledStateKiller = this::restartEnabledPackage;
     private volatile Consumer<EnabledChange> mEnabledStateListener;
     private volatile Consumer<EnabledChange> mEnabledStateRestarter;
@@ -62,6 +65,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
     private final List<Consumer<String>> mPackageRemoval = new ArrayList<>();
     private final List<Consumer<String>> mPackageRemovalChecks = new ArrayList<>();
+    private volatile Consumer<Set<String>> mAccountRemovalReconciler = installed -> { };
     private volatile Map<String, ApkPackage> mRemoving = new LinkedHashMap<>();
 
     boolean isRemovalPending(String name) { return mRemoving.containsKey(name); }
@@ -96,7 +100,10 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     /** Server-local capability cleanup; never callable through the package Binder. */
-    synchronized void onPackageRemoval(Consumer<String> cleanup) { mPackageRemoval.add(cleanup); }
+    synchronized AutoCloseable onPackageRemoval(Consumer<String> cleanup) {
+        mPackageRemoval.add(java.util.Objects.requireNonNull(cleanup));
+        return () -> removePackageRemovalListener(cleanup);
+    }
     synchronized void removePackageRemovalListener(Consumer<String> cleanup) { mPackageRemoval.remove(cleanup); }
 
     synchronized void onPackageRemovalCheck(Consumer<String> check) { mPackageRemovalChecks.add(check); }
@@ -107,12 +114,22 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (Consumer<String> check : checks) check.accept(name);
     }
 
+    /** Reconcile the account store against the Installer's authoritative registry. */
+    void setAccountRemovalReconciler(Consumer<Set<String>> reconcile) {
+        mAccountRemovalReconciler = reconcile;
+    }
+
+    void reconcileAccountRemovals(Set<String> installed) {
+        mAccountRemovalReconciler.accept(installed);
+    }
+
     void revokePackageCapabilities(String name) {
         List<Consumer<String>> cleanup;
         synchronized (this) { cleanup = new ArrayList<>(mPackageRemoval); }
         for (Consumer<String> action : cleanup) action.accept(name);
     }
 
+    boolean hasTransientPackageState() { return mTransientEnabled; }
     private volatile AppOpsService mAppOps;
     private final java.util.concurrent.CopyOnWriteArrayList<Consumer<ApkPackage>> mPackageChanges =
             new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -305,11 +322,21 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     private void sendPackageEvent(Intent intent) {
+        // Server-local listeners observe committed events after the installer/PM locks
+        // are released. An app cannot inject these callbacks by sending a broadcast.
+        for (Consumer<Intent> listener : mPackageEventListeners) {
+            try { listener.accept(new Intent(intent)); }
+            catch (RuntimeException failure) {
+                SystemServer.log("package listener failed: " + failure.getClass().getSimpleName());
+            }
+        }
         try { mPackageEventSender.accept(intent); }
         catch (RuntimeException failure) {
             SystemServer.log("package event unavailable: " + failure.getClass().getSimpleName());
         }
     }
+
+    void onPackageEvent(Consumer<Intent> listener) { mPackageEventListeners.add(listener); }
 
     private static void broadcastPackageEvent(Intent intent) {
         long identity = Binder.clearCallingIdentity();
@@ -474,6 +501,19 @@ public final class PackageManagerService extends IPackageManager.Default {
                     flags));
         }
         return result;
+    }
+
+    /** Visibility to an installed service, from the already authenticated caller's package. */
+    synchronized boolean canSeeInstalledPackage(String source, String target) {
+        Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
+        for (String removing : mRemoving.keySet()) packages.remove(removing);
+        ApkPackage caller = packages.get(source);
+        if (caller == null) return false;
+        PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
+                this::isProtectedBroadcast);
+        // Package admission assigns isolated or authenticated shared identities
+        // in both signature-spoofing modes.
+        return visibility.canSee(caller.uid(), target);
     }
 
     /** The services {@code intent} resolves to, in every package. */

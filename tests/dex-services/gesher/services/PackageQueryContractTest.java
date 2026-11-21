@@ -153,7 +153,7 @@ public final class PackageQueryContractTest {
     }
 
     public static void main(String[] args) throws Exception {
-        require(args.length == 1, "Pass the current components.apk fixture");
+        require(args.length == 2, "Pass the current components.apk and unsigned APK fixtures");
         System.loadLibrary("android_runtime");
         // This VM owns the server side of package-cache invalidation, just as
         // SystemServer does before publishing installation and query services.
@@ -173,6 +173,8 @@ public final class PackageQueryContractTest {
         Class<?> apkClass = Class.forName("com.gesher.server.ApkPackage");
         Object apk = apkClass.getMethod("parse", String.class).invoke(null, apkFile.getPath());
         require(PACKAGE.equals(apkClass.getField("packageName").get(apk)), "Wrong fixture package");
+        require((Boolean) apkClass.getMethod("hasVerifiedSigningIdentity").invoke(apk),
+                "The components fixture must retain its verified signing identity");
         Class<?> pmClass = Class.forName("com.gesher.server.PackageManagerService");
         IPackageManager service = (IPackageManager) pmClass.getConstructor(Collection.class)
                 .newInstance(Collections.singletonList(apk));
@@ -319,13 +321,28 @@ public final class PackageQueryContractTest {
                 "Permission-holder query lost the matching subset or fabricated grant metadata");
         holders = client.getPackagesHoldingPermissions(new String[]{heldPermission},
                 PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS | flags));
-        require(holders.size() == 1 && holders.get(0).requestedPermissions.length == 2
-                && Arrays.asList(holders.get(0).requestedPermissions).contains(
-                        "android.permission.FOREGROUND_SERVICE_SPECIAL_USE")
-                && holders.get(0).requestedPermissionsFlags.length == 2
-                && (holders.get(0).requestedPermissionsFlags[0] & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0
-                && holders.get(0).activities != null,
-                "GET_PERMISSIONS did not retain complete manifest/grant/component metadata");
+        require(holders.size() == 1,
+                "GET_PERMISSIONS changed the matching package count: " + holders.size());
+        PackageInfo permissionHolder = holders.get(0);
+        packageInfo(permissionHolder, expected, true);
+        // Parsed permissions are keyed by name; metadata order need not match the manifest.
+        List<String> requested = permissionHolder.requestedPermissions == null
+                ? Collections.emptyList() : Arrays.asList(permissionHolder.requestedPermissions);
+        require(requested.size() == 3 && requested.containsAll(Arrays.asList(heldPermission,
+                        "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+                        "android.permission.WRITE_SETTINGS")),
+                "GET_PERMISSIONS changed the complete manifest permission inventory: " + requested);
+        int[] permissionFlags = permissionHolder.requestedPermissionsFlags;
+        require(permissionFlags != null && permissionFlags.length == requested.size(),
+                "GET_PERMISSIONS lost parallel permission flags: " + Arrays.toString(permissionFlags));
+        require((permissionFlags[requested.indexOf(heldPermission)]
+                        & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0,
+                "GET_PERMISSIONS lost the foreground-service grant: "
+                        + requested + " / " + Arrays.toString(permissionFlags));
+        require((permissionFlags[requested.indexOf("android.permission.WRITE_SETTINGS")]
+                        & PackageInfo.REQUESTED_PERMISSION_GRANTED) == 0,
+                "GET_PERMISSIONS fabricated a WRITE_SETTINGS permission grant: "
+                        + requested + " / " + Arrays.toString(permissionFlags));
         holders = client.getPackagesHoldingPermissions(new String[]{heldPermission,
                 "fixture.absent.permission", heldPermission}, 0);
         require(holders.size() == 1 && Arrays.equals(holders.get(0).requestedPermissions,
@@ -342,25 +359,38 @@ public final class PackageQueryContractTest {
                 "System-only group query included an ordinary package");
         require(client.getPackageGids("android", PackageManager.MATCH_SYSTEM_ONLY).length == 0,
                 "System-only group query excluded the platform package");
+        // components.apk is signed for real AppOps persistence in the service
+        // fixture. Keep the unverified-addon rejection on the separate unsigned
+        // APK, without promoting the ordinary signed application for this test.
+        File unsignedFile = new File(data, "unsigned.apk");
+        Files.copy(new File(args[1]).toPath(), unsignedFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        Object unsignedApk = apkClass.getMethod("parse", String.class).invoke(null, unsignedFile.getPath());
+        String unsignedPackage = (String) apkClass.getField("packageName").get(unsignedApk);
+        require(!PACKAGE.equals(unsignedPackage)
+                        && !((Boolean) apkClass.getMethod("hasVerifiedSigningIdentity").invoke(unsignedApk)),
+                "Addon rejection requires a distinct, actually unsigned fixture");
+        method(pmClass, "add", apkClass).invoke(service, unsignedApk);
         Method addon = method(apkClass, "setSystemAddon", boolean.class);
         try {
-            // components.apk is deliberately unsigned. It must not become a trusted
-            // system addon merely to exercise a metadata-query positive branch.
-            addon.invoke(apk, true);
-            throw new AssertionError("Unverified APK acquired system-addon status");
-        } catch (java.lang.reflect.InvocationTargetException rejected) {
-            require(rejected.getCause() instanceof SecurityException,
-                    "Unsigned addon promotion failed for an unrelated reason");
+            try {
+                addon.invoke(unsignedApk, true);
+                throw new AssertionError("Unverified APK acquired system-addon status");
+            } catch (java.lang.reflect.InvocationTargetException rejected) {
+                require(rejected.getCause() instanceof SecurityException,
+                        "Unsigned addon promotion failed for an unrelated reason");
+            }
+            require(!((Boolean) apkClass.getMethod("isSystemAddon").invoke(unsignedApk))
+                            && (client.getApplicationInfo(unsignedPackage, 0).flags
+                                    & android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0,
+                    "Rejected addon promotion changed installed system metadata");
+            missing(() -> client.getPackageGids(unsignedPackage, PackageManager.MATCH_SYSTEM_ONLY),
+                    "Rejected addon promotion changed the system-only group query");
+            require(client.getPackagesHoldingPermissions(new String[]{heldPermission},
+                            PackageManager.MATCH_SYSTEM_ONLY).isEmpty(),
+                    "Rejected addon promotion changed the system-only permission query");
+        } finally {
+            method(pmClass, "remove", String.class).invoke(service, unsignedPackage);
         }
-        require(!((Boolean)apkClass.getMethod("isSystemAddon").invoke(apk))
-                        && (client.getApplicationInfo(PACKAGE, 0).flags
-                                & android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0,
-                "Rejected addon promotion changed installed system metadata");
-        missing(() -> client.getPackageGids(PACKAGE, PackageManager.MATCH_SYSTEM_ONLY),
-                "Rejected addon promotion changed the system-only group query");
-        require(client.getPackagesHoldingPermissions(new String[]{heldPermission},
-                        PackageManager.MATCH_SYSTEM_ONLY).isEmpty(),
-                "Rejected addon promotion changed the system-only permission query");
         dexRegistration(wire, service, apkFile.getPath());
 
         String[] names = {PACKAGE, "fixture.not.installed", PACKAGE};

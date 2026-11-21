@@ -500,6 +500,7 @@ public final class SystemServer {
                 SystemClock.sleep(200);
                 log("shutting down: " + reason);
                 mServices.atm.endAllProcesses(5000);
+                mServices.atm.flushUsageStats();
                 java.util.Properties state = Device.read(Device.stateFile());
                 if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
                     Device.stateFile().delete();

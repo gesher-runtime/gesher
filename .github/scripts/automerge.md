@@ -2,11 +2,12 @@
 
 Apply `automerge` after reviewing the current PR head. GitHub performs a native
 SQUASH merge after the required PR CI and exact-head QA gate succeed.
-There is no merge queue and no second full merge-group CI run. In App mode the
-trusted label controller selects GitHub's protected immediate merge API when the
-PR is already ready, or native auto-merge waiting when another native rule still
-blocks it. It never bypasses a rule or starts another CI build. Its only schedule
-is the recovery described under API quota.
+There is no merge queue and no second full merge-group CI run. In both legacy
+and App modes the trusted label controller uses GitHub's protected immediate
+merge API with `expectedHeadOid` after rechecking current authorization and CI.
+If another native rule still blocks it, the PR stays open and native auto-merge
+stays disarmed. An ordinary event or the recovery schedule tries again from
+fresh evidence. The controller never bypasses a rule or starts another CI build.
 
 ## Label authorization and QA
 
@@ -19,31 +20,27 @@ a later label application. A pending label in the same/adjacent timestamp second
 is conservatively retained when GitHub supplies no proof that it predates the
 push; it cannot authorize a new head without a matching approval receipt.
 
-The existing author routes are unchanged: an author may deliberately reapply an
-earlier label, or precede their first label with an unedited exact-head COMMENT
-review. A different authorized collaborator may apply their first label. The bot
+Any collaborator with write/admin access, including the PR author, approves the
+current head by applying the label after the PR was opened. The controller
+removes only a label applied at creation (or in the same second, or before the
+recorded opening boundary) and labels invalidated by a push, reopening or
+retargeting. A creation-time label is the only route an author without write
+access could use to request automerge, and the permission check rejects such an
+author's later labels. No separate author COMMENT review is required. The bot
 records a native approval binding the repository, PR, head, base and label event.
 This receipt records authorization; it is not a code-review or scope verdict.
 
-An author first-label review states the reviewed commit, scope verdict, contract
-evidence, actionable findings, tests and validation limits required by
-CONTRIBUTING.md. Include exactly one standalone compact marker with actual values:
-
-```text
-<!-- gesher-automerge-qa-v1 {"repository":1426153186,"number":115,"head":"FULL_40_CHARACTER_HEAD_SHA","base":"main"} -->
-```
-
-Edited, duplicate or mismatched proof fails closed. Legacy unedited receipts and
-opening boundaries retain their meaning. Maintainer approval cannot waive the
-Android-visible contract requirements in CONTRIBUTING.md.
+Legacy unedited receipts and opening boundaries retain their meaning. Maintainer
+approval cannot waive the Android-visible contract requirements in
+CONTRIBUTING.md.
 
 ## One PR CI run and final QA
 
-The label records approval for that head. In legacy-only mode it also enables
-native SQUASH waiting while `qa/label-approval` remains pending. With the App
-status enabled, native waiting stays disarmed through status publication and
-verification. Its final release either submits the protected native SQUASH
-merge or enables native SQUASH waiting. A small metadata-only
+The label records approval for that head without arming native waiting. Both
+legacy-only and App-enabled publication first cancel and verify removal of any
+request left by an earlier controller. Native waiting stays disarmed throughout
+CI, status publication and verification. Final release submits only the protected
+native SQUASH merge pinned to the reviewed head. A small metadata-only
 workflow, triggered when ci or arm64-windows completes, verifies the registered
 workflow IDs/paths, pull_request event, exact head/branch, target/source repository
 IDs and successful aggregate check suites from GitHub Actions. Display-name
@@ -70,6 +67,19 @@ all three contexts are bound to GitHub Actions, force pushes/deletion are blocke
 and there are no permanent bypass actors. Branch updates may need fresh CI;
 there is no automatic second full CI run simply for merging.
 
+GitHub's stale-review dismissal (`dismiss_stale_reviews_on_push`) is off. With
+it on, GitHub dismissed the controller's exact-head approval with "The
+merge-base changed after approval" whenever `main` advanced, and kept dismissing
+every fresh approval of the same head until the branch was updated, although
+`git merge-base` was unchanged (PR 120 after #218). Approval stays exact-head
+without it: `qa/label-approval` is required and bound to the reviewed head, and
+the final protected mutation supplies `expectedHeadOid`. No persistent native
+request can later consume the retained review for another already-green head
+before asynchronous push cleanup runs. A push also removes the label and
+dismisses the controller's own approvals of older heads; only a fresh label on
+the new head can authorize release. Approval survives `main` advancing while
+the source head remains unchanged.
+
 ## API quota
 
 Every reconciliation rereads labels, reviews, permission and CI evidence. These
@@ -85,7 +95,13 @@ without stopping the job, a notice is logged and reads fall back to `GITHUB_TOKE
 Same-repository `workflow_run` events use the PRs GitHub names in the event
 instead of listing every open PR; fork runs still list open PRs. In App mode,
 only the first named PR shares that event's concurrency key; any other matched
-PR is routed to its own metadata job as described below. Native
+PR is routed to its own metadata job as described below. A CI completion for
+an open PR at the run's head with no `automerge` label, no native waiting and
+no `success` in either QA context (trusted or not) ends after that PR read and
+one current-context scan, the same rule the recovery schedule applies to
+unlabeled PRs. Such a PR's gate is already not green, so a full pass would only
+repeat its revocation with an App status write and a legacy write on the shared
+`GITHUB_TOKEN` quota. Every other matched PR is reconciled as before. Native
 auto-merge cancellation reads its state from the REST pull request it already
 fetched. Registered workflow identities, paths and enabled states are reread at
 each CI evidence pass, including after App status publication. Title or body
@@ -108,16 +124,17 @@ URL, current CI and ordinary approval validation all remain valid. A foreign
 same-name success cannot suppress recovery. A failed same-head rerun removes
 the stale label; a pending rerun restores pending rather than keeping old green.
 Recovery also resumes a valid green PR if a controller stopped after publication
-but before the final native SQUASH release. A valid green gate with native SQUASH
-waiting needs no status rewrites or native mutations. Each labeled
-candidate has one current combined-status scan and a CI evidence pass; settled
-green candidates also recheck approval and current native waiting. Scans paginate
-current contexts rather than full status history. Drafts are skipped. In App
+but before the final native SQUASH release, or if another native rule has since
+become satisfied. An open green PR is revalidated for an exact-head release;
+green alone never suppresses that attempt. An inherited native request is
+disarmed even while CI is pending. Current-status scans paginate contexts rather
+than full status history. Drafts are skipped. In App
 mode, an unlabeled PR with native waiting or leftover green is also recovered,
 so a missed unlabel delivery cannot keep old authorization indefinitely. An
 unlabeled PR without native waiting costs only a current-context scan and no CI
 or approval reads; without old green, it is left alone. Legacy-only recovery
-still skips unlabeled PRs. Schedule payloads carry no repository object, so the job derives
+also cancels inherited requests on unlabeled PRs, but skips unlabeled PRs without
+a native request. Schedule payloads carry no repository object, so the job derives
 the repository name for App token scoping from `GITHUB_REPOSITORY` and the App
 requirement from `GITHUB_REPOSITORY_ID`. Reconciliation
 applies exactly the event path's checks; it never creates an approval. A failure
@@ -173,24 +190,32 @@ An existing native request is cancelled and its removal verified before any
 status publication or new native approval receipt. The controller authenticates the App success, checks
 approval and CI again, writes the legacy success, then rechecks current approval,
 registered CI and the exact App receipt before releasing native SQUASH pinned to
-the reviewed head. GitHub rejects `enablePullRequestAutoMerge` for an already
-ready `CLEAN` PR. Following the [GitHub CLI selection](https://github.com/cli/cli/blob/trunk/pkg/cmd/pr/merge/merge.go),
-`CLEAN`, `HAS_HOOKS` and `UNSTABLE` use `mergePullRequest`; `BLOCKED` and `BEHIND`
-use native waiting. Unknown, conflicting, changed, closed or draft targets do not
-release. Both mutations supply `expectedHeadOid` and remain subject to all native
-required checks, approvals and other rules. This is the authorized label
-controller, not an administrator/manual merge fallback.
+the reviewed head. `CLEAN`, `HAS_HOOKS` and `UNSTABLE` permit a protected
+`mergePullRequest` attempt; `BLOCKED` and `BEHIND` defer it without a mutation.
+Unknown, conflicting, changed, closed or draft targets do not release. The
+mutation supplies `expectedHeadOid` and remains subject to all native required
+checks, approvals and other rules. This is the authorized label controller, not
+an administrator/manual merge fallback. `enablePullRequestAutoMerge` is never
+issued, including when a fully reviewed PR is blocked by another native rule.
 
-The native-state read is a selection hint, not an override of required evidence.
+The native-state read is a readiness hint, not an override of required evidence.
 Current approval, CI and the exact App receipt are checked after it. The chosen
 mutation is the final release action, with no further required controller checks.
 If it fails or its response is lost, the controller first rereads the PR. A
 closed or changed target receives no cleanup writes; an unreadable target is
 reported and deferred. An open unchanged target is disarmed and its status is
-revoked only by the safe protocol below. It never retries through the other
-release API. A subsequent ordinary reconciliation starts again from live state.
+revoked only by the safe protocol below. It never falls back to another release
+API or native waiting. A subsequent ordinary reconciliation starts again from live state.
 App-enabled controller jobs use the per-PR ordering above through the complete
-publication sequence. Legacy-only publication behavior remains unchanged.
+publication sequence. Legacy-only publication uses the same final approval/CI
+rechecks and protected exact-head release, while retaining its Actions status.
+
+On deployment, requests armed by older controller runs still need ordinary
+reconciliation to cancel them. An older in-flight run can rearm such a request
+until it finishes; neither the code change nor local tests retroactively revoke
+that external state. Do not claim this rollout condition is resolved without
+checking the live controller runs and request readbacks. No protection setting
+or token permission change is part of this correction.
 
 Operational order: complete migration phase 2 step 5 (dual gate), merge this
 change, then remove only the legacy `qa/label-approval` requirement from ruleset
@@ -217,9 +242,9 @@ workflow approval policy. Fork pull_request_review events have read-only tokens
 and perform no privileged writes: the target repository's workflow_run event
 rechecks their proof after CI, while the required QA gate remains pending.
 
-A push to a new head needs fresh label authorization and CI. GitHub may also
-disable native waiting when a fork contributor without target write access
-pushes. A new label restores waiting only after the new head is reviewed.
+A push to a new head needs fresh label authorization and CI. This rule does not
+rely on GitHub disabling auto-merge after pushes by users without target write
+access: write-capable contributors must receive the same exact-head protection.
 
 ## Operations and validation
 
@@ -247,8 +272,8 @@ job completion. Set the App ID only after installing the App and saving its key;
 incomplete App configuration fails visibly.
 
 The App writes approval receipts, dismisses stale bot approvals, removes stale
-approval labels, comments on CI failures, and enables or disables native
-auto-merge. The controller still recognizes unedited receipts and legacy
+approval labels, comments on CI failures, cancels inherited native auto-merge,
+and submits the protected expected-head merge. The controller still recognizes unedited receipts and legacy
 opening and failure comments from GitHub Actions. It authenticates artifacts
 from either bot by login, numeric account ID, and bot account type.
 The job skips the App's own review submissions and dismissals and its own

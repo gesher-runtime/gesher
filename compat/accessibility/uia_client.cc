@@ -60,13 +60,17 @@ DWORD WINAPI UiaMain(void*) {
   return 0;
 }
 
-// Runs fn on the UIA thread, waiting up to timeout_ms; false when it did not
-// finish in time (it still runs, later).
-bool RunOnUiaThread(std::function<void()> fn, DWORD timeout_ms) {
+// Runs fn on the UIA thread, waiting up to timeout_ms. A timed-out fn can still
+// finish, but must not publish a snapshot its caller never received. Completion
+// and timeout arbitrate under the same mutex; cleanup always runs on the UIA
+// thread, outside that mutex (COM Release must not extend the caller's wait).
+bool RunOnUiaThread(std::function<void()> fn, DWORD timeout_ms,
+                    std::function<void()> completed = {}, std::function<void()> cleanup = {}) {
   struct Done {
     std::mutex m;
     std::condition_variable cv;
     bool done = false;
+    bool abandoned = false;
   };
   auto done = std::make_shared<Done>();
   {
@@ -76,38 +80,55 @@ bool RunOnUiaThread(std::function<void()> fn, DWORD timeout_ms) {
       HANDLE t = CreateThread(nullptr, 0, UiaMain, nullptr, 0, nullptr);
       if (t != nullptr) CloseHandle(t);
     }
-    g_jobs.push_back([fn, done] {
+    g_jobs.push_back([fn, done, completed, cleanup] {
       fn();
-      std::lock_guard<std::mutex> l(done->m);
-      done->done = true;
+      {
+        std::lock_guard<std::mutex> l(done->m);
+        if (!done->abandoned) {
+          if (completed) completed();
+          done->done = true;
+        }
+      }
       done->cv.notify_all();
+      if (cleanup) cleanup();
     });
   }
   g_cv.notify_all();
   std::unique_lock<std::mutex> lock(done->m);
-  return done->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return done->done; });
+  if (done->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return done->done; })) {
+    return true;
+  }
+  done->abandoned = true;
+  return false;
 }
 
 // --- Snapshots --------------------------------------------------------------------
+
+template <typename T> struct UiaRelease {
+  void operator()(T* value) const { if (value != nullptr) value->Release(); }
+};
+template <typename T> using UiaPtr = std::unique_ptr<T, UiaRelease<T>>;
 
 // Keep the current and previous snapshot of each live window: another WebView
 // or a refresh must not invalidate an action queued against a displayed node.
 struct Elements {
   HWND hwnd = nullptr;
-  std::vector<IUIAutomationElement*> nodes;
+  std::vector<UiaPtr<IUIAutomationElement>> nodes;
 };
 std::map<int, Elements> g_elements;
 int g_generation = 0;
 
 void ReleaseElements(HWND refreshing) {
-  int newest = 0;
+  int newest = 0, previous = 0;
   for (auto it = g_elements.rbegin(); it != g_elements.rend(); ++it) {
-    if (it->second.hwnd == refreshing) { newest = it->first; break; }
+    if (it->second.hwnd == refreshing) {
+      if (newest == 0) newest = it->first;
+      else { previous = it->first; break; }
+    }
   }
   for (auto it = g_elements.begin(); it != g_elements.end();) {
     if (!IsWindow(it->second.hwnd) ||
-        (it->second.hwnd == refreshing && it->first != newest)) {
-      for (IUIAutomationElement* e : it->second.nodes) e->Release();
+        (it->second.hwnd == refreshing && it->first != newest && it->first != previous)) {
       it = g_elements.erase(it);
     } else {
       ++it;
@@ -156,20 +177,55 @@ enum : uint32_t {
   kSelected = 2048,
 };
 
+// An unavailable UIA provider is not an empty tree. Keep every reference local
+// until the traversal succeeds, including children not yet visited when a
+// sibling/descendant query fails or the node budget is reached.
+HRESULT Children(IUIAutomationTreeWalker* walker, IUIAutomationCacheRequest* cache,
+                 IUIAutomationElement* parent,
+                 std::vector<UiaPtr<IUIAutomationElement>>& children) {
+  IUIAutomationElement* raw = nullptr;
+  g_phase.store("GetFirstChildElementBuildCache");
+  HRESULT hr = walker->GetFirstChildElementBuildCache(parent, cache, &raw);
+  UiaPtr<IUIAutomationElement> child(raw);
+  if (FAILED(hr)) return hr;
+  while (child != nullptr) {
+    raw = nullptr;
+    g_phase.store("GetNextSiblingElementBuildCache");
+    hr = walker->GetNextSiblingElementBuildCache(child.get(), cache, &raw);
+    UiaPtr<IUIAutomationElement> next(raw);
+    if (FAILED(hr)) return hr;
+    children.push_back(std::move(child));
+    child = std::move(next);
+  }
+  return S_OK;
+}
+
 // "gen\t<n>" then per element:
 // "id\tparent\tcontrolType\tname\tvalue\tl t r b\tflags\tautomationId\thelp"
 // (screen coordinates; parent -1 for the top level).
-std::wstring Snapshot(HWND hwnd, int max_nodes) {
+struct PendingSnapshot {
+  Elements elements;
+  std::wstring text;
+};
+
+std::unique_ptr<PendingSnapshot> Snapshot(HWND hwnd, int max_nodes) {
   g_phase.store("snapshot setup");
-  ReleaseElements(hwnd);
-  g_generation++;
-  Elements& snapshot = g_elements[g_generation];
-  snapshot.hwnd = hwnd;
-  auto& elements = snapshot.nodes;
-  std::wstring out = L"gen\t" + std::to_wstring(g_generation) + L"\n";
-  if (g_uia == nullptr) return out;
-  IUIAutomationCacheRequest* cache = nullptr;
-  if (FAILED(g_uia->CreateCacheRequest(&cache))) return out;
+  auto failed = [hwnd](HRESULT hr) {
+    std::fprintf(stderr, "gesher-a11y: UIA snapshot of %p failed at %s (0x%08x)\n",
+                 static_cast<void*>(hwnd), g_phase.load(), static_cast<unsigned>(hr));
+    g_phase.store("idle");
+    return nullptr;
+  };
+  auto snapshot = std::make_unique<PendingSnapshot>();
+  snapshot->elements.hwnd = hwnd;
+  auto& elements = snapshot->elements.nodes;
+  auto& out = snapshot->text;
+  if (g_uia == nullptr) return failed(E_UNEXPECTED);
+  IUIAutomationCacheRequest* raw_cache = nullptr;
+  g_phase.store("CreateCacheRequest");
+  HRESULT hr = g_uia->CreateCacheRequest(&raw_cache);
+  UiaPtr<IUIAutomationCacheRequest> cache(raw_cache);
+  if (FAILED(hr) || cache == nullptr) return failed(FAILED(hr) ? hr : E_UNEXPECTED);
   const PROPERTYID props[] = {
       UIA_NamePropertyId, UIA_ControlTypePropertyId, UIA_BoundingRectanglePropertyId,
       UIA_IsEnabledPropertyId, UIA_HasKeyboardFocusPropertyId, UIA_IsKeyboardFocusablePropertyId,
@@ -181,43 +237,43 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
       UIA_AriaRolePropertyId,
       UIA_IsScrollPatternAvailablePropertyId, UIA_SelectionItemIsSelectedPropertyId,
   };
-  for (PROPERTYID p : props) cache->AddProperty(p);
-  IUIAutomationTreeWalker* walker = nullptr;
-  g_uia->get_ControlViewWalker(&walker);
-  IUIAutomationElement* root = nullptr;
-  g_phase.store("ElementFromHandleBuildCache");
-  if (walker == nullptr || FAILED(g_uia->ElementFromHandleBuildCache(hwnd, cache, &root)) ||
-      root == nullptr) {
-    if (walker != nullptr) walker->Release();
-    cache->Release();
-    return out;
+  g_phase.store("AddProperty");
+  for (PROPERTYID p : props) {
+    hr = cache->AddProperty(p);
+    if (FAILED(hr)) return failed(hr);
   }
+  IUIAutomationTreeWalker* raw_walker = nullptr;
+  g_phase.store("get_ControlViewWalker");
+  hr = g_uia->get_ControlViewWalker(&raw_walker);
+  UiaPtr<IUIAutomationTreeWalker> walker(raw_walker);
+  if (FAILED(hr) || walker == nullptr) return failed(FAILED(hr) ? hr : E_UNEXPECTED);
+  IUIAutomationElement* raw_root = nullptr;
+  g_phase.store("ElementFromHandleBuildCache");
+  hr = g_uia->ElementFromHandleBuildCache(hwnd, cache.get(), &raw_root);
+  UiaPtr<IUIAutomationElement> root(raw_root);
+  if (FAILED(hr) || root == nullptr) return failed(FAILED(hr) ? hr : E_UNEXPECTED);
   struct Item {
-    IUIAutomationElement* element;
+    UiaPtr<IUIAutomationElement> element;
     int parent;
     int depth;
   };
   std::vector<Item> stack;
   // The container itself (Gesher's window) is not a node: its subtree is.
-  IUIAutomationElement* child = nullptr;
-  std::vector<IUIAutomationElement*> top;
+  std::vector<UiaPtr<IUIAutomationElement>> top;
   g_phase.store("first child");
-  walker->GetFirstChildElementBuildCache(root, cache, &child);
-  while (child != nullptr) {
-    top.push_back(child);
-    IUIAutomationElement* next = nullptr;
-    walker->GetNextSiblingElementBuildCache(child, cache, &next);
-    child = next;
+  hr = Children(walker.get(), cache.get(), root.get(), top);
+  if (FAILED(hr)) return failed(hr);
+  for (auto it = top.rbegin(); it != top.rend(); ++it) {
+    stack.push_back({std::move(*it), -1, 0});
   }
-  for (auto it = top.rbegin(); it != top.rend(); ++it) stack.push_back({*it, -1, 0});
-  root->Release();
+  root.reset();
   while (!stack.empty() && static_cast<int>(elements.size()) < max_nodes) {
     g_phase.store("element properties");
-    Item item = stack.back();
+    Item item = std::move(stack.back());
     stack.pop_back();
-    IUIAutomationElement* e = item.element;
+    IUIAutomationElement* e = item.element.get();
     int id = static_cast<int>(elements.size());
-    elements.push_back(e);
+    elements.push_back(std::move(item.element));
     BSTR name = nullptr;
     e->get_CachedName(&name);
     RECT r = {0, 0, 0, 0};
@@ -256,23 +312,16 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
            CachedString(e, UIA_HelpTextPropertyId) + L"\n";
     SysFreeString(name);
     if (item.depth >= 64) continue;
-    std::vector<IUIAutomationElement*> kids;
-    IUIAutomationElement* c = nullptr;
+    std::vector<UiaPtr<IUIAutomationElement>> kids;
     g_phase.store("element children");
-    walker->GetFirstChildElementBuildCache(e, cache, &c);
-    while (c != nullptr) {
-      kids.push_back(c);
-      IUIAutomationElement* next = nullptr;
-      walker->GetNextSiblingElementBuildCache(c, cache, &next);
-      c = next;
+    hr = Children(walker.get(), cache.get(), e, kids);
+    if (FAILED(hr)) return failed(hr);
+    for (auto it = kids.rbegin(); it != kids.rend(); ++it) {
+      stack.push_back({std::move(*it), id, item.depth + 1});
     }
-    for (auto it = kids.rbegin(); it != kids.rend(); ++it) stack.push_back({*it, id, item.depth + 1});
   }
-  for (Item& left : stack) left.element->Release();
-  walker->Release();
-  cache->Release();
   g_phase.store("idle");
-  return out;
+  return snapshot;
 }
 
 // action: 1 click (Invoke, else Toggle, else SelectionItem.Select, else the
@@ -281,7 +330,7 @@ bool Act(int generation, int id, int action, const std::wstring& text) {
   auto snapshot = g_elements.find(generation);
   if (snapshot == g_elements.end() || !IsWindow(snapshot->second.hwnd) || id < 0 ||
       id >= static_cast<int>(snapshot->second.nodes.size())) return false;
-  IUIAutomationElement* e = snapshot->second.nodes[static_cast<size_t>(id)];
+  IUIAutomationElement* e = snapshot->second.nodes[static_cast<size_t>(id)].get();
   switch (action) {
     case 1: {
       IUIAutomationInvokePattern* invoke = nullptr;
@@ -356,16 +405,36 @@ std::wstring Str(JNIEnv* env, jstring s) {
 }
 
 jstring UiaClient_nativeSnapshot(JNIEnv* env, jclass, jlong hwnd, jint max_nodes, jint timeout_ms) {
-  auto result = std::make_shared<std::wstring>();
+  struct Result {
+    std::unique_ptr<PendingSnapshot> pending;
+    std::wstring text;
+  };
+  auto result = std::make_shared<Result>();
   HWND h = reinterpret_cast<HWND>(static_cast<intptr_t>(hwnd));
-  if (!RunOnUiaThread([h, max_nodes, result] { *result = Snapshot(h, max_nodes); },
-                      static_cast<DWORD>(timeout_ms))) {
+  if (!RunOnUiaThread([h, max_nodes, result] { result->pending = Snapshot(h, max_nodes); },
+                      static_cast<DWORD>(timeout_ms),
+                      [result] {
+                        // This callback and timeout cancellation are serialized.
+                        // Only complete, received trees may retire action targets.
+                        // A successful empty tree has a generation line; failures
+                        // have no text and become a null Java snapshot.
+                        if (result->pending == nullptr) return;
+                        int generation = ++g_generation;
+                        result->text = L"gen\t" + std::to_wstring(generation) + L"\n" +
+                                       result->pending->text;
+                        g_elements.emplace(generation, std::move(result->pending->elements));
+                      },
+                      [h, result] {
+                        result->pending.reset();
+                        ReleaseElements(h);
+                      })) {
     std::fprintf(stderr, "gesher-a11y: UIA snapshot of %p timed out at %s\n",
                  static_cast<void*>(h), g_phase.load());
     return nullptr;
   }
-  return env->NewString(reinterpret_cast<const jchar*>(result->data()),
-                        static_cast<jsize>(result->size()));
+  if (result->text.empty()) return nullptr;
+  return env->NewString(reinterpret_cast<const jchar*>(result->text.data()),
+                        static_cast<jsize>(result->text.size()));
 }
 
 jboolean UiaClient_nativeAct(JNIEnv* env, jclass, jint generation, jint id, jint action,
