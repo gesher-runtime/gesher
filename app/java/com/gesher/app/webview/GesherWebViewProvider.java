@@ -315,6 +315,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
      * frame of the same URL, as Android loads the URL itself there) are not answered with it.
      */
     private static final class PendingData {
+        /** The base URL's document as WebView2 reports it (ApiNavigations.document). */
         final String url;
         final String mime;
         final byte[] body;
@@ -322,7 +323,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         final AtomicBoolean answer = new AtomicBoolean();
 
         PendingData(String url, String mime, byte[] body) {
-            this.url = url;
+            this.url = ApiNavigations.document(url);
             this.mime = mime;
             this.body = body;
         }
@@ -1903,7 +1904,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 // A page's own navigation leaves loadDataWithBaseURL's document (not a
                 // newer one the Looper published meanwhile).
                 mPendingData.compareAndSet(published, null);
-            } else if (published != null && a != null && a.equals(published.url)) {
+            } else if (published != null && published.url.equals(ApiNavigations.document(a))) {
                 // Each of the WebView's own navigations of the base URL (a superseded one
                 // and the next, a reload) has its main document answered once.
                 published.answer.set(true);
@@ -1997,7 +1998,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         try {
             String appUrl = FileUrls.fromWebView2(url);
             PendingData data = mPendingData.get();
-            if (data != null && context == CONTEXT_DOCUMENT && mainFrame && url.equals(data.url)
+            if (data != null && context == CONTEXT_DOCUMENT && mainFrame
+                    && data.url.equals(ApiNavigations.document(url))
                     && data.answer.compareAndSet(true, false)) {
                 // The published document's own array, which nothing changes (JNI copies
                 // it). App-supplied streams still take the read/close path below, even

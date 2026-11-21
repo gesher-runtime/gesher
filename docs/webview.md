@@ -111,7 +111,11 @@ hangs the other for long:
   only the last of identical ones). A load stops counting as the WebView's
   own once a main-frame navigation that started after WebView2 was handed it
   ends without being superseded (the native host numbers the loads it hands
-  over), so a page navigation to the same URL later reaches the app.
+  over), so a page navigation to the same URL later reaches the app. The
+  URLs the WebView loads are compared with those WebView2 reports in the
+  form WebView2 reports them (lower-case scheme and host, the default port
+  dropped, an empty path `/`, spaces and non-ASCII characters
+  percent-encoded), here and for `loadDataWithBaseURL`'s base URL.
 - HTTP(S) `@JavascriptInterface` calls remain synchronous for JavaScript, but
   execute in order on a per-view JavaBridge worker. A deferred reserved request
   leaves WebView2's STA free to answer synchronous Android cookie APIs. Other

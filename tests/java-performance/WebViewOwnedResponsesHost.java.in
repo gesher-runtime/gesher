@@ -398,6 +398,66 @@ public final class WebViewOwnedResponsesHost {
             check(Arrays.equals(last(provider).body, bytes("published")) && provider.mClient.calls.get() == 1,
                     "a reload of the base URL lost the data");
         });
+        // WebView2 reports URLs (NavigationStarting, WebResourceRequested) serialized as the
+        // URL Standard does: what the app passed is compared in that form.
+        String[][] reported = {
+            {"https://Example.COM", "https://example.com/"},
+            {"HTTPS://example.com:443/a/./b/../c?q=a b#top", "https://example.com/a/c?q=a%20b#top"},
+            {"http://example.com:80", "http://example.com/"},
+            {"file:///sdcard/My Notes/\u05e9\u05dc\u05d5\u05dd.html",
+                    "https://gesher-file.example/sdcard/My%20Notes/%D7%A9%D7%9C%D7%95%D7%9D.html"},
+            {"https://b\u00fccher.example/\u00e4?\u00e4", "https://xn--bcher-kva.example/%C3%A4?%C3%A4"},
+        };
+        scenario("a load is its own however WebView2 spells its URL", () -> {
+            for (String[] pair : reported) {
+                WebViewOwnedResponsesHost provider = taking(new WebViewOwnedResponsesHost());
+                WebView2Host host = provider.mHost;
+                provider.loadUrl0(pair[0]);
+                host.execute();
+                host.apiNavigation = false;  // another load took WebView2Host's flag
+                check(host.starting(pair[1], false, false) > 0 && provider.mClient.overrides.get() == 0,
+                        "loadUrl(" + pair[0] + ") reported as " + pair[1] + " was asked about");
+                check(provider.mApiNavigations.size() == 0, "the started load stayed outstanding: " + pair[0]);
+            }
+        });
+        scenario("loadDataWithBaseURL's document is answered however WebView2 spells the base URL", () -> {
+            for (String[] pair : reported) {
+                if (pair[1].indexOf('#') >= 0) continue;
+                WebViewOwnedResponsesHost provider = pending(pair[0], "data", "text/html", "UTF-8");
+                WebView2Host host = provider.mHost;
+                host.execute();
+                host.starting(pair[1], false, false);
+                host.request(1, pair[1], CONTEXT_DOCUMENT);
+                check(last(provider).status == 200 && Arrays.equals(last(provider).body, bytes("data")),
+                        "the document for base " + pair[0] + " (requested as " + pair[1] + ") was not answered");
+            }
+        });
+        scenario("other URLs stay apart and reported URLs keep their form", () -> {
+            try {
+                java.lang.reflect.Method canonical = ApiNavigations.class.getDeclaredMethod("canonical", String.class);
+                canonical.setAccessible(true);
+                for (String[] pair : reported) {
+                    check(pair[1].equals(canonical.invoke(null, FileUrls.toWebView2(pair[0]))), "canonical(" + pair[0] + ") is not " + pair[1]);
+                    check(pair[1].equals(canonical.invoke(null, pair[1])), "a reported URL changed: " + pair[1]);
+                }
+                String[][] different = {
+                    {"https://example.com/a", "https://example.com/A"},
+                    {"https://example.com/a?x", "https://example.com/a"},
+                    {"https://example.com/a%2Fb", "https://example.com/a/b"},
+                    {"https://example.com:444/", "https://example.com/"},
+                    {"http://example.com/", "https://example.com/"},
+                };
+                for (String[] pair : different) {
+                    check(!canonical.invoke(null, pair[0]).equals(canonical.invoke(null, pair[1])),
+                            pair[0] + " and " + pair[1] + " became the same URL");
+                }
+                for (String other : new String[] {"data:text/html;base64,PGI+", "about:blank", "javascript:void(0)"}) {
+                    check(other.equals(canonical.invoke(null, other)), "a non-http(s) URL changed: " + other);
+                }
+            } catch (ReflectiveOperationException e) {
+                throw new AssertionError("ApiNavigations.canonical: " + e);
+            }
+        });
         scenario("a page navigation leaves the published document", () -> {
             WebViewOwnedResponsesHost provider = pending(BASE, "published", "text/html", "UTF-8");
             WebView2Host host = provider.mHost;
