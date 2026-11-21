@@ -57,12 +57,14 @@ public final class GesherActivityWindow {
             // No longer the top resumed Activity (ActivityThread reports it as it pauses).
             a.performTopResumedActivityChanged(false, "pausing");
             a.performPause();
+            GesherAppDriver.activityPaused();
         }
         android.os.Bundle state = new android.os.Bundle();
         boolean before = a.getApplicationInfo().targetSdkVersion < android.os.Build.VERSION_CODES.P;
         // Instrumentation.callActivityOnSaveInstanceState's call.
         if (before) a.performSaveInstanceState(state);
         a.performStop(false /* preserveWindow */, "gesher-app");
+        GesherAppDriver.activityStopped();
         if (!before) a.performSaveInstanceState(state);
         View decor = a.mDecor;
         if (decor != null && a.mVisibleFromServer) {
@@ -83,7 +85,9 @@ public final class GesherActivityWindow {
             a.mVisibleFromServer = true;
             if (a.mVisibleFromClient) a.makeVisible();
         }
+        GesherAppDriver.activityResuming();
         a.performResume(false /* followedByPause */, "gesher-app");
+        GesherAppDriver.activityResumed();
         a.performTopResumedActivityChanged(true, "topWhenResuming");
     }
 
@@ -100,8 +104,10 @@ public final class GesherActivityWindow {
         if (a.isResumed()) {
             a.performTopResumedActivityChanged(false, "pausing");
             a.performPause();
+            GesherAppDriver.activityPaused();
         }
         a.performStop(false /* preserveWindow */, "gesher-app");
+        GesherAppDriver.activityStopped();
         View decor = a.mDecor;
         a.performDestroy();
         if (decor != null && a.mWindowAdded) {

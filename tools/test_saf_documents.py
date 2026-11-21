@@ -37,7 +37,8 @@ def main():
         sources = [ROOT / "app/java/com/gesher/server" / (name + ".java") for name in
                    ("DocumentsStorageProvider", "DocumentPicker", "WindowsHost", "ContentProviders",
                     "ActivityManagerService", "ActivityTaskManagerService", "PackageManagerService")]
-        sources += [ROOT / "tests/dex-services/gesher/services/SafDocumentsContractTest.java",
+        sources += [ROOT / "tests/dex-services/gesher/services/FixtureServiceContext.java",
+                    ROOT / "tests/dex-services/gesher/services/SafDocumentsContractTest.java",
                     ROOT / "tests/saf/SafDocumentsHost.java",
                     ROOT / "tests/dex-services/gesher/services/DetachedNativeUiContractTest.java"]
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-source", "17",

@@ -13,6 +13,7 @@
 // pending bytes of a UTF-8 sequence kept in it. long double is IEEE binary128
 // there (strtold returns it in %xmm0).
 
+#include "binary128_parse.h"
 #include "shim_internal.h"
 #include "unicode_bionic.h"
 
@@ -572,12 +573,16 @@ Quad ToQuad(double d) {
   return q;
 }
 
-Quad BIONIC_SYSV Strtold(const char* s, char** end) { return ToQuad(strtod(s, end)); }
-Quad BIONIC_SYSV StrtoldL(const char* s, char** end, void*) { return ToQuad(strtod(s, end)); }
+Quad BIONIC_SYSV Strtold(const char* s, char** end) {
+  Quad result;
+  ParseBinary128(s, end, Binary128RoundingMode(), &result);
+  return result;
+}
+Quad BIONIC_SYSV StrtoldL(const char* s, char** end, void*) { return Strtold(s, end); }
 
 // Floating conversions use the same candidate alphabet as bionic/wcstod.cpp,
 // after its Unicode whitespace skip. Keep full input lengths/end pointers.
-template <class R, class F>
+template <class R, bool CommitPrefix = false, class F>
 R WideParse(const wchar32* s, wchar32** end, F parse) {
   const wchar32* start = s;
   while (UnicodeValue(*start, UnicodeProperty::Space)) ++start;
@@ -587,6 +592,7 @@ R WideParse(const wchar32* s, wchar32** end, F parse) {
                                std::strchr(alphabet, static_cast<char>(*p)) != nullptr; ++p) {
     ascii += static_cast<char>(*p);
   }
+  if constexpr (CommitPrefix) ascii.resize(Binary128WidePrefix(ascii.c_str()));
   char* e;
   R r = parse(ascii.c_str(), &e);
   if (end != nullptr) *end = const_cast<wchar32*>(e == ascii.c_str() ? s : start + (e - ascii.c_str()));
@@ -668,7 +674,7 @@ float BIONIC_SYSV Wcstof(const wchar32* s, wchar32** end) {
   });
 }
 Quad BIONIC_SYSV Wcstold(const wchar32* s, wchar32** end) {
-  return ToQuad(WideParse<double>(s, end, [](const char* b, char** e) { return strtod(b, e); }));
+  return WideParse<Quad, true>(s, end, [](const char* b, char** e) { return Strtold(b, e); });
 }
 
 int64_t BIONIC_SYSV WcstolL(const wchar32* s, wchar32** end, int base, void*) {
@@ -679,6 +685,7 @@ uint64_t BIONIC_SYSV WcstoulL(const wchar32* s, wchar32** end, int base, void*) 
 }
 double BIONIC_SYSV WcstodL(const wchar32* s, wchar32** end, void*) { return Wcstod(s, end); }
 float BIONIC_SYSV WcstofL(const wchar32* s, wchar32** end, void*) { return Wcstof(s, end); }
+Quad BIONIC_SYSV WcstoldL(const wchar32* s, wchar32** end, void*) { return Wcstold(s, end); }
 
 size_t BIONIC_SYSV Wcsftime(wchar32* dst, size_t max, const wchar32* format, const void* tm,
                            void*) {
@@ -791,6 +798,7 @@ void RegisterLocale(SymbolTable& t) {
   L("wcstof", Wcstof);
   L("wcstof_l", WcstofL);
   L("wcstold", Wcstold);
+  L("wcstold_l", WcstoldL);
   L("wcsftime", Wcsftime);
   L("wcsftime_l", Wcsftime);
   L("openlog", Openlog);

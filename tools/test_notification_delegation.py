@@ -39,7 +39,8 @@ def main() -> None:
                 source.write_bytes(subprocess.run(["git", "show", args.service_source_ref + ":" + relative],
                                                  cwd=ROOT, check=True, capture_output=True).stdout)
             sources.append(str(source))
-        sources += [str(ROOT / "tests/dex-services/gesher/services/NotificationDelegationTest.java"),
+        sources += [str(ROOT / "tests/dex-services/gesher/services/FixtureServiceContext.java"),
+                    str(ROOT / "tests/dex-services/gesher/services/NotificationDelegationTest.java"),
                     str(ROOT / "tests/notification-delegation/NotificationDelegationHost.java")]
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), *sources], check=True)
