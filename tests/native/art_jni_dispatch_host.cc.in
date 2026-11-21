@@ -1,6 +1,7 @@
 // Production JNI installation and dispatch; only the Windows/ART boundaries
 // below are controlled. Each scenario runs in a fresh process for static state.
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 #include <elf.h>
 #include <sys/mman.h>
@@ -22,10 +24,33 @@ struct IMAGE_DOS_HEADER { int e_lfanew; };
 struct IMAGE_NT_HEADERS64 { struct { uint64_t SizeOfImage; } OptionalHeader; };
 alignas(64) uint8_t g_image[kPage]{};
 struct JNINativeInterface { void* entries[kEnvSlots]{}; };
-// ART's actual JNIEnvExt has fields after the public table pointer. Keep a
-// distinct second field so an accidental proxy unwrap cannot pass unnoticed.
-struct JNIEnv { void* const* functions; void* art_thread = reinterpret_cast<void*>(0x5678); };
-struct ProxyEnv { void* const* functions; JNIEnv* real; };
+struct JNIEnv { void* const* functions; };
+@PROXY_ENV@
+// Pinned ART16r4 JNIEnvExt derives from JNIEnv, then stores const self_ and vm_
+// pointers before locals and further runtime state. Represent that prefix with
+// distinct live objects and sufficient storage, not the old two-word envelope
+// or a synthetic proxy tag. This boundary performs no ART operations.
+// https://android.googlesource.com/platform/art/+/android-16.0.0_r4/runtime/jni/jni_env_ext.h
+struct ArtThreadBoundary { uintptr_t state = 0x5678; };
+struct ArtVmBoundary { uintptr_t state = 0x9abc; };
+struct ArtEnvBoundary : JNIEnv {
+  ArtThreadBoundary* const self_;
+  ArtVmBoundary* const vm_;
+  uintptr_t locals_storage[4]{};
+  ArtEnvBoundary(void* const* table, ArtThreadBoundary* thread, ArtVmBoundary* vm)
+      : JNIEnv{table}, self_(thread), vm_(vm) {}
+};
+static_assert(sizeof(void*) == 8 && sizeof(ArtEnvBoundary) >= sizeof(ProxyEnv));
+static_assert(alignof(ArtEnvBoundary) >= alignof(ProxyEnv));
+template <typename Proxy>
+Proxy NewProxy(void* const* table, bool guest) {
+  if constexpr (std::is_constructible_v<Proxy, void* const*, bool>) {
+    return Proxy(table, guest);  // The actual production constructor owns its tag.
+  } else {
+    // Historical --source-ref controls retain their actual old representation.
+    return Proxy{table, nullptr};
+  }
+}
 void* g_env_table[kEnvSlots]{};
 void* g_env_table_guest[kEnvSlots]{};
 JNINativeInterface g_real;
@@ -92,6 +117,7 @@ void* LoadArtShim(const std::string&, std::string* path, std::string*) {
 @HOOK_DECLARATION@
 @HOOK_DEFINITION@
 @REAL_ENV@
+@GUEST_ENV@
 @INSTALLER@
 
 void* ReadHook() {
@@ -138,8 +164,12 @@ void SetCallerRange(bool inside) {
 void CheckDispatch() {
   Require(g_override->entries[0] == nullptr && g_override->entries[1] == g_real.entries[1] &&
               g_override->entries[2] == nullptr, "reserved/missing slots preserved");
-  JNIEnv real{g_override->entries};
-  ProxyEnv proxy{g_env_table, &real}, guest{g_env_table_guest, &real};
+  ArtThreadBoundary thread;
+  ArtVmBoundary vm;
+  ArtEnvBoundary real{g_override->entries, &thread, &vm};
+  ProxyEnv proxy = NewProxy<ProxyEnv>(g_env_table, false);
+  ProxyEnv guest = NewProxy<ProxyEnv>(g_env_table_guest, true);
+  proxy.real = &real; guest.real = &real;
   Require(Real(&real) == &real && Real(reinterpret_cast<JNIEnv*>(&proxy)) == &real &&
               Real(reinterpret_cast<JNIEnv*>(&guest)) == &real, "real and both proxy environments");
   using SysvInt = uint64_t(__attribute__((sysv_abi)) *)(void*, uint64_t, uint64_t, uint64_t,
@@ -165,6 +195,39 @@ void CheckDispatch() {
           "Microsoft integer and stack arguments");
   Require(reinterpret_cast<MsFloat>(g_override->entries[5])(env,1,2,3,4,5,6,7,8,9) == fp + 1,
           "Microsoft floating and stack arguments");
+}
+
+void CheckProxyIdentity() {
+  ArtThreadBoundary thread;
+  ArtVmBoundary vm;
+  ArtEnvBoundary real{g_override->entries, &thread, &vm};
+  Require(reinterpret_cast<void*>(&real) == reinterpret_cast<void*>(static_cast<JNIEnv*>(&real)) &&
+              reinterpret_cast<uintptr_t>(&real.self_) - reinterpret_cast<uintptr_t>(&real) == sizeof(void*) &&
+              reinterpret_cast<uintptr_t>(&real.vm_) - reinterpret_cast<uintptr_t>(&real) == 2 * sizeof(void*),
+          "real environment retains the pinned ART thread and VM prefix");
+  Require(Real(&real) == &real && !IsGuestEnv(&real),
+          "real ART boundary is neither unwrapped nor classified as guest");
+  ProxyEnv proxy = NewProxy<ProxyEnv>(g_env_table, false);
+  ProxyEnv guest = NewProxy<ProxyEnv>(g_env_table_guest, true);
+  proxy.real = &real; guest.real = &real;
+  std::array<void*, kEnvSlots> host_copy{}, guest_copy{};
+  std::memcpy(host_copy.data(), g_env_table, sizeof(g_env_table));
+  std::memcpy(guest_copy.data(), g_env_table_guest, sizeof(g_env_table_guest));
+  proxy.functions = host_copy.data(); guest.functions = guest_copy.data();
+  Require(Real(reinterpret_cast<JNIEnv*>(&proxy)) == &real,
+          "copied host proxy table retains the real association");
+  Require(Real(reinterpret_cast<JNIEnv*>(&guest)) == &real,
+          "copied guest proxy table retains the real association");
+  Require(!IsGuestEnv(reinterpret_cast<JNIEnv*>(&proxy)) && IsGuestEnv(reinterpret_cast<JNIEnv*>(&guest)),
+          "copied tables retain distinct host and guest identity");
+  proxy.functions = g_env_table; guest.functions = g_env_table_guest;
+  Require(Real(reinterpret_cast<JNIEnv*>(&proxy)) == &real &&
+              Real(reinterpret_cast<JNIEnv*>(&guest)) == &real &&
+              !IsGuestEnv(reinterpret_cast<JNIEnv*>(&proxy)) && IsGuestEnv(reinterpret_cast<JNIEnv*>(&guest)),
+          "restored tables retain both real associations and guest identity");
+  Require(Real(nullptr) == nullptr && !IsGuestEnv(nullptr), "null environment is not a proxy");
+  Require(real.self_ == &thread && real.vm_ == &vm && thread.state == 0x5678 && vm.state == 0x9abc,
+          "identity checks preserve real thread and VM state");
 }
 
 void WriteShell(const Elf64_Ehdr& header, size_t size = sizeof(Elf64_Ehdr)) {
@@ -220,7 +283,8 @@ int main(int argc, char** argv) {
   LoadArtShimFor("libexec.so");
   Require(g_live.empty() && ReadHook() == nullptr, "disabled shim leaves runtime unchanged");
   unsetenv("GESHER_ART_SHIM");
-  if (scenario != "success" && scenario != "concurrent" && scenario != "architecture") {
+  if (scenario != "success" && scenario != "concurrent" && scenario != "architecture" &&
+      scenario != "proxy-identity") {
     LoadArtShimFor("libexec.so");
     Require(g_override == nullptr && ReadHook() == nullptr && g_live.empty(),
             "failed setup neither publishes nor leaks");
@@ -245,6 +309,7 @@ int main(int argc, char** argv) {
   LoadArtShimFor("libexec.so");
   Require(g_allocations == allocations && g_publications == 1, "repeated setup reuses table");
   CheckDispatch();
+  if (scenario == "proxy-identity") CheckProxyIdentity();
   Require(std::remove("libexec.so") == 0, "fixture shell removed");
   while (!g_live.empty()) VirtualFree(g_live.begin()->first, 0, MEM_RELEASE);
   std::printf("PASS ART JNI %s: publication, cleanup, retry, proxies and both ABIs\n", scenario.c_str());

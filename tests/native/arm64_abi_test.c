@@ -22,6 +22,7 @@
 #include <netdb.h>
 #include <pthread.h>
 #include <setjmp.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdatomic.h>
 #include "arm64_fpcr_contracts.h"
@@ -153,6 +154,14 @@ static void test_stat_epoll(const char* dir) {
 }
 
 // --- syscall, getauxval ---------------------------------------------------------------
+static long raw_svc2(long nr, long a0, long a1) {
+  register long x8 __asm__("x8") = nr;
+  register long x0 __asm__("x0") = a0;
+  register long x1 __asm__("x1") = a1;
+  __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1) : "memory");
+  return x0;
+}
+
 static void test_syscall_auxv(void) {
   check("syscall(SYS_gettid) == gettid()", syscall(SYS_gettid) == gettid());
   int word = 0;
@@ -160,6 +169,25 @@ static void test_syscall_auxv(void) {
   errno = 0;
   check("syscall of an unknown number fails with ENOSYS",
         syscall(4000) == -1 && errno == ENOSYS);
+  static unsigned char alt_stack_buf[16384];
+  stack_t old_ss, prev_ss, cur_ss, new_ss;
+  memset(&old_ss, 0, sizeof(old_ss));
+  memset(&prev_ss, 0, sizeof(prev_ss));
+  memset(&cur_ss, 0, sizeof(cur_ss));
+  memset(&new_ss, 0, sizeof(new_ss));
+  new_ss.ss_sp = alt_stack_buf;
+  new_ss.ss_flags = 0;
+  new_ss.ss_size = sizeof(alt_stack_buf);
+  check("raw svc SYS_sigaltstack queries initial stack",
+        raw_svc2(SYS_sigaltstack, 0, (long)&old_ss) == 0 && (old_ss.ss_flags & SS_DISABLE) != 0);
+  check("raw svc SYS_sigaltstack installs alternate stack",
+        raw_svc2(SYS_sigaltstack, (long)&new_ss, (long)&prev_ss) == 0 &&
+            prev_ss.ss_sp == old_ss.ss_sp && prev_ss.ss_flags == old_ss.ss_flags);
+  check("syscall(SYS_sigaltstack) observes installed stack",
+        syscall(SYS_sigaltstack, NULL, &cur_ss) == 0 && cur_ss.ss_sp == alt_stack_buf &&
+            cur_ss.ss_flags == 0 && cur_ss.ss_size == sizeof(alt_stack_buf));
+  check("raw svc SYS_sigaltstack restores previous stack",
+        raw_svc2(SYS_sigaltstack, (long)&old_ss, 0) == 0);
   unsigned long hw = getauxval(AT_HWCAP);
   check("getauxval(AT_HWCAP): FP, ASIMD; no LSE atomics",
         (hw & 3) == 3 && (hw & (1ul << 8)) == 0);

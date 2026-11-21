@@ -1,5 +1,5 @@
-// gesher-base: <sys/utsname.h>. sysname is "Windows" and release is the
-// Windows version, so Linux kernel-version checks fail safely.
+// gesher-base: <sys/utsname.h>. sysname is "Linux", as on Android, and release
+// is "0.0.0-gesher", so Linux kernel-version checks fail safely (system.cc).
 #pragma once
 
 #ifdef __cplusplus

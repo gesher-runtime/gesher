@@ -145,7 +145,11 @@ int main(int, char** argv) {
   vl = sizeof(v);
   CHECK(setsockopt(sv[0], IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) == 0);
   CHECK(getsockopt(sv[0], IPPROTO_TCP, TCP_NODELAY, &v, &vl) == 0 && v != 0);
-  CHECK(getsockopt(sv[0], SOL_SOCKET, SO_PEERCRED, &v, &vl) == -1 && errno == ENOPROTOOPT);
+  // A socketpair's SO_PEERCRED is its creator (ADR 0088); a 4-byte buffer gets
+  // its first field, the pid, as on Linux.
+  vl = sizeof(v);
+  CHECK(getsockopt(sv[0], SOL_SOCKET, SO_PEERCRED, &v, &vl) == 0 && vl == sizeof(v) &&
+        v == static_cast<int>(GetCurrentProcessId()));
 
   // SO_RCVTIMEO expires with EAGAIN, as on Linux.
   timeval tv = {0, 100000};

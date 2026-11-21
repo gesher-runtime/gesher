@@ -95,6 +95,10 @@ void Close(Library* library);
 struct PhdrInfo {
   uintptr_t addr = 0;            // load bias
   const char* name = "";         // soname
+  // The file the object was loaded from, made absolute (realpath): what
+  // bionic's dl_iterate_phdr gives as dlpi_name. For an object loaded from
+  // memory, the name LoadFromMemory was given.
+  const char* path = "";
   const void* phdr = nullptr;    // Elf64_Phdr[phnum], inside the mapping
   uint16_t phnum = 0;
   size_t tls_modid = 0;          // 0 when the object has no PT_TLS
@@ -109,6 +113,7 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn);
 // or below it. Returns false if `addr` is in no loaded object.
 struct AddressInfo {
   const char* soname = "";
+  const char* path = "";         // as PhdrInfo::path: bionic's dladdr dli_fname
   void* base = nullptr;          // the mapping's start
   const char* symbol = nullptr;  // nullptr if no symbol covers it
   void* symbol_addr = nullptr;
