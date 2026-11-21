@@ -157,13 +157,36 @@ public final class SoftwareServiceContractTest {
         for (int i = Temperature.THROTTLING_LIGHT; i <= Temperature.THROTTLING_SHUTDOWN; i++) {
             require(Float.isNaN(thresholds[i]), "invented thermal threshold");
         }
+        // ThermalManagerService registers a status listener with or without a HAL and
+        // tells it the current status (THROTTLING_NONE here) once, on another thread.
         AtomicInteger events = new AtomicInteger();
+        AtomicInteger lastStatus = new AtomicInteger(-1);
+        java.util.concurrent.CountDownLatch told = new java.util.concurrent.CountDownLatch(1);
         IThermalStatusListener listener = new IThermalStatusListener.Stub() {
-            @Override public void onStatusChange(int status) { events.incrementAndGet(); }
+            @Override public void onStatusChange(int status) {
+                lastStatus.set(status);
+                events.incrementAndGet();
+                told.countDown();
+            }
         };
-        require(!thermal.registerThermalStatusListener(listener), "accepted unavailable listener");
-        require(!thermal.unregisterThermalStatusListener(listener), "invented registration");
-        require(events.get() == 0, "unavailable listener emitted a fake event");
+        require(thermal.registerThermalStatusListener(listener), "status listener refused");
+        require(told.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                "registered status listener not told the current status");
+        require(lastStatus.get() == Temperature.THROTTLING_NONE, "invented a throttling status");
+        require(thermal.unregisterThermalStatusListener(listener), "registration not removed");
+        require(!thermal.unregisterThermalStatusListener(listener), "removed a listener twice");
+        Thread.sleep(200);
+        require(events.get() == 1, "status listener told " + events.get() + " times, not once");
+        AtomicInteger headroom = new AtomicInteger();
+        android.os.IThermalHeadroomListener headroomListener =
+                new android.os.IThermalHeadroomListener.Stub() {
+                    @Override public void onHeadroomChange(float h, float f, int s, float[] t) {
+                        headroom.incrementAndGet();
+                    }
+                };
+        require(!thermal.registerThermalHeadroomListener(headroomListener),
+                "headroom listener registered without a thermal HAL");
+        require(headroom.get() == 0, "headroom without a HAL");
 
         Class<?> pmType = Class.forName("com.gesher.server.PackageManagerService");
         Object pm = construct("PackageManagerService", new Class<?>[] {java.util.Collection.class},
