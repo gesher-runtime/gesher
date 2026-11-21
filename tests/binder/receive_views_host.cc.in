@@ -84,6 +84,7 @@ struct MEMORY_BASIC_INFORMATION {
 
 #include "binder_wire.h"
 #define FIXTURE_SHARED_DESCRIPTIONS @SHARED_DESCRIPTIONS@
+#define FIXTURE_SOCKET_DESCRIPTIONS @SOCKET_DESCRIPTIONS@
 #if FIXTURE_SHARED_DESCRIPTIONS
 #include "binder_file_descriptions.h"
 #endif
@@ -224,7 +225,8 @@ int FixtureClose(int fd) {
     fixture::Check(a.open, "adopted fd handles closed once"); a.open = false; ++p.closes; ++handles;
   }
   if (!handles) std::abort();
-  fixture::Check(handles == (FIXTURE_SHARED_DESCRIPTIONS ? 2 : 1), "fd owns all transported handles");
+  fixture::Check(handles == (FIXTURE_SHARED_DESCRIPTIONS && p.adopted_kinds[fd - 101] != 4 ? 2 : 1),
+                 "fd owns all transported handles");
   ++p.closed_fds;
   return 0;
 }
@@ -272,6 +274,22 @@ int AdoptFileDescription(HANDLE file, HANDLE shared, DescriptorKind kind, bool c
 #define close FixtureClose
 #include "binder_sg.h"
 namespace gesher {
+namespace record_locks { struct DescriptorGuard { ~DescriptorGuard() {} }; }
+// Sender fixtures use plain handles. Received socket fixtures model the
+// separate socket owner, which consumes one native handle, not an OFD section.
+bool TransferSocket(int, uintptr_t*, uint64_t*) { return false; }
+int AdoptSocket(uintptr_t owned, uint64_t metadata) {
+  fixture::Check((metadata & 1) != 0, "socket adoption retains socket metadata");
+  const int fd = _open_osfhandle(static_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
+  if (fd < 0) CloseHandle(reinterpret_cast<HANDLE>(owned));
+  else fixture::peer->adopted_kinds[fd - 101] = 4;
+  return fd;
+}
+int AdoptTransferred(HANDLE owned, uint64_t) {
+  const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
+  if (fd < 0) CloseHandle(owned);  // as production: a failed adoption closes the handle
+  return fd;
+}
 namespace {
 namespace wire = binder_wire;
 @PIPE@
@@ -582,6 +600,53 @@ void FileDescriptionMetadata() {
     Reject(p, EBADF);
   }
 }
+#if FIXTURE_SOCKET_DESCRIPTIONS
+void SocketDescriptionMetadata() {
+  Payload valid(64); valid.Fd(0, 0x301); valid.Fd(32, 0x302);
+  auto socket = Load<binder_fd_object>(valid.data.data());
+  socket.pad_flags = 1;
+  socket.cookie = 0x123400000055ull;
+  std::memcpy(valid.data.data(), &socket, sizeof(socket));
+  valid.descriptions[0].kind = gesher::binder_wire::kSocketFileDescription;
+  valid.descriptions[0].shared_handle = 0;
+  for (unsigned failure = 0; failure != 5; ++failure) {
+    Mapping mapping; Peer p; BeginReply(p); valid.AppendTo(p, 321); Output output;
+    if (failure == 1) p.fail_duplicate = 2;
+    if (failure == 2) p.fail_open = 1;
+    if (failure == 3) p.fail_open = 2;
+    if (failure == 4) p.fail_publish = 1;
+    const int result = output.Run(mapping, p);
+    if (failure == 0) {
+      Check(result == 0 && p.duplicates == 3 && p.opens == 2,
+            "mixed socket and file adopt their distinct ownership representations");
+      const auto tr = output.Transaction();
+      const auto delivered = Load<binder_fd_object>(reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer));
+      Check(delivered.cookie == 0x55 && delivered.pad_flags == 0,
+            "socket wire metadata is consumed without leaking into Android's FD object");
+      Check(p.adopted_kinds[0] == 4 && p.adopted_kinds[1] == 0,
+            "socket transport does not turn the following file into a socket");
+      SelectPeer selected(p);
+      gesher::CloseReceivedFds(reinterpret_cast<uint8_t*>(tr.data.ptr.buffer), tr.data_size,
+                              reinterpret_cast<const void*>(tr.data.ptr.offsets), tr.offsets_size);
+      Check(mapping.file->Free(tr.data.ptr.buffer) == 321, "mixed caller frees exact buffer");
+    } else {
+      Check(result == -1, "mixed descriptor failure is never published as success");
+    }
+    Check(EmptyMapping(mapping) && std::none_of(p.adopted.begin(), p.adopted.end(),
+          [](const auto& handle) { return handle.open; }), "mixed failure or close releases every capability");
+  }
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Payload invalid = valid;
+    if (failure == 0) invalid.descriptions[0].shared_handle = 0x10000;
+    if (failure == 1) invalid.descriptions[0].kind = 0;
+    if (failure == 2) {
+      socket.pad_flags = 0;
+      std::memcpy(invalid.data.data(), &socket, sizeof(socket));
+    }
+    Peer p; BeginReply(p); invalid.AppendTo(p); Reject(p, EBADF);
+  }
+}
+#endif
 #endif
 
 void FdAndOwnershipFailures() {
@@ -751,6 +816,9 @@ int main(int argc, char** argv) {
   fixture::InvalidDeliveries();
 #if FIXTURE_SHARED_DESCRIPTIONS
   fixture::FileDescriptionMetadata();
+#if FIXTURE_SOCKET_DESCRIPTIONS
+  fixture::SocketDescriptionMetadata();
+#endif
 #endif
   fixture::FdAndOwnershipFailures();
   fixture::MixedCommands();

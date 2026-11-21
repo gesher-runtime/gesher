@@ -7,7 +7,8 @@ An app's .so imports eglXxx/glXxx from libEGL.so, libGLESv1_CM.so,
 libGLESv2.so and libGLESv3.so and calls them with the System V ABI; Gesher's
 EGL/GLES is ANGLE's libEGL.dll/libGLESv2.dll, whose exports are Microsoft
 x64. For every function the Khronos headers (AOSP's
-frameworks/native/opengl/include, the headers the NDK ships) declare, this
+frameworks/native/opengl/include, the headers the NDK ships) and ANGLE's
+gl2ext_angle.h (third_party/angle: the extensions ANGLE adds) declare, this
 writes a `sysv_abi` function with the same prototype that calls ANGLE's entry
 point through a pointer of the Microsoft-ABI type; the compiler does the
 argument shuffle (integer and floating-point registers, the stack, the
@@ -40,33 +41,30 @@ HEADERS = [
     'GLES/gl.h', 'GLES/glext.h',
 ]
 
-# Extensions ANGLE advertises that AOSP's headers do not declare (ANGLE's
-# include/GLES2/gl2ext_angle.h). A client that sees one in GL_EXTENSIONS takes
-# its functions as required: Skia's GrGLInterface fails validation, and
-# Flutter's Skia renderer draws nothing, when glBindUniformLocationCHROMIUM is
-# null.
+# The extensions ANGLE adds to GL_EXTENSIONS beyond AOSP's headers
+# (GL_ANGLE_*, GL_CHROMIUM_*), declared by ANGLE's include/GLES2/gl2ext_angle.h
+# at the commit the DLLs are built from (third_party/angle). A client that sees
+# one in GL_EXTENSIONS takes its functions as present and calls them:
+# WebRender (Firefox) calls glProvokingVertexANGLE for GL_ANGLE_provoking_vertex
+# and panics when eglGetProcAddress returned null for it; Skia's GrGLInterface
+# fails validation, and Flutter's Skia renderer draws nothing, without
+# glBindUniformLocationCHROMIUM.
 EXTRA = 'ANGLE gl2ext_angle.h'
+EXTRA_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'third_party', 'angle', 'GLES2', 'gl2ext_angle.h')
+# Entry points of extensions ANGLE advertises that a later revision of the
+# extension added and AOSP's gl2ext.h predates (Khronos' gl2ext.h has them).
 EXTRA_PROTOTYPES = [
-    # GL_CHROMIUM_bind_uniform_location
-    'GL_APICALL void GL_APIENTRY glBindUniformLocationCHROMIUM (GLuint program, GLint location, '
-    'const GLchar *name);',
-    # GL_CHROMIUM_copy_texture
-    'GL_APICALL void GL_APIENTRY glCopyTextureCHROMIUM (GLuint sourceId, GLint sourceLevel, '
-    'GLenum destTarget, GLuint destId, GLint destLevel, GLint internalFormat, GLenum destType, '
-    'GLboolean unpackFlipY, GLboolean unpackPremultiplyAlpha, GLboolean unpackUnmultiplyAlpha);',
-    'GL_APICALL void GL_APIENTRY glCopySubTextureCHROMIUM (GLuint sourceId, GLint sourceLevel, '
-    'GLenum destTarget, GLuint destId, GLint destLevel, GLint xoffset, GLint yoffset, GLint x, '
-    'GLint y, GLint width, GLint height, GLboolean unpackFlipY, GLboolean unpackPremultiplyAlpha, '
-    'GLboolean unpackUnmultiplyAlpha);',
-    # GL_CHROMIUM_framebuffer_mixed_samples
-    'GL_APICALL void GL_APIENTRY glCoverageModulationCHROMIUM (GLenum components);',
+    # GL_EXT_disjoint_timer_query (its later revisions add it)
+    'GL_APICALL void GL_APIENTRY glGetInteger64vEXT (GLenum pname, GLint64 *data);',
 ]
 
 CALLBACK_TYPES = ('GLDEBUGPROC', 'GLDEBUGPROCKHR', 'EGLDEBUGPROCKHR', 'EGLSetBlobFuncANDROID',
-                  'EGLGetBlobFuncANDROID', 'GLVULKANPROCNV', '__eglMustCastToProperFunctionPointerType')
+                  'EGLGetBlobFuncANDROID', 'GLVULKANPROCNV', '__eglMustCastToProperFunctionPointerType',
+                  'GLSETBLOBPROCANGLE', 'GLGETBLOBPROCANGLE')
 # Taking a callback, not forwarded and not handwritten: not provided (the
 # loader's stub names them if an app calls one).
-LEFT_OUT = {'glGetVkProcAddrNV'}
+LEFT_OUT = {'glGetVkProcAddrNV', 'glBlobCacheCallbacksANGLE'}
 
 # Types the headers spell with `long` (khrplatform.h's khronos_intptr_t and
 # khronos_ssize_t are `signed long int`: AOSP's copy is for LP64 Android). The
@@ -95,17 +93,35 @@ def fixed_width(t):
 PROTO = re.compile(r'^(?:GL_APICALL|GL_API|EGLAPI)\s+(?P<ret>.*?)\s*\b(?:GL_APIENTRY|EGLAPIENTRY)\s+'
                    r'(?P<name>\w+)\s*\((?P<args>.*)\)\s*;\s*$')
 PARAM = re.compile(r'^(?P<type>.*?)(?P<name>\b\w+)\s*(?P<array>\[[^\]]*\])?\s*$')
+# A parameter given only by its type: one type name, maybe const, maybe pointers.
+UNNAMED = re.compile(r'(?:const\s+)?\w+(?:\s*\*\s*(?:const\b)?)*\s*')
+
+
+def joined(lines):
+    """The lines, with a declaration that continues over several lines (as
+    gl2ext_angle.h writes long ones) joined into one."""
+    out, pending = [], None
+    for line in lines:
+        text = line.strip()
+        if pending is not None:
+            pending += ' ' + text
+            if text.endswith(';'):
+                out.append(pending)
+                pending = None
+        elif re.match(r'(?:GL_APICALL|GL_API|EGLAPI)\b', text) and not text.endswith(';'):
+            pending = text
+        else:
+            out.append(text)
+    return out
 
 
 def parse(include_dir):
     funcs = {}
     order = []
     for header in HEADERS + [EXTRA]:
-        if header == EXTRA:
-            lines = EXTRA_PROTOTYPES
-        else:
-            with open(os.path.join(include_dir, header), encoding='utf-8') as f:
-                lines = f.readlines()
+        path = EXTRA_HEADER if header == EXTRA else os.path.join(include_dir, header)
+        with open(path, encoding='utf-8') as f:
+            lines = joined(f.readlines()) + EXTRA_PROTOTYPES if header == EXTRA else f.readlines()
         for line in lines:
             m = PROTO.match(line.strip())
             if not m:
@@ -115,13 +131,22 @@ def parse(include_dir):
                 continue
             ret = m.group('ret').strip()
             args = m.group('args').strip()
+            if header == EXTRA and name in LEFT_OUT:
+                # No thunk; ANGLE's header names none of its parameters.
+                funcs[name] = (ret, [], header)
+                order.append(name)
+                continue
             params = []
             if args and args != 'void':
                 for i, p in enumerate(a.strip() for a in args.split(',')):
                     pm = PARAM.match(p)
-                    if not pm or not pm.group('type').strip() or pm.group('type').strip() == 'const':
+                    if pm and pm.group('type').strip() and pm.group('type').strip() != 'const':
+                        params.append((pm.group('type').strip(), pm.group('array') or ''))
+                    elif header == EXTRA and UNNAMED.fullmatch(p):
+                        # ANGLE's header leaves some parameters unnamed ("GLenum").
+                        params.append((p, ''))
+                    else:
                         raise SystemExit(f'{header}: cannot parse parameter "{p}" of {name}')
-                    params.append((pm.group('type').strip(), pm.group('array') or ''))
             funcs[name] = (ret, params, header)
             order.append(name)
     return funcs, order

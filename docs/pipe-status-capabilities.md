@@ -18,6 +18,13 @@ Each runtime-created endpoint has actual access rights, a shared metadata
 section and a named admission mutex. Duplication and aware-process transport
 share the description. Metadata retains no extra pipe endpoint handle.
 
+Adoption opens or recreates the mutex named by the validated shared nonce.
+The sender may release its last description after process creation or broker
+transfer, before the receiver imports it. An active operation retains its
+description and mutex handle; a missing named mutex consequently has no active
+owner. Recreating that same name preserves the shared state and avoids a child
+startup failure when its sender has already retired the last local handle.
+
 The creator records the actual initial wait mode before publication. `F_GETFL`
 reads known status without entering a kernel query. `F_SETFL` changes the real
 kernel mode before publishing `O_NONBLOCK`. Shared metadata records an active

@@ -23,6 +23,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #include <windows.h>
 
@@ -75,6 +77,40 @@ struct Command {
   binder_ptr_cookie pc;        // BR_INCREFS ... BR_DECREFS
   uint64_t cookie;             // BR_DEAD_BINDER, BR_CLEAR_DEATH_NOTIFICATION_DONE
 };
+
+// A received Binder descriptor can be forwarded through every AF_UNIX pair
+// transport. Retain the received alias until its original owner revokes it.
+int ForwardFile(int fd, int type) {
+  int pair[2];
+  REQUIRE(socketpair(AF_UNIX, type, 0, pair) == 0);
+  char byte = 'f';
+  iovec vector{&byte, 1};
+  alignas(cmsghdr) unsigned char control[CMSG_SPACE(sizeof(int))]{};
+  msghdr message{};
+  message.msg_iov = &vector;
+  message.msg_iovlen = 1;
+  message.msg_control = control;
+  message.msg_controllen = sizeof(control);
+  cmsghdr* header = CMSG_FIRSTHDR(&message);
+  header->cmsg_level = SOL_SOCKET;
+  header->cmsg_type = SCM_RIGHTS;
+  header->cmsg_len = CMSG_LEN(sizeof(int));
+  memcpy(CMSG_DATA(header), &fd, sizeof(fd));
+  REQUIRE(sendmsg(pair[0], &message, 0) == 1);
+  memset(control, 0, sizeof(control));
+  byte = 0;
+  REQUIRE(recvmsg(pair[1], &message, MSG_CMSG_CLOEXEC) == 1 && byte == 'f');
+  header = CMSG_FIRSTHDR(&message);
+  REQUIRE((message.msg_flags & MSG_CTRUNC) == 0 && header != nullptr &&
+          header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_RIGHTS &&
+          header->cmsg_len == CMSG_LEN(sizeof(int)));
+  int received = -1;
+  memcpy(&received, CMSG_DATA(header), sizeof(received));
+  REQUIRE(received >= 0);
+  EXPECT((fcntl(received, F_GETFD) & FD_CLOEXEC) != 0);
+  EXPECT(close(pair[0]) == 0 && close(pair[1]) == 0);
+  return received;
+}
 
 struct Binder {
   int fd = -1;
@@ -289,10 +325,15 @@ int Server() {
         std::string path = "/proc/self/fd/" + std::to_string(fd);
         retained_files.push_back(open(path.c_str(), O_RDWR));
         REQUIRE(retained_files.back() >= 0 && retained_files[1] >= 0);
+        for (int type : {SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET}) {
+          const int forwarded = ForwardFile(fd, type);
+          EXPECT(pwrite(forwarded, "B", 1, 0) == 1);
+          retained_files.push_back(forwarded);
+        }
         b.FreeBuffer(tr);
         b.Transaction(BC_REPLY, 0, 0, 0, Payload("fd retained"), {});
       } else if (tr.code == kCodeCheckRevoked) {
-        REQUIRE(retained_files.size() == 3);
+        REQUIRE(retained_files.size() == 6);
         for (int fd : retained_files) {
           char byte;
           EXPECT(write(fd, "x", 1) == -1 && errno == EPERM);

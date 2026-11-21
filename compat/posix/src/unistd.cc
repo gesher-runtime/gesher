@@ -17,6 +17,7 @@
 #include <gesher/file_description.h>
 
 #include <atomic>
+#include <mutex>
 #include <string>
 
 #include "internal.h"
@@ -61,6 +62,42 @@ bool FinalPath(HANDLE h, std::string* out) {
   }
   *out = gesher::LinuxPath(buf);
   return true;
+}
+
+// setenv, putenv and unsetenv on Linux (bionic, glibc) never free an
+// environment string they replace or remove: what getenv returned, and what
+// environ pointed at, stays valid. Android code keeps such pointers: mozglue
+// has its own getenv over environ, and caches MOZ_ANDROID_LIBDIR's value while
+// GeckoLoader puts the same assignment again before each of its loads. The CRT
+// frees the string _putenv_s replaces, so before a change the CRT's string for
+// the variable is swapped for a copy, which the CRT frees, and the original is
+// kept for the life of the process. Gesher's own writes are serialized here.
+std::mutex& EnvironmentWrites() {
+  static std::mutex* mutex = new std::mutex();
+  return *mutex;
+}
+
+void KeepEnvironmentString(const char* name) {
+  if (_environ == nullptr) return;
+  const size_t length = strlen(name);
+  for (char** entry = _environ; *entry != nullptr; ++entry) {
+    // The CRT matches names without regard to case.
+    if (_strnicmp(*entry, name, length) != 0 || (*entry)[length] != '=') continue;
+    if (char* copy = _strdup(*entry)) *entry = copy;
+    return;
+  }
+}
+
+// _putenv_s(name, value), or the removal of name for nullptr, keeping the
+// replaced string. Setting the value it already has changes nothing.
+int PutEnvironment(const char* name, const char* value) {
+  if (name == nullptr || *name == '\0' || strchr(name, '=') != nullptr) return errno = EINVAL, -1;
+  std::lock_guard<std::mutex> lock(EnvironmentWrites());
+  const char* current = getenv(name);
+  if (value != nullptr ? current != nullptr && strcmp(current, value) == 0 : current == nullptr)
+    return 0;
+  KeepEnvironmentString(name);
+  return _putenv_s(name, value != nullptr ? value : "") == 0 ? 0 : (errno = EINVAL, -1);
 }
 
 }  // namespace
@@ -329,6 +366,9 @@ int gesher_ftruncate(int fd, off_t length) {
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE file = snapshot->handle;
+  if (gesher::FileDescriptionIsMemfd(snapshot)) {
+    if (int error = gesher::MemfdResizeHandleError(file, static_cast<uint64_t>(length))) return errno = error, -1;
+  }
   uint32_t access = 0;
   int error = gesher::record_locks::HandleAccess(file, &access);
   if (error) return errno = error, -1;
@@ -544,6 +584,10 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
   // Android uses Linux's pwrite behavior: O_APPEND overrides the explicit
   // offset, but the caller's shared ordinary file position stays unchanged.
   const bool append = writing && type == FILE_TYPE_DISK && (status_flags & O_APPEND) != 0;
+  if (writing && gesher::FileDescriptionIsMemfd(snapshot)) {
+    if (int error = gesher::MemfdWriteHandleError(file, false, static_cast<uint64_t>(offset), count, append))
+      return errno = error, -1;
+  }
   uint32_t granted = 0;
   int error = gesher::record_locks::HandleAccess(file, &granted);
   if (error) return errno = error, -1;
@@ -738,14 +782,15 @@ char* realpath(const char* path, char* resolved_path) {
 int setenv(const char* name, const char* value, int overwrite) {
   if (auto result = gesher::WriteFontEnvironment(name, value, overwrite))
     return *result == 0 ? 0 : (errno = EINVAL, -1);
-  if (!overwrite && getenv(name) != nullptr) return 0;
-  return _putenv_s(name, value) == 0 ? 0 : (errno = EINVAL, -1);
+  if (!overwrite && name != nullptr && getenv(name) != nullptr) return 0;
+  if (value == nullptr) return errno = EINVAL, -1;
+  return PutEnvironment(name, value);
 }
 
 int unsetenv(const char* name) {
   if (auto result = gesher::WriteFontEnvironment(name, "", 1))
     return *result == 0 ? 0 : (errno = EINVAL, -1);
-  return _putenv_s(name, "") == 0 ? 0 : (errno = EINVAL, -1);
+  return PutEnvironment(name, nullptr);
 }
 
 }  // extern "C"
@@ -765,6 +810,10 @@ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void
   if (int error = record_locks::HandleAccess(snapshot->handle, &granted)) return errno = error, -1;
   const DWORD access = granted & FILE_WRITE_DATA ? FILE_WRITE_DATA : FILE_APPEND_DATA;
   if ((granted & access) == 0) return errno = EBADF, -1;
+  if (FileDescriptionIsMemfd(snapshot)) {
+    if (int error = MemfdWriteHandleError(snapshot->handle, false, static_cast<uint64_t>(offset), count,
+                                         (flags & O_APPEND) != 0)) return errno = error, -1;
+  }
   return PositionedNativeIo(snapshot->handle, FILE_TYPE_DISK, access, (flags & O_APPEND) != 0,
                             const_cast<void*>(bytes), count, offset, true);
 }

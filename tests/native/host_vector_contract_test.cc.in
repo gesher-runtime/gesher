@@ -41,6 +41,8 @@ struct EventFd {
 };
 struct Inotify {};
 struct Epoll {};
+// The host has no sealed memfds (memfd_seals.cc): no seal forbids a write.
+[[maybe_unused]] static int MemfdWriteError(int, bool, uint64_t, uint64_t) { return 0; }
 struct Object { std::shared_ptr<EventFd> eventfd; std::shared_ptr<Epoll> epoll; std::shared_ptr<Inotify> inotify; };
 static std::map<int, Object> objects;
 static bool Lookup(int fd, Object* object) {

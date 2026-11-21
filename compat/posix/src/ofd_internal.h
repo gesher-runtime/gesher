@@ -31,6 +31,10 @@ struct OpenFileDescription {
   // Native handles discovered through the CRT are initialized only after the
   // caller has pinned them and released the descriptor/table transaction.
   std::atomic<bool> initialized{false};
+  // File kind is immutable after publication. Cache the one-time seals
+  // lookup so ordinary snapshot writes do not query an EA on every call.
+  std::atomic<bool> memfd_known{false};
+  std::atomic<bool> memfd{false};
   std::atomic<Shared*> shared{nullptr};
   HANDLE mapping = nullptr;
   HANDLE pipe_mutex = nullptr;

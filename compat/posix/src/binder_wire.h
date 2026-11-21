@@ -41,7 +41,7 @@ namespace binder_wire {
 
 constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
 // Both endpoints must change together; an old endpoint rejects the hello.
-constexpr uint32_t kVersion = 3;
+constexpr uint32_t kVersion = 4;
 
 // One entry for every FD object, in object-offset order. The file HANDLE still
 // occupies pad_binder on the wire; this side table carries the exact shared
@@ -54,6 +54,9 @@ struct FileDescription {
   uint32_t kind;
   uint32_t reserved;
 };
+// Socket handles carry their existing ADR 0088 metadata in the FD object,
+// not an OFD mapping. Keep this distinct from the unshareable-resource kind.
+constexpr uint32_t kSocketFileDescription = 4;
 // One transaction cannot install more than the receiver's UCRT descriptor
 // ceiling. Bound metadata and native pin allocations before capturing handles.
 constexpr uint32_t kMaxFileDescriptions = 8192;
@@ -75,7 +78,64 @@ enum Op : uint32_t {
   // -> {buffer id, accepted (u32)}; <- {status}. A failed allocation/user
   // copy abandons the delivery, unwinds its transaction and releases it.
   kFinishBuffer = 6,
+
+  // The descriptor broker (ADR 0088 section 3): SCM_RIGHTS on Gesher's AF_UNIX
+  // socketpairs. A process opens one connection for it; the broker knows the
+  // caller by the pipe's client process id, not by anything it claims.
+  // -> {magic, kRightsVersion}; <- {status}
+  kHelloRights = 7,
+  // Hands descriptors to the broker, which duplicates their handles into itself.
+  // -> {queue (u64): 0, or a stream connection's key; position (u64): with a
+  //     queue, where the bytes sent with the group begin in that direction of
+  //     the connection (kStreamPositionsPrefix); count (u32);
+  //     count x {handle (u64), metadata (u64), shared_handle (u64), kind (u32)}}
+  // <- {status, token (2 x u64)}. With a queue, the group also waits in that
+  // connection's queue (kRightsTake), in order.
+  kRightsDeposit = 8,
+  // Moves a deposited group into the caller (closing the broker's handles).
+  // -> {token}; <- {status, count, count x {handle, metadata, shared_handle, kind}}
+  kRightsClaim = 9,
+  // Moves the groups waiting in a stream connection's queue whose position is
+  // below `limit` (what the receiver has read) into the caller, in order; the
+  // others keep waiting.
+  // -> {queue, limit (u64)}; <- {status, count, count x {handle, metadata, shared_handle, kind}}
+  kRightsTake = 10,
+  // Takes a group back out of its queue (its sendmsg failed) and closes it.
+  // -> {token}; <- {status}: -ENOENT if a receiver already took it.
+  kRightsCancel = 11,
 };
+
+// The descriptor broker's protocol version (kHelloRights), apart from kVersion:
+// binderd and the processes that send or receive descriptors must agree on it;
+// other binder clients need not.
+constexpr uint32_t kRightsVersion = 5;
+
+// The broker's doorbell for stream queues: a shared section named
+// kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint64 values, one
+// per receiving loopback port (a queue's key >> 16): 0 when no group waits for
+// that port, else 1 + the lowest position of the groups that wait. Only the
+// broker writes it; a read asks the broker only once it has read past such a
+// position.
+constexpr const wchar_t kRightsDoorbellPrefix[] = L"Local\\gesher-unix-rights-";
+constexpr uint32_t kRightsDoorbellSlots = 65536;
+// Stream positions: a shared section named kStreamPositionsPrefix + device, of
+// kRightsDoorbellSlots {sent, received} uint64 pairs, one per stream pair end,
+// by its local loopback port: the bytes written into the connection from that
+// end, and the bytes read from it there. Every process that holds the end
+// keeps them, so they survive the end's moves between processes (Binder,
+// SCM_RIGHTS, exec); socketpair starts both ends at 0, and the broker keeps the
+// section while it runs. A stream group's position is its sender's `sent`
+// before the bytes sent with it, and the read whose `received` passes that
+// position takes it: Linux delivers descriptors with the first byte sent with
+// them, never before.
+constexpr const wchar_t kStreamPositionsPrefix[] = L"Local\\gesher-unix-streams-";
+struct StreamPositions {
+  uint64_t sent;
+  uint64_t received;
+};
+// Linux's SCM_MAX_FD, and the broker's limit of descriptors in flight.
+constexpr uint32_t kRightsMaxPerMessage = 253;
+constexpr uint32_t kRightsMaxInFlight = 65536;
 
 // The pipe name of a device: \\.\pipe\gesher-binder-<device>.
 constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";

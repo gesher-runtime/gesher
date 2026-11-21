@@ -12,13 +12,46 @@
 // protector, with an initial-exec thread-local, so threads ART created must get
 // their TLS block (ADR 0014) before they run its code.
 
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <jni.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "jni_argument_callbacks.h"
+
+// ASharedMemory (libandroid, in an app process), as libcutils' memfd regions:
+// created sized and sealed F_SEAL_GROW | F_SEAL_SHRINK; setProt(PROT_READ) adds
+// F_SEAL_FUTURE_WRITE for good. Chromium tells shared memory by those seals.
+// Returns 0 when all hold, else the number of the first failure.
+JNIEXPORT jint JNICALL Java_gesher_JniTest_sharedMemory(JNIEnv* env, jclass cls) {
+  (void)env;
+  (void)cls;
+  void* android = dlopen("libandroid.so", RTLD_NOW);
+  if (android == NULL) return 1;
+  int (*create)(const char*, size_t) = (int (*)(const char*, size_t))dlsym(android, "ASharedMemory_create");
+  int (*set_prot)(int, int) = (int (*)(int, int))dlsym(android, "ASharedMemory_setProt");
+  size_t (*get_size)(int) = (size_t (*)(int))dlsym(android, "ASharedMemory_getSize");
+  if (create == NULL || set_prot == NULL || get_size == NULL) return 2;
+  const size_t size = 4096;
+  int fd = create("jni-region", size);
+  if (fd < 0) return 3;
+  int failure = 0;
+  if (get_size(fd) != size) failure = 4;
+  else if (fcntl(fd, F_GET_SEALS) != (F_SEAL_GROW | F_SEAL_SHRINK)) failure = 5;
+  else if (set_prot(fd, PROT_READ | PROT_WRITE) != 0 || write(fd, "rw", 2) != 2) failure = 6;
+  else if (set_prot(fd, PROT_READ) != 0 || (fcntl(fd, F_GET_SEALS) & F_SEAL_FUTURE_WRITE) == 0) failure = 7;
+  else if (write(fd, "x", 1) != -1 || errno != EPERM) failure = 8;
+  else if (set_prot(fd, PROT_READ | PROT_WRITE) != -1 || errno != EINVAL) failure = 9;
+  else if (mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) != MAP_FAILED) failure = 10;
+  close(fd);
+  return failure;
+}
 
 static JavaVM* g_vm;
 static jclass g_class;  // gesher/JniTest, a global reference
@@ -50,6 +83,36 @@ JNIEXPORT jint JNICALL Java_gesher_JniTest_add(JNIEnv* env, jclass cls, jint a, 
   (void)env;
   (void)cls;
   return a + b;
+}
+
+// A library that hooks JNI (Opera's does): it copies the JNIEnv's table, replaces
+// an entry with its own, which calls the original, and stores the copy in the
+// JNIEnv. The copy's other entries are called with the same JNIEnv and must still
+// reach ART; the hook must reach the original. Returns 0 when all hold, else the
+// number of the first failure.
+static const struct JNINativeInterface* g_original_table;
+static int g_hooked_calls;
+static jsize JNICALL HookedGetStringLength(JNIEnv* env, jstring s) {
+  ++g_hooked_calls;
+  return g_original_table->GetStringLength(env, s);
+}
+JNIEXPORT jint JNICALL Java_gesher_JniTest_hookedTable(JNIEnv* env, jclass cls, jstring s) {
+  (void)cls;
+  static struct JNINativeInterface copy;
+  g_original_table = *env;
+  copy = **env;
+  copy.GetStringLength = HookedGetStringLength;
+  *env = &copy;
+  int failure = 0;
+  if ((*env)->GetStringLength(env, s) != 6) failure = 1;          // the hook, then ART
+  else if (g_hooked_calls != 1) failure = 2;
+  else if ((*env)->GetStringUTFLength(env, s) != 6) failure = 3;  // a copied entry
+  else if ((*env)->GetVersion(env) < JNI_VERSION_1_6) failure = 4;
+  else if ((*env)->FindClass(env, "java/lang/String") == NULL) failure = 5;
+  *env = g_original_table;
+  if (failure == 0 && (*env)->GetStringLength(env, s) != 6) failure = 6;  // restored
+  if (failure == 0 && g_hooked_calls != 1) failure = 7;
+  return failure;
 }
 
 JNIEXPORT jstring JNICALL Java_gesher_JniTest_greet(JNIEnv* env, jclass cls, jstring who) {

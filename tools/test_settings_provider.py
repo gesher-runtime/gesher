@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
     parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
-    parser.add_argument('--case', choices=('all', 'query', 'crud', 'call', 'persistence', 'limits', 'observers'), default='all')
+    parser.add_argument('--case', choices=('all', 'query', 'crud', 'call', 'persistence', 'transient', 'limits', 'observers'), default='all')
     args = parser.parse_args()
     cc = shutil.which('cc')
     if not cc:

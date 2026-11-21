@@ -14,8 +14,17 @@ foreach ($track in $tracks) {
     $node -is [Management.Automation.Language.FunctionDefinitionAst]
   }, $false)) { $functions[$definition.Name] = $track.Name }
 }
+# Every manifest shard must run in CI and be accepted by the runner.
+$shards = @($manifest.PSObject.Properties.Name)
+$workflow = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../.github/workflows/ci.yml') -Raw
+$matrix = [regex]::Matches($workflow, '(?m)^\s+shard: \[([^\]]+)\]\s*$')
+if ($matrix.Count -ne 1) { throw 'Expected one test-shards matrix in ci.yml' }
+if (Compare-Object $shards @($matrix[0].Groups[1].Value -split ',\s*')) { throw "ci.yml shard matrix differs from test-shards.json: $($shards -join ', ')" }
+$runnerSet = (Get-Command (Join-Path $PSScriptRoot 'run-tests.ps1')).Parameters['Shard'].Attributes |
+  Where-Object { $_ -is [Management.Automation.ValidateSetAttribute] }
+if (Compare-Object $shards @($runnerSet.ValidValues | Where-Object { $_ -ne 'all' })) { throw 'run-tests.ps1 Shard values differ from test-shards.json' }
 $covered = @()
-foreach ($shard in 'native', 'desktop', 'services', 'compilation') {
+foreach ($shard in $shards) {
   $plan = & $planner -Shard $shard
   $listed = @(& (Join-Path $PSHOME 'pwsh') -NoProfile -File "$PSScriptRoot/run-tests.ps1" unused -Shard $shard -ListTracks)
   if ($LASTEXITCODE -ne 0 -or (Compare-Object $listed $plan.Tracks.Name)) { throw "Runner selection differs for $shard" }

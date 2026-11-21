@@ -8,40 +8,70 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <functional>
+#include <set>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-using HANDLE = intptr_t;
+using HANDLE = void*;
 using DWORD = unsigned long;
-constexpr HANDLE INVALID_HANDLE_VALUE = -1;
+#define INVALID_HANDLE_VALUE reinterpret_cast<HANDLE>(intptr_t{-1})
+static HANDLE Handle(int fd) { return reinterpret_cast<HANDLE>(static_cast<intptr_t>(fd)); }
+static int Native(HANDLE handle) { return static_cast<int>(reinterpret_cast<intptr_t>(handle)); }
+constexpr bool FALSE = false;
+constexpr DWORD DUPLICATE_SAME_ACCESS = 2;
+constexpr int _O_RDWR = O_RDWR, _O_BINARY = 0x8000, _O_NOINHERIT = 0x80;
 constexpr DWORD FILE_TYPE_UNKNOWN = 0, FILE_TYPE_DISK = 1, FILE_TYPE_PIPE = 3, FILE_TYPE_CHAR = 2;
 constexpr DWORD ERROR_SUCCESS = 0;
 constexpr uint32_t FILE_READ_DATA = 1, FILE_WRITE_DATA = 2, FILE_APPEND_DATA = 4;
 static DWORD last_error;
 static void SetLastError(DWORD error) { last_error = error; }
 static DWORD GetLastError() { return last_error; }
-static int length_error, growth_error, access_error;
+static int length_error, growth_error, access_error, duplicate_error, slot_error;
 static unsigned growth_calls;
 static bool unbound_standard_input;
+static std::set<int> private_handles;
+static std::function<void()> after_capture;
+static HANDLE GetCurrentProcess() { return Handle(-3); }
+[[maybe_unused]] static bool DuplicateHandle(HANDLE from, HANDLE handle, HANDLE to, HANDLE* result,
+                            DWORD access, bool inherit, DWORD flags) {
+  if (from != GetCurrentProcess() || to != from || access || inherit || flags != DUPLICATE_SAME_ACCESS) std::abort();
+  if (duplicate_error) { SetLastError(duplicate_error); return false; }
+  const int fd = dup(Native(handle));
+  if (fd < 0) { SetLastError(errno); return false; }
+  private_handles.insert(fd);
+  *result = Handle(fd);
+  return true;
+}
+[[maybe_unused]] static bool CloseHandle(HANDLE handle) {
+  private_handles.erase(Native(handle));
+  return close(Native(handle)) == 0;
+}
+[[maybe_unused]] static int _open_osfhandle(intptr_t handle, int flags) {
+  if (flags != (_O_RDWR | _O_BINARY | _O_NOINHERIT)) std::abort();
+  if (slot_error) { errno = slot_error; return -1; }
+  return fcntl(static_cast<int>(handle), F_SETFD, FD_CLOEXEC) < 0 ? -1 : static_cast<int>(handle);
+}
+[[maybe_unused]] static int _close(int fd) { private_handles.erase(fd); return close(fd); }
 struct LARGE_INTEGER { int64_t QuadPart; };
 struct FILE_END_OF_FILE_INFO { LARGE_INTEGER EndOfFile; };
 enum FILE_INFO_BY_HANDLE_CLASS { FileEndOfFileInfo };
 static bool GetFileSizeEx(HANDLE fd, LARGE_INTEGER* size) {
   struct stat info{};
-  if (fstat(fd, &info)) { SetLastError(errno); return false; }
+  if (fstat(Native(fd), &info)) { SetLastError(errno); return false; }
   size->QuadPart = info.st_size;
   return true;
 }
 static bool SetFileInformationByHandle(HANDLE fd, FILE_INFO_BY_HANDLE_CLASS kind, void* raw, size_t bytes) {
   if (kind != FileEndOfFileInfo || bytes != sizeof(FILE_END_OF_FILE_INFO)) std::abort();
-  if (ftruncate(fd, static_cast<FILE_END_OF_FILE_INFO*>(raw)->EndOfFile.QuadPart) == 0) return true;
+  if (ftruncate(Native(fd), static_cast<FILE_END_OF_FILE_INFO*>(raw)->EndOfFile.QuadPart) == 0) return true;
   SetLastError(errno);
   return false;
 }
 [[maybe_unused]] static DWORD GetFileType(HANDLE handle) {
   struct stat info{};
-  if (fstat(handle, &info) < 0) {
+  if (fstat(Native(handle), &info) < 0) {
     SetLastError(errno);
     return FILE_TYPE_UNKNOWN;
   }
@@ -50,30 +80,36 @@ static bool SetFileInformationByHandle(HANDLE fd, FILE_INFO_BY_HANDLE_CLASS kind
 }
 namespace gesher {
 static int ErrnoFromWin32(DWORD error) { return static_cast<int>(error); }
+// The host has no sealed memfds (memfd_seals.cc): no seal forbids growth.
+[[maybe_unused]] static int MemfdGrowError(int, uint64_t) { return 0; }
 [[maybe_unused]] static HANDLE HandleFromFd(int fd) {
-  if (unbound_standard_input && fd == STDIN_FILENO) return -2;
-  return fcntl(fd, F_GETFD) < 0 ? -1 : fd;
+  if (unbound_standard_input && fd == STDIN_FILENO) return Handle(-2);
+  return fcntl(fd, F_GETFD) < 0 ? INVALID_HANDLE_VALUE : Handle(fd);
 }
 // Ordinary-file boundary for this corpus; exact shared-group behavior has its
 // own production-code fixture. A capture still pins a real Linux duplicate.
-struct DescriptorSnapshot { int handle; ~DescriptorSnapshot() { close(handle); } };
+struct DescriptorSnapshot { HANDLE handle; ~DescriptorSnapshot() { close(Native(handle)); } };
 using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
 static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
-  if (HandleFromFd(fd) < 0) { errno = EBADF; return nullptr; }
+  if (Native(HandleFromFd(fd)) < 0) { errno = EBADF; return nullptr; }
   int pinned = dup(fd);
-  return pinned < 0 ? nullptr : DescriptorSnapshotPtr(new DescriptorSnapshot{pinned});
+  auto snapshot = pinned < 0 ? nullptr : DescriptorSnapshotPtr(new DescriptorSnapshot{Handle(pinned)});
+  if (snapshot && after_capture) { auto action = std::move(after_capture); action(); }
+  return snapshot;
 }
 struct FileOperationLease {
   explicit FileOperationLease(const DescriptorSnapshotPtr&) {}
   int Error() const { return 0; }
 };
 static bool FileDescriptionIsRevocable(const DescriptorSnapshotPtr&) { return false; }
-static int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) { return fcntl(snapshot->handle, F_GETFL); }
+static bool FileDescriptionIsMemfd(const DescriptorSnapshotPtr&) { return false; }
+static int MemfdGrowHandleError(HANDLE, uint64_t) { return 0; }
+static int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) { return fcntl(Native(snapshot->handle), F_GETFL); }
 namespace record_locks {
 struct DescriptorGuard {};
 [[maybe_unused]] static int HandleAccess(HANDLE handle, uint32_t* access) {
   if (access_error) return access_error;
-  int flags = fcntl(handle, F_GETFL);
+  int flags = fcntl(Native(handle), F_GETFL);
   if (flags < 0) return errno;
   if (flags & O_PATH) *access = 0;
   else *access = (flags & O_ACCMODE) == O_RDONLY ? FILE_READ_DATA : FILE_WRITE_DATA;
@@ -123,26 +159,61 @@ static void test_file_allocation_failures() {
   if (fd < 0) return;
   const char marker[] = "preserve";
   check("file allocation faults: initialize bytes", write(fd, marker, sizeof(marker)) == sizeof(marker));
-  for (int fault = 0; fault < 3; ++fault) {
+  for (int fault = 0; fault < 5; ++fault) {
     access_error = fault == 0 ? EACCES : 0;
     length_error = fault == 1 ? EIO : 0;
     growth_error = fault == 2 ? ENOSPC : 0;
+    duplicate_error = fault == 3 ? EACCES : 0;
+    slot_error = fault == 4 ? EMFILE : 0;
     growth_calls = 0;
     errno = E2BIG;
-    int expected = fault == 0 ? EACCES : fault == 2 ? ENOSPC : EIO;
+    int expected = fault == 0 || fault == 3 ? EACCES : fault == 2 ? ENOSPC : fault == 4 ? EMFILE : EIO;
     check("file allocation faults: actual error returned; errno preserved",
           posix_fallocate(fd, 0, 65536) == expected && errno == E2BIG);
     check("file allocation faults: no later mutation after failure",
           growth_calls == (fault == 2 ? 1u : 0u));
+    check("file allocation faults: no leaked private handle or CRT slot", private_handles.empty());
     struct stat info{};
     char actual[sizeof(marker)];
     check("file allocation faults: EOF and existing bytes survive",
           fstat(fd, &info) == 0 && info.st_size == sizeof(marker) &&
           pread(fd, actual, sizeof(actual), 0) == sizeof(actual) && std::memcmp(actual, marker, sizeof(marker)) == 0);
   }
-  access_error = length_error = growth_error = 0;
+  access_error = length_error = growth_error = duplicate_error = slot_error = 0;
   close(fd);
   unlink(path);
+}
+
+static void test_file_allocation_reuse() {
+  char first_path[] = "gesher-allocation-first-XXXXXX", second_path[] = "gesher-allocation-second-XXXXXX";
+  int fd = mkstemp(first_path), second = mkstemp(second_path);
+  check("file allocation reuse: create independent real files", fd >= 0 && second >= 0);
+  if (fd < 0 || second < 0) std::abort();
+  const int first = dup(fd);
+  if (first < 0) std::abort();
+  check("file allocation reuse: initialize distinct contents and shared cursor",
+        write(fd, "ABC", 3) == 3 && lseek(fd, 1, SEEK_SET) == 1 && write(second, "keep", 4) == 4);
+  after_capture = [&] { if (dup2(second, fd) != fd) std::abort(); };
+  errno = E2BIG;
+  check("file allocation reuse: admitted call completes after caller slot replacement",
+        posix_fallocate(fd, 0, 4096) == 0 && errno == E2BIG);
+  struct stat before{}, replacement{};
+  char bytes[4]{};
+  check("file allocation reuse: the captured file grows with its shared cursor intact",
+        fstat(first, &before) == 0 && before.st_size == 4096 && lseek(first, 0, SEEK_CUR) == 1 &&
+        pread(first, bytes, 4, 0) == 4 && std::memcmp(bytes, "ABC\0", 4) == 0);
+  check("file allocation reuse: replacement file is never inspected or mutated",
+        fstat(second, &replacement) == 0 && replacement.st_size == 4 &&
+        pread(second, bytes, 4, 0) == 4 && std::memcmp(bytes, "keep", 4) == 0);
+  if (dup2(first, fd) != fd) std::abort();
+  after_capture = [&] { if (close(fd) != 0) std::abort(); };
+  errno = E2BIG;
+  check("file allocation reuse: admitted call survives caller slot closure",
+        posix_fallocate(fd, 0, 8192) == 0 && errno == E2BIG &&
+        fstat(first, &before) == 0 && before.st_size == 8192 && lseek(first, 0, SEEK_CUR) == 1);
+  check("file allocation reuse: private native handles and CRT slots retire", private_handles.empty());
+  close(first); close(second);
+  unlink(first_path); unlink(second_path);
 }
 
 int main(int argc, char** argv) {
@@ -156,6 +227,7 @@ int main(int argc, char** argv) {
   else if (std::strcmp(argv[1], "errors") == 0) test_file_allocation_errors();
   else if (std::strcmp(argv[1], "overflow") == 0) test_file_allocation_overflow();
   else if (std::strcmp(argv[1], "faults") == 0) test_file_allocation_failures();
+  else if (std::strcmp(argv[1], "reuse") == 0) test_file_allocation_reuse();
   else return 2;
   return failures == 0 ? 0 : 1;
 }

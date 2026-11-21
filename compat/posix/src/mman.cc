@@ -157,6 +157,9 @@ struct Region {
   size_t physical_extent = 0;
   size_t view_padding = 0;
   bool shared = false;        // views: MAP_SHARED
+  // A shared view of a memfd mapped after a write seal: mprotect may never make
+  // it writable (Linux clears its VM_MAYWRITE; memfd_seals.cc).
+  bool deny_write = false;
   std::vector<bool> live;     // one entry per page
   std::vector<Origin> origins;  // logical origin; independent of Kind/MEM_PRIVATE
   size_t live_pages = 0;
@@ -367,10 +370,22 @@ std::map<uintptr_t, Region>::iterator SplitEntry(State& s,
 
 // A new placeholder reservation of `len` bytes at `at` (exactly) or, with
 // nullptr, anywhere: one hole. Returns its start, or 0.
+//
+// A reservation starts on an allocation granularity boundary. Given an
+// address that is not on one, VirtualAlloc2 does not fail: it rounds the
+// start down and reserves through the rounded-up end, a range other than
+// the one recorded here (MEM_REPLACE_PLACEHOLDER of `len` bytes then fails).
+// Such an address cannot be reserved exactly, so it is refused, as is any
+// result other than `at`.
 uintptr_t Reserve(State& s, void* at, size_t len) {
+  if (at != nullptr && reinterpret_cast<uintptr_t>(at) % s.granularity != 0) return 0;
   void* p = Placeholders().alloc2(GetCurrentProcess(), at, len,
                                   MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0);
   if (p == nullptr) return 0;
+  if (at != nullptr && p != at) {
+    VirtualFree(p, 0, MEM_RELEASE);
+    return 0;
+  }
   const uintptr_t start = reinterpret_cast<uintptr_t>(p);
   Region hole;
   hole.kind = Kind::kHole;
@@ -382,9 +397,11 @@ uintptr_t Reserve(State& s, void* at, size_t len) {
 
 // A reservation for a mapping with a hint (not MAP_FIXED): at the hint, else
 // at the next allocation granularity boundary after it (reservations start at
-// one), else anywhere. The second try keeps ART's search for free address
-// space in the low 4 GiB, which steps through pages, from ending up anywhere
-// at each page that is not on a boundary.
+// one), else anywhere. As on Linux, a hint never makes the mapping fail. The
+// second try keeps ART's search for free address space in the low 4 GiB, which
+// steps through pages, from ending up anywhere at each page that is not on a
+// boundary; it also places hints that are not on a boundary (PartitionAlloc's
+// randomized pool addresses are only page aligned).
 uintptr_t ReserveNear(State& s, void* hint, size_t len) {
   uintptr_t at = 0;
   if (hint != nullptr) {
@@ -1551,7 +1568,22 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
       gesher::SetBinderMapping(fd, result, length);
     }
   } else {
+    // A memfd's write seals (memfd_seals.cc): no writable shared mapping, and a
+    // shared mapping made after the seal can never become writable.
+    bool deny_write = false;
+    if (type != MAP_PRIVATE) {
+      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write)) {
+        errno = sealed;
+        return MAP_FAILED;
+      }
+    }
     result = MapFile(s, addr, length, prot, flags, snapshot->handle, offset);
+    if (result != MAP_FAILED && deny_write) {
+      const uintptr_t begin_view = reinterpret_cast<uintptr_t>(result);
+      for (auto it = FindRegion(s, begin_view); it != s.regions.end() && it->first < begin_view + length; ++it) {
+        it->second.deny_write = true;
+      }
+    }
   }
   TRACE("mmap(%p, 0x%zx, prot=%d, flags=0x%x, fd=%d, offset=0x%llx) = %p\n", addr, length, prot,
         flags, fd, static_cast<unsigned long long>(offset), result);
@@ -1696,6 +1728,13 @@ int mprotect(void* addr, size_t length, int prot) {
   if (length == 0) return 0;
   State& s = state();
   std::lock_guard<std::mutex> registry_guard(s.lock);
+  if ((prot & PROT_WRITE) != 0) {
+    // A shared view mapped after its memfd's write seal stays read-only.
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+    for (auto it = FindRegion(s, begin); it != s.regions.end() && it->first < begin + length; ++it) {
+      if (it->second.deny_write) return errno = EACCES, -1;
+    }
+  }
   InvalidateSharedAliases(s, reinterpret_cast<uintptr_t>(addr), length);
   const DWORD protection = PageProtection(prot);
   const bool ok = ForEachRun(addr, length, [&](uint8_t* p, size_t n, const MEMORY_BASIC_INFORMATION& info) {

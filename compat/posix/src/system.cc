@@ -93,8 +93,12 @@ extern "C" {
 
 int uname(struct utsname* buf) {
   memset(buf, 0, sizeof(*buf));
-  // Not "Linux": kernel-version checks must not pass.
-  snprintf(buf->sysname, sizeof(buf->sysname), "Windows");
+  // Android's kernel is Linux, and Android code takes it as given: libcore turns
+  // sysname into os.name (JNA, for one, selects its native platform from it), and
+  // ART's IsKernelVersionAtLeast CHECKs that sysname is "Linux". The release names
+  // no real kernel version, so "kernel >= X" checks still fail: callers take their
+  // oldest-kernel path instead of assuming features Gesher may not provide.
+  snprintf(buf->sysname, sizeof(buf->sysname), "Linux");
   snprintf(buf->release, sizeof(buf->release), "0.0.0-gesher");
   OSVERSIONINFOEXW v{};
   v.dwOSVersionInfoSize = sizeof(v);
@@ -338,7 +342,12 @@ int ioctl(int fd, unsigned long request, ...) {
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
     if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
-    if (request == FIONREAD) return gesher::ws::Available(state.socket, argp);
+    if (request == FIONREAD) {
+      if (gesher::ws::Available(state.socket, argp) != 0) return -1;
+      // An AF_UNIX datagram pair's payload, without its framing (ADR 0088).
+      if (state.description->unix_datagram_pair.load()) *argp = gesher::ws::UnixDatagramPayload(*argp);
+      return 0;
+    }
     int result;
     if (gesher::sock::InterfaceIoctl(request, argp, &result)) return result;
     if (request == FIONBIO) {
@@ -471,11 +480,14 @@ int fcntl(int fd, int cmd, ...) {
         break;
       case F_DUPFD:
       case F_DUPFD_CLOEXEC: {
-        return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
+        const int duplicate = gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
+        if (duplicate >= 0) gesher::CopyMemfdRegistration(fd, duplicate);
+        return duplicate;
       }
       case F_ADD_SEALS:
+        return gesher::AddMemfdSeals(fd, static_cast<unsigned>(arg));
       case F_GET_SEALS:
-        return 0;  // seals are advisory here
+        return gesher::GetMemfdSeals(fd);
       default:
         return errno = EINVAL, -1;
     }
@@ -571,6 +583,9 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
     if (!snapshot) return errno;
     gesher::FileOperationLease operation(snapshot);
     if (operation.Error()) return operation.Error();
+    if (gesher::FileDescriptionIsMemfd(snapshot)) {
+      if (int error = gesher::MemfdGrowHandleError(snapshot->handle, static_cast<uint64_t>(end))) return error;
+    }
     if (gesher::FileDescriptionIsRevocable(snapshot)) {
       const int flags = gesher::FileDescriptionFlags(snapshot);
       if (flags < 0) return errno;
@@ -585,10 +600,7 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
       }
       return 0;
     }
-    // Preserve the ordinary CRT growth path for unrelated descriptors.
-    gesher::record_locks::DescriptorGuard descriptor_guard;
-    HANDLE handle = gesher::HandleFromFd(fd);
-    if (handle == INVALID_HANDLE_VALUE) return EBADF;
+    const HANDLE handle = snapshot->handle;
     uint32_t access = 0;
     int error = gesher::record_locks::HandleAccess(handle, &access);
     if (error) return error;
@@ -597,14 +609,30 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
     if (kind == FILE_TYPE_PIPE) return ESPIPE;
     if (kind != FILE_TYPE_DISK) return ENODEV;
 
-    const long long size = _filelengthi64(fd);
+    // Preserve CRT zero-filled growth on the object captured above. The
+    // caller's fd may already have been closed or replaced with another file
+    // whose seals or revocation group were never admitted by this operation.
+    HANDLE duplicate = INVALID_HANDLE_VALUE;
+    if (!DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &duplicate,
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) return gesher::ErrnoFromWin32(GetLastError());
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    const int pinned_fd = _open_osfhandle(reinterpret_cast<intptr_t>(duplicate), _O_RDWR | _O_BINARY | _O_NOINHERIT);
+    if (pinned_fd < 0) {
+      const int error = gesher_errno_from_crt(errno);
+      CloseHandle(duplicate);
+      return error;
+    }
+    // This internal slot is never published or registered as an Android fd.
+    // Its close must not release the app's process-wide record locks.
+    struct CrtSlot { int fd; ~CrtSlot() { _close(fd); } } pinned{pinned_fd};
+    const long long size = _filelengthi64(pinned_fd);
     if (size < 0) return gesher_errno_from_crt(errno);
     if (end > size) {
       // Retain the existing CRT zero-filled extension path. This is not a
       // range-preallocation backend for sparse files. In particular, replacing
       // it with absolute FileAllocationInfo/EOF assignments would also risk
       // truncating concurrent writers after a stale size query.
-      error = _chsize_s(fd, end);
+      error = _chsize_s(pinned_fd, end);
       if (error) return gesher_errno_from_crt(error);
     }
     return 0;
@@ -855,8 +883,8 @@ int memfd_create(const char* name, unsigned int flags) {
   }
   // A delete-on-close file supplies storage, not enforceable Linux seals or
   // huge pages. Do not report those capabilities merely because a file opens.
-  if ((flags & (MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_NOEXEC_SEAL)) != 0)
-    return errno = EOPNOTSUPP, -1;
+  // Seals are stored on the file and enforced by gesher-base (memfd_seals.cc).
+  if ((flags & (MFD_HUGETLB | MFD_NOEXEC_SEAL)) != 0) return errno = EOPNOTSUPP, -1;
   wchar_t dir[MAX_PATH], path[MAX_PATH];
   DWORD length = GetTempPathW(MAX_PATH, dir);
   if (length == 0) return gesher::FailWithLastError();
@@ -875,6 +903,14 @@ int memfd_create(const char* name, unsigned int flags) {
     DeleteFileW(path);
     return errno = gesher::ErrnoFromWin32(error), -1;
   }
+  // Every memfd carries its seals (F_SEAL_SEAL alone without MFD_ALLOW_SEALING,
+  // as on Linux). A file system that cannot store them cannot seal: refuse
+  // MFD_ALLOW_SEALING rather than accept seals nothing would keep.
+  if (!gesher::InitMemfdSeals(h, (flags & MFD_ALLOW_SEALING) != 0) &&
+      (flags & MFD_ALLOW_SEALING) != 0) {
+    CloseHandle(h);
+    return errno = EOPNOTSUPP, -1;
+  }
   gesher::record_locks::DescriptorGuard descriptor_guard;
   int fd = gesher::CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h),
                            _O_RDWR | _O_BINARY | ((flags & MFD_CLOEXEC) != 0 ? _O_NOINHERIT : 0)));
@@ -884,6 +920,7 @@ int memfd_create(const char* name, unsigned int flags) {
     _close(fd);
     return errno = saved, -1;
   }
+  if (fd >= 0) gesher::RegisterMemfd(fd);
   return fd;
 }
 

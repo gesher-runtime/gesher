@@ -1,7 +1,10 @@
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
-index 4505114eb..6edb7b56a 100644
+index 35b94f7b..aef8aeff 100644
 --- a/compat/posix/src/fd.cc
 +++ b/compat/posix/src/fd.cc
+@@ -7 +7 @@
+-// Each falls through to the CRT's underscore version for other fds.
++// Non-socket I/O retains the selected native object through completion.
 @@ -11,0 +12 @@
 +#include <pthread.h>
 @@ -16,0 +18 @@
@@ -77,9 +80,19 @@ index 4505114eb..6edb7b56a 100644
 @@ -174 +192 @@ void ForgetStreamDevice(int fd, bool closed_or_replaced) {
 -  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) ForgetDevice(fd);
 +  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) ForgetOfd(fd);
-@@ -183,0 +202,86 @@ namespace {
+@@ -183,0 +202,96 @@ namespace {
 +void ReleaseCanceledSnapshot(void* raw) {
 +  static_cast<gesher::DescriptorSnapshotPtr*>(raw)->reset();
++}
++int NativeDescriptorIo(gesher::DescriptorSnapshotPtr snapshot, void* buffer,
++                       unsigned int count, bool writing) {
++  if (!snapshot) return -1;
++  int result;
++  pthread_cleanup_push(ReleaseCanceledSnapshot, &snapshot);
++  result = writing ? gesher::WriteFileDescription(snapshot, buffer, count)
++                   : gesher::ReadFileDescription(snapshot, buffer, count);
++  pthread_cleanup_pop(0);
++  return result;
 +}
 +bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* result) {
 +  gesher::DescriptorSnapshotPtr snapshot;
@@ -90,13 +103,9 @@ index 4505114eb..6edb7b56a 100644
 +    if (GetFileType(file) != FILE_TYPE_PIPE) return false;
 +    snapshot = gesher::CaptureDescriptor(fd);
 +  }
-+  if (!snapshot) { *result = -1; return true; }
 +  // Validate status and transfer through one capture. Looking the fd up again
 +  // could select a replacement, and would duplicate every pipe query/pin.
-+  pthread_cleanup_push(ReleaseCanceledSnapshot, &snapshot);
-+  *result = writing ? gesher::WriteFileDescription(snapshot, buffer, count)
-+                    : gesher::ReadFileDescription(snapshot, buffer, count);
-+  pthread_cleanup_pop(0);
++  *result = NativeDescriptorIo(std::move(snapshot), buffer, count, writing);
 +  return true;
 +}
 +// The caller owns an exact native object reference for the whole operation.
@@ -158,26 +167,30 @@ index 4505114eb..6edb7b56a 100644
 +    *result = (errno = EBADF, -1);
 +    return true;
 +  }
++  if (writing && gesher::FileDescriptionIsMemfd(snapshot)) {
++    const int error = gesher::MemfdWriteHandleError(snapshot->handle, true, 0, count, (flags & O_APPEND) != 0);
++    if (error) { *result = (errno = error, -1); return true; }
++  }
 +  // A zero-length append must not move the shared cursor to EOF.
 +  if (writing && count == 0) { *result = 0; return true; }
 +  *result = TransferFileHandle(snapshot->handle, buffer, count, writing, writing && (flags & O_APPEND) != 0);
 +  return true;
 +}
 +
-@@ -196,0 +301,5 @@ int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
+@@ -197,0 +312,5 @@ int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
 +    const int close_errno = errno;
 +    if (result == 0 || gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) {
 +      gesher::ForgetOfd(fd);
 +    }
 +    errno = close_errno;
-@@ -217 +326,5 @@ int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
+@@ -218 +337,5 @@ int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
 -    if (unpublished && crt_closed < 0) return -1;
 +    const int crt_errno = errno;
 +    if (crt_closed == 0 || gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) {
 +      gesher::ForgetOfd(fd);
 +    }
 +    if (unpublished && crt_closed < 0) return errno = crt_errno, -1;
-@@ -247,0 +361,66 @@ int CloseUnpublishedDuplicate(int fd) {
+@@ -248,0 +372,70 @@ int CloseUnpublishedDuplicate(int fd) {
 +void RetiredDescriptor::Retire(int fd) {
 +  // CRT has released the old handle while its fd number is still protected
 +  // from participating reuse. Retire precisely the virtual owners belonging
@@ -198,6 +211,7 @@ index 4505114eb..6edb7b56a 100644
 +    ForgetBinder(fd);
 +  }
 +  ForgetOfd(fd);
++  ForgetMemfd(fd);
 +  if (HasPollWaiters()) WakePollers();
 +}
 +int RetiredDescriptor::Finish() {
@@ -238,33 +252,53 @@ index 4505114eb..6edb7b56a 100644
 +  count = std::min(count, 0x7ffff000u);
 +  if (snapshot->kind == DescriptorKind::kZero) return static_cast<int>(count);
 +  const bool append = (flags & O_APPEND) != 0 && GetFileType(snapshot->handle) == FILE_TYPE_DISK;
++  if (FileDescriptionIsMemfd(snapshot)) {
++    if (int error = MemfdWriteHandleError(snapshot->handle, true, 0, count, append)) return errno = error, -1;
++  }
 +  int result = GetFileType(snapshot->handle) == FILE_TYPE_PIPE
 +      ? TransferPipe(snapshot, const_cast<void*>(bytes), count, true)
 +      : TransferFileHandle(snapshot->handle, const_cast<void*>(bytes), count, true, append);
 +  if (result > 0 && HasPollWaiters() && GetFileType(snapshot->handle) == FILE_TYPE_PIPE) WakePollers();
 +  return result;
 +}
-@@ -266,0 +446,6 @@ int read(int fd, void* buf, unsigned int count) {
+@@ -267,0 +461,6 @@ int read(int fd, void* buf, unsigned int count) {
 +    count = std::min(count, 0x7ffff000u);
 +    int result;
 +    if (NativeFileIo(fd, buf, count, false, &result) || NativePipeIo(fd, buf, count, false, &result)) return result;
 +    int flags = gesher::GetFileStatusFlags(fd);
 +    if (flags < 0) return -1;
 +    if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) return errno = EBADF, -1;
-@@ -269 +453,0 @@ int read(int fd, void* buf, unsigned int count) {
+@@ -270 +468,0 @@ int read(int fd, void* buf, unsigned int count) {
 -    int result;
-@@ -279,0 +464 @@ int write(int fd, const void* buf, unsigned int count) {
+@@ -272 +470,4 @@ int read(int fd, void* buf, unsigned int count) {
+-    return gesher::CrtResult(_read(fd, buf, count));
++    // A close/dup2 between the earlier kind probes may have replaced the fd
++    // with a file or pipe. Dispatch the final capture through its own policy;
++    // never fall through to a raw CRT operation on an unchecked replacement.
++    return NativeDescriptorIo(gesher::CaptureDescriptor(fd), buf, count, false);
+@@ -280,0 +482 @@ int write(int fd, const void* buf, unsigned int count) {
 +    count = std::min(count, 0x7ffff000u);
-@@ -280,0 +466,5 @@ int write(int fd, const void* buf, unsigned int count) {
+@@ -281,0 +484,5 @@ int write(int fd, const void* buf, unsigned int count) {
 +    if (NativeFileIo(fd, const_cast<void*>(buf), count, true, &result) ||
 +        NativePipeIo(fd, const_cast<void*>(buf), count, true, &result)) return result;
 +    int flags = gesher::GetFileStatusFlags(fd);
 +    if (flags < 0) return -1;
 +    if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_RDONLY) return errno = EBADF, -1;
-@@ -295,0 +486,2 @@ int dup(int fd) {
+@@ -283,9 +490 @@ int write(int fd, const void* buf, unsigned int count) {
+-    // A memfd's seals may forbid the write (memfd_seals.cc).
+-    if (const int sealed = gesher::MemfdWriteError(fd, true, 0, count)) return errno = sealed, -1;
+-    result = gesher::CrtResult(_write(fd, buf, count));
+-    if (result > 0) gesher::InotifyNoteWrite(fd);
+-    if (result > 0 && gesher::HasPollWaiters() &&
+-        GetFileType(gesher::HandleFromFd(fd)) == FILE_TYPE_PIPE) {
+-      gesher::WakePollers();
+-    }
+-    return result;
++    return NativeDescriptorIo(gesher::CaptureDescriptor(fd), const_cast<void*>(buf), count, true);
+@@ -298,0 +498,2 @@ int dup(int fd) {
 +  // Resolve/allocate the source description before publishing any new fd.
 +  if (!gesher::CaptureDescriptor(fd)) return -1;
-@@ -302,0 +495,11 @@ int dup(int fd) {
+@@ -305,0 +507,11 @@ int dup(int fd) {
 +    if (fd2 >= 0) {
 +      int error = gesher::DupOfd(fd, fd2) < 0 ? errno : 0;
 +      HANDLE h2 = gesher::HandleFromFd(fd2);
@@ -276,7 +310,7 @@ index 4505114eb..6edb7b56a 100644
 +        return errno = error, -1;
 +      }
 +    }
-@@ -307 +510,7 @@ int dup(int fd) {
+@@ -311 +523,7 @@ int dup(int fd) {
 -  return gesher::RegisterSocket(state);
 +  int fd2 = gesher::RegisterSocket(state);
 +  if (fd2 >= 0 && gesher::DupOfd(fd, fd2) < 0) {
@@ -285,18 +319,18 @@ index 4505114eb..6edb7b56a 100644
 +    return errno = error, -1;
 +  }
 +  return fd2;
-@@ -310 +519 @@ int dup(int fd) {
+@@ -314 +532 @@ int dup(int fd) {
 -int dup2(int fd, int fd2) {
 +static int DupTo(int fd, int fd2, bool cloexec) {
-@@ -316,2 +525,3 @@ int dup2(int fd, int fd2) {
+@@ -320,2 +538,3 @@ int dup2(int fd, int fd2) {
 -    if (fd == fd2) return _get_osfhandle(fd) != -1 ? fd : (errno = EBADF, -1);
 -    if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
 +    if (fd2 < 0 || fd2 >= 8192) return errno = EBADF, -1;
 +    if (fd == fd2) return gesher::HandleFromFd(fd) != INVALID_HANDLE_VALUE ? fd : (errno = EBADF, -1);
 +    if (!gesher::CaptureDescriptor(fd)) return -1;
-@@ -337,0 +548 @@ int dup2(int fd, int fd2) {
+@@ -341,0 +561 @@ int dup2(int fd, int fd2) {
 +    gesher::ForgetOfd(fd2);
-@@ -344,0 +556,10 @@ int dup2(int fd, int fd2) {
+@@ -349,0 +570,10 @@ int dup2(int fd, int fd2) {
 +    if (gesher::DupOfd(fd, fd2) < 0 && !metadata_error) metadata_error = errno;
 +    HANDLE h2 = gesher::HandleFromFd(fd2);
 +    if (h2 == INVALID_HANDLE_VALUE) {
@@ -307,7 +341,7 @@ index 4505114eb..6edb7b56a 100644
 +      // Keep this inside the same descriptor transaction as replacement.
 +      if (!metadata_error) metadata_error = gesher::ErrnoFromWin32(GetLastError());
 +    }
-@@ -353,0 +575,7 @@ int dup2(int fd, int fd2) {
+@@ -358,0 +589,7 @@ int dup2(int fd, int fd2) {
 +int dup2(int fd, int fd2) { return DupTo(fd, fd2, false); }
 +
 +int dup3(int oldfd, int newfd, int flags) {
@@ -315,7 +349,7 @@ index 4505114eb..6edb7b56a 100644
 +  return DupTo(oldfd, newfd, (flags & O_CLOEXEC) != 0);
 +}
 +
-@@ -375,0 +604,12 @@ void IgnoreInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsi
+@@ -380,0 +618,12 @@ void IgnoreInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsi
 +}  // namespace
 +
 +namespace gesher {
@@ -328,13 +362,13 @@ index 4505114eb..6edb7b56a 100644
 +
 +namespace {
 +
-@@ -377 +617 @@ const bool invalid_parameter_handler_installed =
+@@ -382 +631 @@ const bool invalid_parameter_handler_installed =
 -    (_set_invalid_parameter_handler(IgnoreInvalidParameter), true);
 +    (gesher::InitializeCrtDescriptorErrors(), true);
-@@ -412 +652 @@ struct FdPollScratch {
+@@ -417 +666 @@ struct FdPollScratch {
 -bool PollFile(pollfd* p) {
 +int PollFile(pollfd* p) {
-@@ -416,15 +656,13 @@ bool PollFile(pollfd* p) {
+@@ -421,15 +670,13 @@ bool PollFile(pollfd* p) {
 -  HANDLE h = gesher::HandleFromFd(p->fd);
 -  if (h == INVALID_HANDLE_VALUE) {
 -    p->revents = POLLNVAL;
@@ -363,26 +397,26 @@ index 4505114eb..6edb7b56a 100644
 +      return true;
 +    }
 +    snapshot = gesher::CaptureDescriptor(p->fd);
-@@ -432,2 +670,3 @@ bool PollFile(pollfd* p) {
+@@ -437,2 +684,3 @@ bool PollFile(pollfd* p) {
 -  p->revents = (avail > 0 ? p->events & kIn : 0) | (p->events & kOut);
 -  return (p->events & kIn) == 0 || avail > 0;
 +  if (!snapshot) return -1;
 +  if (gesher::PollPipeHandle(snapshot, p->events, &p->revents) < 0) return -1;
 +  return p->revents != 0;
-@@ -538,2 +777,4 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt,
+@@ -543,2 +791,4 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt,
 -    } else if (!PollFile(p)) {
 -      waiting_files = true;
 +    } else {
 +      int result = PollFile(p);
 +      if (result < 0) return -1;
 +      if (!result) waiting_files = true;
-@@ -659 +900,3 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt,
+@@ -664 +914,3 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt,
 -        if (!PollFile(p)) waiting_files = true;
 +        int result = PollFile(p);
 +        if (result < 0) return -1;
 +        if (!result) waiting_files = true;
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index a51b8d7d3..892320278 100644
+index 0af9c16d..a3bc4dfd 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
 @@ -28,0 +29 @@
@@ -394,9 +428,9 @@ index a51b8d7d3..892320278 100644
 @@ -36,0 +41,2 @@
 +#include "pipe_io.h"
 +#include "revocable_internal.h"
-@@ -333,0 +340 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -337,0 +344 @@ int ioctl(int fd, unsigned long request, ...) {
 +    if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
-@@ -350,2 +357,9 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -359,2 +366,9 @@ int ioctl(int fd, unsigned long request, ...) {
 -  HANDLE h = gesher::HandleFromFd(fd);
 -  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
 +  auto snapshot = gesher::CaptureDescriptor(fd);
@@ -408,19 +442,19 @@ index a51b8d7d3..892320278 100644
 +    if (flags < 0) return -1;
 +    return gesher::SetFileDescriptionFlags(snapshot, *argp ? flags | O_NONBLOCK : flags & ~O_NONBLOCK);
 +  }
-@@ -352,0 +367,2 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -361,0 +376,2 @@ int ioctl(int fd, unsigned long request, ...) {
 +  gesher::FileOperationLease operation(snapshot);
 +  if (operation.Error()) return errno = operation.Error(), -1;
-@@ -355,4 +371 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -364,4 +380 @@ int ioctl(int fd, unsigned long request, ...) {
 -      DWORD avail = 0;
 -      if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) avail = 0;  // writer gone
 -      *argp = static_cast<int>(avail > 0x7FFFFFFF ? 0x7FFFFFFF : avail);
 -      return 0;
 +      return gesher::PipeBytesAvailable(snapshot, argp);
-@@ -394,2 +406,0 @@ int fcntl(int fd, int cmd, ...) {
+@@ -403,2 +415,0 @@ int fcntl(int fd, int cmd, ...) {
 -  HANDLE h = gesher::HandleFromFd(fd);
 -  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-@@ -405,16 +416,22 @@ int fcntl(int fd, int cmd, ...) {
+@@ -414,16 +425,22 @@ int fcntl(int fd, int cmd, ...) {
 -  gesher::SocketFd state;
 -  if (gesher::LookupSocket(fd, &state)) {
 -    switch (cmd) {
@@ -459,7 +493,7 @@ index a51b8d7d3..892320278 100644
 +                  gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
 +              state.description->nonblocking.store(on);
 +            }
-@@ -422 +439,13 @@ int fcntl(int fd, int cmd, ...) {
+@@ -431 +448,13 @@ int fcntl(int fd, int cmd, ...) {
 -        }
 +          return 0;
 +        case F_GETFD:
@@ -474,7 +508,7 @@ index a51b8d7d3..892320278 100644
 +      if (cmd == F_GETFL) return O_RDWR | (gesher::IsNonBlocking(*e) ? O_NONBLOCK : 0);
 +      if (cmd == F_SETFL) {
 +        gesher::SetNonBlocking(*e, (arg & O_NONBLOCK) != 0);
-@@ -424,2 +453,8 @@ int fcntl(int fd, int cmd, ...) {
+@@ -433,2 +462,8 @@ int fcntl(int fd, int cmd, ...) {
 -      case F_GETFD:
 -        return FD_CLOEXEC;  // sockets are never inherited (winsock.cc)
 +      }
@@ -485,12 +519,12 @@ index a51b8d7d3..892320278 100644
 +        if (!GetHandleInformation(h, &flags)) return gesher::FailWithLastError();
 +        return (flags & HANDLE_FLAG_INHERIT) != 0 ? 0 : FD_CLOEXEC;
 +      }
-@@ -426,0 +462,4 @@ int fcntl(int fd, int cmd, ...) {
+@@ -435,0 +471,4 @@ int fcntl(int fd, int cmd, ...) {
 +        if (!SetHandleInformation(h, HANDLE_FLAG_INHERIT,
 +                                  (arg & FD_CLOEXEC) != 0 ? 0 : HANDLE_FLAG_INHERIT)) {
 +          return gesher::FailWithLastError();
 +        }
-@@ -428,21 +467,8 @@ int fcntl(int fd, int cmd, ...) {
+@@ -437,21 +476,10 @@ int fcntl(int fd, int cmd, ...) {
 -      default:
 -        break;  // F_DUPFD and the rest below
 -    }
@@ -519,8 +553,10 @@ index a51b8d7d3..892320278 100644
 +        break;
 +      case F_DUPFD:
 +      case F_DUPFD_CLOEXEC: {
-+        return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
-@@ -450,8 +476,5 @@ int fcntl(int fd, int cmd, ...) {
++        const int duplicate = gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
++        if (duplicate >= 0) gesher::CopyMemfdRegistration(fd, duplicate);
++        return duplicate;
+@@ -459,10 +487,6 @@ int fcntl(int fd, int cmd, ...) {
 -      return 0;
 -    case F_GETFL:
 -      return O_RDWR;
@@ -528,32 +564,45 @@ index a51b8d7d3..892320278 100644
 -      return 0;
 -    case F_DUPFD:
 -    case F_DUPFD_CLOEXEC: {
--      return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
+-      const int duplicate = gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
+-      if (duplicate >= 0) gesher::CopyMemfdRegistration(fd, duplicate);
+-      return duplicate;
 +      case F_ADD_SEALS:
++        return gesher::AddMemfdSeals(fd, static_cast<unsigned>(arg));
 +      case F_GET_SEALS:
-+        return 0;  // seals are advisory here
++        return gesher::GetMemfdSeals(fd);
 +      default:
 +        return errno = EINVAL, -1;
-@@ -459,5 +481,0 @@ int fcntl(int fd, int cmd, ...) {
+@@ -470,6 +493,0 @@ int fcntl(int fd, int cmd, ...) {
 -    case F_ADD_SEALS:
+-      return gesher::AddMemfdSeals(fd, static_cast<unsigned>(arg));
 -    case F_GET_SEALS:
--      return 0;  // seals are advisory here
+-      return gesher::GetMemfdSeals(fd);
 -    default:
 -      return errno = EINVAL, -1;
-@@ -464,0 +483,4 @@ int fcntl(int fd, int cmd, ...) {
+@@ -476,0 +495,4 @@ int fcntl(int fd, int cmd, ...) {
 +  // The snapshot retains the selected object and description across concurrent
 +  // close/dup2. Native mode operations must not hold the publication lock.
 +  return cmd == F_GETFL ? gesher::FileDescriptionFlags(status_snapshot)
 +                       : gesher::SetFileDescriptionFlags(status_snapshot, arg);
-@@ -546,2 +568,21 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
+@@ -557,2 +578,0 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
+-    // A memfd sealed with F_SEAL_GROW cannot be extended (memfd_seals.cc).
+-    if (const int sealed = gesher::MemfdGrowError(fd, static_cast<uint64_t>(end))) return sealed;
+@@ -560,5 +580,24 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
 -    // Keep the descriptor's actual file object stable through inspection and
 -    // growth. F_GETFL's generic fallback is not evidence of write access.
+-    gesher::record_locks::DescriptorGuard descriptor_guard;
+-    HANDLE handle = gesher::HandleFromFd(fd);
+-    if (handle == INVALID_HANDLE_VALUE) return EBADF;
 +    // Revocable files serialize growth with all writes in the same session.
 +    // Do not hold the process descriptor lock while entering that barrier.
 +    auto snapshot = gesher::CaptureDescriptor(fd);
 +    if (!snapshot) return errno;
 +    gesher::FileOperationLease operation(snapshot);
 +    if (operation.Error()) return operation.Error();
++    if (gesher::FileDescriptionIsMemfd(snapshot)) {
++      if (int error = gesher::MemfdGrowHandleError(snapshot->handle, static_cast<uint64_t>(end))) return error;
++    }
 +    if (gesher::FileDescriptionIsRevocable(snapshot)) {
 +      const int flags = gesher::FileDescriptionFlags(snapshot);
 +      if (flags < 0) return errno;
@@ -568,8 +617,30 @@ index a51b8d7d3..892320278 100644
 +      }
 +      return 0;
 +    }
-+    // Preserve the ordinary CRT growth path for unrelated descriptors.
-@@ -615,0 +657,66 @@ bool BadVector(int fd, int iovcnt) {
++    const HANDLE handle = snapshot->handle;
+@@ -573 +612,17 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
+-    const long long size = _filelengthi64(fd);
++    // Preserve CRT zero-filled growth on the object captured above. The
++    // caller's fd may already have been closed or replaced with another file
++    // whose seals or revocation group were never admitted by this operation.
++    HANDLE duplicate = INVALID_HANDLE_VALUE;
++    if (!DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &duplicate,
++                         0, FALSE, DUPLICATE_SAME_ACCESS)) return gesher::ErrnoFromWin32(GetLastError());
++    gesher::record_locks::DescriptorGuard descriptor_guard;
++    const int pinned_fd = _open_osfhandle(reinterpret_cast<intptr_t>(duplicate), _O_RDWR | _O_BINARY | _O_NOINHERIT);
++    if (pinned_fd < 0) {
++      const int error = gesher_errno_from_crt(errno);
++      CloseHandle(duplicate);
++      return error;
++    }
++    // This internal slot is never published or registered as an Android fd.
++    // Its close must not release the app's process-wide record locks.
++    struct CrtSlot { int fd; ~CrtSlot() { _close(fd); } } pinned{pinned_fd};
++    const long long size = _filelengthi64(pinned_fd);
+@@ -580 +635 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
+-      error = _chsize_s(fd, end);
++      error = _chsize_s(pinned_fd, end);
+@@ -629,0 +685,66 @@ bool BadVector(int fd, int iovcnt) {
 +struct FileVectorTransfer {
 +  gesher::DescriptorSnapshotPtr snapshot;
 +  std::unique_ptr<unsigned char[]> allocated;
@@ -636,14 +707,20 @@ index a51b8d7d3..892320278 100644
 +  return true;
 +}
 +
-@@ -633,0 +741,2 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
+@@ -647,0 +769,2 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
 +  ssize_t transferred = 0;
 +  if (FileWriteVector(fd, iov, iovcnt, false, 0, &transferred)) return transferred;
-@@ -684,0 +794 @@ ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+@@ -698,0 +822 @@ ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
 +  if (FileWriteVector(fd, iov, iovcnt, true, offset, &total)) return total;
-@@ -771,0 +882,5 @@ int memfd_create(const char* name, unsigned int flags) {
+@@ -793,3 +917,5 @@ int memfd_create(const char* name, unsigned int flags) {
+-  if (fd < 0) {
+-    CloseHandle(h);
+-    return fd;
++  if (fd < 0) CloseHandle(h);
 +  else if (gesher::RegisterOfd(fd, O_RDWR | O_LARGEFILE) < 0) {
 +    int saved = errno;
 +    _close(fd);
 +    return errno = saved, -1;
-+  }
+@@ -797 +923 @@ int memfd_create(const char* name, unsigned int flags) {
+-  gesher::RegisterMemfd(fd);
++  if (fd >= 0) gesher::RegisterMemfd(fd);

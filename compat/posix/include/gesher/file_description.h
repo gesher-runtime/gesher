@@ -42,6 +42,7 @@ int FileDescriptionIoFlags(const DescriptorSnapshotPtr& snapshot);
 // Its access and wait mode are supplied by the creator, before any I/O.
 int InitializePipeDescription(const DescriptorSnapshotPtr& snapshot, int flags);
 bool FileDescriptionIsRevocable(const DescriptorSnapshotPtr& snapshot);
+bool FileDescriptionIsMemfd(const DescriptorSnapshotPtr& snapshot);
 // Consumes both owned handles on every outcome. Used after a broker has
 // transferred the file and its exact shared description as one capability.
 int AdoptFileDescription(HANDLE file, HANDLE shared, DescriptorKind kind, bool close_on_exec);

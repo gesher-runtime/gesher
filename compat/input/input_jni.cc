@@ -37,6 +37,7 @@
 
 namespace android {
 int register_android_view_InputChannel(JNIEnv* env);
+int register_android_window_InputTransferToken(JNIEnv* env);
 int register_android_view_InputEventReceiver(JNIEnv* env);
 int register_android_view_InputEventSender(JNIEnv* env);
 int register_android_view_KeyCharacterMap(JNIEnv* env);
@@ -358,6 +359,8 @@ int register_gesher_input(JNIEnv* env) {
       {"android/view/MotionEvent", android::register_android_view_MotionEvent},
       {"android/view/KeyCharacterMap", android::register_android_view_KeyCharacterMap},
       {"android/view/VelocityTracker", android::register_android_view_VelocityTracker},
+      // ViewRootImpl.getInputTransferToken (SurfaceView, embedded windows).
+      {"android/window/InputTransferToken", android::register_android_window_InputTransferToken},
       {"com/gesher/app/input/WindowInput", RegisterWindowInput},
       {"com/gesher/app/input/VirtualKeyboard", RegisterVirtualKeyboard},
   };

@@ -65,6 +65,14 @@ int main(int argc, char** argv) {
     char byte;
     return read(37, &byte, 1) == -1 && errno == EAGAIN ? 0 : 25;
   }
+  if (argc == 2 && std::strcmp(argv[1], "--pipe-retired") == 0) {
+    for (int fd = 0; fd < 3; ++fd) if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) return 26;
+    if (fcntl(37, F_GETFL) != O_RDONLY || fcntl(38, F_GETFL) != O_WRONLY) return 27;
+    if (fcntl(37, F_SETFL, O_NONBLOCK) < 0 || (fcntl(7100, F_GETFL) & O_NONBLOCK) == 0) return 28;
+    char byte = 0;
+    if (read(37, &byte, 1) != 1 || byte != 'R' || read(7100, &byte, 1) != 0) return 29;
+    return write(38, "S", 1) == 1 ? 0 : 30;
+  }
   wchar_t image[32768];
   DWORD length = GetModuleFileNameW(nullptr, image, sizeof(image) / sizeof(image[0]));
   if (!length || length >= sizeof(image) / sizeof(image[0])) return 1;
@@ -153,6 +161,34 @@ int main(int argc, char** argv) {
     Check("child pipe mode change reaches parent's native endpoint", parent_flags >= 0 && (parent_flags & O_NONBLOCK) != 0);
   } else Check("capture aware child pipe", false);
   files.clear(); shared_pipe.reset(); close(pipes[0]); close(pipes[1]);
+  incoming[0] = incoming[1] = outgoing[0] = outgoing[1] = -1;
+  Check("retired-owner pipe fixture", pipe2(incoming, O_CLOEXEC) == 0 && pipe2(outgoing, O_CLOEXEC) == 0);
+  incoming_reader = gesher::CaptureDescriptor(incoming[0]);
+  outgoing_writer = gesher::CaptureDescriptor(outgoing[1]);
+  if (incoming_reader && outgoing_writer) {
+    files = {{37, incoming_reader->handle, incoming_reader},
+             {7100, incoming_reader->handle, incoming_reader},
+             {38, outgoing_writer->handle, outgoing_writer}};
+    // Suspend before any child initialization so the sender deterministically
+    // closes its last local gate handles before the child imports the pipes.
+    error = gesher::exec::SpawnWithFds(Target(self, L"--pipe-retired"), nullptr, L"", files,
+                                      &child, CREATE_SUSPENDED);
+    Check("aware child waits before importing transferred pipe descriptions", error == 0);
+    Check("retired-owner input contains real bytes", write(incoming[1], "R", 1) == 1);
+    close(incoming[1]); incoming[1] = -1;
+    files.clear(); incoming_reader.reset(); outgoing_writer.reset();
+    close(incoming[0]); incoming[0] = -1;
+    close(outgoing[1]); outgoing[1] = -1;
+    if (!error) {
+      Check("resume child after every sender-side pipe description retired", ResumeThread(child.hThread) == 1);
+      Check("retired-owner aware child imports aliases and completes actual I/O", WaitChild(&child));
+      char byte = 0;
+      Check("retired-owner output retains genuine data and last-writer EOF",
+          read(outgoing[0], &byte, 1) == 1 && byte == 'S' && read(outgoing[0], &byte, 1) == 0);
+    }
+  } else Check("capture retired-owner endpoints", false);
+  files.clear(); incoming_reader.reset(); outgoing_writer.reset();
+  for (int descriptor : {incoming[0], incoming[1], outgoing[0], outgoing[1]}) if (descriptor >= 0) close(descriptor);
   gesher::exec::Launch shell;
   Check("prepare the shell", gesher::exec::PrepareLaunch({"sh", "-c", "printf Y"}, "", &shell) == 0);
   Check("set append for raw shell output", fcntl(fd, F_SETFL, O_APPEND) == 0 && lseek(fd, 0, SEEK_SET) == 0);

@@ -36,7 +36,7 @@ def main():
     # The inherited pipe fixture now supplies these Win32 boundaries too.
     # Retain its helpers under distinct names; the revocation corpus below
     # supplies shared mutexes with both blocking and immediate wait semantics.
-    for name in ("CreateMutexW", "OpenMutexW", "WaitForSingleObject", "ReleaseMutex", "BCryptGenRandom"):
+    for name in ("CreateMutexW", "CreateMutexExW", "OpenMutexW", "WaitForSingleObject", "ReleaseMutex", "BCryptGenRandom"):
         boundary = boundary.replace(name + "(", "Host" + name + "(")
     resolver = rest.split("@OFD_IMPLEMENTATION@", 1)[1].split("namespace gesher::exec {", 1)[0]
     declarations = "\n".join(no_includes((ROOT / name).read_text()) for name in (

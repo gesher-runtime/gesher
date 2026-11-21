@@ -24,8 +24,13 @@ inline bool ValidFileDescriptions(const void* data, size_t data_size,
     if (header.type != BINDER_TYPE_FD) continue;
     if (data_size - offset < sizeof(binder_fd_object) || next == descriptions.size()) return false;
     const auto& description = descriptions[next++];
-    if (description.object_offset != offset || description.shared_handle == 0 ||
-        description.shared_handle > UINTPTR_MAX || description.kind > 2 || description.reserved != 0)
+    binder_fd_object object{};
+    std::memcpy(&object, bytes + offset, sizeof(object));
+    const bool socket = description.kind == kSocketFileDescription;
+    if (description.object_offset != offset || description.shared_handle > UINTPTR_MAX ||
+        description.reserved != 0 ||
+        (socket ? description.shared_handle != 0 || (object.pad_flags & 1) == 0
+                : description.shared_handle == 0 || description.kind > 2 || object.pad_flags != 0))
       return false;
   }
   return next == descriptions.size();

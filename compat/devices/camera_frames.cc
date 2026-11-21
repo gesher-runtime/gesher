@@ -17,6 +17,7 @@
 #include <jni.h>
 #include <nativehelper/JNIHelp.h>
 #include <nativehelper/scoped_local_ref.h>
+#include <utils/Errors.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -145,11 +146,11 @@ void ImageReader_classInit(JNIEnv* env, jclass clazz) {
   gIr.surfaceCtor = GetMethodIDOrDie(env, gIr.surfaceClass, "<init>", "()V");
 }
 
-void EnqueueImage(JNIEnv* env, const std::shared_ptr<Reader>& r, Image* image) {
+int EnqueueImage(JNIEnv* env, const std::shared_ptr<Reader>& r, Image* image) {
   jobject weak;
   {
     std::lock_guard<std::mutex> lock(r->mutex);
-    if (r->closed) { delete image; return; }
+    if (r->closed) { delete image; return NO_INIT; }
     while (static_cast<int>(r->pending.size()) >= r->maxImages) {
       delete r->pending.front();
       r->pending.pop_front();
@@ -159,6 +160,7 @@ void EnqueueImage(JNIEnv* env, const std::shared_ptr<Reader>& r, Image* image) {
   }
   env->CallStaticVoidMethod(gIr.readerClass, gIr.postEvent, weak);
   env->DeleteLocalRef(weak);
+  return OK;
 }
 
 void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
@@ -399,8 +401,8 @@ void Nv12ToRgba(const uint8_t* src, int w, int h, uint8_t* dst, int stride, int 
   }
 }
 
-// One frame into a reader: false when the reader cannot take this format.
-bool QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv12, int w, int h, int64_t ts,
+// One frame into a reader: 1 for an unsupported format, NO_INIT after closure.
+int QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv12, int w, int h, int64_t ts,
                 const uint8_t* jpeg, size_t jpegSize) {
   Image* i = new Image();
   i->timestampNs = ts;
@@ -412,7 +414,7 @@ bool QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv
   if (r->halFormat == kHalBlob) {
     if (jpeg == nullptr) {
       delete i;
-      return false;
+      return 1;
     }
     i->data.assign(jpeg, jpeg + jpegSize);
     i->planes.push_back({0, jpegSize, 0, 0});
@@ -432,12 +434,11 @@ bool QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv
     i->planes.push_back({ySize, cSize, cw, 1});
     i->planes.push_back({ySize + cSize, cSize, cw, 1});
   }
-  EnqueueImage(env, r, i);
-  return true;
+  return EnqueueImage(env, r, i);
 }
 
-// CameraFrames.nativeDeliver: 0 delivered, 1 the target cannot take it (no native
-// window, or a JPEG reader without JPEG bytes), -1 an error.
+// CameraFrames.nativeDeliver: 0 delivered, 1 unsupported format, otherwise an
+// Android status. A closed or missing consumer is NO_INIT, not a format mismatch.
 gesher::devices::camera::TraceStats gDeliveryTrace{
     "JNI delivery (process cumulative)",
     {"validate", "pin arrays", "lookup target", "target/lock", "convert", "post", "release"}};
@@ -452,15 +453,13 @@ jint CameraFrames_deliver(JNIEnv* env, jclass, jobject surface, jbyteArray nv12,
   jbyte* frame = env->GetByteArrayElements(nv12, nullptr);
   jbyte* jpegBytes = jpeg != nullptr ? env->GetByteArrayElements(jpeg, nullptr) : nullptr;
   trace.Step(1);
-  jint result = 1;
+  jint result = NO_INIT;
   auto r = ReaderForSurface(env, surface);
   trace.Step(2);
   if (r != nullptr) {
     result = QueueFrame(env, r, reinterpret_cast<uint8_t*>(frame), w, h, ts,
                         reinterpret_cast<uint8_t*>(jpegBytes),
-                        jpeg != nullptr ? env->GetArrayLength(jpeg) : 0)
-                 ? 0
-                 : 1;
+                        jpeg != nullptr ? env->GetArrayLength(jpeg) : 0);
     trace.Step(3);
   } else {
     ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
@@ -472,17 +471,16 @@ jint CameraFrames_deliver(JNIEnv* env, jclass, jobject surface, jbyteArray nv12,
         ww = w;
         wh = h;
       }
-      ANativeWindow_setBuffersGeometry(window, ww, wh, kHalRgba8888);
+      result = ANativeWindow_setBuffersGeometry(window, ww, wh, kHalRgba8888);
       ANativeWindow_Buffer buffer;
-      int locked = ANativeWindow_lock(window, &buffer, nullptr);
+      if (result == OK) result = ANativeWindow_lock(window, &buffer, nullptr);
       trace.Step(3);
-      if (locked == 0) {
+      if (result == OK) {
         Nv12ToRgba(reinterpret_cast<uint8_t*>(frame), w, h, static_cast<uint8_t*>(buffer.bits),
                    buffer.stride, std::min(buffer.width, ww), std::min(buffer.height, wh));
         trace.Step(4);
-        ANativeWindow_unlockAndPost(window);
+        result = ANativeWindow_unlockAndPost(window);
         trace.Step(5);
-        result = 0;
       }
       ANativeWindow_release(window);
     }

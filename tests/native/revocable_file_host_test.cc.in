@@ -88,6 +88,15 @@ static HANDLE OpenMutexW(DWORD access, BOOL inherit, const wchar_t* name) {
   host::Require(access == (SYNCHRONIZE | MUTEX_MODIFY_STATE) && !inherit);
   return MutexHandle(name, false);
 }
+static HANDLE CreateMutexExW(void* attributes, const wchar_t* name, DWORD flags, DWORD access) {
+  host::Require(!attributes && !flags && access == (SYNCHRONIZE | MUTEX_MODIFY_STATE));
+  HANDLE result = MutexHandle(name, true);
+  if (!result && GetLastError() == ERROR_ALREADY_EXISTS) {
+    result = MutexHandle(name, false);
+    if (result) SetLastError(ERROR_ALREADY_EXISTS);
+  }
+  return result;
+}
 static DWORD WaitForSingleObject(HANDLE handle, DWORD timeout) {
   host::Require(timeout == INFINITE || timeout == 0);
   auto found = mutex_views.find(host::Native(handle));

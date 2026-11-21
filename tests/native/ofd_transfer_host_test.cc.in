@@ -218,6 +218,17 @@ static HANDLE OpenMutexW(DWORD access, BOOL inherit, const wchar_t* name) {
   host::Require(access == (SYNCHRONIZE | MUTEX_MODIFY_STATE) && !inherit);
   return MapMutex(shm_open(MutexName(name).c_str(), O_RDWR | O_CLOEXEC, 0), false);
 }
+static HANDLE CreateMutexExW(void* attributes, const wchar_t* name, DWORD flags, DWORD access) {
+  host::Require(!attributes && !flags && access == (SYNCHRONIZE | MUTEX_MODIFY_STATE));
+  const std::string path = MutexName(name);
+  int fd = shm_open(path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  const bool created = fd >= 0;
+  if (created) host::mutex_names.insert(path);
+  else if (errno == EEXIST) fd = shm_open(path.c_str(), O_RDWR | O_CLOEXEC, 0);
+  HANDLE result = MapMutex(fd, created);
+  if (result && !created) SetLastError(ERROR_ALREADY_EXISTS);
+  return result;
+}
 static DWORD WaitForSingleObject(HANDLE handle, DWORD milliseconds) {
   host::Require(milliseconds == 0);
   auto found = host::mutexes.find(host::Native(handle));
@@ -427,6 +438,11 @@ static BOOL CreateProcessW(const wchar_t*, wchar_t*, void*, void*, BOOL, DWORD, 
                            STARTUPINFOW*, PROCESS_INFORMATION*);
 
 namespace gesher {
+// This corpus uses ordinary files; the memfd-seal corpus exercises the EA
+// boundary separately. No ordinary descriptor may be registered as a memfd.
+static bool FileHasMemfdSeals(HANDLE) { return false; }
+static void RegisterMemfd(int) { std::abort(); }
+static int MemfdWriteHandleError(HANDLE, bool, uint64_t, uint64_t, bool) { return 0; }
 int PipeStatusFlags(HANDLE handle, int flags) {
   const int native = fcntl(host::Native(handle), F_GETFL);
   return native < 0 ? -1 : (flags & ~O_NONBLOCK) | (native & O_NONBLOCK);
@@ -743,6 +759,18 @@ int main(int argc, char** argv) {
       ReleaseMutex(child->description->pipe_mutex);
     });
     while (!holding.load()) std::this_thread::yield();
+    {
+      HANDLE late_mapping = nullptr;
+      Check("retain shared state for adoption while another process owns the gate",
+          DuplicateHandle(GetCurrentProcess(), gesher::ShareFileDescription(parent),
+              GetCurrentProcess(), &late_mapping, 0, FALSE, DUPLICATE_SAME_ACCESS));
+      gesher::OpenFileDescription late;
+      const bool late_adopted = late_mapping && late.Adopt(late_mapping);
+      const DWORD admission = late_adopted ? WaitForSingleObject(late.pipe_mutex, 0) : WAIT_FAILED;
+      Check("adoption opens the existing gate without resetting active ownership", admission == WAIT_TIMEOUT);
+      if (admission == WAIT_OBJECT_0 || admission == WAIT_ABANDONED) ReleaseMutex(late.pipe_mutex);
+      if (!late_adopted && late_mapping) CloseHandle(late_mapping);
+    }
     Check("unchanged and metadata-only flags remain usable during endpoint I/O",
         gesher::SetFileDescriptionFlags(parent, 0) == 0 &&
         gesher::SetFileDescriptionFlags(parent, O_APPEND) == 0 &&
@@ -754,6 +782,45 @@ int main(int argc, char** argv) {
     Check("restore metadata after active-I/O checks", gesher::SetFileDescriptionFlags(parent, 0) == 0);
     child.reset(); parent.reset();
     Check("shared-state interleavings release every retained native handle", host::owned.size() == before);
+  }
+  {
+    const size_t before = host::owned.size();
+    int ends[2];
+    host::Require(pipe2(ends, O_CLOEXEC) == 0);
+    HANDLE original_file = host::Handle(host::Own(ends[0]));
+    auto original = gesher::CaptureFileHandle(original_file);
+    host::Require(original && gesher::InitializePipeDescription(original, O_RDONLY) == 0);
+    std::wstring gate_name = L"Local\\gesher-pipe-";
+    for (char digit : original->description->shared.load()->pipe_gate) {
+      if (digit) gate_name += static_cast<wchar_t>(digit);
+    }
+    HANDLE inherited = nullptr, inherited_file = nullptr;
+    host::Require(DuplicateHandle(GetCurrentProcess(), gesher::ShareFileDescription(original),
+        GetCurrentProcess(), &inherited, 0, FALSE, DUPLICATE_SAME_ACCESS) &&
+        DuplicateHandle(GetCurrentProcess(), original->handle, GetCurrentProcess(),
+            &inherited_file, 0, FALSE, DUPLICATE_SAME_ACCESS));
+    original.reset(); CloseHandle(original_file);
+    // POSIX shared-memory names survive their last close. Explicitly model
+    // Windows destroying this now-unowned mutex before the child imports.
+    Check("sender retired every pipe gate handle before child adoption", host::owned.size() == before + 2);
+    host::Require(shm_unlink(MutexName(gate_name.c_str()).c_str()) == 0);
+    auto child = std::make_shared<gesher::DescriptorSnapshot>();
+    child->handle = inherited_file;
+    child->description = std::make_shared<gesher::OpenFileDescription>();
+    const bool adopted = child->description->Adopt(inherited);
+    Check("child imports a pipe after the sender's last description retired", adopted);
+    if (!adopted) CloseHandle(inherited);
+    Check("retired-owner adoption preserves real access and permits a mode change",
+        adopted && gesher::FileDescriptionFlags(child) == O_RDONLY &&
+        gesher::SetFileDescriptionFlags(child, O_NONBLOCK) == 0 &&
+        (fcntl(host::Native(child->handle), F_GETFL) & O_NONBLOCK) != 0);
+    char byte = 0;
+    Check("retired-owner endpoint retains the actual pipe data",
+        write(ends[1], "R", 1) == 1 && read(host::Native(child->handle), &byte, 1) == 1 && byte == 'R');
+    close(ends[1]);
+    Check("retired-owner endpoint sees actual last-writer EOF", read(host::Native(child->handle), &byte, 1) == 0);
+    child.reset();
+    Check("retired-owner adoption releases every retained native handle", host::owned.size() == before);
   }
   Check("stateless device kind fixture", OpenFixture("/dev/null", 42, O_RDWR) == 42 &&
       gesher::SetDescriptorKind(42, gesher::DescriptorKind::kZero) == 0);

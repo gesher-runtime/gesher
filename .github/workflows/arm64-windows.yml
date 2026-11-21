@@ -47,8 +47,18 @@ jobs:
           curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
             | tar -xJ -C ~/toolchain
 
+      # Normally restores the entry ci.yml saves on main; only a main dispatch saves.
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -62,6 +72,8 @@ jobs:
         shell: bash
         run: sudo apt-get install -y --no-install-recommends ninja-build ccache
 
+      # This workflow never runs on a main push, so branches keep saving this
+      # small (~25 MB) cache (an exception in tools/ci/test_cache_policy.py).
       - name: Cache ccache
         uses: actions/cache@v4
         with:

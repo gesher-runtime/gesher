@@ -34,6 +34,7 @@
 #include "binder_sg.h"
 #include "binder_wire.h"
 #include "internal.h"
+#include "record_lock_descriptors.h"
 
 namespace gesher {
 namespace {
@@ -312,9 +313,16 @@ void CloseThreadPipe(BinderFile* file) {
 // fd's Windows handle in the object (its 64-bit pad_binder, which shares the
 // fd's union), binderd duplicates it into the receiving process
 // (DuplicateHandle). That staging handle remains broker-owned; the receiver
-// duplicates it again and adopts only its distinct local copy. Only
-// fds backed by a Windows handle (files, memfds, pipes) travel; any other
-// goes as handle 0, which binderd refuses (BR_FAILED_REPLY).
+// duplicates it again and adopts only its distinct local copy. A socket's fd
+// (open on NUL) travels as its SOCKET handle, and its description's state in
+// pad_flags and the high 32 bits of the object's cookie (TransferSocket's low
+// and high 32 bits, ADR 0088 phase 3). binderd copies an fd object's cookie
+// unchanged; its low 32 bits keep libbinder's value (the sender's ownership
+// flag), which the receiver gets back as sent. Ordinary files retain their
+// full cookie and carry shared descriptions in the separate side table.
+// Only fds backed by a Windows handle (files, memfds, pipes, sockets) travel;
+// any other goes as handle 0,
+// which binderd refuses (BR_FAILED_REPLY).
 template <typename F>
 void ForEachFdObject(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size,
                      F f) {
@@ -337,15 +345,35 @@ bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
   bool ok = true;
   ForEachFdObject(data, data_size, offsets, offsets_size, [&](uint64_t offset, binder_fd_object& obj) {
     if (!ok) { obj.pad_binder = 0; return; }
-    auto snapshot = CaptureDescriptor(static_cast<int>(obj.fd));
+    const int fd = static_cast<int>(obj.fd);
+    uintptr_t socket = 0;
+    uint64_t metadata = 0;
+    DescriptorSnapshotPtr snapshot;
+    {
+      record_locks::DescriptorGuard guard;
+      if (TransferSocket(fd, &socket, &metadata)) {
+        // Keep the actual socket alive until the broker consumes this stream.
+        auto pin = std::make_shared<DescriptorSnapshot>();
+        if (!DuplicateHandle(GetCurrentProcess(), reinterpret_cast<HANDLE>(socket),
+                             GetCurrentProcess(), &pin->handle, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          ok = false; obj.pad_binder = 0; return;
+        }
+        obj.pad_flags = static_cast<__u32>(metadata);
+        obj.cookie = (obj.cookie & 0xffffffffu) | (metadata & 0xffffffff00000000ull);
+        obj.pad_binder = reinterpret_cast<uintptr_t>(pin->handle);
+        descriptions->push_back({offset, 0, wire::kSocketFileDescription, 0});
+        pins->push_back(std::move(pin));
+        return;
+      }
+      snapshot = CaptureDescriptor(fd);
+    }
     HANDLE shared = snapshot && snapshot->kind != DescriptorKind::kUnshareable
         ? ShareFileDescription(snapshot) : nullptr;
     if (!shared) { ok = false; obj.pad_binder = 0; return; }
+    obj.pad_flags = 0;
     obj.pad_binder = reinterpret_cast<uintptr_t>(snapshot->handle);
     descriptions->push_back({offset, reinterpret_cast<uintptr_t>(shared),
                              static_cast<uint32_t>(snapshot->kind), 0});
-    // Pin both exact objects until the broker has processed this write stream,
-    // even if the sender closes/reuses its original fd during the transaction.
     pins->push_back(std::move(snapshot));
   });
   return ok;
@@ -361,16 +389,23 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
     HANDLE owned = nullptr, shared = nullptr;
     int fd = -1;
     if (DuplicateHandle(GetCurrentProcess(), staging, GetCurrentProcess(), &owned,
-                        0, FALSE, DUPLICATE_SAME_ACCESS)) {
-      HANDLE shared_staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(description.shared_handle));
-      if (DuplicateHandle(GetCurrentProcess(), shared_staging, GetCurrentProcess(), &shared,
-                          0, FALSE, DUPLICATE_SAME_ACCESS)) {
-        fd = AdoptFileDescription(owned, shared, static_cast<DescriptorKind>(description.kind), true);
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      if (description.kind == wire::kSocketFileDescription) {
+        fd = AdoptSocket(reinterpret_cast<uintptr_t>(owned),
+                         uint64_t{obj.pad_flags} | (obj.cookie & 0xffffffff00000000ull));
       } else {
-        CloseHandle(owned);
+        HANDLE shared_staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(description.shared_handle));
+        if (DuplicateHandle(GetCurrentProcess(), shared_staging, GetCurrentProcess(), &shared,
+                            0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          fd = AdoptFileDescription(owned, shared, static_cast<DescriptorKind>(description.kind), true);
+        } else {
+          CloseHandle(owned);
+        }
       }
     }
     if (fd < 0) ok = false;
+    obj.pad_flags = 0;
+    if (description.kind == wire::kSocketFileDescription) obj.cookie &= 0xffffffffu;
     obj.pad_binder = 0;
     obj.fd = static_cast<__u32>(fd);
   });

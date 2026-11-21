@@ -244,7 +244,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '95486aa0842c0745ace359daf91eb172f19d9386e3a46b045fdb08eed22dde4d'
+OFD_QUALIFICATION_SHA256 = '9a8c1b398d2b195a3fa2f0e5c9ed7578ebd0c86d8d9c6deb16dcd3617bc4de22'
 # Valid pipes can now fail a control operation explicitly. These two exact
 # non-socket dispatch substitutions are the only PollFdsImpl changes allowed;
 # normalize them before comparing every byte of the original native poll core.
@@ -303,6 +303,28 @@ def preceding_ofd_sources():
      actual=actual.replace(after,before,1)
    assert actual==expected,(path,marker)
  return previous
+# AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
+# these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
+# pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
+# the checkpoint's file: every current file must be its checkpoint bytes with
+# exactly those hunks applied, and the derivations below still verify the
+# checkpoint's bytes. Any other change fails here as before.
+REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
+REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
+REVIEWED_PATCH_SHA256='5724ba64d08b68b8900c1442f6302f3fcadc4ef6b584c52d2055b0bb6c04e441'
+def reviewed(path,actual):
+ raw=(ROOT/REVIEWED_PATCH).read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
+ patch=json.loads(raw)
+ assert patch['checkpoint']==REVIEWED_CHECKPOINT and sorted(patch['hunks'])==sorted(REVIEWED_PATHS),REVIEWED_PATCH
+ base=subprocess.check_output(['git','-C',str(ROOT),'show',REVIEWED_CHECKPOINT+':'+path])
+ lines=base.decode('utf-8').splitlines(keepends=True);rebuilt=[];cursor=0
+ for start,before,after in patch['hunks'][path]:
+  assert start>=cursor and lines[start:start+len(before)]==before and before!=after,path
+  rebuilt+=lines[cursor:start]+after;cursor=start+len(before)
+ assert ''.join(rebuilt+lines[cursor:]).encode('utf-8')==actual,path
+ return base
+REVIEWED_PATHS=('compat/posix/src/fd.cc','compat/posix/src/socket.cc','compat/posix/src/socket_internal.h','compat/posix/src/system.cc','compat/posix/src/winsock.cc')
 def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
 def check():
  preceding=preceding_ofd_sources()
@@ -317,6 +339,7 @@ def check():
          CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
   expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
   actual=preceding.get(path,(ROOT/path).read_bytes())
+  if path in REVIEWED_PATHS:actual=reviewed(path,actual)
   if path=='compat/posix/src/winsock.cc':
    assert actual==expected and hashlib.sha256(actual).hexdigest()==WINSOCK_SHA256,path
    original=old(path)

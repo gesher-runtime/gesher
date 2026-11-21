@@ -104,7 +104,13 @@ bool OpenFileDescription::Adopt(HANDLE inherited) {
       name += static_cast<wchar_t>(digit);
     }
     if (!valid) { UnmapViewOfFile(view); errno = EINVAL; return false; }
-    gate = OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, name.c_str());
+    // The sender can retire its last local description after transferring
+    // the file and shared state, before this process starts importing them.
+    // The named gate then has no handles and Windows destroys it. Every
+    // active operation pins its description (and therefore its gate), so a
+    // missing gate has no active owner. Open or recreate that same gate,
+    // without resetting the shared flags or an existing mutex's ownership.
+    gate = CreateMutexExW(nullptr, name.c_str(), 0, SYNCHRONIZE | MUTEX_MODIFY_STATE);
     if (!gate) {
       DWORD error = GetLastError();
       UnmapViewOfFile(view);
@@ -438,6 +444,9 @@ int AttachLocal(const DescriptorSnapshotPtr& snapshot, bool close_on_exec) {
   if (!snapshot || !snapshot->description || !snapshot->handle || snapshot->handle == INVALID_HANDLE_VALUE)
     return errno = EBADF, -1;
   if (snapshot->kind == DescriptorKind::kUnshareable) return errno = EOPNOTSUPP, -1;
+  // Probe the pinned file before taking the descriptor-table locks. A file
+  // attribute query must not hold up unrelated descriptor operations.
+  const bool memfd = FileDescriptionIsMemfd(snapshot);
   record_locks::DescriptorGuard guard;
   if (InitializeLocal() < 0) return -1;
   HANDLE duplicate = nullptr;
@@ -462,6 +471,7 @@ int AttachLocal(const DescriptorSnapshotPtr& snapshot, bool close_on_exec) {
   }
   std::lock_guard<std::mutex> lock(table->mutex);
   table->entries[fd] = snapshot->description;
+  if (memfd) RegisterMemfd(fd);
   return fd;
 }
 
@@ -756,6 +766,17 @@ int NativeFileDescriptionExport::Prepare(const DescriptorSnapshotPtr& snapshot) 
   description_->ExposePipe(true);
   return 0;
 }
+bool FileDescriptionIsMemfd(const DescriptorSnapshotPtr& snapshot) {
+  if (!snapshot || !snapshot->description || snapshot->kind != DescriptorKind::kFile) return false;
+  auto& description = *snapshot->description;
+  if (!description.memfd_known.load(std::memory_order_acquire)) {
+    description.memfd.store(GetFileType(snapshot->handle) == FILE_TYPE_DISK &&
+                            FileHasMemfdSeals(snapshot->handle), std::memory_order_relaxed);
+    description.memfd_known.store(true, std::memory_order_release);
+  }
+  return description.memfd.load(std::memory_order_acquire);
+}
+
 bool FileDescriptionIsRevocable(const DescriptorSnapshotPtr& snapshot) {
   if (!snapshot || !snapshot->description) return false;
   auto* view = snapshot->description->shared.load(std::memory_order_acquire);
