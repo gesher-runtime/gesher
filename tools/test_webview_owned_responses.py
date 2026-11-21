@@ -3,9 +3,10 @@
 """Exercise exact WebView document publication/answering and measure owned-body copies.
 
 Copies production loadDataWithBaseURL, answerRequest, blocked, readAll, headers,
-navigation, onNavigationStarting, pending-data state and ApiNavigations. Native host/JNI,
-the UI thread and file-resource loading are declared boundaries; file/byte streams,
-concurrency and Java allocations are real.
+navigation, onEvent, onNavigationStarting, pending-data state and ApiNavigations. Native
+host/JNI (a model of webview_host.cc's navigation events), the UI thread and file-resource
+loading are declared boundaries; file/byte streams, concurrency and Java allocations are
+real.
 --framework-classes runs real Android WebResourceResponse/Base64 implementations;
 otherwise small declared Android adapters keep this host preflight standalone.
 Only the pending-data read boundary is instrumented to force concurrent changes.
@@ -81,6 +82,7 @@ def main() -> None:
         'public void loadDataWithBaseURL(String baseUrl, String data, String mimeType,',
         'private void navigate(String webView2Url, String headers)',
         'private void navigate(String webView2Url, String headers, PendingData data)',
+        'public void onEvent(int type, long id, int arg, String a, String b, String c, byte[] bytes)',
         'public boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect)',
         'private void answerRequest(long id, String url, String method, String headers, int context,',
         'private boolean blocked(String url, int context)',
