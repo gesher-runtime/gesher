@@ -140,41 +140,15 @@ Each process has a 30 s deadline. Raw logs and run receipts survive failed
 outcomes. Independent review must assess actual native evidence before treating
 the primitive as qualified.
 
-## Separate actual Gesher baseline
+## Separate historical Gesher baseline (removed)
 
-The unchanged `callback_longjmp_contract.c` fixture, first committed at
-`3620f93dc27cb4b6660d8ffabeec972498d20c2b`, has 80 legal same-thread C callback
-cases: bsearch, qsort, nested outer and nearest inner destinations. Its Bionic
-reference results are not Gesher results. Relevant contracts are
-[POSIX longjmp](https://pubs.opengroup.org/onlinepubs/9799919799/functions/longjmp.html)
-and [qsort](https://pubs.opengroup.org/onlinepubs/9799919799/functions/qsort.html).
-
-The independent historical job uses genuine PR #120 artifacts from run
-`44162241853`: windows-x64 `14372697124` and arm64 `14367839302`. Both producer
-jobs succeeded. The source merge is `097fc3e5d936147162cf0379150292fd1e26d274`,
-tree `fd04f3b0e111f8e9e403a57b6e547a193c883c71`. This runtime predates the
-separate thunk-unwind prerequisite; no native fixture replaces its binaries.
-`prepare-callback-baseline.py` verifies immutable run/head/merge-tree/parents,
-producer jobs, artifact metadata, ZIP/member digests and an embedded producer
-source receipt. That embedded receipt corroborates the producer source, not a
-loader-specific binary provenance claim. The pinned original ZIP and explicit
-loader member digest bind the loader. The guest is freshly built from unchanged
-source with an authenticated, freshly extracted NDK r27c archive.
-
-`run-callback-baseline.ps1` first requires the exact trivial guest to pass through
-the same loader, then isolates cases 1–4 and the full corpus. Success requires
-exit zero, the complete guest success marker and `arm64_elf_test all passed`
-from the enclosing loader. Missing runtime exports, load failures or absent
-fixture entry are inconclusive prerequisites, including when a stub diagnostic
-precedes a later crash. Assertions, timeouts and other failures after entry
-retain distinct classifications and raw evidence; a timeout/crash alone does
-not identify its cause.
-
-This is historical characterization: **successful collection is not a callback
-semantic pass**. The receipt records those outcomes separately. Both native
-runner versions collect this evidence on topic pushes/manual runs, independently
-of the cleanup gate. The fixed historical artifacts expire, so this consumer
-is not a permanent pull-request correctness gate.
+An earlier revision of this PR also collected a historical characterization of
+the 80-case same-thread callback corpus (`callback_longjmp_contract.c`) against
+the pinned PR #120 artifacts of run `44162241853`, through
+`prepare-callback-baseline.py` and `run-callback-baseline.ps1`. Those artifacts
+expire, so the jobs would start failing for reasons unrelated to any change;
+they, the two scripts and the fixture were removed before merge. That
+collection was never a callback semantic pass.
 
 Production translator cleanup, correct Jit owner selection, guest masks/FP
 state, allowed boundary discovery and an actual translated corpus pass remain
