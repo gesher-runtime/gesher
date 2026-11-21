@@ -2,7 +2,7 @@
 #   pwsh tests/windows/run-tests.ps1 <dir with *.exe, hello.dex, hello.apk>
 param([Parameter(Mandatory)] [string] $Dir, [string] $Web3Observer = '',
   [switch] $FrameworkContractsOnly,
-  [ValidateSet('all', 'native', 'desktop', 'services', 'compilation')]
+  [ValidateSet('all', 'native', 'desktop', 'windowing', 'services', 'contracts', 'media', 'compilation')]
   [string] $Shard = 'all', [switch] $ListTracks)
 
 $ErrorActionPreference = 'Stop'

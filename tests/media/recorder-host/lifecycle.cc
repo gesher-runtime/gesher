@@ -116,9 +116,12 @@ ssize_t CaptureStream::Read(void* dst, size_t bytes, bool) {
 }
 void RaiseAudioThreadPriority(bool) {}
 
+static AudioEncoderParams observed_params;
 class HostEncoder : public AudioEncoder {
  public:
+  explicit HostEncoder(int bitrate) : bitrate_(bitrate) {}
   std::string Name() const override { return "fixture-aac"; }
+  int ConfiguredBitrate() const override { return bitrate_; }
   bool Encode(const int16_t*, size_t, int64_t pts, std::vector<EncodedPacket>* out) override {
     if (next_ == 0) out->push_back({{0x11, 0x88}, 0, false, true});  // LC, 48000 Hz, mono
     out->push_back({access_units[next_++ % access_units.size()], pts, true, false});
@@ -129,16 +132,19 @@ class HostEncoder : public AudioEncoder {
   size_t frame_size() const override { return 1024; }
 
  private:
+  int bitrate_;
   size_t next_ = 0;
 };
 
-std::unique_ptr<AudioEncoder> AudioEncoder::Create(const std::string&, const AudioEncoderParams&,
+std::unique_ptr<AudioEncoder> AudioEncoder::Create(const std::string&, const AudioEncoderParams& p,
                                                     std::string*) {
-  return std::make_unique<HostEncoder>();
+  observed_params = p;
+  return std::make_unique<HostEncoder>(p.bitrate);
 }
 class HostVideoEncoder : public VideoEncoder {
  public:
   std::string Name() const override { return "fixture-avc"; }
+  bool SetBitrate(int) override { return false; }
   bool Encode(const VideoFrame& frame, bool, std::vector<EncodedPacket>* out) override {
     if (frame.time_us >= 120000 && hold_video_limit) {
       video_limit_waiting = true;

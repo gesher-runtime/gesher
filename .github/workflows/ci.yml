@@ -16,9 +16,13 @@ permissions:
 # One current run per PR or branch. The root-specific prefix cannot collide
 # with reusable workflows, which inherit the caller's github.workflow value.
 # A release tag push has a separate group from manual runs on the same ref.
+# Runs on main are queued, not cancelled: only main saves the caches every
+# branch restores, and a cancelled main run leaves them on an older commit.
+# GitHub keeps at most one pending run per group, so a burst of merges still
+# collapses to the newest commit.
 concurrency:
   group: ci-run-${{ github.event_name == 'push' && github.ref_type == 'tag' && 'release-' || '' }}${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref_type == 'tag') }}
+  cancel-in-progress: ${{ github.event_name != 'push' && github.ref != 'refs/heads/main' }}
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -59,6 +63,8 @@ jobs:
             .github/scripts
             .github/workflows
             .github/actions/runner-route
+            .github/actions/local-build-cache
+            .github/actions/setup-build
             tools/ci
       - uses: actions/setup-node@v4
         with:
@@ -72,17 +78,29 @@ jobs:
           python3 -m pip install PyYAML==6.0.3
           python3 .github/scripts/test_automerge_workflows.py
           python3 tools/ci/test_release_workflows.py
-  app-identity-restart:
+          python3 -m unittest discover -s tools/ci -p test_cache_policy.py
+  # Short Windows host contracts share one runner per OS: separate jobs each
+  # paid for a runner, checkout and queue slot to run a minute of checks.
+  # Every check step runs even after an earlier one fails, so one failure
+  # does not hide another.
+  windows-host-contracts:
     needs: [source-identity]
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.13'
       - name: Build actual app identity restart implementation
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
@@ -91,19 +109,50 @@ jobs:
         run: |
           & .\app-identity-restart.exe
           if ($LASTEXITCODE -ne 0) { throw 'Native application identity restart gate failed' }
+      - name: Exact native reader ownership and handle reuse controls
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/test-process-reader-handles.ps1
+      - name: Release updater and control panel contracts on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/PreferredLanguagesChecks.ps1
+          tests/windows/shell/MicrogDefaultsChecks.ps1
+          tests/windows/shell/ControlPanelRefreshChecks.ps1
+          tests/windows/shell/ControlPanelIconCacheChecks.ps1
+          tests/windows/shell/ControlPanelVirtualizationChecks.ps1
+          tests/windows/shell/ControlPanelActionChecks.ps1
+          tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/UpdateChecks.ps1
+          tests/windows/shell/UpdateTransportChecks.ps1
+          tests/windows/shell/ControlPanelUpdateChecks.ps1
+          tests/windows/shell/RuntimeFileChecks.ps1
+          tests/windows/shell/InstallErrorChecks.ps1
+      - name: Production modal dialogs on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        shell: powershell
+        run: tests/windows/shell/Issue32And33Contracts.ps1
+      - name: API 37 report gate failure and selection contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          # Exercise the host's ordinary file encoding; report writers choose UTF-8.
+          PYTHONUTF8: '0'
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest discover -s tools/ci -p test_run_api37_report_tests.py -v
+      - name: API 37 SDK, NDK, ELF and source report suites
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHONUTF8: '0'
+          PYTHONIOENCODING: utf-8
+        run: python tools/ci/run_api37_report_tests.py --profile windows
   api37-report-tests:
     needs: [source-identity]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            profile: linux
-          - os: windows-2022
-            profile: windows
-          - os: windows-2025
-            profile: windows
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       # Exercise the host's ordinary file encoding; report writers choose UTF-8.
@@ -125,65 +174,20 @@ jobs:
         run: python -m unittest discover -s tools/ci -p test_run_api37_report_tests.py -v
       - name: SDK, NDK, ELF and source report suites
         shell: bash
-        run: python tools/ci/run_api37_report_tests.py --profile ${{ matrix.profile }}
-  update-contracts:
-    needs: [source-identity]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            tools/package
-            tests/windows/shell
-      - name: Release updater and control panel contracts on Windows PowerShell 5.1
-        shell: powershell
-        run: |
-          tests/windows/shell/UiLocalizationChecks.ps1
-          tests/windows/shell/PreferredLanguagesChecks.ps1
-          tests/windows/shell/MicrogDefaultsChecks.ps1
-          tests/windows/shell/ControlPanelRefreshChecks.ps1
-          tests/windows/shell/ControlPanelIconCacheChecks.ps1
-          tests/windows/shell/ControlPanelVirtualizationChecks.ps1
-          tests/windows/shell/ControlPanelActionChecks.ps1
-          tests/windows/shell/ControlPanelRequestChecks.ps1
-          tests/windows/shell/UpdateChecks.ps1
-          tests/windows/shell/UpdateTransportChecks.ps1
-          tests/windows/shell/ControlPanelUpdateChecks.ps1
-          tests/windows/shell/RuntimeFileChecks.ps1
-          tests/windows/shell/InstallErrorChecks.ps1
-      - name: Production modal dialogs on Windows PowerShell 5.1
-        timeout-minutes: 2
-        shell: powershell
-        run: tests/windows/shell/Issue32And33Contracts.ps1
-  reader-ownership:
-    needs: [source-identity]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Exact native reader ownership and handle reuse controls
-        shell: pwsh
-        run: tests/windows/test-process-reader-handles.ps1
+        run: python tools/ci/run_api37_report_tests.py --profile linux
   union-tsf:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/tsf-format-component.yml
   union-services:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/services-geocoder-worker-component.yml
   union-native-blocking:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native3-locks-blocking.yml
+  # Host-only contract tests. Builds no longer wait for them: they run
+  # alongside the build jobs and ci-required still requires them to pass.
   artifact-preflight:
-    needs: [source-identity, reader-ownership]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -202,6 +206,7 @@ jobs:
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/ci -p test_wait_for_job.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
@@ -432,13 +437,23 @@ jobs:
         run: python3 tools/test_app_crash_diagnostics.py
 
   build-framework-assets:
-    needs: [artifact-preflight, source-identity]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Only main saves; other refs restore main's entry (see .github/actions/setup-build).
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -493,7 +508,7 @@ jobs:
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [artifact-preflight, source-identity, build-framework-assets]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     env:
       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
@@ -615,10 +630,15 @@ jobs:
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: framework-assets
-          path: dist
+      # The framework assets are needed only from here on. Compiling above
+      # overlaps build-framework-assets instead of waiting for it via needs:;
+      # the receipt still requires that exact producer to have succeeded.
+      - name: Wait for and verify the framework assets producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ci/wait_for_job.py --job build-framework-assets --timeout 1800
+          python3 tools/ci/artifact_receipt.py --name framework-assets --producer build-framework-assets --destination dist
 
       - name: Collect artifacts
         run: |
@@ -727,7 +747,7 @@ jobs:
           if-no-files-found: error
 
   native3-locks-reference:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -792,65 +812,65 @@ jobs:
   # tools/framework/build.py): .github/workflows/framework.yml, which also
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     # This immutable policy, not PR-controlled workflow YAML, may use the runner.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@7a45c2468c270bfe68ee5f854aa9d4feaf2208b3
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@fcb7b44d982a8d8a9faf42a5075966d1f8f0ce23
     with:
       local-runner: true
 
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
   native-libs:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native-libs.yml
 
   # The Bluetooth backend's probe (docs/bluetooth.md): built on the Linux
   # runner, run against Windows' real APIs (no radio) and the test radio.
   bluetooth:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/bluetooth.yml
 
   # Android ELF executables run as processes (docs/exec.md): the NDK test
   # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
   exec:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/exec.yml
 
   # The core libraries' own unit tests (AOSP's cc_test modules), built for
   # the test job: .github/workflows/libs.yml.
   libs:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/libs.yml
 
   # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
   # (dynarmic) dalvikvm LoadLibrary()s for arm64-v8a apps (docs/arm64.md,
   # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
   arm64:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/arm64.yml
 
   # The native2 track's NDK test programs (shim extras, platform dlopen,
   # popular NDK libraries' self-tests): .github/workflows/native2.yml.
   native2:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/native2.yml
 
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/posix.yml
 
   # Skia, hwui and the graphics probes (docs/graphics.md):
   # .github/workflows/graphics.yml, which also runs on its own.
   graphics:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/graphics.yml
 
   # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
   # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
   angle:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/angle.yml
 
   # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
@@ -877,18 +897,28 @@ jobs:
   # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
   # .github/workflows/surfaces.yml.
   surfaces:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/surfaces.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      # Only main saves; other refs restore main's entry (see .github/actions/setup-build).
       - name: Cache AOSP sources
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Restore AOSP sources
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@v4
         with:
           path: third_party/aosp
           key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -1749,7 +1779,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
-        shard: [native, desktop, services, compilation]
+        shard: [native, desktop, windowing, services, contracts, media, compilation]
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
     timeout-minutes: 120
@@ -1909,7 +1939,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Assemble isolated capture hosts for explicit synthetic media fixtures
-        if: matrix.shard == 'services'
+        if: matrix.shard == 'media'
         shell: pwsh
         run: |
           python tools/ci/artifact_receipt.py --name media-capture-test --producer "build" --destination ci-suppliers/media_capture_test
@@ -1920,7 +1950,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run offline identity and retirement regressions
-        if: matrix.shard == 'services'
+        if: matrix.shard == 'contracts'
         shell: pwsh
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/run-microg-security.ps1 -Dir dist -EvidenceDir "${{ runner.temp }}/microg-security" | Tee-Object -FilePath microg-security-results.txt
@@ -1952,7 +1982,7 @@ jobs:
 
       - name: Upload media output captures
         uses: actions/upload-artifact@v4
-        if: ${{ always() && matrix.shard == 'services' }}
+        if: ${{ always() && matrix.shard == 'media' }}
         with:
           name: media-output-${{ matrix.os }}
           path: |
@@ -1963,7 +1993,7 @@ jobs:
 
       - name: Upload offline regression evidence
         uses: actions/upload-artifact@v4
-        if: ${{ always() && matrix.shard == 'services' }}
+        if: ${{ always() && matrix.shard == 'contracts' }}
         with:
           name: microg-security-${{ matrix.os }}
           path: |
@@ -2072,7 +2102,7 @@ jobs:
   # Ordinary Binder scope is mandatory and separate from production installer
   # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
   binder2-sg-fixtures:
-    needs: [artifact-preflight]
+    needs: [source-identity]
     uses: ./.github/workflows/binder2-sg-full-fixtures.yml
 
   binder2-sg-regression:
@@ -2164,7 +2194,7 @@ jobs:
           python3 tools/host-pthread-authority/minimum_receipt.py selftest
       - uses: ./.github/actions/setup-build
         with:
-          ccache-key: runtime
+          ccache-key: selected-minimum
       - name: Cache dynarmic, fmt and Boost headers
         id: deps
         uses: actions/cache@v4
@@ -2343,7 +2373,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, app-identity-restart, api37-report-tests, update-contracts, reader-ownership, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job

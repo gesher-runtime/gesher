@@ -44,8 +44,20 @@ runs:
         curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
           | tar -xJ -C ~/toolchain
 
+    # Only main saves the large caches. Other refs restore main's entries: a
+    # per-branch copy cannot be shared and pushed the repository over its
+    # cache quota, evicting main's caches for everyone.
     - name: Cache AOSP sources
+      if: github.ref == 'refs/heads/main'
       uses: actions/cache@v4
+      with:
+        path: third_party/aosp
+        key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+        restore-keys: aosp-
+
+    - name: Restore AOSP sources
+      if: github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@v4
       with:
         path: third_party/aosp
         key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
@@ -64,8 +76,18 @@ runs:
         fi
         sudo apt-get install -y --no-install-recommends ninja-build ccache
 
+    # Keyed per commit, so every saving run adds a new entry; only main's are kept.
     - name: Cache compiler output
+      if: github.ref == 'refs/heads/main'
       uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ccache-${{ inputs.ccache-key }}-${{ github.sha }}
+        restore-keys: ccache-${{ inputs.ccache-key }}-
+
+    - name: Restore compiler output
+      if: github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@v4
       with:
         path: ~/.cache/ccache
         key: ccache-${{ inputs.ccache-key }}-${{ github.sha }}

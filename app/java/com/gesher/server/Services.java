@@ -140,7 +140,7 @@ public final class Services {
                 new InputMethodManagerService()).asBinder());
         services.put(Context.TEXT_SERVICES_MANAGER_SERVICE, StandIn.of(
                 com.android.internal.textservice.ITextServicesManager.class,
-                new TextServicesManagerService()).asBinder());
+                new TextServicesManagerService(am, pm)).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
         UiModeManagerService uiMode = new UiModeManagerService(pm, atm, persistentAccounts);
@@ -166,6 +166,10 @@ public final class Services {
                 pm.appOps()).asBinder());
         services.put("permission_checker", StandIn.of(android.permission.IPermissionChecker.class,
                 new AppOpsPermissionChecker(pm)).asBinder());
+        // StatusBarManager (TileService.requestListeningState, requestAddTileService).
+        services.put(Context.STATUS_BAR_SERVICE, StandIn.of(
+                com.android.internal.statusbar.IStatusBarService.class,
+                new StatusBarService(pm, atm)).asBinder());
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());

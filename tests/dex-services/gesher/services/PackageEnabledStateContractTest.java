@@ -35,6 +35,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.FutureTask;
@@ -146,6 +147,12 @@ public final class PackageEnabledStateContractTest {
                 check(!Thread.holdsLock(service), "Event callback held the package monitor");
                 events.add(intent);
             });
+            // Unsafe allocation skips the listener list's field initializer.
+            if (persistent) {
+                try {
+                    set(service, "mPackageEventListeners", new CopyOnWriteArrayList<Consumer<Intent>>());
+                } catch (NoSuchFieldException oldImplementation) { }
+            }
             // Keep the public-API fixture runnable against the unchanged baseline.
             try { set(service, "mEnabledStateKiller", (Consumer<ApkPackage>)kills::add); }
             catch (NoSuchFieldException oldImplementation) { }
