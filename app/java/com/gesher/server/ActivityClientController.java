@@ -150,10 +150,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void onBackPressed(IBinder token, IRequestFinishCallback callback) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null && mAtm.backMovesTaskToBack(r)) {
-            mAtm.moveTaskToBack(r, true /* nonRoot */);
-            return;
-        }
+        if (r != null && mAtm.moveTaskToBackOnBack(r)) return;
         try {
             callback.requestFinish();
         } catch (RemoteException e) {

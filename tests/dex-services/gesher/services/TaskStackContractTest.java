@@ -1157,6 +1157,32 @@ public final class TaskStackContractTest {
         check(!backOnRoot(home, main) && homeHidden.contains((Integer) get(main, "taskId")),
                 "Back on an app opened from home did not move its task to the back");
         check(!(Boolean) get(main, "finishing"), "Back on an app opened from home finished it");
+
+        // The launcher intent from another app (not home): the root finishes.
+        Harness other = new Harness();
+        other.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER));
+        Object notHome = other.record("Root");
+        other.acknowledge("activityResumed", notHome);
+        from.set(notHome, "com.example.other");
+        java.util.Set<Integer> otherHidden = (java.util.Set<Integer>) get(other.tasks, "mHiddenTasks");
+        check(backOnRoot(other, notHome) && !otherHidden.contains((Integer) get(notHome, "taskId")),
+                "Back on a launcher-intent root another app started did not finish it");
+
+        // Not the root: an activity on top of a root home launched finishes, the task stays.
+        Harness top = new Harness();
+        top.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER));
+        Object topRoot = top.record("Root");
+        top.acknowledge("activityResumed", topRoot);
+        from.set(topRoot, "com.gesher.launcher");
+        top.start(launch("Top"));
+        Object above = top.record("Top");
+        top.acknowledge("activityResumed", above);
+        check(get(above, "taskId").equals(get(topRoot, "taskId")), "Top did not start in Root's task");
+        java.util.Set<Integer> topHidden = (java.util.Set<Integer>) get(top.tasks, "mHiddenTasks");
+        check(backOnRoot(top, above) && !topHidden.contains((Integer) get(above, "taskId")),
+                "Back on an activity above a root home launched moved its task to the back");
     }
 
     private static void pendingStacks() throws Exception {

@@ -5089,18 +5089,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * instead of finishing it (ActivityClientController.onBackPressed): the last running
      * activity of a task whose root the home screen launched with its launcher intent, as
      * Android keeps an app the user opened from home (ActivityRecord.isMainIntent,
-     * LAUNCH_SOURCE_TYPE_HOME). Any other root finishes.
+     * LAUNCH_SOURCE_TYPE_HOME). Any other root finishes. If so, moves the task to the back
+     * (decided and moved under one lock, so an activity started meanwhile is not sent back
+     * with it) and returns true.
      */
-    boolean backMovesTaskToBack(ActivityRecord r) {
+    boolean moveTaskToBackOnBack(ActivityRecord r) {
+        int taskId = r.taskId;
         synchronized (this) {
-            if (topOf(r.taskId) != r) return false;
-            for (ActivityRecord a : mActivities) {
-                if (a.taskId == r.taskId && !a.finishing && a.state != State.DESTROYED) {
-                    return HOME_PACKAGE.equals(a.launchedFromPackage) && isMainIntent(a.intent);
-                }
-            }
-            return false;
+            if (!backMovesTaskToBackLocked(r)) return false;
+            if (!mHiddenTasks.add(taskId)) return true;
+            notifyTaskStackChangedLocked();
         }
+        stopHiddenTask(taskId);
+        return true;
+    }
+
+    private boolean backMovesTaskToBackLocked(ActivityRecord r) {
+        if (topOf(r.taskId) != r) return false;
+        for (ActivityRecord a : mActivities) {
+            if (a.taskId == r.taskId && !a.finishing && a.state != State.DESTROYED) {
+                // The root itself, its task's last activity (AOSP: r == rootActivity).
+                return a == r && HOME_PACKAGE.equals(a.launchedFromPackage)
+                        && isMainIntent(a.intent);
+            }
+        }
+        return false;
     }
 
     /** ActivityRecord.isMainIntent: MAIN with LAUNCHER as its only category, no data. */
