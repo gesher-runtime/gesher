@@ -438,6 +438,59 @@ public final class SpeechRecognitionContractTest {
         return manager.getClass().getField("testRequestDispatchVisits").getLong(manager);
     }
 
+    private static void sharedAdmissionWork() throws Exception {
+        Backend backend = new Backend();
+        SpeechRecognitionManagerService manager = new SpeechRecognitionManagerService(backend, 2000);
+        Admission first = new Admission();
+        Lifetime firstToken = new Lifetime();
+        manager.createSession(SERVICE, firstToken, false, first);
+        IServiceConnection link = take(backend.bindings);
+        link.connected(SERVICE, new Engine(), null, false);
+        IRecognitionService firstClient = (IRecognitionService) take(first.events);
+        boolean observe = Boolean.getBoolean("gesher.test.speech.quota-budget");
+        long before = observe ? manager.getClass().getField("testQuotaAdmissionVisits").getLong(manager) : 0;
+        int count = 1024;
+        List<Lifetime> tokens = new ArrayList<>();
+        List<Admission> admissions = new ArrayList<>();
+        List<IRecognitionService> clients = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            Lifetime token = new Lifetime();
+            Admission admission = new Admission();
+            tokens.add(token);
+            admissions.add(admission);
+            manager.createSession(SERVICE, token, false, admission);
+        }
+        for (Admission admission : admissions) clients.add((IRecognitionService) take(admission.events));
+        check(clients.size() == count && backend.bindings.isEmpty(),
+                "many same-provider tokens remain individually admitted through one binding");
+        if (observe) {
+            long visits = manager.getClass().getField("testQuotaAdmissionVisits").getLong(manager) - before;
+            System.out.println("speech quota admission visits: " + visits + " for " + count + " tokens");
+            check(visits <= count, "quota work grows with new tokens, not all previous sessions");
+        }
+        // Retiring any subset must retain the reservation and shared binding.
+        for (int i = 0; i < count / 2; i++) clients.get(i).cancel(null, true);
+        Admission barrier = new Admission();
+        manager.createSession(SERVICE, firstToken, false, barrier);
+        check(take(barrier.events) == firstClient && backend.unbindings.isEmpty()
+                && backend.process.links() == count / 2 + 1,
+                "partial shared-session retirement keeps the remaining provider owners");
+        backend.process.die();
+        check(take(backend.unbindings) == link && backend.unbindings.isEmpty()
+                && firstToken.detached() && tokens.stream().allMatch(Lifetime::detached),
+                "process death retires every shared token and the final provider reservation");
+        // The controlled backend can reuse its caller after death. Re-admission
+        // verifies no empty UID reservation remains after final cleanup.
+        Admission retry = new Admission();
+        manager.createSession(SERVICE, new Lifetime(), false, retry);
+        IServiceConnection rebound = take(backend.bindings);
+        rebound.connected(SERVICE, new Engine(), null, false);
+        IRecognitionService replacement = (IRecognitionService) take(retry.events);
+        replacement.cancel(null, true);
+        check(take(backend.unbindings) == rebound && backend.process.detached(),
+                "final shared-owner cleanup permits a fresh independent binding");
+    }
+
     private static void pendingRequestDispatch() throws Exception {
         Backend backend = new Backend();
         SpeechRecognitionManagerService manager = new SpeechRecognitionManagerService(backend, 2000);
@@ -690,6 +743,7 @@ public final class SpeechRecognitionContractTest {
         supportAndDeath();
         unavailableAndShared();
         pendingRequestDispatch();
+        sharedAdmissionWork();
         java.lang.System.out.println("SpeechRecognitionContractTest all passed: " + checks + " checks");
     }
 }

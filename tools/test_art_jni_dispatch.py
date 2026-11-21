@@ -3,7 +3,9 @@
 
 The host fixture executes the actual generated x86-64 dispatch stubs with both
 ABIs, and injects allocation/protection/cache failures before publication. This
-does not replace the Windows ART/native-library tests.
+also extracts the production proxy representation and identity helpers. Its
+declared real-environment boundary retains ART16r4's thread/VM prefix; it is not
+an ART runtime. This does not replace the Windows ART/native-library tests.
 """
 import argparse
 import hashlib
@@ -42,12 +44,19 @@ def main():
     hook_read = re.findall(r'^\+  if \((void\* hook = [^;]+);$', patch, re.M)
     real_start, real_end = 'inline JNIEnv* Real(JNIEnv* env) {', '\n// --- stubs'
     real = source[source.index(real_start):source.index(real_end, source.index(real_start))]
+    identity = {}
+    for marker, begin, end in [
+            ('@PROXY_ENV@', 'struct ProxyEnv {', '\nstruct ProxyVm {'),
+            ('@GUEST_ENV@', 'bool IsGuestEnv(JNIEnv* env) {', '\nbool IsGuestVm(')]:
+        if source.count(begin) != 1 or source.count(end) != 1:
+            raise ValueError('proxy identity boundary changed: ' + begin)
+        identity[marker] = source[source.index(begin):source.index(end, source.index(begin))]
     if len(declaration) != 1 or len(definition) != 1 or len(hook_read) != 1:
         raise ValueError('ART hook publication boundaries changed')
     fixture = (ROOT / 'tests/native/art_jni_dispatch_host.cc.in').read_text(encoding='utf-8')
     for marker, value in [('@INSTALLER@', implementation), ('@HOOK_DECLARATION@', declaration[0]),
                           ('@HOOK_DEFINITION@', definition[0]), ('@HOOK_READ@', hook_read[0] + ';'),
-                          ('@REAL_ENV@', real)]:
+                          ('@REAL_ENV@', real), *identity.items()]:
         if fixture.count(marker) != 1:
             raise ValueError('fixture marker changed: ' + marker)
         fixture = fixture.replace(marker, value)
@@ -68,7 +77,7 @@ def main():
         failed = False
         for scenario in ['null-table', 'first-allocation', 'second-allocation',
                          'code-protection', 'table-protection', 'cache-flush',
-                         'architecture', 'success', 'concurrent']:
+                         'architecture', 'success', 'concurrent', 'proxy-identity']:
             case_folder = folder / scenario
             case_folder.mkdir()
             result = subprocess.run([str(binary), scenario], cwd=case_folder,

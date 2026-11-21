@@ -68,6 +68,9 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
     private final ScheduledThreadPoolExecutor mWorker;
     private final int mBindTimeoutMs;
     private final Map<IBinder, Session> mSessions = new HashMap<>();
+    // Logical provider reservations outlive transient binding failures. Count
+    // their owning sessions so admission does not scan every live client token.
+    private final Map<Integer, Map<ComponentName, Integer>> mConnectionsByUid = new HashMap<>();
     private record ConnectionKey(int uid, ComponentName component) {}
     private final Map<ConnectionKey, Binding> mBindings = new HashMap<>();
     private ComponentName mTemporaryComponent;
@@ -151,6 +154,8 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
             return;
         }
         mSessions.put(token, session);
+        mConnectionsByUid.computeIfAbsent(owner.uid(), uid -> new HashMap<>())
+                .merge(selected, 1, Integer::sum);
         session.callbacks.add(callback);
         session.connect(provider);
     }
@@ -302,7 +307,13 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
         void close() {
             if (closed) return;
             closed = true;
-            mSessions.remove(token, this);
+            // Death can be queued while the initial death-link setup fails,
+            // before this session has acquired any logical reservation.
+            if (mSessions.remove(token, this)) {
+                Map<ComponentName, Integer> connections = mConnectionsByUid.get(owner.uid());
+                connections.compute(component, (key, count) -> count == 1 ? null : count - 1);
+                if (connections.isEmpty()) mConnectionsByUid.remove(owner.uid());
+            }
             unlink(token, clientDeath);
             if (processDeathLink != null) unlink(processDeathLink, clientDeath);
             callbacks.clear();
@@ -568,12 +579,8 @@ public final class SpeechRecognitionManagerService extends IRecognitionServiceMa
     private boolean atConnectionLimit(int uid) {
         // A delivered endpoint retains its logical connection reservation
         // across provider loss. Only final session retirement releases it.
-        Set<ComponentName> components = new LinkedHashSet<>();
-        for (Session session : mSessions.values()) {
-            if (session.owner.uid() == uid && components.add(session.component)
-                    && components.size() >= MAX_CONNECTIONS_PER_UID) return true;
-        }
-        return false;
+        Map<ComponentName, Integer> connections = mConnectionsByUid.get(uid);
+        return connections != null && connections.size() >= MAX_CONNECTIONS_PER_UID;
     }
 
     private void attach(Session session, Provider selected) {

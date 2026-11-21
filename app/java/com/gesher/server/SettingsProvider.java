@@ -5,10 +5,12 @@
 package com.gesher.server;
 
 import android.app.ContentProviderHolder;
+import android.content.ComponentName;
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ProviderInfo;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
@@ -38,6 +40,7 @@ import java.util.regex.Pattern;
  */
 final class SettingsProvider extends ContentProvider {
     static final String AUTHORITY = Settings.AUTHORITY;
+    static final String SELECT_DEFAULT_CHECKER = "gesher:select-default-spell-checker";
 
     private static final String SYSTEM = "system";
     private static final String SECURE = "secure";
@@ -46,12 +49,128 @@ final class SettingsProvider extends ContentProvider {
     // Guarded by this. Table name -> setting -> value.
     private final Map<String, Map<String, String>> mTables = new LinkedHashMap<>();
     private final SettingsStore mStore;
+    // Older unprotected profiles could write arbitrary Secure rows. Spell-checker
+    // consent is read only from this store, whose keys require privileged writes.
+    private final Map<String, Map<String, String>> mTextTables = new LinkedHashMap<>();
+    private final SettingsStore mTextStore;
+    // Guarded by this. An automatic choice must not replace a concurrent privileged write.
+    private long mTextRevision;
+    private static final String SELECTED_CHECKER = Settings.Secure.SELECTED_SPELL_CHECKER;
+    private static final String CHECKER_SUBTYPE = Settings.Secure.SELECTED_SPELL_CHECKER_SUBTYPE;
+    private static final String CHECKER_ENABLED = Settings.Secure.SPELL_CHECKER_ENABLED;
     private static final String[] COLUMNS = {"_id", "name", "value", "is_preserved_in_restore"};
     private static final Pattern PARAM = Pattern.compile("\\s*name\\s*=\\s*\\?\\s*");
     private static final Pattern LITERAL = Pattern.compile("\\s*name\\s*=\\s*(['\"])(.*)\\1\\s*");
     private final ProviderInfo mInfo = new ProviderInfo();
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
+    private volatile java.util.function.BooleanSupplier mAutomaticCheckerSelector;
+
+    void setAutomaticCheckerSelector(java.util.function.BooleanSupplier selector) {
+        mAutomaticCheckerSelector = selector;
+    }
+
+    static final class SpellCheckerSettings {
+        final String component;
+        final String identity;
+        final int subtype;
+        final boolean enabled;
+        final long revision;
+
+        SpellCheckerSettings(String component, String identity, int subtype, boolean enabled) {
+            this(component, identity, subtype, enabled, -1);
+        }
+
+        SpellCheckerSettings(String component, String identity, int subtype, boolean enabled,
+                long revision) {
+            this.component = component;
+            this.identity = identity;
+            this.subtype = subtype;
+            this.enabled = enabled;
+            this.revision = revision;
+        }
+    }
+
+    synchronized SpellCheckerSettings spellCheckerSettings() {
+        Map<String, String> rows = mTextTables.get(SECURE);
+        String selected = rows.get(SELECTED_CHECKER);
+        int delimiter = selected == null ? -1 : selected.indexOf('\n');
+        return new SpellCheckerSettings(delimiter < 0 ? null : selected.substring(0, delimiter),
+                delimiter < 0 ? null : selected.substring(delimiter + 1),
+                number(visible(SECURE, CHECKER_SUBTYPE, rows.get(CHECKER_SUBTYPE)), 0),
+                number(rows.get(CHECKER_ENABLED), 1) == 1, mTextRevision);
+    }
+
+    /** Server-local default selection, using the same durable rows as an explicit choice. */
+    boolean initializeSpellChecker(SpellCheckerSettings expected, SpellCheckerCatalog.Entry entry) {
+        String value = "";
+        if (entry != null) {
+            if (!entry.owner.isSystemAddon()) throw new SecurityException("Automatic checker is not a system provider");
+            String identity = entry.codeIdentity();
+            if (identity == null) return false;
+            value = entry.info.getId() + "\n" + identity;
+        }
+        synchronized (this) {
+            if (mTextRevision != expected.revision) return false;
+            if (entry != null && (mPm == null || mPm.get(entry.owner.packageName) != entry.owner
+                    || mPm.isRemovalPending(entry.owner.packageName)
+                    || !entry.owner.componentEnabled(entry.info.getComponent().getClassName(),
+                            ApkPackage.ComponentKind.SERVICE))) return false;
+            if (mTextStore == null) {
+                // Single-process profiles have no persistent privileged consent store.
+                mTextTables.get(SECURE).put(SELECTED_CHECKER, value);
+                mTextTables.get(SECURE).put(CHECKER_SUBTYPE, "0");
+            } else {
+                // A newer selection row also invalidates an older subtype atomically.
+                mTextStore.put(SECURE, SELECTED_CHECKER, value, false);
+            }
+            mTextRevision++;
+        }
+        notifySetting(SECURE, SELECTED_CHECKER);
+        return true;
+    }
+
+    private static int number(String value, int fallback) {
+        try { return value == null ? fallback : Integer.parseInt(value); }
+        catch (NumberFormatException invalid) { return fallback; }
+    }
+
+    private static boolean textKey(String table, String name) {
+        return SECURE.equals(table) && (SELECTED_CHECKER.equals(name) || CHECKER_SUBTYPE.equals(name)
+                || CHECKER_ENABLED.equals(name));
+    }
+
+    private boolean checkerSubtypePredatesSelection() {
+        Map<String, String> rows = mTextTables.get(SECURE);
+        return mTextStore != null && rows.containsKey(CHECKER_SUBTYPE)
+                && rows.containsKey(SELECTED_CHECKER)
+                && mTextStore.id(SECURE, CHECKER_SUBTYPE) < mTextStore.id(SECURE, SELECTED_CHECKER);
+    }
+
+    private String visible(String table, String name, String value) {
+        if (value == null || !SECURE.equals(table)) return value;
+        if (SELECTED_CHECKER.equals(name)) {
+            int delimiter = value.indexOf('\n');
+            return delimiter < 0 ? value : value.substring(0, delimiter);
+        }
+        if (CHECKER_SUBTYPE.equals(name) && checkerSubtypePredatesSelection()) return "0";
+        return value;
+    }
+
+    private String verifiedCheckerSelection(String value) {
+        if (value == null || value.isEmpty() || "null".equals(value)) return value;
+        ComponentName component = ComponentName.unflattenFromString(value);
+        ApkPackage owner = component == null || mPm == null ? null : mPm.get(component.getPackageName());
+        if (owner == null || mPm.isRemovalPending(owner.packageName)
+                || owner.serviceInfo(component.getClassName(), PackageManager.GET_META_DATA) == null) {
+            throw new IllegalArgumentException("Spell-checker component is unavailable");
+        }
+        String identity = owner.codeIdentity();
+        if (identity == null || mPm.get(owner.packageName) != owner || mPm.isRemovalPending(owner.packageName)) {
+            throw new IllegalArgumentException("Spell-checker package changed during selection");
+        }
+        return component.flattenToShortString() + "\n" + identity;
+    }
 
     /** The provider of this process (the system server's), for {@link #putSystem}. */
     private static volatile SettingsProvider sInstance;
@@ -95,6 +214,7 @@ final class SettingsProvider extends ContentProvider {
         mCallers = pm == null ? null : new CallerIdentity(pm, atm);
         for (String table : new String[] {SYSTEM, SECURE, GLOBAL}) {
             mTables.put(table, new LinkedHashMap<>());
+            mTextTables.put(table, new LinkedHashMap<>());
         }
         Map<String, String> system = mTables.get(SYSTEM);
         system.put(Settings.System.FONT_SCALE, "1.0");
@@ -140,6 +260,11 @@ final class SettingsProvider extends ContentProvider {
         String recognizer = SpeechRecognitionManagerService.configuredDefault(pm,
                 System.getenv("GESHER_SPEECH_RECOGNIZER"));
         if (recognizer != null) mStore.addDefault(SECURE, Settings.Secure.VOICE_RECOGNITION_SERVICE, recognizer);
+        // Single-process mode executes app code in the server's own PID and cannot
+        // authenticate a privileged writer. Never expose its process to host selection state.
+        mTextStore = mPm != null && mPm.hasTransientPackageState() ? null
+                : new SettingsStore(new File(file.toString() + ".spell-checker"), mTextTables);
+        if (mPm != null && mTextStore != null) mPm.onPackageRemoval(this::removeCheckerSelection);
         ApplicationInfo ai = new ApplicationInfo();
         ai.packageName = "com.android.providers.settings";
         ai.processName = "system";
@@ -182,7 +307,11 @@ final class SettingsProvider extends ContentProvider {
     private void enforceWrite(String table, String name) {
         // Selecting the recognizer controls which APK may receive other apps' audio.
         boolean recognizer = SECURE.equals(table) && Settings.Secure.VOICE_RECOGNITION_SERVICE.equals(name);
-        if (!recognizer && !GmsSignatureSpoofing.isEnabled()) return;
+        boolean text = textKey(table, name);
+        if (text && mTextStore == null) {
+            throw new SecurityException("Spell-checker settings require the device system server");
+        }
+        if (!recognizer && !text && !GmsSignatureSpoofing.isEnabled()) return;
         if (android.os.Binder.getCallingPid() == Process.myPid()) return;
         if (mCallers == null) throw new SecurityException("Settings writer identity unavailable");
         if (mCallers.isSystem()) return;
@@ -198,12 +327,23 @@ final class SettingsProvider extends ContentProvider {
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
         if (method == null) return null;
+        if (SELECT_DEFAULT_CHECKER.equals(method)) {
+            enforceWrite(SECURE, SELECTED_CHECKER);
+            java.util.function.BooleanSupplier selector = mAutomaticCheckerSelector;
+            if (selector == null) throw new IllegalStateException("Text services are unavailable");
+            Bundle result = new Bundle();
+            result.putBoolean("result", selector.getAsBoolean());
+            return result;
+        }
         String table = table(method);
         if (!mTables.containsKey(table)) {
             return method.startsWith("GET_") ? valueBundle(null) : null;
         }
         if (method.equals("GET_" + table)) {
-            synchronized (this) { return valueBundle(mTables.get(table).get(arg)); }
+            synchronized (this) {
+                Map<String, String> rows = (textKey(table, arg) ? mTextTables : mTables).get(table);
+                return valueBundle(visible(table, arg, rows.get(arg)));
+            }
         }
         if (method.equals("PUT_" + table)) {
             enforceWrite(table, arg);
@@ -221,8 +361,8 @@ final class SettingsProvider extends ContentProvider {
         if (method.equals("LIST_" + table)) {
             ArrayList<String> all = new ArrayList<>();
             synchronized (this) {
-                for (Map.Entry<String, String> e : mTables.get(table).entrySet()) {
-                    all.add(e.getKey() + "=" + e.getValue());
+                for (Map.Entry<String, String> e : rows(table).entrySet()) {
+                    all.add(e.getKey() + "=" + visible(table, e.getKey(), e.getValue()));
                 }
             }
             Bundle result = new Bundle();
@@ -236,16 +376,65 @@ final class SettingsProvider extends ContentProvider {
         Bundle result = new Bundle(); result.putString("value", value); return result;
     }
 
+    // Caller holds this monitor. Keep arbitrary historical checker rows out of all read paths.
+    private Map<String, String> rows(String table) {
+        Map<String, String> rows = mTables.get(table);
+        if (!SECURE.equals(table)) return rows;
+        Map<String, String> result = new LinkedHashMap<>(rows);
+        result.keySet().removeIf(name -> textKey(table, name));
+        result.putAll(mTextTables.get(table));
+        return result;
+    }
+
+    private SettingsStore store(String table, String name) {
+        return textKey(table, name) ? mTextStore : mStore;
+    }
+
+    private long rowId(String table, String name) {
+        SettingsStore store = store(table, name);
+        // Single-process profiles expose the server's initial text-service rows
+        // without opening the privileged device store. Give those read-only rows
+        // distinct IDs too; a normal default-projection query must remain usable.
+        long id = store != null ? store.id(table, name)
+                : SELECTED_CHECKER.equals(name) ? 0 : CHECKER_SUBTYPE.equals(name) ? 1 : 2;
+        return textKey(table, name) ? (1L << 62) | id : id;
+    }
+
     private boolean put(String table, String name, String value, boolean existingOnly) {
         synchronized (this) {
-            if (!mStore.put(table, name, value, existingOnly)) return false;
+            if (SECURE.equals(table) && SELECTED_CHECKER.equals(name)) {
+                value = verifiedCheckerSelection(value);
+            }
+            boolean newGeneration = SECURE.equals(table) && CHECKER_SUBTYPE.equals(name)
+                    && checkerSubtypePredatesSelection();
+            if (!store(table, name).put(table, name, value, existingOnly, newGeneration)) return false;
+            if (textKey(table, name)) mTextRevision++;
         }
         notifySetting(table, name); return true;
     }
 
     private boolean remove(String table, String name) {
-        synchronized (this) { if (!mStore.remove(table, name)) return false; }
+        synchronized (this) {
+            if (SECURE.equals(table) && SELECTED_CHECKER.equals(name)
+                    && mTextTables.get(SECURE).containsKey(SELECTED_CHECKER)) {
+                mTextStore.remove(SECURE, CHECKER_SUBTYPE);
+            }
+            if (!store(table, name).remove(table, name)) return false;
+            if (textKey(table, name)) mTextRevision++;
+        }
         notifySetting(table, name); return true;
+    }
+
+    private void removeCheckerSelection(String packageName) {
+        synchronized (this) {
+            String component = visible(SECURE, SELECTED_CHECKER,
+                    mTextTables.get(SECURE).get(SELECTED_CHECKER));
+            if (component == null || !component.startsWith(packageName + "/")) return;
+            // Keep a new selection generation, invalidating the previous subtype.
+            mTextStore.put(SECURE, SELECTED_CHECKER, "", false);
+            mTextRevision++;
+        }
+        notifySetting(SECURE, SELECTED_CHECKER);
     }
 
     private void notifySetting(String table, String name) {
@@ -302,14 +491,16 @@ final class SettingsProvider extends ContentProvider {
         }
         MatrixCursor cursor = new MatrixCursor(columns);
         synchronized (this) {
-            for (Map.Entry<String, String> entry : mTables.get(args.table).entrySet()) {
+            for (Map.Entry<String, String> entry : rows(args.table).entrySet()) {
                 if (args.name != null && !args.name.equals(entry.getKey())) continue;
                 Object[] row = new Object[columns.length];
                 for (int i = 0; i < columns.length; i++) {
                     switch (columns[i]) {
-                        case "_id": row[i] = Long.toString(mStore.id(args.table, entry.getKey())); break;
+                        case "_id":
+                            row[i] = Long.toString(rowId(args.table, entry.getKey()));
+                            break;
                         case "name": row[i] = entry.getKey(); break;
-                        case "value": row[i] = entry.getValue(); break;
+                        case "value": row[i] = visible(args.table, entry.getKey(), entry.getValue()); break;
                         case "is_preserved_in_restore": row[i] = "false"; break;
                         default: throw new AssertionError(columns[i]);
                     }

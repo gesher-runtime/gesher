@@ -28,7 +28,7 @@ def main():
     for argument in ('java-home', 'framework-classes', 'core-classes', 'app-classes'):
         parser.add_argument('--' + argument, type=Path, required=True)
     parser.add_argument('--unpatched-aosp-base', type=Path)
-    parser.add_argument('--source-ref', help='Use an older broker as a dispatch-work negative control')
+    parser.add_argument('--source-ref', help='Use an older broker as an admission/dispatch negative control')
     args = parser.parse_args()
     classpath = os.pathsep.join(str(p.resolve()) for p in
                                 (args.app_classes, args.framework_classes, args.core_classes))
@@ -52,9 +52,19 @@ def main():
         if broker_text.count(counter_anchor) != 1 or broker_text.count(dispatch_anchor) != 1:
             raise RuntimeError('Cannot instrument speech request dispatch unambiguously')
         broker_text = broker_text.replace(counter_anchor,
-                counter_anchor + '\n    public volatile long testRequestDispatchVisits;')
+                counter_anchor + '\n    public volatile long testRequestDispatchVisits;'
+                + '\n    public volatile long testQuotaAdmissionVisits;')
         broker_text = broker_text.replace(dispatch_anchor,
                 dispatch_anchor + '\n                testRequestDispatchVisits++;')
+        # Observe actual quota work in the old session scan or the current UID
+        # lookup. Identical behavior assertions run against either source.
+        quota_anchor = '        for (Session session : mSessions.values()) {'
+        if quota_anchor not in broker_text:
+            quota_anchor = '        Map<ComponentName, Integer> connections = mConnectionsByUid.get(uid);'
+        if broker_text.count(quota_anchor) != 1:
+            raise RuntimeError('Cannot instrument speech quota admission unambiguously')
+        broker_text = broker_text.replace(quota_anchor,
+                quota_anchor + '\n            testQuotaAdmissionVisits++;')
         broker = work / 'SpeechRecognitionManagerService.java'
         broker.write_text(broker_text)
         sources = [broker, *[ROOT / path for path in (
@@ -78,6 +88,7 @@ def main():
                 '-XX:-BytecodeVerificationRemote', '--patch-module',
                 'jdk.unsupported=' + str(work / 'cleaner'), '-cp', str(work) + os.pathsep + classpath]
         subprocess.run([*java, '-Dgesher.test.speech.dispatch-budget=true',
+                        '-Dgesher.test.speech.quota-budget=true',
                         'com.gesher.server.SpeechRecognitionContractTest', str(binder)],
                        check=True, timeout=45)
         subprocess.run([*java, 'gesher.services.SpeechRecognizerConnectionTest', str(binder), str(looper)],

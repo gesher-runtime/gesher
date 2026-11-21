@@ -136,7 +136,22 @@ class SoftAvcEncoder : public VideoEncoder {
       return false;
     }
     Controls();
+    if (!SetBitrate(std::max(p_.bitrate, 64000))) {
+      *error = "libavc: the configured bitrate is unsupported";
+      return false;
+    }
     return true;
+  }
+
+  bool SetBitrate(int bitrate) override {
+    if (bitrate <= 0) return false;
+    ih264e_ctl_set_bitrate_ip_t ip = {};
+    ih264e_ctl_set_bitrate_op_t op = {};
+    Head(&ip.s_ive_ip, IVE_CMD_CTL_SET_BITRATE);
+    ip.s_ive_ip.u4_size = sizeof(ip);
+    ip.s_ive_ip.u4_target_bitrate = static_cast<UWORD32>(bitrate);
+    op.s_ive_op.u4_size = sizeof(op);
+    return ih264e_api_function(ctx_, &ip, &op) == IV_SUCCESS;
   }
 
   bool Encode(const VideoFrame& frame, bool key, std::vector<EncodedPacket>* out) override {
@@ -210,13 +225,6 @@ class SoftAvcEncoder : public VideoEncoder {
       ip.u4_enable_intra_4x4 = 1;
       ip.u4_enc_speed_preset = IVE_NORMAL;
       ip.u4_constrained_intra_pred = 0;
-      Ctl(&ip, &op);
-    }
-    {
-      ive_ctl_set_bitrate_ip_t ip = {};
-      ive_ctl_set_bitrate_op_t op = {};
-      Head(&ip, IVE_CMD_CTL_SET_BITRATE);
-      ip.u4_target_bitrate = static_cast<UWORD32>(std::max(p_.bitrate, 64000));
       Ctl(&ip, &op);
     }
     {

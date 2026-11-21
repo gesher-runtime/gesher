@@ -106,8 +106,15 @@ Windows without them (no location service, no Media Foundation) gets clean
   `submitRequestList` (bursts get their frame numbers at submission; the
   repeating request one per frame), `cancelRequest`, `flush`, `waitUntilIdle`,
   default request templates (preview, still, record, video snapshot), and a
-  capture thread: one frame per request, opened at the largest configured
-  size, then for each target: an ImageReader gets YUV_420_888 (I420 planes),
+  capture thread that owns the Windows device. `endConfigure` has it open the
+  device at the largest configured size (reopened when a later configuration
+  needs another size) and waits for that, up to 10 s, as cameraserver
+  configures the streams before the session's `onConfigured`: the open (a
+  cold Media Foundation source reader with its video processing has taken
+  over 2 s on CI runners) does not delay the first frame of a request made
+  after `onConfigured`. An open that fails there is retried by the first
+  request, which reports the failure. Then one frame per request, for each
+  target: an ImageReader gets YUV_420_888 (I420 planes),
   RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
   reader's size; another surface with a native window gets RGBA through
   `ANativeWindow_lock`. Then `onCaptureStarted` and the result

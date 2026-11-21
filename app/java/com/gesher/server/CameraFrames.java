@@ -23,8 +23,11 @@ public final class CameraFrames {
 
     /** Delivered. */
     public static final int OK = 0;
-    /** The surface cannot take frames (no native window, or a JPEG reader and no JPEG). */
+    /** The reader cannot take this format (for example, a JPEG reader without JPEG bytes). */
     public static final int UNSUPPORTED = 1;
+
+    /** Android NO_INIT: the surface consumer is closed or unavailable. */
+    public static final int NO_INIT = -19;
 
     /** Hands {@code nv12} (w x h) to {@code surface}; {@code jpeg} for a JPEG reader. */
     public static int deliver(Surface surface, byte[] nv12, int w, int h, long timestampNs,
