@@ -8,16 +8,6 @@ import com.gesher.app.NativeLibs;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
-import java.nio.file.LinkOption;
-import java.nio.file.Path;
-import java.nio.file.attribute.FileTime;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
 
 /** Fixed addon slots; all checks precede manifest parsing and app code loading. */
 public final class MicrogAddons {
@@ -37,106 +27,24 @@ public final class MicrogAddons {
     }
 
     /**
-     * Configures {@code nativeLibraryDir} / {@code primaryCpuAbi} and extracts native
-     * libraries for a staged {@code priv-app} addon when its directory is missing or out
-     * of sync with the APK.
+     * The package manager's native-library setup for a staged {@code priv-app} addon, as
+     * at a system package scan: the APK's libraries for its best ABI in
+     * {@code <code dir>/lib/<isa>} (stale ones removed), and the package's
+     * {@code nativeLibraryDir} and {@code primaryCpuAbi}. The package is changed only
+     * once its directory is ready; returns how many libraries the APK has.
      */
     static int prepareNativeLibraries(ApkPackage pkg) throws IOException {
-        File apkFile = new File(pkg.apkPath);
-        File codeDir = apkFile.getParentFile();
-        if (codeDir == null) return 0;
+        File codeDir = new File(pkg.apkPath).getParentFile();
+        if (codeDir == null) throw new IOException("No code directory: " + pkg.apkPath);
         String abi = NativeLibs.abiFor(pkg.apkPath);
-        File libDir = new File(codeDir, "lib/"
-                + NativeLibs.instructionSetDir(abi != null ? abi : NativeLibs.ABI));
-        pkg.setNativeLibraryDir(libDir.getPath());
+        String libDir = new File(codeDir, "lib/"
+                + NativeLibs.instructionSetDir(abi != null ? abi : NativeLibs.ABI)).getPath();
+        // Without native code this only clears libraries an earlier release left.
+        int count = NativeLibs.syncDirectory(pkg.apkPath, libDir,
+                abi != null ? abi : NativeLibs.ABI);
+        pkg.setNativeLibraryDir(libDir);
         pkg.setPrimaryCpuAbi(abi);
-        if (abi == null) return 0;
-        return syncNativeLibraries(apkFile, libDir, abi);
-    }
-
-    static int syncNativeLibraries(File apkFile, File libDir, String abi) throws IOException {
-        Path libPath = libDir.toPath();
-        Path libRoot = libPath.getParent();
-        if ((libRoot != null && Files.isSymbolicLink(libRoot))
-                || Files.isSymbolicLink(libPath)
-                || (Files.exists(libPath, LinkOption.NOFOLLOW_LINKS)
-                        && !Files.isDirectory(libPath, LinkOption.NOFOLLOW_LINKS))) {
-            throw new IOException("Refusing non-directory native library path: " + libDir);
-        }
-
-        String prefix = "lib/" + abi + "/";
-        Map<String, Long> expected = new HashMap<>();
-        try (ZipFile zip = new ZipFile(apkFile)) {
-            for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
-                ZipEntry entry = e.nextElement();
-                String name = entry.getName();
-                if (entry.isDirectory() || !name.startsWith(prefix) || !name.endsWith(".so")
-                        || name.indexOf('/', prefix.length()) >= 0) {
-                    continue;
-                }
-                expected.put(name.substring(prefix.length()), entry.getSize());
-            }
-        }
-        if (expected.isEmpty()) return 0;
-
-        long apkMtime = Files.getLastModifiedTime(apkFile.toPath()).toMillis();
-        if (isNativeLibDirCurrent(libPath, expected, apkMtime)) {
-            return 0;
-        }
-
-        int count = NativeLibs.extract(apkFile.getPath(), libDir.getPath(), abi);
-        if (apkMtime > 0) {
-            FileTime stamp = FileTime.fromMillis(apkMtime);
-            for (String leaf : expected.keySet()) {
-                Path out = libPath.resolve(leaf);
-                if (Files.isRegularFile(out, LinkOption.NOFOLLOW_LINKS)) {
-                    Files.setLastModifiedTime(out, stamp);
-                }
-            }
-        }
-        if (Files.isDirectory(libPath, LinkOption.NOFOLLOW_LINKS)) {
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(libPath)) {
-                for (Path entry : stream) {
-                    String name = entry.getFileName().toString();
-                    if (name.endsWith(".so") && !expected.containsKey(name)
-                            && Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) {
-                        Files.deleteIfExists(entry);
-                    }
-                }
-            }
-        }
         return count;
-    }
-
-    private static boolean isNativeLibDirCurrent(Path libPath, Map<String, Long> expected,
-            long apkMtime) throws IOException {
-        if (apkMtime <= 0 || !Files.isDirectory(libPath, LinkOption.NOFOLLOW_LINKS)) {
-            return false;
-        }
-        for (Map.Entry<String, Long> e : expected.entrySet()) {
-            String leaf = e.getKey();
-            long size = e.getValue();
-            if (size < 0 || leaf.indexOf('\\') >= 0 || leaf.indexOf(':') >= 0
-                    || ".".equals(leaf) || "..".equals(leaf)) {
-                return false;
-            }
-            Path candidate = libPath.resolve(leaf);
-            if (!Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS)
-                    || Files.size(candidate) != size
-                    || Files.getLastModifiedTime(candidate, LinkOption.NOFOLLOW_LINKS).toMillis()
-                            != apkMtime) {
-                return false;
-            }
-        }
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(libPath)) {
-            for (Path entry : stream) {
-                String name = entry.getFileName().toString();
-                if (name.endsWith(".so") && !expected.containsKey(name)) {
-                    return false;
-                }
-            }
-        }
-        return true;
     }
 
     /** Packaging preflight, with no Binder connection, account or network traffic. */

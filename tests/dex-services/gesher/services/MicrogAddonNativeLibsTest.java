@@ -6,7 +6,6 @@ package gesher.services;
 
 import com.gesher.server.ApkPackage;
 import com.gesher.server.MicrogAddons;
-import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -24,7 +23,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import sun.misc.Unsafe;
 
-/** Tests idempotent native-library extraction and stale cleanup for staged microG addons. */
+/** The package-scan native-library setup of staged microG addons (MicrogAddons). */
 public final class MicrogAddonNativeLibsTest {
     private static int checks;
 
@@ -96,13 +95,12 @@ public final class MicrogAddonNativeLibsTest {
 
         Method prepareNativeLibraries = method(MicrogAddons.class, "prepareNativeLibraries",
                 ApkPackage.class);
-        Method syncNativeLibraries = method(MicrogAddons.class, "syncNativeLibraries",
-                File.class, File.class, String.class);
         Field primaryCpuAbiField = field(ApkPackage.class, "mPrimaryCpuAbi");
+        Field nativeLibraryDirField = field(ApkPackage.class, "mNativeLibraryDir");
 
         Path root = Files.createTempDirectory("gesher-microg-native-libs-");
         try {
-            // 1. Multi-ABI APK: prefers x86_64 over arm64-v8a and extracts x86_64 payload.
+            // 1. Multi-ABI APK: x86_64 preferred, its libraries in <code dir>/lib/x86_64.
             Path gmsDir = root.resolve("priv-app/com.google.android.gms");
             Path gmsApk = gmsDir.resolve("base.apk");
             byte[] x64Conscrypt = bytes("x64-conscrypt-payload-v1");
@@ -114,13 +112,11 @@ public final class MicrogAddonNativeLibsTest {
             multiAbi.put("lib/x86_64/libconscrypt.so", x64Conscrypt);
             multiAbi.put("lib/x86_64/libcronet.so", x64Cronet);
             writeZip(gmsApk, multiAbi);
-            long initialMtimeMs = 1_700_000_100_000L;
-            Files.setLastModifiedTime(gmsApk, FileTime.fromMillis(initialMtimeMs));
 
             ApkPackage gmsPkg = allocateApkPackage(unsafe, gmsApk.toString());
-            int extracted = (Integer) invoke(prepareNativeLibraries, null, gmsPkg);
+            int prepared = (Integer) invoke(prepareNativeLibraries, null, gmsPkg);
             Path expectedX64Dir = gmsDir.resolve("lib/x86_64");
-            check(extracted == 2, "Expected 2 x86_64 libs extracted, got " + extracted);
+            check(prepared == 2, "Expected 2 x86_64 libraries, got " + prepared);
             check(expectedX64Dir.toString().equals(gmsPkg.nativeLibraryDir()),
                     "Expected nativeLibraryDir=" + expectedX64Dir + ", got " + gmsPkg.nativeLibraryDir());
             check("x86_64".equals(primaryCpuAbiField.get(gmsPkg)),
@@ -130,48 +126,35 @@ public final class MicrogAddonNativeLibsTest {
             check(Arrays.equals(x64Cronet, Files.readAllBytes(expectedX64Dir.resolve("libcronet.so"))),
                     "Extracted libcronet.so must match x86_64 entry");
 
-            // 2. Idempotent second run returns 0 and preserves files.
-            int secondRun = (Integer) invoke(prepareNativeLibraries, null, gmsPkg);
-            check(secondRun == 0, "Expected idempotent second run to extract 0 libs, got " + secondRun);
-            check(Arrays.equals(x64Cronet, Files.readAllBytes(expectedX64Dir.resolve("libcronet.so"))),
-                    "Idempotent run must keep libcronet.so intact");
+            // 2. A second startup keeps identical files (a client may map them).
+            FileTime old = FileTime.fromMillis(1_600_000_000_000L);
+            Files.setLastModifiedTime(expectedX64Dir.resolve("libcronet.so"), old);
+            invoke(prepareNativeLibraries, null, gmsPkg);
+            check(old.equals(Files.getLastModifiedTime(expectedX64Dir.resolve("libcronet.so"))),
+                    "Identical libcronet.so must not be rewritten");
 
-            // 3a. Missing .so recovery.
-            Files.delete(expectedX64Dir.resolve("libcronet.so"));
-            int afterDelete = (Integer) invoke(prepareNativeLibraries, null, gmsPkg);
-            check(afterDelete == 2, "Deleting an extracted lib must trigger re-extraction");
-            check(Arrays.equals(x64Cronet, Files.readAllBytes(expectedX64Dir.resolve("libcronet.so"))),
-                    "Re-extraction must restore deleted libcronet.so");
-
-            // 3b. Truncated .so recovery.
-            Files.write(expectedX64Dir.resolve("libconscrypt.so"), bytes("short"));
-            int afterTruncate = (Integer) invoke(prepareNativeLibraries, null, gmsPkg);
-            check(afterTruncate == 2, "Truncating an extracted lib must trigger re-extraction");
+            // 3. A modified library (same size) is restored from the verified APK.
+            byte[] tampered = x64Conscrypt.clone();
+            tampered[0] ^= 1;
+            Files.write(expectedX64Dir.resolve("libconscrypt.so"), tampered);
+            invoke(prepareNativeLibraries, null, gmsPkg);
             check(Arrays.equals(x64Conscrypt, Files.readAllBytes(expectedX64Dir.resolve("libconscrypt.so"))),
-                    "Re-extraction must restore truncated libconscrypt.so");
+                    "Modified libconscrypt.so must be restored");
 
-            // 4. Replaced APK with older mtime + same-size modified content + stale .so cleanup.
-            byte[] x64ConscryptV2 = bytes("x64-conscrypt-payload-v2");
-            check(x64ConscryptV2.length == x64Conscrypt.length, "Test fixture requires equal size");
+            // 4. An updated APK replaces libraries and removes ones it no longer has.
             byte[] x64CronetV2 = bytes("x64-cronet-v2");
             Map<String, byte[]> upgraded = new LinkedHashMap<>();
             upgraded.put("classes.dex", bytes("dex2"));
-            upgraded.put("lib/x86_64/libconscrypt.so", x64ConscryptV2);
+            upgraded.put("lib/x86_64/libconscrypt.so", x64Conscrypt);
             upgraded.put("lib/x86_64/libcronet_v2.so", x64CronetV2);
             writeZip(gmsApk, upgraded);
-            long olderMtimeMs = initialMtimeMs - 60_000L;
-            Files.setLastModifiedTime(gmsApk, FileTime.fromMillis(olderMtimeMs));
-
-            int afterReplace = (Integer) invoke(prepareNativeLibraries, null, gmsPkg);
-            check(afterReplace == 2, "Replaced APK with older mtime must re-extract");
-            check(Arrays.equals(x64ConscryptV2, Files.readAllBytes(expectedX64Dir.resolve("libconscrypt.so"))),
-                    "Same-size replaced libconscrypt.so must be updated");
+            check((Integer) invoke(prepareNativeLibraries, null, gmsPkg) == 2, "Updated APK has 2 libraries");
             check(Arrays.equals(x64CronetV2, Files.readAllBytes(expectedX64Dir.resolve("libcronet_v2.so"))),
                     "New libcronet_v2.so must be extracted");
             check(!Files.exists(expectedX64Dir.resolve("libcronet.so")),
                     "Stale libcronet.so must be removed after APK update");
 
-            // 5. ARM64-only APK extracts into lib/arm64 and sets primaryCpuAbi=arm64-v8a.
+            // 5. ARM64-only APK: lib/arm64 and primaryCpuAbi=arm64-v8a.
             Path armDir = root.resolve("priv-app/com.android.vending");
             Path armApk = armDir.resolve("base.apk");
             byte[] armPayload = bytes("arm64-only-lib");
@@ -179,39 +162,40 @@ public final class MicrogAddonNativeLibsTest {
             ApkPackage armPkg = allocateApkPackage(unsafe, armApk.toString());
             int armCount = (Integer) invoke(prepareNativeLibraries, null, armPkg);
             Path expectedArmDir = armDir.resolve("lib/arm64");
-            check(armCount == 1, "Expected 1 arm64 lib extracted, got " + armCount);
+            check(armCount == 1, "Expected 1 arm64 library, got " + armCount);
             check(expectedArmDir.toString().equals(armPkg.nativeLibraryDir()),
                     "Expected arm64 nativeLibraryDir=" + expectedArmDir + ", got " + armPkg.nativeLibraryDir());
-            check("arm64-v8a".equals(primaryCpuAbiField.get(armPkg)),
-                    "Expected primaryCpuAbi=arm64-v8a");
+            check("arm64-v8a".equals(primaryCpuAbiField.get(armPkg)), "Expected primaryCpuAbi=arm64-v8a");
             check(Arrays.equals(armPayload, Files.readAllBytes(expectedArmDir.resolve("libarmhelper.so"))),
                     "ARM64 library content mismatch");
 
-            // 6. No-native-code APK sets fallback x86_64 dir, null ABI, and creates no lib dir.
+            // 6. No native code: the code directory's lib/x86_64, no ABI, no directory made.
             Path gsfDir = root.resolve("priv-app/com.google.android.gsf");
             Path gsfApk = gsfDir.resolve("base.apk");
             writeZip(gsfApk, Map.of("classes.dex", bytes("dex")));
             ApkPackage gsfPkg = allocateApkPackage(unsafe, gsfApk.toString());
-            int gsfCount = (Integer) invoke(prepareNativeLibraries, null, gsfPkg);
-            check(gsfCount == 0, "Expected 0 libs for no-native APK");
+            check((Integer) invoke(prepareNativeLibraries, null, gsfPkg) == 0, "No libraries for a Java-only APK");
             check(gsfDir.resolve("lib/x86_64").toString().equals(gsfPkg.nativeLibraryDir()),
-                    "Expected fallback nativeLibraryDir for no-native APK");
-            check(primaryCpuAbiField.get(gsfPkg) == null,
-                    "Expected primaryCpuAbi=null for no-native APK");
-            check(!Files.exists(gsfDir.resolve("lib")),
-                    "No-native APK must not create lib directory");
+                    "Expected code-directory nativeLibraryDir for a Java-only APK");
+            check(primaryCpuAbiField.get(gsfPkg) == null, "Expected primaryCpuAbi=null for a Java-only APK");
+            check(!Files.exists(gsfDir.resolve("lib")), "Java-only APK must not create a lib directory");
 
-            // 7. Reject non-directory target path.
-            Path badDir = root.resolve("priv-app/bad/lib/x86_64");
-            Files.createDirectories(badDir.getParent());
-            Files.write(badDir, bytes("not-a-directory"));
+            // 7. A refused library path leaves the package's defaults untouched.
+            Path badDir = root.resolve("priv-app/bad");
+            Path badApk = badDir.resolve("base.apk");
+            writeZip(badApk, Map.of("lib/x86_64/libbad.so", bytes("bad")));
+            Files.createDirectories(badDir.resolve("lib"));
+            Files.write(badDir.resolve("lib/x86_64"), bytes("not-a-directory"));
+            ApkPackage badPkg = allocateApkPackage(unsafe, badApk.toString());
             boolean rejected = false;
             try {
-                invoke(syncNativeLibraries, null, gmsApk.toFile(), badDir.toFile(), "x86_64");
+                invoke(prepareNativeLibraries, null, badPkg);
             } catch (IOException expected) {
                 rejected = true;
             }
             check(rejected, "Non-directory native library target must throw IOException");
+            check(nativeLibraryDirField.get(badPkg) == null && primaryCpuAbiField.get(badPkg) == null,
+                    "A refused directory must not become the package's nativeLibraryDir");
 
             System.out.println("MicrogAddonNativeLibsTest all passed (" + checks + " checks)");
         } finally {

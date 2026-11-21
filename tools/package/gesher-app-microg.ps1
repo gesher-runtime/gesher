@@ -21,50 +21,10 @@ $RuntimeDir = if ($RuntimeDir) { [IO.Path]::GetFullPath($RuntimeDir) } else { $s
 $marker = Join-Path $ProfileRoot 'microg.enabled'
 $packages = 'com.google.android.gms', 'com.android.vending', 'com.google.android.gsf'
 function Initialize-MicrogDefaults([string] $ProfileRoot) {
-    # Pre-configure microG settings (Checkin & GCM enabled out of the box)
-    $prefsDir = Join-Path $ProfileRoot 'data/data/com.google.android.gms/shared_prefs'
-    New-Item -ItemType Directory -Force -Path $prefsDir | Out-Null
-
-    $checkinXml = @"
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <boolean name="checkin_enable_service" value="true" />
-</map>
-"@
-    if (-not (Test-Path -LiteralPath (Join-Path $prefsDir 'checkin.xml'))) {
-    Set-Content -LiteralPath (Join-Path $prefsDir 'checkin.xml') -Value $checkinXml -Encoding UTF8
-    }
-
-    $gcmXml = @"
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <boolean name="gcm_enable_mcs_service" value="true" />
-</map>
-"@
-    if (-not (Test-Path -LiteralPath (Join-Path $prefsDir 'gcm.xml'))) {
-    Set-Content -LiteralPath (Join-Path $prefsDir 'gcm.xml') -Value $gcmXml -Encoding UTF8
-    }
-
-    $settingsXml = @"
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <boolean name="checkin_enable_service" value="true" />
-    <boolean name="gcm_enable_mcs_service" value="true" />
-</map>
-
-"@
-    if (-not (Test-Path -LiteralPath (Join-Path $prefsDir 'org.microg.gms.settings_preferences.xml'))) {
-    Set-Content -LiteralPath (Join-Path $prefsDir 'org.microg.gms.settings_preferences.xml') -Value $settingsXml -Encoding UTF8
-    }
-
-    # microG's SettingsProvider reads Check-in/GCM toggles via PreferenceManager's
-    # default SharedPreferences file (com.google.android.gms_preferences.xml).
-    $defaultPrefsPath = Join-Path $prefsDir 'com.google.android.gms_preferences.xml'
-    if (-not (Test-Path -LiteralPath $defaultPrefsPath)) {
-        [IO.File]::WriteAllText($defaultPrefsPath, $settingsXml, [Text.UTF8Encoding]::new($false))
-    }
-
-    # Pre-seed runtime permissions for official microG
+    # Google device registration (Check-in) and Cloud Messaging stay microG's own
+    # opt-in settings: this helper never writes microG's preferences.
+    # Default runtime grants for the verified official microG priv-app, as a system
+    # image may pre-grant a privileged app; existing user decisions are kept.
     $permFile = Join-Path $ProfileRoot 'data/system/runtime-permissions'
     $permLines = @()
     if (Test-Path -LiteralPath $permFile) {
@@ -127,16 +87,21 @@ if ($Remove) {
             $file = Join-Path $ProfileRoot "system/priv-app/$package/$name"
             if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
         }
-        foreach ($isa in 'x86_64', 'arm64') {
-            $libDir = Join-Path $ProfileRoot "system/priv-app/$package/lib/$isa"
-            if (Test-Path -LiteralPath $libDir -PathType Container) {
-                $dirItem = Get-Item -LiteralPath $libDir -Force
-                if (-not ($dirItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                    Get-ChildItem -LiteralPath $libDir -Filter '*.so' -File -ErrorAction SilentlyContinue |
-                        Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
-                        Remove-Item -Force
-                }
+        # Libraries startup extracted from these APKs; only regular .so files in
+        # plain (non-reparse) directories, and those directories only once empty.
+        $libRoot = Join-Path $ProfileRoot "system/priv-app/$package/lib"
+        if ((Test-Path -LiteralPath $libRoot -PathType Container) -and
+                -not ((Get-Item -LiteralPath $libRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            foreach ($isa in 'x86_64', 'arm64') {
+                $libDir = Join-Path $libRoot $isa
+                if (-not (Test-Path -LiteralPath $libDir -PathType Container)) { continue }
+                if ((Get-Item -LiteralPath $libDir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+                Get-ChildItem -LiteralPath $libDir -Filter '*.so' -File -Force |
+                    Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+                    Remove-Item -Force
+                if (-not @(Get-ChildItem -LiteralPath $libDir -Force).Count) { Remove-Item -LiteralPath $libDir }
             }
+            if (-not @(Get-ChildItem -LiteralPath $libRoot -Force).Count) { Remove-Item -LiteralPath $libRoot }
         }
     }
     Write-Host (Get-GesherText 'microg_removed')

@@ -15,6 +15,7 @@ import static com.gesher.app.locale.UiText.text;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -198,10 +199,19 @@ public final class SystemServer {
                     }
                 }
                 if (fromPrivApp) {
-                    int libs = MicrogAddons.prepareNativeLibraries(p);
-                    if (libs > 0) {
-                        log("microg addon " + name + ": extracted " + libs + " native lib(s) to "
-                                + p.nativeLibraryDir());
+                    // As the package manager's scan of a system package: its libraries
+                    // on disk for every process that loads its code (Dynamite modules).
+                    try {
+                        int libs = MicrogAddons.prepareNativeLibraries(p);
+                        if (libs > 0) {
+                            log("microg addon " + name + ": " + libs + " native "
+                                    + (libs == 1 ? "library" : "libraries") + " in "
+                                    + p.nativeLibraryDir());
+                        }
+                    } catch (IOException e) {
+                        // The package keeps its own per-launch extraction (Main).
+                        log("microg addon " + name + ": native libraries not prepared: "
+                                + e.getMessage());
                     }
                 }
                 packages.removeIf(old -> name.equals(old.packageName));

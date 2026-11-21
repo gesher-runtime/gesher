@@ -5,6 +5,7 @@ import com.gesher.app.NativeLibs;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.zip.ZipEntry;
@@ -68,10 +69,95 @@ public final class NativeLibraryPathsTest {
         check(NativeLibs.ABI.equals(NativeLibs.abiFor(arm.toString())), "Replaced APK is rescanned");
     }
 
+    /** Re-extraction keeps identical files; a system code directory is synced exactly. */
+    private static void sync(Path root) throws IOException {
+        Path apk = root.resolve("sync.apk");
+        archive(apk, "lib/x86_64/libkeep.so", "lib/x86_64/libother.so");
+        Path dir = root.resolve("sync/lib/x86_64");
+        check(NativeLibs.syncDirectory(apk.toString(), dir.toString(), "x86_64") == 2,
+                "Sync extracts every selected library");
+        Path keep = dir.resolve("libkeep.so");
+        FileTime old = FileTime.fromMillis(1_600_000_000_000L);
+        Files.setLastModifiedTime(keep, old);
+        Object identity = Files.readAttributes(keep,
+                java.nio.file.attribute.BasicFileAttributes.class).fileKey();
+        check(NativeLibs.extract(apk.toString(), dir.toString(), "x86_64") == 2,
+                "Identical libraries still count as extracted");
+        check(old.equals(Files.getLastModifiedTime(keep)), "Identical library is not rewritten");
+        check(identity == null || identity.equals(Files.readAttributes(keep,
+                java.nio.file.attribute.BasicFileAttributes.class).fileKey()),
+                "Identical library keeps its file");
+        Files.write(keep, new byte[] {9, 9, 9, 9, 9});
+        Files.setLastModifiedTime(keep, old);
+        NativeLibs.extract(apk.toString(), dir.toString(), "x86_64");
+        check(Arrays.equals(PAYLOAD, Files.readAllBytes(keep)), "Same-size modified library is replaced");
+        Files.write(keep, new byte[] {1, 2, 3, 4, 5, 6});
+        NativeLibs.extract(apk.toString(), dir.toString(), "x86_64");
+        check(Arrays.equals(PAYLOAD, Files.readAllBytes(keep)), "Longer modified library is replaced");
+        Files.delete(keep);
+        NativeLibs.extract(apk.toString(), dir.toString(), "x86_64");
+        check(Arrays.equals(PAYLOAD, Files.readAllBytes(keep)), "Missing library is restored");
+
+        Files.write(dir.resolve("libstale.so"), PAYLOAD);
+        Files.write(dir.resolve("notes.txt"), PAYLOAD);
+        Files.createDirectory(dir.resolve("nested.so"));
+        archive(apk, "lib/x86_64/libkeep.so");
+        check(NativeLibs.syncDirectory(apk.toString(), dir.toString(), "x86_64") == 1,
+                "Sync counts the APK's libraries");
+        check(Files.exists(keep), "Listed library kept");
+        check(!Files.exists(dir.resolve("libother.so")) && !Files.exists(dir.resolve("libstale.so")),
+                "Libraries the APK no longer has are removed");
+        check(Files.exists(dir.resolve("notes.txt")) && Files.isDirectory(dir.resolve("nested.so")),
+                "Only regular .so files are removed");
+
+        archive(apk, "classes.dex");
+        check(NativeLibs.syncDirectory(apk.toString(), dir.toString(), "x86_64") == 0,
+                "APK without native code has no libraries");
+        check(!Files.exists(keep), "Libraries of an earlier native release are removed");
+        Path fresh = root.resolve("fresh/lib/x86_64");
+        check(NativeLibs.syncDirectory(apk.toString(), fresh.toString(), "x86_64") == 0
+                && !Files.exists(fresh.getParent()), "No directory is created without libraries");
+
+        archive(apk, "lib/x86_64/libkeep.so");
+        Path fileTarget = root.resolve("file-target/lib/x86_64");
+        Files.createDirectories(fileTarget.getParent());
+        Files.write(fileTarget, PAYLOAD);
+        Path fileParent = root.resolve("file-parent/lib");
+        Files.createDirectories(fileParent.getParent());
+        Files.write(fileParent, PAYLOAD);
+        for (Path refused : new Path[] {fileTarget, fileParent.resolve("x86_64")}) {
+            boolean rejected = false;
+            try { NativeLibs.syncDirectory(apk.toString(), refused.toString(), "x86_64"); }
+            catch (IOException expected) { rejected = true; }
+            check(rejected, "Non-directory library path refused: " + refused);
+        }
+        check(Arrays.equals(PAYLOAD, Files.readAllBytes(fileTarget)), "Refused file unchanged");
+
+        Path elsewhere = Files.createDirectories(root.resolve("elsewhere"));
+        Path link = root.resolve("linked/lib/x86_64");
+        Files.createDirectories(link.getParent());
+        boolean linked;
+        try {
+            Files.createSymbolicLink(link, elsewhere);
+            linked = true;
+        } catch (IOException | UnsupportedOperationException noPrivilege) {
+            linked = false;  // Windows without the symbolic-link privilege
+        }
+        if (linked) {
+            boolean rejected = false;
+            try { NativeLibs.syncDirectory(apk.toString(), link.toString(), "x86_64"); }
+            catch (IOException expected) { rejected = true; }
+            check(rejected, "Linked library directory refused");
+            check(!Files.exists(elsewhere.resolve("libkeep.so")), "Nothing written through a link");
+            Files.delete(link);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         Path root = Files.createTempDirectory("gesher-native-library-paths-");
         try {
             discovery(root);
+            sync(root);
             Path apk = root.resolve("fixture.apk");
             Path destination = Files.createDirectory(root.resolve("lib"));
             archive(apk, "lib/arm64-v8a/libother.so", "lib/x86_64/libvalid.so",
