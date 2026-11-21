@@ -273,16 +273,54 @@ function CheckOrdered([string] $Name, [string] $Out, [string[]] $Expect, [int] $
 # destroys the activity (PauseActivityItem, StopActivityItem,
 # DestroyActivityItem) and ends the process (scheduleExit). A second run asks
 # the activity to finish() itself.
+# Keep the exact handles from each successful Start-Process. Every later throw
+# (including fixture prerequisites) must retire the manual device before returning.
+$manualServicesOwned = [Collections.Generic.List[object]]::new()
+$manualServicesFailure = $null
+$manualServicesBinder = $env:GESHER_BINDER
+function Own-ManualService([Diagnostics.Process] $Process, [string] $Role) {
+  # Retain the object even if reading its identity fails; the finally must still
+  # try to retire this successful start, and must report any unproved cleanup.
+  $record = [pscustomobject]@{ Process=$Process; Handle=$null; Role=$Role; Pid=$null; Created=$null }
+  $manualServicesOwned.Add($record)
+  $record.Handle = $Process.SafeHandle
+  $record.Pid = $Process.Id
+  $record.Created = $Process.StartTime.ToUniversalTime().ToFileTimeUtc()
+  Write-Host "SERVICE_FIXTURE_OWN role=$Role pid=$($record.Pid) created=$($record.Created)"
+}
+try {
 $device = "apps-$PID"
 $env:GESHER_BINDER = $device
 $binderd = Start-Process "$Dir/binderd.exe" -ArgumentList $device -PassThru -NoNewWindow `
   -RedirectStandardOutput "$logs/apps-binderd.out" -RedirectStandardError "$logs/apps-binderd.log"
+Own-ManualService $binderd binderd
 $servicemanager = Start-ReadyServiceManager $binderd $device "$logs/apps-servicemanager" "$logs/apps-binderd.log"
+Own-ManualService $servicemanager servicemanager
 $dvmApp = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false')
+function SettingsFixtureSetup([string[]] $Arguments) {
+  $savedUid = $env:GESHER_UID; $savedBinderUid = $env:GESHER_BINDER_UID
+  try {
+    $env:GESHER_UID = '1000'; $env:GESHER_BINDER_UID = '1000'
+    RunTimed "$Dir/dalvikvm.exe" ($dvmApp + '-cp', (NoDrive "$Dir/services-tests.dex"),
+      'gesher.services.FixtureSettingsSetup' + $Arguments) 90
+  } finally {
+    $env:GESHER_UID = $savedUid; $env:GESHER_BINDER_UID = $savedBinderUid
+  }
+}
+# A declared special permission is not a runtime/signature grant. Commit the
+# actual fixture's WRITE_SETTINGS AppOp before the server loads its policy snapshot.
+$settingsSetup = SettingsFixtureSetup @((NoDrive "$Dir/components.apk"))
+if ($LASTEXITCODE -ne 0 -or $settingsSetup -notmatch 'FixtureSettingsSetup persisted special access UID ([0-9]+) package com\.gesher\.components') {
+  throw "Components special-access setup failed: $settingsSetup"
+}
+$componentsUid = [int]$Matches[1]
+if ($componentsUid -lt 10000 -or $componentsUid -gt 19999) { throw 'Components fixture requires an ordinary admitted UID' }
+Write-Host $settingsSetup
 $server = Start-Process "$Dir/dalvikvm.exe" -PassThru -NoNewWindow `
   -ArgumentList ($dvmApp + 'com.gesher.server.SystemServer', (NoDrive "$Dir/lifecycle.apk"), (NoDrive "$Dir/components.apk")) `
   -RedirectStandardOutput "$logs/system_server.out" -RedirectStandardError "$logs/system_server.err"
+Own-ManualService $server system_server
 $failedBefore = $failed
 $appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server',
   (NoDrive "$Dir/lifecycle.apk")) 400
@@ -453,7 +491,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $s = 'system_server: '
 $null = CheckSequences 'services: system_server drives components.apk: NewIntentItem, ActivityResultItem, services, receivers, providers, notifications' $serverOut @(
-  ,@("${s}com.gesher.components parsed by PackageParser2: 8 activities, 4 services, 1 receivers, 1 providers",
+  ,@("${s}com.gesher.components parsed by PackageParser2: 9 activities, 4 services, 1 receivers, 1 providers",
     "${s}publishContentProviders: com.gesher.components.items (com.gesher.components.ItemsProvider)",
     "${s}scheduleTransaction NewIntentItem to com.gesher.components/com.gesher.components.SingleTopActivity",
     "${s}scheduleTransaction ActivityResultItem, ResumeActivityItem to com.gesher.components/com.gesher.components.MainActivity",
@@ -503,8 +541,42 @@ try {
   $null = CheckOrdered 'text services: restore automatic checker selection' `
     $checkerResetOut @('Spell-checker setting updated') $checkerResetCode
 }
-foreach ($p in $server, $servicemanager, $binderd) {
-  if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+} catch {
+  $manualServicesFailure = $_
+  throw
+} finally {
+  $manualServicesExitCode = $global:LASTEXITCODE
+  $manualServicesCleanup = @()
+  for ($index = $manualServicesOwned.Count - 1; $index -ge 0; $index--) {
+    $record = $manualServicesOwned[$index]
+    $retired = $false; $problem = ''
+    try {
+      if ($null -eq $record.Handle -or $record.Handle.IsClosed) {
+        throw 'Owned process handle was already closed by startup failure cleanup'
+      }
+      if (-not $record.Process.HasExited) { $record.Process.Kill($true) }
+      $retired = $record.Process.WaitForExit(5000)
+      if (-not $retired) { throw 'Owned manual service did not retire within five seconds' }
+    } catch { $problem = [string]$_ }
+    finally {
+      try { $record.Process.Dispose() }
+      catch { $problem += " Dispose failed: $_" }
+    }
+    Write-Host "SERVICE_FIXTURE_RETIRE role=$($record.Role) pid=$($record.Pid) created=$($record.Created) exited=$retired closed=$($record.Handle.IsClosed) problem=$problem"
+    if ($problem -or -not $retired -or -not $record.Handle.IsClosed) {
+      $manualServicesCleanup += "$($record.Role): $problem (exited=$retired, closed=$($record.Handle.IsClosed))"
+    }
+  }
+  $env:GESHER_BINDER = $manualServicesBinder
+  $global:LASTEXITCODE = $manualServicesExitCode
+  if ($manualServicesCleanup.Count) {
+    $script:failed++
+    $cleanupMessage = 'Owned manual-device cleanup failed: ' + ($manualServicesCleanup -join '; ')
+    if ($null -ne $manualServicesFailure) {
+      # Report cleanup too, without replacing the original exception/exit status.
+      Write-Error -ErrorAction Continue $cleanupMessage
+    } else { throw $cleanupMessage }
+  }
 }
 Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
@@ -527,7 +599,7 @@ if ($failed -ne $failedBefore) {
     Get-Content "$logs/$f" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
   }
 }
-Remove-Item Env:GESHER_BINDER
+# The manual-device finally restored the prior Binder environment.
 
 # The Gesher device (docs/services.md, ADR 0026): binderd, servicemanager and a
 # persistent system server that every launch shares, started detached by the
@@ -748,12 +820,35 @@ if (-not (CheckSequences 'services: gesher-app launch lifecycle.apk: the system 
     'gesher-app: the process of com.gesher.lifecycle ended (exit code 0)')
 ) $code)) { Write-Host $out }
 
-# A second app on the same device (installed by its first launch):
+# A second app on the same device, installed and explicitly authorized before launch:
 # components.apk runs its activities, services, broadcasts and providers to the
 # end (--keep-task).
-$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive "$Dir/components.apk"), '--keep-task') 500
+$componentsInstall = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'install', (NoDrive "$Dir/components.apk")) 180
+if ($LASTEXITCODE -ne 0 -or -not $componentsInstall.Contains('gesher-app: installed com.gesher.components (version 1) in ')) {
+  throw "Components actual installation failed: $componentsInstall"
+}
+foreach ($settingsMode in @(3, 1, 2, 0)) {
+  $settingsAllowed = if ($settingsMode -eq 0) { 'true' } else { 'false' }
+  $modeSetup = SettingsFixtureSetup @('--remote', [string]$componentsUid, 'com.gesher.components', [string]$settingsMode)
+  if ($LASTEXITCODE -ne 0 -or -not $modeSetup.Contains("FixtureSettingsSetup live special access UID $componentsUid package com.gesher.components source ") -or
+      -not $modeSetup.Contains(" mode $settingsMode")) { throw "Real settings mode setup failed: $modeSetup" }
+  $modeOut = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', 'com.gesher.components', '--activity', '.SettingsAccessActivity',
+    '--keep-task', '--headless', '--ez', 'allowed', $settingsAllowed) 180
+  $modeCode = $LASTEXITCODE
+  Write-Host $modeSetup
+  $null = CheckOrdered "services: Settings.System.canWrite and actual provider write, AppOp mode $settingsMode" $modeOut @(
+    "components: settings special access canWrite $settingsAllowed uid $componentsUid pid ",
+    '; secure/global and foreign package denied', 'gesher-app: done') $modeCode
+  if ($modeCode -ne 0 -or -not $modeOut.Contains("components: settings special access canWrite $settingsAllowed uid $componentsUid pid ")) { Write-Host $modeOut }
+}
+$settingsSetup = SettingsFixtureSetup @('--remote', [string]$componentsUid, 'com.gesher.components')
+if ($LASTEXITCODE -ne 0 -or -not $settingsSetup.Contains("FixtureSettingsSetup live special access UID $componentsUid package com.gesher.components source ")) {
+  throw "Components installed special-access setup failed: $settingsSetup"
+}
+Write-Host $settingsSetup
+$out = $componentsInstall + "`n" + (RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive "$Dir/components.apk"), '--keep-task') 500)
 $code = $LASTEXITCODE
-$ok = CheckOrdered 'services: gesher-app launch components.apk --keep-task: installed on first launch, its own process, every step' $out @(
+$ok = CheckOrdered 'services: gesher-app launch components.apk --keep-task: installed and authorized before launch, its own process, every step' $out @(
   'gesher-app: connected to the running Gesher device ',
   'gesher-app: installed com.gesher.components (version 1) in ',
   'gesher-app: app process for com.gesher.components: pid ',

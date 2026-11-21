@@ -20,6 +20,7 @@
 
 #include "translator.h"
 #include "guest_counter.h"
+#include "host_call.h"
 #include <gesher/arm64_va_list.h>
 
 #include <windows.h>
@@ -44,17 +45,6 @@
 #include "dynarmic/interface/exclusive_monitor.h"
 
 namespace A64 = Dynarmic::A64;
-
-// A guest -> host call, marshalled to System V by gesher_call_host_sysv.
-struct HostCall {
-  void* fn;              // the host System V function
-  const uint64_t* gpr;   // X0..X5 -> rdi,rsi,rdx,rcx,r8,r9
-  const uint64_t* xmm;   // V0..V7 low 64 bits -> xmm0..xmm7
-  const uint64_t* stack; // host stack arguments: X6, X7, then guest stack args
-  uint64_t nstack;       // count of `stack`
-  uint64_t out_xmm0;     // written by the thunk: the result's xmm0 low 64 bits
-  uint64_t out_rdx;      // written by the thunk: the result's rdx
-};
 
 // What gesher_guest_entry_shim builds from a System V call (thunks.S).
 struct EntryFrame {
@@ -1125,7 +1115,7 @@ class Env final : public A64::UserCallbacks {
         slot = reinterpret_cast<uint64_t>(&va.tag);
       }
     }
-    HostCall call{fn, gpr, xmm, stack, nstack, 0, 0};
+    HostCall call{fn, gpr, xmm, stack, nstack, 0, 0, 0};
     // A host->guest call made by this host function runs below the guest's
     // live frames.
     uint64_t saved_stack_cur = stack_cur_;
@@ -1147,7 +1137,7 @@ class Env final : public A64::UserCallbacks {
     stack_cur_ = saved_stack_cur;
     jit->SetRegister(0, rax);
     jit->SetRegister(1, call.out_rdx);
-    jit->SetVector(0, A64::Vector{call.out_xmm0, 0});
+    jit->SetVector(0, A64::Vector{call.out_xmm0, call.out_xmm0_hi});
   }
 
   std::vector<std::unique_ptr<A64::Jit>> jits_;

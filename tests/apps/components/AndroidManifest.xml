@@ -11,6 +11,7 @@
     android:versionName="1.0">
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <application
         android:name=".ComponentsApplication"
         android:label="@string/app_name"
@@ -40,6 +41,7 @@
         <activity android:name=".CallerContractActivity" android:exported="true" />
         <activity android:name=".CallerRelayActivity" android:exported="true" />
         <activity android:name=".CallerResultActivity" android:exported="true" />
+        <activity android:name=".SettingsAccessActivity" android:exported="true" />
         <!-- Uses another package's activity and provider (tests/apps/peer); the launcher
              starts it explicitly. Its BROWSABLE custom scheme (as an OAuth redirect's) makes
              gesher-app install register the URL protocol gesher-components (the package

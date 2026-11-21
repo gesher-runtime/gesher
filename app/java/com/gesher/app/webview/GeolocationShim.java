@@ -208,25 +208,8 @@ final class GeolocationShim {
         });
     }
 
-    /**
-     * The app asks for a location permission in its manifest (Gesher grants what an app
-     * requests, as LocationManagerService checks it), or holds one.
-     */
+    /** A declaration is not a grant; origin consent cannot replace app permission. */
     private static boolean hasLocationPermission(android.content.Context context) {
-        try {
-            String[] requested = context.getPackageManager().getPackageInfo(
-                    context.getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
-            if (requested != null) {
-                for (String p : requested) {
-                    if (android.Manifest.permission.ACCESS_FINE_LOCATION.equals(p)
-                            || android.Manifest.permission.ACCESS_COARSE_LOCATION.equals(p)) {
-                        return true;
-                    }
-                }
-            }
-        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
-            // ask the context below
-        }
         return context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED
                 || context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)

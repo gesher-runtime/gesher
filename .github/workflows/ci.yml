@@ -109,6 +109,14 @@ jobs:
         run: |
           & .\app-identity-restart.exe
           if ($LASTEXITCODE -ne 0) { throw 'Native application identity restart gate failed' }
+      - name: Build actual private clipboard publication and competing-writer regression
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" tests\clipboard\publication_windows_test.cc compat\windows\clipboard_bridge.cc /Fe:clipboard-publication.exe ole32.lib uuid.lib user32.lib gdi32.lib windowscodecs.lib
+      - name: Verify real clipboard identity, complete formats and native retirement
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/clipboard/Publication.ps1
       - name: Exact native reader ownership and handle reuse controls
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -206,6 +214,7 @@ jobs:
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/ci -p test_producer_context.py
           python3 -m unittest discover -s tools/ci -p test_wait_for_job.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
@@ -230,6 +239,7 @@ jobs:
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
           python3 tools/test_bionic_system_contracts.py --sanitize
+          python3 tools/test_bionic_signal_masks.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
           python3 tools/test_bionic_directory_contracts.py --sanitize
@@ -607,6 +617,7 @@ jobs:
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
           ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
+          ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -645,6 +656,7 @@ jobs:
         run: |
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
+          cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
           cp out/futex_test_module.dll dist/
           cp out/libgesher_account_crypto.so dist/
@@ -1071,7 +1083,7 @@ jobs:
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'gesher-camera.apk') {
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
@@ -1746,6 +1758,8 @@ jobs:
           pwsh -NoProfile -File tests/e2e/test-apks.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pwsh -NoProfile -File tests/e2e/test-evidence.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/e2e/render-readiness.test.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/e2e/test_coverage.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
