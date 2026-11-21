@@ -127,25 +127,61 @@ function PixelDiff($a, $b) {
   return [GesherE2E]::Diff([int[]]$a, [int[]]$b)
 }
 
-# An input action can require both the real asynchronous completion and content
-# in its viewport. A callback from an earlier empty page is insufficient by itself.
-function RenderReadiness($expect, $px, [string] $log) {
+# The app's own log (its process writes there and, while the launch runs, to the
+# launch's log too).
+function AppLogPath([string] $pkg) { return "$env:LOCALAPPDATA\Gesher\logs\$pkg.log" }
+
+# How long the launch's and the app's logs are: taken before an action, so that only
+# what the logs gained after it counts as the action's result.
+function LogMark([string] $log, [string] $pkg) {
+  return @((ReadText $log).Length, (ReadText (AppLogPath $pkg)).Length)
+}
+
+# What the launch's and the app's logs gained since LogMark (all of a log that shrank).
+function LogsSince([string] $log, [string] $pkg, $mark) {
+  $files = @($log, (AppLogPath $pkg))
+  $out = ''
+  for ($i = 0; $i -lt $files.Count; $i++) {
+    $text = ReadText $files[$i]
+    $from = if ($null -ne $mark -and $mark.Count -gt $i -and $text.Length -ge $mark[$i]) { $mark[$i] } else { 0 }
+    $out += $text.Substring($from) + "`n"
+  }
+  return $out
+}
+
+# An input action can require evidence of its own result: a log line the action's
+# asynchronous completion writes after it ($since: the logs' mark and the capture before
+# the action), text in a content rectangle, and that rectangle changed from what it
+# showed before the action. A completion before the action, or content that was already
+# there (an editor the action should have replaced), is not the action's result.
+function RenderReadiness($expect, $px, $since) {
   $problems = @()
   if ($null -eq $expect) { return @{ Ready = $true; Problems = $problems } }
-  if (-not $expect.log -or -not (ReadText $log).Contains([string]$expect.log)) {
-    $problems += "the log lacks '$($expect.log)' before closing the window"
+  if (-not $expect.log -or -not (LogsSince $since.Log $since.Package $since.Mark).Contains([string]$expect.log)) {
+    $problems += "the logs gained no '$($expect.log)' after the action"
   }
   $rect = @($expect.region)
-  $region = $null
-  if ($rect.Count -eq 4) {
-    $region = [GesherE2E]::Region([int[]]$px, [int]$rect[0], [int]$rect[1], [int]$rect[2], [int]$rect[3])
-  }
-  if ($null -eq $region -or [int]$expect.minTextPixels -le 0) {
-    $problems += 'invalid rendered-content rectangle or text requirement'
+  if ($null -eq $px) {
+    $problems += 'no capture of the window (PrintWindow failed)'
+  } elseif ($rect.Count -ne 4 -or [int]$expect.minTextPixels -le 0 -or [int]$expect.minChangedPixels -le 0) {
+    $problems += 'invalid rendered-content rectangle or pixel requirements'
   } else {
-    $an = Analyze $region
-    if ($an.Text -lt [int]$expect.minTextPixels) {
-      $problems += "the content region has $($an.Text) text pixels, expected at least $($expect.minTextPixels)"
+    $region = [GesherE2E]::Region([int[]]$px, [int]$rect[0], [int]$rect[1], [int]$rect[2], [int]$rect[3])
+    if ($null -eq $region) {
+      $problems += "the content rectangle $($rect -join ',') is not within the $($px[0])x$($px[1]) capture"
+    } else {
+      $an = Analyze $region
+      if ($an.Text -lt [int]$expect.minTextPixels) {
+        $problems += "the content region has $($an.Text) text pixels, expected at least $($expect.minTextPixels)"
+      }
+      $earlier = $null
+      if ($null -ne $since.Before) {
+        $earlier = [GesherE2E]::Region([int[]]$since.Before, [int]$rect[0], [int]$rect[1], [int]$rect[2], [int]$rect[3])
+      }
+      $changed = PixelDiff $earlier $region
+      if ($changed -lt [int]$expect.minChangedPixels) {
+        $problems += "the content region changed in $changed pixels since before the action, expected at least $($expect.minChangedPixels)"
+      }
     }
   }
   return @{ Ready = ($problems.Count -eq 0); Problems = $problems }
@@ -206,7 +242,7 @@ function FrontWindow([string] $log, [IntPtr] $hwnd) {
 
 # Captures until two reads a second apart agree on non-blank content (the app settled)
 # or $seconds pass.
-function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15, $render = $null, [string] $log = '', $renderReady = $null) {
+function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15, $render = $null, $since = $null, $renderReady = $null) {
   $deadline = (Get-Date).AddSeconds($seconds)
   if ($null -ne $renderReady) { $renderReady.Value = $false }
   $last = [GesherWin32]::Capture($hwnd)
@@ -215,7 +251,7 @@ function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15, $render = $null, [s
     $px = [GesherWin32]::Capture($hwnd)
     if ($null -ne $px -and (PixelDiff $last $px) -eq 0) {
       $an = Analyze $px
-      if ($an.Other -ge ($an.Width * $an.Height * 0.005) -and (RenderReadiness $render $px $log).Ready) {
+      if ($an.Other -ge ($an.Width * $an.Height * 0.005) -and (RenderReadiness $render $px $since).Ready) {
         if ($null -ne $renderReady) { $renderReady.Value = $true }
         return $px
       }
@@ -368,6 +404,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
     $i = 0
     foreach ($act in $actions) {
       $i++
+      $since = @{ Log = $log; Package = $pkg; Mark = (LogMark $log $pkg); Before = $before }
       if ($act.click) { [GesherWin32]::Click($hwnd, [int]$act.click[0], [int]$act.click[1]); $what = "click at $($act.click[0]),$($act.click[1])" }
       elseif ($act.keys) { [GesherWin32]::TypeKeys($hwnd, [string]$act.keys); $what = "keys '$($act.keys)'" }
       Start-Sleep 2
@@ -375,9 +412,9 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
       # The existing 20-second capture deadline also owns readiness: no extra
       # wait after it, and no reset between the completion and pixel predicates.
       $renderReady = $false
-      $after = CaptureSettled $hwnd 20 $act.render $log ([ref]$renderReady)
+      $after = CaptureSettled $hwnd 20 $act.render $since ([ref]$renderReady)
       if ($null -ne $act.render -and -not $renderReady) {
-        $detail = (RenderReadiness $act.render $after $log).Problems -join '; '
+        $detail = (RenderReadiness $act.render $after $since).Problems -join '; '
         if (-not $detail) { $detail = 'the completed content did not stabilize' }
         $res.Problems += "rendered content did not become ready within the existing 20-second capture budget: $detail"
       }
@@ -391,7 +428,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
   # "waitLog" (apps.json): a line the app's log must show after the actions, e.g. that
   # a background step they started finished; the window is saved again then.
   if ($a.waitLog -and $tag -eq 'launch') {
-    $appLogFile = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
+    $appLogFile = AppLogPath $pkg
     $deadline = (Get-Date).AddSeconds(120)
     while ((Get-Date) -lt $deadline -and (ReadText $appLogFile) -notmatch $a.waitLog) { Start-Sleep 1 }
     $m = [regex]::Match((ReadText $appLogFile), $a.waitLog)
@@ -530,7 +567,7 @@ foreach ($a in $manifestData.apps) {
   }
   foreach ($l in $info) { Report "INFO  e2e: ${pkg}: $l" }
   $log = ReadText (Join-Path $OutDir "$pkg.launch.log")
-  $appLog = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
+  $appLog = AppLogPath $pkg
   if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $OutDir "$pkg.app.log") -Force }
   # "expectLog": lines the launch's or the app's log must contain (e.g. that its WebView
   # got a WebView2, docs/webview.md).

@@ -93,8 +93,16 @@ public static class GesherWin32 {
     PostMessageW(hwnd, down ? 0x0100u : 0x0101u, (IntPtr) vk, (IntPtr) l);
   }
   // Types letters and digits with WM_KEYDOWN/WM_KEYUP (shift for capitals), as a keyboard
-  // does; TranslateMessage adds the WM_CHARs.
+  // does; TranslateMessage adds the WM_CHARs. Text with other characters (whose keys
+  // depend on the keyboard layout) is typed as WM_CHARs only, each as Char() posts it:
+  // a translated key's WM_CHAR would come after a posted one that followed it.
   public static void TypeKeys(IntPtr hwnd, string text) {
+    foreach (char c in text) {
+      if (!char.IsLetterOrDigit(c) && c != ' ') {
+        foreach (char t in text) Char(hwnd, t);
+        return;
+      }
+    }
     foreach (char c in text) {
       bool upper = char.IsUpper(c);
       uint vk = (uint) char.ToUpperInvariant(c);
