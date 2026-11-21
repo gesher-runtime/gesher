@@ -142,7 +142,7 @@ bool Call(Request& request, Reply* reply) {
 
 // The delivered handles of a claim or take, as new descriptors (-1 for one the
 // broker could not deliver, or this process could not adopt).
-bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt) {
+bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt, bool close_on_exec) {
   int32_t status;
   uint32_t count;
   if (!reply.Get(&status) || !reply.Get(&count)) return errno = EIO, false;
@@ -178,7 +178,7 @@ bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt) {
       fds->push_back(AdoptSocket(reinterpret_cast<uintptr_t>(h), metadata));
     } else {
       // Adoption consumes both handles, including on a failed/retired group.
-      fds->push_back(AdoptFileDescription(h, shared, static_cast<DescriptorKind>(kind), false));
+      fds->push_back(AdoptFileDescription(h, shared, static_cast<DescriptorKind>(kind), close_on_exec));
     }
   }
   return true;
@@ -289,24 +289,24 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
   return true;
 }
 
-bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds) {
+bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec) {
   Request request;
   request.Put<uint32_t>(wire::kRightsClaim);
   request.Put<uint64_t>(token.value[0]);
   request.Put<uint64_t>(token.value[1]);
   std::lock_guard<std::mutex> lock(g_mutex);
   Reply reply;
-  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr);
+  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr, close_on_exec);
 }
 
-bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds) {
+bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec) {
   Request request;
   request.Put<uint32_t>(wire::kRightsTake);
   request.Put<uint64_t>(queue);
   request.Put<uint64_t>(limit);
   std::lock_guard<std::mutex> lock(g_mutex);
   Reply reply;
-  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr);
+  return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr, close_on_exec);
 }
 
 void CancelRights(const ws::RightsToken& token) {

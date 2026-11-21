@@ -80,7 +80,7 @@ struct Command {
 
 // A received Binder descriptor can be forwarded through every AF_UNIX pair
 // transport. Retain the received alias until its original owner revokes it.
-int ForwardFile(int fd, int type) {
+int ForwardFile(int fd, int type, int receive_flags) {
   int pair[2];
   REQUIRE(socketpair(AF_UNIX, type, 0, pair) == 0);
   char byte = 'f';
@@ -99,7 +99,7 @@ int ForwardFile(int fd, int type) {
   REQUIRE(sendmsg(pair[0], &message, 0) == 1);
   memset(control, 0, sizeof(control));
   byte = 0;
-  REQUIRE(recvmsg(pair[1], &message, MSG_CMSG_CLOEXEC) == 1 && byte == 'f');
+  REQUIRE(recvmsg(pair[1], &message, receive_flags) == 1 && byte == 'f');
   header = CMSG_FIRSTHDR(&message);
   REQUIRE((message.msg_flags & MSG_CTRUNC) == 0 && header != nullptr &&
           header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_RIGHTS &&
@@ -107,7 +107,10 @@ int ForwardFile(int fd, int type) {
   int received = -1;
   memcpy(&received, CMSG_DATA(header), sizeof(received));
   REQUIRE(received >= 0);
-  EXPECT((fcntl(received, F_GETFD) & FD_CLOEXEC) != 0);
+  const int descriptor_flags = fcntl(received, F_GETFD);
+  EXPECT(descriptor_flags >= 0 &&
+         ((descriptor_flags & FD_CLOEXEC) != 0) == ((receive_flags & MSG_CMSG_CLOEXEC) != 0));
+  EXPECT((fcntl(fd, F_GETFD) & FD_CLOEXEC) != 0);  // the Binder alias is unchanged
   EXPECT(close(pair[0]) == 0 && close(pair[1]) == 0);
   return received;
 }
@@ -326,14 +329,16 @@ int Server() {
         retained_files.push_back(open(path.c_str(), O_RDWR));
         REQUIRE(retained_files.back() >= 0 && retained_files[1] >= 0);
         for (int type : {SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET}) {
-          const int forwarded = ForwardFile(fd, type);
-          EXPECT(pwrite(forwarded, "B", 1, 0) == 1);
-          retained_files.push_back(forwarded);
+          for (int receive_flags : {0, MSG_CMSG_CLOEXEC}) {
+            const int forwarded = ForwardFile(fd, type, receive_flags);
+            EXPECT(pwrite(forwarded, "B", 1, 0) == 1);
+            retained_files.push_back(forwarded);
+          }
         }
         b.FreeBuffer(tr);
         b.Transaction(BC_REPLY, 0, 0, 0, Payload("fd retained"), {});
       } else if (tr.code == kCodeCheckRevoked) {
-        REQUIRE(retained_files.size() == 6);
+        REQUIRE(retained_files.size() == 9);
         for (int fd : retained_files) {
           char byte;
           EXPECT(write(fd, "x", 1) == -1 && errno == EPERM);

@@ -415,6 +415,31 @@ index 35b94f7b..aef8aeff 100644
 +        int result = PollFile(p);
 +        if (result < 0) return -1;
 +        if (!result) waiting_files = true;
+diff --git a/compat/posix/src/socket.cc b/compat/posix/src/socket.cc
+index 02a81e66..6683c8c5 100644
+--- a/compat/posix/src/socket.cc
++++ b/compat/posix/src/socket.cc
+@@ -437,0 +438 @@ int ToMsgFlags(int flags) {
++  if (flags & MSG_CMSG_CLOEXEC) result |= ws::kMsgCmsgCloexec;
+@@ -485 +486,2 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
+-  if (n >= 0 && rights != nullptr && token.count != 0) gesher::ClaimRights(token, rights);
++  if (n >= 0 && rights != nullptr && token.count != 0)
++    gesher::ClaimRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0);
+diff --git a/compat/posix/src/socket_internal.h b/compat/posix/src/socket_internal.h
+index 2f3b1693..b715fa5c 100644
+--- a/compat/posix/src/socket_internal.h
++++ b/compat/posix/src/socket_internal.h
+@@ -43,0 +44 @@ inline constexpr int kMsgTrunc = 16;
++inline constexpr int kMsgCmsgCloexec = 32;
+@@ -345,2 +346,3 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
+-// adopted). With `fds` null, the descriptors are discarded.
+-bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds);
++// adopted). With `fds` null, the descriptors are discarded. close_on_exec
++// belongs to this receive, not to the sender's descriptor or the shared OFD.
++bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec = false);
+@@ -348 +350 @@ bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds);
+-bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds);
++bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec = false);
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
 index 0af9c16d..a3bc4dfd 100644
 --- a/compat/posix/src/system.cc
@@ -724,3 +749,17 @@ index 0af9c16d..a3bc4dfd 100644
 @@ -797 +923 @@ int memfd_create(const char* name, unsigned int flags) {
 -  gesher::RegisterMemfd(fd);
 +  if (fd >= 0) gesher::RegisterMemfd(fd);
+diff --git a/compat/posix/src/winsock.cc b/compat/posix/src/winsock.cc
+index 5fc93e12..03af5355 100644
+--- a/compat/posix/src/winsock.cc
++++ b/compat/posix/src/winsock.cc
+@@ -1173 +1173 @@ void StreamReceived(Socket s, SocketDescription& description, size_t bytes,
+-                    std::vector<int>* rights) {
++                    std::vector<int>* rights, bool close_on_exec) {
+@@ -1179 +1179 @@ void StreamReceived(Socket s, SocketDescription& description, size_t bytes,
+-      gesher::TakeRights(static_cast<uint64_t>(local) << 16 | peer, end, rights);
++      gesher::TakeRights(static_cast<uint64_t>(local) << 16 | peer, end, rights, close_on_exec);
+@@ -1237 +1237,2 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
+-    StreamReceived(s, *description, static_cast<size_t>(n), stream_rights);
++    StreamReceived(s, *description, static_cast<size_t>(n), stream_rights,
++                   (flags & kMsgCmsgCloexec) != 0);

@@ -240,11 +240,11 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
     $Expected['head_repository_id'] = $SourceIdentity.head_repository_id
   }
 '''
-# This exact transition is applied in reverse to the current fd/system bytes,
+# This exact transition is applied in reverse to the current OFD and SCM_RIGHTS bytes,
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '9a8c1b398d2b195a3fa2f0e5c9ed7578ebd0c86d8d9c6deb16dcd3617bc4de22'
+OFD_QUALIFICATION_SHA256 = '680480d891ae925427a347e1ee23b9e1fd3927aad908d9eb2354bd70c81def4e'
 # Valid pipes can now fail a control operation explicitly. These two exact
 # non-socket dispatch substitutions are the only PollFdsImpl changes allowed;
 # normalize them before comparing every byte of the original native poll core.
@@ -269,7 +269,8 @@ def preceding_ofd_sources():
  qualification=json.loads(raw)
  patch=(folder/'ofd-stream-source.patch').read_bytes()
  assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'OFD transition patch changed'
- paths=['compat/posix/src/fd.cc','compat/posix/src/system.cc']
+ paths=['compat/posix/src/fd.cc','compat/posix/src/socket.cc','compat/posix/src/socket_internal.h',
+        'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  for path,digest in qualification['source_sha256'].items():
@@ -291,8 +292,8 @@ def preceding_ofd_sources():
   return source[begin:end]
  # Independently retain socket ownership and actual native poll core bytes.
  for path,markers in {
-   paths[0]:[b'bool Remove(',b'void Insert(',b'bool ReplaceSocket(',b'bool LookupSocket(',b'static int PollFdsImpl('],
-   paths[1]:[b'bool SocketIo('],
+   'compat/posix/src/fd.cc':[b'bool Remove(',b'void Insert(',b'bool ReplaceSocket(',b'bool LookupSocket(',b'static int PollFdsImpl('],
+   'compat/posix/src/system.cc':[b'bool SocketIo('],
  }.items():
   current=(ROOT/path).read_bytes()
   for marker in markers:
@@ -439,6 +440,11 @@ def transition_negative_controls():
   ('compat/posix/src/fd.cc',b'if (result < 0) return -1;',b'if (result < 0) return 0;'),
   ('compat/posix/src/fd.cc',b'SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;',b'SocketRegistry socket_registry;'),
   ('compat/posix/src/stdio_output.cc',b'if (locked_stream_) _lock_file(locked_stream_);',b'if (locked_stream_) {}'),
+  ('compat/posix/src/socket.cc',b'if (flags & MSG_CMSG_CLOEXEC) result |= ws::kMsgCmsgCloexec;',b'if (flags & MSG_CMSG_CLOEXEC) result |= 0;'),
+  ('compat/posix/src/socket.cc',b'gesher::ClaimRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0);',b'gesher::ClaimRights(token, rights, true);'),
+  ('compat/posix/src/winsock.cc',b'(flags & kMsgCmsgCloexec) != 0);',b'false);'),
+  ('compat/posix/src/unix_rights.cc',b'AdoptFileDescription(h, shared, static_cast<DescriptorKind>(kind), close_on_exec)',b'AdoptFileDescription(h, shared, static_cast<DescriptorKind>(kind), false)'),
+  ('probes/binder/binder_probe.cc',b'retained_files.size() == 9',b'retained_files.size() == 6'),
  ]
  for name,before,after in cases:
   target=ROOT/name

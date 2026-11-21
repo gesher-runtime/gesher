@@ -2,9 +2,12 @@
   "baseline": "ba464131552eb72e7e0cd62cbfa51f1ab32f5841",
   "paths": [
     "compat/posix/src/fd.cc",
-    "compat/posix/src/system.cc"
+    "compat/posix/src/socket.cc",
+    "compat/posix/src/socket_internal.h",
+    "compat/posix/src/system.cc",
+    "compat/posix/src/winsock.cc"
   ],
-  "patch_sha256": "c40b25b6dba0fef1d88b9074c56ad8ccd485dd6382a9bf695bf4913b5af1545b",
+  "patch_sha256": "9ee2f32e66053405e4b283bbfc5ba1302aa2456d75bbaa1872913bfe6dfc0f33",
   "source_sha256": {
     "compat/posix/src/ofd.cc": "2cd9960d954105ae987ab8eff7c319b59c6da96a6410c5610c5c0e78e04a2df1",
     "compat/posix/src/ofd_internal.h": "fa97f2675731123a03896ed179d73c8cb2701273b5d94d2078c484a1b16b37da",
@@ -39,11 +42,12 @@
     "tools/test_socket_registry_lifetime.py": "e48c568a71d2efd28e5df2a6b9631c205295a43f0a0904a58f05939113f7c115",
     "compat/posix/src/memfd_seals.cc": "a3f81c55d81f5085b9066daa72dad401f5430ba506712cf90b1571d8014cceca",
     "compat/posix/src/mman.cc": "00f5f9e96f3b54e10930226a63783759353733742c64fc3732f73c35b1c89b73",
-    "compat/posix/src/unix_rights.cc": "bc495c827e405ea0718f09a91566dd08fa1b536d6c739df50cc6fc95dfc46021",
+    "compat/posix/src/unix_rights.cc": "9a5497ac3ece694343cf2260a14e6c8821443b61c5b355567591d26c180e29d9",
     "compat/posix/src/binder.cc": "900c529bc610e634b840d3bd8faed2885396227b9c1e3af5b553bf2e111dcd49",
     "compat/posix/src/binder_wire.h": "72dfc0aa2b8842307e817a99e441891c35dfbd198fe2de8b9db9f8748863704a",
     "compat/posix/src/binder_file_descriptions.h": "0248c8b8db2c5f18bbde68390ff967570eeb97103d4bc5a263adbacbf64cbc5a",
-    "compat/binder/binderd.cc": "df38aab20bcac73d7c57634b93729c4a8e6fd97a68378aa411ef6a0a7217b9f0"
+    "compat/binder/binderd.cc": "df38aab20bcac73d7c57634b93729c4a8e6fd97a68378aa411ef6a0a7217b9f0",
+    "probes/binder/binder_probe.cc": "7355784bfde616ea8ee44191be549df943b237a44e99fd96204e25b59c23ac35"
   },
   "contract_evidence": [
     "docs/pipe-status-capabilities.md",

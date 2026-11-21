@@ -2,7 +2,7 @@
 """Exercise production stream/device ownership with real Linux FILE reuse.
 
 Extract actual OFD device adapters, descriptor retirement, fclose/freopen and
-Bionic stream readers. The shared OFD registry, Windows CRT/path/record locks,
+Bionic stream readers. The shared OFD/memfd registries, Windows CRT/path/record locks,
 stdio backend and device data are declared boundaries; their complete owners
 run separately in the OFD/stdio corpora and actual Windows fixtures. The shared
 public fixture also runs without adapters against Linux. This is not Windows
@@ -26,12 +26,13 @@ def section(source: str, first: str, following: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host-source", type=Path, default=ROOT / "compat/posix/src/fsops.cc")
+    parser.add_argument("--descriptor-source", type=Path, default=ROOT / "compat/posix/src/fd.cc")
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
     host = args.host_source.read_text()
-    devices = (ROOT / "compat/posix/src/fd.cc").read_text()
+    devices = args.descriptor_source.read_text()
     shim = (ROOT / "compat/bionic/stdio_bionic.cc").read_text()
     sections = {
         "@DEVICE_MAP@": section(devices, "// Stateless logical devices live", "int ReadDevice("),

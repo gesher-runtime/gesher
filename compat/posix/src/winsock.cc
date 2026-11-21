@@ -1170,13 +1170,13 @@ ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, A
 // `rights` or discarded. Every read, from any process holding the end, keeps
 // its position, so that a group is never delivered with bytes sent before it.
 void StreamReceived(Socket s, SocketDescription& description, size_t bytes,
-                    std::vector<int>* rights) {
+                    std::vector<int>* rights, bool close_on_exec) {
   const int saved = errno;
   uint16_t local, peer;
   if (StreamPorts(s, description, &local, &peer)) {
     const uint64_t end = gesher::AdvanceStream(local, false, bytes);
     if (gesher::RightsDue(local, end)) {
-      gesher::TakeRights(static_cast<uint64_t>(local) << 16 | peer, end, rights);
+      gesher::TakeRights(static_cast<uint64_t>(local) << 16 | peer, end, rights, close_on_exec);
     }
   }
   errno = saved;
@@ -1234,7 +1234,8 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
   const ptrdiff_t n =
       RecvOwnedRaw(s, buffers, count, flags, from, description, dont_wait, result_flags);
   if (n > 0 && (flags & kMsgPeek) == 0 && description->unix_stream_pair.load()) {
-    StreamReceived(s, *description, static_cast<size_t>(n), stream_rights);
+    StreamReceived(s, *description, static_cast<size_t>(n), stream_rights,
+                   (flags & kMsgCmsgCloexec) != 0);
   }
   return n;
 }
