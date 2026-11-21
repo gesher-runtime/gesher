@@ -98,13 +98,15 @@ class JavaListener final : public Listener {
     if (data != nullptr) env->DeleteLocalRef(data);
   }
 
-  bool OnNavigationStarting(const std::wstring& url, bool user_initiated, bool redirect) override {
+  bool OnNavigationStarting(const std::wstring& url, bool user_initiated, bool redirect,
+                            int64_t handed) override {
     JNIEnv* env = Env();
     if (env == nullptr) return false;
     jstring jurl = JStr(env, url);
     jboolean cancel = env->CallBooleanMethod(peer_, g_on_navigation_starting, jurl,
                                              user_initiated ? JNI_TRUE : JNI_FALSE,
-                                             redirect ? JNI_TRUE : JNI_FALSE);
+                                             redirect ? JNI_TRUE : JNI_FALSE,
+                                             static_cast<jlong>(handed));
     CheckException(env);
     env->DeleteLocalRef(jurl);
     return cancel == JNI_TRUE;
@@ -238,8 +240,8 @@ void JNICALL WebView2Host_navigate(JNIEnv* env, jclass, jlong h, jstring url, js
                                    jstring method, jbyteArray body, jlong number) {
   std::wstring m = Str(env, method);
   Host* host = Get(h);
-  if (number > 0) host->NumberNextNavigate(static_cast<int64_t>(number));
-  host->Navigate(Str(env, url), Str(env, headers), m.empty() ? L"GET" : m, Bytes(env, body));
+  host->Navigate(Str(env, url), Str(env, headers), m.empty() ? L"GET" : m, Bytes(env, body),
+                 static_cast<int64_t>(number));
 }
 
 void JNICALL WebView2Host_postWebMessage(JNIEnv* env, jclass, jlong h, jstring json) {
@@ -504,7 +506,7 @@ extern "C" jint JNI_OnLoad_gesher_webview(JavaVM* vm, void*) {
   g_on_event = env->GetMethodID(c, "onEvent",
                                 "(IJILjava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V");
   g_on_navigation_starting =
-      env->GetMethodID(c, "onNavigationStarting", "(Ljava/lang/String;ZZ)Z");
+      env->GetMethodID(c, "onNavigationStarting", "(Ljava/lang/String;ZZJ)Z");
   g_on_resource_request = env->GetMethodID(
       c, "onResourceRequest", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;IZ)V");
   g_on_bridge_call = env->GetMethodID(

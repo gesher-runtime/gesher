@@ -289,6 +289,12 @@ bool StartsWith(const std::wstring& s, const std::wstring& prefix) {
   return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
 }
 
+// A navigation retains its fragment, but the document's network request omits
+// it. Keep every other byte significant, including queries and escaped '#'.
+bool SameDocumentUrl(const std::wstring& request, const std::wstring& document) {
+  return request.compare(0, request.find(L'#'), document, 0, document.find(L'#')) == 0;
+}
+
 std::wstring Hex(HRESULT hr) {
   wchar_t buf[16];
   swprintf(buf, 16, L"0x%08lx", static_cast<unsigned long>(hr));
@@ -473,10 +479,10 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   // before a navigation that was not superseded.
   int64_t api_number = 0;
   std::map<UINT64, int64_t> started_numbers;
-  void NavigationStarted(UINT64 nav) {
+  void NavigationStarted(UINT64 nav, int64_t number) {
     // Superseded navigations' completions may not come: keep the newest only.
     if (started_numbers.size() >= 64) started_numbers.erase(started_numbers.begin());
-    started_numbers[nav] = api_number;
+    started_numbers[nav] = number;
   }
   int64_t NavigationEnded(UINT64 nav) {
     auto it = started_numbers.find(nav);
@@ -670,7 +676,7 @@ class NullListener final : public Listener {
  public:
   void OnEvent(int32_t, int64_t, int32_t, const std::wstring&, const std::wstring&,
                const std::wstring&, const std::vector<uint8_t>*) override {}
-  bool OnNavigationStarting(const std::wstring&, bool, bool) override { return false; }
+  bool OnNavigationStarting(const std::wstring&, bool, bool, int64_t) override { return false; }
   void OnResourceRequest(int64_t, const std::wstring&, const std::wstring&, const std::wstring&,
                          int32_t, bool) override {}
   std::wstring OnBridgeCall(const std::wstring&, const std::wstring&,
@@ -1129,6 +1135,10 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           -> HRESULT {
                         auto impl = weak.lock();
                         if (!impl || impl->destroyed) return S_OK;
+                        // Capture handed work before the client can issue newer API loads.
+                        // This navigation may retire only work already handed
+                        // over when its start arrived, not that newer work.
+                        const int64_t started_number = impl->api_number;
                         CoString uri;
                         args->get_Uri(uri.Put());
                         BOOL user = FALSE, redirect = FALSE;
@@ -1142,13 +1152,14 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           impl->main_document = url;
                           UINT64 nav = 0;
                           args->get_NavigationId(&nav);
-                          impl->NavigationStarted(nav);
+                          impl->NavigationStarted(nav, started_number);
                           return S_OK;
                         }
                         impl->auth_retry.clear();
                         if (!api && impl->listener != nullptr &&
                             impl->listener->OnNavigationStarting(url, user != FALSE,
-                                                                 redirect != FALSE)) {
+                                                                 redirect != FALSE,
+                                                                 started_number)) {
                           args->put_Cancel(TRUE);
                           // Its NavigationCompleted (OPERATION_CANCELED) is not the
                           // app's: no onPageFinished for a navigation it took.
@@ -1162,8 +1173,9 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           CancelBridgeRequests(impl.get());
                           UINT64 nav = 0;
                           args->get_NavigationId(&nav);
-                          impl->NavigationStarted(nav);
-                          impl->Report(kPageStarted, static_cast<int64_t>(nav), api ? 1 : 0, url);
+                          impl->NavigationStarted(nav, started_number);
+                          impl->Report(kPageStarted, static_cast<int64_t>(nav), api ? 1 : 0, url,
+                                       std::to_wstring(started_number));
                         }
                         return S_OK;
                       })
@@ -1400,7 +1412,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         if (FAILED(args->GetDeferral(r.deferral.Put()))) return S_OK;
                         int64_t id = impl->next_request++;
                         impl->requests.emplace(id, std::move(r));
-                        bool main = document && url == impl->main_document;
+                        bool main = document && SameDocumentUrl(url, impl->main_document);
                         impl->listener->OnResourceRequest(id, url, method.str(),
                                                           Headers(headers.get()),
                                                           static_cast<int32_t>(context), main);
@@ -2095,12 +2107,12 @@ void Host::Destroy() {
 }
 
 void Host::Navigate(const std::wstring& url, const std::wstring& headers,
-                    const std::wstring& method, std::vector<uint8_t> body) {
+                    const std::wstring& method, std::vector<uint8_t> body, int64_t number) {
   SharedBody bytes;
   if (!body.empty() && !method.empty() && method != L"GET") {
     bytes = std::make_shared<const std::vector<uint8_t>>(std::move(body));
   }
-  Do(impl_, [url, headers, method, body = std::move(bytes)](Impl* impl) {
+  Do(impl_, [url, headers, method, body = std::move(bytes), number](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = E_FAIL;
     Com<ICoreWebView2_2> wv2;
@@ -2118,20 +2130,18 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
         hr = env2->CreateWebResourceRequest(url.c_str(), get ? L"GET" : method.c_str(),
                                             stream.get(), headers.c_str(), request.Put());
       }
-      if (SUCCEEDED(hr)) hr = wv2->NavigateWithWebResourceRequest(request.get());
+      if (SUCCEEDED(hr)) {
+        if (number > impl->api_number) impl->api_number = number;
+        hr = wv2->NavigateWithWebResourceRequest(request.get());
+      }
     } else {
+      if (number > impl->api_number) impl->api_number = number;
       hr = impl->webview->Navigate(url.c_str());
     }
     if (FAILED(hr)) {
       impl->api_navigation = false;
       impl->Report(kFailed, 0, static_cast<int32_t>(hr), L"Navigate " + url + L": " + Hex(hr));
     }
-  });
-}
-
-void Host::NumberNextNavigate(int64_t number) {
-  Do(impl_, [number](Impl* impl) {
-    if (number > impl->api_number) impl->api_number = number;
   });
 }
 
