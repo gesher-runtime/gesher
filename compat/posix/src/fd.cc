@@ -190,6 +190,7 @@ int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
     gesher::ForgetDevice(fd);
     gesher::ForgetEventObject(fd);
     gesher::ForgetBinder(fd);
+    gesher::ForgetMemfd(fd);
     // A pipe's last writer closing makes its reader readable (end of file).
     const bool pipe = gesher::HasPollWaiters() &&
                       GetFileType(gesher::HandleFromFd(fd)) == FILE_TYPE_PIPE;
@@ -279,6 +280,8 @@ int write(int fd, const void* buf, unsigned int count) {
   if (!gesher::LookupSocket(fd, &state)) {
     int result;
     if (gesher::WriteEventObject(fd, buf, count, &result)) return result;
+    // A memfd's seals may forbid the write (memfd_seals.cc).
+    if (const int sealed = gesher::MemfdWriteError(fd, true, 0, count)) return errno = sealed, -1;
     result = gesher::CrtResult(_write(fd, buf, count));
     if (result > 0) gesher::InotifyNoteWrite(fd);
     if (result > 0 && gesher::HasPollWaiters() &&
@@ -300,6 +303,7 @@ int dup(int fd) {
     if (fd2 >= 0 && gesher::LookupDevice(fd, &device)) gesher::RegisterDevice(fd2, device);
     if (fd2 >= 0) gesher::DupEventObject(fd, fd2);
     if (fd2 >= 0) gesher::DupBinder(fd, fd2);
+    if (fd2 >= 0) gesher::CopyMemfdRegistration(fd, fd2);
     return fd2;
   }
   // WSADuplicateSocket creates distinct native connect-error ownership.
@@ -335,6 +339,7 @@ int dup2(int fd, int fd2) {
     gesher::ForgetEventObject(fd2);
     gesher::ForgetEpollEntries(fd2);
     gesher::ForgetBinder(fd2);
+    gesher::CopyMemfdRegistration(fd, fd2);
     Device device;
     if (!source_is_socket && gesher::LookupDevice(fd, &device)) {
       gesher::RegisterDevice(fd2, device);

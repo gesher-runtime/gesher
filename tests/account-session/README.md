@@ -58,3 +58,14 @@ Connection callbacks use a local Binder and explicit synthetic authenticator ope
 The bind-failure check uses a missing host ActivityManager boundary and executes the
 production exception-to-error path; it does not simulate a successful binding. Unrelated
 notification descriptor reads are explicitly unsupported (ENOSYS) on Windows.
+
+`AccountExplicitRemovalRaceHost` covers the interval after an explicit removal
+has committed and released the account monitor, but before its notifications
+are delivered. A JDK debugger breakpoint controls only thread scheduling; it
+does not replace or instrument production bytecode. The fixture verifies the
+monitor is released and the account is already removed before applying an
+ordinary same-signer client update or uninstall/reinstall. An unchanged or
+updated recipient receives the original account name/type once. A replacement
+installation receives no old removal notification. A failed protected-store
+write retains both accounts and emits no notification. The same scheduling
+probe reproduces the old capture-after-unlock race using `--source-ref`.

@@ -16,8 +16,11 @@ bridge and the complete roadmap/ADR graphics limits before implementation.
   The natives themselves are now built over ANGLE (docs/angle.md, "Java apps";
   GlBindingsTest); a GLSurfaceView lifecycle fixture is what remains here.
 - SurfaceTexture consumed by GLES: attach/detach, updateTexImage, transform
-  matrix/timestamps and external-OES texture sampling. CPU TextureView
-  rendering alone does not establish this path.
+  matrix/timestamps and external-OES texture sampling are implemented
+  (compat/media/surface/surface_texture_gl.cc, docs/graphics.md "SurfaceTexture
+  in OpenGL ES", SurfaceTextureGlTest); what remains is a GLSurfaceView camera
+  preview fixture over it. CPU TextureView rendering alone does not establish
+  this path.
 - Child SurfaceControl transactions: alpha/transforms and the remaining
   layering/clipping/ownership limits in the surfaces ADR/status section.
 - YuvImage JPEG_R and the remaining Bitmap parcel storage/ownership limits

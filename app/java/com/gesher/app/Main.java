@@ -26,11 +26,11 @@ import android.os.ServiceManager;
 
 import com.gesher.app.window.WindowMode;
 import com.gesher.server.ApkPackage;
+import com.gesher.server.InProcessApplication;
 import com.gesher.server.Services;
 import com.gesher.server.StandIn;
 
 import java.io.File;
-import java.util.List;
 
 /**
  * {@code gesher-app [options] <app.apk>}: runs an APK's launcher Activity through attach,
@@ -189,15 +189,13 @@ public final class Main {
 
         // 5-6. The package and the system services: parsed and served in this process, or
         //      asked of a SystemServer process over binder.
-        ApplicationInfo appInfo;
-        ActivityInfo launch;
         if (systemServer) {
             // The app process the framework's way (android.app.GesherAppProcess): attached
             // to the system server, which binds it and drives its activity with client
             // transactions; this process also plays the launcher (am start -W).
             IPackageManager pm = remotePackageManager();
             String packageName = packageName(apk);
-            appInfo = pm.getApplicationInfo(packageName, PackageManager.GET_META_DATA
+            ApplicationInfo appInfo = pm.getApplicationInfo(packageName, PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES, 0);
             if (appInfo == null) {
                 throw new IllegalStateException("the system server does not know "
@@ -244,23 +242,32 @@ public final class Main {
                             : showWindow ? WindowMode.WINDOW : WindowMode.HIDDEN);
             log("done");
             return 0;
-        } else {
-            ApkPackage pkg = ApkPackage.parse(apk);
-            log(pkg.describe());
-            if (dataDir != null) {
-                pkg.setDataDir(new File(dataDir).getAbsolutePath());
+        }
+        ApkPackage pkg = ApkPackage.parse(apk);
+        log(pkg.describe());
+        if (dataDir != null) pkg.setDataDir(new File(dataDir).getAbsolutePath());
+        // Admission owns the canonical durable UID. If this VM started with another
+        // identity, its supervisor re-enters Main under that UID before any APK code.
+        // The child parses and admits the APK again; an environment claim is not admission.
+        try (InProcessApplication application = Services.createInProcess(pkg)) {
+            if (application.needsRestart()) {
+                log("restarting standalone VM for admitted UID " + pkg.uid());
+                return application.restart();
             }
-            // Admission assigns the stable UID; snapshot application/component
-            // metadata only after the in-process package manager has accepted it.
-            Services.installInProcess(Services.createInProcess(List.of(pkg)));
+            application.install();
             pkg.prepareDataDirectories();
-            appInfo = pkg.applicationInfo(PackageManager.GET_META_DATA
+            ApplicationInfo appInfo = pkg.applicationInfo(PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES);
-            launch = pkg.launcherActivity(activity);
+            ActivityInfo launch = pkg.launcherActivity(activity);
             com.gesher.server.ConnectivityService.applyInternetPermission(pkg);  // docs/network.md
             log("stand-in services in this process: "
                     + String.join(", ", ServiceManager.listServices()));
+            return runInProcess(apk, appInfo, launch, window, showWindow, application);
         }
+    }
+
+    private static int runInProcess(String apk, ApplicationInfo appInfo, ActivityInfo launch,
+            boolean window, boolean showWindow, InProcessApplication application) throws Exception {
         launch.applicationInfo = appInfo;
         if (System.getenv("GESHER_LOG_FILE") == null) {
             File logFile = com.gesher.server.Device.packageLog(appInfo.packageName);
@@ -296,7 +303,7 @@ public final class Main {
         main.post(() -> {
             boolean ended = !windowed;
             try {
-                Activity launched = GesherAppDriver.launch(app, target);
+                Activity launched = GesherAppDriver.launch(app, target, application);
                 if (windowed) {
                     // Runs until the window is closed: then the loop ends as below.
                     WindowMode.show(launched, () -> main.post(() -> {

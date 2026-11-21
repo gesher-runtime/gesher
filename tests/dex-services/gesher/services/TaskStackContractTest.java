@@ -19,6 +19,8 @@ import android.app.servertransaction.NewIntentItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
 import android.app.servertransaction.StopActivityItem;
+import android.app.usage.IUsageStatsManager;
+import android.app.usage.UsageEvents;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
@@ -41,11 +43,14 @@ import com.gesher.server.StandIn;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 import sun.misc.Unsafe;
 
 /**
@@ -558,7 +563,35 @@ public final class TaskStackContractTest {
                 && h.thread.items(PauseActivityItem.class, middle) == 1
                 && h.thread.items(ResumeActivityItem.class, middle) == 0,
                 "Newly visible history should be created paused beneath the translucent top");
-        h.acknowledge("activityPaused", middle);
+        Path directory = Files.createTempDirectory("task-usage");
+        Path file = directory.resolve("activity-usage.bin");
+        AutoCloseable usageHistory = null;
+        try {
+            Method callers = h.am.getClass().getDeclaredMethod("callers");
+            callers.setAccessible(true);
+            Class<?> usageType = type("DesktopUsageStatsService");
+            IUsageStatsManager usage = (IUsageStatsManager) make(usageType,
+                    new Class<?>[]{h.packages.getClass(), callers.getReturnType(), Path.class,
+                            LongSupplier.class},
+                    h.packages, callers.invoke(h.am), file, (LongSupplier) () -> 100L);
+            usageHistory = (AutoCloseable) get(usage, "mHistory");
+            Method setUsage = h.tasks.getClass().getDeclaredMethod("setUsageStats", usageType);
+            setUsage.setAccessible(true);
+            setUsage.invoke(h.tasks, usage);
+            h.asApp(() -> {
+                h.api.getActivityClientController().activityPaused((IBinder)get(middle, "token"));
+                UsageEvents events = usage.queryEventsForPackage(100, 101, PKG);
+                UsageEvents.Event event = new UsageEvents.Event();
+                check(events.getNextEvent(event) && event.getEventType() == UsageEvents.Event.ACTIVITY_PAUSED
+                        && (PKG + ".Middle").equals(event.getClassName()) && !events.hasNextEvent(),
+                        "Pause-only launch did not record one real PAUSED event");
+            });
+        } finally {
+            set(h.tasks, "mUsageStats", null);
+            if (usageHistory != null) usageHistory.close();
+            Files.deleteIfExists(file);
+            Files.delete(directory);
+        }
         h.finish(top);
         check(h.thread.launches(middle) == 1 && h.thread.items(ResumeActivityItem.class, middle) == 1,
                 "Back recreated/resumed a visible parent more than once");

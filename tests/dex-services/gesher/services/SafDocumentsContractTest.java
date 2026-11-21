@@ -26,6 +26,7 @@ import sun.misc.Unsafe;
 
 /** Actual registry, AOSP transport, filesystem, grant store and ATM callbacks. */
 public final class SafDocumentsContractTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     static final String CLIENT="org.gesher.fixture.saf.client", OTHER="org.gesher.fixture.saf.other";
     static final String AUTH=DocumentsStorageProvider.AUTHORITY;
     static final int UID=10601, OTHER_UID=10602;
@@ -248,6 +249,28 @@ public final class SafDocumentsContractTest {
             List<ResultInfo> r=new ArrayList<>();synchronized(events){for(var e:events)if(e instanceof ActivityResultItem)r.addAll((List<ResultInfo>)get(e,"mResultInfoList"));}return r;
         }
     }
+    /** Restore only the genuine service bindings installed by this isolated fixture. */
+    private static final class FixtureBindings implements AutoCloseable {
+        private final Field packageManager = field(ActivityThread.class, "sPackageManager");
+        private final Object previousPackageManager = packageManager.get(null);
+        private final Map<String, IBinder> cache;
+        private final boolean hadMount;
+        private final IBinder previousMount;
+
+        @SuppressWarnings("unchecked") FixtureBindings() throws Exception {
+            cache = (Map<String, IBinder>)field(ServiceManager.class, "sCache").get(null);
+            hadMount = cache.containsKey("mount");
+            previousMount = cache.get("mount");
+        }
+
+        @Override public void close() throws Exception {
+            try { packageManager.set(null, previousPackageManager); }
+            finally {
+                if (hadMount) cache.put("mount", previousMount); else cache.remove("mount");
+            }
+        }
+    }
+
     static final class Harness{
         final ApkPackage client=code(CLIENT,UID),other=code(OTHER,OTHER_UID);
         final PackageManagerService pm=new PackageManagerService(List.of(client,other,
@@ -266,11 +289,11 @@ public final class SafDocumentsContractTest {
             as(OTHER_UID,OTHER_PID,()->holder[0]=make(type("ActivityTaskManagerService$ProcessRecord"),new Class<?>[]{ActivityTaskManagerService.class,int.class,IApplicationThread.class},atm,OTHER_PID,new AppThread()));
             set(holder[0],"packageName",OTHER);set(holder[0],"processName",OTHER);set(holder[0],"packageCode",other);set(holder[0],"ready",true);((List<Object>)get(atm,"mProcesses")).add(holder[0]);
             thread.controller=(IActivityClientController)get(atm,"mClientImpl");
-            Object created=make(type("Services$Created"),new Class<?>[]{PackageManagerService.class,ActivityTaskManagerService.class,ActivityManagerService.class},pm,atm,am);
+            IBinder mount=StandIn.of(android.os.storage.IStorageManager.class,new Services.StorageService()).asBinder();
+            Object created=serviceContexts.runtime(pm,atm,am,Map.of("mount",mount));
             field(Services.class,"sLast").set(null,created);
             field(ActivityThread.class,"sPackageManager").set(null,pm);
-            ((Map<String,IBinder>)field(ServiceManager.class,"sCache").get(null)).put("mount",
-                    StandIn.of(android.os.storage.IStorageManager.class,new Services.StorageService()).asBinder());
+            ((Map<String,IBinder>)field(ServiceManager.class,"sCache").get(null)).put("mount",mount);
             context=new TestContext(this);call(provider,"attachTo",new Class<?>[]{Context.class},context);
             IContentProvider local=((ContentProviderHolder)call(provider,"holder",new Class<?>[0])).provider;
             transport=nativeFiles?remoteTransport(local):local;
@@ -1017,8 +1040,22 @@ public final class SafDocumentsContractTest {
         }
     }
 
+    /** Also used by the detached-window fixture, which shares this actual Harness. */
+    static void withServiceContext(Work operation) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureBindings bindings = new FixtureBindings();
+                FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            operation.run();
+        } finally { serviceContexts = previous; }
+    }
+
     /** Invoked in three separate JVM/ART processes; only the real XML store is shared. */
     public static void restartPhase(String phase, File directory) throws Exception {
+        withServiceContext(() -> restartPhaseWithServiceContext(phase, directory));
+    }
+
+    private static void restartPhaseWithServiceContext(String phase, File directory) throws Exception {
         field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File data = new File(directory, "persisted.txt"), state = new File(directory, "grants.xml");
         if (phase.equals("write")) Files.writeString(data.toPath(), "survives process exit");
@@ -1042,7 +1079,11 @@ public final class SafDocumentsContractTest {
         } else throw new IllegalArgumentException("Unknown restart phase");
         System.out.println("SafDocumentsContractTest restart " + phase + " passed");
     }
-    public static void contracts(boolean descriptors)throws Exception{
+    public static void contracts(boolean descriptors) throws Exception {
+        withServiceContext(() -> contractsWithServiceContext(descriptors));
+    }
+
+    private static void contractsWithServiceContext(boolean descriptors) throws Exception {
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
         try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);

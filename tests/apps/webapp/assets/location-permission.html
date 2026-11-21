@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Application location permission</title>
+<p>A declared permission still needs an actual grant.</p>
+<script>
+navigator.geolocation.getCurrentPosition(
+  () => PermissionResult.result(0),
+  error => PermissionResult.result(error.code),
+  {timeout: 10000});
+</script>

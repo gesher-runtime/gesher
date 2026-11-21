@@ -47,13 +47,6 @@ async function disarm(github, mergeGithub, owner, repo, pr) {
   return true;
 }
 
-async function enable(mergeGithub, pr) {
-  await mergeGithub.graphql(`mutation($id: ID!, $head: GitObjectID!) {
-    enablePullRequestAutoMerge(input: {pullRequestId: $id, expectedHeadOid: $head,
-      mergeMethod: SQUASH}) { clientMutationId }
-  }`, {id: pr.node_id, head: pr.head.sha});
-}
-
 async function nativeReleaseState(github, pr) {
   const {node} = await github.graphql(`query($id: ID!) {
     node(id: $id) { ... on PullRequest {
@@ -63,15 +56,31 @@ async function nativeReleaseState(github, pr) {
   if (node?.id !== pr.node_id || node.state !== 'OPEN' || node.isDraft !== false ||
       node.headRefOid !== pr.head.sha || node.baseRefName !== pr.base.ref ||
       node.mergeable !== 'MERGEABLE') throw new Error('Native merge state or reviewed target is unavailable');
-  // GitHub CLI uses the immediate path for these states: auto-merge enable
-  // rejects a CLEAN PR. Both supported mutations still enforce GitHub policy.
+  // The protected immediate mutation checks the head when it executes. Native
+  // waiting would outlive this authorization and could consume an old review
+  // after a write-capable contributor changes to an already-green commit.
   if (['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(node.mergeStateStatus)) return 'merge';
-  if (['BLOCKED', 'BEHIND'].includes(node.mergeStateStatus)) return 'wait';
+  if (['BLOCKED', 'BEHIND'].includes(node.mergeStateStatus)) return 'blocked';
   throw new Error('Native merge state cannot be released: ' + node.mergeStateStatus);
 }
 
-async function release(mergeGithub, pr, mode) {
-  if (mode === 'wait') return enable(mergeGithub, pr);
+// The controller republishes the required QA status immediately before it reads
+// the native state, and GitHub recomputes mergeStateStatus asynchronously. An
+// immediate BLOCKED read is therefore usually stale. Without native waiting,
+// returning on it strands a green PR: every later reconciliation republishes
+// the gate first and reads the same stale state. Re-read a bounded number of
+// times before deferring. Required evidence is still rechecked after this read.
+const RELEASE_STATE = {attempts: 7, delayMs: 5000};
+async function settledReleaseState(github, pr) {
+  let mode = await nativeReleaseState(github, pr);
+  for (let attempt = 1; mode === 'blocked' && attempt < RELEASE_STATE.attempts; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, RELEASE_STATE.delayMs));
+    mode = await nativeReleaseState(github, pr);
+  }
+  return mode;
+}
+
+async function release(mergeGithub, pr) {
   await mergeGithub.graphql(`mutation($id: ID!, $head: GitObjectID!) {
     mergePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head,
       mergeMethod: SQUASH}) { clientMutationId }
@@ -173,6 +182,8 @@ async function currentGate(statusReader, owner, repo, pr, gate) {
 }
 
 async function stuck(github, statusReader, owner, repo, pr, gate) {
+  // Retire requests left by an earlier controller even before CI is ready.
+  if (pr.auto_merge) return true;
   const {matching, latest} = await currentGate(statusReader, owner, repo, pr, gate);
   const evidence = await ciEvidence(github, owner, repo, pr);
   if (latest?.state === 'success') {
@@ -180,11 +191,10 @@ async function stuck(github, statusReader, owner, repo, pr, gate) {
         !qaStatuses.trustedStatus(latest, owner, repo, pr.head.sha, gate, 'success') ||
         !evidence.ready) return true;
     if (!await approved(github, owner, repo, pr)) return true;
-    // A previous controller can stop after publishing success but before its
-    // final native enable. Green alone must not strand that recoverable PR.
-    const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
-    return !p.sameTarget(pr, current) || current.state !== 'open' || current.draft ||
-      !p.hasLabel(current) || current.auto_merge?.merge_method !== 'squash';
+    // An open green PR still needs an exact-head release attempt. Another rule
+    // may have become satisfied since the last event; no persistent native
+    // request is allowed to make that decision with stale authorization.
+    return true;
   }
   return evidence.ready || Boolean(evidence.failed);
 }
@@ -211,17 +221,13 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
   if (pr.state !== 'open' || (expectedHead && pr.head.sha !== expectedHead)) return;
   let nativeOff = false;
   const statuses = {...publisher, set: (sha, ok) => publisher.set(sha, ok, {nativeOff})};
-  let approvalChecked = false;
   try {
     // An old green gate may already have native waiting armed. Disarm before
     // any status write, including revocation of an invalid approval: even a
     // legacy status write can wake native evaluation of the existing App gate.
-    if (statuses.enabled) {
-      nativeOff = await disarm(github, mergeGithub, owner, repo, pr);
-      if (!nativeOff) return;
-    }
+    nativeOff = await disarm(github, mergeGithub, owner, repo, pr);
+    if (!nativeOff) return;
     const ok = await approved(github, owner, repo, pr);
-    approvalChecked = true;
     if (!ok) {
       await statuses.set(pr.head.sha, false);
       return await cancel(github, owner, repo, pr, mergeGithub);
@@ -229,17 +235,6 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
     // This gate stays pending until CI is done. In particular fork review events
     // have read-only tokens; the privileged CI-completion event rechecks QA then.
     await statuses.set(pr.head.sha, null);
-    if (!statuses.enabled) {
-      // Preserve legacy-only early waiting: the required legacy context stays
-      // pending until the final status write, with no later release checks.
-      const {node} = await github.graphql(`query($id: ID!) {
-        node(id: $id) { ... on PullRequest { autoMergeRequest { mergeMethod } } }
-      }`, {id: pr.node_id});
-      if (node?.autoMergeRequest?.mergeMethod !== 'SQUASH') {
-        if (node?.autoMergeRequest) await cancel(github, owner, repo, pr, mergeGithub);
-        await enable(mergeGithub, pr);
-      }
-    }
     const event = await p.labelEvent(github, owner, repo, number);
     const evidence = await ciEvidence(github, owner, repo, pr);
     if (evidence.failed) return await failedCI(github, prGithub, owner, repo, pr, event, evidence.failed, core, mergeGithub, statuses);
@@ -272,14 +267,14 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
       }
     }
     await statuses.finishSuccess(pr.head.sha, receipt);
-    if (statuses.enabled) {
-      // The legacy write/readback is another asynchronous boundary too. Native
-      // waiting is still off, even when both contexts have become green.
+    {
+      // In both legacy and App modes, the final status write is an asynchronous
+      // boundary. Native waiting is still off when required gates become green.
       if (!await approved(github, owner, repo, pr)) {
         await statuses.set(pr.head.sha, false);
         return await cancel(github, owner, repo, pr, mergeGithub);
       }
-      const mode = await nativeReleaseState(github, pr);
+      const mode = await settledReleaseState(github, pr);
       const finalEvent = await p.labelEvent(github, owner, repo, number);
       const finalEvidence = await ciEvidence(github, owner, repo, pr);
       if (finalEvidence.failed) {
@@ -293,13 +288,12 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
         return await cancel(github, owner, repo, pr, mergeGithub);
       }
       await statuses.verifySuccess(pr.head.sha, receipt);
-      // This policy-enforced, exact-head mutation is the release point. The
-      // native state hint selects one API; an error never retries via the other.
-      nativeOff = false;
-      await release(mergeGithub, pr, mode);
+      if (mode === 'blocked') return;
+      // This policy-enforced, exact-head mutation is the only release point.
+      // An error never falls back to native waiting or another merge API.
+      await release(mergeGithub, pr);
     }
   } catch (error) {
-    if (!statuses.enabled && approvalChecked) throw error;
     await invalidate(github, mergeGithub, owner, repo, pr, publisher, core);
     throw error;
   }
@@ -370,7 +364,7 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     // The read token requests statuses access only while the App status is on.
     const statusReader = appQaStatus ? github : actionsGithub;
     const prs = await p.list(github.rest.pulls.list, {owner, repo, state: 'open', base: 'main'});
-    for (const pr of prs.filter(x => !x.draft && (p.hasLabel(x) || appQaStatus) && p.SHA.test(x.head.sha))) {
+    for (const pr of prs.filter(x => !x.draft && (p.hasLabel(x) || appQaStatus || x.auto_merge) && p.SHA.test(x.head.sha))) {
       try {
         if (p.hasLabel(pr)) {
           if (!await stuck(github, statusReader, owner, repo, pr, gate)) continue;
@@ -412,7 +406,7 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     if (['labeled', 'unlabeled'].includes(payload.action) && payload.label?.name !== 'automerge') return;
     const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
     if (pr.state !== 'open') return;
-    if (statuses.enabled) {
+    {
       // A newly recorded native approval can also release an old green gate.
       // Secure the request before label handling writes any review receipt.
       try {
@@ -461,6 +455,7 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
   await reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses);
 };
 module.exports.approved = approved;
+module.exports.RELEASE_STATE = RELEASE_STATE;
 module.exports.ciReady = ciReady;
 module.exports.STATUS = STATUS;
 module.exports.APP_SLUG = p.APP_SLUG;

@@ -53,7 +53,7 @@ public final class WebStorageOriginContractTest implements WebView2Host.Client {
         }
     }
 
-    @Override public boolean onNavigationStarting(String url, boolean user, boolean redirect) {
+    @Override public boolean onNavigationStarting(String url, boolean user, boolean redirect, long handed) {
         return false;
     }
 

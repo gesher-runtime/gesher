@@ -172,7 +172,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         /** Ended by the idle reaper: its services bound by others start again (ActiveServices). */
         volatile boolean reaped;
         boolean spawned;     // started by this server (startProcess), not by itself
-        /** Original retained native child identity, copied from its PendingProcess. */
+        /** Actual native generation: a retained child handle or trusted local startup. */
         long nativeStartTime;
         long startSeq;       // distinguishes a late exit from a newer process of this package
         /** When something last used it (uptime): the idle reaper's clock. */
@@ -189,6 +189,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ProcessExitStatus.Generation exitGeneration;
         /** The configuration it was given last (bindApplication, ConfigurationChangeItem). */
         Configuration config;
+        /** Actual manual-driver lifecycle; null for a server-driven application. */
+        State inProcessActivityState;
         final List<ActivityRecord> activities = new ArrayList<>();
 
         ProcessRecord(int pid, IApplicationThread thread) {
@@ -278,6 +280,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean deferredHistory;
         boolean historyEntry;
         boolean launchScheduled;
+        boolean launchingPaused;
         /**
          * The configuration it was launched or relaunched with, or told of last: its
          * package's (locale track: LocaleManagerService.configurationFor) with its task's size
@@ -407,10 +410,23 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** The activity told it is the top resumed one (onTopResumedActivityChanged), or null. */
     private ActivityRecord mTopResumed;
 
-    /** Current top application for scheduler policy; does not infer foreground from mere liveness. */
+    private volatile Runnable mTopResumedPackageListener;
+    private String mLastTopResumedPackage; // Guarded by this.
+
+    /** Current top application's UID for foreground-only service APIs. */
     synchronized int topResumedUid() {
         return mTopResumed != null && mTopResumed.app != null ? mTopResumed.app.uid : -1;
     }
+
+    /** Current top application for scheduler policy, including with legacy shared UIDs. */
+    synchronized String topResumedPackage() {
+        return mTopResumed != null && mTopResumed.app != null ? mTopResumed.app.packageName : null;
+    }
+
+    void setTopResumedPackageListener(Runnable listener) {
+        mTopResumedPackageListener = listener;
+    }
+
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
@@ -520,6 +536,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || mPm.isRemovalPending(app.packageName)) continue;
             int state = android.app.AppOpsManager.UID_STATE_CACHED;
             int capabilities = 0;
+            if (app.inProcessActivityState == State.RESUMING
+                    || app.inProcessActivityState == State.RESUMED) {
+                state = android.app.AppOpsManager.UID_STATE_TOP;
+                capabilities = android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_LOCATION
+                        | android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA
+                        | android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_MICROPHONE
+                        | android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL;
+            } else if (app.inProcessActivityState == State.STARTED
+                    || app.inProcessActivityState == State.PAUSED) {
+                state = android.app.AppOpsManager.UID_STATE_FOREGROUND;
+            }
             for (ActivityRecord activity : app.activities) {
                 if (activity.finishing || mHiddenTasks.contains(activity.taskId)) continue;
                 if (activity.state == State.RESUMED || activity.state == State.RESUMING) {
@@ -546,7 +573,85 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return mAm != null ? mAm.uriGrants() : null;
     }
 
+    /** Resolves a native foreground observation to a current, authenticated application. */
+    synchronized boolean ownsForegroundProcess(int uid, long[] foreground) {
+        if (foreground == null || foreground.length != 2 || foreground[0] <= 0
+                || foreground[0] > Integer.MAX_VALUE || foreground[1] <= 0) return false;
+        ProcessRecord app = attachedProcessByPid((int) foreground[0]);
+        return app != null && app.ready && !app.dead && !app.exiting && !app.pidSuperseded
+                && app.uid == uid && app.nativeStartTime == foreground[1]
+                && app.packageCode != null && app.packageCode.uid() == uid
+                && mPm.get(app.packageName) == app.packageCode
+                && !mPm.isRemovalPending(app.packageName);
+    }
+
+    /**
+     * Runtime-only admission for the manual ActivityThread driver. No caller package claim
+     * or synthetic focus is accepted: the exact admitted APK, native UID/PID and live
+     * Windows process generation must agree before any APK classes are loaded.
+     */
+    synchronized ProcessRecord attachInProcessApplication(ApkPackage owner,
+            IApplicationThread thread) {
+        int pid = android.os.Process.myPid();
+        int uid = android.os.Process.myUid();
+        if (mStarter != null || owner == null || owner != mPm.get(owner.packageName)
+                || owner.uidPending() || owner.uid() != uid
+                || mPm.isRemovalPending(owner.packageName)
+                || Binder.getCallingPid() != pid || Binder.getCallingUid() != uid
+                || thread == null || attachedProcessByPid(pid) != null) {
+            throw new SecurityException("Standalone process does not match its admitted APK");
+        }
+        long startTime = Zygote.startTime(pid);
+        if (startTime <= 0) {
+            throw new IllegalStateException("Standalone native process identity is unavailable");
+        }
+        ProcessRecord app = new ProcessRecord(pid, thread);
+        app.packageCode = owner;
+        app.nativeStartTime = startTime;
+        app.inProcessActivityState = State.STOPPED;
+        assignPackage(app, owner.packageName, componentProcess(owner.packageName, null));
+        app.ready = true;
+        registerAttachedProcess(app);
+        updateIdle();
+        return app;
+    }
+
+    /** Manual-driver lifecycle is used for AppOps state, never as proof of Windows focus. */
+    synchronized void inProcessActivityState(ProcessRecord app, State state) {
+        if (app.inProcessActivityState == null || app.dead || app.exiting
+                || !mProcesses.contains(app) || app.packageCode != mPm.get(app.packageName)
+                || mPm.isRemovalPending(app.packageName)) return;
+        app.inProcessActivityState = state;
+        updateIdle();
+    }
+
+    void retireInProcessApplication(ProcessRecord app) {
+        synchronized (this) {
+            if (app.inProcessActivityState == null) {
+                throw new IllegalArgumentException("Not a standalone process admission");
+            }
+            app.ready = false;
+            app.exiting = true;
+            app.inProcessActivityState = State.STOPPED;
+        }
+        processDied(app);
+    }
+
     void setAccountManager(AccountManagerService accounts) { mAccounts = accounts; }
+
+    private DesktopUsageStatsService mUsageStats;
+
+    void setUsageStats(DesktopUsageStatsService usageStats) { mUsageStats = usageStats; }
+
+    void flushUsageStats() {
+        if (mUsageStats != null) mUsageStats.flush();
+    }
+
+    private void recordUsage(ActivityRecord record, ActivityUsageHistory.State state) {
+        if (mUsageStats != null) {
+            mUsageStats.transition(record.token, record.info.packageName, record.info.name, state);
+        }
+    }
 
     private int chooseAccount(IApplicationThread caller, String callingPackage, Intent intent,
             IBinder token, String resultWho, int requestCode) {
@@ -2764,6 +2869,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return app != null && !app.dead ? app.packageName : null;
     }
 
+    /** Capture current installed code, so a later name lookup cannot adopt a replacement. */
+    synchronized ApkPackage authenticatedPackageCodeForPid(int pid, int uid) {
+        // A scheduled exit does not end the identity of an attached, live process.
+        ProcessRecord app = attachedProcessByPid(pid);
+        ApkPackage code = app == null || app.dead ? null : app.packageCode;
+        return code != null && app.uid == uid && code.uid() == uid
+                && code.packageName.equals(app.packageName) && mPm.get(code.packageName) == code
+                && !mPm.isRemovalPending(code.packageName) ? code : null;
+    }
+
     /** One-time enrollment in a mode that already permits real self-attachment. */
     private synchronized boolean legacyBootstrapProcess(ProcessRecord app,
             IApplicationThread thread, int pid, int uid) {
@@ -3115,6 +3230,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     void maybeExit(ProcessRecord app) {
         if (app == null) return;
+        // The standalone session owns the manual driver's activity and lifetime;
+        // absence from the server's transaction/activity lists is not an idle exit.
+        if (app.inProcessActivityState != null) return;
         // Work in it just ended: the idle reaper counts from now.
         app.markActive(SystemClock.uptimeMillis());
         synchronized (this) {
@@ -3582,6 +3700,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     void attachApplication(IApplicationThread thread, int pid, long startSeq) {
         ProcessRecord app = new ProcessRecord(pid, thread);
+        if (startSeq <= 0) {
+            // Legacy self-attached applications still need a native process generation
+            // before they can own input focus. Unknown identity never grants focus.
+            try { app.nativeStartTime = Zygote.startTime(pid); }
+            catch (UnsatisfiedLinkError unavailable) { app.nativeStartTime = 0; }
+        }
         boolean bind = false;
         synchronized (this) {
             PendingProcess started = startSeq > 0 ? mStarting.get(startSeq) : null;
@@ -3820,6 +3944,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             app.dead = true;
             retireAppWindowModeLocked(app.packageName);
             for (ActivityRecord r : new ArrayList<>(app.activities)) {
+                recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 for (ActivityRecord a : mActivities) {
                     if (a.waitingFor == r) {
                         a.waitingFor = null;
@@ -4170,7 +4295,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         } else {
             t.addTransactionItem(new PauseActivityItem(r.token, false, false, false, false));
         }
-        setState(r, State.LAUNCHING);
+        synchronized (this) {
+            r.launchingPaused = !andResume;
+            setState(r, State.LAUNCHING);
+        }
         schedule(r, t, andResume ? "LaunchActivityItem, ResumeActivityItem"
                 : "LaunchActivityItem, PauseActivityItem");
     }
@@ -4453,6 +4581,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ActivityRecord gain = null;
         int displayRotation;
         long displaySequence;
+        boolean topPackageChanged;
         synchronized (this) {
             ActivityRecord want = topResumedCandidateLocked();
             displayRotation = want == null ? Surface.ROTATION_0
@@ -4466,11 +4595,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 mTopResumed.topSent = false;
             }
             mTopResumed = want;
+            String topPackage = topResumedPackage();
+            topPackageChanged = !java.util.Objects.equals(mLastTopResumedPackage, topPackage);
+            mLastTopResumedPackage = topPackage;
             if (want != null && !want.topSent && want.state == State.RESUMED) {
                 want.topSent = true;
                 gain = want;
             }
         }
+        Runnable listener = mTopResumedPackageListener;
+        if (topPackageChanged && listener != null) listener.run();
         com.gesher.app.window.ApplicationDisplay.update(displayRotation, displaySequence);
         if (lose != null) {
             ClientTransaction t = new ClientTransaction(lose.app.thread);
@@ -5067,6 +5201,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ProcessRecord check = null;
         List<ActivityRecord> released = new ArrayList<>();
         synchronized (this) {
+            recordUsage(r, ActivityUsageHistory.State.TERMINATED);
             r.state = State.DESTROYED;
             accountActivityFinished(r);
             mActivities.remove(r);
@@ -5254,6 +5389,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
             // A pause or a finish may already be on its way (startActivity or finish() in
             // onResume).
+            if (r.app != null && !r.app.dead && (r.state == State.LAUNCHING && !r.launchingPaused
+                    || r.state == State.RESUMING || r.state == State.PAUSING)) {
+                recordUsage(r, ActivityUsageHistory.State.RESUMED);
+            }
             if (r.state == State.LAUNCHING || r.state == State.RESUMING) r.state = State.RESUMED;
             coveredByNativeUi = (r.documentPickers > 0 || r.chooserCoverCount > 0)
                     && r.state == State.RESUMED;
@@ -5579,6 +5718,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean needProcess = false;
         ActivityRecord processTarget = null;
         synchronized (this) {
+            // Covered launches acknowledge the PauseActivityItem actually sent;
+            // an already started visible activity may also acknowledge a pause.
+            if (r.app != null && !r.app.dead && (r.state == State.PAUSING
+                    || r.state == State.STARTED
+                    || r.state == State.LAUNCHING && r.launchingPaused)) {
+                recordUsage(r, ActivityUsageHistory.State.PAUSED);
+            }
+            r.launchingPaused = false;
             r.state = State.PAUSED;
             finishing = r.finishing;
             // Paused as its task went to the back: stopped now (nothing in front of it will
@@ -5681,7 +5828,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (persistentState != null) r.persistentState = persistentState;
             // A resume may have been scheduled after the stop (the activity in front
             // finished first): it stays on its way to the front.
-            if (r.state == State.STOPPING) r.state = State.STOPPED;
+            if (r.state == State.STOPPING) {
+                if (r.app != null && !r.app.dead) recordUsage(r, ActivityUsageHistory.State.STOPPED);
+                r.state = State.STOPPED;
+            }
             destroy = r.finishing;
             notifyAll();
         }
