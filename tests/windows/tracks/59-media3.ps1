@@ -176,7 +176,7 @@ $recordChecks = @(
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
-      $_ -match 'AudioRecord (read|stop) trace:|AAudio input (open|read|stop) trace:|RecordTest ndk aaudio input read:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|camera native trace:|camera JNI array trace:|camera suspend trace:|\bGC\b|Suspending all threads took|SuspendAll|ResumeAll|ThreadFlip|WaitForGcToComplete'
+      $_ -match 'AudioRecord (read|stop) trace:|AAudio input (open|read|stop) trace:|RecordTest ndk aaudio input read:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|capturing at \d+x\d+ \(opened in|camera native trace:|camera JNI array trace:|camera suspend trace:|\bGC\b|Suspending all threads took|SuspendAll|ResumeAll|ThreadFlip|WaitForGcToComplete'
     } | Select-Object -Unique)) {
     Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
   }
