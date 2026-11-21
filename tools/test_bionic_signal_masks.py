@@ -50,8 +50,9 @@ def main() -> int:
     pending = read_source("compat/posix/include/gesher/pending_signals.h")
     declarations = []
     for key in ("kNsig", "kSigrtMin", "kSigDfl", "kSaSiginfo", "kSaResethand",
-                "kSigBlock", "kSigkill", "kSiUser", "kEAGAIN", "kEINTR", "kEINVAL", "kENOSYS"):
-        origin = shim if key in ("kEAGAIN", "kEINTR", "kEINVAL", "kENOSYS") else source
+                "kSigBlock", "kSigkill", "kSiUser", "kEAGAIN", "kEFAULT", "kEINTR", "kEINVAL",
+                "kENOSYS"):
+        origin = shim if key in ("kEAGAIN", "kEFAULT", "kEINTR", "kEINVAL", "kENOSYS") else source
         matches = re.findall(r"^constexpr (?:int|uintptr_t|uint32_t) " + key + r"[^\n]+",
                              origin, re.M)
         if len(matches) != 1:
@@ -69,12 +70,19 @@ def main() -> int:
                function(source, "void Pop("),
                function(source, "int TakeDeliverable("),
                function(source, "int DeliverAll(")]
+    # The wait-set filter; a historical --source-ref passes the set unfiltered.
+    wait_set = ([function(source, "uint64_t WaitSet(")]
+                if "uint64_t WaitSet(" in source else [])
     suspend = [function(source, "bool DefaultIgnores("),
-               function(source, "int TakeWaiting("),
+               function(source, "int TakeWaiting(")] + wait_set + [
+               function(source, "int BIONIC_SYSV Sigwait("),
+               function(source, "int BIONIC_SYSV Sigwaitinfo("),
+               function(source, "int BIONIC_SYSV Sigtimedwait("),
                function(source, "int BIONIC_SYSV Sigsuspend("),
                function(source, "int BIONIC_SYSV Pause(")]
     structs = [function(source, "struct " + name + " {") + ";"
                for name in ("BionicSigaction", "BionicSiginfo", "BionicStack")]
+    structs.append(function(shim, "struct LinuxTimespec {") + ";")
     replacements = {
         "@DECLARATIONS@": "\n".join(declarations + structs + bodies[:1 + len(filters)]),
         "@ACTION_HELPERS@": "\n".join(helpers[:5]),
