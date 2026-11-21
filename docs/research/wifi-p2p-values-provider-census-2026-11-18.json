@@ -1,0 +1,1706 @@
+{
+  "scope": "Eight SDK36 types and 172 declarations in fresh production DEX; retained framework is an older actual distribution, not a current full Windows runtime build",
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "source_integration_head": "f0dce23e5418add5af38dd7762a061593b3751f1",
+  "framework_distribution_source": {
+    "run_id": 44208723771,
+    "artifact_id": 14386510665,
+    "source": "63d8db3e8e4a7c992d8daa0c027860bb759dcdaa",
+    "checkout": "76ac2cd2be8469ea88acc9145c4c51ffeb313a96"
+  },
+  "fresh_app_archive": {
+    "source_id": "fresh-gesher-app",
+    "role": "boot",
+    "name": "gesher-app.jar",
+    "sha256": "07190f2dc84ee8f41819071015495e30de7be26d04746a1a23051b0b9864e8d1",
+    "archive_bytes": 1409285,
+    "entries": 1,
+    "uncompressed_bytes": 3400672,
+    "class_definitions": 2443,
+    "selected_members": 1,
+    "versions": {
+      "dex_039": 1
+    },
+    "encoded_member_definitions": 30495
+  },
+  "retained_framework_archive": {
+    "source_id": "retained-distribution-framework",
+    "role": "boot",
+    "name": "framework.jar",
+    "sha256": "fed525b7fd92cfe2b82ac547172d545dd2f4073a6bb67740906b15ec7c8c1bb7",
+    "archive_bytes": 17040072,
+    "entries": 1183,
+    "uncompressed_bytes": 44464732,
+    "class_definitions": 34764,
+    "selected_members": 5,
+    "versions": {
+      "dex_039": 5
+    },
+    "encoded_member_definitions": 456490
+  },
+  "selected_counts": {
+    "android.net.wifi.p2p.WifiP2pConfig": 33,
+    "android.net.wifi.p2p.WifiP2pConfig$Builder": 12,
+    "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig": 11,
+    "android.net.wifi.p2p.WifiP2pDevice": 32,
+    "android.net.wifi.p2p.WifiP2pWfdInfo": 45,
+    "android.net.wifi.p2p.WifiP2pDeviceList": 8,
+    "android.net.wifi.p2p.WifiP2pGroup": 22,
+    "android.net.wifi.p2p.WifiP2pInfo": 9
+  },
+  "selected_types_present": 8,
+  "selected_declarations_present": 172,
+  "rows": [
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_CLIENT_IP_PROVISIONING_MODE_IPV4_DHCP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_CLIENT_IP_PROVISIONING_MODE_IPV6_LINK_LOCAL",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_OWNER_BAND_2GHZ",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_OWNER_BAND_5GHZ",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_OWNER_BAND_6GHZ",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_OWNER_BAND_AUTO",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_OWNER_INTENT_AUTO",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_OWNER_INTENT_MAX",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "GROUP_OWNER_INTENT_MIN",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "P2P_VERSION_1",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "P2P_VERSION_2",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "PCC_MODE_CONNECTION_TYPE_LEGACY_ONLY",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "PCC_MODE_CONNECTION_TYPE_LEGACY_OR_R2",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "PCC_MODE_CONNECTION_TYPE_R2_ONLY",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "deviceAddress",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "groupOwnerIntent",
+      "descriptor": "I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "field",
+      "name": "wps",
+      "descriptor": "Landroid/net/wifi/WpsInfo;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/p2p/WifiP2pConfig;)V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "getGroupClientIpProvisioningMode",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "getGroupOwnerBand",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "getGroupOwnerVersion",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "getNetworkId",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "getNetworkName",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "getPairingBootstrappingConfig",
+      "descriptor": "()Landroid/net/wifi/p2p/WifiP2pPairingBootstrappingConfig;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "getPassphrase",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "getPccModeConnectionType",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "isAuthorizeConnectionFromPeerEnabled",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "setGroupOwnerVersion",
+      "descriptor": "(I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "build",
+      "descriptor": "()Landroid/net/wifi/p2p/WifiP2pConfig;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "enablePersistentMode",
+      "descriptor": "(Z)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setAuthorizeConnectionFromPeerEnabled",
+      "descriptor": "(Z)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setDeviceAddress",
+      "descriptor": "(Landroid/net/MacAddress;)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setGroupClientIpProvisioningMode",
+      "descriptor": "(I)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setGroupOperatingBand",
+      "descriptor": "(I)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setGroupOperatingFrequency",
+      "descriptor": "(I)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setNetworkName",
+      "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setPairingBootstrappingConfig",
+      "descriptor": "(Landroid/net/wifi/p2p/WifiP2pPairingBootstrappingConfig;)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setPassphrase",
+      "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pConfig$Builder",
+      "kind": "method",
+      "name": "setPccModeConnectionType",
+      "descriptor": "(I)Landroid/net/wifi/p2p/WifiP2pConfig$Builder;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "field",
+      "name": "PAIRING_BOOTSTRAPPING_METHOD_DISPLAY_PASSPHRASE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "field",
+      "name": "PAIRING_BOOTSTRAPPING_METHOD_DISPLAY_PINCODE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "field",
+      "name": "PAIRING_BOOTSTRAPPING_METHOD_KEYPAD_PASSPHRASE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "field",
+      "name": "PAIRING_BOOTSTRAPPING_METHOD_KEYPAD_PINCODE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "field",
+      "name": "PAIRING_BOOTSTRAPPING_METHOD_OPPORTUNISTIC",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "field",
+      "name": "PAIRING_BOOTSTRAPPING_METHOD_OUT_OF_BAND",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(ILjava/lang/String;)V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "AVAILABLE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "CONNECTED",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "FAILED",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "INVITED",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "UNAVAILABLE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "deviceAddress",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "deviceName",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "primaryDeviceType",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "secondaryDeviceType",
+      "descriptor": "Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "field",
+      "name": "status",
+      "descriptor": "I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/p2p/WifiP2pDevice;)V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "equals",
+      "descriptor": "(Ljava/lang/Object;)Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "getIpAddress",
+      "descriptor": "()Ljava/net/InetAddress;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "getVendorElements",
+      "descriptor": "()Ljava/util/List;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "getWfdInfo",
+      "descriptor": "()Landroid/net/wifi/p2p/WifiP2pWfdInfo;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "hashCode",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "isGroupOwner",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "isOpportunisticBootstrappingMethodSupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "isPassphraseDisplayBootstrappingMethodSupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "isPassphraseKeypadBootstrappingMethodSupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "isPinCodeDisplayBootstrappingMethodSupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "isPinCodeKeypadBootstrappingMethodSupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "isServiceDiscoveryCapable",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "update",
+      "descriptor": "(Landroid/net/wifi/p2p/WifiP2pDevice;)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "wpsDisplaySupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "wpsKeypadSupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "wpsPbcSupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDevice",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_AUDIO_ONLY_SUPPORT_AT_SOURCE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_AUDIO_UNSUPPORTED_AT_PRIMARY_SINK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_CONTENT_PROTECTION_SUPPORT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_COUPLED_SINK_SUPPORT_AT_SINK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_COUPLED_SINK_SUPPORT_AT_SOURCE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_DEVICE_TYPE_MASK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_PREFERRED_CONNECTIVITY_MASK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_SESSION_AVAILABLE_MASK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_TDLS_PERSISTENT_GROUP",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_TDLS_PERSISTENT_GROUP_REINVOKE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_TIME_SYNCHRONIZATION_SUPPORT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_INFO_WFD_SERVICE_DISCOVERY_SUPPORT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_TYPE_PRIMARY_SINK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_TYPE_SECONDARY_SINK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_TYPE_SOURCE_OR_PRIMARY_SINK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "DEVICE_TYPE_WFD_SOURCE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "PREFERRED_CONNECTIVITY_P2P",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "field",
+      "name": "PREFERRED_CONNECTIVITY_TDLS",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/p2p/WifiP2pWfdInfo;)V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "getControlPort",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "getDeviceInfo",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "getDeviceType",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "getMaxThroughput",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "getR2DeviceInfo",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "getR2DeviceType",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "isContentProtectionSupported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "isCoupledSinkSupportedAtSink",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "isCoupledSinkSupportedAtSource",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "isEnabled",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "isR2Supported",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "isSessionAvailable",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setContentProtectionSupported",
+      "descriptor": "(Z)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setControlPort",
+      "descriptor": "(I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setCoupledSinkSupportAtSink",
+      "descriptor": "(Z)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setCoupledSinkSupportAtSource",
+      "descriptor": "(Z)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setDeviceType",
+      "descriptor": "(I)Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setEnabled",
+      "descriptor": "(Z)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setMaxThroughput",
+      "descriptor": "(I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setR2DeviceType",
+      "descriptor": "(I)Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "setSessionAvailable",
+      "descriptor": "(Z)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pWfdInfo",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDeviceList",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDeviceList",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDeviceList",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/p2p/WifiP2pDeviceList;)V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDeviceList",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDeviceList",
+      "kind": "method",
+      "name": "get",
+      "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/p2p/WifiP2pDevice;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDeviceList",
+      "kind": "method",
+      "name": "getDeviceList",
+      "descriptor": "()Ljava/util/Collection;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDeviceList",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pDeviceList",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "field",
+      "name": "NETWORK_ID_PERSISTENT",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "field",
+      "name": "NETWORK_ID_TEMPORARY",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "field",
+      "name": "SECURITY_TYPE_UNKNOWN",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "field",
+      "name": "SECURITY_TYPE_WPA2_PSK",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "field",
+      "name": "SECURITY_TYPE_WPA3_COMPATIBILITY",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "field",
+      "name": "SECURITY_TYPE_WPA3_SAE",
+      "descriptor": "I",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/p2p/WifiP2pGroup;)V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getClientList",
+      "descriptor": "()Ljava/util/Collection;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getFrequency",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getGroupOwnerBssid",
+      "descriptor": "()Landroid/net/MacAddress;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getInterface",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getNetworkId",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getNetworkName",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getOwner",
+      "descriptor": "()Landroid/net/wifi/p2p/WifiP2pDevice;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getPassphrase",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "getSecurityType",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "isGroupOwner",
+      "descriptor": "()Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pGroup",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "field",
+      "name": "CREATOR",
+      "descriptor": "Landroid/os/Parcelable$Creator;",
+      "sdk_flags": 25,
+      "dex_flags": 25,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "field",
+      "name": "groupFormed",
+      "descriptor": "Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "field",
+      "name": "groupOwnerAddress",
+      "descriptor": "Ljava/net/InetAddress;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "field",
+      "name": "isGroupOwner",
+      "descriptor": "Z",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "()V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "method",
+      "name": "<init>",
+      "descriptor": "(Landroid/net/wifi/p2p/WifiP2pInfo;)V",
+      "sdk_flags": 1,
+      "dex_flags": 65537,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "method",
+      "name": "describeContents",
+      "descriptor": "()I",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "method",
+      "name": "toString",
+      "descriptor": "()Ljava/lang/String;",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    },
+    {
+      "owner": "android.net.wifi.p2p.WifiP2pInfo",
+      "kind": "method",
+      "name": "writeToParcel",
+      "descriptor": "(Landroid/os/Parcel;I)V",
+      "sdk_flags": 1,
+      "dex_flags": 1,
+      "provider": "fresh-gesher-app"
+    }
+  ],
+  "descriptor_and_generic_dependencies": {
+    "android.net.MacAddress": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.ScanResult$InformationElement": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.WpsInfo": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.p2p.WifiP2pConfig": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.p2p.WifiP2pConfig$Builder": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.p2p.WifiP2pDevice": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.p2p.WifiP2pDeviceList": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.p2p.WifiP2pGroup": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.p2p.WifiP2pInfo": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.p2p.WifiP2pPairingBootstrappingConfig": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.net.wifi.p2p.WifiP2pWfdInfo": {
+      "retained_framework": false,
+      "fresh_app": true,
+      "selected_subset_provider": "fresh-gesher-app"
+    },
+    "android.os.Parcel": {
+      "retained_framework": true,
+      "fresh_app": false,
+      "selected_subset_provider": "retained-framework"
+    },
+    "android.os.Parcelable": {
+      "retained_framework": true,
+      "fresh_app": false,
+      "selected_subset_provider": "retained-framework"
+    },
+    "android.os.Parcelable$Creator": {
+      "retained_framework": true,
+      "fresh_app": false,
+      "selected_subset_provider": "retained-framework"
+    },
+    "java.lang.Object": {
+      "retained_framework": false,
+      "fresh_app": false,
+      "selected_subset_provider": "core/runtime input outside this two-archive census"
+    },
+    "java.lang.String": {
+      "retained_framework": false,
+      "fresh_app": false,
+      "selected_subset_provider": "core/runtime input outside this two-archive census"
+    },
+    "java.net.InetAddress": {
+      "retained_framework": false,
+      "fresh_app": false,
+      "selected_subset_provider": "core/runtime input outside this two-archive census"
+    },
+    "java.util.Collection": {
+      "retained_framework": false,
+      "fresh_app": false,
+      "selected_subset_provider": "core/runtime input outside this two-archive census"
+    },
+    "java.util.List": {
+      "retained_framework": false,
+      "fresh_app": false,
+      "selected_subset_provider": "core/runtime input outside this two-archive census"
+    }
+  },
+  "duplicate_selected_p2p_providers": 0,
+  "current_framework_rebuild": false,
+  "actual_windows_execution": false,
+  "source_freeze": "Corrected hidden DIR field annotation; production source hashes in full-build-v3/source-hashes.json",
+  "artifact_relative_path": "full-build-v3/app/gesher-app.jar",
+  "companion_provenance": "wifi-p2p-values-provenance-2026-11-18.json"
+}

@@ -29,6 +29,7 @@
 // (BR_TRANSACTION_SEC_CTX), freezing, priority inheritance, polling; such
 // transactions fail with BR_FAILED_REPLY.
 #include <windows.h>
+#include <bcrypt.h>
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -38,6 +39,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <deque>
 #include <list>
 #include <map>
 #include <memory>
@@ -1559,6 +1561,215 @@ void ServeProc(HANDLE pipe, In in) {
   ProcRelease(proc);
 }
 
+// --- the descriptor broker (ADR 0088 section 3) --------------------------------------
+//
+// SCM_RIGHTS on Gesher's AF_UNIX socketpairs. A deposited group of
+// descriptors is a set of handles this process owns (duplicated from the
+// sender), with each descriptor's metadata. It leaves when a receiver claims
+// it (by token: datagram pairs carry the token in the message), takes it from
+// its stream connection's queue once it has read the bytes sent with it (the
+// group's position, binder_wire.h), or the sender cancels it. As on Linux,
+// descriptors in flight outlive their sender.
+
+struct RightsEntry {
+  HANDLE handle;
+  uint64_t metadata;
+};
+
+struct RightsGroup {
+  uint64_t token[2] = {};
+  uint64_t queue = 0;  // 0: claimed by token only
+  uint64_t position = 0;  // a queued group's: where its bytes begin
+  std::vector<RightsEntry> entries;
+};
+
+std::mutex g_rights_lock;
+std::map<std::pair<uint64_t, uint64_t>, std::shared_ptr<RightsGroup>> g_rights_groups;
+std::map<uint64_t, std::deque<std::shared_ptr<RightsGroup>>> g_rights_queues;
+uint32_t g_rights_in_flight = 0;
+volatile LONG64* g_rights_doorbell = nullptr;  // wire::kRightsDoorbellSlots values
+
+// Publishes the lowest position waiting for the receiving port of `queue`
+// (binder_wire.h's doorbell); g_rights_lock held. Every queue of that port
+// counts: the doorbell is per port.
+void RefreshDoorbell(uint64_t queue) {
+  if (g_rights_doorbell == nullptr || queue == 0) return;
+  const uint64_t port = (queue >> 16) & 0xffff;
+  uint64_t lowest = UINT64_MAX;
+  for (auto it = g_rights_queues.lower_bound(port << 16);
+       it != g_rights_queues.end() && (it->first >> 16) == port; ++it) {
+    for (const auto& group : it->second) lowest = std::min(lowest, group->position);
+  }
+  InterlockedExchange64(&g_rights_doorbell[port],
+                        lowest == UINT64_MAX ? 0 : static_cast<LONG64>(lowest + 1));
+}
+
+// g_rights_lock held.
+void CloseRightsGroup(RightsGroup* group) {
+  for (const RightsEntry& e : group->entries) CloseHandle(e.handle);
+  g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
+  group->entries.clear();
+}
+
+// Moves a group's handles into `to` (the caller's process); g_rights_lock held.
+// Each handle the broker held is closed, delivered or not; one that cannot be
+// delivered is reported as handle 0, which the receiver reports as a failure.
+void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
+  for (const RightsEntry& e : group->entries) {
+    HANDLE out = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), e.handle, to, &out, 0, FALSE,
+                         DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE)) {
+      Log("rights: DuplicateHandle into the receiver failed: %lu", GetLastError());
+      out = nullptr;
+    }
+    reply->Put<uint64_t>(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(out)));
+    reply->Put<uint64_t>(e.metadata);
+  }
+  g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
+  group->entries.clear();
+}
+
+void ServeRights(HANDLE pipe, In in) {
+  uint32_t version;
+  ULONG client_pid = 0;
+  HANDLE client = nullptr;
+  if (in.Get(&version) && version == wire::kRightsVersion &&
+      GetNamedPipeClientProcessId(pipe, &client_pid)) {
+    client = OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid);
+  }
+  WireReply hello;
+  hello.Put<int32_t>(client != nullptr ? 0 : -ESRCH);
+  if (!WriteMessage(pipe, hello) || client == nullptr) {
+    if (client != nullptr) CloseHandle(client);
+    return;
+  }
+  std::vector<uint8_t> msg;
+  while (ReadMessage(pipe, &msg)) {
+    In req{msg.data(), msg.data() + msg.size()};
+    uint32_t op;
+    if (!req.Get(&op)) break;
+    WireReply reply;
+    if (op == wire::kRightsDeposit) {
+      uint64_t queue, position;
+      uint32_t count;
+      if (!req.Get(&queue) || !req.Get(&position) || !req.Get(&count) || count == 0 ||
+          count > wire::kRightsMaxPerMessage) {
+        break;
+      }
+      auto group = std::make_shared<RightsGroup>();
+      group->queue = queue;
+      group->position = position;
+      int32_t status = 0;
+      for (uint32_t i = 0; i < count; ++i) {
+        uint64_t handle;
+        uint64_t metadata;
+        if (!req.Get(&handle) || !req.Get(&metadata)) {
+          status = -EINVAL;
+          break;
+        }
+        HANDLE own = nullptr;
+        if (!DuplicateHandle(client, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)),
+                             GetCurrentProcess(), &own, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          Log("rights: DuplicateHandle from pid %lu failed: %lu", client_pid, GetLastError());
+          status = -EBADF;
+          break;
+        }
+        group->entries.push_back({own, metadata});
+      }
+      if (status == 0 &&
+          !BCRYPT_SUCCESS(BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(group->token),
+                                          sizeof(group->token),
+                                          BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+        status = -EIO;
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_rights_lock);
+        g_rights_in_flight += static_cast<uint32_t>(group->entries.size());
+        if (status == 0 && g_rights_in_flight > wire::kRightsMaxInFlight) status = -ETOOMANYREFS;
+        if (status != 0) {
+          CloseRightsGroup(group.get());
+        } else {
+          g_rights_groups[{group->token[0], group->token[1]}] = group;
+          if (queue != 0) {
+            g_rights_queues[queue].push_back(group);
+            RefreshDoorbell(queue);
+          }
+        }
+      }
+      TRACE("rights: pid %lu deposited %u descriptor(s), queue %llx at %llu: %d", client_pid,
+            count, (unsigned long long)queue, (unsigned long long)position, status);
+      reply.Put<int32_t>(status);
+      reply.Put<uint64_t>(status == 0 ? group->token[0] : 0);
+      reply.Put<uint64_t>(status == 0 ? group->token[1] : 0);
+    } else if (op == wire::kRightsClaim || op == wire::kRightsCancel) {
+      uint64_t token[2];
+      if (!req.Get(&token[0]) || !req.Get(&token[1])) break;
+      std::lock_guard<std::mutex> lock(g_rights_lock);
+      auto it = g_rights_groups.find({token[0], token[1]});
+      std::shared_ptr<RightsGroup> group;
+      if (it != g_rights_groups.end()) {
+        group = it->second;
+        if (group->queue != 0) {
+          // A queued group leaves by its queue (take) or its sender's cancel.
+          auto q = g_rights_queues.find(group->queue);
+          bool queued = false;
+          if (q != g_rights_queues.end()) {
+            auto at = std::find(q->second.begin(), q->second.end(), group);
+            if (at != q->second.end() && op == wire::kRightsCancel) {
+              q->second.erase(at);
+              if (q->second.empty()) g_rights_queues.erase(q);
+              RefreshDoorbell(group->queue);
+              queued = true;
+            }
+          }
+          if (!queued) group = nullptr;
+        }
+        if (group != nullptr) g_rights_groups.erase(it);
+      }
+      if (group == nullptr) {
+        reply.Put<int32_t>(-ENOENT);
+        if (op == wire::kRightsClaim) reply.Put<uint32_t>(0);
+      } else if (op == wire::kRightsCancel) {
+        CloseRightsGroup(group.get());
+        reply.Put<int32_t>(0);
+      } else {
+        reply.Put<int32_t>(0);
+        reply.Put<uint32_t>(static_cast<uint32_t>(group->entries.size()));
+        DeliverRights(client, group.get(), &reply);
+      }
+    } else if (op == wire::kRightsTake) {
+      uint64_t queue, limit;
+      if (!req.Get(&queue) || queue == 0 || !req.Get(&limit)) break;
+      std::lock_guard<std::mutex> lock(g_rights_lock);
+      // The groups whose bytes the receiver has begun to read; the others
+      // stay queued, in order.
+      std::deque<std::shared_ptr<RightsGroup>> groups;
+      auto it = g_rights_queues.find(queue);
+      if (it != g_rights_queues.end()) {
+        std::deque<std::shared_ptr<RightsGroup>> waiting;
+        for (auto& group : it->second) {
+          (group->position < limit ? groups : waiting).push_back(std::move(group));
+        }
+        if (waiting.empty()) g_rights_queues.erase(it);
+        else it->second.swap(waiting);
+        RefreshDoorbell(queue);
+      }
+      uint32_t count = 0;
+      for (const auto& group : groups) count += static_cast<uint32_t>(group->entries.size());
+      reply.Put<int32_t>(0);
+      reply.Put<uint32_t>(count);
+      for (const auto& group : groups) {
+        g_rights_groups.erase({group->token[0], group->token[1]});
+        DeliverRights(client, group.get(), &reply);
+      }
+    } else {
+      break;
+    }
+    if (!WriteMessage(pipe, reply)) break;
+  }
+  CloseHandle(client);
+}
+
 int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
   switch (request) {
     case BINDER_SET_MAX_THREADS: {
@@ -1710,6 +1921,8 @@ void Serve(HANDLE pipe) {
         ServeProc(pipe, in);
       } else if (op == wire::kHelloThread) {
         ServeThread(pipe, in);
+      } else if (op == wire::kHelloRights) {
+        ServeRights(pipe, in);
       }
     }
   }
@@ -1732,6 +1945,29 @@ int main(int argc, char** argv) {
   }
   std::wstring name = wire::kPipePrefix;
   for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
+
+  // The descriptor broker's doorbell and the stream positions (binder_wire.h),
+  // which live as long as the broker does. The positions are the processes'
+  // own; the broker only keeps the section.
+  std::wstring doorbell = wire::kRightsDoorbellPrefix;
+  std::wstring positions = wire::kStreamPositionsPrefix;
+  for (char c : device) {
+    doorbell += static_cast<wchar_t>(static_cast<unsigned char>(c));
+    positions += static_cast<wchar_t>(static_cast<unsigned char>(c));
+  }
+  constexpr DWORD kDoorbellBytes = wire::kRightsDoorbellSlots * sizeof(LONG64);
+  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                      kDoorbellBytes, doorbell.c_str());
+  if (section != nullptr) {
+    g_rights_doorbell = static_cast<volatile LONG64*>(
+        MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kDoorbellBytes));
+  }
+  HANDLE positions_section = CreateFileMappingW(
+      INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+      wire::kRightsDoorbellSlots * sizeof(wire::StreamPositions), positions.c_str());
+  if (g_rights_doorbell == nullptr || positions_section == nullptr) {
+    Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
+  }
 
   bool first = true;
   for (;;) {

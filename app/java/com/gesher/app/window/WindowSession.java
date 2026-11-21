@@ -354,6 +354,20 @@ public final class WindowSession extends IWindowSession.Stub {
         return sInstance;
     }
 
+    /** Whether a real, shown application window exists in this process. */
+    public boolean hasShownApplicationWindow() {
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow w = mWindows.valueAt(i);
+                if (w.shown && w.nativeWindow != null && isApplicationWindow(w.attrs.type)
+                        && shownOnDesktop(w)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     public void setActivityVisibility(IBinder token, boolean shown) {
         if (token == null) throw new IllegalArgumentException("Missing activity token");
         synchronized (mWindows) { mActivityVisibility.put(token, shown); }
@@ -943,6 +957,68 @@ public final class WindowSession extends IWindowSession.Stub {
         } catch (RuntimeException e) {
             return null;  // read while the main thread changes it
         }
+    }
+
+    private final AtomicBoolean mWatchingResumes = new AtomicBoolean();
+
+    /**
+     * Observe the actual lifecycle, including NewIntentItem's implicit resume, which
+     * does not send ActivityClient.activityResumed. The Application can be unavailable
+     * when the session is installed, so retry when windows are added or laid out.
+     */
+    private void watchResumedActivities() {
+        if (mWatchingResumes.get()) return;
+        android.app.Application app = ActivityThread.currentApplication();
+        if (app == null || !mWatchingResumes.compareAndSet(false, true)) return;
+        app.registerActivityLifecycleCallbacks(new android.app.Application.ActivityLifecycleCallbacks() {
+            @Override public void onActivityPostResumed(android.app.Activity a) {
+                activateActivity(a.getActivityToken());
+            }
+            @Override public void onActivityCreated(android.app.Activity a, Bundle b) {}
+            @Override public void onActivityStarted(android.app.Activity a) {}
+            @Override public void onActivityResumed(android.app.Activity a) {}
+            @Override public void onActivityPaused(android.app.Activity a) {}
+            @Override public void onActivityStopped(android.app.Activity a) {}
+            @Override public void onActivitySaveInstanceState(android.app.Activity a, Bundle b) {}
+            @Override public void onActivityDestroyed(android.app.Activity a) {}
+        });
+    }
+
+    /** Brings a resumed activity's Win32 window to the front or restores it when minimized. */
+    public void activateActivity(IBinder activityToken) {
+        if (activityToken == null) return;
+        AppWindow target = null;
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (!v.popup && v.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
+                        && v.attrs.token == activityToken && v.nativeWindow != null && v.shown
+                        && v.focusable()) {
+                    target = v;
+                    break;
+                }
+            }
+        }
+        if (target == null || target.handler == null || !shownOnDesktop(target)) return;
+        final AppWindow w = target;
+        final NativeWindow nativeWindow = w.nativeWindow;
+        Runnable act = () -> {
+            // Resume is reported before this work reaches the window's thread. A pause,
+            // close or desktop-visibility decision may have overtaken it in the meantime.
+            if (!present(w.client.asBinder(), w) || w.nativeWindow != nativeWindow
+                    || w.attrs.token != activityToken || w.popup || !w.shown
+                    || w.attrs.type != WindowManager.LayoutParams.TYPE_BASE_APPLICATION
+                    || !w.focusable() || !shownOnDesktop(w)) return;
+            android.app.Activity a = activity(activityToken);
+            if (a == null || !a.isResumed() || a.isFinishing() || a.isDestroyed()) return;
+            if (w.minimized) {
+                w.minimized = false;
+                nativeWindow.restore();
+            } else if (!w.focused) {
+                nativeWindow.activate();
+            }
+        };
+        w.handler.post(act);
     }
 
     /** Ends this process now, as SIGKILL does: nothing more of the app runs. */
@@ -1556,37 +1632,6 @@ public final class WindowSession extends IWindowSession.Stub {
         return !windows.isEmpty();
     }
 
-    /** Brings a resumed activity's Win32 window to the front or restores it when minimized. */
-    public void activateActivity(IBinder activityToken) {
-        if (activityToken == null) return;
-        AppWindow target = null;
-        synchronized (mWindows) {
-            for (int i = 0; i < mWindows.size(); i++) {
-                AppWindow v = mWindows.valueAt(i);
-                if (!v.popup && v.attrs.token == activityToken && v.nativeWindow != null && v.shown) {
-                    target = v;
-                    break;
-                }
-            }
-        }
-        if (target == null || !shownOnDesktop(target)) return;
-        final AppWindow w = target;
-        Runnable act = () -> {
-            if (w.nativeWindow == null || !w.shown) return;
-            if (w.minimized) {
-                w.minimized = false;
-                w.nativeWindow.show();
-            } else if (!w.focused) {
-                w.nativeWindow.activate();
-            }
-        };
-        if (w.handler != null) {
-            w.handler.post(act);
-        } else {
-            act.run();
-        }
-    }
-
     /** Remembers where a top-level window of a task is, as it goes or is hidden. */
     private void rememberTaskScreen(AppWindow w) {
         if (w.taskId < 0 || w.nativeWindow == null) return;
@@ -2010,6 +2055,7 @@ public final class WindowSession extends IWindowSession.Stub {
             InputChannel outInputChannel, WindowRelayoutResult result) {
         // After a LaunchActivityItem: the Activity's calls go through the hook again.
         ActivityClientHook.ensure();
+        watchResumedActivities();
         AppWindow w = new AppWindow(window);
         w.attrs.copyFrom(attrs);
         w.requestedVisibleTypes = requestedVisibleTypes;
@@ -2114,6 +2160,7 @@ public final class WindowSession extends IWindowSession.Stub {
         // The task turned for an orientation (or back): the window takes its new shape.
         syncTaskShape(w);
         ActivityClientHook.ensure();
+        watchResumedActivities();
         WindowRelayoutResult result = outRelayoutResult != null ? outRelayoutResult
                 : new WindowRelayoutResult(new ClientWindowFrames(),
                         new android.util.MergedConfiguration(), new InsetsState(),

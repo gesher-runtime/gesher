@@ -204,7 +204,11 @@ public final class SystemServer {
             ApkPackage p = ApkPackage.parse(apk);
             selectCommandLinePackage(packages, p);
         }
-        preparePackageStorage(committed, packages);
+        try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {
+            identity.commit();
+            preparePackageStorage(committed, packages);
+            identity.accept();
+        }
 
         // The services, published with servicemanager.
         Map<String, IBinder> services = Services.create(packages);
@@ -212,10 +216,6 @@ public final class SystemServer {
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.
         created.am.invalidatePermissionCaches();
-        // Providers answering other processes ask the permission checker.
-        services.put("permission_checker", StandIn.of(
-                android.permission.IPermissionChecker.class,
-                new Services.PermissionChecker()).asBinder());
         startAppProcessesOnDemand(created.atm, created.pm);
         PersistentDevice device = null;
         if (persistent) {
@@ -478,6 +478,7 @@ public final class SystemServer {
                 SystemClock.sleep(200);
                 log("shutting down: " + reason);
                 mServices.atm.endAllProcesses(5000);
+                mServices.atm.flushUsageStats();
                 java.util.Properties state = Device.read(Device.stateFile());
                 if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
                     Device.stateFile().delete();

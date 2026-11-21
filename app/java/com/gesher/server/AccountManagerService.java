@@ -42,6 +42,7 @@ import java.util.Set;
 import java.util.WeakHashMap;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,8 +71,8 @@ public final class AccountManagerService extends IAccountManager.Default {
     private static final String GOOGLE_TYPE = "com.google";
     private static final Account DEFAULT_ACCOUNT = new Account("user@gesher.local", GOOGLE_TYPE);
     private static final String ANDROID_NS = "http://schemas.android.com/apk/res/android";
-    /** How long an authenticator has to bind and answer. */
-    private static final long AUTHENTICATOR_TIMEOUT_SECONDS = 60;
+    /** AOSP Session budget, including binding and any login Activity continuation. */
+    private static final long AUTHENTICATOR_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(15);
 
     /** An account's password and user data. */
     private static final class Entry {
@@ -115,7 +116,9 @@ public final class AccountManagerService extends IAccountManager.Default {
     private StoreWriter mStoreWriter = mStore::write;
     private String mUnclaimedLegacy;
     private final AccountSessions mSessions = new AccountSessions();
-    private final Map<String, Long> mRemovalEpochs = new HashMap<>();
+    // Removal advances under the account monitor; broadcast lifetime checks read
+    // without it because target resolution can already hold the package monitor.
+    private final Map<String, Long> mRemovalEpochs = new java.util.concurrent.ConcurrentHashMap<>();
     private final Set<Answer> mAnswers = java.util.Collections.newSetFromMap(new WeakHashMap<>());
     private final Map<ApkPackage, String> mCodeIdentities = new WeakHashMap<>();
     /** Server-local test seam; never exposed through Binder or process settings. */
@@ -147,13 +150,21 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
     // Guarded by this.
     private final Map<Account, Entry> mAccounts = new LinkedHashMap<>();
+    // Protected-store write-ahead records. Only the package registry can decide
+    // if removing the owner committed or rolled back.
+    private final Set<String> mPendingOwnerRemovals = new HashSet<>();
+    private final Set<String> mCommittedOwnerRemovals = new HashSet<>();
+    private java.util.function.BiConsumer<Set<Account>, Set<Account>> mRetireSync =
+            (removed, retained) -> { };
     private State mBeforeMutation;
 
     private static final class State {
         final Map<Account, Entry> accounts = new LinkedHashMap<>();
         final String legacy;
-        State(Map<Account, Entry> source, String legacy) {
+        final Set<String> pendingOwnerRemovals;
+        State(Map<Account, Entry> source, String legacy, Set<String> pendingOwnerRemovals) {
             this.legacy = legacy;
+            this.pendingOwnerRemovals = new HashSet<>(pendingOwnerRemovals);
             for (Map.Entry<Account, Entry> item : source.entrySet()) {
                 Entry old = item.getValue(), copy = new Entry();
                 copy.owner = old.owner; copy.ownerIdentity = old.ownerIdentity;
@@ -169,18 +180,33 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private void beginMutation() {
-        if (mBeforeMutation == null) mBeforeMutation = new State(mAccounts, mUnclaimedLegacy);
+        if (mBeforeMutation == null) {
+            mBeforeMutation = new State(mAccounts, mUnclaimedLegacy, mPendingOwnerRemovals);
+        }
     }
     // Calls to authenticators wait on their binding and answer: off the binder threads.
+    /** Server-local clock seam; normal sessions always use Android's awake-time clock. */
+    private java.util.function.LongSupplier mSessionUptimeMillis = SystemClock::uptimeMillis;
     private final java.util.concurrent.ScheduledExecutorService mSessionTimeout =
-            Executors.newSingleThreadScheduledExecutor(r -> {
+            sessionTimer();
+    private static java.util.concurrent.ScheduledThreadPoolExecutor sessionTimer() {
+        java.util.concurrent.ScheduledThreadPoolExecutor timer =
+            new java.util.concurrent.ScheduledThreadPoolExecutor(1, r -> {
                 Thread t = new Thread(r, "account-session-timeout"); t.setDaemon(true); return t;
             });
+        timer.setRemoveOnCancelPolicy(true);
+        return timer;
+    }
     private final ExecutorService mCalls = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "accounts");
         t.setDaemon(true);
         return t;
     });
+    // Retirement notifications share one worker, independent of account count.
+    // Only immutable event/recipient metadata enters this lane, never an Entry.
+    private record AccountChange(Account account, boolean removed, List<Caller> recipients) { }
+    private final ArrayDeque<AccountChange> mChanges = new ArrayDeque<>();
+    private boolean mChangeWorker;
 
     public AccountManagerService(ActivityManagerService am, PackageManagerService pm) {
         this(am, pm, true);
@@ -198,42 +224,41 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (persistent) load();
         else mStoreWriter = values -> { /* Stand-in accounts live only in this process. */ };
         if (am != null) am.setAccountManager(this);
-        pm.onPackageRemovalCheck(this::checkPackageRemoval);
         pm.onPackageRemoval(this::packageRemoved);
+        pm.setAccountRemovalReconciler(this::reconcilePackageRemovals);
     }
 
-    private synchronized long packageEpoch(String name) { return mRemovalEpochs.getOrDefault(name, 0L); }
+    private long packageEpoch(String name) { return name == null ? 0 : mRemovalEpochs.getOrDefault(name, 0L); }
 
     private synchronized Caller captureCaller(String name, String code, boolean system, int uid, int pid) {
         if (!system && mPm.isRemovalPending(name)) throw new SecurityException("Account client is being removed");
         return new Caller(name, code, system, uid, pid, packageEpoch(name));
     }
 
-    /** Retire client capabilities before an uninstall can publish removal or permit reinstall. */
-    private synchronized void checkPackageRemoval(String name) {
-        if (mAccounts.values().stream().anyMatch(e -> name.equals(e.owner))) {
-            throw new UnsupportedOperationException("Remove this authenticator's accounts before uninstalling it");
-        }
+    void setSyncRetirement(java.util.function.BiConsumer<Set<Account>, Set<Account>> retire) {
+        mRetireSync = retire;
     }
 
+    /** Before package publication, seal the intent to remove owned accounts and revoke client grants. */
     void packageRemoved(String name) {
         if (name == null || name.isEmpty()) throw new IllegalArgumentException("Missing removed package");
         List<Answer> cancel = new ArrayList<>();
         synchronized (this) {
-            checkPackageRemoval(name);
             String prefix = name + "\u0000";
+            boolean ownsAccounts = mAccounts.values().stream().anyMatch(e -> name.equals(e.owner));
             boolean changed = mAccounts.values().stream().anyMatch(e ->
                     e.visibility.keySet().stream().anyMatch(k -> k.startsWith(prefix))
                     || e.tokenGrants.values().stream().anyMatch(g -> g.stream().anyMatch(k -> k.startsWith(prefix)))
                     || e.customTokens.keySet().stream().anyMatch(k -> k.startsWith(prefix)));
-            if (changed) {
+            if (ownsAccounts || changed) {
                 beginMutation();
+                if (ownsAccounts) mPendingOwnerRemovals.add(name);
                 for (Entry e : mAccounts.values()) {
                     e.visibility.keySet().removeIf(k -> k.startsWith(prefix));
                     for (Set<String> grants : e.tokenGrants.values()) grants.removeIf(k -> k.startsWith(prefix));
                     e.customTokens.keySet().removeIf(k -> k.startsWith(prefix));
                 }
-                save(); // Failed persistence restores all grants and stops removal.
+                save(); // A failed write restores grants and stops the package transaction.
             }
             mRemovalEpochs.put(name, packageEpoch(name) + 1);
             mSessions.packageRemoved(name);
@@ -243,8 +268,60 @@ public final class AccountManagerService extends IAccountManager.Default {
             }
         }
         for (Answer answer : cancel) answer.cancelForRemoval();
-        // Provider-owned records/credentials are never deleted by client cleanup.
-        AccountManager.invalidateLocalAccountsDataCaches();
+        invalidateAccountListCache();
+        invalidateAccountUserDataCache();
+    }
+
+    /**
+     * The Installer calls this under its publication lock, with the durable registry's
+     * names. A scan failure or temporarily disabled authenticator is not a removal.
+     * Synchronize our own state separately: sync admission calls back into accounts.
+     */
+    void reconcilePackageRemovals(Set<String> installed) {
+        Map<Account, Entry> removed = new LinkedHashMap<>();
+        Set<Account> retained = new HashSet<>();
+        List<AccountChange> changes = new ArrayList<>();
+        synchronized (this) {
+            if (mPendingOwnerRemovals.isEmpty()) return;
+            for (String owner : mPendingOwnerRemovals) {
+                if (!installed.contains(owner)) mCommittedOwnerRemovals.add(owner);
+            }
+            for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+                if (mCommittedOwnerRemovals.contains(item.getValue().owner)) {
+                    removed.put(item.getKey(), item.getValue());
+                } else {
+                    retained.add(item.getKey());
+                }
+            }
+        }
+        // A failed cleanup leaves the marker sealed and the accounts inaccessible.
+        // Retry before a package can be published again, even with the same signer.
+        try {
+            if (!removed.isEmpty()) mRetireSync.accept(removed.keySet(), retained);
+            synchronized (this) {
+                beginMutation();
+                for (Account account : removed.keySet()) {
+                    // Snapshot while the authoritative entry and the client
+                    // removal epochs are protected by the same monitor.
+                    Entry entry = mAccounts.remove(account);
+                    if (entry != null) changes.add(captureChange(account, true, entry, false));
+                }
+                mPendingOwnerRemovals.clear();
+                save();
+                mCommittedOwnerRemovals.clear();
+            }
+        } finally {
+            invalidateAccountListCache();
+            invalidateAccountUserDataCache();
+        }
+        enqueueChanges(changes);
+    }
+
+    /** Called with this locked. Pending accounts remain sealed for a possible registry rollback. */
+    private boolean retiring(Entry entry) {
+        return entry != null && mPendingOwnerRemovals.contains(entry.owner)
+                && (mCommittedOwnerRemovals.contains(entry.owner)
+                        || mPm.isRemovalPending(entry.owner) || mPm.get(entry.owner) == null);
     }
 
     /** Called only after ATM authenticated the source activity, PID and application thread. */
@@ -289,7 +366,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         private boolean permittedType(String type) { return allowedTypes == null || allowedTypes.contains(type); }
         private boolean eligible(Account account, Entry entry) {
             if (entry == null || entry.owner == null || entry.ownerIdentity == null
-                    || !entry.ownerIdentity.equals(packageIdentity(entry.owner))
+                    || retiring(entry) || !entry.ownerIdentity.equals(packageIdentity(entry.owner))
                     || !permittedType(account.type)
                     || allowedAccounts != null && !allowedAccounts.contains(account)) return false;
             Authenticator owner = authenticator(account.type);
@@ -344,35 +421,35 @@ public final class AccountManagerService extends IAccountManager.Default {
             Authenticator owner = authenticator(type);
             if (owner == null) return false;
             String ownerCode = packageIdentity(owner.service.getPackageName());
-            Answer answer = call(owner, (auth, response) -> auth.addAccount(response, type,
-                    authTokenType, requiredFeatures, new Bundle(addOptions)), client);
             CountDownLatch done = new CountDownLatch(1);
             java.util.concurrent.atomic.AtomicBoolean success = new java.util.concurrent.atomic.AtomicBoolean();
             java.util.concurrent.atomic.AtomicBoolean launched = new java.util.concurrent.atomic.AtomicBoolean();
-            answer.deliverSession(new IAccountManagerResponse.Stub() {
+            java.util.concurrent.atomic.AtomicBoolean finished = new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.function.Consumer<Boolean> finish = value -> {
+                if (finished.compareAndSet(false, true)) { success.set(value); done.countDown(); }
+            };
+            IAccountManagerResponse response = new IAccountManagerResponse.Stub() {
                 @Override public void onResult(Bundle result) {
-                    if (!active.getAsBoolean()) { done.countDown(); return; }
+                    if (!active.getAsBoolean()) { finish.accept(false); return; }
                     Intent intent = result.getParcelable(AccountManager.KEY_INTENT, Intent.class);
-                    if (intent == null) { success.set(true); done.countDown(); }
+                    if (intent == null) finish.accept(true);
                     else if (!launched.compareAndSet(false, true)
-                            || !launcher.launch(intent, () -> { success.set(true); done.countDown(); })) done.countDown();
+                            || !launcher.launch(intent, () -> finish.accept(true))) finish.accept(false);
                 }
-                @Override public void onError(int code, String message) { done.countDown(); }
-            }, value -> {
-                Authenticator current = authenticator(type);
-                if (!active.getAsBoolean() || !callerUnchanged(client) || current == null
-                        || !current.service.equals(owner.service) || ownerCode == null
-                        || !ownerCode.equals(packageIdentity(owner.service.getPackageName()))) return null;
-                // Unlike addAccount, adding through the chooser grants no visibility.
-                return validatedResult(owner, value, null);
-            });
+                @Override public void onError(int code, String message) { finish.accept(false); }
+            };
+            Answer answer = call(owner, (auth, r) -> auth.addAccount(r, type,
+                    authTokenType, requiredFeatures, new Bundle(addOptions)), client, response, active);
             try {
-                long end = SystemClock.elapsedRealtime() + TimeUnit.MINUTES.toMillis(10);
-                while (!done.await(250, TimeUnit.MILLISECONDS)) {
-                    if (!active.getAsBoolean() || SystemClock.elapsedRealtime() >= end) return false;
-                }
-                return success.get() && active.getAsBoolean();
-            } catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
+                return answer.deliverToChooser(response, value -> {
+                    Authenticator current = authenticator(type);
+                    if (!active.getAsBoolean() || !callerUnchanged(client) || current == null
+                            || !current.service.equals(owner.service) || ownerCode == null
+                            || !ownerCode.equals(packageIdentity(owner.service.getPackageName()))) return null;
+                    // Unlike addAccount, adding through the chooser grants no visibility.
+                    return validatedResult(owner, value, null);
+                }, done, success::get, active);
+            } finally { finish.accept(false); }
         }
     }
 
@@ -388,7 +465,14 @@ public final class AccountManagerService extends IAccountManager.Default {
     private synchronized String packageIdentity(String name) {
         ApkPackage pkg = mPm.get(name);
         if (pkg == null || mPm.isRemovalPending(name)) return null;
-        if (mCodeIdentities.containsKey(pkg)) return mCodeIdentities.get(pkg);
+        return codeIdentity(pkg);
+    }
+
+    /** Code identity belongs to one package instance; this cache never takes the account monitor. */
+    private String codeIdentity(ApkPackage pkg) {
+        synchronized (mCodeIdentities) {
+            if (mCodeIdentities.containsKey(pkg)) return mCodeIdentities.get(pkg);
+        }
         // A verified rotation may explicitly retain account authentication rights.
         String code = pkg.verifiedAuthSignerSha256();
         if (code != null) code = "cert:" + code;
@@ -398,8 +482,20 @@ public final class AccountManagerService extends IAccountManager.Default {
             // cannot inherit credentials by keeping base unchanged and replacing a split.
             code = NotificationManagerService.codeIdentity(pkg);
         }
-        mCodeIdentities.put(pkg, code);
+        synchronized (mCodeIdentities) { mCodeIdentities.put(pkg, code); }
         return code;
+    }
+
+    /** Safe under BroadcastController/PackageManager locks; no account lock acquisition. */
+    private boolean recipientUnchanged(Caller recipient) {
+        if (recipient.code == null || recipient.removalEpoch != packageEpoch(recipient.name)
+                || mPm.isRemovalPending(recipient.name)) return false;
+        ApkPackage current = mPm.get(recipient.name);
+        if (current == null || GmsSignatureSpoofing.isEnabled() && current.uid() != recipient.uid) return false;
+        String code = codeIdentity(current);
+        // Reject retirement or replacement that raced the identity calculation.
+        return recipient.code.equals(code) && recipient.removalEpoch == packageEpoch(recipient.name)
+                && !mPm.isRemovalPending(recipient.name) && mPm.get(recipient.name) == current;
     }
 
     private static boolean synthetic(Account account, Entry e) {
@@ -411,8 +507,8 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private boolean owns(Caller c, Entry e) {
-        return c.system || e != null && c.name != null && c.code != null && c.name.equals(e.owner)
-                && c.code.equals(e.ownerIdentity);
+        return !retiring(e) && (c.system || e != null && c.name != null && c.code != null
+                && c.name.equals(e.owner) && c.code.equals(e.ownerIdentity));
     }
 
     private void requireOwner(Caller c, Entry e) {
@@ -425,7 +521,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private int visibility(Caller c, Entry e) {
-        if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
+        if (e == null || retiring(e)) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (owns(c, e)) return AccountManager.VISIBILITY_VISIBLE;
         // Legacy keys describe policy categories, not grants to every client. Until
         // Android's permission/target-SDK eligibility policy is implemented here,
@@ -521,7 +617,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         Map<String, Integer> result = new LinkedHashMap<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             Account a = item.getKey(); Entry e = item.getValue();
-            if (accountType != null && !accountType.equals(a.type)) continue;
+            if (retiring(e) || accountType != null && !accountType.equals(a.type)) continue;
             if (!c.system && !owns(c, e)
                     && (!packageName.equals(c.name) || !visible(c, a, e))) continue;
             if (!dummy(a)) result.put(a.name, visibility(target, e));
@@ -532,7 +628,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public synchronized int getAccountVisibility(Account account, String packageName) {
         Caller c = caller(null); Entry e = mAccounts.get(account);
-        if (e == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
+        if (e == null || retiring(e)) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (!owns(c, e) && !packageName.equals(c.name)) throw new SecurityException("Account client mismatch");
         if (isLegacyKey(packageName)) return legacyVisibility(e, packageName);
         return visibility(targetCaller(packageName), e);
@@ -665,17 +761,29 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     synchronized boolean canAccessAccount(Account account, String packageName) {
         Entry e = mAccounts.get(account);
-        return e != null && visible(targetCaller(packageName), account, e);
+        if (e == null || packageName == null || mPm.isRemovalPending(packageName)) return false;
+        ApkPackage target = mPm.get(packageName);
+        String code = target == null ? null : codeIdentity(target);
+        // Sync admission must return a denial if removal starts while reading the code identity.
+        if (mPm.isRemovalPending(packageName) || mPm.get(packageName) != target) return false;
+        Caller caller = new Caller(packageName, code, false, target == null ? -1 : target.uid(),
+                -1, packageEpoch(packageName));
+        return visible(caller, account, e);
     }
 
     synchronized Account[] syncableAccounts() {
-        List<Account> list = new ArrayList<>(mAccounts.keySet());
-        if (synthetic(DEFAULT_ACCOUNT, mAccounts.get(DEFAULT_ACCOUNT))) list.remove(DEFAULT_ACCOUNT);
+        List<Account> list = new ArrayList<>();
+        for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+            if (!synthetic(item.getKey(), item.getValue()) && !retiring(item.getValue())) {
+                list.add(item.getKey());
+            }
+        }
         return list.toArray(new Account[0]);
     }
 
     private synchronized boolean exists(Account account) {
-        return account != null && mAccounts.containsKey(account);
+        Entry entry = account != null ? mAccounts.get(account) : null;
+        return entry != null && !retiring(entry);
     }
 
     @Override
@@ -734,12 +842,15 @@ public final class AccountManagerService extends IAccountManager.Default {
     public boolean removeAccountExplicitly(Account account) {
         if (account == null) return false;
         synchronized (this) { if (synthetic(account, mAccounts.get(account))) return false; }
-        Entry removed;
+        AccountChange change;
         synchronized (this) {
-            removed = mAccounts.get(account); requireOwner(caller(null), removed);
+            Entry removed = mAccounts.get(account); requireOwner(caller(null), removed);
+            // Capture the authorized installation while the entry is authoritative.
+            // A client can uninstall/reinstall as soon as this monitor is released.
+            change = captureChange(account, true, removed, true);
             beginMutation(); mAccounts.remove(account); save();
         }
-        changed(account, true, removed); return true;
+        deliverChange(change); return true;
     }
 
     @Override
@@ -898,7 +1009,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                     error(response, AccountManager.ERROR_CODE_CANCELED, "Account credential access revoked"); return;
                 }
             }
-            Answer answer = call(a, (auth, r) -> auth.getAuthToken(r, account, authTokenType, o), c);
+            Answer answer = call(a, (auth, r) -> auth.getAuthToken(r, account, authTokenType, o), c, response);
             answer.deliverSession(response, b -> {
                 Bundle result = validatedResult(a, b, account, true);
                 if (result == null) return null;
@@ -986,6 +1097,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             if (!item.getKey().type.equals(accountType)) continue;
             Entry e = item.getValue();
+            if (retiring(e)) continue;
             for (String type : new ArrayList<>(e.tokens.keySet())) {
                 Set<String> grants = e.tokenGrants.get(type);
                 if (authToken.equals(e.tokens.get(type)) && (owns(c, e) || grants != null && grants.contains(c.key()))) {
@@ -1004,7 +1116,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (!c.system) throw new SecurityException("Only system may change token grants");
         if (tokenType == null) throw new IllegalArgumentException("token type");
         Entry e = mAccounts.get(account);
-        if (e == null) return;
+        if (e == null || retiring(e)) return;
         String[] packages = mPm.getPackagesForUid(uid);
         List<String> keys = new ArrayList<>();
         if (packages != null) for (String name : packages) keys.add(targetKey(name));
@@ -1049,7 +1161,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         mCalls.execute(() -> {
             Authenticator a = authenticator(accountType);
             if (a == null) { error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "Authenticator unavailable"); return; }
-            Answer answer = call(a, (auth, r) -> auth.addAccount(r, accountType, authTokenType, requiredFeatures, o), c);
+            Answer answer = call(a, (auth, r) -> auth.addAccount(r, accountType, authTokenType, requiredFeatures, o), c, response);
             answer.deliverSession(response, b -> {
                 Bundle result = validatedResult(a, b, null);
                 if (result == null) return null;
@@ -1127,10 +1239,12 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (a == null) return false;
         synchronized (this) {
             Entry e = mAccounts.get(account);
-            if (!a.service.getPackageName().equals(e.owner) || !e.ownerIdentity.equals(packageIdentity(e.owner))) return false;
+            if (e == null || retiring(e) || !a.service.getPackageName().equals(e.owner)
+                    || !e.ownerIdentity.equals(packageIdentity(e.owner))) return false;
         }
         Answer answer = call(a, (auth, r) -> auth.hasFeatures(r, account, features));
-        return answer.result != null ? answer.result.getBoolean(AccountManager.KEY_BOOLEAN_RESULT, false) : null;
+        Bundle result = answer.takeResult();
+        return result != null ? result.getBoolean(AccountManager.KEY_BOOLEAN_RESULT, false) : null;
     }
 
     @Override
@@ -1161,7 +1275,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                     error(response, AccountManager.ERROR_CODE_BAD_AUTHENTICATION, "Authenticator unavailable"); return;
                 }
             }
-            call(a, operation, c).deliverSession(response, b -> validatedResult(a, b, account));
+            call(a, operation, c, response).deliverSession(response, b -> validatedResult(a, b, account));
         });
     }
 
@@ -1172,7 +1286,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (a == null) { error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "Authenticator unavailable"); return; }
         if (!c.system && (!a.service.getPackageName().equals(c.name)
                 || !packageIdentity(c.name).equals(c.code))) throw new SecurityException("Authenticator owner required");
-        mCalls.execute(() -> call(a, (auth, r) -> auth.editProperties(r, accountType), c)
+        mCalls.execute(() -> call(a, (auth, r) -> auth.editProperties(r, accountType), c, response)
                 .deliverSession(response, b -> validatedResult(a, b, null)));
     }
 
@@ -1181,11 +1295,13 @@ public final class AccountManagerService extends IAccountManager.Default {
         caller(null); Authenticator a = authenticator(type);
         if (a == null) { error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "Authenticator unavailable"); return; }
         mCalls.execute(() -> {
-            Answer answer = call(a, (auth, r) -> auth.getAuthTokenLabel(r, tokenType));
-            if (answer.result == null) { answer.deliver(response); return; }
-            Bundle result = new Bundle();
-            result.putString(AccountManager.KEY_AUTH_TOKEN_LABEL, answer.result.getString(AccountManager.KEY_AUTH_TOKEN_LABEL));
-            reply(response, result);
+            call(a, (auth, r) -> auth.getAuthTokenLabel(r, tokenType), null, response)
+                    .deliverSession(response, value -> {
+                        Bundle result = new Bundle();
+                        result.putString(AccountManager.KEY_AUTH_TOKEN_LABEL,
+                                value.getString(AccountManager.KEY_AUTH_TOKEN_LABEL));
+                        return result;
+                    });
         });
     }
 
@@ -1235,7 +1351,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                     error(response, AccountManager.ERROR_CODE_BAD_AUTHENTICATION, "Account owner changed"); return;
                 }
             }
-            call(a, operation, c).deliverSession(response, b -> {
+            call(a, operation, c, response).deliverSession(response, b -> {
                 if (!code.equals(packageIdentity(a.service.getPackageName()))) return null;
                 Bundle internal = b.getBundle(AccountManager.KEY_ACCOUNT_SESSION_BUNDLE);
                 Bundle checked = validatedResult(a, b, account);
@@ -1292,7 +1408,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                     || !pending.ownerCode.equals(packageIdentity(pending.owner))) {
                 error(response, AccountManager.ERROR_CODE_BAD_AUTHENTICATION, "Account session owner changed"); return;
             }
-            call(a, (auth, r) -> auth.finishSession(r, pending.type, internal), c).deliverSession(response, b -> {
+            call(a, (auth, r) -> auth.finishSession(r, pending.type, internal), c, response).deliverSession(response, b -> {
                 Bundle result = validatedResult(a, b, pending.account);
                 if (result == null || !pending.ownerCode.equals(packageIdentity(pending.owner))) return null;
                 String name = result.getString(AccountManager.KEY_ACCOUNT_NAME);
@@ -1454,39 +1570,142 @@ public final class AccountManagerService extends IAccountManager.Default {
     private interface ResultCheck { Bundle check(Bundle bundle); }
 
     /** Initial service answer plus the later callback from an authenticator login Activity. */
-    private final class Answer extends IAccountAuthenticatorResponse.Stub {
+    private final class Answer extends IAccountAuthenticatorResponse.Stub implements IBinder.DeathRecipient {
         final CountDownLatch done = new CountDownLatch(1);
         final Authenticator owner;
         final Caller client;
-        volatile Bundle result;
-        volatile int code = AccountManager.ERROR_CODE_REMOTE_EXCEPTION;
-        volatile String message = "Authenticator did not answer";
+        final long deadline;
+        private Bundle result;
+        private int code = AccountManager.ERROR_CODE_REMOTE_EXCEPTION;
+        private String message = "Authenticator did not answer";
         private final List<Bundle> pending = new ArrayList<>();
+        // Serialize validation and outbound callbacks, without holding the state monitor
+        // across app code. In particular, a timeout cannot overtake an accepted login Intent.
+        private final Object deliveryLock = new Object();
         private java.util.function.Consumer<Bundle> listener;
         private java.util.function.BiConsumer<Integer, String> errorListener;
-        private boolean complete, failed;
+        private boolean complete, failed, deliveryStarted;
+        private int deliveriesInProgress;
+        private boolean timeoutPending;
+        private IBinder responseBinder;
+        private java.util.concurrent.ScheduledFuture<?> timeout;
 
-        Answer(Authenticator owner) { this(owner, null); }
-        Answer(Authenticator owner, Caller client) {
+        /** Called with this Answer's monitor held on every terminal session path. */
+        private void completeLocked() {
+            complete = true;
+            timeoutPending = false;
+            if (timeout != null) { timeout.cancel(false); timeout = null; }
+            if (responseBinder != null) {
+                responseBinder.unlinkToDeath(this, 0);
+                responseBinder = null;
+            }
+            listener = null;
+            errorListener = null;
+            result = null;
+            pending.clear();
+            done.countDown();
+        }
+
+        Answer(Authenticator owner) { this(owner, null, null); }
+        Answer(Authenticator owner, Caller client) { this(owner, client, null); }
+        Answer(Authenticator owner, Caller client, IAccountManagerResponse response) {
             this.owner = owner; this.client = client;
+            deadline = mSessionUptimeMillis.getAsLong() + AUTHENTICATOR_TIMEOUT_MILLIS;
             synchronized (AccountManagerService.this) { mAnswers.add(this); }
+            synchronized (deliveryLock) {
+                synchronized (this) {
+                    if (!complete) {
+                        scheduleTimeoutLocked();
+                        watchResponseLocked(response);
+                        if (!complete && response != null) errorListener = (c, m) -> error(response, c, m);
+                    }
+                }
+            }
+        }
+
+        private void watchResponseLocked(IAccountManagerResponse response) {
+            if (responseBinder != null || response == null) return;
+            IBinder binder = response.asBinder();
+            if (binder == null) return;
+            try {
+                responseBinder = binder;
+                binder.linkToDeath(this, 0);
+            } catch (RemoteException e) {
+                responseBinder = null; // linkToDeath did not register a recipient.
+                deliveryStarted = true;
+                completeLocked();
+            }
+        }
+
+        private void scheduleTimeoutLocked() {
+            if (timeout != null) timeout.cancel(false);
+            timeout = mSessionTimeout.schedule(this::onTimedOut,
+                    Math.max(0, deadline - mSessionUptimeMillis.getAsLong()), TimeUnit.MILLISECONDS);
+        }
+
+        private void onTimedOut() {
+            java.util.function.BiConsumer<Integer, String> deliver;
+            synchronized (this) {
+                if (complete) return;
+                // The scheduler's delay clock need not exclude host sleep. Keep the
+                // Android Handler uptime deadline even if a host wakeup arrives early.
+                if (mSessionUptimeMillis.getAsLong() < deadline) {
+                    scheduleTimeoutLocked();
+                    return;
+                }
+                if (deliveriesInProgress != 0) {
+                    // This Answer's accepted result goes first. The shared clock thread
+                    // must remain available while validation or a local callback runs.
+                    timeoutPending = true;
+                    return;
+                }
+                deliver = finishErrorLocked(AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "timeout");
+            }
+            if (deliver != null) mCalls.execute(() -> deliver.accept(
+                    AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "timeout"));
         }
 
         private boolean current() {
             return authenticatorUnchanged(owner) && (client == null || callerUnchanged(client));
         }
 
-        void cancelForRemoval() {
-            java.util.function.BiConsumer<Integer, String> listener;
-            synchronized (this) {
-                if (complete) return;
-                complete = true; failed = true; result = null; pending.clear();
-                code = AccountManager.ERROR_CODE_CANCELED; message = "Account package access removed";
-                listener = errorListener; done.countDown();
-            }
-            if (listener != null) mCalls.execute(() -> listener.accept(
-                    AccountManager.ERROR_CODE_CANCELED, "Account package access removed"));
+        /** Records the sole terminal error, with this Answer's state monitor held. */
+        private java.util.function.BiConsumer<Integer, String> finishErrorLocked(int errorCode, String errorMessage) {
+            code = errorCode;
+            message = errorMessage;
+            failed = true;
+            java.util.function.BiConsumer<Integer, String> deliver = errorListener;
+            if (deliver != null) deliveryStarted = true;
+            completeLocked();
+            return deliver;
         }
+
+        private void finishError(int errorCode, String errorMessage, boolean asynchronous) {
+            synchronized (deliveryLock) {
+                java.util.function.BiConsumer<Integer, String> deliver;
+                synchronized (this) {
+                    if (complete) return;
+                    deliver = finishErrorLocked(errorCode, errorMessage);
+                }
+                if (deliver != null) {
+                    if (asynchronous) mCalls.execute(() -> deliver.accept(errorCode, errorMessage));
+                    else deliver.accept(errorCode, errorMessage);
+                }
+            }
+        }
+
+        void cancelForRemoval() {
+            finishError(AccountManager.ERROR_CODE_CANCELED, "Account package access removed", true);
+        }
+
+        /** Caller death or an abandoned chooser has no remaining response to deliver. */
+        void close() {
+            synchronized (deliveryLock) {
+                synchronized (this) { deliveryStarted = true; completeLocked(); }
+            }
+        }
+
+        @Override public void binderDied() { close(); }
 
         private void authenticateCallback() {
             if (!mCallers.isSystem()) mCallers.requirePackage(owner.service.getPackageName());
@@ -1519,72 +1738,133 @@ public final class AccountManagerService extends IAccountManager.Default {
         public void onError(int errorCode, String errorMessage) {
             authenticateCallback();
             if (!current()) { cancelForRemoval(); return; }
-            java.util.function.BiConsumer<Integer, String> deliver;
-            synchronized (this) {
-                if (complete) return;
-                code = errorCode; message = errorMessage; failed = true; deliver = errorListener;
-                if (deliver != null) complete = true;
-                done.countDown();
+            finishError(errorCode, errorMessage, false);
+        }
+
+        void fail(String why) {
+            finishError(AccountManager.ERROR_CODE_REMOTE_EXCEPTION, why, false);
+        }
+
+        void awaitInitial(java.util.function.BooleanSupplier active) throws InterruptedException {
+            if (active == null) done.await();
+            else {
+                while (active.getAsBoolean()) {
+                    if (done.await(250, TimeUnit.MILLISECONDS)) return;
+                }
+                close();
             }
-            if (deliver != null) deliver.accept(errorCode, errorMessage);
         }
 
-        synchronized void fail(String why) {
-            if (complete) return;
-            message = why; failed = true; done.countDown();
+        synchronized boolean isComplete() { return complete; }
+
+        /** Noninteractive internal consumers also retire the construction-time timer. */
+        Bundle takeResult() {
+            if (!current()) cancelForRemoval();
+            synchronized (deliveryLock) {
+                synchronized (this) {
+                    if (deliveryStarted) return null;
+                    deliveryStarted = true;
+                    Bundle value = complete || failed ? null : result;
+                    completeLocked();
+                    return value;
+                }
+            }
         }
 
-        void deliver(IAccountManagerResponse response) {
-            if (!current()) { cancelForRemoval(); error(response, code, message); return; }
-            if (result != null) reply(response, result);
-            else error(response, code, message);
-        }
-
-        void deliverSession(IAccountManagerResponse response, ResultCheck check) {
-            if (!current()) { cancelForRemoval(); error(response, code, message); return; }
-            List<Bundle> initial;
-            synchronized (this) {
-                if (result == null || failed) { complete = true; error(response, code, message); return; }
-                listener = value -> {
-                    synchronized (this) { if (complete) return; }
+        private void deliverChecked(IAccountManagerResponse response, ResultCheck check, Bundle value) {
+            synchronized (deliveryLock) {
+                synchronized (this) {
+                    if (complete) return;
+                    deliveriesInProgress++;
+                }
+                try {
+                    if (!current()) { cancelForRemoval(); return; }
                     Bundle checked;
-                    try { checked = current() ? check.check(value) : null; }
+                    try { checked = check.check(value); }
                     catch (RuntimeException e) { checked = null; }
                     synchronized (this) {
                         if (complete) return;
-                        if (checked == null || !checked.containsKey(AccountManager.KEY_INTENT)) complete = true;
+                        if (checked == null || response == null
+                                || !checked.containsKey(AccountManager.KEY_INTENT)) completeLocked();
                     }
                     if (checked == null) error(response, AccountManager.ERROR_CODE_INVALID_RESPONSE, "Invalid authenticator response");
-                    else reply(response, checked);
-                };
-                errorListener = (c, m) -> error(response, c, m);
-                initial = new ArrayList<>(); initial.add(result); initial.addAll(pending); pending.clear();
-            }
-            for (Bundle value : initial) listener.accept(value);
-            synchronized (this) { if (complete) return; }
-            mSessionTimeout.schedule(() -> {
-                synchronized (this) {
-                    if (complete) return;
-                    complete = true;
+                    else if (response != null) {
+                        try { response.onResult(checked); }
+                        catch (RemoteException e) { close(); }
+                    }
+                } finally {
+                    boolean expire;
+                    synchronized (this) {
+                        expire = --deliveriesInProgress == 0 && timeoutPending;
+                    }
+                    if (expire) onTimedOut();
                 }
-                error(response, AccountManager.ERROR_CODE_CANCELED, "Authentication session expired");
-            }, 10, TimeUnit.MINUTES);
+            }
+        }
+
+        void deliverSession(IAccountManagerResponse response, ResultCheck check) {
+            if (!current()) cancelForRemoval();
+            synchronized (deliveryLock) {
+                List<Bundle> initial = new ArrayList<>();
+                java.util.function.Consumer<Bundle> continuation = null;
+                int errorCode = 0;
+                String errorMessage = null;
+                synchronized (this) {
+                    if (deliveryStarted) return;
+                    deliveryStarted = true;
+                    if (complete) {
+                        // A timeout/error can precede registration. Cleanup must not
+                        // consume that sole error, nor may a second registration replay it.
+                        if (!failed) return;
+                        errorCode = code; errorMessage = message;
+                    } else {
+                        watchResponseLocked(response);
+                        if (complete) return;
+                        listener = value -> deliverChecked(response, check, value);
+                        errorListener = (c, m) -> error(response, c, m);
+                        if (result != null) initial.add(result);
+                        initial.addAll(pending); pending.clear(); result = null;
+                        continuation = listener;
+                    }
+                }
+                if (continuation == null) error(response, errorCode, errorMessage);
+                else for (Bundle value : initial) continuation.accept(value);
+            }
+        }
+
+        boolean deliverToChooser(IAccountManagerResponse response, ResultCheck check,
+                CountDownLatch finished, java.util.function.BooleanSupplier success,
+                java.util.function.BooleanSupplier active) {
+            try {
+                deliverSession(response, check);
+                // This Answer's timer owns the budget, including the initial binding.
+                while (!finished.await(250, TimeUnit.MILLISECONDS)) {
+                    if (!active.getAsBoolean()) return false;
+                }
+                return success.getAsBoolean() && active.getAsBoolean();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            } finally { close(); }
         }
     }
 
     /** Binds {@code a}'s service, makes the call and waits for its answer (on mCalls). */
     private Answer call(Authenticator a, Call call) {
-        return call(a, call, null);
+        return call(a, call, null, null);
     }
 
-    private Answer call(Authenticator a, Call call, Caller client) {
-        Answer answer = new Answer(a, client);
-        if (!answer.current()) { answer.cancelForRemoval(); return answer; }
-        IServiceConnection connection = new IServiceConnection.Stub() {
+    private Answer call(Authenticator a, Call call, Caller client, IAccountManagerResponse response) {
+        return call(a, call, client, response, null);
+    }
+
+    private IServiceConnection connection(Answer answer, Call call) {
+        return new IServiceConnection.Stub() {
             @Override
             public void connected(ComponentName name, IBinder binder,
                     android.app.IBinderSession session, boolean dead) {
-                if (binder == null) return;
+                if (answer.isComplete()) return;
+                if (binder == null || dead) { answer.fail("Authenticator disconnected"); return; }
                 if (!answer.current()) { answer.cancelForRemoval(); return; }
                 try {
                     call.run(IAccountAuthenticator.Stub.asInterface(binder), answer);
@@ -1593,6 +1873,15 @@ public final class AccountManagerService extends IAccountManager.Default {
                 }
             }
         };
+    }
+
+    private Answer call(Authenticator a, Call call, Caller client, IAccountManagerResponse response,
+            java.util.function.BooleanSupplier active) {
+        Answer answer = new Answer(a, client, response);
+        if (answer.isComplete()) return answer;
+        if (!answer.current()) { answer.cancelForRemoval(); return answer; }
+        if (active != null && !active.getAsBoolean()) { answer.close(); return answer; }
+        IServiceConnection connection = connection(answer, call);
         int bound;
         long token = Binder.clearCallingIdentity();
         try {
@@ -1611,12 +1900,10 @@ public final class AccountManagerService extends IAccountManager.Default {
             return answer;
         }
         try {
-            if (!answer.done.await(AUTHENTICATOR_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                answer.fail("the authenticator " + a.service.flattenToShortString()
-                        + " did not answer in " + AUTHENTICATOR_TIMEOUT_SECONDS + " s");
-            }
+            answer.awaitInitial(active);
         } catch (InterruptedException e) {
             answer.fail("interrupted");
+            Thread.currentThread().interrupt();
         } finally {
             try {
                 mAm.unbindService(connection);
@@ -1657,35 +1944,79 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     private void changed(Account account, boolean removed, Entry e) {
         if (e == null) return;
+        AccountChange change;
+        synchronized (this) { change = captureChange(account, removed, e, true); }
+        deliverChange(change);
+    }
+
+    /** Called while this is locked; do not retain the account's credential Entry. */
+    private AccountChange captureChange(Account account, boolean removed, Entry e, boolean includeOwner) {
+        Map<String, Caller> recipients = new LinkedHashMap<>();
+        if (includeOwner && e.ownerIdentity != null && e.ownerIdentity.equals(packageIdentity(e.owner))) {
+            ApkPackage owner = mPm.get(e.owner);
+            if (owner != null) recipients.put(e.owner,
+                    new Caller(e.owner, e.ownerIdentity, false, owner.uid(), -1, packageEpoch(e.owner)));
+        }
+        for (Map.Entry<String, Integer> grant : e.visibility.entrySet()) {
+            if (grant.getValue() != AccountManager.VISIBILITY_VISIBLE
+                    && grant.getValue() != AccountManager.VISIBILITY_USER_MANAGED_VISIBLE) continue;
+            int separator = grant.getKey().indexOf('\u0000');
+            if (separator <= 0) continue;
+            String name = grant.getKey().substring(0, separator);
+            String code = packageIdentity(name);
+            ApkPackage client = mPm.get(name);
+            if (client != null && code != null && grant.getKey().equals(name + "\u0000" + code)) {
+                recipients.put(name, new Caller(name, code, false, client.uid(), -1, packageEpoch(name)));
+            }
+        }
+        return new AccountChange(new Account(account.name, account.type), removed, List.copyOf(recipients.values()));
+    }
+
+    private void enqueueChanges(List<AccountChange> changes) {
+        if (changes.isEmpty()) return;
+        synchronized (mChanges) {
+            mChanges.addAll(changes);
+            if (mChangeWorker) return;
+            mChangeWorker = true;
+        }
+        try {
+            mCalls.execute(this::drainChanges);
+        } catch (RuntimeException failure) {
+            synchronized (mChanges) { mChangeWorker = false; }
+            throw failure;
+        }
+    }
+
+    private void drainChanges() {
+        for (;;) {
+            AccountChange change;
+            synchronized (mChanges) {
+                change = mChanges.pollFirst();
+                if (change == null) { mChangeWorker = false; return; }
+            }
+            deliverChange(change);
+        }
+    }
+
+    private void deliverChange(AccountChange change) {
         // Once account caches have a nonce, later add/remove/rename operations
         // must invalidate them too; otherwise enabling the cache would make a
         // subsequent account change stale despite a correctly delivered event.
         invalidateAccountListCache();
         invalidateAccountUserDataCache();
         if (mAm == null) return;
-        Set<String> recipients = new HashSet<>(); recipients.add(e.owner);
-        synchronized (this) {
-            for (Map.Entry<String, Integer> grant : e.visibility.entrySet()) {
-                if (grant.getValue() != AccountManager.VISIBILITY_VISIBLE
-                        && grant.getValue() != AccountManager.VISIBILITY_USER_MANAGED_VISIBLE) continue;
-                int separator = grant.getKey().indexOf('\u0000');
-                if (separator > 0) {
-                    String name = grant.getKey().substring(0, separator);
-                    if (grant.getKey().equals(name + "\u0000" + packageIdentity(name))) recipients.add(name);
-                }
-            }
-        }
         long token = Binder.clearCallingIdentity();
         try {
-            for (String recipient : recipients) {
+            for (Caller recipient : change.recipients()) {
                 List<Intent> intents = new ArrayList<>();
-                intents.add(new Intent(AccountManager.LOGIN_ACCOUNTS_CHANGED_ACTION).setPackage(recipient));
-                intents.add(new Intent(AccountManager.ACTION_VISIBLE_ACCOUNTS_CHANGED).setPackage(recipient));
-                if (removed) intents.add(new Intent(AccountManager.ACTION_ACCOUNT_REMOVED).setPackage(recipient)
-                        .putExtra(AccountManager.KEY_ACCOUNT_NAME, account.name)
-                        .putExtra(AccountManager.KEY_ACCOUNT_TYPE, account.type));
-                for (Intent intent : intents) mAm.broadcastIntentWithFeature(null, null, intent,
-                        null, null, 0, null, null, null, null, null, -1, null, false, false, 0);
+                intents.add(new Intent(AccountManager.LOGIN_ACCOUNTS_CHANGED_ACTION).setPackage(recipient.name));
+                intents.add(new Intent(AccountManager.ACTION_VISIBLE_ACCOUNTS_CHANGED).setPackage(recipient.name));
+                if (change.removed()) intents.add(new Intent(AccountManager.ACTION_ACCOUNT_REMOVED).setPackage(recipient.name)
+                        .putExtra(AccountManager.KEY_ACCOUNT_NAME, change.account().name)
+                        .putExtra(AccountManager.KEY_ACCOUNT_TYPE, change.account().type));
+                // BroadcastController rechecks this through target reservation
+                // and deferred dispatch, including a reinstall during handoff.
+                for (Intent intent : intents) mAm.broadcastAccountChange(intent, () -> recipientUnchanged(recipient));
             }
         } catch (Throwable t) {
             SystemServer.log(TAG + "account change delivery failed: " + t.getClass().getSimpleName());
@@ -1716,48 +2047,58 @@ public final class AccountManagerService extends IAccountManager.Default {
                 }
                 return;
             }
-            mUnclaimedLegacy = p.getProperty("unclaimedLegacy");
-            for (int i = 0; i < count(p, "count"); i++) {
-                String prefix = i + ".";
-                String name = p.getProperty(prefix + "name"), type = p.getProperty(prefix + "type");
-                Entry e = new Entry();
-                e.owner = p.getProperty(prefix + "owner");
-                e.ownerIdentity = p.getProperty(prefix + "ownerIdentity");
-                if (name == null || type == null || e.owner == null || e.ownerIdentity == null) {
-                    throw new IllegalStateException("Invalid protected account ownership");
-                }
-                e.password = p.getProperty(prefix + "password");
-                e.authenticatedAt = Long.parseLong(p.getProperty(prefix + "authenticatedAt", "0"));
-                for (int j = 0; j < count(p, prefix + "data.count"); j++) {
-                    e.data.put(p.getProperty(prefix + "data." + j + ".key"),
-                            p.getProperty(prefix + "data." + j + ".value"));
-                }
-                for (int j = 0; j < count(p, prefix + "token.count"); j++) {
-                    String tokenPrefix = prefix + "token." + j + ".";
-                    String tokenType = p.getProperty(tokenPrefix + "type");
-                    e.tokens.put(tokenType, p.getProperty(tokenPrefix + "value"));
-                    Set<String> grants = new HashSet<>();
-                    for (int k = 0; k < count(p, tokenPrefix + "grant.count"); k++) {
-                        grants.add(p.getProperty(tokenPrefix + "grant." + k));
-                    }
-                    e.tokenGrants.put(tokenType, grants);
-                }
-                for (int j = 0; j < count(p, prefix + "grantType.count"); j++) {
-                    String grantPrefix = prefix + "grantType." + j + ".";
-                    Set<String> grants = new HashSet<>();
-                    for (int k = 0; k < count(p, grantPrefix + "client.count"); k++) {
-                        grants.add(p.getProperty(grantPrefix + "client." + k));
-                    }
-                    e.tokenGrants.put(p.getProperty(grantPrefix + "type"), grants);
-                }
-                for (int j = 0; j < count(p, prefix + "visibility.count"); j++) {
-                    e.visibility.put(p.getProperty(prefix + "visibility." + j + ".client"),
-                            Integer.parseInt(p.getProperty(prefix + "visibility." + j + ".value")));
-                }
-                mAccounts.put(new Account(name, type), e);
-            }
+            loadProtectedState(p);
         } catch (IOException | RuntimeException e) {
             throw new IllegalStateException("Cannot open protected account storage", e);
+        }
+    }
+
+    /** Load the protected data only after the store has authenticated it. */
+    private void loadProtectedState(Properties p) {
+        mUnclaimedLegacy = p.getProperty("unclaimedLegacy");
+        for (int i = 0; i < count(p, "pendingRemoval.count"); i++) {
+            String name = p.getProperty("pendingRemoval." + i);
+            if (name == null || name.isEmpty()) throw new IllegalStateException("Invalid account removal record");
+            mPendingOwnerRemovals.add(name);
+        }
+        for (int i = 0; i < count(p, "count"); i++) {
+            String prefix = i + ".";
+            String name = p.getProperty(prefix + "name"), type = p.getProperty(prefix + "type");
+            Entry e = new Entry();
+            e.owner = p.getProperty(prefix + "owner");
+            e.ownerIdentity = p.getProperty(prefix + "ownerIdentity");
+            if (name == null || type == null || e.owner == null || e.ownerIdentity == null) {
+                throw new IllegalStateException("Invalid protected account ownership");
+            }
+            e.password = p.getProperty(prefix + "password");
+            e.authenticatedAt = Long.parseLong(p.getProperty(prefix + "authenticatedAt", "0"));
+            for (int j = 0; j < count(p, prefix + "data.count"); j++) {
+                e.data.put(p.getProperty(prefix + "data." + j + ".key"),
+                        p.getProperty(prefix + "data." + j + ".value"));
+            }
+            for (int j = 0; j < count(p, prefix + "token.count"); j++) {
+                String tokenPrefix = prefix + "token." + j + ".";
+                String tokenType = p.getProperty(tokenPrefix + "type");
+                e.tokens.put(tokenType, p.getProperty(tokenPrefix + "value"));
+                Set<String> grants = new HashSet<>();
+                for (int k = 0; k < count(p, tokenPrefix + "grant.count"); k++) {
+                    grants.add(p.getProperty(tokenPrefix + "grant." + k));
+                }
+                e.tokenGrants.put(tokenType, grants);
+            }
+            for (int j = 0; j < count(p, prefix + "grantType.count"); j++) {
+                String grantPrefix = prefix + "grantType." + j + ".";
+                Set<String> grants = new HashSet<>();
+                for (int k = 0; k < count(p, grantPrefix + "client.count"); k++) {
+                    grants.add(p.getProperty(grantPrefix + "client." + k));
+                }
+                e.tokenGrants.put(p.getProperty(grantPrefix + "type"), grants);
+            }
+            for (int j = 0; j < count(p, prefix + "visibility.count"); j++) {
+                e.visibility.put(p.getProperty(prefix + "visibility." + j + ".client"),
+                        Integer.parseInt(p.getProperty(prefix + "visibility." + j + ".value")));
+            }
+            mAccounts.put(new Account(name, type), e);
         }
     }
 
@@ -1768,6 +2109,9 @@ public final class AccountManagerService extends IAccountManager.Default {
             Properties p = new Properties();
             if (mUnclaimedLegacy != null) p.setProperty("unclaimedLegacy", mUnclaimedLegacy);
             int i = 0;
+            for (String pending : mPendingOwnerRemovals) p.setProperty("pendingRemoval." + i++, pending);
+            p.setProperty("pendingRemoval.count", Integer.toString(i));
+            i = 0;
             for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
                 if (synthetic(item.getKey(), item.getValue())) continue;
                 String prefix = i + "."; Entry e = item.getValue();
@@ -1814,6 +2158,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             State before = mBeforeMutation;
             mAccounts.clear(); mAccounts.putAll(before.accounts);
             mUnclaimedLegacy = before.legacy;
+            mPendingOwnerRemovals.clear(); mPendingOwnerRemovals.addAll(before.pendingOwnerRemovals);
             mBeforeMutation = null;
             throw new IllegalStateException("Cannot save protected account storage", e);
         }

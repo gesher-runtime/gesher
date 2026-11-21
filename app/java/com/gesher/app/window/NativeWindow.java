@@ -102,6 +102,11 @@ public final class NativeWindow implements AutoCloseable {
     nShow(ptr());
   }
 
+  /** Restores a minimized window, preserving its previous maximized placement. */
+  public void restore() {
+    nRestore(ptr());
+  }
+
   public void hide() {
     nHide(ptr());
   }
@@ -262,6 +267,7 @@ public final class NativeWindow implements AutoCloseable {
   private static native long nCreate(String title, int width, int height);
   private static native void nDestroy(long ptr);
   private static native void nShow(long ptr);
+  private static native void nRestore(long ptr);
   private static native Surface nGetSurface(long ptr);
   private static native int nGetWidth(long ptr);
   private static native int nGetHeight(long ptr);

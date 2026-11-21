@@ -41,7 +41,8 @@ def main() -> None:
                         '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include/linux'),
                         str(ROOT / 'tests/scheduler/framework_host.c'), '-o', str(library)], check=True)
         sources = []
-        for name in ('JobSchedulerService', 'AlarmManagerService', 'BroadcastController', 'DeviceWork'):
+        for name in ('JobSchedulerService', 'ActivityTaskManagerService', 'AlarmManagerService',
+                     'BroadcastController', 'DeviceWork'):
             relative = 'app/java/com/gesher/server/' + name + '.java'
             source = ROOT / relative
             if args.source_ref:

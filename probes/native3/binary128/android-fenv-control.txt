@@ -1,0 +1,25 @@
+FENV arithmetic 0 0 3fb9999999999999
+FENV explicit 0 0 18
+FENV strtod 0 0 123 0
+FENV strtold 0 0 123 0
+FENV strtod 0 1 123 2
+FENV strtold 0 1 123 2
+FENV arithmetic 1 0 3fb999999999999a
+FENV explicit 1 0 18
+FENV strtod 1 0 123 0
+FENV strtold 1 0 123 0
+FENV strtod 1 1 123 2
+FENV strtold 1 1 123 2
+FENV arithmetic 2 0 3fb999999999999a
+FENV explicit 2 0 18
+FENV strtod 2 0 123 0
+FENV strtold 2 0 123 0
+FENV strtod 2 1 123 2
+FENV strtold 2 1 123 2
+FENV arithmetic 3 0 3fb9999999999999
+FENV explicit 3 0 18
+FENV strtod 3 0 123 0
+FENV strtold 3 0 123 0
+FENV strtod 3 1 123 2
+FENV strtold 3 1 123 2
+FENV_REFERENCE_DONE

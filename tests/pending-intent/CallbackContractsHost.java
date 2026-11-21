@@ -5,9 +5,6 @@ public final class CallbackContractsHost {
         if ("content".equals(args[1])) {
             gesher.services.ContentObserverLifecycleTest.contracts();
             System.out.println("Content observer host all passed: " + gesher.services.ContentObserverLifecycleTest.checks + " checks");
-        } else if ("clipboard".equals(args[1])) {
-            gesher.services.ClipboardCallbackTest.contracts();
-            System.out.println("Clipboard host all passed: " + gesher.services.ClipboardCallbackTest.checks + " checks");
         } else {
             gesher.services.PendingIntentContractTest.contracts(args[1], false);
             System.out.println("PendingIntent host all passed: " + gesher.services.PendingIntentContractTest.checks + " checks");

@@ -408,13 +408,14 @@ void PlainCollisionsAndFailure() {
 void UnmapFailureCleanup() {
   State value;
   Prepare(value);
-  const uintptr_t second = kBase + 8 * kPage;
+  // A separate new placeholder reservation starts at allocation granularity.
+  const uintptr_t second = kBase + value.granularity;
   Check(GroupAnonymous(value, reinterpret_cast<void*>(second), 4 * kPage,
           PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE)
       == reinterpret_cast<void*>(second), "second unmap group created");
   active_state = &value;
   failing_unmap_address = second;
-  Check(munmap(reinterpret_cast<void*>(kBase), 12 * kPage) == -1 && errno == EACCES,
+  Check(munmap(reinterpret_cast<void*>(kBase), second - kBase + 4 * kPage) == -1 && errno == EACCES,
         "later native unmap failure and its errno reach the caller");
   Check(!value.groups.contains(kBase),
         "later failure still releases an earlier successfully emptied group");

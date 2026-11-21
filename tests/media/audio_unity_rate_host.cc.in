@@ -1,0 +1,258 @@
+// Real Track methods; only Engine attachment, clock/CV transport and allocation
+// observation are host adapters. Reference mode runs this unchanged fixture.
+#include <array>
+#include <bit>
+#include <cstdlib>
+#include <new>
+#include <limits>
+
+namespace {
+thread_local bool count_allocations = false;
+thread_local size_t allocation_count = 0, allocation_bytes = 0;
+thread_local size_t availability_checks = 0, source_reads = 0;
+}
+void* operator new(size_t size) {
+  if (count_allocations) { ++allocation_count; allocation_bytes += size; }
+  if (void* p = std::malloc(size ? size : 1)) return p;
+  std::abort();
+}
+void* operator new[](size_t size) { return ::operator new(size); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, size_t) noexcept { std::free(p); }
+void operator delete[](void* p, size_t) noexcept { std::free(p); }
+
+@PRODUCTION@
+
+namespace {
+using namespace gesher::media;
+Engine engine;
+size_t checks = 0, failures = 0;
+void Check(bool okay, const char* reason) {
+  ++checks;
+  if (!okay) { ++failures; if (failures <= 12) std::fprintf(stderr, "FAIL unity mixer: %s\n", reason); }
+}
+void Write(FILE* output, const void* data, size_t size) {
+  if (size && std::fwrite(data, 1, size, output) != size) std::abort();
+}
+template<class T> void Write(FILE* output, const T& value) { Write(output, &value, sizeof(value)); }
+float Sample(size_t frame, size_t channel) {
+  return (static_cast<int>((frame * 13 + channel * 29) % 201) - 100) / 128.0f;
+}
+std::vector<uint8_t> Payload(PcmFormat format, uint32_t channels, size_t frames) {
+  const size_t bytes = BytesPerSample(format);
+  std::vector<uint8_t> result(frames * channels * bytes);
+  for (size_t frame = 0; frame < frames; ++frame) for (size_t ch = 0; ch < channels; ++ch) {
+    const int level = static_cast<int>(Sample(frame, ch) * 128);
+    uint8_t* out = result.data() + (frame * channels + ch) * bytes;
+    switch (format) {
+      case PcmFormat::kU8: *out = static_cast<uint8_t>(128 + level); break;
+      case PcmFormat::kS16: { int16_t v = static_cast<int16_t>(level * 256); std::memcpy(out, &v, 2); break; }
+      case PcmFormat::kS24Packed: {
+        uint32_t v = static_cast<uint32_t>(level * 65536);
+        out[0] = v; out[1] = v >> 8; out[2] = v >> 16; break;
+      }
+      case PcmFormat::kS32: { int32_t v = level * 16777216; std::memcpy(out, &v, 4); break; }
+      case PcmFormat::kFloat: { float v = Sample(frame, ch); std::memcpy(out, &v, 4); break; }
+    }
+  }
+  return result;
+}
+std::array<float, 2> Channels(size_t frame, size_t channels) {
+  float l = Sample(frame, 0), r = Sample(frame, channels == 1 ? 0 : 1);
+  if (channels > 2) {
+    l += 0.7071f * Sample(frame, 2); r += 0.7071f * Sample(frame, 2);
+    for (size_t ch = 4; ch + 1 < channels && ch < 8; ch += 2) {
+      l += 0.7071f * Sample(frame, ch); r += 0.7071f * Sample(frame, ch + 1);
+    }
+  }
+  return {l, r};
+}
+
+// Serialize individual values, not struct padding or nondeterministic clock
+// readings. Includes all ownership/timeline state that a batching change could
+// accidentally advance early, and all callback types in delivery order.
+void Observe(FILE* output, Track& t, const std::vector<uint64_t>& events) {
+  Write(output, t.state_); Write(output, t.drained_); Write(output, t.released_);
+  Write(output, t.read_); Write(output, t.written_); Write(output, t.stop_end_);
+  Write(output, t.buffer_frames_); Write(output, t.static_pos_); Write(output, t.static_frames_);
+  Write(output, t.loop_start_); Write(output, t.loop_end_); Write(output, t.loop_count_);
+  Write(output, t.played_); Write(output, t.position_base_); Write(output, t.write_interrupt_);
+  Write(output, t.marker_); Write(output, t.marker_reached_); Write(output, t.next_update_);
+  Write(output, t.update_period_); Write(output, t.underrun_count_); Write(output, t.underrun_frames_);
+  Write(output, t.was_underrun_); Write(output, t.end_signalled_); Write(output, t.starved_ticks_);
+  Write(output, t.vol_left_); Write(output, t.vol_right_);
+  Write(output, t.applied_left_); Write(output, t.applied_right_);
+  Write(output, t.rate_); Write(output, t.speed_);
+  Write(output, t.rs_->t); Write(output, t.rs_->width); Write(output, t.rs_->start_index);
+  Write(output, t.rs_->real_end); Write(output, t.rs_->primed); Write(output, t.rs_->played_index);
+  Write(output, t.rs_->hist.size()); Write(output, t.rs_->hist.data(), t.rs_->hist.size() * sizeof(float));
+  Write(output, events.size()); Write(output, events.data(), events.size() * sizeof(uint64_t));
+}
+void Record(FILE* output, Track& t, size_t frames, uint32_t out_rate, uint32_t channels,
+            const std::vector<uint64_t>& events) {
+  std::vector<float> data(frames * channels);
+  for (size_t i = 0; i < data.size(); ++i) data[i] = (i & 1) ? -0.125f : 0.25f;
+  const bool active = t.MixInto(data.data(), frames, out_rate, channels);
+  Check(std::all_of(data.begin(), data.end(), [](float v) { return std::isfinite(v); }),
+        "finite supplied PCM remains finite");
+  Write(output, active); Write(output, frames); Write(output, channels);
+  Write(output, data.data(), data.size() * sizeof(float));
+  Observe(output, t, events);
+}
+void InstallEvents(Track& t, std::vector<uint64_t>* events) {
+  TrackEvents e;
+  e.marker = [events](uint32_t p) { events->push_back((uint64_t{1} << 32) | p); };
+  e.new_position = [events](uint32_t p) { events->push_back((uint64_t{2} << 32) | p); };
+  e.end = [events] { events->push_back(uint64_t{3} << 32); };
+  e.underrun = [events] { events->push_back(uint64_t{4} << 32); };
+  t.SetEvents(std::move(e)); t.SetMarker(17); t.SetUpdatePeriod(97);
+}
+
+void Oracle(PcmFormat format, uint32_t channels, uint32_t out_channels) {
+  TrackParams p; p.format = format; p.channels = channels; p.capacity_frames = 777; p.is_static = true;
+  Track t(&engine, p); const auto source = Payload(format, channels, p.capacity_frames);
+  Check(t.Write(source.data(), source.size(), false) == static_cast<ssize_t>(source.size()), "oracle writes full input");
+  std::vector<uint64_t> events; InstallEvents(t, &events); t.Start();
+  size_t at = 0;
+  for (size_t frames : {0u, 1u, 17u, 255u, 256u, 257u, 480u}) {
+    std::vector<float> actual(frames * out_channels, 0.25f), expected = actual;
+    const size_t n = std::min(frames, p.capacity_frames - at);
+    for (size_t i = 0; i < n; ++i) {
+      const auto value = Channels(at + i, channels);
+      if (out_channels == 1) expected[i] += 0.5f * (value[0] + value[1]);
+      else { expected[i * out_channels] += value[0]; expected[i * out_channels + 1] += value[1]; }
+    }
+    t.MixInto(actual.data(), frames, 48000, out_channels); at += n;
+    Check(actual == expected, "every sample follows independent source/channel oracle");
+    Check(t.Position() == at, "position advances only by real source frames");
+  }
+  Check(std::count(events.begin(), events.end(), uint64_t{3} << 32) == 1, "static end is delivered once");
+  Check(t.state() == Track::State::kPlaying, "completed static track retains playing state");
+}
+
+// A valid retained history can end one ULP below an integer following a rate
+// change. The scalar oracle repeats floating-point phase addition, including
+// rounding at powers of two; floor(initial_phase) + i is not equivalent.
+void FractionalBoundary(uint32_t channels, double boundary, FILE* output) {
+  TrackParams p; p.channels = channels; p.capacity_frames = 8192; p.is_static = true; p.format = PcmFormat::kFloat;
+  Track t(&engine, p); const auto source = Payload(p.format, channels, p.capacity_frames);
+  t.Write(source.data(), source.size(), false); t.Start();
+  float zero = 0; t.MixInto(&zero, 0, 48000, 1);
+  t.rs_->hist.resize(p.capacity_frames * channels);
+  bool ended = false;
+  Check(t.ReadSource(t.rs_->hist.data(), p.capacity_frames, &ended) == p.capacity_frames, "phase fixture has real source history");
+  t.rs_->t = std::nextafter(boundary, 0.0);
+  double phase = t.rs_->t;
+  std::array<float, 12> actual{}, expected{};
+  for (size_t i = 0; i < 6; ++i) {
+    const auto value = Channels(static_cast<size_t>(std::floor(phase)), channels);
+    expected[i * 2] = value[0]; expected[i * 2 + 1] = value[1]; phase += 1.0;
+  }
+  t.MixInto(actual.data(), 6, 48000, 2);
+  Check(actual == expected, "fractional boundary follows repeated phase additions exactly");
+  Check(t.rs_->start_index + t.rs_->t == phase, "fractional absolute phase remains exact after compaction");
+  Write(output, actual); Observe(output, t, {});
+}
+
+uint32_t Next(uint32_t* seed) { *seed = *seed * 1664525u + 1013904223u; return *seed; }
+void Transcript(PcmFormat format, uint32_t channels, bool is_static, FILE* output) {
+  TrackParams p; p.format = format; p.channels = channels; p.capacity_frames = is_static ? 4096 : 301; p.is_static = is_static;
+  Track t(&engine, p); const auto source = Payload(format, channels, p.capacity_frames);
+  std::vector<uint64_t> events; InstallEvents(t, &events);
+  t.Write(source.data(), source.size(), false);
+  if (is_static) t.SetLoop(3, 997, -1);
+  t.Start(); t.SetVolume(0.3f, 0.9f);
+  uint32_t seed = 0x916ba521u + channels + static_cast<uint32_t>(format) * 31;
+  uint32_t out_rate = 48000;
+  for (size_t step = 0; step < 96; ++step) {
+    if (step == 3) t.SetSampleRate(44100);
+    if (step == 7) t.SetSampleRate(48000);
+    if (step == 13) t.SetSpeed(0.5f);
+    if (step == 19) t.SetSpeed(1.0f);
+    if (step == 23) out_rate = 96000;
+    if (step == 29) out_rate = 48000;
+    if (step == 31) { t.Pause(); Record(output, t, 17, out_rate, 2, events); t.Start(); }
+    if (step == 37) t.Stop();
+    if (step == 49) t.Start();
+    if (step == 53) { t.Pause(); t.Flush(); if (is_static) t.SetPosition(17); t.Start(); }
+    if (step == 59) { t.SetVolume(0.75f, 0.25f); t.SetMarker(t.Position() + 23); t.SetUpdatePeriod(83); }
+    if (step == 67 && is_static) { t.Pause(); t.Reload(); t.SetLoop(11, 267, 3); t.Start(); }
+    if (step == 71 && !is_static) t.SetBufferSizeFrames(73);
+    if (step == 77 && !is_static) t.SetBufferSizeFrames(301);
+    if (!is_static && (step % 5 != 0)) {
+      size_t n = (Next(&seed) % 302) * t.frame_size();
+      Write(output, t.Write(source.data(), n, false));
+    }
+    const std::array<size_t, 9> spans{0, 1, 2, 17, 255, 256, 257, 480, 513};
+    Record(output, t, spans[Next(&seed) % spans.size()], out_rate, (step % 3 == 0) ? 1 : 2, events);
+  }
+  t.Stop();
+  for (int i = 0; i < 12; ++i) Record(output, t, 257, 48000, 2, events);
+  if (is_static) { t.Reload(); t.SetLoop(0, 4096, -1); }
+  else t.Write(source.data(), source.size(), false);
+  t.SetSampleRate(48000); t.SetSpeed(1); t.Start();
+  // Long unity spans cross both the 256-frame refill and 4096-frame compaction boundaries.
+  Record(output, t, 5000, 48000, 2, events);
+  t.Release(); Record(output, t, 480, 48000, 2, events);
+}
+
+void WorkBudget(uint32_t channels, bool gate) {
+  constexpr size_t blocks = 1000, frames = 480;
+  TrackParams p; p.channels = channels; p.capacity_frames = 4096; p.is_static = true;
+  Track t(&engine, p); const auto source = Payload(p.format, channels, p.capacity_frames);
+  t.Write(source.data(), source.size(), false); t.SetLoop(0, 4096, -1); t.Start();
+  std::array<float, frames * 2> out{};
+  for (int i = 0; i < 100; ++i) t.MixInto(out.data(), frames, 48000, 2);
+  availability_checks = source_reads = allocation_count = allocation_bytes = 0;
+  count_allocations = true;
+  for (size_t i = 0; i < blocks; ++i) t.MixInto(out.data(), frames, 48000, 2);
+  count_allocations = false;
+  Check(allocation_count == 0, "warm unity mixing retains its allocation-free contract");
+  Check(t.Position() == (blocks + 100) * frames, "workload produces all requested source frames");
+  if (gate) Check(availability_checks <= blocks * 4, "unity availability work is bounded per span, not per sample");
+  std::printf("work channels=%u frames=%zu checks=%zu reads=%zu allocations=%zu bytes=%zu\n",
+              channels, frames * blocks, availability_checks, source_reads, allocation_count, allocation_bytes);
+}
+
+int Benchmark(uint32_t channels, uint32_t rate, bool stream) {
+  constexpr size_t frames = 480;
+  const size_t blocks = rate == 48000 ? 30000 : 6000;
+  TrackParams p; p.channels = channels; p.sample_rate = rate; p.capacity_frames = 4096; p.is_static = !stream;
+  Track t(&engine, p); const auto source = Payload(p.format, channels, p.capacity_frames);
+  if (!stream) { t.Write(source.data(), source.size(), false); t.SetLoop(0, 4096, -1); }
+  t.Start(); std::array<float, frames * 2> out{};
+  auto block = [&] {
+    if (stream) t.Write(source.data(), source.size(), false);
+    out.fill(0); t.MixInto(out.data(), frames, 48000, 2);
+  };
+  for (int i = 0; i < 100; ++i) block();
+  timespec start{}, end{};
+  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start)) return 2;
+  for (size_t i = 0; i < blocks; ++i) block();
+  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &end)) return 2;
+  const uint64_t nanos = static_cast<uint64_t>(end.tv_sec - start.tv_sec) * 1000000000ull + end.tv_nsec - start.tv_nsec;
+  uint64_t checksum = 14695981039346656037ull;
+  for (unsigned char c : std::bit_cast<std::array<unsigned char, sizeof(out)>>(out)) { checksum ^= c; checksum *= 1099511628211ull; }
+  std::printf("{\"channels\":%u,\"rate\":%u,\"stream\":%s,\"frames\":%zu,\"cpu_ns\":%llu,\"position\":%u,\"checksum\":%llu}\n",
+              channels, rate, stream ? "true" : "false", blocks * frames,
+              static_cast<unsigned long long>(nanos), t.Position(), static_cast<unsigned long long>(checksum));
+  return 0;
+}
+}  // namespace
+int main(int argc, char** argv) {
+  if (argc == 5 && std::strcmp(argv[1], "bench") == 0)
+    return Benchmark(static_cast<uint32_t>(std::atoi(argv[2])), static_cast<uint32_t>(std::atoi(argv[3])), std::atoi(argv[4]) != 0);
+  if (argc != 3) return 2;
+  FILE* output = std::fopen(argv[1], "wb"); if (!output) return 2;
+  for (PcmFormat f : {PcmFormat::kU8, PcmFormat::kS16, PcmFormat::kS24Packed, PcmFormat::kS32, PcmFormat::kFloat})
+    for (uint32_t ch : {1u, 2u, 3u, 8u, 24u}) {
+      Oracle(f, ch, 1); Oracle(f, ch, 2); Oracle(f, ch, 4);
+      Transcript(f, ch, false, output); Transcript(f, ch, true, output);
+    }
+  for (uint32_t ch : {1u, 2u, 8u}) for (double boundary : {2.0, 4.0, 16.0, 256.0, 4096.0}) FractionalBoundary(ch, boundary, output);
+  for (uint32_t ch : {1u, 2u, 8u, 24u}) WorkBudget(ch, std::strcmp(argv[2], "gate") == 0);
+  if (std::fclose(output)) return 2;
+  std::printf("audio unity-rate contracts: %zu checks, %zu failures\n", checks, failures);
+  return failures != 0;
+}

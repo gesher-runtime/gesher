@@ -36,10 +36,14 @@ namespace gesher::webview {
 enum Event : int32_t {
   kReady = 1,          // arg: 0; a: the runtime's version
   kFailed = 2,         // arg: HRESULT; a: what failed
-  kPageStarted = 3,    // id: navigation id; arg: 1 if the app started it; a: url
+  kPageStarted = 3,    // id: navigation id; arg: 1 if the app started it; a: url;
+                       // b: the last Navigate number handed to WebView2 before
+                       // the navigation's client callback (decimal)
   kPageFinished = 4,   // id: HTTP status (0 unknown); arg: -1 success, else
-                       // COREWEBVIEW2_WEB_ERROR_STATUS; a: url
-  kSourceChanged = 5,  // arg: 1 new document, 0 same document; a: url
+                       // COREWEBVIEW2_WEB_ERROR_STATUS; a: url; b: the last Navigate
+                       // number handed to WebView2 when it started (decimal)
+  kSourceChanged = 5,  // arg: 1 new document, 0 same document; a: url; id: the
+                       // last Navigate number handed to WebView2
   kHistory = 6,        // arg: 1 can go back | 2 can go forward
   kTitle = 7,          // a: title
   kContentLoading = 8, // arg: 1 for an error page
@@ -88,9 +92,10 @@ class Listener {
                        const std::vector<uint8_t>* bytes) = 0;
   // A main-frame navigation the page (or the user) started is about to begin:
   // true cancels it (WebViewClient.shouldOverrideUrlLoading). On the WebView
-  // thread, synchronously.
+  // thread, synchronously. handed is the last API load actually handed to
+  // WebView2 before this callback, excluding loads merely queued by the app.
   virtual bool OnNavigationStarting(const std::wstring& url, bool user_initiated,
-                                    bool redirect) = 0;
+                                    bool redirect, int64_t handed) = 0;
   // A request the Listener asked to see (SetSettings' intercept_all, file
   // URLs, documents): answer with Host::RespondToRequest(id, ...), from any
   // thread, later. On the WebView thread.
@@ -156,9 +161,12 @@ class Host {
   HWND Container() const;
 
   // Navigation. headers: "Name: value\r\n..." or empty. A method other than
-  // GET (postUrl: POST) sends `body`.
+  // GET (postUrl: POST) sends `body`. The Java load number travels with this
+  // queued navigation and is published only when it is handed to WebView2.
+  // kPageStarted and kPageFinished report the same captured number for a start.
   void Navigate(const std::wstring& url, const std::wstring& headers,
-                const std::wstring& method = L"GET", std::vector<uint8_t> body = {});
+                const std::wstring& method = L"GET", std::vector<uint8_t> body = {},
+                int64_t number = 0);
   void NavigateToString(const std::wstring& html);
   void SetBridgeEndpoint(const std::wstring& path);
   enum Command : int32_t {

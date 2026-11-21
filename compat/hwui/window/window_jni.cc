@@ -155,6 +155,10 @@ void JNICALL NativeWindow_show(JNIEnv*, jclass, jlong ptr) {
   Get(ptr)->window()->Show();
 }
 
+void JNICALL NativeWindow_restore(JNIEnv*, jclass, jlong ptr) {
+  Get(ptr)->window()->Restore();
+}
+
 jobject JNICALL NativeWindow_getSurface(JNIEnv* env, jclass, jlong ptr) {
   return android::android_view_Surface_createFromSurface(
       env, android::sp<android::Surface>::fromExisting(Get(ptr)));
@@ -296,6 +300,7 @@ const JNINativeMethod kMethods[] = {
     {"nCreate", "(Ljava/lang/String;II)J", reinterpret_cast<void*>(&NativeWindow_create)},
     {"nDestroy", "(J)V", reinterpret_cast<void*>(&NativeWindow_destroy)},
     {"nShow", "(J)V", reinterpret_cast<void*>(&NativeWindow_show)},
+    {"nRestore", "(J)V", reinterpret_cast<void*>(&NativeWindow_restore)},
     {"nShowOffscreen", "(J)V", reinterpret_cast<void*>(&NativeWindow_showOffscreen)},
     {"nGetSurface", "(J)Landroid/view/Surface;", reinterpret_cast<void*>(&NativeWindow_getSurface)},
     {"nGetWidth", "(J)I", reinterpret_cast<void*>(&NativeWindow_getWidth)},

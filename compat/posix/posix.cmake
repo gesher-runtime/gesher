@@ -21,6 +21,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/memalign.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/mman_alias_prepare.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/mman.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/memfd_seals.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/misc.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/netdb.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/network_dns.cc
@@ -39,6 +40,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/signal.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/sleep.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/socket.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/unix_rights.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/stat.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/syscall.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/sysv_shims.cc
@@ -49,7 +51,8 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/unistd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/users.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/windows_zones.cc
-  ${CMAKE_CURRENT_LIST_DIR}/src/winsock.cc)
+  ${CMAKE_CURRENT_LIST_DIR}/src/winsock.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/xattr.cc)
 # Windows time zone ids to IANA ids (src/windows_zones.cc), from the pinned
 # ICU's CLDR windowsZones (ADR 0045).
 set(_gesher_posix_gen "${CMAKE_BINARY_DIR}/gen/gesher_posix")

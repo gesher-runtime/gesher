@@ -18,6 +18,7 @@ public final class QueryBoundaryActivity extends Activity {
     private static native long nativeStart(long hwnd, int kind, long node, boolean direct);
     private static native long nativeState(long id);
     private static native long nativeGeneration(long id);
+    private static native long[] nativeTiming(long id);
     private static native boolean nativeJoin(long id);
     private static native int nativeActive();
     private static native int nativeAttached();

@@ -86,21 +86,22 @@ def verify(dist, with_fixture):
     normal = json.loads((dist / 'media-capture-production-role.json').read_text())
     shared.require(normal['role'] == 'capture-production' and normal['fixture'] is False, 'Wrong production role')
     shared.require(set(normal['files']) == set(FILES), 'Incomplete production capture inventory')
-    shared.require(all(normal[k] == v for k, v in context.items()), 'Production supplier source/run mismatch')
+    producer = shared.supplier_context(dist / 'media-capture-production-role.json', context, 'capture-production')
     for name, digest in normal['files'].items():
         shared.require(shared.sha(dist / name) == digest and SENTINEL not in (dist / name).read_bytes(),
                        'Wrong production capture executable: ' + name)
     if with_fixture:
         hook = json.loads((dist / 'media-capture-fixture-role.json').read_text())
         shared.require(hook['role'] == 'capture-fixture' and hook['fixture'] is True, 'Wrong capture fixture role')
-        shared.require(all(hook[k] == v for k, v in context.items()), 'Fixture supplier source/run mismatch')
+        fixture_producer = shared.supplier_context(dist / 'media-capture-fixture-role.json', context, 'capture-fixture')
+        shared.require(fixture_producer == producer, 'Capture fixture and production came from different executions')
         shared.require(hook['compiler'] == normal['compiler'] and hook['sources'] == normal['sources']
                        and hook['production'] == normal['files'], 'Capture fixture differs from sealed production')
         shared.require(set(hook['files']) == set(FILES.values()), 'Unexpected capture fixture files')
         for name, digest in hook['files'].items():
             shared.require(shared.sha(dist / name) == digest and SENTINEL in (dist / name).read_bytes(),
                            'Wrong synthetic capture executable: ' + name)
-        shared.verify_selected(dist, hook.get('selected_link'), hook['compiler'], context,
+        shared.verify_selected(dist, hook.get('selected_link'), hook['compiler'], fixture_producer,
                                set(FILES.values()), 'capture-fixture')
     print('capture host roles: verified ' + ('production and isolated fixture' if with_fixture else 'production'))
 

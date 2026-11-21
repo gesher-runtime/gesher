@@ -55,6 +55,7 @@ jobs:
           sparse-checkout: |
             tools/ci
             tools/surface
+            tools/test_arm64_sigsetjmp.py
             compat/arm64
             cmake/toolchain-llvm-mingw.cmake
             tests/native
@@ -162,6 +163,17 @@ jobs:
           unzip -q ndk.zip
           test -d "$NDK_DIR"
 
+      - name: Execute production setjmp bytecode with an independent ARM64 CPU
+        run: |
+          python3 -m venv "$RUNNER_TEMP/arm64-setjmp-venv"
+          # PyPI's SHA-256 of unicorn 2.1.4's manylinux x86_64 wheel and of its sdist.
+          printf '%s\n' 'unicorn==2.1.4 --hash=sha256:9d6e6dea140560de4ebd8446661f7ef84a357d428c14a3ef09dacd306ec8c239 --hash=sha256:00567a70e323f749b419cd86bee4f9115beab7ebba32194581c090cbb7c59cff' \
+            > "$RUNNER_TEMP/arm64-setjmp-requirements.txt"
+          "$RUNNER_TEMP/arm64-setjmp-venv/bin/python" -m pip install --disable-pip-version-check \
+            --require-hashes -r "$RUNNER_TEMP/arm64-setjmp-requirements.txt"
+          "$RUNNER_TEMP/arm64-setjmp-venv/bin/python" tools/test_arm64_sigsetjmp.py \
+            --arm-cc "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+
       - name: Build the arm64-v8a guest test .so files
         run: |
           set -euo pipefail
@@ -184,6 +196,7 @@ jobs:
             -O binary --only-section=.text /tmp/arm64-fpcr-code.o dist-arm64/arm64-fpcr-code.bin
           # Step 1 (guest): a self-contained .so, no libc/TLS/stack guard.
           bash tests/native/build-lookup-graph.sh "$cc" dist-arm64 _arm64
+          bash tests/native/build-load-transaction-graph.sh "$cc" dist-arm64/elf-load-transaction-arm64
           "$cc" -std=c11 -O2 -Wall -Wextra -Werror tests/native/aaudio_builder_contract_test.c \
             -laaudio -ldl -o dist-arm64/aaudio_builder_arm64
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++" \
@@ -217,7 +230,7 @@ jobs:
           # and the perf kernel (docs/arm64.md).
           "$cc" -shared -fPIC -O2 -fstack-protector-all \
             -Wl,-soname,libarm64_abi_test.so \
-            -o dist-arm64/arm64_abi_test.so tests/native/arm64_abi_test.c /tmp/arm64-fpcr-reference.o -ldl -lm
+            -o dist-arm64/arm64_abi_test.so tests/native/arm64_abi_test.c tests/native/arm64_setjmp_registers.S /tmp/arm64-fpcr-reference.o -ldl -lm
           "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -o dist-arm64/arm64-fpcr-exec tests/native/arm64_fpcr_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
           "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \

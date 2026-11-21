@@ -28,6 +28,16 @@ set_target_properties(gesher_media_format PROPERTIES CXX_STANDARD 23)
 target_link_libraries(dalvikvm PRIVATE gesher_media_format)
 target_link_libraries(gesher-exec PRIVATE gesher_media_format)
 
+# The NDK's MediaDrm/MediaCrypto: no DRM plugin, so no scheme is supported
+# and no object is created (compat/media/ndk/media_drm.cc).
+add_library(gesher_media_drm OBJECT ${_media}/ndk/media_drm.cc)
+target_include_directories(gesher_media_drm PRIVATE ${AOSP_DIR}/frameworks/av/media/ndk/include)
+target_link_libraries(gesher_media_drm PUBLIC gesher_bionic)
+target_compile_options(gesher_media_drm PRIVATE -Wall -Wextra -Werror)
+set_target_properties(gesher_media_drm PROPERTIES CXX_STANDARD 23)
+target_link_libraries(dalvikvm PRIVATE gesher_media_drm)
+target_link_libraries(gesher-exec PRIVATE gesher_media_drm)
+
 set(GESHER_MEDIA_AUDIO_SOURCES
   ${_media}/audio/engine.cc
   ${_media}/audio/shared_state.cc
@@ -208,20 +218,20 @@ target_compile_options(media_http_source_contract_test PRIVATE -Wall -Wextra -We
 target_link_libraries(media_http_source_contract_test PRIVATE gesher_posix winhttp pthread)
 
 add_executable(media_surface_timestamp_contract_test
-  "${CMAKE_SOURCE_DIR}/tests/media/surface_timestamp_contract_test.cc" ${_media}/surface/queue_surface.cc)
+  "${CMAKE_SOURCE_DIR}/tests/media/surface_timestamp_contract_test.cc")
 target_include_directories(media_surface_timestamp_contract_test PRIVATE "${CMAKE_SOURCE_DIR}")
 target_compile_options(media_surface_timestamp_contract_test PRIVATE -Wall -Werror)
-target_link_libraries(media_surface_timestamp_contract_test PRIVATE hostgraphics)
+target_link_libraries(media_surface_timestamp_contract_test PRIVATE gesher_window_surface)
 gesher_graphics_cxx(media_surface_timestamp_contract_test)
 
 add_executable(media_surface_geometry_contract_test
-  "${CMAKE_SOURCE_DIR}/tests/media/surface_geometry_contract_test.cc" ${_media}/surface/queue_surface.cc)
+  "${CMAKE_SOURCE_DIR}/tests/media/surface_geometry_contract_test.cc")
 target_include_directories(media_surface_geometry_contract_test PRIVATE "${CMAKE_SOURCE_DIR}")
 # Pinned hostgraphics inline adapters retain unused signature parameters, as
 # in window_probe. Keep all other extra warnings and warnings-as-errors enabled.
 target_compile_options(media_surface_geometry_contract_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter)
-target_link_libraries(media_surface_geometry_contract_test PRIVATE hostgraphics gesher_window_surface)
+target_link_libraries(media_surface_geometry_contract_test PRIVATE gesher_window_surface)
 gesher_graphics_cxx(media_surface_geometry_contract_test)
 
 add_executable(media_surface_frame_recycling_test
@@ -233,12 +243,21 @@ target_compile_options(media_surface_frame_recycling_test PRIVATE
 target_link_libraries(media_surface_frame_recycling_test PRIVATE hostgraphics)
 gesher_graphics_cxx(media_surface_frame_recycling_test)
 
+# I420 rows to RGBA (compat/media/video/yuv_rgba.h): every Y, U, V against the
+# reference formula, generic and AVX2 (38-media.ps1).
+add_executable(media_yuv_rgba_test "${CMAKE_SOURCE_DIR}/tests/media/yuv_rgba_test.cc")
+target_include_directories(media_yuv_rgba_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_yuv_rgba_test PRIVATE -Wall -Wextra -Werror)
+
 # The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
+# QueueSurface itself uses only hostgraphics and is shared by hwui and the renderer.
+target_sources(gesher_window_surface PRIVATE ${_media}/surface/queue_surface.cc)
 target_sources(hwui PRIVATE
-  ${_media}/surface/queue_surface.cc
   ${_media}/surface/reader_surface.cc
   ${_media}/surface/surface_jni.cc
+  # SurfaceTexture's GL consumer: frames into the app's external texture.
+  ${_media}/surface/surface_texture_gl.cc
   # The encoders' input surfaces (media3, ADR 0059): QueueSurfaces too.
   ${_media}/video/input_surface.cc)
 

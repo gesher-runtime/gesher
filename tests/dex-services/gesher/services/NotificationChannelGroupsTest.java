@@ -52,6 +52,7 @@ import org.xmlpull.v1.XmlPullParser;
 
 /** Real framework manager -> AIDL Parcel -> service, plus policy persistence and publication races. */
 public final class NotificationChannelGroupsTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     private static int checks;
     private interface Work { void run() throws Exception; }
     private static void require(boolean yes, String why) { if (!yes) throw new AssertionError(why); checks++; }
@@ -289,9 +290,8 @@ public final class NotificationChannelGroupsTest {
             service = (NotificationManagerService)make(NotificationManagerService.class,
                     new Class<?>[]{pmType, amType, ToIntBiFunction.class}, pm, null, sink);
             am = make(amType, new Class<?>[]{atmType, pmType, NotificationManagerService.class}, atm, pm, service);
-            Class<?> created = Class.forName("com.gesher.server.Services$Created");
             field(Class.forName("com.gesher.server.Services"), "sLast").set(null,
-                    make(created, new Class<?>[]{pmType, atmType, amType}, pm, atm, am));
+                    serviceContexts.runtime(pm, atm, am));
             wire = wire(service); nm = manager(wire, pkg);
         }
         Notification notification(String channel) throws Exception {
@@ -365,6 +365,42 @@ public final class NotificationChannelGroupsTest {
         require(field(restored.getClass(), "channelId").get(restored) == null,
                 "Version-2 migration fabricated unknown channel identity");
         f.wire.cancelNotificationWithTag(f.pkg, f.pkg, null, 61, 0);
+    }
+
+    private static void notificationKeyCollisions(Fixture f) throws Exception {
+        f.nm.createNotificationChannel(new NotificationChannel("identity", "Identity", NotificationManager.IMPORTANCE_DEFAULT));
+        Notification n = f.notification("identity");
+        int uid = (Integer)f.apkType.getMethod("uid").invoke(f.owner);
+        String first = new StatusBarNotification(f.pkg, f.pkg, 1701, "Aa", uid, 0, n,
+                android.os.UserHandle.SYSTEM, null, 0).getKey();
+        String second = new StatusBarNotification(f.pkg, f.pkg, 1701, "BB", uid, 0, n,
+                android.os.UserHandle.SYSTEM, null, 0).getKey();
+        require(!first.equals(second) && first.hashCode() == second.hashCode(), "Invalid collision fixture");
+        f.wire.enqueueNotificationWithTag(f.pkg, f.pkg, "Aa", 1701, n, 0);
+        f.wire.enqueueNotificationWithTag(f.pkg, f.pkg, "BB", 1701, n, 0);
+        Class<?> store = Class.forName("com.gesher.server.NotificationStore");
+        Method load = method(store, "load", String.class, String.class);
+        Method path = method(store, "file", String.class, String.class);
+        require(load.invoke(null, f.pkg, first) != null && load.invoke(null, f.pkg, second) != null,
+                "Distinct colliding keys overwrote persisted notifications");
+        File current = (File)path.invoke(null, f.pkg, first);
+        File legacy = new File(current.getParentFile(), Integer.toHexString(first.hashCode()) + ".n");
+        Files.copy(current.toPath(), legacy.toPath()); Files.delete(current.toPath());
+        f.restart();
+        require(load.invoke(null, f.pkg, first) != null && load.invoke(null, f.pkg, second) != null,
+                "Restart lost legacy or new collision-separated notification");
+        f.wire.cancelNotificationWithTag(f.pkg, f.pkg, "BB", 1701, 0);
+        require(legacy.isFile() && load.invoke(null, f.pkg, first) != null,
+                "Cancellation removed another notification's colliding legacy record");
+        f.wire.enqueueNotificationWithTag(f.pkg, f.pkg, "BB", 1701, n, 0);
+        require(legacy.isFile(), "Saving another key removed the colliding legacy record");
+        f.wire.enqueueNotificationWithTag(f.pkg, f.pkg, "Aa", 1701, n, 0);
+        require(!legacy.exists() && load.invoke(null, f.pkg, first) != null,
+                "Successful same-key update did not retire legacy state");
+        f.wire.cancelNotificationWithTag(f.pkg, f.pkg, "Aa", 1701, 0);
+        require(load.invoke(null, f.pkg, first) == null && load.invoke(null, f.pkg, second) != null,
+                "Canceling one key damaged its collision peer");
+        f.wire.cancelNotificationWithTag(f.pkg, f.pkg, "BB", 1701, 0);
     }
 
     private static void blockedChannels(Fixture f) throws Exception {
@@ -566,6 +602,14 @@ public final class NotificationChannelGroupsTest {
     }
 
     public static void main(String[] args) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            runWithServiceContext(args);
+        } finally { serviceContexts = previous; }
+    }
+
+    private static void runWithServiceContext(String[] args) throws Exception {
         require(args.length == 1, "Pass the devsvc APK requesting notification permission");
         require("1000".equals(System.getenv("GESHER_BINDER_UID")), "System-UID fixture needed for real retained notification state");
         System.loadLibrary("android_runtime");
@@ -583,7 +627,7 @@ public final class NotificationChannelGroupsTest {
             legacyRouting(f);
             blockedChannels(f);
             f.restart(); persistence(f.nm, f.service, f.pkg);
-            publication(f); retainedV2(f); activeUses(f);
+            publication(f); retainedV2(f); notificationKeyCollisions(f); activeUses(f);
             f.nm.createNotificationChannelGroup(group("accounts", "For capacity check"));
             limits(f.service, f.pkg);
             method(NotificationManagerService.class, "packageRemoved", String.class).invoke(f.service, f.pkg);

@@ -519,6 +519,16 @@ void Window::Show() {
   SetForegroundWindow(hwnd);
 }
 
+void Window::Restore() {
+  offscreen_ = false;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  // A user restore can overtake the Java visibility notification. SW_RESTORE on
+  // an already maximized window would unmaximize it, so only restore an icon.
+  if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+  SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  SetForegroundWindow(hwnd);
+}
+
 void Window::Hide() {
   ShowWindowAsync(static_cast<HWND>(hwnd_), SW_HIDE);
 }

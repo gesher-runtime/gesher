@@ -39,6 +39,9 @@ import java.util.Map;
  * frames are made (a burst's at submission, so SubmitInfo can tell its last one).
  */
 public final class CameraDeviceUser extends ICameraDeviceUser.Default {
+    /** How long endConfigure waits for the device to open. */
+    private static final long OPEN_WAIT_MS = 10_000;
+
     /** One configured output. */
     private static final class Stream {
         final List<Surface> surfaces = new ArrayList<>();
@@ -145,8 +148,12 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private boolean mBusy;
     private boolean mIdleReported = true;
     private boolean mDisconnected;
+    /** endConfigure asks the capture thread to open the device at the session's size. */
+    private boolean mOpenWanted;
     private Thread mThread;
     private WindowsCamera.Capture mCapture;
+    /** The size {@link #mCapture} was opened for (the largest stream's then). */
+    private Size mCaptureFor;
 
     CameraDeviceUser(CameraService service, String cameraId, WindowsCamera.Device device,
             ICameraDeviceCallbacks callbacks) {
@@ -171,6 +178,31 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         if (operatingMode != NORMAL_MODE) {
             throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
                     "operating mode " + operatingMode + " is not supported");
+        }
+        // cameraserver configures the device's streams here, before the session reports
+        // onConfigured; requests then start at the stream rate. Open the Windows device at
+        // the session's size now, on the capture thread that owns it, instead of on the
+        // first request: its open (a Media Foundation source reader and its video
+        // processing, up to seconds when cold) would otherwise come between
+        // setRepeatingRequest and the first frame. A failed open is retried, and
+        // reported, by the first request, as before.
+        synchronized (mLock) {
+            if (!mStreams.isEmpty()) {
+                mOpenWanted = true;
+                startThreadLocked();
+                mLock.notifyAll();
+                long deadline = SystemClock.uptimeMillis() + OPEN_WAIT_MS;
+                while (mOpenWanted && !mDisconnected) {
+                    long left = deadline - SystemClock.uptimeMillis();
+                    if (left <= 0) break;  // the first request waits for the rest
+                    try {
+                        mLock.wait(left);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
         }
         return new int[0];
     }
@@ -432,11 +464,12 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     /** The next frame to make, or null when disconnected; reports idleness. */
     private Frame next() {
         for (;;) {
+            boolean openWanted = false;
             synchronized (mLock) {
                 mBusy = false;
                 mLock.notifyAll();
                 boolean reportIdle = false;
-                while (!mDisconnected && mQueue.isEmpty() && mRepeating == null) {
+                while (!mDisconnected && !mOpenWanted && mQueue.isEmpty() && mRepeating == null) {
                     if (!mIdleReported) {
                         mIdleReported = true;
                         reportIdle = true;
@@ -451,6 +484,9 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 if (!reportIdle) {
                     if (mDisconnected) return null;
                     mBusy = true;
+                    openWanted = mOpenWanted;
+                }
+                if (!reportIdle && !openWanted) {
                     Frame f = mQueue.poll();
                     if (f != null) return f;
                     // Select and number this frame under the same lock that
@@ -461,6 +497,14 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     mRepeatingLastFrame = f.frameNumber;
                     return f;
                 }
+            }
+            if (openWanted) {
+                openForConfiguration();
+                synchronized (mLock) {
+                    mOpenWanted = false;
+                    mLock.notifyAll();
+                }
+                continue;
             }
             try {
                 mCallbacks.onDeviceIdle();
@@ -491,7 +535,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         while ((f = next(timing)) != null) {
             if (mCapture == null) {
                 try {
-                    mCapture = open();
+                    open(configuredSize());
                 } catch (WindowsCamera.OpenException e) {
                     CameraService.log(e.getMessage());
                     fail(f, ICameraDeviceCallbacks.ERROR_CAMERA_DEVICE);
@@ -575,8 +619,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         return frame;
     }
 
-    /** Opens the device at the largest configured stream size. */
-    private WindowsCamera.Capture open() throws WindowsCamera.OpenException {
+    /** The largest configured stream size (640x480 with none). */
+    private Size configuredSize() {
         int w = 640, h = 480;
         long area = 0;
         synchronized (mLock) {
@@ -589,10 +633,40 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 }
             }
         }
-        WindowsCamera.Capture capture = WindowsCamera.open(mDevice.id, w, h);
+        return new Size(w, h);
+    }
+
+    /**
+     * On the capture thread, for endConfigure: opens the device at the configured size,
+     * or reopens it when a new configuration needs another size. A failure is logged;
+     * the next request retries the open and reports the error.
+     */
+    private void openForConfiguration() {
+        Size size = configuredSize();
+        if (mCapture != null) {
+            if (size.equals(mCaptureFor)) return;
+            WindowsCamera.Capture old = mCapture;
+            mCapture = null;
+            mCaptureFor = null;
+            old.close();
+        }
+        try {
+            open(size);
+        } catch (WindowsCamera.OpenException e) {
+            CameraService.log(e.getMessage());
+        }
+    }
+
+    /** Opens the device at its offered size nearest to {@code size}, as mCapture. */
+    private void open(Size size) throws WindowsCamera.OpenException {
+        long start = SystemClock.elapsedRealtime();
+        WindowsCamera.Capture capture = WindowsCamera.open(mDevice.id, size.getWidth(),
+                size.getHeight());
+        mCapture = capture;
+        mCaptureFor = size;
         CameraService.log("camera " + mCameraId + " (" + mDevice.name + ") capturing at "
-                + capture.width + "x" + capture.height);
-        return capture;
+                + capture.width + "x" + capture.height + " (opened in "
+                + (SystemClock.elapsedRealtime() - start) + " ms)");
     }
 
     private void fail(Frame f, int error) {

@@ -24,7 +24,7 @@
 //    ObbFile; mounting is not supported (the callback reports
 //    AOBB_STATE_ERROR_INTERNAL from another thread, as the platform reports
 //    asynchronously).
-//  - ASharedMemory_create/getSize/setProt over gesher-base's memfd_create.
+//  - ASharedMemory_create/getSize/setProt over gesher-base's sealable memfds.
 //  - ANativeWindow_fromSurface/toSurface over libandroid_runtime's (with the
 //    runtime's JNIEnv); the other ANativeWindow_* are in libandroid_window.cc
 //    and EGL/GLES in egl_gles.cc.
@@ -34,6 +34,7 @@
 #include "extra_bionic.h"
 #include "jni_bridge.h"
 #include "shim_internal.h"
+#include "surface_control.h"
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
@@ -50,6 +51,7 @@
 #include <utils/Looper.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <io.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -57,6 +59,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -417,13 +420,20 @@ int32_t BIONIC_SYSV ObbInfoGetFlags(ObbInfo* info) { return info->getFlags(); }
 
 // --- ASharedMemory ---------------------------------------------------------------------------------
 
+// libcutils' memfd regions (system/core/libcutils/ashmem-dev.cpp,
+// memfd_create_region and memfd_set_prot_region), which ASharedMemory_* call:
+// a sealable memfd whose size is fixed by F_SEAL_GROW | F_SEAL_SHRINK, made
+// read-only for good by F_SEAL_FUTURE_WRITE. Chromium tells a memfd region by
+// those seals; gesher-base stores and enforces them (memfd_seals.cc).
 int BIONIC_SYSV SharedMemoryCreate(const char* name, size_t size) {
   if (size == 0) return errno = kEINVAL, -1;
-  int fd = memfd_create(name != nullptr ? name : "ashmem", 0);
+  int fd = memfd_create(name != nullptr ? name : "none", MFD_CLOEXEC | MFD_ALLOW_SEALING);
   if (fd < 0) return -1;
-  if (_chsize_s(fd, static_cast<long long>(size)) != 0) {
+  if (gesher_ftruncate(fd, static_cast<off_t>(size)) != 0 ||
+      fcntl(fd, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK) != 0) {
+    const int saved = errno;
     close(fd);
-    return errno = kENOMEM, -1;
+    return errno = saved, -1;
   }
   return fd;
 }
@@ -432,7 +442,16 @@ size_t BIONIC_SYSV SharedMemoryGetSize(int fd) {
   if (fstat(fd, &st) != 0) return 0;
   return static_cast<size_t>(st.st_size);
 }
-int BIONIC_SYSV SharedMemorySetProt(int, int) { return 0; }
+int BIONIC_SYSV SharedMemorySetProt(int fd, int prot) {
+  const int seals = fcntl(fd, F_GET_SEALS);
+  if (seals == -1) return -1;
+  if ((prot & PROT_WRITE) != 0) {
+    // A region made read-only cannot become writable again (ashmem's EINVAL).
+    if ((seals & F_SEAL_FUTURE_WRITE) != 0) return errno = kEINVAL, -1;
+    return 0;
+  }
+  return fcntl(fd, F_ADD_SEALS, F_SEAL_FUTURE_WRITE) == 0 ? 0 : -1;
+}
 
 // --- ANativeWindow_fromSurface/toSurface ------------------------------------------------------
 // The other ANativeWindow_* functions are in libandroid_window.cc. These two
@@ -445,6 +464,38 @@ ANativeWindow* BIONIC_SYSV WindowFromSurface(JNIEnv* env, jobject surface) {
 }
 jobject BIONIC_SYSV WindowToSurface(JNIEnv* env, ANativeWindow* window) {
   return ANativeWindow_toSurface(RealJniEnv(env), window);
+}
+
+// ASurfaceControl_fromJava (API 34): the layer standing for a Java
+// SurfaceControl, by its native object (surface_control.cc keeps the layers;
+// ADR 0089). As on Android, a null or released SurfaceControl is fatal.
+ASurfaceControl* BIONIC_SYSV SurfaceControlFromJava(JNIEnv* env, jobject surface_control) {
+  JNIEnv* real = RealJniEnv(env);
+  if (surface_control == nullptr) {
+    std::fprintf(stderr, "gesher libandroid: ASurfaceControl_fromJava: null SurfaceControl\n");
+    std::abort();
+  }
+  jclass c = real->FindClass("android/view/SurfaceControl");
+  jfieldID native_field = c != nullptr ? real->GetFieldID(c, "mNativeObject", "J") : nullptr;
+  jfieldID name_field = c != nullptr ? real->GetFieldID(c, "mName", "Ljava/lang/String;") : nullptr;
+  if (real->ExceptionCheck()) real->ExceptionClear();
+  const jlong native_object = native_field != nullptr ? real->GetLongField(surface_control, native_field) : 0;
+  if (native_object == 0) {
+    std::fprintf(stderr, "gesher libandroid: ASurfaceControl_fromJava: the SurfaceControl is not valid\n");
+    std::abort();
+  }
+  std::string name = "java";
+  if (name_field != nullptr) {
+    if (auto s = static_cast<jstring>(real->GetObjectField(surface_control, name_field))) {
+      if (const char* utf = real->GetStringUTFChars(s, nullptr)) {
+        name = utf;
+        real->ReleaseStringUTFChars(s, utf);
+      }
+      real->DeleteLocalRef(s);
+    }
+  }
+  if (c != nullptr) real->DeleteLocalRef(c);
+  return sc::ForJavaSurfaceControl(native_object, name.c_str());
 }
 
 // --- the table ---------------------------------------------------------------------------------------
@@ -558,6 +609,8 @@ void Register() {
       // Surfaces (the rest of ANativeWindow_*: libandroid_window.cc).
       E("ANativeWindow_fromSurface", WindowFromSurface),
       E("ANativeWindow_toSurface", WindowToSurface),
+      // The rest of ASurfaceControl_*: surface_control.cc.
+      E("ASurfaceControl_fromJava", SurfaceControlFromJava),
       // ANativeActivity_*: native_activity.cc.
   };
 #undef CFG

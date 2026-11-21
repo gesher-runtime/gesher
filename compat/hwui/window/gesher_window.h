@@ -104,6 +104,8 @@ class Window {
   ~Window();  // destroys the window and joins its thread
 
   void Show();
+  // Restores an iconic window to its previous normal or maximized placement.
+  void Restore();
   void Hide();
   // Minimizes the window without activating anything (an app's
   // Activity.moveTaskToBack: its taskbar button stays, restoring it brings
