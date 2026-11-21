@@ -27,11 +27,14 @@
 #include <vector>
 
 #include <linux/android/binder.h>
+#include <gesher/file_description.h>
 
 #include "binder_internal.h"
+#include "binder_file_descriptions.h"
 #include "binder_sg.h"
 #include "binder_wire.h"
 #include "internal.h"
+#include "record_lock_descriptors.h"
 
 namespace gesher {
 namespace {
@@ -315,8 +318,10 @@ void CloseThreadPipe(BinderFile* file) {
 // pad_flags and the high 32 bits of the object's cookie (TransferSocket's low
 // and high 32 bits, ADR 0088 phase 3). binderd copies an fd object's cookie
 // unchanged; its low 32 bits keep libbinder's value (the sender's ownership
-// flag), which the receiver gets back as sent. Only fds backed by a Windows
-// handle (files, memfds, pipes, sockets) travel; any other goes as handle 0,
+// flag), which the receiver gets back as sent. Ordinary files retain their
+// full cookie and carry shared descriptions in the separate side table.
+// Only fds backed by a Windows handle (files, memfds, pipes, sockets) travel;
+// any other goes as handle 0,
 // which binderd refuses (BR_FAILED_REPLY).
 template <typename F>
 void ForEachFdObject(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size,
@@ -329,42 +334,78 @@ void ForEachFdObject(uint8_t* data, size_t data_size, const void* offsets, size_
     binder_fd_object obj;
     memcpy(&obj, data + off, sizeof(obj));
     if (obj.hdr.type != BINDER_TYPE_FD) continue;
-    f(obj);
+    f(off, obj);
     memcpy(data + off, &obj, sizeof(obj));
   }
 }
 
-void SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
-  ForEachFdObject(data, data_size, offsets, offsets_size, [](binder_fd_object& obj) {
+bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size,
+             std::vector<wire::FileDescription>* descriptions,
+             std::vector<DescriptorSnapshotPtr>* pins) {
+  bool ok = true;
+  ForEachFdObject(data, data_size, offsets, offsets_size, [&](uint64_t offset, binder_fd_object& obj) {
+    if (!ok) { obj.pad_binder = 0; return; }
     const int fd = static_cast<int>(obj.fd);
     uintptr_t socket = 0;
     uint64_t metadata = 0;
-    if (gesher::TransferSocket(fd, &socket, &metadata)) {
-      obj.pad_flags = static_cast<__u32>(metadata);
-      obj.cookie = (obj.cookie & 0xffffffffu) | (metadata >> 32) << 32;
-      obj.pad_binder = static_cast<binder_uintptr_t>(socket);
-      return;
+    DescriptorSnapshotPtr snapshot;
+    {
+      record_locks::DescriptorGuard guard;
+      if (TransferSocket(fd, &socket, &metadata)) {
+        // Keep the actual socket alive until the broker consumes this stream.
+        auto pin = std::make_shared<DescriptorSnapshot>();
+        if (!DuplicateHandle(GetCurrentProcess(), reinterpret_cast<HANDLE>(socket),
+                             GetCurrentProcess(), &pin->handle, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          ok = false; obj.pad_binder = 0; return;
+        }
+        obj.pad_flags = static_cast<__u32>(metadata);
+        obj.cookie = (obj.cookie & 0xffffffffu) | (metadata & 0xffffffff00000000ull);
+        obj.pad_binder = reinterpret_cast<uintptr_t>(pin->handle);
+        descriptions->push_back({offset, 0, wire::kSocketFileDescription, 0});
+        pins->push_back(std::move(pin));
+        return;
+      }
+      snapshot = CaptureDescriptor(fd);
     }
-    intptr_t h = _get_osfhandle(fd);
+    HANDLE shared = snapshot && snapshot->kind != DescriptorKind::kUnshareable
+        ? ShareFileDescription(snapshot) : nullptr;
+    if (!shared) { ok = false; obj.pad_binder = 0; return; }
     obj.pad_flags = 0;
-    obj.pad_binder = h == -1 || h == -2 ? 0 : static_cast<binder_uintptr_t>(h);
+    obj.pad_binder = reinterpret_cast<uintptr_t>(snapshot->handle);
+    descriptions->push_back({offset, reinterpret_cast<uintptr_t>(shared),
+                             static_cast<uint32_t>(snapshot->kind), 0});
+    pins->push_back(std::move(snapshot));
   });
+  return ok;
 }
 
-bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
+bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size,
+                const std::vector<wire::FileDescription>& descriptions) {
   bool ok = true;
-  ForEachFdObject(data, data_size, offsets, offsets_size, [&](binder_fd_object& obj) {
+  size_t next = 0;
+  ForEachFdObject(data, data_size, offsets, offsets_size, [&](uint64_t, binder_fd_object& obj) {
+    const auto& description = descriptions[next++];  // validated before allocation/claim
     HANDLE staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(obj.pad_binder));
-    HANDLE owned = nullptr;
+    HANDLE owned = nullptr, shared = nullptr;
     int fd = -1;
     if (DuplicateHandle(GetCurrentProcess(), staging, GetCurrentProcess(), &owned,
-                        0, FALSE, DUPLICATE_SAME_ACCESS)) {
-      fd = gesher::AdoptTransferred(
-          owned, uint64_t{obj.pad_flags} | (uint64_t{obj.cookie} >> 32) << 32);
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      if (description.kind == wire::kSocketFileDescription) {
+        fd = AdoptSocket(reinterpret_cast<uintptr_t>(owned),
+                         uint64_t{obj.pad_flags} | (obj.cookie & 0xffffffff00000000ull));
+      } else {
+        HANDLE shared_staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(description.shared_handle));
+        if (DuplicateHandle(GetCurrentProcess(), shared_staging, GetCurrentProcess(), &shared,
+                            0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          fd = AdoptFileDescription(owned, shared, static_cast<DescriptorKind>(description.kind), true);
+        } else {
+          CloseHandle(owned);
+        }
+      }
     }
     if (fd < 0) ok = false;
     obj.pad_flags = 0;
-    obj.cookie &= 0xffffffffu;
+    if (description.kind == wire::kSocketFileDescription) obj.cookie &= 0xffffffffu;
     obj.pad_binder = 0;
     obj.fd = static_cast<__u32>(fd);
   });
@@ -372,7 +413,7 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
 }
 
 void CloseReceivedFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
-  ForEachFdObject(data, data_size, offsets, offsets_size, [](binder_fd_object& obj) {
+  ForEachFdObject(data, data_size, offsets, offsets_size, [](uint64_t, binder_fd_object& obj) {
     if (obj.fd != static_cast<__u32>(-1)) close(static_cast<int>(obj.fd));
     obj.fd = static_cast<__u32>(-1);
   });
@@ -443,6 +484,7 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
   if (pipe == INVALID_HANDLE_VALUE) return -1;
 
   Message m;
+  std::vector<DescriptorSnapshotPtr> outbound_fds;
   m.Put<uint32_t>(wire::kWriteRead);
   uint64_t read_size = bwr->read_size > bwr->read_consumed ? bwr->read_size - bwr->read_consumed : 0;
   m.Put<uint64_t>(read_size);
@@ -484,6 +526,7 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       std::vector<uint8_t> snapshot;
       std::vector<uint64_t> snapshot_offsets;
       std::vector<uint8_t> extra;
+      std::vector<wire::FileDescription> descriptions;
       int32_t copy_error = 0;
       if (!binder_sg::Dimensions(tr.data_size, tr.offsets_size, extra_size)) {
         copy_error = EINVAL;
@@ -513,14 +556,33 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       }
       tr.data.ptr.buffer = 0;
       tr.data.ptr.offsets = 0;
+      if (copy_error == 0) {
+        size_t count = 0;
+        ForEachFdObject(snapshot.data(), snapshot.size(), snapshot_offsets.data(),
+                       snapshot_offsets.size() * sizeof(uint64_t), [&](uint64_t, binder_fd_object&) { ++count; });
+        if (count > wire::kMaxFileDescriptions ||
+            !binder_sg::Range(m.bytes.size() - 4 + size + sizeof(int32_t) + sizeof(uint32_t),
+                    snapshot.size() + snapshot_offsets.size() * sizeof(uint64_t) + extra.size() +
+                    count * sizeof(wire::FileDescription), binder_sg::kMaxBytes)) {
+          copy_error = EINVAL;
+        } else {
+          const size_t previous_pins = outbound_fds.size();
+          if (!SendFds(snapshot.data(), snapshot.size(), snapshot_offsets.data(),
+                       snapshot_offsets.size() * sizeof(uint64_t), &descriptions, &outbound_fds)) {
+            copy_error = EBADF;
+            outbound_fds.resize(previous_pins);
+          }
+        }
+      }
       m.Put(tr);
       if (size > sizeof(tr)) m.Write(arg + sizeof(tr), size - sizeof(tr));  // buffers_size
       m.Put(copy_error);
       if (copy_error == 0) {
-        SendFds(snapshot.data(), snapshot.size(), snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t));
+        m.Put<uint32_t>(static_cast<uint32_t>(descriptions.size()));
         m.Write(snapshot.data(), snapshot.size());
         m.Write(snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t));
         m.Write(extra.data(), extra.size());
+        m.Write(descriptions.data(), descriptions.size() * sizeof(wire::FileDescription));
       }
     } else if (cmd == BC_FREE_BUFFER) {
       binder_uintptr_t ptr;
@@ -586,25 +648,37 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
         return -1;
       };
       uint64_t extra_size;
-      if (!r.Get(&extra_size) || !binder_sg::Dimensions(tr.data_size, tr.offsets_size, extra_size)) {
+      uint32_t description_count;
+      if (!r.Get(&extra_size) || !r.Get(&description_count) ||
+          !binder_sg::Dimensions(tr.data_size, tr.offsets_size, extra_size) ||
+          description_count > tr.offsets_size / sizeof(uint64_t) ||
+          description_count > wire::kMaxFileDescriptions) {
         return abandon(nullptr, false, EBADF);
       }
       size_t data_size = static_cast<size_t>(tr.data_size);
       size_t aligned = (data_size + 7) & ~size_t{7};
       const size_t offsets_size = static_cast<size_t>(tr.offsets_size);
       const size_t extra_offset = aligned + offsets_size;
-      const uint64_t wire_bytes = tr.data_size + tr.offsets_size + extra_size;
+      const uint64_t wire_bytes = tr.data_size + tr.offsets_size + extra_size +
+          static_cast<uint64_t>(description_count) * sizeof(wire::FileDescription);
       if (wire_bytes > static_cast<uint64_t>(r.end - r.p)) return abandon(nullptr, false, EBADF);
       // Receive owns this immutable reply until WriteRead returns. Validate its
       // byte ranges directly, then copy once into the receiver-owned allocation.
-      // In particular, wire offsets can be unaligned after an odd-sized payload.
+      // Wire offsets and the descriptor table can follow an odd-sized payload.
       const uint8_t* data = r.p;
       const uint8_t* offsets = data + data_size;
       const uint8_t* extra = offsets + offsets_size;
+      std::vector<wire::FileDescription> descriptions(description_count);
+      if (!descriptions.empty()) {
+        memcpy(descriptions.data(), extra + static_cast<size_t>(extra_size),
+               descriptions.size() * sizeof(wire::FileDescription));
+      }
       r.p += static_cast<size_t>(wire_bytes);
       binder_sg::Layout layout;
       if (!binder_sg::WireLayout(data, data_size, offsets, offsets_size,
-                                static_cast<size_t>(extra_size), &layout)) return abandon(nullptr, false, EBADF);
+                                static_cast<size_t>(extra_size), &layout) ||
+          !wire::ValidFileDescriptions(data, data_size, offsets, offsets_size, descriptions))
+        return abandon(nullptr, false, EBADF);
       uint8_t* block = file->Allocate(extra_offset + static_cast<size_t>(extra_size), id, !layout.pointers.empty());
       if (block == nullptr) return abandon(nullptr, false, ENOMEM);
       if (data_size != 0) memcpy(block, data, data_size);
@@ -612,7 +686,8 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       if (extra_size != 0) memcpy(block + extra_offset, extra, static_cast<size_t>(extra_size));
       binder_sg::Rebase(block, block + extra_offset, layout);
       if (!BufferResult(pipe, wire::kClaimBuffer, id)) return abandon(block, false, EBADF);
-      if (!ReceiveFds(block, data_size, block + aligned, tr.offsets_size)) return abandon(block, true, EMFILE);
+      if (!ReceiveFds(block, data_size, block + aligned, tr.offsets_size, descriptions))
+        return abandon(block, true, EMFILE);
       tr.data.ptr.buffer = reinterpret_cast<binder_uintptr_t>(block);
       tr.data.ptr.offsets = reinterpret_cast<binder_uintptr_t>(block + aligned);
       memcpy(command.data() + 4, &tr, sizeof(tr));

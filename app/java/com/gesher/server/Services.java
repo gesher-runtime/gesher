@@ -110,9 +110,11 @@ public final class Services {
         services.put(Context.RESTRICTIONS_SERVICE,
                 StandIn.of(android.content.IRestrictionsManager.class,
                         new ApplicationRestrictionsService()).asBinder());
+        java.io.File sharedBlobs = persistentAccounts
+                ? new java.io.File(android.os.Environment.getDataDirectory(), "system/gesher-blobs")
+                : null;
         services.put(Context.BLOB_STORE_SERVICE,
-                StandIn.of(android.app.blob.IBlobStoreManager.class,
-                        new BlobStoreService()).asBinder());
+                new BlobStoreService(pm, am.callers(), sharedBlobs).asBinder());
         services.put(Context.ROLLBACK_SERVICE,
                 StandIn.of(android.content.rollback.IRollbackManager.class,
                         new RollbackManagerService(pm, atm)).asBinder());
@@ -663,6 +665,10 @@ public final class Services {
             java.io.File path = allocationPath(volumeUuid);
             // No Android cache-reclamation/quota backend is present. Only actually
             // usable host space is offered, retaining Android's low-storage reserve.
+            return allocatableBytes(path, flags);
+        }
+
+        static long allocatableBytes(java.io.File path, int flags) {
             if ((flags & StorageManager.FLAG_ALLOCATE_CACHE_ONLY) != 0) return 0;
             return Math.max(0, path.getUsableSpace() - reservedBytes(path, flags));
         }

@@ -603,6 +603,19 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: BlobStore quota admission and accounting contracts
+        run: |
+          python3 tools/test_blobstore_quotas.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: BlobStore attached identity contracts
+        run: |
+          python3 tools/test_blobstore_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
       - name: Notification delegation ownership and durable policy contracts
         run: |
           python3 tools/test_notification_delegation.py --with-storage --java-home "$JAVA_HOME" \

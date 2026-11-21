@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Exercise production stream/device ownership with real Linux FILE reuse.
 
-Extract the actual device registry, fclose/freopen and Bionic stream readers.
-Only Windows CRT/path/record-lock boundaries and the device data source are
-adapted. The shared public fixture also runs without adapters against Linux.
-This does not substitute for the existing Windows/Android ELF runtime tests.
+Extract actual OFD device adapters, descriptor retirement, fclose/freopen and
+Bionic stream readers. The shared OFD registry, Windows CRT/path/record locks,
+stdio backend and device data are declared boundaries; their complete owners
+run separately in the OFD/stdio corpora and actual Windows fixtures. The shared
+public fixture also runs without adapters against Linux. This is not Windows
+or Android ELF runtime qualification.
 """
 import argparse
 import os
@@ -32,8 +34,9 @@ def main() -> int:
     devices = (ROOT / "compat/posix/src/fd.cc").read_text()
     shim = (ROOT / "compat/bionic/stdio_bionic.cc").read_text()
     sections = {
-        "@DEVICE_MAP@": section(devices, "// /dev/zero and /dev/random fds", "int ReadDevice("),
+        "@DEVICE_MAP@": section(devices, "// Stateless logical devices live", "int ReadDevice("),
         "@DEVICE_REGISTRATION@": section(devices, "void RegisterDevice(", "}  // namespace gesher"),
+        "@RETIRE_DESCRIPTOR@": section(devices, "void RetiredDescriptor::Retire(", "int RetiredDescriptor::Finish("),
         "@PARSE_MODE@": section(host, "bool ParseMode(", "// Random characters"),
         "@FCLOSE@": section(host, "int gesher_fclose_state(", "// The stream is reopened"),
         "@FREOPEN@": section(host, "FILE* gesher_freopen_state(", "char* mkdtemp("),
@@ -46,6 +49,8 @@ def main() -> int:
     }
     sections["@FREOPEN@"] = sections["@FREOPEN@"].replace(
         "return freopen(path, mode, stream);", "return host::freopen(path, mode, stream);")
+    # Both public and unlocked guest readers now call the declared shared-stdio
+    # boundary directly. Keep their production bodies unchanged.
     template = (ROOT / "tests/native/stream_device_host_test.cc.in").read_text()
     for marker, contents in sections.items():
         if template.count(marker) != 1:

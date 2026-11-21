@@ -543,11 +543,9 @@ int* BIONIC_SYSV Errno() { return &errno; }
   std::abort();
 }
 [[noreturn]] void BIONIC_SYSV Exit(int code) {
-  ExitIfVforkChild(code);  // a vfork/fork child that exits without exec
   std::exit(code);
 }
 [[noreturn]] void BIONIC_SYSV UnderscoreExit(int code) {
-  ExitIfVforkChild(code);
   std::fflush(stdout);
   std::fflush(stderr);
   ExitProcess(static_cast<UINT>(code));

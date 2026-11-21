@@ -21,6 +21,7 @@
 #include "stdio_windows_lock.h"
 #include <gesher/bionic_shim.h>
 #include <gesher/logging.h>
+#include <gesher/stdio.h>
 
 #include <windows.h>
 
@@ -519,6 +520,7 @@ FILE* F(void* f) {
 // registry mutex protects insert/erase and is released before doing any I/O.
 constexpr uint32_t kWeof = 0xffffffffu;
 struct StreamState {
+  FILE* stream = nullptr;
   int orientation = 0;
   bool conversion_error = false;
   uint32_t pushback = kWeof;
@@ -544,7 +546,9 @@ StreamState* State(FILE* stream, bool create = true) {
   // The registry is a host implementation detail. Allocation failure must
   // remain a stdio error, rather than unwinding through the guest's C ABI.
   try {
-    return &bucket.streams.try_emplace(stream).first->second;
+    auto* state = &bucket.streams.try_emplace(stream).first->second;
+    state->stream = stream;
+    return state;
   } catch (const std::bad_alloc&) {
     errno = kENOMEM;
     return nullptr;
@@ -555,14 +559,17 @@ StreamState* State(FILE* stream, bool create = true) {
 }
 
 int Orient(StreamState& state, int mode) {
-  if (state.orientation == 0 && mode != 0) state.orientation = mode > 0 ? 1 : -1;
+  // Native and guest operations use the same descriptor-backed byte buffer.
+  // Keep orientation in that owner as well, before a wide codec emits bytes.
+  state.orientation = gesher::stdio::Orient(state.stream, mode, true);
   return state.orientation;
 }
 
 int Orient(FILE* stream, int mode) {
   // An orientation query does not need to create a record for a fresh FILE.
   auto* state = State(stream, mode != 0);
-  return state ? Orient(*state, mode) : 0;
+  return state ? Orient(*state, mode) :
+      (mode == 0 ? gesher::stdio::Orient(stream, 0, true) : 0);
 }
 
 void ResetStream(FILE* stream) {
@@ -629,58 +636,18 @@ int CloseBionicStream(FILE* stream) { return CloseBionicStream(stream, nullptr);
 
 namespace {
 
-// /dev/zero and /dev/random are NUL handles that gesher's read() fills: the
-// CRT's own read of one returns nothing (mbedtls seeds its DRBG with
-// fread from fopen("/dev/urandom"), and WhatsApp aborts when that fails).
+// /dev/zero, /dev/random, pipes and revocable descriptors all use the shared
+// descriptor-backed buffer. CRT I/O would bypass its status and revocation.
 size_t ReadStream(void* buf, size_t size, size_t n, FILE* f) {
-  int fd = _fileno(f);
-  if (size == 0 || n == 0 || fd < 0 || !gesher_is_device_fd(fd)) {
-    return _fread_nolock(buf, size, n, f);
-  }
-  auto* p = static_cast<unsigned char*>(buf);
-  size_t total = n > SIZE_MAX / size ? SIZE_MAX / size * size : size * n;
-  size_t done = 0;
-  while (done < total) {
-    size_t chunk = total - done < 0x40000000 ? total - done : 0x40000000;
-    int r = read(fd, p + done, static_cast<unsigned int>(chunk));
-    if (r <= 0) break;
-    done += static_cast<size_t>(r);
-  }
-  return done / size;
+  return gesher::stdio::Read(buf, size, n, f, true);
 }
 
 // fopen through gesher-base's open (Linux O_* flags, delete access shared, so
 // the file can be unlinked or renamed while open, as on Linux), then fdopen.
 FILE* BIONIC_SYSV Fopen(const char* path, const char* mode) {
-  std::string m = CrtMode(mode);
-  if (m.empty()) return errno = kEINVAL, nullptr;
-  bool plus = m.find('+') != std::string::npos;
-  int flags = 0;
-  switch (m[0]) {
-    case 'r': flags = plus ? O_RDWR : O_RDONLY; break;
-    case 'w': flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC; break;
-    default: flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND; break;
-  }
-  if (m.find('x') != std::string::npos) flags |= O_EXCL;
-  if (m.find('N') != std::string::npos) flags |= O_CLOEXEC;
-  int fd = open(path, flags, 0666);
-  if (fd < 0) return nullptr;
-  std::string crt = m.substr(0, plus ? 2 : 1) + "b";
-  FILE* f = fdopen(fd, crt.c_str());
-  if (f == nullptr) {
-    int saved = errno;
-    close(fd);
-    errno = saved;
-  }
-  return f;
+  return std::fopen(path, mode);
 }
-FILE* BIONIC_SYSV Fdopen(int fd, const char* mode) {
-  std::string m = CrtMode(mode);
-  if (m.empty()) return errno = kEINVAL, nullptr;
-  if (m.back() == 'N') m.pop_back();
-  if (m.size() > 1 && m.back() == 'x') m.pop_back();
-  return fdopen(fd, m.c_str());
-}
+FILE* BIONIC_SYSV Fdopen(int fd, const char* mode) { return fdopen(fd, mode); }
 FILE* BIONIC_SYSV Freopen(const char* path, const char* mode, void* f) {
   std::string m = CrtMode(mode);
   if (m.empty()) {
@@ -699,12 +666,12 @@ FILE* BIONIC_SYSV Freopen(const char* path, const char* mode, void* f) {
   return reopened;
 }
 int BIONIC_SYSV Fgetpos(void* f, int64_t* pos) {
-  int64_t p = _ftelli64(F(f));
+  int64_t p = gesher::stdio::Tell(F(f));
   if (p < 0) return -1;
   *pos = p;
   return 0;
 }
-int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return _fseeki64(F(f), *pos, SEEK_SET); }
+int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return static_cast<int>(gesher::stdio::Seek(F(f), *pos, SEEK_SET)); }
 
 // getline/getdelim: *line grows with the CRT's realloc, which the .so's
 // free (the shim's) accepts.
@@ -715,7 +682,7 @@ int64_t BIONIC_SYSV Getdelim(char** line, size_t* n, int delim, void* f) {
   if (Orient(fp, -1) == 0) return -1;
   size_t len = 0;
   int c;
-  while ((c = _getc_nolock(fp)) != EOF) {
+  while ((c = gesher::stdio::Get(fp, true)) != EOF) {
     if (*line == nullptr || len + 2 > *n) {
       size_t cap = *n < 120 ? 120 : *n * 2;
       char* grown = static_cast<char*>(std::realloc(*line, cap));
@@ -761,7 +728,7 @@ uint32_t ReadWide(FILE* stream, StreamState& state) {
     return wc;
   }
   while (true) {
-    int byte = _getc_nolock(stream);
+    int byte = gesher::stdio::Get(stream, true);
     if (byte == EOF) return kWeof;
     char input = static_cast<char>(byte);
     uint32_t wc = 0;
@@ -783,15 +750,14 @@ bool WriteWide(FILE* stream, StreamState& state, uint32_t wc) {
     state.conversion_error = true;
     return false;
   }
-  return _fwrite_nolock(bytes, 1, size, stream) == size;
+  return gesher::stdio::Write(bytes, 1, size, stream, true) == size;
 }
 
 uint32_t BIONIC_SYSV Fgetwc(void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   auto* state = State(stream);
-  if (!state) return kWeof;
-  Orient(*state, 1);
+  if (!state || Orient(*state, 1) == 0) return kWeof;
   return ReadWide(stream, *state);
 }
 
@@ -799,8 +765,7 @@ uint32_t* BIONIC_SYSV Fgetws(uint32_t* out, int n, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   auto* state = State(stream);
-  if (!state) return nullptr;
-  Orient(*state, 1);
+  if (!state || Orient(*state, 1) == 0) return nullptr;
   if (n <= 0) return errno = kEINVAL, nullptr;
   int count = 0;
   while (count < n - 1) {
@@ -822,8 +787,7 @@ uint32_t BIONIC_SYSV Ungetwc(uint32_t c, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   auto* state = State(stream);
-  if (!state) return kWeof;
-  Orient(*state, 1);
+  if (!state || Orient(*state, 1) == 0) return kWeof;
   if (state->pushback != kWeof) return kWeof;
   state->pushback = c;
   state->conversion_error = false;
@@ -835,8 +799,7 @@ uint32_t BIONIC_SYSV Fputwc(uint32_t c, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   auto* state = State(stream);
-  if (!state) return kWeof;
-  Orient(*state, 1);
+  if (!state || Orient(*state, 1) == 0) return kWeof;
   return WriteWide(stream, *state, c) ? c : kWeof;
 }
 
@@ -844,8 +807,7 @@ int BIONIC_SYSV Fputws(const uint32_t* ws, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
   auto* state = State(stream);
-  if (!state) return -1;
-  Orient(*state, 1);
+  if (!state || Orient(*state, 1) == 0) return -1;
   for (; *ws != 0; ++ws) {
     if (!WriteWide(stream, *state, *ws)) return -1;
   }
@@ -864,15 +826,12 @@ int BIONIC_SYSV Fclose(void* f) { return CloseBionicStream(F(f)); }
 int BIONIC_SYSV GetcUnlocked(void* f) {
   FILE* stream = F(f);
   if (Orient(stream, -1) == 0) return EOF;
-  unsigned char c;
-  int fd = _fileno(stream);
-  if (fd >= 0 && gesher_is_device_fd(fd)) return ReadStream(&c, 1, 1, stream) == 1 ? c : EOF;
-  return _getc_nolock(stream);
+  return gesher::stdio::Get(stream, true);
 }
 int BIONIC_SYSV PutcUnlocked(int c, void* f) {
   FILE* stream = F(f);
   if (Orient(stream, -1) == 0) return EOF;
-  return _putc_nolock(c, stream);
+  return gesher::stdio::Put(c, stream, true);
 }
 int BIONIC_SYSV GetcharUnlocked() { return GetcUnlocked(stdin); }
 int BIONIC_SYSV PutcharUnlocked(int c) { return PutcUnlocked(c, stdout); }
@@ -884,13 +843,13 @@ size_t BIONIC_SYSV FreadUnlocked(void* buf, size_t size, size_t n, void* f) {
 size_t BIONIC_SYSV FwriteUnlocked(const void* buf, size_t size, size_t n, void* f) {
   FILE* stream = F(f);
   if (size != 0 && n != 0 && Orient(stream, -1) == 0) return 0;
-  return _fwrite_nolock(buf, size, n, stream);
+  return gesher::stdio::Write(buf, size, n, stream, true);
 }
 int BIONIC_SYSV FputsUnlocked(const char* s, void* f) {
   FILE* stream = F(f);
   if (Orient(stream, -1) == 0) return EOF;
   size_t n = std::strlen(s);
-  return _fwrite_nolock(s, 1, n, stream) == n ? 0 : EOF;
+  return gesher::stdio::Write(s, 1, n, stream, true) == n ? 0 : EOF;
 }
 char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) {
   if (n <= 0) return errno = kEINVAL, nullptr;
@@ -898,7 +857,7 @@ char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) {
   if (Orient(stream, -1) == 0) return nullptr;
   int count = 0;
   while (count < n - 1) {
-    int c = _getc_nolock(stream);
+    int c = gesher::stdio::Get(stream, true);
     if (c == EOF) {
       if (count == 0) return nullptr;
       break;
@@ -965,7 +924,7 @@ int BIONIC_SYSV Ungetc(int c, void* f) {
   StreamLock lock(stream);
   auto* state = State(stream);
   if (!state) return EOF;
-  int result = _ungetc_nolock(c, stream);
+  int result = std::ungetc(c, stream);
   if (result != EOF) Orient(*state, -1);
   return result;
 }
@@ -974,7 +933,7 @@ int BIONIC_SYSV Feof(void* f) { return std::feof(F(f)); }
 int BIONIC_SYSV FerrorUnlocked(void* f) {
   FILE* stream = F(f);
   auto* state = State(stream, false);
-  return (state && state->conversion_error) || std::ferror(stream);
+  return (state && state->conversion_error) || gesher::stdio::Error(stream, true);
 }
 int BIONIC_SYSV Ferror(void* f) {
   StreamLock lock(F(f));
@@ -983,15 +942,15 @@ int BIONIC_SYSV Ferror(void* f) {
 void BIONIC_SYSV ClearerrUnlocked(void* f) {
   FILE* stream = F(f);
   if (auto* state = State(stream, false)) state->conversion_error = false;
-  std::clearerr(stream);
+  gesher::stdio::Clear(stream, true);
 }
 void BIONIC_SYSV Clearerr(void* f) {
   StreamLock lock(F(f));
   ClearerrUnlocked(f);
 }
 int BIONIC_SYSV Fileno(void* f) { return _fileno(F(f)); }
-int BIONIC_SYSV Fseek(void* f, int64_t off, int whence) { return _fseeki64(F(f), off, whence); }
-int64_t BIONIC_SYSV Ftell(void* f) { return _ftelli64(F(f)); }
+int BIONIC_SYSV Fseek(void* f, int64_t off, int whence) { return static_cast<int>(gesher::stdio::Seek(F(f), off, whence)); }
+int64_t BIONIC_SYSV Ftell(void* f) { return gesher::stdio::Tell(F(f)); }
 int BIONIC_SYSV Getw(void* f) {
   int word;
   return Fread(&word, sizeof(word), 1, f) == 1 ? word : EOF;
@@ -1002,7 +961,7 @@ int BIONIC_SYSV Putw(int word, void* f) {
 void BIONIC_SYSV Rewind(void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
-  _fseeki64_nolock(stream, 0, SEEK_SET);
+  gesher::stdio::Seek(stream, 0, SEEK_SET);
   // Like Android's rewind, clear stream errors even if seeking failed.
   ClearerrUnlocked(f);
 }
@@ -1012,7 +971,7 @@ int BIONIC_SYSV Setvbuf(void* f, char* buf, int mode, size_t size) {
   if (mode < 0 || mode > 2) return -1;
   return std::setvbuf(F(f), buf, kModes[mode], size);
 }
-void BIONIC_SYSV Setbuf(void* f, char* buf) { std::setbuf(F(f), buf); }
+void BIONIC_SYSV Setbuf(void* f, char* buf) { std::setvbuf(F(f), buf, buf ? _IOFBF : _IONBF, 1024); }
 FILE* BIONIC_SYSV Tmpfile() { return std::tmpfile(); }
 void BIONIC_SYSV Perror(const char* s) {
   StreamLock lock(stderr);
@@ -1213,7 +1172,7 @@ int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt, SysvVaList* ap)
   bool valid;
   std::string s = Format(fmt, ap, &valid);
   if (!valid) return -1;
-  return _fwrite_nolock(s.data(), 1, s.size(), stream) == s.size() ? static_cast<int>(s.size()) : -1;
+  return gesher::stdio::Write(s.data(), 1, s.size(), stream, true) == s.size() ? static_cast<int>(s.size()) : -1;
 }
 int BIONIC_SYSV gesher_bionic_vprintf(const char* fmt, SysvVaList* ap) {
   return gesher_bionic_vfprintf(stdout, fmt, ap);
@@ -1304,8 +1263,7 @@ int BIONIC_SYSV gesher_bionic_vfwprintf(void* f, const uint32_t* fmt, SysvVaList
   StreamState* state = nullptr;
   try {
     state = State(stream);
-    if (!state) return -1;
-    Orient(*state, 1);
+    if (!state || Orient(*state, 1) == 0) return -1;
     struct Target { FILE* stream; StreamState* state; } target{stream, state};
     WideSink sink{&target, [](void* context, uint32_t wc) {
       auto* target = static_cast<Target*>(context);

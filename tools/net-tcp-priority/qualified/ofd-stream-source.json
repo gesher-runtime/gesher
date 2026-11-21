@@ -1,0 +1,53 @@
+{
+  "baseline": "ba464131552eb72e7e0cd62cbfa51f1ab32f5841",
+  "paths": [
+    "compat/posix/src/fd.cc",
+    "compat/posix/src/system.cc"
+  ],
+  "patch_sha256": "c40b25b6dba0fef1d88b9074c56ad8ccd485dd6382a9bf695bf4913b5af1545b",
+  "source_sha256": {
+    "compat/posix/src/ofd.cc": "2cd9960d954105ae987ab8eff7c319b59c6da96a6410c5610c5c0e78e04a2df1",
+    "compat/posix/src/ofd_internal.h": "fa97f2675731123a03896ed179d73c8cb2701273b5d94d2078c484a1b16b37da",
+    "compat/posix/include/gesher/file_description.h": "c1ba32ce26a44a8094de09fe848394eacc34a9ed5be9cadc990789190d115187",
+    "compat/posix/src/pipe_io.cc": "d74ef8ebe28903215ac099b521e6029bcd16bda32bce02b4e00ad681100a5f66",
+    "compat/posix/src/pipe_io.h": "60cc9802b04fc60c80a90ffcc3628b3ba510404df8b2fe4ce222c95915d426d3",
+    "compat/posix/src/descriptor_resources.h": "ee7f5c8027576c9126f144f335a9c76a38bc4734d5cdecd3219a292493f48025",
+    "compat/posix/src/stdio_output.cc": "e645915a48f42feff8e74f763fa1f252cbecb346908bf1f17d16ed448486139a",
+    "compat/posix/src/stdio_internal.h": "90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17",
+    "compat/posix/src/stdio_stream_buffer.h": "f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d",
+    "compat/posix/src/stdio_output_buffer.h": "1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542",
+    "compat/posix/src/fsops.cc": "3ac288ac5e9a9d4a229dfd1d2e134f3931b8017359ac6cb65ec56f0dfd4f7d1a",
+    "compat/posix/src/unistd.cc": "fc5c2b7aca75720bacd19ecd2bcf7d369bafc59e17ce382ca7098eee4dc588e0",
+    "compat/posix/posix.cmake": "2cf98c91031572121d52b41dc946f02de4211b40b9a773943d995b95826515a8",
+    "compat/posix/include/wchar.h": "b4ab6d86bfcffc534eb1a74abdfb13164cc7c51200eacece3f96310873120817",
+    "compat/posix/include/gesher/stdio.h": "981f2e735df34e3ab4ef1086f040cee6fb51a3a80c1f85edccb46865ecea3051",
+    "compat/posix/include/gesher/cancellation.h": "5f56f27a916daf62c5cbd99332cc09cf10d6078f181f2edcffb5ba9a56dd5e02",
+    "compat/posix/src/procfs.cc": "99ad8c2f6ec523f42dc030fa1010f693743bfa60ee025236e99f3429654120d9",
+    "compat/elf/exec/exec_spawn.cc": "2e3f679fc8aa181614436f0b5c22aa48dc40e153b2094f56c5ff94c773cadde2",
+    "compat/libcore/process.cc": "24dfb56149ca4c8bd694bb019c5f1f7c5ddfe3341256d8cd652ee89163e60d8b",
+    "compat/bionic/stdio_bionic.cc": "25412c6a0219f674fe98b588f739032427382d832040349bd4d16bb42252e3dd",
+    "compat/posix/src/internal.h": "dcfa9633e153c14a59101c152348900e7bfd6a22545006fcdbeffc49bd3c3fad",
+    "compat/elf/exec/gesher_shell.cc": "3a0a1a45ef0ad4e7fe43cbc45e8194221379033f02e97de43c4e103e6992d6cf",
+    "compat/elf/exec/shell_execute.inc": "08f1f451b15ab64a7dfe28a0c6743e899aa4bea093261001ebd28957be815d0c",
+    "compat/bionic/process_bionic.cc": "8466c7c43143d4129926010cce198e1a0b21f6c3990a99be02ca48d23b4c77a9",
+    "compat/posix/src/revocable_file.cc": "851ab074cf5a08dfe1e4e815e56a07c144521512532b75e8663bc3f980a077ce",
+    "compat/posix/src/revocable_internal.h": "cb19a942c0caa10ad314ecb0c9ea123281d33185acaf73a9ff491ce9771e219a",
+    "compat/bionic/stdio_windows_lock.h": "86063fcea2901b3bc3acd57d49cef57880125fc0c9ddee9cc3e70917b2e5671c",
+    "compat/bionic/extra_bionic.cc": "0e0958142d26aa1dbe87acf44e416507d87969c5ba100e478356ffc9ba942bc3",
+    "compat/posix/include/stdio.h": "2c269413b37d147d1a6bc9a7b7700a0677d73017a05af98234142c6272f2b9a2",
+    "tests/native/socket_registry_lifetime_host.cc.in": "939a8e839112e3298d1ff49991f317533fc42571303942888c5fd31515454105",
+    "tools/test_socket_registry_lifetime.py": "e48c568a71d2efd28e5df2a6b9631c205295a43f0a0904a58f05939113f7c115",
+    "compat/posix/src/memfd_seals.cc": "a3f81c55d81f5085b9066daa72dad401f5430ba506712cf90b1571d8014cceca",
+    "compat/posix/src/mman.cc": "00f5f9e96f3b54e10930226a63783759353733742c64fc3732f73c35b1c89b73",
+    "compat/posix/src/unix_rights.cc": "bc495c827e405ea0718f09a91566dd08fa1b536d6c739df50cc6fc95dfc46021",
+    "compat/posix/src/binder.cc": "900c529bc610e634b840d3bd8faed2885396227b9c1e3af5b553bf2e111dcd49",
+    "compat/posix/src/binder_wire.h": "72dfc0aa2b8842307e817a99e441891c35dfbd198fe2de8b9db9f8748863704a",
+    "compat/posix/src/binder_file_descriptions.h": "0248c8b8db2c5f18bbde68390ff967570eeb97103d4bc5a263adbacbf64cbc5a",
+    "compat/binder/binderd.cc": "df38aab20bcac73d7c57634b93729c4a8e6fd97a68378aa411ef6a0a7217b9f0"
+  },
+  "contract_evidence": [
+    "docs/pipe-status-capabilities.md",
+    "docs/testing/bionic-stream-contracts.md"
+  ],
+  "native_runtime_approval": false
+}
