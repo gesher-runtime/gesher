@@ -319,13 +319,20 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         final String url;
         final String mime;
         final byte[] body;
+        /** The load's ApiNavigations number; published with its immutable data. */
+        final long number;
         /** An own navigation of the URL started and its main document was not answered yet. */
         final AtomicBoolean answer = new AtomicBoolean();
 
         PendingData(String url, String mime, byte[] body) {
+            this(url, mime, body, 0);
+        }
+
+        PendingData(String url, String mime, byte[] body, long number) {
             this.url = ApiNavigations.document(url);
             this.mime = mime;
             this.body = body;
+            this.number = number;
         }
     }
     private final AtomicReference<PendingData> mPendingData = new AtomicReference<>();
@@ -582,8 +589,9 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             GesherWebView.log("loading " + webView2Url + ": WebView2 is unavailable");
             return;
         }
-        mPendingData.set(data);
-        mHost.navigate(webView2Url, headers, mApiNavigations.issued(webView2Url));
+        long number = mApiNavigations.issued(webView2Url);
+        mPendingData.set(data == null ? null : new PendingData(data.url, data.mime, data.body, number));
+        mHost.navigate(webView2Url, headers, number);
     }
 
     @Override
@@ -1898,16 +1906,18 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             // arg 1: WebView2Host took it for one of the WebView's own loads.
             boolean own = arg == 1 || mStartingApi;
             mStartingApi = false;
-            if (arg == 1) mApiNavigations.started(a);
+            if (arg == 1) mApiNavigations.started(a, number(b));
             PendingData published = mPendingData.get();
-            if (published != null && !own) {
-                // A page's own navigation leaves loadDataWithBaseURL's document (not a
-                // newer one the Looper published meanwhile).
-                mPendingData.compareAndSet(published, null);
-            } else if (published != null && published.url.equals(ApiNavigations.document(a))) {
-                // Each of the WebView's own navigations of the base URL (a superseded one
-                // and the next, a reload) has its main document answered once.
-                published.answer.set(true);
+            // b is the last API load handed to WebView2 before this navigation's
+            // callback. A newer document may already be published by the Looper
+            // (including inside shouldOverrideUrlLoading) while its Navigate is queued.
+            // This older event can neither retire nor arm that newer document.
+            if (published != null && published.number <= number(b)) {
+                if (!own) {
+                    mPendingData.compareAndSet(published, null);
+                } else if (published.url.equals(ApiNavigations.document(a))) {
+                    published.answer.set(true);
+                }
             }
         } else if (type == WebView2Host.EVENT_FAILED && a != null && a.startsWith("Navigate ")) {
             int end = a.lastIndexOf(": ");
@@ -1947,11 +1957,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     @Override
-    public boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect) {
+    public boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect, long handed) {
         // WebView2Host knows one outstanding load of the WebView's own at a time; a second
         // one issued before the first started reaches here too. Android does not ask the
         // app about either (a WebViewClient that takes its base URL would cancel the load).
-        mStartingApi = !redirect && mApiNavigations.started(url);
+        mStartingApi = !redirect && mApiNavigations.started(url, handed);
         if (mStartingApi) return false;
         if (!mOverridesNavigation) return false;
         String appUrl = FileUrls.fromWebView2(url);
@@ -1973,7 +1983,19 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     @Override
     public void onResourceRequest(long id, String url, String method, String headers,
             int context, boolean mainFrame) {
-        sRequests.execute(() -> answerRequest(id, url, method, headers, context, mainFrame));
+        if (mHost == null) return;
+        // NavigationStarting and resource admission run on the same WebView STA.
+        // Claim before dispatch: a delayed older worker must not consume the next
+        // navigation's allowance or reread a later publication's body and MIME.
+        PendingData data = claimData(url, context, mainFrame);
+        sRequests.execute(() -> answerRequest(id, url, method, headers, context, mainFrame, data));
+    }
+
+    private PendingData claimData(String url, int context, boolean mainFrame) {
+        PendingData data = mPendingData.get();
+        return data != null && context == CONTEXT_DOCUMENT && mainFrame
+                && data.url.equals(ApiNavigations.document(url))
+                && data.answer.compareAndSet(true, false) ? data : null;
     }
 
     @Override
@@ -1992,17 +2014,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private static final int CONTEXT_IMAGE = 3;
 
     private void answerRequest(long id, String url, String method, String headers, int context,
-            boolean mainFrame) {
+            boolean mainFrame, PendingData data) {
         WebView2Host host = mHost;
         if (host == null) return;
         WebResourceResponse response = null;
         byte[] ownedBody = null;
         try {
             String appUrl = FileUrls.fromWebView2(url);
-            PendingData data = mPendingData.get();
-            if (data != null && context == CONTEXT_DOCUMENT && mainFrame
-                    && data.url.equals(ApiNavigations.document(url))
-                    && data.answer.compareAndSet(true, false)) {
+            if (data != null) {
                 // The published document's own array, which nothing changes (JNI copies
                 // it). App-supplied streams still take the read/close path below, even
                 // ByteArrayInputStreams. A later publication replaces the whole snapshot.

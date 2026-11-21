@@ -22,6 +22,16 @@ public final class WebViewOwnedResponsesHost {
     private static final int CONTEXT_DOCUMENT = 1, CONTEXT_IMAGE = 3;
     private static final String TAG = "fixture", BASE = "https://owned.example/document";
     private static int checks;
+    private static final class FixtureRequests {
+        final ArrayDeque<Runnable> queued = new ArrayDeque<>();
+        boolean deferred;
+        void execute(Runnable request) { if (deferred) queued.addLast(request); else request.run(); }
+        void runAll() { while (!queued.isEmpty()) queued.removeFirst().run(); }
+        void runLast() { queued.removeLast().run(); }
+    }
+    // A controlled worker dispatch boundary per fixture; production shares a pool.
+    private final FixtureRequests sRequests = new FixtureRequests();
+
     private volatile WebView2Host mHost = new WebView2Host();
     private volatile Runnable beforeClaim;
     private String mOriginalUrl;
@@ -68,11 +78,11 @@ public final class WebViewOwnedResponsesHost {
         void navigateToString(String value) { html = value; }
 
         // webview_host.cc's navigation state, a declared boundary model: Host::Navigate
-        // (after NumberNextNavigate) runs later on the WebView thread, its
+        // (with its number) runs later on the WebView thread, its
         // NavigationStarting handler reports EVENT_PAGE_STARTED (arg 1 for the one API
         // navigation its flag covers) or asks the Listener, NavigationCompleted reports
         // the number the navigation started with, and WebResourceRequested's mainFrame
-        // is url == main_document.
+        // compares the document URL with main_document (no fragment).
         static final int EVENT_FAILED = 2, EVENT_PAGE_STARTED = 3, EVENT_PAGE_FINISHED = 4,
                 EVENT_SOURCE_CHANGED = 5, EVENT_SCRIPT_RESULT = 10, EVENT_CAPTURE = 17,
                 EVENT_PARKED = 18, EVENT_DEVTOOLS_RESULT = 20;
@@ -106,11 +116,12 @@ public final class WebViewOwnedResponsesHost {
             boolean api = apiNavigation && !redirect;
             if (!redirect) apiNavigation = false;
             long navigation = nextNavigation++;
-            if (!api && client.onNavigationStarting(url, user, redirect)) return -1;
+            long handed = apiNumber;  // captured before a client callback can issue another load
+            if (!api && client.onNavigationStarting(url, user, redirect@STARTING_HANDED@)) return -1;
             mainDocument = url;
             if (!redirect) {
-                startedNumbers.put(navigation, apiNumber);
-                client.onEvent(EVENT_PAGE_STARTED, navigation, api ? 1 : 0, url, null, null, null);
+                startedNumbers.put(navigation, handed);
+                client.onEvent(EVENT_PAGE_STARTED, navigation, api ? 1 : 0, url, String.valueOf(handed), null, null);
             }
             return navigation;
         }
@@ -124,10 +135,14 @@ public final class WebViewOwnedResponsesHost {
         void sourceChanged(String url, boolean newDocument) {
             client.onEvent(EVENT_SOURCE_CHANGED, apiNumber, newDocument ? 1 : 0, url, null, null, null);
         }
+        /** The actual onResourceRequest boundary queues its exact production worker. */
+        void requestAsync(long id, String url, int context) {
+            client.onResourceRequest(id, url, "GET", "X-Request: one\r\n", context,
+                    context == CONTEXT_DOCUMENT && @NATIVE_DOCUMENT_MATCH@);
+        }
         /** A WebResourceRequested for the main frame's or a frame's document. */
         void request(long id, String url, int context) {
-            client.answerRequest(id, url, "GET", "X-Request: one\r\n", context,
-                    context == CONTEXT_DOCUMENT && url.equals(mainDocument));
+            requestAsync(id, url, context);
         }
     }
     { mHost.client = this; }
@@ -167,9 +182,11 @@ public final class WebViewOwnedResponsesHost {
         volatile Supplier<WebResourceResponse> response;
         volatile Request request;
         volatile boolean takes;
+        Runnable duringOverride;
         WebViewClient(WebViewOwnedResponsesHost owner) { this.owner = owner; }
         boolean shouldOverrideUrlLoading(Object view, Request request) {
             overrides.incrementAndGet(); this.request = request;
+            if (duringOverride != null) duringOverride.run();
             return takes;
         }
         WebResourceResponse shouldInterceptRequest(Object view, Request request) {
@@ -228,7 +245,7 @@ public final class WebViewOwnedResponsesHost {
         return provider;
     }
     private static void answer(WebViewOwnedResponsesHost provider, long id, String url, int context) {
-        provider.answerRequest(id, FileUrls.toWebView2(url), "GET", "X-Request: one\r\n", context, true);
+        provider.onResourceRequest(id, FileUrls.toWebView2(url), "GET", "X-Request: one\r\n", context, true);
     }
     private static void ownedCases() throws Exception {
         for (String data : new String[] {"", "a", "שלום🙂世界", "x".repeat(16385), "raw\u0000bytes\r\nline"}) {
@@ -423,12 +440,11 @@ public final class WebViewOwnedResponsesHost {
         });
         scenario("loadDataWithBaseURL's document is answered however WebView2 spells the base URL", () -> {
             for (String[] pair : reported) {
-                if (pair[1].indexOf('#') >= 0) continue;
                 WebViewOwnedResponsesHost provider = pending(pair[0], "data", "text/html", "UTF-8");
                 WebView2Host host = provider.mHost;
                 host.execute();
                 host.starting(pair[1], false, false);
-                host.request(1, pair[1], CONTEXT_DOCUMENT);
+                host.request(1, ApiNavigations.document(pair[1]), CONTEXT_DOCUMENT);
                 check(last(provider).status == 200 && Arrays.equals(last(provider).body, bytes("data")),
                         "the document for base " + pair[0] + " (requested as " + pair[1] + ") was not answered");
             }
@@ -524,6 +540,96 @@ public final class WebViewOwnedResponsesHost {
                 check(host.starting(target, false, false) > 0 && provider.mClient.overrides.get() == 0,
                         "loadUrl(" + target + ") was asked about after the page's pushState to its URL");
             }
+        });
+        scenario("independent: delayed older request cannot consume newer navigation allowance", () -> {
+            WebViewOwnedResponsesHost provider = pending(BASE, "first", "text/html", "UTF-8");
+            provider.loadDataWithBaseURL(BASE, "second", "text/html", "UTF-8", null);
+            WebView2Host host = provider.mHost;
+            host.execute();
+            long first = host.starting(url, false, false);
+            // Its exact production OnResourceRequest posts to sRequests; the worker is delayed.
+            provider.sRequests.deferred = true;
+            host.requestAsync(901, url, CONTEXT_DOCUMENT);
+            long second = host.starting(url, false, false);
+            host.requestAsync(902, url, CONTEXT_DOCUMENT);
+            // Now the earlier worker runs, after the later NavigationStarting.
+            provider.sRequests.runAll();
+            System.out.println("INDEPENDENT delayed requests: first=" + host.deliveries.get(0).status
+                    + " second=" + last(provider).status + " pending=" + new String(provider.pendingBody(), StandardCharsets.UTF_8));
+            check(last(provider).status == 200 && Arrays.equals(last(provider).body, bytes("second")),
+                    "latest navigation lost supplied HTML when an earlier request worker ran late");
+        });
+        scenario("independent: fragment base URL supplies its main document", () -> {
+            WebViewOwnedResponsesHost provider = pending(BASE + "#part", "supplied", "text/html", "UTF-8");
+            WebView2Host host = provider.mHost;
+            host.execute();
+            host.starting(url + "#part", false, false);
+            // URI fragments do not appear in the HTTP document request.
+            host.request(903, url, CONTEXT_DOCUMENT);
+            System.out.println("INDEPENDENT fragment response=" + last(provider).status);
+            check(last(provider).status == 200 && Arrays.equals(last(provider).body, bytes("supplied")),
+                    "fragment base URL did not receive supplied main document");
+        });
+        scenario("independent: newer inline publication during page callback survives page start", () -> {
+            WebViewOwnedResponsesHost provider = new WebViewOwnedResponsesHost();
+            WebView2Host host = provider.mHost;
+            provider.mOverridesNavigation = true;
+            provider.mClient.duringOverride = () -> {
+                provider.mClient.duringOverride = null;
+                provider.loadDataWithBaseURL(BASE, "latest", "text/html", "UTF-8", null);
+            };
+            long page = host.starting("https://page.example/", true, false);
+            host.execute();
+            long own = host.starting(url, false, false);
+            host.request(904, url, CONTEXT_DOCUMENT);
+            System.out.println("INDEPENDENT callback-published response=" + last(provider).status);
+            check(last(provider).status == 200 && Arrays.equals(last(provider).body, bytes("latest")),
+                    "older page start cleared a newer loadDataWithBaseURL issued by callback");
+        });
+        scenario("queued inline publication survives an older page navigation", () -> {
+            WebViewOwnedResponsesHost provider = begin(pending(BASE, "old", "text/old", "UTF-8"));
+            WebView2Host host = provider.mHost;
+            host.request(910, url, CONTEXT_DOCUMENT);
+            // Published on the Looper, but not handed to WebView2 when the page starts.
+            provider.loadDataWithBaseURL(BASE, "queued", "text/new", "UTF-8", null);
+            host.starting("https://page.example/", true, false);
+            host.execute();
+            host.starting(url, false, false);
+            host.request(911, url, CONTEXT_DOCUMENT);
+            check(last(provider).status == 200 && Arrays.equals(last(provider).body, bytes("queued")),
+                    "an unrelated page retired a newer load still queued for WebView2");
+        });
+        scenario("delayed workers keep admitted body and MIME in either completion order", () -> {
+            for (boolean newestFirst : new boolean[] {false, true}) {
+                WebViewOwnedResponsesHost provider = begin(pending(BASE, "old", "text/old", "UTF-8"));
+                WebView2Host host = provider.mHost;
+                provider.sRequests.deferred = true;
+                host.requestAsync(920, url, CONTEXT_DOCUMENT);
+                provider.loadDataWithBaseURL(BASE, "new", "text/new", "UTF-8", null);
+                host.execute();
+                host.starting(url, false, false);
+                host.requestAsync(921, url, CONTEXT_DOCUMENT);
+                if (newestFirst) provider.sRequests.runLast();
+                provider.sRequests.runAll();
+                for (Delivery reply : host.deliveries) {
+                    String expected = reply.id == 920 ? "old" : "new";
+                    check(reply.status == 200 && Arrays.equals(reply.body, bytes(expected))
+                                    && reply.headers.equals("Content-Type: text/" + expected + "; charset=UTF-8\r\n"),
+                            "worker reread another navigation's body or MIME after admission");
+                }
+                check(host.deliveries.size() == 2, "admitted document response was lost");
+            }
+        });
+        scenario("a queued load cannot take an earlier page navigation to its URL", () -> {
+            WebViewOwnedResponsesHost provider = taking(new WebViewOwnedResponsesHost());
+            WebView2Host host = provider.mHost;
+            provider.loadUrl0(BASE);  // issued by the UI, not handed to WebView2 yet
+            check(host.starting(url, true, false) < 0 && provider.mClient.overrides.get() == 1,
+                    "a queued API load suppressed shouldOverrideUrlLoading for the page");
+            check(provider.mApiNavigations.size() == 1, "page navigation stole the queued API entry");
+            host.execute();
+            check(host.starting(url, false, false) > 0 && provider.mClient.overrides.get() == 1,
+                    "the actual API load was incorrectly asked about after handoff");
         });
         if (scenarioFailures != 0) throw new AssertionError(scenarioFailures + " navigation scenarios failed");
     }

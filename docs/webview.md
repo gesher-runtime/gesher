@@ -112,6 +112,10 @@ hangs the other for long:
   own once a main-frame navigation that started after WebView2 was handed it
   ends without being superseded (the native host numbers the loads it hands
   over), so a page navigation to the same URL later reaches the app. The
+  cutoff is captured before calling the client: a load still queued on the
+  WebView thread, including one issued inside that callback, cannot exempt
+  the older page navigation or lose its supplied document to it. The number
+  advances in the same queued operation that hands the load to WebView2. The
   URLs the WebView loads are compared with those WebView2 reports in the
   form WebView2 reports them (lower-case scheme and host, the default port
   dropped, an empty path `/`, spaces and non-ASCII characters
@@ -122,7 +126,9 @@ hangs the other for long:
   schemes retain the legacy WebView-thread transport and its cookie limitation.
 - Requests (`WebResourceRequested`) are deferred and answered from a worker
   pool (`shouldInterceptRequest` runs there, off the UI thread, as on
-  Android).
+  Android). Supplied inline HTML is claimed on the WebView thread before
+  dispatching the worker. The worker keeps that immutable body/MIME snapshot,
+  so its delay cannot consume a newer navigation's response allowance.
 - `CookieManager.getCookie` waits for WebView2 (up to 5 s); it returns null
   when called on the WebView thread itself.
 - Detaching waits up to 1 s for the container to be parked.
@@ -156,7 +162,9 @@ Pages see the https origin: same-origin requests between assets work without
   (a superseded load's request can come first, then the next load's; a
   reload asks again), until another load or a page's own navigation; any
   other request for the URL, such as a frame of the same URL, loads the URL
-  itself, as on Android. Without a base URL, `NavigateToString`,
+  itself, as on Android. The main document's resource URL is matched without
+  its fragment, which is absent from the HTTP request; its path and query
+  remain significant. Without a base URL, `NavigateToString`,
   its `file:///android_asset/` and `file:///android_res/` URLs (which
   Android's page loads, as Gmail's compose editor its script) made the
   file origin's.

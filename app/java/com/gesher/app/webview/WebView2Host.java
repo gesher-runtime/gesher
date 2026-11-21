@@ -76,8 +76,8 @@ public final class WebView2Host {
     public interface Client {
         void onEvent(int type, long id, int arg, String a, String b, String c, byte[] bytes);
 
-        /** True cancels the navigation (shouldOverrideUrlLoading). Synchronous. */
-        boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect);
+        /** True cancels the navigation; handed is the last API load already sent to WebView2. */
+        boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect, long handed);
 
         /** Answer with {@link #respond}, from any thread. */
         void onResourceRequest(long id, String url, String method, String headers, int context,
@@ -470,8 +470,8 @@ public final class WebView2Host {
         mClient.onEvent(type, id, arg, a, b, c, bytes);
     }
 
-    private boolean onNavigationStarting(String url, boolean user, boolean redirect) {
-        return mClient.onNavigationStarting(url, user, redirect);
+    private boolean onNavigationStarting(String url, boolean user, boolean redirect, long handed) {
+        return mClient.onNavigationStarting(url, user, redirect, handed);
     }
 
     private void onResourceRequest(long id, String url, String method, String headers,

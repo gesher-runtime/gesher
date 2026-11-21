@@ -50,14 +50,15 @@ final class ApiNavigations {
 
     /**
      * A main-frame NavigationStarting (not a redirect) for {@code url}: whether it is one
-     * of the WebView's own loads. That entry and the older ones are taken.
+     * of the WebView's own loads already handed to WebView2. That entry and the
+     * older ones are taken; a later queued load cannot claim a page navigation.
      */
-    synchronized boolean started(String url) {
+    synchronized boolean started(String url, long handed) {
         String key = canonical(url);
         if (key == null) return false;
         boolean found = false;
         for (Entry e : mIssued) {
-            if (key.equals(e.url)) {
+            if (e.number <= handed && key.equals(e.url)) {
                 found = true;
                 break;
             }
