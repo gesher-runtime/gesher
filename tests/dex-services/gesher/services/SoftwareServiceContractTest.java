@@ -7,6 +7,9 @@ package gesher.services;
 import android.app.admin.DevicePolicyManager;
 import android.app.admin.IDevicePolicyManager;
 import android.app.usage.IUsageStatsManager;
+import android.app.usage.UsageEvents;
+import android.app.usage.UsageEventsQuery;
+import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
 import android.content.ContextWrapper;
 import android.content.Intent;
@@ -17,6 +20,7 @@ import android.content.pm.ShortcutInfo;
 import android.content.res.AssetManager;
 import android.os.IThermalService;
 import android.os.IThermalStatusListener;
+import android.os.Parcel;
 import android.os.RemoteCallback;
 import android.os.Temperature;
 import android.os.UserHandle;
@@ -24,7 +28,12 @@ import android.os.UserHandle;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Object shapes and immediate failure contracts for software-only service policies. */
@@ -57,6 +66,77 @@ public final class SoftwareServiceContractTest {
             throw new AssertionError(name + " accepted an unauthorized caller");
         } catch (SecurityException expected) {
             require(System.nanoTime() - start < 1_000_000_000L, name + " did not fail promptly");
+        }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void usageHistory(Class<?> pmType, Object pm, Class<?> callersType,
+            Object callers, String packageName) throws Exception {
+        Path directory = Files.createTempDirectory("gesher-usage-fixture");
+        Path history = directory.resolve("activity-usage.bin");
+        AutoCloseable historyWriter = null;
+        try {
+            AtomicLong clock = new AtomicLong(100);
+            Object managed = construct("DesktopUsageStatsService", new Class<?>[] {pmType,
+                    callersType, Path.class, LongSupplier.class}, pm, callers, history,
+                    (LongSupplier) clock::get);
+            var historyField = managed.getClass().getDeclaredField("mHistory");
+            historyField.setAccessible(true);
+            historyWriter = (AutoCloseable) historyField.get(managed);
+            IUsageStatsManager usage = strict(IUsageStatsManager.class, managed);
+            Class<? extends Enum> state = Class.forName("com.gesher.server.ActivityUsageHistory$State")
+                    .asSubclass(Enum.class);
+            Method transition = managed.getClass().getDeclaredMethod("transition",
+                    Object.class, String.class, String.class, state);
+            transition.setAccessible(true);
+            Object activity = new Object();
+            transition.invoke(managed, activity, packageName, "ExampleActivity",
+                    Enum.valueOf(state, "RESUMED"));
+            clock.set(130);
+            transition.invoke(managed, activity, packageName, "ExampleActivity",
+                    Enum.valueOf(state, "PAUSED"));
+            clock.set(150);
+            transition.invoke(managed, activity, packageName, "ExampleActivity",
+                    Enum.valueOf(state, "STOPPED"));
+            transition.invoke(managed, new Object(), "other.app", "OtherActivity",
+                    Enum.valueOf(state, "RESUMED"));
+
+            UsageEvents events = usage.queryEventsForPackage(100, 150, packageName);
+            UsageEvents.Event event = new UsageEvents.Event();
+            require(events.getNextEvent(event) && event.getTimeStamp() == 100
+                    && event.getEventType() == UsageEvents.Event.ACTIVITY_RESUMED
+                    && "ExampleActivity".equals(event.getClassName()), "wrong resume event");
+            require(events.getNextEvent(event) && event.getTimeStamp() == 130
+                    && event.getEventType() == UsageEvents.Event.ACTIVITY_PAUSED,
+                    "wrong pause event");
+            require(!events.hasNextEvent(), "event query included its exclusive endpoint");
+
+            UsageEventsQuery query = new UsageEventsQuery.Builder(100, 151)
+                    .setPackageNames(packageName)
+                    .setEventTypes(UsageEvents.Event.ACTIVITY_STOPPED)
+                    .build();
+            Parcel parcel = Parcel.obtain();
+            try {
+                usage.queryEventsWithFilter(query, packageName).writeToParcel(parcel, 0);
+                parcel.setDataPosition(0);
+                events = UsageEvents.CREATOR.createFromParcel(parcel);
+                require(events.getNextEvent(event) && event.getTimeStamp() == 150
+                        && packageName.equals(event.getPackageName()), "filtered parcel lost stop");
+                require(!events.hasNextEvent(), "parcel returned an unrelated event");
+            } finally {
+                parcel.recycle();
+            }
+
+            List<UsageStats> summaries = usage.queryUsageStats(UsageStatsManager.INTERVAL_DAILY,
+                    100, 151, packageName, 0).getList();
+            UsageStats summary = summaries.stream().filter(s -> packageName.equals(s.getPackageName()))
+                    .findFirst().orElseThrow();
+            require(summary.getTotalTimeInForeground() == 30 && summary.getTotalTimeVisible() == 50,
+                    "activity stats lost real lifecycle durations");
+        } finally {
+            if (historyWriter != null) historyWriter.close();
+            Files.deleteIfExists(history);
+            Files.delete(directory);
         }
     }
 
@@ -111,8 +191,12 @@ public final class SoftwareServiceContractTest {
         Class<?> pmType = Class.forName("com.gesher.server.PackageManagerService");
         Object pm = construct("PackageManagerService", new Class<?>[] {java.util.Collection.class},
                 Collections.emptyList());
+        Class<?> callersType = Class.forName("com.gesher.server.CallerIdentity");
+        Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
+        Object callers = construct("CallerIdentity", new Class<?>[] {pmType, atmType}, pm, null);
         IUsageStatsManager usage = strict(IUsageStatsManager.class,
-                construct("DeviceServices$UsageStatsService", new Class<?>[] {pmType}, pm));
+                construct("DesktopUsageStatsService", new Class<?>[] {pmType, callersType,
+                        Path.class}, pm, callers, null));
         require(!usage.isAppStandbyEnabled(), "Android app standby is not a Windows policy");
         require(usage.queryUsageStats(0, 0, 100, "gesher.services", 0).getList().isEmpty(),
                 "unexpected usage history");
@@ -147,6 +231,7 @@ public final class SoftwareServiceContractTest {
         require(!usage.isAppInactive(packageName, 0, packageName), "inactive on disabled standby");
         require(usage.getAppStandbyBuckets(packageName, 0).getList().size() == 1,
                 "installed package omitted from buckets");
+        usageHistory(pmType, pm, callersType, callers, packageName);
 
         IShortcutService shortcuts = strict(IShortcutService.class,
                 construct("DeviceServices$ShortcutService", new Class<?>[] {pmType}, pm));

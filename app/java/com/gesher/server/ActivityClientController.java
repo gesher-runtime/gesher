@@ -53,7 +53,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void activityPaused(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityPaused(r);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityPaused(r);
     }
 
     @Override
@@ -66,7 +66,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void activityDestroyed(IBinder token) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityDestroyed(r);
+        if (r != null && mAtm.requireActivityOwner(r)) mAtm.activityDestroyed(r);
     }
 
     /** After an ActivityRelaunchItem (locale track): the new instance reports its states. */

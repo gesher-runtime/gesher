@@ -540,6 +540,7 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+
       - name: Android UI mode policy, persistence and activity configuration contracts
         run: |
           python3 tools/test_ui_mode_native.py
@@ -602,6 +603,14 @@ jobs:
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Persisted activity usage history contracts
+        run: |
+          "$JAVA_HOME/bin/javac" -encoding UTF-8 -d "$RUNNER_TEMP/activity-usage-classes" \
+            app/java/com/gesher/server/ActivityUsageHistory.java \
+            tests/activity-usage/ActivityUsageHistoryTest.java
+          "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/activity-usage-classes" \
+            com.gesher.server.ActivityUsageHistoryTest
 
       - name: Notification delegation ownership and durable policy contracts
         run: |
@@ -678,6 +687,10 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
           python3 tools/test_scheduler_work_contracts.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+          python3 tools/test_exact_alarm_contracts.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"

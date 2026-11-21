@@ -122,6 +122,12 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     public PermissionPolicy permissions() { return mPermissions; }
 
+    private ExactAlarmAccessRequests mExactAlarmAccessRequests;
+    synchronized ExactAlarmAccessRequests exactAlarmAccessRequests() {
+        if (mExactAlarmAccessRequests == null) mExactAlarmAccessRequests = new ExactAlarmAccessRequests(this);
+        return mExactAlarmAccessRequests;
+    }
+
     /** One policy/operation ledger shared by the Binder and all server consumers. */
     public AppOpsService appOps() {
         AppOpsService service = mAppOps;
@@ -438,6 +444,10 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
         if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
+        if (p == null && userId == 0 && ExactAlarmAccessRequests.PACKAGE.equals(className.getPackageName())) {
+            ActivityInfo nativeActivity = exactAlarmAccessRequests().activityInfo(className, flags);
+            if (nativeActivity != null) return nativeActivity;
+        }
         if (p == null && BrowserPackageSupport.isBrowserPackage(className.getPackageName())) {
             return BrowserPackageSupport.activityInfo(className.getClassName(), flags);
         }
@@ -447,14 +457,14 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ResolveInfo resolveIntent(Intent intent, String resolvedType, long flags,
             int userId) {
-        List<ResolveInfo> all = query(intent, resolvedType, flags);
+        List<ResolveInfo> all = query(intent, resolvedType, flags, userId);
         return all.isEmpty() ? null : all.get(0);
     }
 
     @Override
     public ParceledListSlice queryIntentActivities(Intent intent, String resolvedType,
             long flags, int userId) {
-        return new ParceledListSlice<>(query(intent, resolvedType, flags));
+        return new ParceledListSlice<>(query(intent, resolvedType, flags, userId));
     }
 
     @Override
@@ -468,13 +478,27 @@ public final class PackageManagerService extends IPackageManager.Default {
             packages = new LinkedHashMap<>(mPackages);
             for (String removing : mRemoving.keySet()) packages.remove(removing);
         }
-        return new ParceledListSlice<>(new ActivityOptionsResolver(packages, hostBrowser).query(
+        return new ParceledListSlice<>(new ActivityOptionsResolver(packages, hostBrowser,
+                exactAlarmAccessRequests()).query(
                 caller, specifics, specificTypes, intent, resolvedType, flags));
     }
 
     // A query spanning multiple records must not straddle an atomic enabled-state
     // batch. These readers do metadata/filter work only, never application callbacks.
-    private synchronized List<ResolveInfo> query(Intent intent, String resolvedType, long flags) {
+    private synchronized List<ResolveInfo> query(Intent intent, String resolvedType, long flags, int userId) {
+        if (ExactAlarmAccessRequests.handles(intent, resolvedType)) {
+            if (userId != 0) return new ArrayList<>();
+            Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
+            for (String removing : mRemoving.keySet()) packages.remove(removing);
+            // Use the same AOSP filter cuts, system-priority normalization and ordering
+            // as activity options. Installed iteration order must not select a handler.
+            List<ResolveInfo> settings = new ActivityOptionsResolver(packages, false)
+                    .activities(intent, resolvedType, flags);
+            ResolveInfo nativeSettings = exactAlarmAccessRequests().resolve(intent, resolvedType, flags);
+            if (nativeSettings != null) settings.add(nativeSettings);
+            settings.sort(ActivityOptionsResolver.ORDER);
+            return settings;
+        }
         List<ResolveInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
             if (isRemovalPending(p.packageName)) continue;
