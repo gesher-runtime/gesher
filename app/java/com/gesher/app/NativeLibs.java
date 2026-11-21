@@ -144,8 +144,13 @@ public final class NativeLibs {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(target)) {
                 for (Path entry : stream) {
                     String name = entry.getFileName().toString();
-                    BasicFileAttributes attributes = Files.readAttributes(entry,
-                            BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                    BasicFileAttributes attributes;
+                    try {
+                        attributes = Files.readAttributes(entry, BasicFileAttributes.class,
+                                LinkOption.NOFOLLOW_LINKS);
+                    } catch (NoSuchFileException gone) {
+                        continue;  // already gone: nothing left to load
+                    }
                     boolean link = attributes.isSymbolicLink() || attributes.isOther();
                     // A listed library stays; Windows names are case-insensitive.
                     if (!link && attributes.isRegularFile()
