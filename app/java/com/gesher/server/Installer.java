@@ -172,6 +172,7 @@ final class Installer {
             throws IOException {
         Installer installer = new Installer(pm, atm, readRegistry());
         pm.attachInstaller(atm, installer);
+        installer.reconcileAccountRemovalsBestEffort();
         // Background dexopt with the apps' JIT profiles, while the device is idle (ADR 0054).
         Dexopt.startBackground(installer::codePaths, atm::idleSince);
         return installer;
@@ -627,6 +628,18 @@ final class Installer {
         if (mRemovalActive) throw new IllegalStateException("Package removal is active");
         PackageRemovalStorage.recover(codePaths());
         mPm.recoveredPackageRemovals();
+        // Finish a committed owner retirement before any reinstall can publish.
+        mPm.reconcileAccountRemovals(mEntries.keySet());
+    }
+
+    private void reconcileAccountRemovalsBestEffort() {
+        try {
+            mPm.reconcileAccountRemovals(mEntries.keySet());
+        } catch (RuntimeException failure) {
+            // The account store keeps the retirement marker. Startup and an
+            // already committed uninstall can succeed, but mutations retry it.
+            SystemServer.log("pending account retirement: " + failure.getClass().getSimpleName());
+        }
     }
 
     /** Uninstalls only a persistent ordinary package, retaining its allocated UID tombstone. */
@@ -669,7 +682,10 @@ final class Installer {
             throw failure;
         } finally {
             mRemovalActive = false;
-            if (committed || restored) mPm.endPackageRemoval(target);
+            if (committed || restored) {
+                mPm.endPackageRemoval(target);
+                reconcileAccountRemovalsBestEffort();
+            }
         }
         quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);

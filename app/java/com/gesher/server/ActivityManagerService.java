@@ -748,6 +748,13 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     // --- broadcasts (BroadcastController) ------------------------------------------------
 
+    /** Internal account event with authority pinned to the recipient's install lifetime. */
+    void broadcastAccountChange(Intent intent, java.util.function.BooleanSupplier lifetime) {
+        if (!mCallers.isSystem()) throw new SecurityException("Account broadcasts require the system");
+        mBroadcasts.broadcastIntent(intent, null, null, Binder.getCallingPid(),
+                null, null, null, lifetime);
+    }
+
     @Override
     public Intent registerReceiverWithFeature(IApplicationThread caller, String callerPackage,
             String callingFeatureId, String receiverId, IIntentReceiver receiver,

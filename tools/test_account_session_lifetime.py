@@ -41,16 +41,23 @@ def main():
         subprocess.run([str(args.java_home/'bin/javac'),'-J-XX:-UsePerfData','-encoding','UTF-8',
                         '-cp',cp,'-d',str(classes),str(source),
                         str(ROOT/'tests/account-session/AccountSessionLifetimeHost.java'),
-                        str(ROOT/'tests/account-session/AccountSessionTimeoutHost.java')],check=True)
+                        str(ROOT/'tests/account-session/AccountSessionTimeoutHost.java'),
+                        str(ROOT/'tests/account-session/AccountRetirementHost.java'),
+                        str(ROOT/'tests/account-session/AccountExplicitRemovalRaceHost.java'),
+                        str(ROOT/'tests/account-session/AccountRetirementLockHost.java')],check=True)
         cleaner=work/'cleaner/sun/misc'; cleaner.mkdir(parents=True)
         for entry in (args.core_classes/'sun/misc').glob('Cleaner*.class'):
             shutil.copy2(entry,cleaner/entry.name)
         env=os.environ.copy(); env['ANDROID_DATA']=str(work/'data'); env['GESHER_MICROG_SPOOF']='0'
-        for fixture in ('AccountSessionLifetimeHost', 'AccountSessionTimeoutHost'):
+        for fixture, arguments in (('AccountSessionLifetimeHost', ()),
+                ('AccountSessionTimeoutHost', ()), ('AccountRetirementHost', ()),
+                ('AccountExplicitRemovalRaceHost', (str(work/'cleaner'),)),
+                ('AccountRetirementLockHost', ('false',)), ('AccountRetirementLockHost', ('true',))):
+            if fixture == 'AccountRetirementLockHost': env['GESHER_MICROG_SPOOF']='1'
             subprocess.run([str(args.java_home/'bin/java'),'-XX:-UsePerfData',
                             '--add-opens','java.base/java.util.concurrent=ALL-UNNAMED',
                             '--patch-module','jdk.unsupported='+str(work/'cleaner'),
-                            '-cp',str(classes)+os.pathsep+cp,fixture,str(native)],
+                            '-cp',str(classes)+os.pathsep+cp,fixture,str(native),*arguments],
                            check=True,env=env,timeout=45)
 
 if __name__=='__main__':
