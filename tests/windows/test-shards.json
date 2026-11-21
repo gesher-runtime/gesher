@@ -39,6 +39,7 @@
     "tracks": [
       "30-graphics.ps1",
       "32-fonts.ps1",
+      "33-input.ps1",
       "34-windows.ps1",
       "39-rtl.ps1",
       "49-locale.ps1",
@@ -70,7 +71,6 @@
   "windowing": {
     "tracks": [
       "31-angle.ps1",
-      "33-input.ps1",
       "35-ime.ps1",
       "36-popups.ps1",
       "37-webview.ps1",
