@@ -16,9 +16,13 @@ permissions:
 # One current run per PR or branch. The root-specific prefix cannot collide
 # with reusable workflows, which inherit the caller's github.workflow value.
 # A release tag push has a separate group from manual runs on the same ref.
+# Runs on main are queued, not cancelled: only main saves the caches every
+# branch restores, and a cancelled main run leaves them on an older commit.
+# GitHub keeps at most one pending run per group, so a burst of merges still
+# collapses to the newest commit.
 concurrency:
   group: ci-run-${{ github.event_name == 'push' && github.ref_type == 'tag' && 'release-' || '' }}${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref_type == 'tag') }}
+  cancel-in-progress: ${{ github.event_name != 'push' && github.ref != 'refs/heads/main' }}
 
 env:
   LLVM_MINGW_TAG: "20261006"
