@@ -103,17 +103,41 @@ void* g_env_table[kEnvSlots];
 void* g_vm_table[kVmSlots];
 
 // Laid out like JNIEnv and JavaVM: the function table first.
+//
+// A proxy is known by its identity, not by its table. JNIEnv's table is the
+// app's to read and, as on Android, to replace: a library that hooks JNI
+// copies `functions`, patches some entries and stores the copy back into the
+// JNIEnv it was given. The copy's other entries are still the proxy's, which
+// are called with the same JNIEnv and must still reach the real one (Opera's
+// copy sent every forwarded call back to itself until the stack overflowed).
+// `tag` is the proxy's own address mixed with a constant: a real JNIEnv (ART's
+// JNIEnvExt, larger than a ProxyEnv) holds its runtime pointers there.
 struct ProxyEnv {
+  static constexpr uintptr_t kTagKey = 0x6745736865724a4eull;  // "NJreheSg"
+  ProxyEnv(void* const* table, bool is_guest)
+      : functions(table), real(nullptr),
+        tag(reinterpret_cast<uintptr_t>(this) ^ kTagKey), guest(is_guest) {}
+  ProxyEnv(const ProxyEnv&) = delete;
+  ProxyEnv& operator=(const ProxyEnv&) = delete;
   void* const* functions;
   JNIEnv* real;
+  const uintptr_t tag;
+  const bool guest;
 };
+
+// Whether `env` is one of this layer's proxies (of any thread), whatever table
+// it holds now.
+bool IsProxy(JNIEnv* env) {
+  auto* proxy = reinterpret_cast<ProxyEnv*>(env);
+  return env != nullptr && proxy->tag == (reinterpret_cast<uintptr_t>(env) ^ ProxyEnv::kTagKey);
+}
 struct ProxyVm {
   void* const* functions;
 };
 
 ProxyVm g_vm{g_vm_table};
 std::atomic<JavaVM*> g_real_vm{nullptr};
-thread_local ProxyEnv t_env{g_env_table, nullptr};
+thread_local ProxyEnv t_env{g_env_table, false};
 
 // --- guest (arm64) proxy tables (ADR 0047) -----------------------------------
 // A guest .so calls through its JNIEnv/JavaVM function tables with AAPCS64, and
@@ -127,7 +151,7 @@ thread_local ProxyEnv t_env{g_env_table, nullptr};
 void* g_env_table_guest[kEnvSlots];
 void* g_vm_table_guest[kVmSlots];
 ProxyVm g_vm_guest{g_vm_table_guest};
-thread_local ProxyEnv t_env_guest{g_env_table_guest, nullptr};
+thread_local ProxyEnv t_env_guest{g_env_table_guest, true};
 // Whether this thread last entered a guest (only for JNI_GetCreatedJavaVMs,
 // which has no proxy argument to tell by).
 thread_local bool t_guest_mode = false;
@@ -135,7 +159,7 @@ std::once_flag g_guest_tables_once;
 bool g_guest_tables_ok = false;
 
 bool IsGuestEnv(JNIEnv* env) {
-  return env != nullptr && reinterpret_cast<ProxyEnv*>(env)->functions == g_env_table_guest;
+  return IsProxy(env) && reinterpret_cast<ProxyEnv*>(env)->guest;
 }
 bool IsGuestVm(JavaVM* vm) { return vm == reinterpret_cast<JavaVM*>(&g_vm_guest); }
 
@@ -186,6 +210,8 @@ void EnsureThread() {
 
 JNIEnv* Wrap(JNIEnv* real) {
   if (real == nullptr) return nullptr;
+  // A proxy never wraps a proxy (its own forwarding would reach itself).
+  if (IsProxy(real)) real = reinterpret_cast<ProxyEnv*>(real)->real;
   t_env.real = real;
   return reinterpret_cast<JNIEnv*>(&t_env);
 }
@@ -195,6 +221,7 @@ JNIEnv* WrapGuest(JNIEnv* real) {
   if (real == nullptr) return nullptr;
   BuildGuestTables();
   if (!g_guest_tables_ok) return Wrap(real);
+  if (IsProxy(real)) real = reinterpret_cast<ProxyEnv*>(real)->real;
   t_env.real = real;
   t_env_guest.real = real;
   return reinterpret_cast<JNIEnv*>(&t_env_guest);
@@ -205,9 +232,7 @@ JNIEnv* WrapFor(bool guest, JNIEnv* real) { return guest ? WrapGuest(real) : Wra
 // The real JNIEnv of a proxy; ART's own JNIEnv as it is (a packer's loaded code
 // calls ART's table with it, through InstallCallerAbiJniTable's stubs).
 inline JNIEnv* Real(JNIEnv* env) {
-  auto* proxy = reinterpret_cast<ProxyEnv*>(env);
-  return proxy->functions == g_env_table || proxy->functions == g_env_table_guest ? proxy->real
-                                                                                  : env;
+  return IsProxy(env) ? reinterpret_cast<ProxyEnv*>(env)->real : env;
 }
 
 // --- stubs ---------------------------------------------------------------------
@@ -1024,9 +1049,7 @@ const gesher_elf_dlopen_ops kElfOps = {&ElfOpen, &ElfSym, &ElfClose};
 
 JNIEnv* gesher::bionic::RealJniEnv(JNIEnv* env) {
   if (env == nullptr) return nullptr;
-  auto* proxy = reinterpret_cast<ProxyEnv*>(env);
-  return (proxy->functions == g_env_table || proxy->functions == g_env_table_guest) ? proxy->real
-                                                                                    : env;
+  return IsProxy(env) ? reinterpret_cast<ProxyEnv*>(env)->real : env;
 }
 
 JNIEnv* gesher::bionic::ProxyJniEnv(JNIEnv* real) {
@@ -1037,8 +1060,7 @@ JNIEnv* gesher::bionic::ProxyJniEnv(JNIEnv* real) {
   // host-pointer path), which must know the va_list ones.
   if (gesher::arm64::Available()) BuildGuestTables();
   if (real == nullptr) return nullptr;
-  void* const* f = reinterpret_cast<ProxyEnv*>(real)->functions;
-  if (f == g_env_table || f == g_env_table_guest) return real;
+  if (IsProxy(real)) return real;
   return Wrap(real);
 }
 

@@ -198,11 +198,36 @@ CheckTimed 'binder: CursorWindow types/data and descriptor lifetime across two p
   ($dvm + 'gesher.services.CursorWindowParcelTest', 'client', $cursorName) @(
     'CursorWindowParcelTest: two-process Binder inline/shared-memory cursor transfer preserves types/data and descriptor lifetime',
     'CursorWindowParcelTest all passed')
-foreach ($p in $cursorService, $service, $servicemanager, $binderd) {
+# android.view.Surface in Parcels (compat/framework/surface_parcel.cc, docs/graphics.md):
+# read back in its consumer's process, the consumer's own surface; across processes a
+# producer whose frames reach the consumer through a memfd (a browser's GPU process
+# drawing into its SurfaceView), the consumer's size and its release coming back.
+CheckTimed 'graphics: a Surface in a Parcel read back in its consumer''s process is the consumer''s own' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.SurfaceParcelTest') @(
+    'SurfaceParcelTest: a SurfaceTexture''s Surface read back in its own process is the same native surface',
+    'SurfaceParcelTest: a released Surface travels as no surface',
+    'SurfaceParcelTest all passed')
+$surfaceName = "gesher.surface.tests.$PID"
+$surfaceService = Start-Process "$Dir/dalvikvm.exe" `
+  -ArgumentList ($dvm + 'gesher.services.SurfaceParcelTest', 'service', $surfaceName) `
+  -PassThru -WindowStyle Hidden -RedirectStandardOutput "$logs/surface-service.out" -RedirectStandardError "$logs/surface-service.err"
+CheckTimed 'graphics: a Surface parceled to another process: its frames, sizes, release and memfds' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.SurfaceParcelTest', 'client', $surfaceName) @(
+    'SurfaceParcelTest: an ImageReader''s Surface drawn by process',
+    '64x32, 0 pixels differ, the producer''s time stamp',
+    'SurfaceParcelTest: six frames through one memfd the producer reuses; the consumer keeps no descriptor',
+    'SurfaceParcelTest: parceled again it stays the same producer; parceled back, the consumer''s own Surface',
+    'SurfaceParcelTest: a SurfaceTexture''s Surface read into the producer''s releases the earlier one',
+    'SurfaceParcelTest: SurfaceTexture.setDefaultBufferSize(48, 24) reaches the producer with its next frame',
+    'SurfaceParcelTest: the SurfaceTexture released, the producer''s lockCanvas throws IllegalArgumentException and its memfd is closed',
+    'SurfaceParcelTest: a producer''s Surface released takes its memfd with it',
+    'SurfaceParcelTest all passed') 180
+foreach ($p in $surfaceService, $cursorService, $service, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }
 if ($failed -ne $failedBefore) {
-  foreach ($f in 'service.out', 'service.err', 'cursor-service.out', 'cursor-service.err', 'servicemanager.log', 'binderd.log') {
+  foreach ($f in 'service.out', 'service.err', 'cursor-service.out', 'cursor-service.err', 'surface-service.out',
+      'surface-service.err', 'servicemanager.log', 'binderd.log') {
     Write-Host "--- $f"
     Get-Content "$logs/$f" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
   }
@@ -215,7 +240,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
+    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, statusbar, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -889,6 +914,8 @@ try {
   CheckTimed 'services: thermal usage shortcuts and unmanaged device policy contracts' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceFixtureRunner' + 'SoftwareServiceContractTest' +
       (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/unsigned.apk'))) @('SoftwareServiceContractTest all passed') 30
+  CheckTimed 'services: statusbar without a SystemUI bar: tile listening and add-tile answers' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.StatusBarContractTest') @('StatusBarContractTest all passed') 30
   CheckTimed 'services: existing and future registration callbacks, cancellation and death cleanup' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceRegistrationCallbackTest') @('ServiceRegistrationCallbackTest all passed') 30
   CheckTimed 'services: actual storage volumes, capacity, credential state and file allocation' "$Dir/dalvikvm.exe" `

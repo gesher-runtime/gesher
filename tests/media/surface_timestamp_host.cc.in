@@ -12,6 +12,17 @@
 #include <optional>
 #include <vector>
 
+// <gesher/perf_trace.h>'s timing sites as production runs them without
+// GESHER_PERF_TRACE (docs/media.md, "Measuring playback"): off.
+namespace gesher::perf {
+inline bool Enabled() { return false; }
+inline int64_t Now() { return 0; }
+struct Site {
+  constexpr explicit Site(const char*, int64_t = 0) {}
+  void Add(int64_t, int64_t = 0) {}
+};
+}  // namespace gesher::perf
+
 constexpr int64_t NATIVE_WINDOW_TIMESTAMP_AUTO = std::numeric_limits<int64_t>::min();
 constexpr int SYSTEM_TIME_MONOTONIC = 1;
 constexpr int HAL_PIXEL_FORMAT_RGBX_8888 = 2, HAL_PIXEL_FORMAT_BGRA_8888 = 5;

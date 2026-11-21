@@ -38,19 +38,13 @@
   "desktop": {
     "tracks": [
       "30-graphics.ps1",
-      "31-angle.ps1",
       "32-fonts.ps1",
       "33-input.ps1",
       "34-windows.ps1",
       "35-ime.ps1",
-      "36-popups.ps1",
-      "37-webview.ps1",
       "39-rtl.ps1",
-      "48-lifecycle.ps1",
       "49-locale.ps1",
-      "51-windows3.ps1",
       "52-surfaces.ps1",
-      "54-windows4.ps1",
       "80-surface-invalidation.ps1",
       "81-locale2.ps1",
       "84-ci-processes.ps1"
@@ -75,21 +69,39 @@
       ]
     }
   },
+  "windowing": {
+    "tracks": [
+      "31-angle.ps1",
+      "36-popups.ps1",
+      "37-webview.ps1",
+      "48-lifecycle.ps1",
+      "51-windows3.ps1",
+      "54-windows4.ps1"
+    ],
+    "helpers": {}
+  },
   "services": {
     "tracks": [
       "50-services.ps1",
-      "52-microg.ps1",
-      "54-web3.ps1",
       "55-shell.ps1",
       "56-net.ps1",
       "57-devsvc.ps1",
       "58-devices.ps1",
       "61-bluetooth.ps1",
+      "83-libcore-io.ps1",
+      "geocoder-operation-fixture.ps1",
+      "geocoder-operation.ps1"
+    ],
+    "helpers": {}
+  },
+  "contracts": {
+    "tracks": [
+      "52-microg.ps1",
+      "54-web3.ps1",
       "70-e2e.ps1",
       "70-exec4-exit.ps1",
       "74-exec4-actions.ps1",
       "77-exec4-spawn.ps1",
-      "83-libcore-io.ps1",
       "93-microg-gms.ps1",
       "94-framework-fixes.ps1",
       "95-browser.ps1",
@@ -97,11 +109,13 @@
       "96-deep-compatibility.ps1",
       "97-lifecycle-contracts.ps1",
       "98-system-contracts.ps1",
-      "99-android-windows-contracts.ps1",
-      "geocoder-operation-fixture.ps1",
-      "geocoder-operation.ps1"
+      "99-android-windows-contracts.ps1"
     ],
     "helpers": {
+      "50-services.ps1": [
+        "CheckTimed",
+        "RunTimed"
+      ],
       "61-aot2.ps1": [
         "Aot2Run"
       ]

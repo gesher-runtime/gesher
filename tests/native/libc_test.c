@@ -17,7 +17,9 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <link.h>
+#include <malloc.h>
 #include <math.h>
 #include <mntent.h>
 #include <pthread.h>
@@ -29,6 +31,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>
 #include <sys/xattr.h>
@@ -99,6 +102,20 @@ static void test_memory(void) {
   a = realloc(a, 2000);
   check("realloc of aligned memory", a != NULL && ((unsigned char*)a)[999] == 1);
   free(a);
+  // mallinfo: what the allocator has mapped and allocated; a live 4 MiB block
+  // is counted, and the allocated bytes fit in the mapped ones. (The block
+  // escapes through a volatile, so the compiler keeps the allocation.)
+  static char* volatile live_block;
+  struct mallinfo before = mallinfo();
+  char* big = malloc(4 << 20);
+  memset(big, 1, 4 << 20);
+  live_block = big;
+  struct mallinfo during = mallinfo();
+  check("mallinfo counts allocated bytes",
+        during.uordblks >= before.uordblks + (4u << 20) - (64u << 10) && during.uordblks > 0);
+  check("mallinfo: allocated fit in mapped, the rest is free",
+        during.hblkhd >= during.uordblks && during.fordblks == during.hblkhd - during.uordblks);
+  free(big);
 }
 
 static void test_strings(void) {
@@ -113,6 +130,46 @@ static void test_strings(void) {
   check("strtol returns a 64-bit long", big == 9000000000L);
   check("strtoul hex", strtoul("ffffffffff", NULL, 16) == 0xffffffffffUL);
   check("atoi", atoi("-42") == -42);
+}
+
+// fnmatch with bionic's flag values (FNM_NOESCAPE 0x01, FNM_PATHNAME 0x02),
+// each flag on its own, so swapped values would fail (Opera's libopera.so).
+// getrlimit answers EFAULT for a buffer it cannot write, as the kernel does:
+// Chromium's ProtectedMemory checks a page is read-only exactly this way
+// (getrlimit(RLIMIT_NPROC, page) must fail with EFAULT, or it traps).
+static void test_getrlimit_fault(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  char* p = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (p == MAP_FAILED) {
+    check("getrlimit fault: mmap", 0);
+    return;
+  }
+  check("getrlimit into a writable page succeeds", getrlimit(RLIMIT_NPROC, (struct rlimit*)p) == 0);
+  check("mprotect PROT_READ", mprotect(p, (size_t)page, PROT_READ) == 0);
+  errno = 0;
+  check("getrlimit into a read-only page fails with EFAULT",
+        getrlimit(RLIMIT_NPROC, (struct rlimit*)p) == -1 && errno == EFAULT);
+  check("mprotect PROT_NONE", mprotect(p, (size_t)page, PROT_NONE) == 0);
+  errno = 0;
+  check("getrlimit into an inaccessible page fails with EFAULT",
+        getrlimit(RLIMIT_NOFILE, (struct rlimit*)p) == -1 && errno == EFAULT);
+  munmap(p, (size_t)page);
+  struct rlimit on_stack;
+  check("getrlimit into the stack succeeds",
+        getrlimit(RLIMIT_NOFILE, &on_stack) == 0 && on_stack.rlim_cur > 0);
+}
+
+static void test_fnmatch(void) {
+  check("fnmatch matches and reports FNM_NOMATCH",
+        fnmatch("*.so", "libopera.so", 0) == 0 && fnmatch("*.so", "libopera.a", 0) == FNM_NOMATCH);
+  check("fnmatch FNM_PATHNAME: '*' does not cross '/'",
+        fnmatch("lib/*", "lib/x86_64/a.so", FNM_PATHNAME) == FNM_NOMATCH &&
+        fnmatch("lib/*", "lib/x86_64/a.so", 0) == 0);
+  check("fnmatch FNM_NOESCAPE: '\\' is an ordinary character",
+        fnmatch("a\\*", "a\\x", FNM_NOESCAPE) == 0 && fnmatch("a\\*", "a*", FNM_NOESCAPE) == FNM_NOMATCH &&
+        fnmatch("a\\*", "a*", 0) == 0);
+  check("fnmatch FNM_PERIOD and FNM_CASEFOLD",
+        fnmatch("*", ".hidden", FNM_PERIOD) == FNM_NOMATCH && fnmatch("*.SO", "a.so", FNM_CASEFOLD) == 0);
 }
 
 // bionic's ctype table, read directly by code built for an old API level
@@ -313,6 +370,22 @@ static void test_time_math(void) {
   check("CLOCK_REALTIME is after 2020", rt.tv_sec > 1577836800);
   check("libm", fabs(sqrt(2.0) * sqrt(2.0) - 2.0) < 1e-12 && fabs(sin(0.0)) < 1e-12 &&
                     fabs(pow(2.0, 10.0) - 1024.0) < 1e-9);
+  // nexttoward's long double is binary128 here: a y strictly between x and its
+  // neighbour still decides the direction, and equal values return y's sign.
+  // (volatile: computed at run time, through the shim.)
+  volatile long double above = 1.0L + 0x1p-60L, below = 1.0L - 0x1p-60L, negzero = -0.0L;
+  volatile double one = 1.0, zero = 0.0;
+  check("nexttoward steps toward a binary128 just above x",
+        nexttoward(one, above) == nextafter(1.0, 2.0));
+  check("nexttoward steps toward a binary128 just below x",
+        nexttoward(one, below) == nextafter(1.0, 0.0));
+  check("nexttoward of equal values is y, signed zero included",
+        nexttoward(one, 1.0L) == 1.0 && signbit(nexttoward(zero, negzero)));
+  check("nexttoward from 0 is the smallest subnormal", nexttoward(zero, 1.0L) == 0x1p-1074);
+  check("nexttoward with a NaN is a NaN", isnan(nexttoward(one, (long double)NAN)));
+  check("nexttowardf steps toward a binary128 just above x",
+        nexttowardf((float)one, above) == nextafterf(1.0f, 2.0f) &&
+            nexttowardf((float)one, below) == nextafterf(1.0f, 0.0f));
 }
 
 // statfs and its neighbours: imports the shim once lacked, so they were bound
@@ -730,6 +803,7 @@ static void test_pthread(void) {
 // --- libdl and liblog -------------------------------------------------------------
 
 static int phdr_found = 0;
+static char phdr_name[4096];
 static int phdr_callback(struct dl_phdr_info* info, size_t size, void* data) {
   (void)size;
   for (int i = 0; i < info->dlpi_phnum; ++i) {
@@ -738,6 +812,7 @@ static int phdr_callback(struct dl_phdr_info* info, size_t size, void* data) {
     uintptr_t start = info->dlpi_addr + ph->p_vaddr;
     if ((uintptr_t)data >= start && (uintptr_t)data < start + ph->p_memsz) {
       phdr_found = 1;
+      snprintf(phdr_name, sizeof(phdr_name), "%s", info->dlpi_name ? info->dlpi_name : "");
       return 1;
     }
   }
@@ -745,6 +820,29 @@ static int phdr_callback(struct dl_phdr_info* info, size_t size, void* data) {
 }
 
 int gesher_selftest(void);
+
+// bionic names a loaded object by its file's realpath in dladdr's dli_fname and
+// dl_iterate_phdr's dlpi_name (soinfo::get_realpath). Apps build the paths of
+// their other libraries from it: Gecko's FFVPXRuntimeLinker takes dladdr(malloc)
+// (libmozglue.so's), replaces the file name with libmozavcodec.so and opens that.
+static void test_dl_paths(const Dl_info* info) {
+  const char* path = info->dli_fname;
+  check("dladdr's dli_fname is an absolute path", path != NULL && path[0] == '/');
+  struct stat st;
+  check("dladdr's dli_fname is the library's file",
+        path != NULL && stat(path, &st) == 0 && S_ISREG(st.st_mode));
+  check_str("dl_iterate_phdr's dlpi_name is the same path", phdr_name, path != NULL ? path : "");
+  // The directory of that path is where the library's file is: the file name
+  // built from it (as Gecko builds libmozavcodec.so's) opens the same object.
+  char sibling[4096];
+  const char* slash = path != NULL ? strrchr(path, '/') : NULL;
+  int built = slash != NULL &&
+              snprintf(sibling, sizeof(sibling), "%.*s/%s", (int)(slash - path), path, slash + 1) <
+                  (int)sizeof(sibling);
+  void* self = built ? dlopen(sibling, RTLD_NOW) : NULL;
+  check("dlopen of the path built from dli_fname's directory opens the library",
+        self != NULL && dlsym(self, "gesher_selftest") == (void*)gesher_selftest);
+}
 
 static void test_random_state(void) {
   typedef char* (*init_fn)(unsigned, char*, size_t);
@@ -799,6 +897,7 @@ static void test_dl(void) {
   Dl_info info;
   check("dladdr names the library", dladdr((void*)gesher_selftest, &info) != 0 &&
                                         strstr(info.dli_fname, "libc_test") != NULL);
+  test_dl_paths(&info);
   __android_log_print(ANDROID_LOG_INFO, "gesher", "liblog: %s %d", "formatted", 42);
   check("__android_log_print", 1);
   test_random_state();
@@ -851,6 +950,8 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_sleep_contracts();
   test_timerfd_syscalls();
   test_strings();
+  test_fnmatch();
+  test_getrlimit_fault();
   test_ctype_table();
   test_urandom_stdio();
   test_stream_device_contracts();

@@ -49,6 +49,13 @@ class QueueSurface : public android::Surface {
   uint64_t frames() const;
   // No producer may draw any more (SurfaceTexture.release).
   void Abandon();
+  // A frame from a producer in another process (a Surface parceled to it,
+  // compat/framework/surface_parcel.cc), queued as queueBuffer queues one:
+  // `pixels` (RGBA_8888, `stride` pixels a row) become the latest frame, with
+  // the producer's time stamp, and the listener is called. This surface's own
+  // producer state (its buffer, requested size and format, a lock) is left
+  // alone. False once abandoned.
+  bool PostFrame(int width, int height, int stride, const uint32_t* pixels, int64_t timestamp_ns);
 
   int lock(ANativeWindow_Buffer* out_buffer, ARect* in_out_dirty) override;
   int unlockAndPost() override;

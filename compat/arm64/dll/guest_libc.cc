@@ -11,6 +11,8 @@
 //    onto the shim's functions, shared with raw `SVC #0` in guest code;
 //  - getauxval(AT_HWCAP): arm64 capability bits, only those the translator
 //    implements (no LSE atomics, so outline-atomics code takes LL/SC paths);
+//  - mallinfo: AAPCS64 passes its struct return's address in x8;
+//  - nexttoward(f): their long double is a whole q register;
 //  - setjmp/longjmp: they save and restore registers, so they must be guest
 //    code (AArch64, emitted here), not the host's;
 //  - the floating-point environment (FPCR/FPSR, fenv_t, FE_* values);
@@ -878,6 +880,62 @@ bool InitGuestLibc() {
   }
   for (size_t i = 0; i < 3; ++i) g_overrides[jumps[i].name] = emitted[i];
   for (const char* name : {"longjmp", "_longjmp", "siglongjmp"}) g_overrides[name] = emitted[3];
+
+  // mallinfo returns an 80-byte struct in memory: AAPCS64 passes its address
+  // in x8, System V as the hidden first argument (rdi), which the bridge fills
+  // from x0. A guest stub moves x8 to x0 and goes on to the shim's mallinfo.
+  if (void* mallinfo = Host("mallinfo")) {
+    void* entry = BindHost(mallinfo, -1);
+    if (entry == nullptr) {
+      std::fputs("gesher arm64: cannot bind the mallinfo host entry\n", stderr);
+      return false;
+    }
+    const uint64_t host = reinterpret_cast<uint64_t>(entry);
+    const uint32_t stub[] = {
+        0xAA0803E0u,  // mov x0, x8
+        0x58000070u,  // ldr x16, the address below
+        0xD61F0200u,  // br x16
+        0xD503201Fu,  // nop (aligns the address)
+        static_cast<uint32_t>(host), static_cast<uint32_t>(host >> 32),
+    };
+    void* code = EmitGuestCode(stub, sizeof(stub) / 4);
+    if (code == nullptr) {
+      std::fputs("gesher arm64: cannot emit guest code for mallinfo\n", stderr);
+      return false;
+    }
+    g_overrides["mallinfo"] = code;
+  }
+
+  // nexttoward(f)'s long double is a binary128 in q1, of which the bridge
+  // carries only the low 64 bits: a guest stub stores q1 and passes its
+  // address (x0) to the shim's pointer form; x stays in v0.
+  for (const char* name : {"nexttoward", "nexttowardf"}) {
+    void* fn = Host((std::string("__gesher_arm64_") + name).c_str());
+    if (fn == nullptr) continue;
+    void* entry = BindHost(fn, -1);
+    if (entry == nullptr) {
+      std::fprintf(stderr, "gesher arm64: cannot bind the %s host entry\n", name);
+      return false;
+    }
+    const uint64_t host = reinterpret_cast<uint64_t>(entry);
+    const uint32_t stub[] = {
+        0xA9BE7BFDu,  // stp x29, x30, [sp, #-32]!
+        0x3D8007E1u,  // str q1, [sp, #16]
+        0x910043E0u,  // add x0, sp, #16
+        0x580000B0u,  // ldr x16, the address below
+        0xD63F0200u,  // blr x16
+        0xA8C27BFDu,  // ldp x29, x30, [sp], #32
+        0xD65F03C0u,  // ret
+        0xD503201Fu,  // nop (aligns the address)
+        static_cast<uint32_t>(host), static_cast<uint32_t>(host >> 32),
+    };
+    void* code = EmitGuestCode(stub, sizeof(stub) / 4);
+    if (code == nullptr) {
+      std::fprintf(stderr, "gesher arm64: cannot emit guest code for %s\n", name);
+      return false;
+    }
+    g_overrides[name] = code;
+  }
   return true;
 }
 
