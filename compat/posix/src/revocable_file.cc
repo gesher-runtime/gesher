@@ -19,6 +19,10 @@
 namespace gesher {
 namespace {
 constexpr uint64_t kMagic = 0x3156455246485347ull;  // GSHFREV1
+// Consumers can open the I/O mutex, so a hostile holder must not stall the
+// controller (BlobStore's shared worker and commit path) indefinitely. One
+// admitted operation is a single read/write call; this bounds its drain.
+constexpr DWORD kRevokeDrainMillis = 10000;
 struct SharedRevocation {
   uint64_t magic;
   uint32_t version;
@@ -49,9 +53,10 @@ struct RevocableFileGroup {
     if (mutex) CloseHandle(mutex);
     if (mapping) CloseHandle(mapping);
   }
-  int Lock() {
-    DWORD result = WaitForSingleObject(mutex, INFINITE);
+  int Lock(DWORD timeout = INFINITE) {
+    DWORD result = WaitForSingleObject(mutex, timeout);
     if (result == WAIT_OBJECT_0 || result == WAIT_ABANDONED) return 0;
+    if (result == WAIT_TIMEOUT) return ETIMEDOUT;
     return ErrnoFromWin32(GetLastError());
   }
   bool Revoked() const {
@@ -155,7 +160,9 @@ int RevokeFileGroup(uint64_t controller) {
   // Otherwise an app issuing continuous writes could keep winning the mutex
   // and indefinitely postpone session finalization.
   InterlockedExchange(&group->view->revoked, 1);
-  const int error = group->Lock();
+  // New admission is already closed. A drain that does not finish in time
+  // fails with ETIMEDOUT so the caller reports an error instead of hanging.
+  const int error = group->Lock(kRevokeDrainMillis);
   if (error) return errno = error, -1;
   ReleaseMutex(group->mutex);
   return 0;

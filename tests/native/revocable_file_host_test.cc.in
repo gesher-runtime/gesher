@@ -97,11 +97,29 @@ static HANDLE CreateMutexExW(void* attributes, const wchar_t* name, DWORD flags,
   }
   return result;
 }
+// Finite waits are real timed waits. A test may shorten the actual wait while
+// still observing the timeout the implementation requested.
+static DWORD last_finite_wait = 0;
+static DWORD finite_wait_override = 0;
 static DWORD WaitForSingleObject(HANDLE handle, DWORD timeout) {
-  host::Require(timeout == INFINITE || timeout == 0);
   auto found = mutex_views.find(host::Native(handle));
   host::Require(found != mutex_views.end());
-  int result = timeout == 0 ? pthread_mutex_trylock(found->second) : pthread_mutex_lock(found->second);
+  int result;
+  if (timeout == INFINITE) {
+    result = pthread_mutex_lock(found->second);
+  } else if (timeout == 0) {
+    result = pthread_mutex_trylock(found->second);
+  } else {
+    last_finite_wait = timeout;
+    const DWORD actual = finite_wait_override ? finite_wait_override : timeout;
+    timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += actual / 1000;
+    deadline.tv_nsec += static_cast<long>(actual % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    result = pthread_mutex_timedlock(found->second, &deadline);
+    if (result == ETIMEDOUT) result = EBUSY;
+  }
   if (result == EOWNERDEAD) { pthread_mutex_consistent(found->second); return WAIT_ABANDONED; }
   if (result == EBUSY) return WAIT_TIMEOUT;
   if (result) { SetLastError(result); return WAIT_FAILED; }
@@ -286,6 +304,44 @@ int main() {
   Check(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
         "other process sees revocation through transported OFD");
   close(ready[0]); close(proceed[1]);
+  Check(last_finite_wait != 0 && last_finite_wait != INFINITE, "revoke drain uses a bounded wait");
+  {
+    // An application can hold the shared I/O mutex without finishing. The
+    // controller must report ETIMEDOUT instead of blocking its caller forever.
+    const uint64_t stalled = gesher::CreateRevocableFileGroup();
+    Check(stalled != 0, "second revocation group");
+    int stalled_fd = NewFile("stalled");
+    Check(gesher::AttachRevocableFileGroup(stalled, stalled_fd) == 0, "attach stalled descriptor");
+    auto stalled_snapshot = gesher::CaptureDescriptor(stalled_fd);
+    std::mutex hold;
+    std::condition_variable hold_changed;
+    bool holding = false, let_go = false;
+    before_write = [&] {
+      std::unique_lock<std::mutex> lock(hold);
+      holding = true; hold_changed.notify_all();
+      hold_changed.wait(lock, [&] { return let_go; });
+    };
+    std::thread holder([&] { hold_this_io = true; (void)Write(stalled_fd, "held", 4); });
+    {
+      std::unique_lock<std::mutex> lock(hold);
+      Check(hold_changed.wait_for(lock, std::chrono::seconds(2), [&] { return holding; }),
+            "hostile operation holds the I/O mutex");
+    }
+    finite_wait_override = 50;
+    const auto started = std::chrono::steady_clock::now();
+    const int result = gesher::RevokeFileGroup(stalled);
+    const int error = errno;
+    finite_wait_override = 0;
+    Check(result == -1 && error == ETIMEDOUT, "stalled drain fails with ETIMEDOUT");
+    Check(std::chrono::steady_clock::now() - started < std::chrono::seconds(2), "stalled drain returns promptly");
+    Check(stalled_snapshot->description->revocation->Revoked(), "timed-out revoke still closes admission");
+    { std::lock_guard<std::mutex> lock(hold); let_go = true; }
+    hold_changed.notify_all(); holder.join(); before_write = {};
+    Check(gesher::RevokeFileGroup(stalled) == 0, "revoke succeeds once the holder finishes");
+    gesher::ReleaseRevocableFileGroup(stalled);
+    stalled_snapshot.reset();
+    CloseFd(stalled_fd);
+  }
   gesher::ReleaseRevocableFileGroup(group);
   Check(gesher::RevokeFileGroup(group) == -1 && errno == EINVAL, "retired controller token is not reused");
   for (int value : {fd, alias, adopted, reopened, unrelated}) CloseFd(value);

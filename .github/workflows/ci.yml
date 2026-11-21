@@ -249,6 +249,7 @@ jobs:
           python3 tools/test_ofd_transfer_contracts.py --sanitize
           python3 tools/test_file_io_contracts.py --sanitize
           python3 tools/test_pipe_io_contracts.py --sanitize
+          python3 tools/test_revocable_file_contracts.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
