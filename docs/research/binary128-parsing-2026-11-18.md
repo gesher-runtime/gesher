@@ -54,11 +54,36 @@ the host assumptions. Every compiled upstream helper/table is prefixed
 `gesher_gdtoa_`, so it does not replace a CRT conversion routine.
 
 The upstream free list, private allocation arena, powers-of-five cache and
-hex digit table are shared. A real private mutex covers the complete parser
-call, including lazy initialization. This deliberately serializes simultaneous
-parsing calls; it avoids introducing races into the old cache algorithm.
-The measured concurrency test reports elapsed time rather than claiming a
-throughput guarantee. Allocation and numeric errors remain upstream behavior.
+hex digit table are shared. As in Bionic, the parser is compiled with
+`MULTIPLE_THREADS`; `compat/bionic/gdtoa/thread_private.h` maps upstream's two
+dtoa locks to hooks in `binary128_parse.cc`, and those locks are held only
+around free-list/arena updates (lock 0) and powers-of-five cache growth
+(lock 1). Simultaneous conversions therefore run in parallel; a 200,000-digit
+conversion (about 1.3 s here) no longer blocks every other caller.
+
+Two upstream details need more than the per-structure locks, and are handled
+without changing upstream function bodies:
+
+- `pow5mult` reads the 5^(2^k) chain without a lock, while a grower publishes
+  a new node before clearing its `next` field, and `Balloc` does not reset
+  `next` on a recycled Bigint. Each conversion holds a shared gate, and lock 1
+  takes it exclusively, so no other conversion reads the chain while it
+  grows. Growth happens only the first time a conversion needs a new power;
+  only then does a conversion wait for others in flight.
+- `Balloc` and `pow5mult` return NULL after an allocation failure with their
+  lock still held; with Bionic's mutexes that lock stays held. Lock 0 is
+  re-entrant for the failing thread, and `ParseBinary128` releases any lock
+  still held when the conversion returns. The allocation failure itself is
+  still reported as upstream does.
+
+The hex digit table is filled once with `std::call_once` before any
+conversion, instead of upstream's unsynchronized lazy check.
+`binary128_concurrency` keeps the eight-thread exact-bits check and adds a
+contention check: short conversions must complete while a 200,000-digit
+conversion is still running, with exact results for both. The previous
+whole-parse mutex fails it (no short conversion completes during the long
+one). The allocation-failure release path is not exercised by a test.
+Allocation and numeric errors remain upstream behavior.
 
 All supported Bionic locales use the C numeric syntax. `USE_LOCALE` is not
 enabled, and `_l` aliases ignore their locale argument as Bionic does. Host CRT
