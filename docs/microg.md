@@ -61,7 +61,17 @@ The helper verifies the expected manifest package, signed APK contents and
 official signer offline before replacing any supplied slot. It stages files as
 `system/priv-app/<package>/base.apk` under the selected profile and writes
 `microg.enabled`. Startup verifies the fixed slots again before parsing/loading
-their application code; an unexpected or modified APK stops startup.
+their application code; an unexpected or modified APK stops startup. As the
+package manager does for a system package, startup then keeps each addon's native
+libraries for its best ABI in `system/priv-app/<package>/lib/<isa>` (its
+`nativeLibraryDir`, with `primaryCpuAbi`), so other processes that load its code,
+such as Dynamite modules (`cronet_dynamite`), find them on disk. Libraries already
+identical to the verified APK's are not rewritten, changed ones are restored and
+any other file or link there is removed. If that directory cannot be prepared (for
+example, it is a link, or a stale entry cannot be removed), startup logs it and
+does not use that directory: the addon then runs without its native libraries
+(Dynamite modules fail to load) until a later startup prepares them. `-Remove`
+deletes these extracted libraries too.
 
 The normal launcher uses `%LOCALAPPDATA%/Gesher` and enables
 `GESHER_MICROG_SPOOF=1` when that profile's marker exists. An explicit environment
@@ -70,7 +80,8 @@ value, including `0`, takes precedence. The helper's `-ProfileRoot` and
 profile. They do not change the normal launcher's profile selection.
 
 Open microG Settings to configure Google device registration, Cloud Messaging
-and accounts. Staging the APKs does not enable those settings. On device startup,
+and accounts. Staging the APKs does not enable those settings, and the helper
+does not write microG's preferences. On device startup,
 Gesher sends verified Services `BOOT_COMPLETED` so microG can restore services
 enabled in its own settings. Gesher must be running to receive push.
 
