@@ -522,6 +522,22 @@ int BIONIC_SYSV Sigismember(const uint64_t* set, int sig) {
   return (*set & Bit(sig)) != 0 ? 1 : 0;
 }
 
+// Android 16 Bionic's filter_reserved_signals, applied to a requested set
+// before pthread_sigmask/sigprocmask and sigsuspend use it: signal 32 belongs
+// to POSIX timers and stays blocked; runtime signals 33..41 must not become
+// blocked through the public mask functions. For SIG_UNBLOCK the roles swap.
+// sigsuspend filters its mask with SIG_SETMASK semantics.
+uint64_t FilterReservedSignals(uint64_t set, int how) {
+  if (how == kSigUnblock) {
+    set &= ~Bit(32);
+    for (int sig = 33; sig < kSigrtMin; ++sig) set |= Bit(sig);
+  } else {
+    set |= Bit(32);
+    for (int sig = 33; sig < kSigrtMin; ++sig) set &= ~Bit(sig);
+  }
+  return set;
+}
+
 int BIONIC_SYSV PthreadSigmask(int how, const uint64_t* set, uint64_t* old) {
   ThreadState* self = Self();
   if (self == nullptr) return kEAGAIN;
@@ -532,19 +548,9 @@ int BIONIC_SYSV PthreadSigmask(int how, const uint64_t* set, uint64_t* old) {
   }
   if (set != nullptr) {
     if (how != kSigBlock && how != kSigUnblock && how != kSigSetmask) return kEINVAL;
-    // Match Android 16 Bionic's filter_reserved_signals on the REQUEST,
-    // before applying the operation. Filtering the resulting mask instead
+    // Filtering the request, not the resulting mask: filtering the result
     // would change pre-existing reserved bits even for SIG_BLOCK/UNBLOCK.
-    // Signal 32 belongs to POSIX timers; runtime signals 33..41 must not be
-    // newly blocked through the public mask functions.
-    uint64_t requested = *set;
-    if (how == kSigUnblock) {
-      requested &= ~Bit(32);
-      for (int sig = 33; sig < kSigrtMin; ++sig) requested |= Bit(sig);
-    } else {
-      requested |= Bit(32);
-      for (int sig = 33; sig < kSigrtMin; ++sig) requested &= ~Bit(sig);
-    }
+    uint64_t requested = FilterReservedSignals(*set, how);
     uint64_t next;
     switch (how) {
       case kSigBlock: next = current | requested; break;
@@ -717,7 +723,7 @@ int BIONIC_SYSV Sigsuspend(const uint64_t* mask) {
   ThreadState* self = Self();
   if (self == nullptr) return errno = kEAGAIN, -1;
   uint64_t saved = self->mask;
-  self->mask = *mask & ~(Bit(kSigkill) | Bit(kSigstop));
+  self->mask = FilterReservedSignals(*mask, kSigSetmask) & ~(Bit(kSigkill) | Bit(kSigstop));
   BionicSiginfo info;
   for (;;) {
     BionicSigaction act;

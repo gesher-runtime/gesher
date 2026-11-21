@@ -5,6 +5,8 @@
 // Translator code classification and handler invocation are explicit boundaries;
 // accepting native SA_SIGINFO here does not qualify its Windows ucontext frame.
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cerrno>
@@ -25,9 +27,11 @@ struct ThreadState {
   gesher::signals::Pending<BionicSiginfo> pending;
   std::atomic<bool> any_pending{false};
   BionicStack alt_stack{nullptr, 2 /* SS_DISABLE */, 0};
+  uint64_t waiting_for = 0;
 };
 struct State {
   std::mutex mutex;
+  std::condition_variable sent;
   BionicSigaction actions[kNsig] = {};
   gesher::signals::Pending<BionicSiginfo> process_pending;
 };
@@ -53,6 +57,8 @@ struct Delivery {
   BionicSiginfo info;
   BionicSigaction action;
   uint64_t mask;
+  uint64_t return_mask;
+  bool has_return_mask;
 };
 static std::vector<Delivery> dispatched;
 static int deliveries, change_before_delivery, change_after_dispatch;
@@ -68,8 +74,9 @@ static void ChangeAction(int& sig) {
   sig = 0;
 }
 void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info,
-              const BionicSigaction& action) {
-  dispatched.push_back({sig, info, action, self->mask});
+              const BionicSigaction& action, const uint64_t* return_mask = nullptr) {
+  dispatched.push_back({sig, info, action, self->mask,
+                        return_mask != nullptr ? *return_mask : 0, return_mask != nullptr});
   ChangeAction(change_after_dispatch);
 }
 namespace production_delivery {
@@ -85,6 +92,10 @@ int DeliverAll(ThreadState* self) {
 }
 
 @ENTRY_POINTS@
+
+// sigsuspend/pause and the production wait they use. Every case queues an
+// already-deliverable record first, so the wait returns without blocking.
+@SUSPEND@
 
 static int checks, failures;
 static const char* phase = "original";
@@ -401,6 +412,41 @@ static void DeliveryFailures() {
   }
 }
 
+// Android 16 sigsuspend64 filters its mask with filter_reserved_signals(set,
+// SIG_SETMASK): signal 32 is blocked and runtime signals 33..41 are not while
+// the call waits; the previous mask comes back unchanged afterwards.
+static void SuspendMasks() {
+  phase = "sigsuspend reserved-signal filter";
+  constexpr uint64_t runtime = UINT64_C(0x1ff) << 32;
+  constexpr uint64_t unmaskable = (UINT64_C(1) << 8) | (UINT64_C(1) << 18);
+  struct SuspendCase { const char* name; uint64_t initial, input, expected; bool pause; };
+  const SuspendCase cases[] = {
+    {"empty sigsuspend mask keeps the timer signal blocked", timer_bit | high_bit, 0, timer_bit, false},
+    {"reserved sigsuspend mask leaves runtime signals unblocked", 0, timer_bit | runtime, timer_bit, false},
+    {"full sigsuspend mask except the awaited signal", timer_bit,
+     UINT64_MAX & ~low_bit, UINT64_MAX & ~low_bit & ~runtime & ~unmaskable, false},
+    {"pause waits with the current mask", timer_bit | high_bit, 0, timer_bit | high_bit, true},
+  };
+  for (const auto& c : cases) {
+    ++variation;
+    Reset(c.initial);
+    Queue(false, 10, 801);
+    uint64_t input = c.input;
+    errno = ERANGE;
+    const int rc = c.pause ? Pause() : Sigsuspend(&input);
+    const int observed_errno = errno;
+    check(c.name, dispatched.size() == 1 && dispatched[0].sig == 10 &&
+                  dispatched[0].mask == c.expected);
+    check("sigsuspend reports the previous mask as the handler's return mask",
+          dispatched.size() == 1 && dispatched[0].has_return_mask &&
+          dispatched[0].return_mask == c.initial);
+    check("sigsuspend returns -1/EINTR with the previous mask restored",
+          rc == -1 && observed_errno == EINTR && state.mask == c.initial);
+    check("sigsuspend leaves its input unchanged", input == c.input);
+    check("sigsuspend consumes the delivered record", state.pending.Mask() == 0);
+  }
+}
+
 int main() {
   constexpr uint64_t timer=UINT64_C(1)<<31;
   constexpr uint64_t runtime=UINT64_C(0x1ff)<<32;
@@ -455,6 +501,7 @@ int main() {
   UnsupportedPreflight();
   SupportedActions();
   DeliveryFailures();
+  SuspendMasks();
   Reset(timer_bit);
   check("all fixture-owned pending records are released", queued_records == 0);
   std::printf("Bionic mask entry points: %d checks, %d failures; actual pending/action/delivery helpers; "

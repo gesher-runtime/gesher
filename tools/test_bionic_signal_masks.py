@@ -50,14 +50,17 @@ def main() -> int:
     pending = read_source("compat/posix/include/gesher/pending_signals.h")
     declarations = []
     for key in ("kNsig", "kSigrtMin", "kSigDfl", "kSaSiginfo", "kSaResethand",
-                "kSigBlock", "kSigkill", "kSiUser", "kEAGAIN", "kEINVAL", "kENOSYS"):
-        origin = shim if key in ("kEAGAIN", "kEINVAL", "kENOSYS") else source
+                "kSigBlock", "kSigkill", "kSiUser", "kEAGAIN", "kEINTR", "kEINVAL", "kENOSYS"):
+        origin = shim if key in ("kEAGAIN", "kEINTR", "kEINVAL", "kENOSYS") else source
         matches = re.findall(r"^constexpr (?:int|uintptr_t|uint32_t) " + key + r"[^\n]+",
                              origin, re.M)
         if len(matches) != 1:
             raise ValueError("missing or ambiguous constant: " + key)
         declarations.extend(matches)
-    bodies = [function(source, "uint64_t Bit("),
+    # The shared reserved-signal filter; a historical --source-ref inlines it.
+    filters = ([function(source, "uint64_t FilterReservedSignals(")]
+               if "uint64_t FilterReservedSignals(" in source else [])
+    bodies = [function(source, "uint64_t Bit(")] + filters + [
               function(source, "int BIONIC_SYSV PthreadSigmask("),
               function(source, "int BIONIC_SYSV Sigprocmask(")]
     helpers = [function(source, "bool DefaultStops("),
@@ -66,13 +69,18 @@ def main() -> int:
                function(source, "void Pop("),
                function(source, "int TakeDeliverable("),
                function(source, "int DeliverAll(")]
+    suspend = [function(source, "bool DefaultIgnores("),
+               function(source, "int TakeWaiting("),
+               function(source, "int BIONIC_SYSV Sigsuspend("),
+               function(source, "int BIONIC_SYSV Pause(")]
     structs = [function(source, "struct " + name + " {") + ";"
                for name in ("BionicSigaction", "BionicSiginfo", "BionicStack")]
     replacements = {
-        "@DECLARATIONS@": "\n".join(declarations + structs + bodies[:1]),
+        "@DECLARATIONS@": "\n".join(declarations + structs + bodies[:1 + len(filters)]),
         "@ACTION_HELPERS@": "\n".join(helpers[:5]),
         "@DELIVER_ALL@": helpers[5],
-        "@ENTRY_POINTS@": "\n".join(bodies[1:]),
+        "@ENTRY_POINTS@": "\n".join(bodies[1 + len(filters):]),
+        "@SUSPEND@": "\n".join(suspend),
     }
     fixture = (ROOT / "tests/native/bionic_signal_mask_host_test.cc.in").read_text()
     for marker, content in replacements.items():
@@ -81,7 +89,7 @@ def main() -> int:
         fixture = fixture.replace(marker, content)
     print("production source SHA256 " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     print("production entry bodies SHA256 " + hashlib.sha256("\n".join(bodies).encode()).hexdigest(), flush=True)
-    print("production delivery helpers SHA256 " + hashlib.sha256("\n".join(helpers).encode()).hexdigest(), flush=True)
+    print("production delivery helpers SHA256 " + hashlib.sha256("\n".join(helpers + suspend).encode()).hexdigest(), flush=True)
     print("production pending container SHA256 " + hashlib.sha256(pending.encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="gesher-bionic-masks-") as temporary:
         directory = Path(temporary)
