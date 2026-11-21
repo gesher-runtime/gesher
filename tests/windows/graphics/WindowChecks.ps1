@@ -151,7 +151,11 @@ public static class GesherWin32 {
       Marshal.ReleaseComObject(store);
     }
   }
-  // The client area as 0xRRGGBB values row by row after [width, height]; null on failure.
+  // The composed client area as 0xRRGGBB values after [width, height]; null on failure.
+  // PW_CLIENTONLY alone asks WM_PRINTCLIENT to repaint the CPU back buffer, which
+  // can still contain an editor after a DirectComposition WebView covers it.
+  // Include PW_RENDERFULLCONTENT so the captured pixels include that child content.
+  // Do not fall back to the CPU buffer: it is not evidence of the composed result.
   public static int[] Capture(IntPtr hwnd) {
     RECT r;
     if (!GetClientRect(hwnd, out r)) return null;
@@ -164,7 +168,7 @@ public static class GesherWin32 {
     int[] pixels = null;
     if (bmp != IntPtr.Zero) {
       IntPtr old = SelectObject(dc, bmp);
-      if (PrintWindow(hwnd, dc, 1 /* PW_CLIENTONLY */)) {
+      if (PrintWindow(hwnd, dc, 1 /* PW_CLIENTONLY */ | 2 /* PW_RENDERFULLCONTENT */)) {
         GdiFlush();
         pixels = new int[w * h + 2];
         pixels[0] = w; pixels[1] = h;
