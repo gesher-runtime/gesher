@@ -193,6 +193,8 @@ static HANDLE HandleFromFd(int fd) {
   return &handles.try_emplace(fd, HostHandle{fd, false, false, false}).first->second;
 }
 static bool IsBinderFd(int) { return false; }
+// The host has no sealed memfds (memfd_seals.cc): no seal forbids a write.
+static int MemfdWriteError(int, bool, uint64_t, uint64_t) { return 0; }
 static bool LookupEventFd(int) { return false; }
 static bool PollEpoll(int, short, short*) { return false; }
 static void InotifyNoteWrite(HANDLE handle) {

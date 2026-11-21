@@ -83,8 +83,8 @@ external/tagsoup *.bp
 frameworks/av *.bp media/ndk/include/
 frameworks/hardware/interfaces *.bp
 frameworks/libs/systemui *.bp
-frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/ cmds/servicemanager/ /include/ libs/ui/ libs/nativewindow/ libs/nativebase/ libs/nativedisplay/ libs/arect/ libs/input/ libs/math/ opengl/include/ opengl/libs/ETC1/ libs/attestation/ libs/gui/include/gui/TraceUtils.h
-bionic libc/kernel/uapi/linux/android/
+frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/ cmds/servicemanager/ /include/ libs/ui/ libs/nativewindow/ libs/nativebase/ libs/nativedisplay/ libs/arect/ libs/input/ libs/math/ opengl/include/ opengl/libs/ETC1/ libs/attestation/ libs/gui/include/gui/TraceUtils.h libs/gui/include/gui/InputTransferToken.h libs/gui/include/private/gui/ParcelUtils.h
+bionic libc/kernel/uapi/linux/android/ libc/upstream-openbsd/lib/libc/gdtoa/
 frameworks/opt/telephony *.bp
 frameworks/proto_logging
 hardware/interfaces *.bp graphics/common/aidl/

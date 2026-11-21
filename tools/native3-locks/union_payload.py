@@ -173,10 +173,13 @@ def write_manifest(root, metadata):
 
 def check_manifest(root, role, expected, context, sources):
     actual = json.loads((root / 'provenance.json').read_text(encoding='utf-8'))
-    assert actual['context'] == context and actual['sources'] == sources and actual['role'] == role
+    assert actual['sources'] == sources and actual['role'] == role
+    assert set(actual['context']) == set(context)
+    assert all(actual['context'].get(key) == value for key, value in context.items() if key != 'attempt')
+    producer = host_roles.supplier_context(root / 'provenance.json', context, role)
     if role == 'native3-common-host-fixture':
         executables = {name + '.exe' for name in TARGETS}
-        host_roles.verify_selected(root, actual.get('selected_link'), actual['compiler'], context, executables, role)
+        host_roles.verify_selected(root, actual.get('selected_link'), actual['compiler'], producer, executables, role)
         expected = expected | host_roles.selected_members(executables, actual['compiler'], role)
     files = flat_inventory(root, expected | {'provenance.json'})
     del files['provenance.json']
@@ -757,7 +760,7 @@ def main():
         host = check_manifest(args.host, 'native3-common-host-fixture', HOST_FILES, context, sources)
         reference = check_manifest(args.reference, 'native3-linux-reference', REFERENCE_FILES, context, sources)
         production = host['production_role']
-        assert all(production.get(key) == value for key, value in context.items())
+        assert all(production.get(key) == value for key, value in host['context'].items())
         assert production['role'] == 'production' and production['test_hook_compiled'] is False
         assert production['compiler'] == host['compiler'] and production['shared_sources'] == host_roles.sources()
         assert host['compiler']['configured_driver'] and host['compiler']['sha256'] and host['compiler']['metadata_sha256']

@@ -23,6 +23,7 @@
 
 #include <jni.h>
 #include <gesher/clocks.h>
+#include <gesher/perf_trace.h>
 
 #include <media/NdkMediaFormat.h>
 #include <utils/Errors.h>
@@ -843,9 +844,12 @@ class Codec {
     // to the long overload and must survive delivery as zero.
     const int64_t timestamp_ns =
         has_timestamp ? time_ns : static_cast<int64_t>(static_cast<uint64_t>(time_us) * 1000);
+    static gesher::perf::Site render_site("MediaCodec: render a frame into its Surface");
+    const int64_t render_start = gesher::perf::Now();
     const int delivery_status = window != nullptr
         ? RenderFrame(window.get(), *frame, timestamp_ns)
         : DeliverToReader(reader->get(), *frame, timestamp_ns);
+    if (window != nullptr) render_site.Add(gesher::perf::Now() - render_start);
     if (delivery_status == android::NO_INIT) {
       *error = "rendering to an abandoned output surface";
       RetireSurfaceFailure(execution_generation, *error);
@@ -1172,7 +1176,11 @@ class Codec {
       std::vector<VideoFrame> frames;
       bool ok = true;
       if (!sample.data.empty()) {
+        static gesher::perf::Site video_site("MediaCodec: decode a video sample");
+        static gesher::perf::Site audio_site("MediaCodec: decode an audio sample");
+        const int64_t start = gesher::perf::Now();
         ok = video_ != nullptr ? video_->Decode(sample, &frames) : audio_->Decode(sample, &pcm);
+        (video_ != nullptr ? video_site : audio_site).Add(gesher::perf::Now() - start);
       }
       if (ok && eos) {
         if (video_ != nullptr) {

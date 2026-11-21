@@ -66,12 +66,17 @@ public final class Services {
         final PackageManagerService pm;
         final ActivityTaskManagerService atm;
         final ActivityManagerService am;
+        final ClipboardService clipboard;
+        final Map<String, IBinder> services;
 
         Created(PackageManagerService pm, ActivityTaskManagerService atm,
-                ActivityManagerService am) {
+                ActivityManagerService am, ClipboardService clipboard,
+                Map<String, IBinder> services) {
             this.pm = pm;
             this.atm = atm;
             this.am = am;
+            this.clipboard = clipboard;
+            this.services = services;
         }
     }
 
@@ -87,13 +92,24 @@ public final class Services {
         return create(packages, false);
     }
 
+    /** Trusted standalone startup: admit the actual APK before selecting the VM identity. */
+    public static InProcessApplication createInProcess(ApkPackage pkg) {
+        return new InProcessApplication(pkg,
+                new PackageManagerService(java.util.List.of(pkg), false));
+    }
+
     private static Map<String, IBinder> create(Collection<ApkPackage> packages, boolean persistentAccounts) {
+        return create(new PackageManagerService(packages, persistentAccounts), persistentAccounts).services;
+    }
+
+    static Created create(PackageManagerService pm, boolean persistentAccounts) {
         Map<String, IBinder> services = new LinkedHashMap<>();
-        PackageManagerService pm = new PackageManagerService(packages, persistentAccounts);
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
-        sLast = new Created(pm, atm, am);
+        ClipboardService clipboard = new ClipboardService(atm, pm);
+        Created created = new Created(pm, atm, am, clipboard, services);
+        sLast = created;
         services.put("uri_grants", StandIn.of(android.app.IUriGrantsManager.class,
                 new UriGrantsManagerService(pm, atm, am)).asBinder());
         services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());
@@ -101,8 +117,9 @@ public final class Services {
                 StandIn.of(IActivityManager.class, am).asBinder());
         services.put(Context.ACTIVITY_TASK_SERVICE,
                 StandIn.of(IActivityTaskManager.class, atm).asBinder());
+        WindowManagerService wm = new WindowManagerService();
         services.put(Context.WINDOW_SERVICE,
-                StandIn.of(IWindowManager.class, new WindowManagerService()).asBinder());
+                StandIn.of(IWindowManager.class, wm).asBinder());
         services.put(Context.DISPLAY_SERVICE,
                 StandIn.of(IDisplayManager.class, new DisplayManager()).asBinder());
         services.put(Context.USER_SERVICE,
@@ -166,13 +183,17 @@ public final class Services {
                 pm.appOps()).asBinder());
         services.put("permission_checker", StandIn.of(android.permission.IPermissionChecker.class,
                 new AppOpsPermissionChecker(pm)).asBinder());
+        // StatusBarManager (TileService.requestListeningState, requestAddTileService).
+        services.put(Context.STATUS_BAR_SERVICE, StandIn.of(
+                com.android.internal.statusbar.IStatusBarService.class,
+                new StatusBarService(pm, atm)).asBinder());
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
-                new ClipboardService()).asBinder());
+                clipboard).asBinder());
         // Construct the network provider before jobs subscribe to its changes.
         ConnectivityService connectivity = new ConnectivityService(pm, atm);
         services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
@@ -286,7 +307,7 @@ public final class Services {
                 pm.permissions()).asBinder());
         services.put(Context.CROSS_PROFILE_APPS_SERVICE, StandIn.of(
                 android.content.pm.ICrossProfileApps.class, new CrossProfileApps()).asBinder());
-        return services;
+        return created;
     }
 
     /**

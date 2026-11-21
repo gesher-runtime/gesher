@@ -117,6 +117,7 @@ struct Region {
   size_t size = kPage;
   Kind kind = Kind::kAnon;
   bool shared = false;
+  bool deny_write = false;  // a write-sealed memfd view (memfd_seals.cc)
   std::vector<bool> live{true};
   std::vector<Origin> origins{Origin::kPrivateAnonymous};
 };

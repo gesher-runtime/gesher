@@ -21,6 +21,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <io.h>
 #include <mntent.h>
 #include <sys/file.h>
@@ -571,6 +572,17 @@ int BIONIC_SYSV Getentropy(void* buf, size_t n) {
 }
 int BIONIC_SYSV MemfdCreate(const char* name, unsigned flags) { return memfd_create(name, flags); }
 int BIONIC_SYSV Madvise(void* addr, size_t len, int advice) { return madvise(addr, len, advice); }
+
+// fnmatch over gesher-base's (src/fnmatch.cc). bionic's FNM_NOESCAPE and
+// FNM_PATHNAME are 0x01 and 0x02, the reverse of the glibc values gesher-base
+// uses; FNM_PERIOD, FNM_LEADING_DIR, FNM_CASEFOLD and FNM_NOMATCH agree.
+int BIONIC_SYSV Fnmatch(const char* pattern, const char* string, int flags) {
+  constexpr int kBionicNoescape = 0x01, kBionicPathname = 0x02;
+  int host = flags & ~(kBionicNoescape | kBionicPathname);
+  if ((flags & kBionicNoescape) != 0) host |= FNM_NOESCAPE;
+  if ((flags & kBionicPathname) != 0) host |= FNM_PATHNAME;
+  return fnmatch(pattern, string, host);
+}
 int BIONIC_SYSV Msync(void* addr, size_t len, int flags) {
   return gesher::elf::SyncLoadedMemory(addr, len, flags);
 }
@@ -1115,6 +1127,7 @@ void RegisterExtraSys(SymbolTable& t) {
   E("getentropy", Getentropy);
   E("memfd_create", MemfdCreate);
   E("madvise", Madvise);
+  E("fnmatch", Fnmatch);
   E("posix_madvise", PosixMadvise);
   E("msync", Msync);
   E("mlock", Mlock);

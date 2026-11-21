@@ -22,7 +22,9 @@ class CaptureRoles(unittest.TestCase):
         self.dist = self.root / 'dist'; self.dist.mkdir()
         self.output = self.root / 'fixture'
         self.state = self.root / 'state.json'
-        self.info = {'source': '1' * 40, 'run': '1', 'attempt': '1'}
+        self.info = {'source': '1' * 40, 'run': '1', 'attempt': '1',
+                     'repository': 'owner/repo', 'repository_id': '7', 'event': 'pull_request',
+                     'supplier_head': '2' * 40, 'head_repository_id': '8'}
         for name in roles.FILES:
             (self.dist / name).write_bytes(b'SYNTHETIC_TEXT_NOT_PE normal ' + name.encode())
         self.context = patch.object(roles.shared, 'context', return_value=self.info); self.context.start()
