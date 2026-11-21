@@ -19,7 +19,8 @@
 #    (Get-Clipboard, Set-Clipboard), the app's clip listener hears Windows' changes;
 #  - on the Gesher device also multi-resume: OtherTaskActivity in a task of its
 #    own leaves MainActivity resumed; the top resumed activity follows the focused
-#    window (onTopResumedActivityChanged).
+#    window (onTopResumedActivityChanged). The device runs winapp with separate
+#    windows (ADR 0088), so each task is a window of its own.
 # In a single process (gesher-app --window) and on the Gesher device.
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
 if (-not ('ImeInput' -as [type])) { Add-Type -Path "$PSScriptRoot/../ime/ImeInput.cs" }
@@ -50,6 +51,22 @@ public static class GesherW3Win32 {
 $bcpW3 = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $dvmW3 = @("-Xbootclasspath:$bcpW3", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $w3Input = 0x8043  # kMsgInputPane (compat/hwui/window/gesher_window.h)
+
+# The device checks below need two tasks of one app on the desktop at once (multi-resume,
+# ADR 0061's simultaneous tasks): each task a window of its own, the per-app "separate
+# windows" setting (ADR 0088). Saved with gesher-app windows in the device's data
+# ($env:ANDROID_DATA) before the app's process starts.
+function W3SeparateWindows([string] $Track, [string] $Package, [string] $Data) {
+  $out = & "$Dir/dalvikvm.exe" @dvmW3 com.gesher.app.Launcher windows $Package separate 2>&1
+  $file = Join-Path $Data 'system/app-windows.properties'
+  $saved = (Test-Path $file) -and (Select-String -Path $file -SimpleMatch "separate.$Package=true" -Quiet)
+  if ($LASTEXITCODE -eq 0 -and $saved) {
+    Write-Host "PASS  ${Track}: $Package set to separate windows (gesher-app windows)"
+  } else {
+    Write-Host "FAIL  ${Track}: gesher-app windows $Package separate (exit $LASTEXITCODE, saved $saved): $out"
+    $script:failed++
+  }
+}
 
 function W3After([scriptblock] $ReadLog, [int] $Mark) {
   $t = "$(& $ReadLog)"
@@ -425,6 +442,7 @@ New-Item -ItemType Directory -Force "$root/data-windows3" | Out-Null
 $env:GESHER_SHORTCUTS = '0'
 $failedBeforeW3Device = $failed
 $device = 'the Gesher device'
+W3SeparateWindows windows3 com.gesher.winapp "$root/data-windows3"
 try {
   W3Run $device 'Gesher windows3 main' @('com.gesher.app.Launcher', 'launch', $apkW3, '--window') {
     param($app, $readLog)
