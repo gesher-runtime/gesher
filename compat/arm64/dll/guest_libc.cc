@@ -566,9 +566,18 @@ JumpAbortFunction g_jump_abort = nullptr;
   std::abort();  // Incomplete standalone host, or a broken returning provider.
 }
 
-[[noreturn]] void GESHER_SYSV JumpInvalidFlag(uint64_t flag) {
-  std::fprintf(stderr, "gesher arm64: unexpected sigflag value: %llu\n",
-               static_cast<unsigned long long>(flag));
+// Bionic's __bionic_setjmp_cookie_get takes the flag as a signed long and
+// reports it with %ld, so sigsetjmp(env, -1) reports -1.
+[[noreturn]] void GESHER_SYSV JumpInvalidFlag(int64_t flag) {
+  std::fprintf(stderr, "gesher arm64: unexpected sigflag value: %lld\n",
+               static_cast<long long>(flag));
+  JumpAbort();
+}
+
+// Bionic's __bionic_setjmp_checksum_mismatch: a corrupted jmp_buf aborts
+// before longjmp changes the mask or any register.
+[[noreturn]] void GESHER_SYSV JumpChecksumMismatch() {
+  std::fputs("gesher arm64: setjmp checksum mismatch\n", stderr);
   JumpAbort();
 }
 
@@ -576,8 +585,14 @@ int GESHER_SYSV JumpSigprocmask(int how, const uint64_t* set, uint64_t* old) {
   // The normal runtime always supplies this core libc entry. Standalone DLL
   // fixtures may omit it; a mask-saving jump must not report success in an
   // incomplete host. _setjmp/sigsetjmp(..., 0) do not need the provider.
-  if (g_jump_sigprocmask == nullptr || g_jump_sigprocmask(how, set, old) != 0) {
-    std::fputs("gesher arm64: setjmp signal-mask provider unavailable or failed\n", stderr);
+  if (g_jump_sigprocmask == nullptr) {
+    std::fputs("gesher arm64: setjmp signal-mask provider unavailable\n", stderr);
+    JumpAbort();
+  }
+  int rc = g_jump_sigprocmask(how, set, old);
+  if (rc != 0) {
+    std::fprintf(stderr, "gesher arm64: setjmp signal-mask provider failed: sigprocmask(%d) returned %d\n",
+                 how, rc);
     JumpAbort();
   }
   return 0;
@@ -736,7 +751,7 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
   return r;
 }
 
-void InitGuestLibc() {
+bool InitGuestLibc() {
   for (const VaFn& v : kVaFunctions) AddVaListFunction(Host(v.name), v.index);
 
   AddPointerVariadicFunction(Host("sscanf"), Host("vsscanf"), 2);
@@ -834,16 +849,36 @@ void InitGuestLibc() {
 
   g_jump_sigprocmask = reinterpret_cast<JumpMaskFunction>(Host("sigprocmask"));
   g_jump_abort = reinterpret_cast<JumpAbortFunction>(Host("abort"));
-  uint64_t mask = reinterpret_cast<uint64_t>(BindHost(reinterpret_cast<void*>(&JumpSigprocmask), -1));
-  uint64_t invalid_flag = reinterpret_cast<uint64_t>(BindHost(reinterpret_cast<void*>(&JumpInvalidFlag), -1));
-  auto emit = [](const std::vector<uint32_t>& code) {
-    return EmitGuestCode(code.data(), code.size());
+  // The emitted jump code branches to these trampolines unconditionally, and
+  // a missing jump override would fall back to the x64 host's incompatible
+  // jmp_buf. Refuse to initialize rather than emit a branch to address 0.
+  void* mask_entry = BindHost(reinterpret_cast<void*>(&JumpSigprocmask), -1);
+  void* invalid_entry = BindHost(reinterpret_cast<void*>(&JumpInvalidFlag), -1);
+  void* mismatch_entry = BindHost(reinterpret_cast<void*>(&JumpChecksumMismatch), -1);
+  if (mask_entry == nullptr || invalid_entry == nullptr || mismatch_entry == nullptr) {
+    std::fputs("gesher arm64: cannot bind the setjmp/longjmp host entries\n", stderr);
+    return false;
+  }
+  uint64_t mask = reinterpret_cast<uint64_t>(mask_entry);
+  uint64_t invalid_flag = reinterpret_cast<uint64_t>(invalid_entry);
+  struct JumpEntry { const char* name; std::vector<uint32_t> code; };
+  const JumpEntry jumps[] = {
+    {"setjmp", jump::Save(mask, jump::SaveMask::Always, invalid_flag)},
+    {"_setjmp", jump::Save(mask, jump::SaveMask::Never, invalid_flag)},
+    {"sigsetjmp", jump::Save(mask, jump::SaveMask::Argument, invalid_flag)},
+    {"longjmp", jump::Restore(mask, reinterpret_cast<uint64_t>(mismatch_entry))},
   };
-  g_overrides["setjmp"] = emit(jump::Save(mask, jump::SaveMask::Always, invalid_flag));
-  g_overrides["_setjmp"] = emit(jump::Save(mask, jump::SaveMask::Never, invalid_flag));
-  g_overrides["sigsetjmp"] = emit(jump::Save(mask, jump::SaveMask::Argument, invalid_flag));
-  void* restore = emit(jump::Restore(mask));
-  for (const char* name : {"longjmp", "_longjmp", "siglongjmp"}) g_overrides[name] = restore;
+  void* emitted[4] = {};
+  for (size_t i = 0; i < 4; ++i) {
+    emitted[i] = EmitGuestCode(jumps[i].code.data(), jumps[i].code.size());
+    if (emitted[i] == nullptr) {
+      std::fprintf(stderr, "gesher arm64: cannot emit guest code for %s\n", jumps[i].name);
+      return false;
+    }
+  }
+  for (size_t i = 0; i < 3; ++i) g_overrides[jumps[i].name] = emitted[i];
+  for (const char* name : {"longjmp", "_longjmp", "siglongjmp"}) g_overrides[name] = emitted[3];
+  return true;
 }
 
 }  // namespace gesher_arm64
