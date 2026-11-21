@@ -47,11 +47,16 @@ bool ClipboardText(std::u16string* text);
 // The fragment of the "HTML Format" (CF_HTML) data, as UTF-16; false if none.
 bool ClipboardHtml(std::u16string* html);
 // Replaces the clipboard's contents with `text` (CF_UNICODETEXT) and, when not
-// empty, `html` as CF_HTML; the event window is the owner. Empty text and html
-// just empty the clipboard.
-bool SetClipboard(const std::u16string& text, const std::u16string& html);
+// empty, `html` as CF_HTML on the shared owned OLE STA. Text presence is
+// explicit: absent text plus absent HTML clears; present empty text remains text.
+bool SetClipboard(const std::u16string& text, const std::u16string& html,
+                  uint32_t* written_sequence = nullptr, bool has_text = true);
 // GetClipboardSequenceNumber.
 uint32_t ClipboardSequence();
+// Stable foreground process identity (native creation FILETIME), false if unknown.
+bool ForegroundProcess(uint32_t* pid, uint64_t* created);
+// The server's Windows session: 0 unlocked, 1 locked, -1 unknown. Windows 10+.
+int SessionLockState();
 
 // --- alarms ----------------------------------------------------------------------------
 // Waits until the wall clock reaches `utc_ms` (milliseconds since 1970, a

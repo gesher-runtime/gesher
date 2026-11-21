@@ -1,4 +1,4 @@
-# Two actual ART processes, separate Binder UIDs, and the production provider transport.
+# Real ART server and separate ordinary/system clients using production provider transport.
 # Caller supplies RunTimed and the ordinary framework/app VM classpath.
 function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, [string] $FixtureRoot) {
   $output = [Collections.Generic.List[string]]::new()
@@ -94,8 +94,16 @@ function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, 
     $result = RunTimed "$Dir/dalvikvm.exe" ($VmArguments + 'gesher.services.SettingsProviderRemoteTest' + 'client') 90
     $code = $LASTEXITCODE
     $output.Add($result)
-    if ($code -ne 0 -or -not $result.Contains('SettingsProviderRemoteTest all passed:')) {
+    if ($code -ne 0 -or -not $result.Contains('SettingsProviderRemoteTest ordinary passed:')) {
       throw "Settings ordinary-UID transport failed with exit $code"
+    }
+    $env:GESHER_BINDER_UID = '1000'
+    $env:GESHER_UID = '1000'
+    $result = RunTimed "$Dir/dalvikvm.exe" ($VmArguments + 'gesher.services.SettingsProviderRemoteTest' + 'client') 90
+    $code = $LASTEXITCODE
+    $output.Add($result)
+    if ($code -ne 0 -or -not $result.Contains('SettingsProviderRemoteTest all passed:')) {
+      throw "Settings authorized system-UID transport failed with exit $code"
     }
   } catch {
     $failed = $true

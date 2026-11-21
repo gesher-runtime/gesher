@@ -103,6 +103,18 @@ public static class GesherE2E {
     for (int i = 2; i < a.Length; i++) if (a[i] != b[i] && !Near(a[i], b[i], 24)) n++;
     return n;
   }
+  // A content rectangle excludes the surrounding native toolbar and controls.
+  public static int[] Region(int[] px, int left, int top, int right, int bottom) {
+    if (px == null || px.Length < 2 || px[0] <= 0 || px[1] <= 0 ||
+        (long)px[0] * px[1] + 2 != px.Length || left < 0 || top < 0 ||
+        right <= left || bottom <= top || right > px[0] || bottom > px[1]) return null;
+    int width = right - left, height = bottom - top;
+    var region = new int[2 + width * height];
+    region[0] = width; region[1] = height;
+    for (int y = 0; y < height; y++)
+      Array.Copy(px, 2 + (top + y) * px[0] + left, region, 2 + y * width, width);
+    return region;
+  }
 }
 '@
 }
@@ -113,6 +125,30 @@ function Analyze($px) {
 function PixelDiff($a, $b) {
   if ($null -eq $a -or $null -eq $b) { return [int]::MaxValue }
   return [GesherE2E]::Diff([int[]]$a, [int[]]$b)
+}
+
+# An input action can require both the real asynchronous completion and content
+# in its viewport. A callback from an earlier empty page is insufficient by itself.
+function RenderReadiness($expect, $px, [string] $log) {
+  $problems = @()
+  if ($null -eq $expect) { return @{ Ready = $true; Problems = $problems } }
+  if (-not $expect.log -or -not (ReadText $log).Contains([string]$expect.log)) {
+    $problems += "the log lacks '$($expect.log)' before closing the window"
+  }
+  $rect = @($expect.region)
+  $region = $null
+  if ($rect.Count -eq 4) {
+    $region = [GesherE2E]::Region([int[]]$px, [int]$rect[0], [int]$rect[1], [int]$rect[2], [int]$rect[3])
+  }
+  if ($null -eq $region -or [int]$expect.minTextPixels -le 0) {
+    $problems += 'invalid rendered-content rectangle or text requirement'
+  } else {
+    $an = Analyze $region
+    if ($an.Text -lt [int]$expect.minTextPixels) {
+      $problems += "the content region has $($an.Text) text pixels, expected at least $($expect.minTextPixels)"
+    }
+  }
+  return @{ Ready = ($problems.Count -eq 0); Problems = $problems }
 }
 
 function SavePng($px, [string] $path) {
@@ -170,15 +206,19 @@ function FrontWindow([string] $log, [IntPtr] $hwnd) {
 
 # Captures until two reads a second apart agree on non-blank content (the app settled)
 # or $seconds pass.
-function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15) {
+function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15, $render = $null, [string] $log = '', $renderReady = $null) {
   $deadline = (Get-Date).AddSeconds($seconds)
+  if ($null -ne $renderReady) { $renderReady.Value = $false }
   $last = [GesherWin32]::Capture($hwnd)
   do {
     Start-Sleep 1
     $px = [GesherWin32]::Capture($hwnd)
     if ($null -ne $px -and (PixelDiff $last $px) -eq 0) {
       $an = Analyze $px
-      if ($an.Other -ge ($an.Width * $an.Height * 0.005)) { return $px }
+      if ($an.Other -ge ($an.Width * $an.Height * 0.005) -and (RenderReadiness $render $px $log).Ready) {
+        if ($null -ne $renderReady) { $renderReady.Value = $true }
+        return $px
+      }
     }
     $last = $px
   } while ((Get-Date) -lt $deadline)
@@ -332,7 +372,15 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
       elseif ($act.keys) { [GesherWin32]::TypeKeys($hwnd, [string]$act.keys); $what = "keys '$($act.keys)'" }
       Start-Sleep 2
       $hwnd = FrontWindow $log $hwnd
-      $after = CaptureSettled $hwnd 20
+      # The existing 20-second capture deadline also owns readiness: no extra
+      # wait after it, and no reset between the completion and pixel predicates.
+      $renderReady = $false
+      $after = CaptureSettled $hwnd 20 $act.render $log ([ref]$renderReady)
+      if ($null -ne $act.render -and -not $renderReady) {
+        $detail = (RenderReadiness $act.render $after $log).Problems -join '; '
+        if (-not $detail) { $detail = 'the completed content did not stabilize' }
+        $res.Problems += "rendered content did not become ready within the existing 20-second capture budget: $detail"
+      }
       $changed = PixelDiff $before $after
       SavePng $after (Join-Path $OutDir "$pkg.$tag.after-$i.png")
       $res.Info += "$what changed $changed pixels"

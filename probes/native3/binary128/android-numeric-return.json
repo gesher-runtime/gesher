@@ -1,0 +1,50 @@
+{
+  "scope": "Android ordinary numeric API reference; same denominator after measured per-API wide expectation repair; initial failure retained; no Windows candidate claim",
+  "fingerprint": "Android/sdk_phone64_x86_64/emu64x:16/BE2A.250530.026.D1/13818094:userdebug/test-keys",
+  "ndk_version": "27.2.12479018",
+  "fixture_source": "tests/native/arm64_numeric_return.c",
+  "initial_source_sha256": "df5c5c55a1b76f232e3a051fa71549a7b9b06a1662add26700c983de72f13773",
+  "corrected_source_sha256": "7502127f04dacd6d63c49aa5d660a1bd04948d0715cf75880eceb930f4f31d4e",
+  "initial_payload_sha256": "afd9c37b7a3be7478b641151d4889eace4b0e3e0b508d41702240fcb1a09c44b",
+  "corrected_payload_sha256": "11893e7754f91f4ba63cf1eedf8a04a24198ea2fe20a740d4a6f7b61ba45e274",
+  "observation_source": "probes/native3/binary128/wide-hex-observation.c",
+  "observation_source_sha256": "353f0ac79ae155f6f3fab1771e49fef16c7484bbfd20d836b77ab87e2a2761c8",
+  "observation_payload_sha256": "af8fc833123b02135b1f3f96bc0cbef07d3732f497e50195a87c84a540a3959c",
+  "observations": [
+    {
+      "name": "initial",
+      "receipt_sha256": "328437565abd868a6246461b4b3716cd6a5393ecc2ee3692b9820bb865cd4bc9",
+      "output_file": "android-numeric-return-initial.txt",
+      "output_sha256": "2fab2d549c9f2405175dbfdae594d81ebf91f22eced21a64d46548d70f092c3e",
+      "exit_code": 1
+    },
+    {
+      "name": "wide-hex",
+      "receipt_sha256": "489757776f6027a118b90615fc2a0504e7702eb353fd5d248617436e0a434f4d",
+      "output_file": "android-numeric-return-wide-hex.txt",
+      "output_sha256": "e45aeb3f40f9c6eee3e7f25c131c6402b3f7cb4f209b7c86cf6a8d8fbc1e671f",
+      "exit_code": 0
+    },
+    {
+      "name": "corrected",
+      "receipt_sha256": "28cc02f76425bee342ddfc674f9dcecdfe1c3c458fe5ac610f486942e42db03e",
+      "output_file": "android-numeric-return-corrected.txt",
+      "output_sha256": "eacaa080d85efe2b622519ec4f1bf2ab384ccd85c1579c5616ed7a15e4d9feaf",
+      "exit_code": 0
+    }
+  ],
+  "conversions": 256,
+  "checks": 1292,
+  "initial_failures": 32,
+  "corrected_failures": 0,
+  "sample": "0x1.23456789abcdep12",
+  "narrow": {
+    "bits": "400b23456789abcde000000000000000",
+    "consumed": 20
+  },
+  "wide": {
+    "bits": "3fff23456789a0000000000000000000",
+    "consumed": 13
+  },
+  "arithmetic_exception_observations_qualified": false
+}

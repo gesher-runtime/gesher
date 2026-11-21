@@ -33,7 +33,8 @@ def main():
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
                         str(ROOT / "tests/appops/framework_host.c"), "-o", str(library)], check=True)
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
-                        "-d", str(classes), str(ROOT / "tests/dex-services/gesher/services/AppOpsContractTest.java"),
+                        "-d", str(classes), str(ROOT / "tests/dex-services/gesher/services/FixtureServiceContext.java"),
+                        str(ROOT / "tests/dex-services/gesher/services/AppOpsContractTest.java"),
                         str(ROOT / "tests/appops/AppOpsHost.java")], check=True)
         cleaner = work / "cleaner/sun/misc"
         cleaner.mkdir(parents=True)
