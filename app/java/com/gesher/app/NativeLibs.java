@@ -126,11 +126,12 @@ public final class NativeLibs {
     /**
      * The package manager's native-library directory for a system package's code
      * directory: {@code dir} holds exactly the APK's libraries for {@code abi}, extracted
-     * as {@link #extract} does, with {@code .so} files the APK no longer has removed.
+     * as {@link #extract} does, with every other file or link removed (directories and
+     * in-progress {@code .part} files aside).
      * A {@code dir} (or its {@code lib} parent) that is a link or not a directory is
-     * refused, before anything is written. If a stale library cannot be removed (a
-     * process still maps it), this throws: the directory is then not a faithful library
-     * path for the APK. Returns how many libraries the APK has.
+     * refused, before anything is written. If a stale entry cannot be removed, this
+     * throws: the directory is then not a faithful library path for the APK. Returns
+     * how many libraries the APK has.
      */
     public static int syncDirectory(String apk, String dir, String abi) throws IOException {
         Path target = new File(dir).toPath();
@@ -143,18 +144,29 @@ public final class NativeLibs {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(target)) {
                 for (Path entry : stream) {
                     String name = entry.getFileName().toString();
-                    // Windows names are case-insensitive: never remove a listed one.
-                    if (!name.endsWith(".so") || names.contains(name.toLowerCase(Locale.ROOT))
-                            || !Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) {
+                    BasicFileAttributes attributes = Files.readAttributes(entry,
+                            BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                    boolean link = attributes.isSymbolicLink() || attributes.isOther();
+                    // A listed library stays; Windows names are case-insensitive.
+                    if (!link && attributes.isRegularFile()
+                            && names.contains(name.toLowerCase(Locale.ROOT))) {
                         continue;
                     }
-                    // A library the APK no longer has must not stay loadable from the
-                    // package's library path: failing to remove it fails the sync.
+                    // A plain directory is never loaded as a library, and a .part file
+                    // is another extraction still writing (it is renamed when done).
+                    if (!link && (attributes.isDirectory()
+                            || (attributes.isRegularFile() && name.endsWith(".part")))) {
+                        continue;
+                    }
+                    // Anything else (a library the APK no longer has, whatever its name's
+                    // case, or a link, removed itself and not its target) must not stay
+                    // loadable from the package's library path: if it cannot be removed,
+                    // the directory is not the APK's and the sync fails.
                     try {
                         Files.deleteIfExists(entry);
                     } catch (IOException e) {
-                        throw new IOException("Cannot remove native library the APK no longer has: "
-                                + entry, e);
+                        throw new IOException("Cannot remove " + entry
+                                + " from the native library directory", e);
                     }
                 }
             }

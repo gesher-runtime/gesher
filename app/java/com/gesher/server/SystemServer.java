@@ -210,7 +210,9 @@ public final class SystemServer {
                         }
                     } catch (IOException | java.io.UncheckedIOException
                             | java.nio.file.InvalidPathException e) {
-                        // The package keeps its own per-launch extraction (Main).
+                        // Not published: the package keeps its default library path,
+                        // which a device run does not fill, so it runs without native
+                        // libraries until a later startup prepares them (fail closed).
                         log("microg addon " + name + ": native libraries not prepared: "
                                 + e.getMessage());
                     }

@@ -100,6 +100,8 @@ public final class NativeLibraryPathsTest {
 
         Files.write(dir.resolve("libstale.so"), PAYLOAD);
         Files.write(dir.resolve("notes.txt"), PAYLOAD);
+        Files.write(dir.resolve("libupper.SO"), PAYLOAD);
+        Files.write(dir.resolve("libkeep.so123.part"), PAYLOAD);
         Files.createDirectory(dir.resolve("nested.so"));
         archive(apk, "lib/x86_64/libkeep.so");
         check(NativeLibs.syncDirectory(apk.toString(), dir.toString(), "x86_64") == 1,
@@ -107,8 +109,25 @@ public final class NativeLibraryPathsTest {
         check(Files.exists(keep), "Listed library kept");
         check(!Files.exists(dir.resolve("libother.so")) && !Files.exists(dir.resolve("libstale.so")),
                 "Libraries the APK no longer has are removed");
-        check(Files.exists(dir.resolve("notes.txt")) && Files.isDirectory(dir.resolve("nested.so")),
-                "Only regular .so files are removed");
+        check(!Files.exists(dir.resolve("notes.txt"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                && !Files.exists(dir.resolve("libupper.SO"), java.nio.file.LinkOption.NOFOLLOW_LINKS),
+                "Unlisted files are removed, whatever their extension's case");
+        check(Files.isDirectory(dir.resolve("nested.so")) && Files.exists(dir.resolve("libkeep.so123.part")),
+                "Directories and in-progress extractions are left alone");
+        Path outsideTarget = root.resolve("link-target.so");
+        Files.write(outsideTarget, PAYLOAD);
+        boolean staleLink;
+        try {
+            Files.createSymbolicLink(dir.resolve("liblinked.so"), outsideTarget);
+            staleLink = true;
+        } catch (IOException | UnsupportedOperationException noPrivilege) {
+            staleLink = false;
+        }
+        if (staleLink) {
+            NativeLibs.syncDirectory(apk.toString(), dir.toString(), "x86_64");
+            check(!Files.exists(dir.resolve("liblinked.so"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    && Files.exists(outsideTarget), "A stale link is removed, not its target");
+        }
 
         archive(apk, "classes.dex");
         check(NativeLibs.syncDirectory(apk.toString(), dir.toString(), "x86_64") == 0,
@@ -180,40 +199,12 @@ public final class NativeLibraryPathsTest {
         NativeLibs.syncDirectory(apk.toString(), held.toString(), "x86_64");
         Path stale = held.resolve("libgone.so");
         Files.write(stale, PAYLOAD);
-        boolean blocked = false;
-        java.io.Closeable release = null;
-        if (System.getProperty("os.name", "").startsWith("Windows")) {
-            // java.io opens without FILE_SHARE_DELETE: the file cannot be deleted.
-            release = new java.io.FileInputStream(stale.toFile());
-            blocked = true;
-        } else {
-            try {
-                Files.setPosixFilePermissions(held,
-                        java.nio.file.attribute.PosixFilePermissions.fromString("r-xr-xr-x"));
-                Path probe = held.resolve("probe");
-                try {
-                    Files.createFile(probe);  // privileged: permissions do not block it
-                    Files.delete(probe);
-                } catch (IOException denied) {
-                    blocked = true;
-                }
-                if (!blocked) {
-                    Files.setPosixFilePermissions(held,
-                            java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
-                }
-            } catch (UnsupportedOperationException | IOException noPosix) {
-                blocked = false;
-            }
-        }
-        if (blocked) {
+        java.io.Closeable release = blockDeletion(root.resolve("probe"), stale);
+        if (release != null) {
             boolean failed = false;
             try { NativeLibs.syncDirectory(apk.toString(), held.toString(), "x86_64"); }
             catch (IOException expected) { failed = true; }
-            finally {
-                if (release != null) release.close();
-                else Files.setPosixFilePermissions(held,
-                        java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
-            }
+            finally { release.close(); }
             check(failed, "Unremovable stale library fails the sync");
             NativeLibs.syncDirectory(apk.toString(), held.toString(), "x86_64");
             check(!Files.exists(stale), "Stale library removed once it is free");
@@ -225,6 +216,88 @@ public final class NativeLibraryPathsTest {
         if (Files.exists(cased.resolve("libkeep.so"))) {
             NativeLibs.syncDirectory(apk.toString(), cased.toString(), "x86_64");
             check(Files.exists(cased.resolve("libkeep.so")), "Differently cased library kept");
+        }
+    }
+
+    /**
+     * Makes {@code file} undeletable by a mechanism this runtime honours, verified first on
+     * a probe file under {@code probeRoot}; returns how to undo it, or null if none works
+     * here (the caller then skips the case).
+     */
+    private static java.io.Closeable blockDeletion(Path probeRoot, Path file) throws IOException {
+        Path probeDir = Files.createDirectories(probeRoot);
+        Path probe = probeDir.resolve("probe.so");
+        for (int mechanism = 0; mechanism < 4; mechanism++) {
+            if (!Files.exists(probe)) Files.write(probe, PAYLOAD);
+            probe.toFile().setWritable(true);
+            java.io.Closeable undoProbe = applyBlock(mechanism, probe);
+            if (undoProbe == null) continue;
+            boolean blocked;
+            try {
+                Files.delete(probe);
+                blocked = false;
+            } catch (IOException denied) {
+                blocked = true;
+            } finally {
+                undoProbe.close();
+            }
+            if (blocked) {
+                System.out.println("deletion blocked by mechanism " + mechanism);
+                return applyBlock(mechanism, file);
+            }
+        }
+        return null;
+    }
+
+    private static java.io.Closeable applyBlock(int mechanism, Path file) {
+        Path dir = file.getParent();
+        try {
+            if (mechanism == 0 && windows()) {
+                // Deny DELETE on the file and delete-child on its directory to Everyone:
+                // honoured by every Windows delete, POSIX-semantics ones included.
+                if (!run("icacls", file.toString(), "/deny", "*S-1-1-0:(D)")
+                        || !run("icacls", dir.toString(), "/deny", "*S-1-1-0:(DC)")) {
+                    run("icacls", file.toString(), "/remove:d", "*S-1-1-0");
+                    run("icacls", dir.toString(), "/remove:d", "*S-1-1-0");
+                    return null;
+                }
+                return () -> {
+                    run("icacls", file.toString(), "/remove:d", "*S-1-1-0");
+                    run("icacls", dir.toString(), "/remove:d", "*S-1-1-0");
+                };
+            }
+            if (mechanism == 1 && windows()) {
+                // java.io opens without FILE_SHARE_DELETE on a Windows JDK.
+                return new java.io.FileInputStream(file.toFile());
+            }
+            if (mechanism == 3) {
+                // A read-only file, where the runtime's delete honours the attribute.
+                if (!file.toFile().setWritable(false)) return null;
+                return () -> file.toFile().setWritable(true);
+            }
+            if (mechanism == 2 && !windows()) {
+                Files.setPosixFilePermissions(dir,
+                        java.nio.file.attribute.PosixFilePermissions.fromString("r-xr-xr-x"));
+                return () -> Files.setPosixFilePermissions(dir,
+                        java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+            }
+        } catch (Exception unavailable) {
+            return null;
+        }
+        return null;
+    }
+
+    private static boolean windows() {
+        return System.getProperty("os.name", "").startsWith("Windows");
+    }
+
+    private static boolean run(String... command) {
+        try {
+            Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
+            p.getInputStream().readAllBytes();
+            return p.waitFor() == 0;
+        } catch (Exception unavailable) {
+            return false;
         }
     }
 
