@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -39,12 +40,14 @@ def zip_bytes(entries):
 
 
 class ArtifactBatch(unittest.TestCase):
+    MANIFEST = 'tools/ci/test_shard_artifacts.json'
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.manifest = self.root / 'manifest.json'
-        self.specs = json.loads((ROOT / 'tools/ci/test_shard_artifacts.json').read_text())
+        self.specs = json.loads((ROOT / self.MANIFEST).read_text())
         self.manifest.write_text(json.dumps(self.specs))
         self.committed_manifest = self.manifest.read_bytes()
         self.destination = self.root / 'suppliers' / 'core'
@@ -159,12 +162,13 @@ class ArtifactBatch(unittest.TestCase):
         self.assertFalse(list(self.destination.parent.glob('core-stage-*')))
         self.assertNotIn('CI_ARTIFACT_RECEIPT ', self.logs.getvalue())
 
-    def test_complete_real_batch_has_22_api_requests_and_only_publishes_verified_members(self):
+    def test_complete_real_batch_has_20_api_requests_and_only_publishes_verified_members(self):
         self.execute()
-        self.assertEqual(len(self.json_reads), 8)
+        # One run + one 100-row job page + one artifact page, twice.
+        self.assertEqual(len(self.json_reads), 6)
         self.assertEqual(len(self.redirects), 14)
         self.assertEqual(len(self.storage_reads), 14)
-        self.assertEqual(len(self.json_reads) + len(self.redirects), 22)
+        self.assertEqual(len(self.json_reads) + len(self.redirects), 20)
         for spec in self.specs:
             path = self.destination / 'artifacts' / spec['destination'] / 'actual' / (spec['destination'] + '.txt')
             self.assertEqual(path.read_text(), spec['name'])
@@ -176,7 +180,7 @@ class ArtifactBatch(unittest.TestCase):
         self.final_items = copy.deepcopy(self.items) + [dict(id=4000, name='later-unrelated')]
         self.execute()
         self.assertEqual(len(self.items), 103)
-        self.assertEqual(len(self.json_reads), 10)
+        self.assertEqual(len(self.json_reads), 8)
         self.assertEqual(len(self.redirects), 14)
         self.assertEqual(sum('/artifacts?per_page=100&page=2' in p for p in self.json_reads), 2)
         self.assertEqual(len(list((self.destination / 'artifacts').iterdir())), 14)
@@ -324,6 +328,103 @@ class ArtifactBatch(unittest.TestCase):
         self.execute()
         self.assertEqual(len(self.redirects), 14)
         self.assertTrue((self.destination / 'artifacts').is_dir())
+
+
+
+    def _complete(self, manifest):
+        """Run a committed CI manifest through the real batch path."""
+        self.doCleanups()
+        self.MANIFEST = manifest
+        self.setUp()
+        self.execute()
+        count = len(self.specs)
+        # One run + one 100-row job page + one artifact page, twice, plus one zip per member.
+        self.assertEqual(len(self.json_reads), 6)
+        self.assertEqual(len(self.redirects), count)
+        for spec in self.specs:
+            path = self.destination / 'artifacts' / spec['destination'] / 'actual' / (spec['destination'] + '.txt')
+            self.assertEqual(path.read_text(), spec['name'])
+        self.assertEqual(self.logs.getvalue().count('CI_ARTIFACT_RECEIPT '), count)
+
+    def test_web3_query_batch_replaces_eleven_single_receipts(self):
+        self._complete('tools/ci/web3_query_artifacts.json')
+
+    def test_package_batch_replaces_seven_single_receipts(self):
+        self._complete('tools/ci/package_artifacts.json')
+
+    def test_binder2_batch_replaces_six_single_receipts(self):
+        self._complete('tools/ci/binder2_sg_artifacts.json')
+
+
+class BatchManifestWiring(unittest.TestCase):
+    """Each batch job downloads exactly its committed manifest from producers it waits for."""
+    JOBS = {'test-shards': ('tools/ci/test_shard_artifacts.json', 'ci-suppliers/core'),
+            'web3-query-regression': ('tools/ci/web3_query_artifacts.json', 'ci-suppliers/web3'),
+            'package': ('tools/ci/package_artifacts.json', 'ci-suppliers/package'),
+            'binder2-sg-regression': ('tools/ci/binder2_sg_artifacts.json', 'ci-suppliers/binder2')}
+    # How many leading members are assembled into dist, and their ledger.
+    # The remaining members are placed whole at the paths their consumers read.
+    ASSEMBLED = {'binder2-sg-regression': (3, 'binder-full-owners.json')}
+    PLACED = {'binder2-sg-regression': {'binder2_sg_host': 'ci-suppliers/binder2_sg_host',
+                                        'binder2_sg_modes': 'fixtures', 'boot_image': 'boot-image'}}
+    # YAML removes the block indentation of `run: |`.
+    ASSEMBLE = ('  python tools/surface/assemble-artifacts.py --source "{destination}/artifacts/$owner" '
+                '--destination dist --ledger {ledger} --owner $owner\n'
+                '  if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n')
+
+    def setUp(self):
+        import yaml
+        self.yaml = yaml
+        self.workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
+
+    def producer_exists(self, producer):
+        """`job` is a ci job; `caller / job` is a job inside the reusable workflow `caller` calls."""
+        caller, _, inner = producer.partition(' / ')
+        job = self.workflow['jobs'][caller]
+        if not inner:
+            return 'uses' not in job
+        uses = job.get('uses', '')
+        pinned = re.fullmatch(r'gesher-runtime/gesher/(\.github/workflows/[\w.-]+)@([0-9a-f]{40})', uses)
+        if uses.startswith('./.github/workflows/'):
+            text = (ROOT / uses[2:]).read_text(encoding='utf-8')
+        elif pinned:
+            # A reusable workflow pinned to an exact commit of this repository.
+            text = subprocess.check_output(['git', 'show', f'{pinned[2]}:{pinned[1]}'], cwd=ROOT, text=True)
+        else:
+            return False
+        called = self.yaml.safe_load(text)
+        return any(key == inner or value.get('name') == inner for key, value in called['jobs'].items())
+
+    def test_jobs_use_their_manifest_and_assemble_every_member_from_the_batch(self):
+        for job_name, (manifest, destination) in self.JOBS.items():
+            with self.subTest(job=job_name):
+                job = self.workflow['jobs'][job_name]
+                runs = chr(10).join(str(step.get('run', '')) for step in job['steps'])
+                specs = receipt.batch_manifest((ROOT / manifest).read_text(encoding='utf-8'))
+                self.assertIn(f'artifact_receipt.py --batch {manifest} --destination {destination}', runs)
+                for spec in specs:
+                    self.assertIn(spec['producer'].split(' / ', 1)[0], set(job['needs']), spec)
+                    self.assertTrue(self.producer_exists(spec['producer']), spec)
+                if job_name == 'test-shards':
+                    continue
+                # Single receipts for batch members would repeat the API reads.
+                for spec in specs:
+                    self.assertNotIn(f"--name {spec['name']} ", runs)
+                # Assembly order decides collisions: it must be the manifest order,
+                # and each iteration must stop on a failed assembly.
+                count, ledger = self.ASSEMBLED.get(job_name, (len(specs), 'ci-owners.json'))
+                owners = ', '.join("'" + spec['destination'] + "'" for spec in specs[:count])
+                loop = (f'foreach ($owner in {owners}) {{\n' +
+                        self.ASSEMBLE.format(destination=destination, ledger=ledger) + '}\n')
+                self.assertIn(loop, runs)
+                placed = self.PLACED.get(job_name, {})
+                self.assertEqual(set(placed), {spec['destination'] for spec in specs[count:]})
+                for member, target in placed.items():
+                    self.assertIn(f"@('{member}', '{target}')", runs)
+                if placed:
+                    self.assertIn('Move-Item -LiteralPath "' + destination +
+                                  '/artifacts/$($pair[0])" -Destination $pair[1]', runs)
+                    self.assertIn('if (Test-Path -LiteralPath $pair[1]) { throw', runs)
 
 
 if __name__ == '__main__':

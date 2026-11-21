@@ -91,7 +91,8 @@ public final class ReceiverExportContractTest {
     }
     private static final class ThreadStub extends IApplicationThread.Default {
         final Binder token = new Binder();
-        int deliveries;
+        // Callback dispatch can update this counter between broadcast assertions.
+        volatile int deliveries;
         Runnable beforeBinder;
         @Override public IBinder asBinder() {
             Runnable action = beforeBinder; beforeBinder = null;

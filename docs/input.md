@@ -400,3 +400,40 @@ holds no state of the window session's, so it is usable from there as is.
 - ci 40039426375: the probe's synthetic touch (a name clash).
 - ci 40040115231: green; real WM_POINTER touch from a synthetic pointer
   device reaches the consumer on both runners (INFO).
+
+## Android spell checker
+
+On the Windows profile, install an Android APK that declares an
+`android.service.textservice.SpellCheckerService`, requires
+`android.permission.BIND_TEXT_SERVICE` and supplies `android.view.textservice.scs`
+metadata with at least one subtype. Configure it from the Windows host.
+
+```powershell
+gesher-app spell-checker list
+gesher-app spell-checker use com.example.spelling/.CheckerService
+gesher-app spell-checker language 0
+gesher-app spell-checker enable
+```
+
+`list` prints the installed components and their language IDs. Use `language 0`
+for locale-based language choice, or pass an ID from `list` to choose a language.
+`disable` disables settings-based spell checking. `automatic` selects and saves
+the Android default from trusted system providers. Startup and committed package
+changes use Android's ordered locale fallback; ordinary reads and locale changes
+do not replace an existing selection. Installed
+third-party providers require explicit selection. Only the host shell or a
+caller with `WRITE_SECURE_SETTINGS` may change these settings, even on the
+legacy compatibility profile. The authorized provider identity is checked
+before reuse, and uninstall clears the selection.
+
+Apps use the standard `TextServicesManager` and `SpellCheckerSession` APIs.
+The selected Android service owns the dictionary and locale handling. It
+receives the ordinary word and sentence requests, cancel, and close messages
+from the Android client through Binder. Gesher holds the provider binding while
+sessions are live, releases it after the final close and handles Binder death.
+When no checker can be selected, the manager remains available and new sessions
+return `null`; the enabled preference remains independent of provider availability.
+A live provider's session-creation request has no arbitrary timeout. Client close,
+Binder death, binding failure and package removal retire its request and binding.
+The distribution does not bundle a dictionary and this path
+requires the device's system server to start provider processes.
