@@ -152,5 +152,27 @@ Case 'content appearing only at the deadline is not stable' 14000 29000 $false
 Case 'preview not shown: editor still visible after the startup completion' ([long]::MaxValue) 14000 $false -IgnoreAccept
 Case 'preview not shown: editor still visible despite a later completion' 14000 14000 $false -IgnoreAccept
 Case 'association shortcut without input' ([long]::MaxValue) ([long]::MaxValue) $true -NoInput
+# The changed-pixels requirement needs the content rectangle from before the action:
+# without that capture (PrintWindow failed) or with one it does not fit in, nothing
+# shows a change, and the requirement must fail rather than pass vacuously.
+$render = @($notes.actions | Where-Object { $null -ne $_.render })[0].render
+[GesherWin32]::Millis = [long]::MaxValue - 1; [GesherWin32]::PageAt = 0
+$small = [int[]]::new(2 + 200 * 100); $small[0] = 200; $small[1] = 100
+# An old-source negative control without RenderReadiness has no requirement to check.
+$befores = if (Get-Command RenderReadiness -ErrorAction SilentlyContinue) { @(
+  @{ Name = 'no capture before the action'; Px = $null },
+  @{ Name = 'a smaller capture before the action'; Px = $small },
+  @{ Name = 'the editor before the action'; Px = [GesherWin32]::Edited }) } else { @() }
+foreach ($before in $befores) {
+  $since = @{ Log = 'launch.log'; Package = $notes.package; Mark = @(0, 0); Before = $before.Px }
+  $result = RenderReadiness $render ([GesherWin32]::Rendered) $since
+  $comparable = $null -ne $before.Px -and $before.Px[0] -eq [GesherWin32]::Rendered[0]
+  if ($comparable) {
+    Check ($result.Ready) "rendered content after $($before.Name) is ready"
+  } else {
+    Check (-not $result.Ready -and @($result.Problems -match 'before the action').Count -gt 0) "rendered content after $($before.Name) is not ready"
+  }
+  Write-Host "READINESS_CASE $($before.Name): ready=$($result.Ready) $(@($result.Problems) -join ' | ')"
+}
 Write-Host "READINESS_DONE checks=$script:checks failures=$script:failures"
 exit $(if ($script:failures) { 1 } else { 0 })

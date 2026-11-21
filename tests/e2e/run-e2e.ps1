@@ -178,9 +178,17 @@ function RenderReadiness($expect, $px, $since) {
       if ($null -ne $since.Before) {
         $earlier = [GesherE2E]::Region([int[]]$since.Before, [int]$rect[0], [int]$rect[1], [int]$rect[2], [int]$rect[3])
       }
-      $changed = PixelDiff $earlier $region
-      if ($changed -lt [int]$expect.minChangedPixels) {
-        $problems += "the content region changed in $changed pixels since before the action, expected at least $($expect.minChangedPixels)"
+      # Without the same rectangle from before the action nothing shows a change
+      # (PixelDiff's "incomparable" maximum would pass the requirement vacuously).
+      if ($null -eq $since.Before) {
+        $problems += 'no capture from before the action to compare the content region with (PrintWindow failed)'
+      } elseif ($null -eq $earlier -or $earlier[0] -ne $region[0] -or $earlier[1] -ne $region[1]) {
+        $problems += "the content rectangle $($rect -join ',') is not within the $($since.Before[0])x$($since.Before[1]) capture from before the action"
+      } else {
+        $changed = PixelDiff $earlier $region
+        if ($changed -lt [int]$expect.minChangedPixels) {
+          $problems += "the content region changed in $changed pixels since before the action, expected at least $($expect.minChangedPixels)"
+        }
       }
     }
   }
