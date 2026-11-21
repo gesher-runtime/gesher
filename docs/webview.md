@@ -105,7 +105,9 @@ hangs the other for long:
   synchronously, so the WebView thread waits for the UI thread's answer (up
   to 5 s, then the navigation goes ahead). It is asked only when the client
   overrides either `shouldOverrideUrlLoading` and only for navigations the
-  page or the user started (not `loadUrl`, `reload`, back/forward).
+  page or the user started (not `loadUrl`, `reload`, back/forward). The
+  WebView's own loads are told apart even when several are issued before
+  WebView2 starts the first (`ApiNavigations`; WebView2 starts each one).
 - HTTP(S) `@JavascriptInterface` calls remain synchronous for JavaScript, but
   execute in order on a per-view JavaBridge worker. A deferred reserved request
   leaves WebView2's STA free to answer synchronous Android cookie APIs. Other
@@ -141,7 +143,10 @@ Pages see the https origin: same-origin requests between assets work without
   Android loads it.
 - `loadDataWithBaseURL`: with an http(s) or file base, the base URL is
   navigated to and its main document answered with the data (so relative
-  URLs and the origin are the base's); without one, `NavigateToString`,
+  URLs and the origin are the base's; every main-document request for the
+  base URL gets it until another load or a page's own navigation, since a
+  superseded load's request can come first and a reload asks again); without
+  one, `NavigateToString`,
   its `file:///android_asset/` and `file:///android_res/` URLs (which
   Android's page loads, as Gmail's compose editor its script) made the
   file origin's.

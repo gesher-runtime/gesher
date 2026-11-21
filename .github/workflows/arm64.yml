@@ -166,7 +166,11 @@ jobs:
       - name: Execute production setjmp bytecode with an independent ARM64 CPU
         run: |
           python3 -m venv "$RUNNER_TEMP/arm64-setjmp-venv"
-          "$RUNNER_TEMP/arm64-setjmp-venv/bin/python" -m pip install --disable-pip-version-check unicorn==2.1.4
+          # PyPI's SHA-256 of unicorn 2.1.4's manylinux x86_64 wheel and of its sdist.
+          printf '%s\n' 'unicorn==2.1.4 --hash=sha256:9d6e6dea140560de4ebd8446661f7ef84a357d428c14a3ef09dacd306ec8c239 --hash=sha256:00567a70e323f749b419cd86bee4f9115beab7ebba32194581c090cbb7c59cff' \
+            > "$RUNNER_TEMP/arm64-setjmp-requirements.txt"
+          "$RUNNER_TEMP/arm64-setjmp-venv/bin/python" -m pip install --disable-pip-version-check \
+            --require-hashes -r "$RUNNER_TEMP/arm64-setjmp-requirements.txt"
           "$RUNNER_TEMP/arm64-setjmp-venv/bin/python" tools/test_arm64_sigsetjmp.py \
             --arm-cc "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
 
