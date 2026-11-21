@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
@@ -238,9 +239,7 @@ public final class NativeLibs {
                 int m = actual.readNBytes(b, 0, n == 0 ? 1 : n);
                 if (n != m) return false;
                 if (n == 0) return true;
-                for (int i = 0; i < n; i++) {
-                    if (a[i] != b[i]) return false;
-                }
+                if (!Arrays.equals(a, 0, n, b, 0, n)) return false;
             }
         }
     }

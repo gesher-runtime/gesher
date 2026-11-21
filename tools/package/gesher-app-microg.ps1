@@ -23,8 +23,8 @@ $packages = 'com.google.android.gms', 'com.android.vending', 'com.google.android
 function Initialize-MicrogDefaults([string] $ProfileRoot) {
     # Google device registration (Check-in) and Cloud Messaging stay microG's own
     # opt-in settings: this helper never writes microG's preferences.
-    # Default runtime grants for the verified official microG priv-app, as a system
-    # image may pre-grant a privileged app; existing user decisions are kept.
+    # Grants location and notifications to the verified official microG signer when
+    # none is recorded; an existing user decision (including a denial) is kept.
     $permFile = Join-Path $ProfileRoot 'data/system/runtime-permissions'
     $permLines = @()
     if (Test-Path -LiteralPath $permFile) {

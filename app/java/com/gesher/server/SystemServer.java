@@ -208,7 +208,8 @@ public final class SystemServer {
                                     + (libs == 1 ? "library" : "libraries") + " in "
                                     + p.nativeLibraryDir());
                         }
-                    } catch (IOException e) {
+                    } catch (IOException | java.io.UncheckedIOException
+                            | java.nio.file.InvalidPathException e) {
                         // The package keeps its own per-launch extraction (Main).
                         log("microg addon " + name + ": native libraries not prepared: "
                                 + e.getMessage());

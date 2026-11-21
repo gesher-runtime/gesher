@@ -151,6 +151,49 @@ public final class NativeLibraryPathsTest {
             check(!Files.exists(elsewhere.resolve("libkeep.so")), "Nothing written through a link");
             Files.delete(link);
         }
+
+        // A Windows junction (no privilege needed), as the lib directory or its parent.
+        for (String layout : new String[] {"junction-target/lib/x86_64", "junction-parent/lib"}) {
+            Path outside = Files.createDirectories(root.resolve("outside-" + layout.replace('/', '-')));
+            Files.write(outside.resolve("victim.so"), PAYLOAD);
+            Path junction = root.resolve(layout);
+            Files.createDirectories(junction.getParent());
+            if (!junction(junction, outside)) break;
+            Path target = layout.endsWith("x86_64") ? junction : junction.resolve("x86_64");
+            if (!layout.endsWith("x86_64")) Files.createDirectories(outside.resolve("x86_64"));
+            Path victim = layout.endsWith("x86_64") ? outside.resolve("victim.so")
+                    : outside.resolve("x86_64/victim.so");
+            if (!layout.endsWith("x86_64")) Files.write(victim, PAYLOAD);
+            boolean rejected = false;
+            try { NativeLibs.syncDirectory(apk.toString(), target.toString(), "x86_64"); }
+            catch (IOException expected) { rejected = true; }
+            check(rejected, "Junction refused: " + layout);
+            check(Files.exists(victim), "Nothing deleted through a junction: " + layout);
+            check(!Files.exists(outside.resolve("libkeep.so"))
+                    && !Files.exists(outside.resolve("x86_64/libkeep.so")),
+                    "Nothing written through a junction: " + layout);
+            Files.delete(junction);
+        }
+
+        // Windows names are case-insensitive: a differently cased listed library stays.
+        Path cased = Files.createDirectories(root.resolve("cased/lib/x86_64"));
+        Files.write(cased.resolve("LibKeep.so"), PAYLOAD);
+        if (Files.exists(cased.resolve("libkeep.so"))) {
+            NativeLibs.syncDirectory(apk.toString(), cased.toString(), "x86_64");
+            check(Files.exists(cased.resolve("libkeep.so")), "Differently cased library kept");
+        }
+    }
+
+    private static boolean junction(Path link, Path target) {
+        if (!System.getProperty("os.name", "").startsWith("Windows")) return false;
+        try {
+            Process p = new ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(),
+                    target.toString()).redirectErrorStream(true).start();
+            p.getInputStream().readAllBytes();
+            return p.waitFor() == 0 && Files.exists(link);
+        } catch (Exception unavailable) {
+            return false;
+        }
     }
 
     public static void main(String[] args) throws Exception {
