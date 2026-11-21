@@ -866,7 +866,7 @@ public final class SafDocumentsContractTest {
                 documents.finish.countDown(); choices.finish.countDown();
                 h.settled(); workersRetired("intent-chooser"); awaitPending(h, 0, 0);
                 check(h.thread.results().isEmpty(), "AppTask launch does not invent an activity-result recipient");
-                check((int)get(origin, "documentPickers") == 0 && (int)get(origin, "chooserCoverCount") == 0,
+                check((int)get(origin, "nativeUiCount") == 0 && (int)get(origin, "chooserCoverCount") == 0,
                         "Native session releases exactly its own coverage");
                 if (retire) {
                     check(!created.exists() && get(replacement, "state") == state("RESUMED")

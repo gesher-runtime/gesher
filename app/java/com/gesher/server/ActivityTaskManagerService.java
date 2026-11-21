@@ -244,8 +244,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean idle;
         boolean finishing;
         boolean preserveProcessOnFinish;
-        int documentPickers;
-        boolean resumeAfterDocuments;
+        int nativeUiCount;
+        boolean resumeAfterNativeUi;
         /** Only an authenticated server chooser may consume its authenticator UI result. */
         Runnable accountCompletion;
         String inheritedWindowMode;
@@ -344,6 +344,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Work for a package's process once it is attached and bound (services, broadcasts). */
     private final List<PendingWork> mPendingWork = new ArrayList<>();
     private final PermissionRequests mPermissionRequests;
+    private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
+    private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedPublication = new ThreadLocal<>();
@@ -479,6 +481,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     ActivityTaskManagerService(PackageManagerService pm) {
         mPm = pm;
         mPermissionRequests = new PermissionRequests(pm);
+        mBluetoothRequests = new BluetoothRequests(pm);
     }
 
     void setActivityManager(ActivityManagerService am) {
@@ -959,8 +962,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             mDocumentPickers.put(key, session);
             if (task >= 0) { mHiddenTasks.remove(task); focusTaskLocked(task); }
             if (covered != null) {
-                covered.documentPickers++;
-                covered.resumeAfterDocuments = true;
+                covered.nativeUiCount++;
+                covered.resumeAfterNativeUi = true;
                 pauseCovered = covered.state == State.RESUMED || covered.state == State.RESUMING
                         || covered.state == State.LAUNCHING;
             }
@@ -1024,9 +1027,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             deliver = session.active();
             if (!mDocumentPickers.remove(session.key, session)) return;
             ActivityRecord covered = session.covered;
-            if (covered != null && --covered.documentPickers == 0 && covered.resumeAfterDocuments
+            if (covered != null && --covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
                     && covered.state != State.PAUSING) {
-                covered.resumeAfterDocuments = false;
+                covered.resumeAfterNativeUi = false;
                 resumeCovered = !covered.finishing && covered.state != State.DESTROYED
                         && mActivities.contains(covered) && activityEnabled(covered)
                         && covered.app == session.coveredProcess && covered.app != null
@@ -1864,6 +1867,197 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return ActivityManager.START_SUCCESS;
     }
 
+    /** A native consent activity covers the app and keeps a headless device alive. */
+    private final class BluetoothActivity {
+        final ActivityRecord covered;
+        final ProcessRecord coveredProcess;
+        final boolean needsPause;
+
+        // Constructed under the activity monitor; only completion releases the reservation.
+        BluetoothActivity(ActivityRecord source) {
+            ActivityRecord top = source == null ? focusedTaskTopLocked() : topOf(source.taskId);
+            covered = top != null && top.app != null ? top : null;
+            coveredProcess = covered == null ? null : covered.app;
+            needsPause = covered != null && (covered.state == State.RESUMED
+                    || covered.state == State.RESUMING || covered.state == State.LAUNCHING);
+            if (covered != null) {
+                covered.nativeUiCount++;
+                covered.resumeAfterNativeUi = true;
+            }
+            mBluetoothActivities.add(this);
+            updateIdle();
+        }
+
+        void pauseCovered(boolean userLeaving) {
+            final IApplicationThread thread;
+            final ClientTransaction transaction;
+            synchronized (ActivityTaskManagerService.this) {
+                // A detached result callback may already have finished its caller.
+                // Admit the pause atomically and retain this process's thread.
+                if (!needsPause || !mBluetoothActivities.contains(this) || covered.finishing
+                        || !mActivities.contains(covered) || !activityEnabled(covered)
+                        || covered.app != coveredProcess || coveredProcess == null
+                        || processByPid(coveredProcess.pid) != coveredProcess
+                        || coveredProcess.thread == null
+                        || (covered.state != State.RESUMED && covered.state != State.RESUMING
+                            && covered.state != State.LAUNCHING)) return;
+                thread = coveredProcess.thread;
+                covered.stopWhenIdle = true;
+                setState(covered, State.PAUSING);
+                transaction = new ClientTransaction(thread);
+                transaction.addTransactionItem(new PauseActivityItem(covered.token, false,
+                        userLeaving, false, false));
+            }
+            try { thread.scheduleTransaction(transaction); }
+            catch (RemoteException failure) {
+                SystemServer.log("Bluetooth consent pause failed: " + failure);
+            }
+        }
+
+        void awaitPause() {
+            if (covered == null) return;
+            synchronized (ActivityTaskManagerService.this) {
+                long until = SystemClock.uptimeMillis() + 500;
+                while (mBluetoothActivities.contains(this) && covered.app == coveredProcess
+                        && covered.state == State.PAUSING) {
+                    long left = until - SystemClock.uptimeMillis();
+                    if (left <= 0) break;
+                    try { ActivityTaskManagerService.this.wait(left); }
+                    catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+
+        void finish(Runnable deliver) {
+            boolean resumeCovered = false;
+            synchronized (ActivityTaskManagerService.this) {
+                if (!mBluetoothActivities.remove(this)) return;
+                if (covered != null && --covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
+                        && covered.state != State.PAUSING) {
+                    covered.resumeAfterNativeUi = false;
+                    resumeCovered = !covered.finishing && covered.state != State.DESTROYED
+                            && mActivities.contains(covered) && activityEnabled(covered)
+                            && covered.app == coveredProcess && coveredProcess != null
+                            && processByPid(coveredProcess.pid) == coveredProcess
+                            && topOf(covered.taskId) == covered && !mHiddenTasks.contains(covered.taskId);
+                }
+                updateIdle();
+                ActivityTaskManagerService.this.notifyAll();
+            }
+            try { deliver.run(); }
+            finally {
+                if (resumeCovered) { realStartActivity(covered); resume(covered); }
+                updateTopResumed();
+            }
+        }
+    }
+
+    private int requestBluetoothState(Intent intent, String verifiedCaller,
+            ProcessRecord callingProcess, boolean internalCreator,
+            java.util.function.BooleanSupplier delegated,
+            java.util.function.BooleanSupplier publication,
+            IBinder resultToToken, String resultWho, int requestCode) {
+        // A selector selects the activity; the launched activity receives the outer
+        // intent and performs its action (RequestPermissionActivity.parseIntent).
+        final String action = intent.getAction();
+        final String pkg = verifiedCaller == null ? "android" : verifiedCaller;
+        final ApkPackage captured = mPm.get(pkg);
+        final BluetoothRequests requests = mBluetoothRequests;
+        // Validate before consuming a forwarded result route or scheduling host work.
+        requests.validate(action, pkg, captured);
+        final ActivityRecord source, recipient;
+        final ProcessRecord sourceProcess, expectedProcess;
+        final String targetWho;
+        final int targetCode;
+        final boolean forwarded, cancelResult;
+        final BluetoothActivity activity;
+        synchronized (this) {
+            source = resultToToken == null ? null : forToken(resultToToken);
+            if (resultToToken != null && (source == null || source.app == null
+                    || source.finishing || source.state == State.DESTROYED || !activityEnabled(source)
+                    || (internalCreator ? publication == null || !publication.getAsBoolean()
+                            : callingProcess == null || source.app != callingProcess))) {
+                throw new SecurityException("Bluetooth result must belong to its live caller activity");
+            }
+            if (requestCode >= 0 && source == null) {
+                throw new SecurityException("Bluetooth result requires a live activity");
+            }
+            sourceProcess = source == null ? null : source.app;
+            forwarded = source != null && (intent.getFlags() & Intent.FLAG_ACTIVITY_FORWARD_RESULT) != 0;
+            if (forwarded && requestCode >= 0) return ActivityManager.START_FORWARD_AND_REQUEST_CONFLICT;
+            if (forwarded) {
+                ActivityRecord target = source.resultTo;
+                recipient = target != null && !isActivityRetired(target) ? target : null;
+                targetWho = source.resultWho;
+                targetCode = source.requestCode;
+                source.resultTo = null;
+                if (recipient != null) {
+                    recipient.pendingResults.removeIf(result -> {
+                        if (!(result instanceof PendingActivityResult pending) || pending.source != source
+                                || result.mRequestCode != source.requestCode
+                                || !Objects.equals(result.mResultWho, source.resultWho)) return false;
+                        recipient.callerState.remove(result.mCallerToken);
+                        return true;
+                    });
+                }
+                // A forwarded route belongs to the saved activity, not its old process.
+                expectedProcess = null;
+            } else {
+                recipient = requestCode >= 0 ? source : null;
+                targetWho = resultWho;
+                targetCode = requestCode;
+                expectedProcess = sourceProcess;
+            }
+            cancelResult = recipient != null && ((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
+                    || source.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE);
+            activity = new BluetoothActivity(source);
+        }
+        // After a result is forwarded/detached (or none was requested), the system UI
+        // owns its work. A trampoline may finish or die without canceling that request.
+        final boolean detached = forwarded || cancelResult || source == null || requestCode < 0;
+        java.util.function.BooleanSupplier lifetime = () -> {
+            synchronized (ActivityTaskManagerService.this) {
+                return (delegated == null || delegated.getAsBoolean())
+                        && (detached || internalCreator || callingProcess == null
+                            || !callingProcess.exiting && !callingProcess.dead && !callingProcess.pidSuperseded
+                                && processByPid(callingProcess.pid) == callingProcess
+                                && (callingProcess.enabledProcessLifetime == null
+                                    || callingProcess.enabledProcessLifetime.getAsBoolean()))
+                        && (detached
+                            || source.app == sourceProcess && !source.finishing
+                                && source.state != State.DESTROYED && mActivities.contains(source)
+                                && activityEnabled(source) && sourceProcess != null
+                                && !sourceProcess.exiting && !sourceProcess.dead
+                                && processByPid(sourceProcess.pid) == sourceProcess);
+            }
+        };
+        java.util.function.IntConsumer completion = result -> activity.finish(() -> {
+            if (recipient != null && !cancelResult && lifetime.getAsBoolean()) {
+                deliverResult(recipient, targetWho, targetCode, result, null, expectedProcess);
+            }
+        });
+        try {
+            if (cancelResult) {
+                deliverResult(recipient, new ResultInfo(targetWho, targetCode,
+                        android.app.Activity.RESULT_CANCELED, null, null), null, null, expectedProcess);
+            }
+            activity.pauseCovered((intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
+            updateTopResumed();
+            requests.request(action, pkg, captured, lifetime, activity::awaitPause, completion);
+        } catch (SecurityException revoked) {
+            // Permission may be revoked after admission consumed a forwarded route.
+            // That accepted launch must finish with cancellation, not lose its result.
+            completion.accept(android.app.Activity.RESULT_CANCELED);
+        } catch (RuntimeException | Error failure) {
+            completion.accept(android.app.Activity.RESULT_CANCELED);
+            throw failure;
+        }
+        return ActivityManager.START_SUCCESS;
+    }
+
     private int start(IApplicationThread caller, Intent intent, String resolvedType,
             String callingPackage, IBinder resultToToken, String resultWho, int requestCode,
             ActivityRecord[] started) {
@@ -1988,6 +2182,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             throw new SecurityException("Initial launch does not match the attached process package");
         }
         if (info == null) {
+            if (requiredTask == null && BluetoothRequests.handles(intent, resolvedType)) {
+                return requestBluetoothState(intent, verifiedCaller, originalProcess,
+                        internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
+            }
             if (DocumentPicker.handles(intent)) {
                 return startDocumentPicker(caller, originalName, intent, resolvedType,
                         resultToToken, resultWho, requestCode, launchTaskId, requiredTask);
@@ -2930,7 +3128,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private void updateIdle() {
         if (mAm != null) mPm.appOps().requestUidStateRefresh();
-        if (hasActivityLocked() || !mIntentChoosers.isEmpty() || !mDocumentPickers.isEmpty()) {
+        if (hasActivityLocked() || !mIntentChoosers.isEmpty() || !mDocumentPickers.isEmpty()
+                || !mBluetoothActivities.isEmpty()) {
             mIdleSince = 0;
         } else if (mIdleSince == 0) {
             mIdleSince = SystemClock.uptimeMillis();
@@ -3984,7 +4183,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean current;
         synchronized (this) {
             if (r.state != State.INITIALIZING || r.launchScheduled || r.finishing || r.deferredHistory
-                    || r.waitingFor != null || r.app == null || !r.app.ready || r.documentPickers > 0) return;
+                    || r.waitingFor != null || r.app == null || !r.app.ready || r.nativeUiCount > 0) return;
             if (r.app.exiting || r.app.dead
                     || r.app.enabledProcessLifetime != null && !r.app.enabledProcessLifetime.getAsBoolean()) return;
             if (r.historyEntry && !isVisible(r)) {
@@ -4026,7 +4225,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             newIntents = r.pendingNewIntents.isEmpty() ? null : new ArrayList<>(r.pendingNewIntents);
             r.pendingNewIntents.clear();
-            andResume = r.chooserCoverCount == 0 && r.documentPickers == 0
+            andResume = r.chooserCoverCount == 0 && r.nativeUiCount == 0
                     && (!r.historyEntry || topOf(r.taskId) == r);
         }
         ClientTransaction t = new ClientTransaction(r.app.thread);
@@ -4205,7 +4404,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private ActivityRecord topResumedCandidateLocked() {
         ActivityRecord top = focusedTaskTopLocked();
-        return top != null && top.app != null && top.documentPickers == 0
+        return top != null && top.app != null && top.nativeUiCount == 0
                 && top.chooserCoverCount == 0 ? top : null;
     }
 
@@ -4324,7 +4523,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (!activityEnabled(r)) { finishDisabledActivity(r); return; }
         synchronized (this) {
             if (!mActivities.contains(r) || r.finishing || r.app == null || !r.app.ready
-                    || r.documentPickers > 0
+                    || r.nativeUiCount > 0
                     || r.app.exiting || r.app.dead
                     || r.app.enabledProcessLifetime != null && !r.app.enabledProcessLifetime.getAsBoolean()
                     || !activityCodeCurrent(r) || r.waitingFor != null || r.chooserCoverCount > 0
@@ -4387,6 +4586,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     private void deliverResult(ActivityRecord r, String resultWho, int requestCode,
             int resultCode, Intent resultData) {
+        deliverResult(r, resultWho, requestCode, resultCode, resultData, null);
+    }
+
+    private void deliverResult(ActivityRecord r, String resultWho, int requestCode,
+            int resultCode, Intent resultData, ProcessRecord expectedProcess) {
         if (r == null) return;
         // These results come from server-owned UI flows. Attribute them to the server
         // even when completion runs on a worker with no original Binder caller.
@@ -4397,7 +4601,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         IBinder callerToken = new Binder("Server activity result caller");
         ResultInfo info = new ResultInfo(resultWho, requestCode, resultCode, resultData, callerToken);
-        deliverResult(r, info, callerToken, snapshot, null);
+        deliverResult(r, info, callerToken, snapshot, expectedProcess);
     }
 
     /** Launch cancellation has no activity caller token; server UI results retain theirs. */
@@ -4985,7 +5189,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             // A pause or a finish may already be on its way (startActivity or finish() in
             // onResume).
             if (r.state == State.LAUNCHING || r.state == State.RESUMING) r.state = State.RESUMED;
-            coveredByNativeUi = (r.documentPickers > 0 || r.chooserCoverCount > 0)
+            coveredByNativeUi = (r.nativeUiCount > 0 || r.chooserCoverCount > 0)
                     && r.state == State.RESUMED;
             toStop = stopping(r);
             toStart = starting();
@@ -5347,11 +5551,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     }
                 }
             }
-            boolean resumeNativeUi = r.documentPickers == 0 && r.resumeAfterDocuments
+            boolean resumeNativeUi = r.nativeUiCount == 0 && r.resumeAfterNativeUi
                     || r.chooserCoverCount == 0 && r.resumeAfterChooser;
-            if (r.documentPickers == 0) r.resumeAfterDocuments = false;
+            if (r.nativeUiCount == 0) r.resumeAfterNativeUi = false;
             if (r.chooserCoverCount == 0) r.resumeAfterChooser = false;
-            if (resumeNativeUi && r.documentPickers == 0 && r.chooserCoverCount == 0
+            if (resumeNativeUi && r.nativeUiCount == 0 && r.chooserCoverCount == 0
                     && !finishing && !stopNow && r.app != null && !r.app.pidSuperseded
                     && mProcesses.contains(r.app) && mActivities.contains(r) && activityEnabled(r)
                     && topOf(r.taskId) == r) {

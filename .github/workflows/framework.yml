@@ -615,12 +615,13 @@ jobs:
             -d "$RUNNER_TEMP/notification-delegation-sdk" \
             tests/notification-delegation/sdk/java/gesher/notificationdelegation/ControlReceiver.java
 
-      - name: Activity finish, null binding and public media receiver contracts
+      - name: Activity finish, Bluetooth requests, null binding and public media receiver contracts
         run: |
           args=(--java-home "$JAVA_HOME" --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar")
           python3 tools/test_activity_finish.py "${args[@]}"
+          python3 tools/test_bluetooth_requests.py "${args[@]}"
           python3 tools/test_null_bindings.py "${args[@]}"
           python3 tools/test_service_rebinding.py "${args[@]}"
           "$JAVA_HOME/bin/javac" -cp work/sdk-36/android.jar \
