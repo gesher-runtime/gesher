@@ -132,6 +132,35 @@ static void test_boundaries() {
     check("select: safe timeval conversion preserves immediate-ready budget", rc == 1 && complete() &&
           std::memcmp(&duration, &timevals[i], sizeof(duration)) == 0);
   }
+  struct CompactFdSet {
+    uint64_t words[2];
+    unsigned char canary[112];
+  };
+  auto check_canary = [](const unsigned char* data, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+      if (data[i] != 0xa5) return false;
+    }
+    return true;
+  };
+  CompactFdSet compact_one{};
+  compact_one.words[0] = uint64_t{1} << 7;
+  std::memset(&compact_one.words[1], 0xa5, sizeof(uint64_t) + sizeof(compact_one.canary));
+  start({{0, 0, 0, 0}}, {{7, POLLIN, 0}});
+  wait_timeval zero_tv{0, 0};
+  int compact_rc = select_api()(8, reinterpret_cast<wait_fd_set*>(&compact_one), nullptr, nullptr, &zero_tv);
+  check("select: nfds <= 64 clears only one fd_mask word without overrun",
+        compact_rc == 0 && complete() && compact_one.words[0] == 0 &&
+        check_canary(reinterpret_cast<const unsigned char*>(&compact_one.words[1]),
+                     sizeof(uint64_t) + sizeof(compact_one.canary)));
+
+  CompactFdSet compact_zero{};
+  std::memset(&compact_zero, 0xa5, sizeof(compact_zero));
+  start({{0, 0, 0, 0}});
+  zero_tv = {0, 0};
+  compact_rc = select_api()(0, reinterpret_cast<wait_fd_set*>(&compact_zero), nullptr, nullptr, &zero_tv);
+  check("select: nfds == 0 leaves caller fd_set storage untouched",
+        compact_rc == 0 && complete() &&
+        check_canary(reinterpret_cast<const unsigned char*>(&compact_zero), sizeof(compact_zero)));
 }
 static void test_budgets() {
   for (const char* name : wait_ppoll_names) {

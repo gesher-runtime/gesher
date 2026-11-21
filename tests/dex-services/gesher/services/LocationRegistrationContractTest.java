@@ -215,6 +215,7 @@ public final class LocationRegistrationContractTest {
             Object policy = UNSAFE.allocateInstance(Class.forName("com.gesher.server.PermissionPolicy"));
             Properties decisions = new Properties(); decisions.setProperty(PKG + ":unsigned:" + permission.name, "granted");
             set(policy, "mPm", pm); set(policy, "mCatalog", catalog); set(policy, "mDecisions", decisions);
+            set(policy, "mForgottenPackages", new java.util.WeakHashMap<>());
             set(pm, "mPermissions", policy);
             service = (LocationManagerService)UNSAFE.allocateInstance(LocationManagerService.class);
             set(service, "mPm", pm); set(service, "mLock", lock); set(service, "mExecutor", executor);

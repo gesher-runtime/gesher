@@ -100,6 +100,41 @@ Design: [0085](decisions/0085-bluetooth-host-radio.md). Tests:
   BOND_STATE_CHANGED (pairings made or removed while the radio is on), the A2DP and
   headset profiles' CONNECTION_STATE_CHANGED and the adapter's.
 
+## Adapter request intents
+
+Contracts: the [BluetoothAdapter request actions](https://developer.android.com/reference/android/bluetooth/BluetoothAdapter#ACTION_REQUEST_ENABLE)
+and Settings' [RequestPermissionActivity](https://android.googlesource.com/platform/packages/apps/Settings/+/refs/heads/main/src/com/android/settings/bluetooth/RequestPermissionActivity.java).
+
+`BluetoothAdapter.ACTION_REQUEST_ENABLE` and `ACTION_REQUEST_DISABLE` use the
+system activity path, including for applications targeting API 33 or newer. They
+require the caller's `BLUETOOTH_CONNECT` grant on API 31+, or its declared
+`BLUETOOTH` permission below that target. A desktop consent prompt runs outside
+the activity/Binder thread. Success is returned only after an existing adapter is
+observed in the requested state; a rejected prompt, missing adapter, failed
+operation or transition timeout returns `Activity.RESULT_CANCELED`. A radio that
+was already in the requested state needs no mutation or confirmation.
+
+`ACTION_REQUEST_DISCOVERABLE` requires `BLUETOOTH_ADVERTISE` for modern callers
+(`BLUETOOTH` for legacy callers). The backend currently cannot make the local
+radio discoverable. It completes with `RESULT_CANCELED` without changing radio
+power or reporting an invented discoverable duration.
+
+`BluetoothRequests` admits at most sixteen pending requests and one per package.
+Queued work rechecks installed package identity, enabled/removal state, caller
+lifetime and grants before changing the adapter. Explicit foreign components,
+foreign packages, data/MIME types and unsupported categories are not intercepted.
+An intent selector selects the handler; the delivered outer action determines
+the operation. A native consent request covers its source activity and keeps the
+runtime alive until completion. Results retain their original recipient and
+request code, including forwarded results and `NEW_TASK` cancellation.
+
+`BluetoothRequestIntentTest` runs the production helper and activity route with
+isolated server-local radio, executor and clock boundaries in the Windows ART
+track. `tools/test_bluetooth_requests.py` runs the same fixture on a host JVM,
+including separate fixture/service class loaders. Both use constructed package
+and permission metadata; they do not test real Windows consent/radio hardware or
+persistent permission metadata parsing.
+
 ## Scan settings without controller offload
 
 The contract follows `isSettingsConfigAllowedForScan` and

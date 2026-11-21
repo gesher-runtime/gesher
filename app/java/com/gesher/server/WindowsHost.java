@@ -256,6 +256,10 @@ public final class WindowsHost {
         return available() ? nativeRemoveToast(appId, tag, group) : 0x80004001;
     }
 
+    public static int removeToastIfLaunch(String appId, String tag, String group, String launch) {
+        return available() ? nativeRemoveToastIfLaunch(appId, tag, group, launch) : 0x80004001;
+    }
+
     public static int clearToasts(String appId) {
         return available() ? nativeClearToasts(appId) : 0x80004001;
     }
@@ -364,6 +368,44 @@ public final class WindowsHost {
         }
     }
 
+    /** Cancellable open/save/tree dialogs. A failed backend is an error, not a URI. */
+    static String[] pickDocuments(int mode, String title, String suggestedName,
+            String initialDirectory, String filter, String extension, boolean multiple,
+            boolean localOnly, int ownerPid, java.util.function.BooleanSupplier active) throws java.io.IOException {
+        if (!available()) throw new java.io.IOException("Windows document picker unavailable");
+        try {
+            return nativePickDocuments(mode, title, suggestedName, initialDirectory, filter,
+                    extension, multiple, localOnly, ownerPid, active);
+        } catch (UnsatisfiedLinkError unavailable) {
+            throw new java.io.IOException("Windows document picker unavailable", unavailable);
+        }
+    }
+
+    private static native String[] nativePickDocuments(int mode, String title, String suggestedName,
+            String initialDirectory, String filter, String extension, boolean multiple,
+            boolean localOnly, int ownerPid, java.util.function.BooleanSupplier active) throws java.io.IOException;
+
+    /** Query the resolved Windows handle and volume, never infer locality from a path prefix. */
+    static boolean isLocalDocument(String windowsPath) throws java.io.IOException {
+        if (!available()) throw new java.io.IOException("Windows document locality check unavailable");
+        try { return nativeIsLocalDocument(windowsPath); }
+        catch (UnsatisfiedLinkError unavailable) {
+            throw new java.io.IOException("Windows document locality check unavailable", unavailable);
+        }
+    }
+
+    private static native boolean nativeIsLocalDocument(String windowsPath);
+
+    /** AppsUseLightTheme: 0 dark, 1 light, -1 missing/unreadable; never launches a process. */
+    public static int appsUseLightTheme() {
+        if (!available()) return -1;
+        try { return nativeAppsUseLightTheme(); }
+        catch (UnsatisfiedLinkError unavailable) { return -1; }
+    }
+
+    public static void removeListener(Listener listener) { sListeners.remove(listener); }
+
+    private static native int nativeAppsUseLightTheme();
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();
@@ -388,6 +430,7 @@ public final class WindowsHost {
     private static native int nativeShowToast(String appId, String tag, String group,
             String xml, boolean suppressPopup, boolean high);
     private static native int nativeRemoveToast(String appId, String tag, String group);
+    private static native int nativeRemoveToastIfLaunch(String appId, String tag, String group, String launch);
     private static native int nativeClearToasts(String appId);
     private static native int nativeShowNotificationBridge(String appId, String tag,
             String group, String title, String text, String iconPath, int id);

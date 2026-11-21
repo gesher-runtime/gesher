@@ -24,14 +24,13 @@ struct TrapSite { uintptr_t addr, stub; };
 struct StubArena { uint8_t* base; size_t used; };
 struct CodeRange { uintptr_t start, end; const char* name; uintptr_t bias; bool stub; };
 struct LazyObject { const char* name = "test"; uintptr_t bias = 0; std::vector<StubArena> arenas; };
-struct SyscallFingerprint { uint8_t length, before, after, bytes[47]; };
+struct SyscallFingerprint { const LazyObject* owner; uint8_t length, before, after, bytes[47]; };
 std::vector<TrapSite>& Traps() { static std::vector<TrapSite> value; return value; }
 std::map<uintptr_t, uint8_t>& SyscallSites() { static std::map<uintptr_t, uint8_t> value; return value; }
 std::vector<SyscallFingerprint>& Fingerprints() { static std::vector<SyscallFingerprint> value; return value; }
 std::vector<CodeRange>& Ranges() { static std::vector<CodeRange> value; return value; }
 struct Rewriter {
   bool deferred_ = true;
-  std::vector<StubArena> arenas_;
   LazyObject* o_;
   std::string* error_ = nullptr;
   std::vector<TrapSite> traps_;

@@ -196,8 +196,8 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   `build` job builds them too (ccache key `runtime`). ci.yml runs
   graphics.yml as its `graphics` job; the test and package jobs download
   artifact `graphics` into `dist`. framework.yml builds `graphics-tests.dex`
-  (`tests/dex-graphics/build.sh`, against framework.jar's classes, with
-  gesher-app's sources on javac's source path) into artifact `framework`.
+  (`tests/dex-graphics/build.sh`, against framework.jar and the complete
+  `gesher-app-classes.jar` from the same build) into artifact `framework`.
   `tests/windows/tracks/30-graphics.ps1` runs the probes and the dex tests
   (`GraphicsDex`: framework.jar and gesher-app.jar on the boot class path,
   a time limit, fault tracing).

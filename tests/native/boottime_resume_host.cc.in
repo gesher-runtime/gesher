@@ -38,11 +38,23 @@ int64_t BoottimeNanos() { return awake + suspended; }
 
 namespace guest {
 constexpr int kNsig = 65, kEINTR = EINTR, kEINVAL = EINVAL, kEFAULT = EFAULT, kEOPNOTSUPP = EOPNOTSUPP;
+constexpr int kEAGAIN = EAGAIN, kENOSYS = ENOSYS;
 constexpr uintptr_t kSigDfl = 0, kSigIgn = 1;
 struct LinuxTimespec { int64_t tv_sec, tv_nsec; };
 struct BionicSiginfo { int value = 0; };
+// Controlled standard-signal injection boundary, compatible with both source
+// representations. This fixture tests resume timing, not real RT allocation.
+struct FixturePending {
+  uint64_t value = 0;
+  operator uint64_t() const { return value; }
+  FixturePending& operator=(uint64_t bits) { value = bits; return *this; }
+  FixturePending& operator&=(uint64_t bits) { value &= bits; return *this; }
+  uint64_t Mask() const { return value; }
+  void Discard(int sig) { value &= ~(uint64_t{1} << (sig - 1)); }
+};
 struct ThreadState {
-  uint64_t pending = 0, mask = 0, waiting_for = 0;
+  FixturePending pending;
+  uint64_t mask = 0, waiting_for = 0;
   std::atomic<bool> any_pending{false};
   BionicSiginfo info[kNsig]{};
 } self;
@@ -55,7 +67,7 @@ static bool DefaultIgnores(int sig) { return sig == 17; }
 static void Run(ThreadState*, int, const BionicSiginfo&) {
   ++deliveries; awake += handler_ns; wall += handler_ns; errno = ERANGE;
 }
-static void DeliverAll(ThreadState*) {}
+static int DeliverAll(ThreadState*) { return 0; }
 static void DeliverPendingSignals() {}
 static LinuxTimespec RealtimeNow() { return {wall / 1000000000, wall % 1000000000}; }
 
@@ -97,14 +109,27 @@ class RelativeCondition {
   bool hold_ = false;
 };
 struct Action { uintptr_t handler = 2; };
+using BionicSigaction = Action;
 struct State {
   std::mutex mutex;
   RelativeCondition sent;
   Action actions[kNsig];
-  uint64_t process_pending = 0;
+  FixturePending process_pending;
   BionicSiginfo process_info[kNsig]{};
 } state;
 static State& S() { return state; }
+static bool ClaimActionLocked(ThreadState*, int sig, BionicSigaction* action) {
+  *action = S().actions[sig];
+  return true;  // controlled ordinary-handler delivery seam
+}
+static void Dispatch(ThreadState* value, int sig, const BionicSiginfo& info,
+                     const BionicSigaction&) { Run(value, sig, info); }
+static void Pop(FixturePending& pending, int sig, BionicSiginfo* info) {
+  if (info != nullptr) {
+    *info = &pending == &self.pending ? self.info[sig] : S().process_info[sig];
+  }
+  pending.Discard(sig);
+}
 
 @SIGNAL_SLEEP@
 @SLEEP_HELPERS@

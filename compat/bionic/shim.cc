@@ -83,6 +83,7 @@ struct Sysv<F> {
 struct Aligned {
   void* raw;
   size_t size;
+  size_t mapped_size;  // non-zero: dedicated OS page mapping (VirtualAlloc / mmap)
 };
 std::mutex g_aligned_mutex;
 std::unordered_map<void*, Aligned> g_aligned;
@@ -110,6 +111,43 @@ bool FindAligned(const void* p, Aligned* out) {
 
 void* AlignedAlloc(size_t align, size_t size) {
   if (align <= 16) return std::malloc(size ? size : 1);
+  // Back page-aligned allocations with dedicated OS pages rather than the CRT
+  // heap: callers such as breakpad allocate a guarded sigaltstack with
+  // posix_memalign(4096, ...), mark its guard page PROT_NONE via mprotect, and
+  // call free() on failure or teardown without restoring PAGE_READWRITE.
+  constexpr size_t kPageSize = 4096;
+  if (align >= kPageSize) {
+#if defined(_WIN32)
+    constexpr size_t kDirectAlignLimit = 65536;
+#else
+    constexpr size_t kDirectAlignLimit = kPageSize;
+#endif
+    size_t rounded = size ? size : 1;
+    if (rounded > SIZE_MAX - (kPageSize - 1)) return errno = kENOMEM, nullptr;
+    rounded = (rounded + kPageSize - 1) & ~(kPageSize - 1);
+    size_t mapped_size = rounded;
+    if (align > kDirectAlignLimit) {
+      const size_t slack = align - kDirectAlignLimit;
+      if (rounded > SIZE_MAX - slack) return errno = kENOMEM, nullptr;
+      mapped_size = rounded + slack;
+    }
+#if defined(_WIN32)
+    void* raw = VirtualAlloc(nullptr, mapped_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (raw == nullptr) return errno = kENOMEM, nullptr;
+#else
+    void* raw = mmap(nullptr, mapped_size, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (raw == MAP_FAILED) return errno = kENOMEM, nullptr;
+#endif
+    auto p = align <= kDirectAlignLimit
+                 ? raw
+                 : reinterpret_cast<void*>((reinterpret_cast<uintptr_t>(raw) + align - 1) &
+                                           ~(align - 1));
+    std::lock_guard<std::mutex> lock(g_aligned_mutex);
+    g_aligned[p] = {raw, size, mapped_size};
+    g_aligned_count.fetch_add(1, std::memory_order_release);
+    return p;
+  }
   // A wrapped allocation could appear to succeed with less than `size`
   // bytes. The pointer still has to be aligned inside the full allocation.
   if (size > SIZE_MAX - align) return errno = kENOMEM, nullptr;
@@ -117,7 +155,7 @@ void* AlignedAlloc(size_t align, size_t size) {
   if (raw == nullptr) return nullptr;
   auto p = reinterpret_cast<void*>((reinterpret_cast<uintptr_t>(raw) + align) & ~(align - 1));
   std::lock_guard<std::mutex> lock(g_aligned_mutex);
-  g_aligned[p] = {raw, size};
+  g_aligned[p] = {raw, size, 0};
   g_aligned_count.fetch_add(1, std::memory_order_release);
   return p;
 }
@@ -131,7 +169,15 @@ void* BIONIC_SYSV Calloc(size_t n, size_t m) {
 void BIONIC_SYSV Free(void* p) {
   Aligned a;
   if (TakeAligned(p, &a)) {
-    std::free(a.raw);
+    if (a.mapped_size != 0) {
+#if defined(_WIN32)
+      VirtualFree(a.raw, 0, MEM_RELEASE);
+#else
+      munmap(a.raw, a.mapped_size);
+#endif
+    } else {
+      std::free(a.raw);
+    }
   } else {
     std::free(p);
   }
@@ -668,8 +714,11 @@ int BIONIC_SYSV Nanosleep(const LinuxTimespec* req, LinuxTimespec* rem) {
     if (milliseconds > 0x7ffffffe) milliseconds = 0x7ffffffe;
     int64_t interrupted_at = 0;
     auto observe = [](void* value) { *static_cast<int64_t*>(value) = MonotonicNanos(); };
-    if (InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe,
-                                  &interrupted_at)) {
+    int error = 0;
+    bool interrupted = InterruptibleSleepObserved(static_cast<uint32_t>(milliseconds), observe,
+                                                  &interrupted_at, &error);
+    if (error != 0) return errno = error, -1;
+    if (interrupted) {
       if (rem != nullptr) {
         // The signal handler may run for longer than the remaining timeout.
         // Its execution is not part of the sleeping interval Linux reports.

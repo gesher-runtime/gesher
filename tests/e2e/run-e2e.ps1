@@ -143,8 +143,10 @@ function ReadText([string] $file) { return "$(Get-Content -Raw $file -ErrorActio
 function WaitFirstFrame($p, [string] $log, [int] $seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
-    $m = [regex]::Match((ReadText $log), 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
-    if ($m.Success) { return [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16) }
+    foreach ($m in [regex]::Matches((ReadText $log), 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')) {
+      $window = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16)
+      if ([GesherWin32]::IsWindow($window)) { return $window }
+    }
     Start-Sleep -Milliseconds 500
   }
   return [IntPtr]::Zero
@@ -223,6 +225,29 @@ function KillTree($p) {
   if ($null -ne $p -and -not $p.HasExited) { try { $p.Kill($true) } catch {} }
 }
 
+function DismissStartupDialog([string] $log, [string] $pkg, $settings) {
+  $text = ReadText $log
+  $title = $settings.title
+  $m = [regex]::Match($text,
+    ('(?m)^gesher-app: window "{0}" \d+x\d+: first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)' -f
+      [regex]::Escape($title)))
+  if (-not $m.Success) { return $false }
+  $dialog = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16)
+  $ownerId = AppPid $text $pkg
+  if (-not $ownerId -or [GesherWin32]::ProcessId($dialog) -ne $ownerId -or
+      [GesherWin32]::Title($dialog) -cne $title) { throw "Cannot identify '$title' as the launched app's dialog" }
+  SavePng ([GesherWin32]::Capture($dialog)) ([IO.Path]::ChangeExtension($log, '.startup-dialog.png'))
+  $size = [GesherWin32]::ClientSize($dialog)
+  if ($size[0] -ne $settings.size[0] -or $size[1] -ne $settings.size[1]) {
+    throw "Unexpected geometry for '$title': $($size -join 'x')"
+  }
+  [GesherWin32]::Click($dialog, [int]$settings.cancel[0], [int]$settings.cancel[1])
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  while ([GesherWin32]::IsWindow($dialog) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+  if ([GesherWin32]::IsWindow($dialog)) { throw "'$title' did not close" }
+  return $true
+}
+
 # Closes the window, waits for the launcher (and the app's process) to end. Returns problems.
 function CloseAndWait([IntPtr] $hwnd, $p, [string] $log, [string] $pkg) {
   $problems = @()
@@ -266,6 +291,24 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
     return $res
   }
   Start-Sleep 3
+  $actions = $a.actions
+  if (-not $NoInput -and $a.startupDialog) {
+    try {
+      if (DismissStartupDialog $log $pkg $a.startupDialog) {
+        $hwnd = WaitFirstFrame $p $log 15
+        if ($hwnd -eq [IntPtr]::Zero) { throw 'No app window remained after closing the startup dialog' }
+        $hwnd = FrontWindow $log $hwnd
+        $focus = $a.startupDialog.focus
+        [GesherWin32]::Click($hwnd, [int]$focus[0], [int]$focus[1])
+        $actions = $a.startupDialog.actions
+        $res.Info += "closed '$($a.startupDialog.title)' and focused the editor"
+      }
+    } catch {
+      $res.Problems += $_.Exception.Message
+      $res.Problems += @(CloseAndWait $hwnd $p $log $pkg)
+      return $res
+    }
+  }
   $hwnd = FrontWindow $log $hwnd
   $px = CaptureSettled $hwnd
   if ($null -eq $px) { $res.Problems += 'PrintWindow failed'; KillTree $p; return $res }
@@ -280,10 +323,10 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
   if ($a.surfaceTrace -and $an.Other -lt $area * 0.005) {
     $res.Info += @(BlankFrameDiagnostics $hwnd $px $pkg $tag)
   }
-  if (-not $NoInput -and $a.actions) {
+  if (-not $NoInput -and $actions) {
     $before = $px
     $i = 0
-    foreach ($act in $a.actions) {
+    foreach ($act in $actions) {
       $i++
       if ($act.click) { [GesherWin32]::Click($hwnd, [int]$act.click[0], [int]$act.click[1]); $what = "click at $($act.click[0]),$($act.click[1])" }
       elseif ($act.keys) { [GesherWin32]::TypeKeys($hwnd, [string]$act.keys); $what = "keys '$($act.keys)'" }

@@ -21,6 +21,7 @@ class OpusEncoderImpl : public AudioEncoder {
   }
 
   std::string Name() const override { return "soft opus (libopus)"; }
+  int ConfiguredBitrate() const override { return bitrate_; }
 
   bool Init(const AudioEncoderParams& p, std::string* error) {
     rate_ = p.sample_rate;
@@ -37,7 +38,12 @@ class OpusEncoderImpl : public AudioEncoder {
       enc_ = nullptr;
       return false;
     }
-    opus_encoder_ctl(enc_, OPUS_SET_BITRATE(std::clamp(p.bitrate, 6000, 510000)));
+    err = opus_encoder_ctl(enc_, OPUS_SET_BITRATE(std::clamp(p.bitrate, 6000, 510000)));
+    if (err == OPUS_OK) err = opus_encoder_ctl(enc_, OPUS_GET_BITRATE(&bitrate_));
+    if (err != OPUS_OK) {
+      *error = std::string("Opus bitrate configuration: ") + opus_strerror(err);
+      return false;
+    }
     opus_int32 lookahead = 0;
     opus_encoder_ctl(enc_, OPUS_GET_LOOKAHEAD(&lookahead));
     // OpusHead's pre-skip counts 48 kHz samples.
@@ -92,6 +98,7 @@ class OpusEncoderImpl : public AudioEncoder {
   }
 
   OpusEncoder* enc_ = nullptr;
+  opus_int32 bitrate_ = 0;
   uint32_t rate_ = 48000, channels_ = 1, pre_skip_ = 0;
   size_t frame_ = 960;
   bool header_sent_ = false;

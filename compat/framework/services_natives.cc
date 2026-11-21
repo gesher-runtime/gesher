@@ -28,6 +28,7 @@
 #include <log/log.h>
 #include <nativehelper/JNIHelp.h>
 #include <unistd.h>
+#include <cstdio>
 
 #include "core_jni_helpers.h"
 #include "services_zygote.h"
@@ -162,6 +163,19 @@ static jint Zygote_spawn(JNIEnv* env, jclass, jstring commandLine, jobjectArray 
                                  breakaway == JNI_TRUE);
 }
 
+static jint Zygote_restartWithUid(JNIEnv* env, jclass, jint uid) {
+    uint32_t code = 0;
+    uint32_t failure = gesher::zygote::RestartWithUid(uid, &code);
+    if (failure != 0) {
+        char message[128];
+        std::snprintf(message, sizeof(message), "Standalone VM restart failed: Win32 error %u", failure);
+        jniThrowException(env, "java/lang/IllegalStateException", message);
+        return 0;
+    }
+    // JNI/Java int retains all 32 bits, including an application's high-bit exit status.
+    return static_cast<jint>(code);
+}
+
 static jlong Zygote_startTime(JNIEnv*, jclass, jint pid) {
     return gesher::zygote::StartTime(pid);
 }
@@ -222,6 +236,7 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeSpawn",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)I",
      GESHER_JNI(Zygote_spawn)},
+    {"nativeRestartWithUid", "(I)I", GESHER_JNI(Zygote_restartWithUid)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
     {"nativeChildStartTime", "(I)J", GESHER_JNI(Zygote_childStartTime)},
     {"nativeExitCode", "(I)I", GESHER_JNI(Zygote_exitCode)},

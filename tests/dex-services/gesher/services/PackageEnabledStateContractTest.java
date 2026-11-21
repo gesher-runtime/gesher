@@ -35,6 +35,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.FutureTask;
@@ -146,6 +147,12 @@ public final class PackageEnabledStateContractTest {
                 check(!Thread.holdsLock(service), "Event callback held the package monitor");
                 events.add(intent);
             });
+            // Unsafe allocation skips the listener list's field initializer.
+            if (persistent) {
+                try {
+                    set(service, "mPackageEventListeners", new CopyOnWriteArrayList<Consumer<Intent>>());
+                } catch (NoSuchFieldException oldImplementation) { }
+            }
             // Keep the public-API fixture runnable against the unchanged baseline.
             try { set(service, "mEnabledStateKiller", (Consumer<ApkPackage>)kills::add); }
             catch (NoSuchFieldException oldImplementation) { }
@@ -395,6 +402,9 @@ public final class PackageEnabledStateContractTest {
                 && reopened.client.getComponentEnabledSetting(component(a, "Alias")) == 1, "Restart lost enabled states");
         invoke(reopened.service, "add", new Class<?>[]{ApkPackage.class}, record(a, true));
         check(reopened.client.getApplicationEnabledSetting(a) == 3, "APK update lost installed state");
+        // Settle the successful package update's permission notification before
+        // testing that the failed enabled-state write queues no further work.
+        reopened.drain();
         Path file = Path.of(System.getenv("ANDROID_DATA"), "system/package-enabled-state");
         Path saved = file.resolveSibling("enabled-state.saved"); Files.move(file, saved); Files.createDirectory(file);
         try {

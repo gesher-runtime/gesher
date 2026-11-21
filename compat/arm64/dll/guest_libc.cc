@@ -397,6 +397,10 @@ struct SyscallMap {
   char ret;
 };
 const SyscallMap kSyscalls[] = {
+    {5, "setxattr", 'i'}, {6, "lsetxattr", 'i'}, {7, "__fsetxattr", 'i'},
+    {8, "getxattr", 'l'}, {9, "lgetxattr", 'l'}, {10, "__fgetxattr", 'l'},
+    {11, "listxattr", 'l'}, {12, "llistxattr", 'l'}, {13, "__flistxattr", 'l'},
+    {14, "removexattr", 'i'}, {15, "lremovexattr", 'i'}, {16, "fremovexattr", 'i'},
     {17, "getcwd", 'p'},      {23, "dup", 'i'},          {24, "dup3", 'i'},
     {26, "inotify_init1", 'i'}, {27, "inotify_add_watch", 'i'}, {28, "inotify_rm_watch", 'i'},
     {32, "flock", 'i'},
@@ -410,7 +414,8 @@ const SyscallMap kSyscalls[] = {
     {85, "timerfd_create", 'i'}, {86, "timerfd_settime", 'i'}, {87, "timerfd_gettime", 'i'},
     {101, "nanosleep", 'i'},  {113, "clock_gettime", 'i'}, {114, "clock_getres", 'i'},
     {124, "sched_yield", 'i'}, {123, "sched_getaffinity", 'i'}, {129, "kill", 'i'},
-    {131, "tgkill", 'i'},     {160, "uname", 'i'},       {163, "getrlimit", 'i'},
+    {131, "tgkill", 'i'},     {132, "sigaltstack", 'i'}, {160, "uname", 'i'},
+    {163, "getrlimit", 'i'},
     {165, "getrusage", 'i'},  {167, "prctl", 'i'},       {169, "gettimeofday", 'i'},
     {172, "getpid", 'i'},     {173, "getppid", 'i'},     {174, "getuid", 'i'},
     {175, "geteuid", 'i'},    {176, "getgid", 'i'},      {177, "getegid", 'i'},
