@@ -56,7 +56,8 @@ def main() -> None:
                                         cwd=ROOT, capture_output=True, check=True)
                 source.write_bytes(before.stdout)
             sources.append(str(source))
-        sources += [str(ROOT / "tests/dex-services/gesher/services/NotificationChannelGroupsTest.java"),
+        sources += [str(ROOT / "tests/dex-services/gesher/services/FixtureServiceContext.java"),
+                    str(ROOT / "tests/dex-services/gesher/services/NotificationChannelGroupsTest.java"),
                     str(ROOT / "tests/notification/NotificationGroupsHost.java")]
         subprocess.run([str(java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), *sources], check=True)

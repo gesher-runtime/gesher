@@ -77,6 +77,8 @@ class QueueWorkflows(unittest.TestCase):
         script = (ROOT / '.github/scripts/label-automerge.js').read_text()
         self.assertNotIn('pulls.merge(', script)
         self.assertIn('expectedHeadOid: $head', script)
+        self.assertNotIn('enablePullRequestAutoMerge(', script)
+        self.assertIn('mergePullRequest(input:', script)
         rules = json.loads((ROOT / '.github/automerge-ruleset.json').read_text())
         self.assertNotIn('merge_queue', [rule['type'] for rule in rules['rules']])
 
@@ -93,6 +95,7 @@ class QueueWorkflows(unittest.TestCase):
         script = (ROOT / '.github/scripts/label-automerge.js').read_text()
         self.assertIn("payload.action === 'synchronize'", script)
         self.assertIn('p.dismissStaleApprovals(', script)
+        self.assertIn("return 'blocked'", script)
 
     def test_app_write_events_are_skipped_before_the_shared_job_queue(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())

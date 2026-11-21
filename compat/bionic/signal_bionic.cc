@@ -72,6 +72,9 @@ namespace gesher::bionic {
 namespace {
 
 constexpr int kNsig = 65;  // signals 1..64
+// Android 16 Bionic reserves kernel realtime signals 32..41 for its runtime.
+// Public SIGRTMIN/SIGRTMAX call these exports rather than expose kernel bounds.
+constexpr int kSigrtMin = 32 + 10;
 constexpr uintptr_t kSigDfl = 0, kSigIgn = 1;
 constexpr int kSaSiginfo = 4, kSaOnstack = 0x08000000, kSaNodefer = 0x40000000;
 constexpr uint32_t kSaResethand = 0x80000000u;
@@ -461,6 +464,9 @@ int SendFromSelf(int sig, int code, uint64_t value, bool to_process) {
 
 // --- the entry points ----------------------------------------------------------
 
+int BIONIC_SYSV CurrentSigrtmin() { return kSigrtMin; }
+int BIONIC_SYSV CurrentSigrtmax() { return kNsig - 1; }
+
 int BIONIC_SYSV Sigaction(int sig, const BionicSigaction* act, BionicSigaction* old) {
   if (!Valid(sig) || (act != nullptr && (sig == kSigkill || sig == kSigstop))) {
     return errno = kEINVAL, -1;
@@ -525,11 +531,25 @@ int BIONIC_SYSV PthreadSigmask(int how, const uint64_t* set, uint64_t* old) {
     return 0;
   }
   if (set != nullptr) {
+    if (how != kSigBlock && how != kSigUnblock && how != kSigSetmask) return kEINVAL;
+    // Match Android 16 Bionic's filter_reserved_signals on the REQUEST,
+    // before applying the operation. Filtering the resulting mask instead
+    // would change pre-existing reserved bits even for SIG_BLOCK/UNBLOCK.
+    // Signal 32 belongs to POSIX timers; runtime signals 33..41 must not be
+    // newly blocked through the public mask functions.
+    uint64_t requested = *set;
+    if (how == kSigUnblock) {
+      requested &= ~Bit(32);
+      for (int sig = 33; sig < kSigrtMin; ++sig) requested |= Bit(sig);
+    } else {
+      requested |= Bit(32);
+      for (int sig = 33; sig < kSigrtMin; ++sig) requested &= ~Bit(sig);
+    }
     uint64_t next;
     switch (how) {
-      case kSigBlock: next = current | *set; break;
-      case kSigUnblock: next = current & ~*set; break;
-      case kSigSetmask: next = *set; break;
+      case kSigBlock: next = current | requested; break;
+      case kSigUnblock: next = current & ~requested; break;
+      case kSigSetmask: next = requested; break;
       default: return kEINVAL;
     }
     // Refuse an unsupported delivery before changing the requested mask or
@@ -761,10 +781,6 @@ void BIONIC_SYSV Psignal(int sig, const char* s) {
 }
 
 unsigned BIONIC_SYSV Alarm(unsigned) { return 0; }
-// bionic libc/platform/bionic/reserved_signals.h: __SIGRTMIN 32 plus
-// __SIGRT_RESERVED 10 signals for the platform's own use.
-int BIONIC_SYSV LibcCurrentSigrtmin() { return 32 + 10; }
-int BIONIC_SYSV LibcCurrentSigrtmax() { return kNsig - 1; }
 
 // sys_siglist / sys_signame (bionic exports both, 65 entries).
 const char* g_sys_siglist[kNsig];
@@ -1052,6 +1068,8 @@ void DeliverPendingSignals() {
 
 void RegisterSignal(SymbolTable& t) {
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
+  E("__libc_current_sigrtmin", CurrentSigrtmin);
+  E("__libc_current_sigrtmax", CurrentSigrtmax);
   E("sigaction", Sigaction);
   E("sigaction64", Sigaction);
   E("signal", Signal);
@@ -1092,8 +1110,6 @@ void RegisterSignal(SymbolTable& t) {
   E("psignal", Psignal);
   E("abort", Abort);
   E("alarm", Alarm);
-  E("__libc_current_sigrtmin", LibcCurrentSigrtmin);
-  E("__libc_current_sigrtmax", LibcCurrentSigrtmax);
 #undef E
   for (int i = 1; i < kNsig; ++i) {
     g_sys_siglist[i] = i < 32 ? kDescriptions[i] : "Real-time signal";
