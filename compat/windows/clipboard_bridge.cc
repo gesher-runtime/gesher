@@ -5,11 +5,13 @@
 
 #undef NOGDI
 #include "clipboard_bridge.h"
+#include "clipboard_publication.h"
 #include <wingdi.h>
 
 #include <jni.h>
 
 #include <cstdio>
+#include <new>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -313,69 +315,9 @@ bool ReadRichClipboard(RichClipboardData* out) {
 }
 
 bool WriteRichClipboard(const std::u16string& text, const std::u16string& html,
-                        const uint8_t* image_bytes, size_t image_size) {
-  if (!OpenClipboardRetrying()) return false;
-  EmptyClipboard();
-
-  bool any = false;
-
-  // CF_UNICODETEXT
-  if (!text.empty()) {
-    size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (g != nullptr) {
-      void* p = GlobalLock(g);
-      std::memcpy(p, text.c_str(), bytes);
-      GlobalUnlock(g);
-      if (SetClipboardData(CF_UNICODETEXT, g) != nullptr) {
-        any = true;
-      } else {
-        GlobalFree(g);
-      }
-    }
-  }
-
-  // HTML Format
-  if (!html.empty() && HtmlFormat() != 0) {
-    std::string data = BuildCfHtml(Utf8(html));
-    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, data.size() + 1);
-    if (g != nullptr) {
-      void* p = GlobalLock(g);
-      std::memcpy(p, data.c_str(), data.size() + 1);
-      GlobalUnlock(g);
-      if (SetClipboardData(HtmlFormat(), g) != nullptr) {
-        any = true;
-      } else {
-        GlobalFree(g);
-      }
-    }
-  }
-
-  // CF_DIB / CF_DIBV5
-  if (image_bytes != nullptr && image_size > 0) {
-    const uint8_t* dib_ptr = image_bytes;
-    size_t dib_size = image_size;
-
-    if (image_size > sizeof(BmpFileHeader) && image_bytes[0] == 'B' && image_bytes[1] == 'M') {
-      dib_ptr = image_bytes + sizeof(BmpFileHeader);
-      dib_size = image_size - sizeof(BmpFileHeader);
-    }
-
-    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, dib_size);
-    if (g != nullptr) {
-      void* p = GlobalLock(g);
-      std::memcpy(p, dib_ptr, dib_size);
-      GlobalUnlock(g);
-      if (SetClipboardData(CF_DIB, g) != nullptr) {
-        any = true;
-      } else {
-        GlobalFree(g);
-      }
-    }
-  }
-
-  CloseClipboard();
-  return any;
+                        const uint8_t* image_bytes, size_t image_size,
+                        uint32_t* written_sequence, bool has_text) {
+  return PublishClipboard(text, has_text, html, image_bytes, image_size, written_sequence);
 }
 
 }  // namespace windows
@@ -404,36 +346,47 @@ Java_com_gesher_server_WindowsHost_nativeHasClipboardImage(JNIEnv*, jclass) {
   return gesher::windows::HasClipboardImage() ? JNI_TRUE : JNI_FALSE;
 }
 
+static bool SetClipboardRich(JNIEnv* env, jstring jtext, jstring jhtml, jbyteArray jimage,
+                             uint32_t* written_sequence) {
+  if (written_sequence) *written_sequence = 0;
+  try {
+    std::u16string text, html;
+    if (jtext != nullptr) {
+      text.resize(static_cast<size_t>(env->GetStringLength(jtext)));
+      if (!text.empty()) env->GetStringRegion(jtext, 0, static_cast<jsize>(text.size()),
+                                              reinterpret_cast<jchar*>(text.data()));
+      if (env->ExceptionCheck()) return false;
+    }
+    if (jhtml != nullptr) {
+      html.resize(static_cast<size_t>(env->GetStringLength(jhtml)));
+      if (!html.empty()) env->GetStringRegion(jhtml, 0, static_cast<jsize>(html.size()),
+                                              reinterpret_cast<jchar*>(html.data()));
+      if (env->ExceptionCheck()) return false;
+    }
+    std::vector<uint8_t> image;
+    if (jimage != nullptr) {
+      const jsize size = env->GetArrayLength(jimage);
+      if (size <= 0) return false;
+      image.resize(static_cast<size_t>(size));
+      env->GetByteArrayRegion(jimage, 0, size, reinterpret_cast<jbyte*>(image.data()));
+      if (env->ExceptionCheck()) return false;
+    }
+    return gesher::windows::WriteRichClipboard(text, html,
+        image.empty() ? nullptr : image.data(), image.size(), written_sequence, jtext != nullptr);
+  } catch (const std::bad_alloc&) { return false; }
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_gesher_server_WindowsHost_nativeSetClipboardRich(JNIEnv* env, jclass,
-                                                          jstring jtext, jstring jhtml,
-                                                          jbyteArray jimage) {
-  std::u16string text;
-  if (jtext != nullptr) {
-    const jchar* chars = env->GetStringChars(jtext, nullptr);
-    jsize len = env->GetStringLength(jtext);
-    text.assign(reinterpret_cast<const char16_t*>(chars), len);
-    env->ReleaseStringChars(jtext, chars);
-  }
+    jstring text, jstring html, jbyteArray image) {
+  return SetClipboardRich(env, text, html, image, nullptr) ? JNI_TRUE : JNI_FALSE;
+}
 
-  std::u16string html;
-  if (jhtml != nullptr) {
-    const jchar* chars = env->GetStringChars(jhtml, nullptr);
-    jsize len = env->GetStringLength(jhtml);
-    html.assign(reinterpret_cast<const char16_t*>(chars), len);
-    env->ReleaseStringChars(jhtml, chars);
-  }
-
-  std::vector<uint8_t> image_bytes;
-  if (jimage != nullptr) {
-    jsize size = env->GetArrayLength(jimage);
-    image_bytes.resize(static_cast<size_t>(size));
-    env->GetByteArrayRegion(jimage, 0, size, reinterpret_cast<jbyte*>(image_bytes.data()));
-  }
-
-  bool ok = gesher::windows::WriteRichClipboard(
-      text, html, image_bytes.empty() ? nullptr : image_bytes.data(), image_bytes.size());
-  return ok ? JNI_TRUE : JNI_FALSE;
+JNIEXPORT jint JNICALL
+Java_com_gesher_server_WindowsHost_nativeSetClipboardRichSequence(JNIEnv* env, jclass,
+    jstring text, jstring html, jbyteArray image) {
+  uint32_t sequence = 0;
+  return SetClipboardRich(env, text, html, image, &sequence) ? static_cast<jint>(sequence) : 0;
 }
 
 }  // extern "C"

@@ -1,0 +1,463 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated with unchanged production bodies by test_bionic_signal_masks.py.
+// This host fixture does not register Windows threads or call guest handlers.
+// Translator code classification and handler invocation are explicit boundaries;
+// accepting native SA_SIGINFO here does not qualify its Windows ucontext frame.
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <cerrno>
+#include <mutex>
+#include <vector>
+#include "gesher/pending_signals.h"
+#define BIONIC_SYSV __attribute__((sysv_abi))
+
+@DECLARATIONS@
+
+// Only the members used by the extracted production routines are needed here.
+// The actual pending container owns its records; accounting is a host boundary.
+static int queued_records;
+extern "C" bool gesher_signal_queue_acquire(bool) { ++queued_records; return true; }
+extern "C" void gesher_signal_queue_release() { --queued_records; }
+struct ThreadState {
+  std::atomic<uint64_t> mask{0};
+  gesher::signals::Pending<BionicSiginfo> pending;
+  std::atomic<bool> any_pending{false};
+  BionicStack alt_stack{nullptr, 2 /* SS_DISABLE */, 0};
+};
+struct State {
+  std::mutex mutex;
+  BionicSigaction actions[kNsig] = {};
+  gesher::signals::Pending<BionicSiginfo> process_pending;
+};
+thread_local ThreadState state;
+static State shared_state;
+static std::atomic<bool> g_process_pending{false};
+static bool self_available = true;
+State& S() { return shared_state; }
+ThreadState* Self() { return self_available ? &state : nullptr; }
+
+static constexpr uintptr_t kNativeHandler = 2;
+static constexpr uintptr_t kTranslatedHandler = 3;
+namespace gesher::arm64 {
+bool IsGuestCode(const void* address) {
+  return reinterpret_cast<uintptr_t>(address) == kTranslatedHandler;
+}
+}  // namespace gesher::arm64
+
+@ACTION_HELPERS@
+
+struct Delivery {
+  int sig;
+  BionicSiginfo info;
+  BionicSigaction action;
+  uint64_t mask;
+};
+static std::vector<Delivery> dispatched;
+static int deliveries, change_before_delivery, change_after_dispatch;
+
+// Deterministic disposition changes model another sigaction or a handler's
+// sigaction after mask preflight. No failed delivery result is invented: the
+// actual ClaimActionLocked/TakeDeliverable/DeliverAll routines produce it.
+static void ChangeAction(int& sig) {
+  if (sig == 0) return;
+  std::lock_guard<std::mutex> lock(S().mutex);
+  S().actions[sig].handler = kTranslatedHandler;
+  S().actions[sig].sa_flags |= kSaSiginfo;
+  sig = 0;
+}
+void Dispatch(ThreadState* self, int sig, const BionicSiginfo& info,
+              const BionicSigaction& action) {
+  dispatched.push_back({sig, info, action, self->mask});
+  ChangeAction(change_after_dispatch);
+}
+namespace production_delivery {
+@DELIVER_ALL@
+}  // namespace production_delivery
+
+// Count delivery-point entry independently of whether a record is available.
+// The body of the production delivery loop above is included unchanged.
+int DeliverAll(ThreadState* self) {
+  ++deliveries;
+  ChangeAction(change_before_delivery);
+  return production_delivery::DeliverAll(self);
+}
+
+@ENTRY_POINTS@
+
+static int checks, failures;
+static const char* phase = "original";
+static int variation;
+static void check(const char* name, bool ok) {
+  ++checks;
+  if (!ok) {
+    ++failures;
+    std::fprintf(stderr, "FAIL %s [%s/%d]\n", name, phase, variation);
+  }
+}
+
+static constexpr uint64_t timer_bit = UINT64_C(1) << 31;
+static constexpr uint64_t low_bit = UINT64_C(1) << 9;
+static constexpr uint64_t high_bit = UINT64_C(1) << 63;
+static constexpr uint64_t sentinel = UINT64_C(0x123456789abcdef0);
+
+static void Reset(uint64_t mask) {
+  state.pending.Clear();
+  S().process_pending.Clear();
+  state.mask = mask;
+  state.any_pending = false;
+  state.alt_stack = {nullptr, 2, 0};
+  g_process_pending = false;
+  for (auto& action : S().actions) action = {0, 0, kNativeHandler, 0, 0};
+  self_available = true;
+  deliveries = change_before_delivery = change_after_dispatch = 0;
+  dispatched.clear();
+}
+
+static void Queue(bool process, int sig, uint64_t value) {
+  BionicSiginfo info{};
+  info.signo = sig;
+  info.code = kSiQueue;
+  info.pid = 123;
+  info.uid = 456;
+  info.value = value;
+  auto& pending = process ? S().process_pending : state.pending;
+  check("fixture queues an owned production record", pending.Push(sig, kSiQueue, info));
+  if (process) g_process_pending = true;
+  else state.any_pending = true;
+}
+
+static bool IsRecord(const BionicSiginfo& info, int sig, uint64_t value) {
+  return info.signo == sig && info.code == kSiQueue && info.value == value &&
+         info.pid == 123 && info.uid == 456 && info.error == 0;
+}
+
+static void CheckRetained(bool process, int sig, uint64_t value) {
+  auto& pending = process ? S().process_pending : state.pending;
+  BionicSiginfo info{};
+  check("rejected delivery retains the exact queued record",
+        pending.Pop(sig, &info) && IsRecord(info, sig, value));
+}
+
+static int MaskCall(bool process, int how, const uint64_t* input, uint64_t* old) {
+  return process ? Sigprocmask(how, input, old) : PthreadSigmask(how, input, old);
+}
+
+static void CheckFailure(bool process, int rc, int error, int observed_errno) {
+  check("failure uses the API's return convention", rc == (process ? -1 : error));
+  check("failure uses the API's errno convention",
+        observed_errno == (process ? error : ERANGE));
+}
+
+static void SelfFailures() {
+  phase = "Self failure";
+  for (bool process : {false, true}) for (bool query : {false, true}) {
+    variation = 2 * process + query;
+    const uint64_t initial = timer_bit | high_bit;
+    Reset(initial);
+    Queue(false, 64, 101);
+    Queue(true, 10, 102);
+    self_available = false;
+    uint64_t input = high_bit, old = sentinel;
+    errno = ERANGE;
+    const int rc = MaskCall(process, query ? 12345 : kSigUnblock,
+                            query ? nullptr : &input, &old);
+    const int observed_errno = errno;
+    CheckFailure(process, rc, kEAGAIN, observed_errno);
+    check("Self failure preserves state, input and output",
+          state.mask == initial && input == high_bit && old == sentinel);
+    check("Self failure never enters delivery", deliveries == 0 && dispatched.empty());
+    check("Self failure preserves both pending queues and charges",
+          state.pending.Mask() == high_bit && S().process_pending.Mask() == low_bit &&
+          state.any_pending && g_process_pending && queued_records == 2);
+    CheckRetained(false, 64, 101);
+    CheckRetained(true, 10, 102);
+  }
+}
+
+static void NonmutatingCalls() {
+  phase = "query and invalid operation";
+  for (bool process : {false, true}) for (int mode = 0; mode < 4; ++mode) {
+    variation = 4 * process + mode;
+    const bool query = mode < 2;
+    const uint64_t initial = timer_bit | high_bit;
+    Reset(initial);
+    // Signal10 is already unblocked and has an unsupported pending action.
+    // Queries and invalid operations must not inspect or deliver that record.
+    Queue(false, 10, 201);
+    Queue(true, 64, 202);
+    S().actions[10].handler = kTranslatedHandler;
+    S().actions[10].sa_flags = kSaSiginfo;
+    uint64_t input = low_bit, old = sentinel;
+    uint64_t* output = mode == 1 ? nullptr : mode == 3 ? &input : &old;
+    errno = ERANGE;
+    const int rc = MaskCall(process, 12345, query ? nullptr : &input, output);
+    const int observed_errno = errno;
+    if (query) {
+      check("query ignores invalid how", rc == 0 && observed_errno == ERANGE);
+      check("query only writes its requested output", old == (mode == 0 ? initial : sentinel));
+    } else {
+      CheckFailure(process, rc, kEINVAL, observed_errno);
+      check("invalid operation leaves old output unchanged", old == sentinel);
+    }
+    check("query or invalid operation leaves input and mask unchanged",
+          input == low_bit && state.mask == initial);
+    check("query or invalid operation does not deliver", deliveries == 0 && dispatched.empty());
+    check("query or invalid operation preserves pending flags, records and actions",
+          state.pending.Mask() == low_bit && S().process_pending.Mask() == high_bit &&
+          state.any_pending && g_process_pending && queued_records == 2 &&
+          S().actions[10].handler == kTranslatedHandler &&
+          S().actions[10].sa_flags == kSaSiginfo);
+    CheckRetained(false, 10, 201);
+    CheckRetained(true, 64, 202);
+  }
+}
+
+static void AliasedMasks() {
+  phase = "aliased new and old masks";
+  struct AliasCase { int how; uint64_t initial, input, expected; };
+  const AliasCase cases[] = {
+    {kSigBlock, timer_bit | low_bit, high_bit, timer_bit | low_bit | high_bit},
+    {kSigUnblock, timer_bit | low_bit | high_bit, high_bit, timer_bit | low_bit},
+    {kSigSetmask, timer_bit | low_bit, high_bit, timer_bit | high_bit},
+  };
+  for (bool process : {false, true}) for (const auto& c : cases) {
+    variation = 3 * process + c.how;
+    Reset(c.initial);
+    uint64_t both = c.input;
+    errno = ERANGE;
+    const int rc = MaskCall(process, c.how, &both, &both);
+    const int observed_errno = errno;
+    check("alias reads the input before writing the previous mask",
+          rc == 0 && both == c.initial && state.mask == c.expected);
+    check("successful alias preserves errno and enters delivery once",
+          observed_errno == ERANGE && deliveries == 1 && dispatched.empty());
+  }
+}
+
+static void PendingDelivery() {
+  phase = "thread and process pending delivery";
+  for (bool process : {false, true}) {
+    variation = process;
+    const uint64_t still_blocked = Bit(42);
+    const uint64_t initial = timer_bit | low_bit | high_bit | still_blocked;
+    Reset(initial);
+    Queue(false, 10, 301);
+    Queue(false, 64, 302);
+    Queue(false, 64, 303);
+    Queue(true, 10, 304);
+    Queue(true, 64, 305);
+    Queue(true, 42, 306);
+    S().actions[42].handler = kTranslatedHandler;
+    S().actions[42].sa_flags = kSaSiginfo;
+    uint64_t input = low_bit | high_bit, old = sentinel;
+    errno = ERANGE;
+    const int rc = MaskCall(process, kSigUnblock, &input, &old);
+    const int observed_errno = errno;
+    check("unblocking public signals succeeds despite a blocked unsupported action",
+          rc == 0 && observed_errno == ERANGE && old == initial &&
+          state.mask == (timer_bit | still_blocked) && input == (low_bit | high_bit));
+    check("one delivery point consumes both queues including signal64",
+          deliveries == 1 && dispatched.size() == 5);
+    const int signals[] = {10, 10, 64, 64, 64};
+    const uint64_t values[] = {301, 304, 302, 303, 305};
+    if (dispatched.size() == 5) for (unsigned i = 0; i < 5; ++i) {
+      check("production selection preserves priority, thread ownership and RT FIFO",
+            dispatched[i].sig == signals[i] && IsRecord(dispatched[i].info, signals[i], values[i]) &&
+            dispatched[i].mask == (timer_bit | still_blocked));
+    }
+    check("only the still-blocked record remains charged and pending",
+          state.pending.Mask() == 0 && !state.any_pending &&
+          S().process_pending.Mask() == still_blocked && g_process_pending && queued_records == 1);
+    CheckRetained(true, 42, 306);
+  }
+}
+
+static void UnsupportedPreflight() {
+  phase = "unsupported action preflight";
+  for (bool process : {false, true}) for (bool process_queue : {false, true})
+      for (int kind = 0; kind < 3; ++kind) {
+    variation = 6 * process + 3 * process_queue + kind;
+    const int sig = kind == 2 ? 20 : 64;
+    const uint64_t initial = timer_bit | low_bit | Bit(sig);
+    Reset(initial);
+    Queue(!process_queue, 10, 401);
+    Queue(process_queue, sig, 402);
+    if (sig == 64) Queue(process_queue, sig, 403);
+    auto& action = S().actions[sig];
+    if (kind == 0) {
+      action.handler = kTranslatedHandler;
+      action.sa_flags = kSaSiginfo;
+    }
+    if (kind == 1) { action.sa_flags = kSaOnstack; state.alt_stack.ss_flags = 0; }
+    if (kind == 2) action.handler = kSigDfl;
+    action.sa_flags |= static_cast<int32_t>(kSaResethand);
+    const auto saved_action = action;
+    uint64_t input = low_bit | Bit(sig), old = sentinel;
+    errno = ERANGE;
+    const int rc = MaskCall(process, kSigUnblock, &input, &old);
+    const int observed_errno = errno;
+    CheckFailure(process, rc, kENOSYS, observed_errno);
+    check("preflight failure preserves mask and both caller buffers",
+          state.mask == initial && old == sentinel && input == (low_bit | Bit(sig)));
+    check("preflight rejects before any delivery or SA_RESETHAND mutation",
+          deliveries == 0 && dispatched.empty() && action.handler == saved_action.handler &&
+          action.sa_flags == saved_action.sa_flags);
+    check("preflight preserves thread/process pending masks and all charges",
+          state.pending.Mask() == (process_queue ? low_bit : Bit(sig)) &&
+          S().process_pending.Mask() == (process_queue ? Bit(sig) : low_bit) &&
+          state.any_pending && g_process_pending && queued_records == (sig == 64 ? 3 : 2));
+    CheckRetained(!process_queue, 10, 401);
+    CheckRetained(process_queue, sig, 402);
+    if (sig == 64) CheckRetained(process_queue, sig, 403);
+  }
+}
+
+static void SupportedActions() {
+  phase = "supported action boundaries";
+  for (int kind = 0; kind < 5; ++kind) {
+    variation = kind;
+    Reset(timer_bit | high_bit);
+    Queue(false, 64, 501);
+    auto& action = S().actions[64];
+    if (kind == 0) action.sa_flags = kSaOnstack;  // The alternate stack is disabled.
+    if (kind == 1) { action.handler = kSigIgn; action.sa_flags = kSaSiginfo | kSaOnstack; }
+    if (kind == 2) action.sa_flags = static_cast<int32_t>(kSaResethand);
+    if (kind == 3) action.sa_flags = kSaSiginfo;
+    if (kind == 4) action.sa_flags = static_cast<int32_t>(kSaSiginfo | kSaResethand);
+    const auto saved_action = action;
+    uint64_t input = high_bit;
+    errno = ERANGE;
+    const int rc = PthreadSigmask(kSigUnblock, &input, nullptr);
+    const int observed_errno = errno;
+    check("supported action can consume its pending record with a null old output",
+          rc == 0 && observed_errno == ERANGE && state.mask == timer_bit && input == high_bit &&
+          deliveries == 1 && dispatched.size() == 1 && queued_records == 0);
+    if (dispatched.size() == 1) {
+      check("claim keeps the selected action and record together",
+            IsRecord(dispatched[0].info, 64, 501) &&
+            dispatched[0].action.handler == saved_action.handler &&
+            dispatched[0].action.sa_flags == saved_action.sa_flags);
+    }
+    check("only a supported one-shot handler resets its disposition",
+          action.handler == (kind == 2 || kind == 4 ? kSigDfl : saved_action.handler) &&
+          action.sa_flags == (kind == 2 || kind == 4 ? 0 : saved_action.sa_flags));
+    check("successful consumption clears pending indicators",
+          state.pending.Mask() == 0 && !state.any_pending && !g_process_pending);
+  }
+}
+
+static void DeliveryFailures() {
+  phase = "delivery error restoration";
+  for (bool process : {false, true}) for (bool process_queue : {false, true})
+      for (bool alias : {false, true}) {
+    variation = 4 * process + 2 * process_queue + alias;
+    const uint64_t initial = timer_bit | high_bit;
+    Reset(initial);
+    Queue(process_queue, 64, 601);
+    S().actions[64].sa_flags = static_cast<int32_t>(kSaResethand);
+    change_before_delivery = 64;
+    uint64_t input = high_bit, old = sentinel;
+    errno = ERANGE;
+    const int rc = MaskCall(process, kSigUnblock, &input, alias ? &input : &old);
+    const int observed_errno = errno;
+    CheckFailure(process, rc, kENOSYS, observed_errno);
+    // Unlike preflight rejection, old has already been written on this path.
+    check("late failure restores the mask and returns the previous mask in old",
+          state.mask == initial && (alias ? input == initial : old == initial));
+    check("late failure writes only the old buffer", alias ? old == sentinel : input == high_bit);
+    check("actual delivery rejects the changed action without consuming its record",
+          deliveries == 1 && dispatched.empty() && queued_records == 1 &&
+          state.pending.Mask() == (process_queue ? 0 : high_bit) &&
+          S().process_pending.Mask() == (process_queue ? high_bit : 0) &&
+          S().actions[64].handler == kTranslatedHandler &&
+          static_cast<uint32_t>(S().actions[64].sa_flags) == (kSaResethand | kSaSiginfo));
+    CheckRetained(process_queue, 64, 601);
+  }
+
+  phase = "partial delivery before error";
+  for (bool process : {false, true}) {
+    variation = process;
+    const uint64_t initial = timer_bit | low_bit | high_bit;
+    Reset(initial);
+    Queue(false, 10, 701);
+    Queue(true, 64, 702);
+    change_after_dispatch = 64;
+    uint64_t input = low_bit | high_bit, old = sentinel;
+    errno = ERANGE;
+    const int rc = MaskCall(process, kSigUnblock, &input, &old);
+    const int observed_errno = errno;
+    CheckFailure(process, rc, kENOSYS, observed_errno);
+    check("partial delivery failure restores mask and reports the previous mask",
+          state.mask == initial && old == initial && input == (low_bit | high_bit));
+    check("completed delivery is not fabricated back into a pending record",
+          deliveries == 1 && dispatched.size() == 1 &&
+          IsRecord(dispatched[0].info, 10, 701) && dispatched[0].mask == timer_bit &&
+          state.pending.Mask() == 0 && !state.any_pending);
+    check("later unsupported record remains pending and charged",
+          S().process_pending.Mask() == high_bit && g_process_pending && queued_records == 1);
+    CheckRetained(true, 64, 702);
+  }
+}
+
+int main() {
+  constexpr uint64_t timer=UINT64_C(1)<<31;
+  constexpr uint64_t runtime=UINT64_C(0x1ff)<<32;
+  constexpr uint64_t public_pair=(UINT64_C(1)<<9)|(UINT64_C(1)<<63);
+  constexpr uint64_t unmaskable=(UINT64_C(1)<<8)|(UINT64_C(1)<<18);
+  struct Case { const char* name; int how; uint64_t initial, input, expected; bool query; };
+  const Case cases[] = {
+    {"empty SETMASK",2,timer,0,timer,false},
+    {"reserved SETMASK",2,0,timer|runtime,timer,false},
+    {"full SETMASK",2,0,UINT64_MAX,UINT64_MAX&~runtime&~unmaskable,false},
+    {"empty BLOCK",0,timer,0,timer,false},
+    {"reserved BLOCK",0,timer,timer|runtime,timer,false},
+    {"public BLOCK including signal64",0,timer,public_pair,timer|public_pair,false},
+    {"timer UNBLOCK",1,timer|public_pair,timer,timer|public_pair,false},
+    {"reserved UNBLOCK",1,timer|public_pair,timer|runtime,timer|public_pair,false},
+    {"public UNBLOCK including signal64",1,timer|public_pair,public_pair,timer,false},
+    {"null query ignores how",12345,timer|public_pair,0,timer|public_pair,true},
+    // AOSP filters the requested set, not the final mask. These pre-existing
+    // raw states distinguish those two implementations without delivering a
+    // reserved signal or claiming a public API can create every raw state.
+    {"BLOCK preserves a previously blocked runtime bit",0,UINT64_C(1)<<32,0,timer|(UINT64_C(1)<<32),false},
+    {"UNBLOCK does not add a previously absent timer bit",1,0,0,0,false},
+    {"UNBLOCK removes previously blocked runtime bits",1,timer|runtime,0,timer,false},
+  };
+  for (const Case& c : cases) {
+    state.mask=c.initial;
+    uint64_t input=c.input, old=UINT64_MAX;
+    errno=ERANGE;
+    const int rc=PthreadSigmask(c.how,c.query?nullptr:&input,&old);
+    check(c.name,rc==0&&state.mask==c.expected&&old==c.initial);
+    check("input remains unchanged",input==c.input);
+    check("pthread_sigmask preserves errno",errno==ERANGE);
+  }
+  state.mask=timer|public_pair;
+  uint64_t input=0, old=UINT64_MAX;
+  const int before=deliveries;
+  errno=ERANGE;
+  check("invalid pthread operation returns EINVAL",PthreadSigmask(12345,&input,&old)==22);
+  check("invalid pthread operation preserves errno",errno==ERANGE);
+  check("invalid operation preserves state/output",state.mask==(timer|public_pair)&&old==UINT64_MAX);
+  check("invalid operation does not deliver",deliveries==before);
+  errno=0;
+  check("sigprocmask translates failure",Sigprocmask(12345,&input,&old)==-1&&errno==EINVAL);
+  check("sigprocmask retains failed output",old==UINT64_MAX&&state.mask==(timer|public_pair));
+  check("sigprocmask uses the same mask contract",Sigprocmask(2,&input,&old)==0&&state.mask==timer);
+  std::printf("Original mask contract cases: %d checks, %d failures\n", checks, failures);
+
+  SelfFailures();
+  NonmutatingCalls();
+  AliasedMasks();
+  PendingDelivery();
+  UnsupportedPreflight();
+  SupportedActions();
+  DeliveryFailures();
+  Reset(timer_bit);
+  check("all fixture-owned pending records are released", queued_records == 0);
+  std::printf("Bionic mask entry points: %d checks, %d failures; actual pending/action/delivery helpers; "
+              "explicit registration/dispatch/accounting fixture\n", checks, failures);
+  return failures?1:0;
+}
