@@ -34,6 +34,41 @@ function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, 
       return $process
     } catch { $process.Dispose(); throw }
   }
+  function Start-ReadySettingsManager([Diagnostics.Process] $Broker, [string] $Device) {
+    if ($Broker.HasExited) { throw "Settings binderd exited before readiness: $($Broker.ExitCode)" }
+    $probe = @($VmArguments) + @('com.gesher.server.RuntimeCommands', 'wait-binder',
+      $Device, [string]$Broker.Id, '15000')
+    $readyOut = RunTimed "$Dir/dalvikvm.exe" $probe 15
+    $readyCode = $LASTEXITCODE
+    $output.Add($readyOut)
+    if ($readyCode -ne 0 -or -not $readyOut.Contains("binder endpoint accepted a protocol connection: $Device")) {
+      throw "Settings binderd did not become ready (exit $readyCode)"
+    }
+    if ($Broker.HasExited) { throw "Settings binderd exited after readiness: $($Broker.ExitCode)" }
+
+    # Keep a readable log while the manager runs: ReadToEndAsync completes only
+    # on exit, too late to observe ownership of the Binder context.
+    $managerOut = Join-Path $fixture 'servicemanager.out'
+    $managerErr = Join-Path $fixture 'servicemanager.err'
+    $manager = Start-Process "$Dir/servicemanager.exe" -PassThru -NoNewWindow -ErrorAction Stop `
+      -RedirectStandardOutput $managerOut -RedirectStandardError $managerErr
+    $owned.Add(@{ Name = 'servicemanager'; Process = $manager; OutFile = $managerOut; ErrFile = $managerErr })
+    $null = $manager.Handle
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while ($timer.ElapsedMilliseconds -lt 15000) {
+      if ($Broker.HasExited) { throw "Settings binderd exited while waiting for servicemanager: $($Broker.ExitCode)" }
+      if ($manager.HasExited) { throw "Settings servicemanager exited before readiness: $($manager.ExitCode)" }
+      $managerLog = if (Test-Path -LiteralPath $managerErr -PathType Leaf) {
+        (Get-Content -LiteralPath $managerErr -Raw -ErrorAction Stop) + ''
+      } else { '' }
+      if ($managerLog.Contains('servicemanager: ready on /dev/binder') -and
+          $timer.ElapsedMilliseconds -lt 15000 -and -not $Broker.HasExited -and -not $manager.HasExited) {
+        return $manager
+      }
+      Start-Sleep -Milliseconds 100
+    }
+    throw 'Settings servicemanager did not become ready within 15 s'
+  }
   try {
     $fixture = Join-Path $FixtureRoot ('settings-transport-' + [Guid]::NewGuid().ToString('N'))
     $null = [IO.Directory]::CreateDirectory((Join-Path $fixture 'data'))
@@ -44,8 +79,8 @@ function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, 
     $env:GESHER_UID = '1000'
     $env:GESHER_MICROG_SPOOF = '0'
     Remove-Item -LiteralPath Env:GESHER_ROLE -ErrorAction SilentlyContinue
-    $null = Start-SettingsProcess 'binderd' "$Dir/binderd.exe" @($env:GESHER_BINDER)
-    $null = Start-SettingsProcess 'servicemanager' "$Dir/servicemanager.exe" @()
+    $broker = Start-SettingsProcess 'binderd' "$Dir/binderd.exe" @($env:GESHER_BINDER)
+    $null = Start-ReadySettingsManager $broker $env:GESHER_BINDER
     $server = Start-SettingsProcess 'settings-server' "$Dir/dalvikvm.exe" `
       ($VmArguments + 'gesher.services.SettingsProviderRemoteTest' + 'server' + (SettingsGuestPath $ready))
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
@@ -72,8 +107,12 @@ function Test-SettingsProviderTransport([string] $Dir, [string[]] $VmArguments, 
         if (-not $entry.Process.HasExited) { $entry.Process.Kill($true) }
         if (-not $entry.Process.WaitForExit(10000)) { throw "Owned $($entry.Name) did not stop" }
         foreach ($stream in @('Out', 'Err')) {
-          if (-not $entry[$stream].Wait(2000)) { throw "Owned $($entry.Name) output did not drain" }
-          $text = $entry[$stream].GetAwaiter().GetResult()
+          if ($entry.ContainsKey($stream + 'File')) {
+            $text = Get-Content -LiteralPath $entry[$stream + 'File'] -Raw -ErrorAction Stop
+          } else {
+            if (-not $entry[$stream].Wait(2000)) { throw "Owned $($entry.Name) output did not drain" }
+            $text = $entry[$stream].GetAwaiter().GetResult()
+          }
           if ($text) { $output.Add("$($entry.Name) ${stream}: $text") }
         }
       } catch { $failed = $true; $output.Add('Settings cleanup: ' + [string]$_) }
