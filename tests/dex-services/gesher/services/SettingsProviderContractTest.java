@@ -287,5 +287,6 @@ public final class SettingsProviderContractTest {
     public static void main(String[] args) throws Exception {
         contracts(args.length == 0 ? "all" : args[0]);
         System.out.println("Settings provider contracts passed: " + checks + " checks");
+        System.out.println("Settings write access passed: " + SettingsWriteAccessTest.run(true) + " checks");
     }
 }

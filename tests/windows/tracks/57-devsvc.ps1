@@ -52,9 +52,10 @@ function DevsvcWait([int] $Mark, [string[]] $Texts, [int] $Seconds) {
   return $false
 }
 
-function DevsvcLaunch([string] $Activity) {
+function DevsvcLaunch([string] $Activity, [switch] $Window) {
+  $mode = if ($Window) { '--window' } else { '--headless' }
   return StartTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive $devsvcApk), '--activity', ".$Activity",
-    '--keep-task', '--headless')
+    '--keep-task', $mode)
 }
 
 function DevsvcCheck([string] $Name, [string[]] $Problems, [string] $Details) {
@@ -236,7 +237,29 @@ DevsvcCheck 'devsvc: jobs: JobScheduler runs a one-off job (latency, deadline, c
 # The app's clip (HTML text) is on Windows' clipboard, as text and as HTML
 # Format; what PowerShell puts there reaches the app's listener.
 $mark = (DevsvcText $devsvcLog).Length
-$t = DevsvcLaunch 'ClipActivity'
+$t = DevsvcLaunch 'ClipActivity' -Window
+. "$PSScriptRoot/../graphics/WindowChecks.ps1"
+if (-not ('ImeInput' -as [type])) { Add-Type -Path "$PSScriptRoot/../ime/ImeInput.cs" }
+$clipWindow = [IntPtr]::Zero
+$clipFocusProblem = ''
+$deadline = (Get-Date).AddSeconds(90)
+do {
+  $clipLog = DevsvcSince $mark
+  $frame = [regex]::Match($clipLog, 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
+  $identity = [regex]::Match($clipLog, 'devsvc: clip: window process ([0-9]+) uid ([0-9]+)')
+  if ($frame.Success -and $identity.Success) {
+    $clipWindow = [IntPtr][Convert]::ToInt64($frame.Groups[1].Value, 16)
+    if ([GesherWin32]::ProcessId($clipWindow) -ne [int]$identity.Groups[1].Value -or
+        [int]$identity.Groups[2].Value -lt 10000 -or [int]$identity.Groups[2].Value -gt 19999) {
+      $clipFocusProblem = 'the application identity does not own its actual window'
+    } elseif (-not [ImeInput]::Foreground($clipWindow)) {
+      $clipFocusProblem = 'the ordinary clipboard application did not gain actual foreground'
+    }
+    break
+  }
+  Start-Sleep -Milliseconds 100
+} while ((Get-Date) -lt $deadline)
+if ($clipWindow -eq [IntPtr]::Zero) { $clipFocusProblem = 'the clipboard fixture did not create a real application window' }
 $set = DevsvcWait $mark @('devsvc: clip: set; reads back') 300
 Start-Sleep 1
 $winText = (Get-Clipboard -Raw) -as [string]
@@ -246,6 +269,7 @@ $out = WaitTimed $t 200
 $code = $LASTEXITCODE
 $log = DevsvcSince $mark
 $problems = @()
+if ($clipFocusProblem) { $problems += $clipFocusProblem }
 if (-not $set) { $problems += 'the app did not set its clip' }
 if ($winText -ne 'android text 57') { $problems += "Windows' clipboard has '$winText'" }
 if (-not $winHtml.Contains('<b>android html 57</b>')) { $problems += "Windows' HTML Format has no '<b>android html 57</b>'" }

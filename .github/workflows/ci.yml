@@ -109,6 +109,14 @@ jobs:
         run: |
           & .\app-identity-restart.exe
           if ($LASTEXITCODE -ne 0) { throw 'Native application identity restart gate failed' }
+      - name: Build actual private clipboard publication and competing-writer regression
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /I"%JAVA_HOME%\include" /I"%JAVA_HOME%\include\win32" tests\clipboard\publication_windows_test.cc compat\windows\clipboard_bridge.cc /Fe:clipboard-publication.exe ole32.lib uuid.lib user32.lib gdi32.lib windowscodecs.lib
+      - name: Verify real clipboard identity, complete formats and native retirement
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/clipboard/Publication.ps1
       - name: Exact native reader ownership and handle reuse controls
         if: ${{ !cancelled() }}
         shell: pwsh

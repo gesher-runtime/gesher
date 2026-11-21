@@ -53,6 +53,8 @@ def main() -> None:
         sources.append(str(ROOT / 'app/java/android/app/GesherSettingsContext.java'))
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/SettingsProviderContractTest.java',
+            'tests/dex-services/gesher/services/SettingsWriteAccessTest.java',
+            'tests/dex-services/gesher/services/ClipboardFixture.java',
             'tests/settings/SettingsProviderHost.java'))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), *sources], check=True)
