@@ -537,29 +537,35 @@ public final class WindowSession extends IWindowSession.Stub {
             android.app.ActivityManager am = a.getSystemService(android.app.ActivityManager.class);
             if (am == null) return;
             int own = a.getTaskId();
-            List<android.app.ActivityManager.AppTask> tasks = am.getAppTasks();
+            List<IBinder> handles = android.app.ActivityTaskManager.getService()
+                    .getAppTasks(a.getPackageName());
+            List<android.app.IAppTask> tasks = new ArrayList<>();
+            for (IBinder handle : handles) tasks.add(android.app.IAppTask.Stub.asInterface(handle));
             boolean ownApp = false;
-            for (android.app.ActivityManager.AppTask task : tasks) {
+            for (android.app.IAppTask task : tasks) {
                 try {
                     if (task.getTaskInfo().taskId == own) ownApp = true;
-                } catch (RuntimeException e) {
+                } catch (RemoteException | RuntimeException e) {
                     // The task went meanwhile.
                 }
             }
             // Another app's task (this process's Activity in it, a share target): its window
             // is not this app's, and closing it leaves the app's own tasks alone.
             if (!ownApp) return;
-            for (android.app.ActivityManager.AppTask task : tasks) {
+            for (android.app.IAppTask task : tasks) {
                 try {
                     int id = task.getTaskInfo().taskId;
                     if (id == own || keep.contains(id)) continue;
-                    log("the app's window closed: task " + id + " removed");
-                    task.finishAndRemoveTask();
-                } catch (RuntimeException e) {
+                    if (AppWindowTasks.finishNonMinimized(task.asBinder())) {
+                        log("the app's window closed: task " + id + " removed");
+                    } else {
+                        log("the app's window closed: minimized task " + id + " stays");
+                    }
+                } catch (RemoteException | RuntimeException e) {
                     log("the app's window closed: a task stays: " + e);
                 }
             }
-        } catch (RuntimeException e) {
+        } catch (RemoteException | RuntimeException e) {
             log("the app's window closed: its other tasks stay: " + e);
         }
     }

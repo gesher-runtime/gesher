@@ -566,3 +566,6 @@ try {
   if ($savedLogs) { $env:GESHER_LOGS = $savedLogs } else { Remove-Item Env:GESHER_LOGS -ErrorAction SilentlyContinue }
   Remove-Item Env:GESHER_SHORTCUTS -ErrorAction SilentlyContinue
 }
+
+# Required on both desktop Windows versions; all legacy/shared checks above stay unchanged.
+. "$PSScriptRoot/../app-window-lifetime.ps1"

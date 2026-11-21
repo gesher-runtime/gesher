@@ -306,7 +306,7 @@ public final class SystemServer {
             // Gesher's own proxy for the package, over Windows' (docs/network.md).
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
             // One window for the app's tasks, or one each (ADR 0088).
-            env.addAll(com.gesher.app.window.AppWindows.environment(packageName));
+            env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk))), env, logFile.getPath(), false);

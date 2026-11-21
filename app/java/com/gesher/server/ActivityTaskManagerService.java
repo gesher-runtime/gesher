@@ -158,6 +158,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         /** Actual mode captured for this server-spawned process, never an Intent extra. */
         String windowMode;
         boolean windowModeExplicit;
+        /** Same immutable app-task presentation as the package's other live processes. */
+        boolean separateWindows;
         boolean ready;       // finishAttachApplication came
         /** Told to exit (or dying): no longer handed out. Read without the lock (providers). */
         volatile boolean exiting;
@@ -442,6 +444,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final String reason;
         final String windowMode;
         final boolean windowModeExplicit;
+        final boolean separateWindows;
         int pid;
         long nativeStartTime;
         ProcessExitStatus.Generation exitGeneration;
@@ -457,11 +460,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         PendingProcess(String packageName, String processName, String reason, String windowMode,
                 boolean windowModeExplicit) {
+            this(packageName, processName, reason, windowMode, windowModeExplicit,
+                    com.gesher.app.window.AppWindows.separate(packageName));
+        }
+        PendingProcess(String packageName, String processName, String reason, String windowMode,
+                boolean windowModeExplicit, boolean separateWindows) {
             this.packageName = packageName;
             this.processName = processName;
             this.reason = reason;
             this.windowMode = windowMode;
             this.windowModeExplicit = windowModeExplicit;
+            this.separateWindows = separateWindows;
         }
     }
 
@@ -1581,10 +1590,32 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         };
     }
 
-    private final class OwnedAppTask extends IAppTask.Stub {
+    private final class OwnedAppTask extends IAppTask.Stub
+            implements com.gesher.app.window.AppWindowTasks.Local {
         private final AppTaskRecord mTask;
 
         OwnedAppTask(AppTaskRecord task) { mTask = task; }
+
+        @Override public android.os.IInterface queryLocalInterface(String descriptor) {
+            if (com.gesher.app.window.AppWindowTasks.DESCRIPTOR.equals(descriptor)) return this;
+            return super.queryLocalInterface(descriptor);
+        }
+
+        @Override public boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+                throws RemoteException {
+            if (code != com.gesher.app.window.AppWindowTasks.FINISH_NON_MINIMIZED) {
+                return super.onTransact(code, data, reply, flags);
+            }
+            data.enforceInterface(com.gesher.app.window.AppWindowTasks.DESCRIPTOR);
+            data.enforceNoDataAvail();
+            if (reply == null || (flags & IBinder.FLAG_ONEWAY) != 0) {
+                throw new IllegalArgumentException("App-window close requires a reply");
+            }
+            boolean closed = finishFromAppWindow();
+            reply.writeNoException();
+            reply.writeBoolean(closed);
+            return true;
+        }
 
         private boolean checkCaller() {
             boolean system = mAm.callers().isSystem();
@@ -1632,6 +1663,33 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     throw new IllegalArgumentException("Unable to find task ID " + mTask.id);
                 }
             }
+        }
+
+        /** X closes other app tasks, but the user may have minimized one in another process. */
+        @Override public boolean finishFromAppWindow() {
+            checkCaller();
+            synchronized (mLaunchLock) {
+                List<ActivityRecord> selected = new ArrayList<>();
+                synchronized (ActivityTaskManagerService.this) {
+                    requireLiveTaskLocked();
+                    if (userMinimized()) return false;
+                    for (ActivityRecord activity : mActivities) {
+                        if (activity.taskId == mTask.id && !activity.finishing) selected.add(activity);
+                    }
+                }
+                if (selected.isEmpty()) return false;
+                java.util.Collections.reverse(selected);
+                // Recheck at the same lifecycle decision that marks every selected
+                // Activity finishing. A minimize during result preparation wins.
+                return finishTogether(selected.get(0), selected, "app-window-close",
+                        android.app.Activity.RESULT_CANCELED, null,
+                        () -> hasAppTaskLocked(mTask) && !userMinimized());
+            }
+        }
+
+        /** Guarded by ActivityTaskManagerService.this; app-covered is not user-minimized. */
+        private boolean userMinimized() {
+            return mHiddenTasks.contains(mTask.id) && !mAppHiddenTasks.contains(mTask.id);
         }
 
         @Override public void moveToFront(IApplicationThread appThread, String callingPackage) {
@@ -2724,6 +2782,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void assignPackage(ProcessRecord app, String packageName, String processName) {
         app.packageName = packageName;
         app.processName = processName;
+        if (!app.spawned) {
+            app.separateWindows = com.gesher.app.window.AppWindows.separate(packageName);
+            com.gesher.app.window.AppWindows.started(packageName, app.separateWindows);
+        }
         if (app.packageCode == null) app.packageCode = mPm.get(packageName);
         if (app.enabledProcessLifetime == null && app.packageCode != null) {
             app.enabledProcessLifetime = app.packageCode.enabledProcessLifetime();
@@ -2786,6 +2848,38 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         startProcess(packageName, processName, reason, null);
     }
 
+    /** Guarded by this: pending starts participate before either child can attach. */
+    private boolean appWindowModeForStartLocked(String packageName) {
+        for (ProcessRecord process : mProcesses) {
+            if (packageName.equals(process.packageName)) return process.separateWindows;
+        }
+        for (PendingProcess pending : mStarting.values()) {
+            if (packageName.equals(pending.packageName)) return pending.separateWindows;
+        }
+        return com.gesher.app.window.AppWindows.saved(packageName);
+    }
+
+    /** The spawner consumes the exact pending admission, not a later saved preference. */
+    synchronized List<String> appWindowsEnvironment(String packageName, long startSeq) {
+        PendingProcess pending = mStarting.get(startSeq);
+        if (pending == null || !packageName.equals(pending.packageName) || !pendingCurrent(pending)) {
+            throw new IllegalStateException("App windows mode has no current process admission");
+        }
+        return com.gesher.app.window.AppWindows.environment(pending.separateWindows);
+    }
+
+    /** Guarded by this. No separate retained process list or lifetime counter. */
+    private void retireAppWindowModeLocked(String packageName) {
+        if (packageName == null) return;
+        for (ProcessRecord process : mProcesses) {
+            if (packageName.equals(process.packageName)) return;
+        }
+        for (PendingProcess pending : mStarting.values()) {
+            if (packageName.equals(pending.packageName)) return;
+        }
+        com.gesher.app.window.AppWindows.retired(packageName);
+    }
+
     private void startProcess(String packageName, String processName, String reason, String sourceMode) {
         ProcessStarter starter = mStarter;
         if (starter == null) return;
@@ -2808,7 +2902,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             mExitStatus.started(processKey(packageName, processName), seq);
             WindowManagerService.WindowPolicy policy =
                     WindowManagerService.resolveWindowPolicy(packageName, sourceMode);
-            pending = new PendingProcess(packageName, processName, reason, policy.mode, policy.explicit);
+            pending = new PendingProcess(packageName, processName, reason, policy.mode, policy.explicit,
+                    appWindowModeForStartLocked(packageName));
             pending.owner = owner;
             pending.enabledLifetime = enabledLifetime;
             pending.exitGeneration = mExitStatus.capture(processKey(packageName, processName), seq);
@@ -2833,6 +2928,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         + " resolved=" + policy.mode + " captured-explicit=" + policy.explicit);
             }
             mStarting.put(seq, pending);
+            com.gesher.app.window.AppWindows.started(packageName, pending.separateWindows);
             updateIdle();
         }
         int pid;
@@ -2905,6 +3001,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (mStarting.get(seq) != pending) return;
             mExitStatus.unavailable(pending.exitGeneration);
             mStarting.remove(seq);
+            retireAppWindowModeLocked(pending.packageName);
             for (int i = mActivities.size() - 1; i >= 0; i--) {
                 ActivityRecord r = mActivities.get(i);
                 if (r.app == null && !r.deferredHistory && r.launchGeneration == pending.exitGeneration) {
@@ -3180,6 +3277,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (pending.owner == null || pending.owner.uid() != expected.uid()) continue;
                 pending.cancelled = true;
                 mStarting.remove(entry.getKey());
+                retireAppWindowModeLocked(pending.packageName);
                 mExitStatus.unavailable(pending.exitGeneration);
                 if (pending.pid > 0) Zygote.killChild(pending.pid, pending.nativeStartTime);
                 for (PendingWork work : mPendingWork) {
@@ -3276,6 +3374,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         || pending.enabledLifetime.getAsBoolean()) continue;
                 pending.cancelled = true;
                 mStarting.remove(entry.getKey());
+                retireAppWindowModeLocked(pending.packageName);
                 mExitStatus.unavailable(pending.exitGeneration);
                 if (pending.pid > 0) Zygote.killChild(pending.pid, pending.nativeStartTime);
                 for (ActivityRecord activity : mActivities) {
@@ -3525,6 +3624,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 app.enabledProcessLifetime = started.enabledLifetime;
                 app.windowMode = started.windowMode;
                 app.windowModeExplicit = started.windowModeExplicit;
+                app.separateWindows = started.separateWindows;
                 waiting = started.packageName;
                 waitingProcess = started.processName;
             } else {
@@ -3718,6 +3818,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             if (!mProcesses.remove(app)) return;
             app.dead = true;
+            retireAppWindowModeLocked(app.packageName);
             for (ActivityRecord r : new ArrayList<>(app.activities)) {
                 for (ActivityRecord a : mActivities) {
                     if (a.waitingFor == r) {
@@ -4704,6 +4805,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private boolean finishTogether(ActivityRecord source, List<ActivityRecord> selected,
             String reason, int resultCode, Intent resultData) {
+        return finishTogether(source, selected, reason, resultCode, resultData, () -> true);
+    }
+
+    private boolean finishTogether(ActivityRecord source, List<ActivityRecord> selected,
+            String reason, int resultCode, Intent resultData,
+            java.util.function.BooleanSupplier allowedAtCommit) {
         List<PendingFinish> prepared = new ArrayList<>();
         synchronized (mPm) {
             for (ActivityRecord r : selected) {
@@ -4722,7 +4829,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         List<PendingFinish> accepted = new ArrayList<>();
         Map<ActivityRecord, List<ResultInfo>> immediateResults = new java.util.LinkedHashMap<>();
         synchronized (this) {
-            if (isActivityRetired(source)) return false;
+            if (isActivityRetired(source) || !allowedAtCommit.getAsBoolean()) return false;
             for (PendingFinish pending : prepared) {
                 ActivityRecord r = pending.activity;
                 if (isActivityRetired(r) || r.finishing) continue;

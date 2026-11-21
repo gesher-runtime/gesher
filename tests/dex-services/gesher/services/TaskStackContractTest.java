@@ -206,6 +206,10 @@ public final class TaskStackContractTest {
             } finally { Binder.restoreCallingIdentity(original); }
             set(process, "packageName", PKG);
             set(process, "processName", PKG);
+            // This fixture supplies an already admitted process. Keep its captured
+            // choice consistent with the server's actual package setting.
+            try { set(process, "separateWindows", com.gesher.app.window.AppWindows.separate(PKG)); }
+            catch (NoSuchFieldException oldSource) { /* old records had no captured mode */ }
             set(process, "ready", true);
             ((List<Object>)get(tasks, "mProcesses")).add(process);
             if (!realBinder) { api = (IActivityTaskManager) tasks; return; }
@@ -1471,14 +1475,339 @@ public final class TaskStackContractTest {
         }
     }
 
+    private static final class CloseProbeActivity extends android.app.Activity {
+        int task;
+        android.app.ActivityManager manager;
+        @Override public String getPackageName() { return PKG; }
+        @Override public int getTaskId() { return task; }
+        @Override public String getSystemServiceName(Class<?> type) {
+            if (type == android.app.ActivityManager.class) return android.content.Context.ACTIVITY_SERVICE;
+            throw new AssertionError("Unexpected service type " + type);
+        }
+        @Override public Object getSystemService(String name) {
+            if (android.content.Context.ACTIVITY_SERVICE.equals(name)) return manager;
+            throw new AssertionError("Unexpected service " + name);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void closeMinimizedAppTasks() throws Exception {
+        // Actual current task service and framework AppTask handles. Only Activity lookup
+        // and the process-local Win32 minimized set are the declared host boundaries.
+        for (int scenario = 0; scenario < 3; scenario++) {
+            separateWindows(PKG, false);
+            Harness h = new Harness();
+            h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Object root = h.record("Root");
+            h.acknowledge("activityResumed", root);
+            h.start(launch("Doc").setData(android.net.Uri.parse("content://fixture/close-probe/" + scenario)));
+            Object doc = h.record("Doc");
+            h.acknowledge("activityPaused", root);
+            h.acknowledgeStopped(root);
+            h.acknowledge("activityResumed", doc);
+            int own = (Integer)get(root, "taskId"), sibling = (Integer)get(doc, "taskId");
+            h.asApp(() -> check(h.api.getActivityClientController().moveActivityTaskToBack(
+                    (IBinder)get(doc, "token"), true), "Minimized sibling setup was rejected"));
+            h.acknowledge("activityPaused", doc);
+            h.acknowledgeStopped(doc);
+            h.asApp(() -> h.api.moveTaskToFront(h.thread, PKG, own, 0, null));
+            h.acknowledge("activityResumed", root);
+            java.util.Set<Integer> hidden = (java.util.Set<Integer>)get(h.tasks, "mHiddenTasks");
+            java.util.Set<Integer> covered = (java.util.Set<Integer>)get(h.tasks, "mAppHiddenTasks");
+            check(hidden.contains(sibling) && !covered.contains(sibling) && live(h, doc),
+                    "Sibling is not a real live user-minimized service task");
+
+            Object singleton = field(android.app.ActivityTaskManager.class,
+                    "IActivityTaskManagerSingleton").get(null);
+            Field instance = field(android.util.Singleton.class, "mInstance");
+            Object previous = instance.get(singleton);
+            instance.set(singleton, h.api);
+            try {
+                CloseProbeActivity activity = (CloseProbeActivity)UNSAFE.allocateInstance(CloseProbeActivity.class);
+                activity.task = own;
+                activity.manager = (android.app.ActivityManager)make(android.app.ActivityManager.class,
+                        new Class<?>[]{android.content.Context.class, android.os.Handler.class}, h.context(), null);
+                Method close = Class.forName("com.gesher.app.window.WindowSession")
+                        .getDeclaredMethod("finishOtherAppTasks", android.app.Activity.class, java.util.Set.class);
+                close.setAccessible(true);
+                final int current = scenario;
+                h.asApp(() -> {
+                    java.util.List<android.app.ActivityManager.AppTask> handles = activity.manager.getAppTasks();
+                    check(handles.size() == 2, "Actual package-wide task handles missing");
+                    if (current == 1) {
+                        for (var task : handles) if (task.getTaskInfo().taskId == sibling)
+                            task.finishAndRemoveTask();
+                    } else {
+                        close.invoke(null, activity, current == 0 ? java.util.Set.of(sibling) : java.util.Set.of());
+                    }
+                });
+                boolean remains = live(h, doc);
+                System.out.println("CLOSE_PROBE scenario=" + scenario + " minimizedSiblingLive=" + remains
+                        + " currentRootLive=" + live(h, root));
+                check(live(h, root), "Other-task closure finished its current activity");
+                if (scenario == 0) check(remains, "Same-process minimized keep control failed");
+                if (scenario == 1) check(!remains, "Ordinary public finishAndRemoveTask must remain unconditional");
+                if (scenario == 2) check(remains,
+                        "X-close deleted a live user-minimized sibling absent from this process's HWND keep set");
+            } finally {
+                instance.set(singleton, previous);
+                separateWindows(PKG, true);
+            }
+        }
+    }
+
+
+    private static boolean closeOwnedTask(IBinder handle) throws RemoteException {
+        return com.gesher.app.window.AppWindowTasks.finishNonMinimized(appTask(handle).asBinder());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void conditionalCloseOwnership() throws Exception {
+        Harness h = new Harness();
+        h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        Object root = h.record("Root"); h.acknowledge("activityResumed", root);
+        IBinder handle = h.api.getAppTasks(PKG).get(0);
+        long identity = Binder.clearCallingIdentity();
+        try {
+            int foreignPid = PID + 100;
+            Binder.restoreCallingIdentity(((long)(UID + 1) << 32) | foreignPid);
+            Object foreign = make(h.process.getClass(), new Class<?>[]{h.tasks.getClass(), int.class,
+                    IApplicationThread.class}, h.tasks, foreignPid, new AppThread());
+            set(foreign, "packageName", PKG + ".second");
+            set(foreign, "processName", PKG + ".second"); set(foreign, "ready", true);
+            ((List<Object>)get(h.tasks, "mProcesses")).add(foreign);
+            rejects(SecurityException.class, () -> closeOwnedTask(handle));
+            check(live(h, root), "Foreign AppTask holder closed another package's task");
+        } finally { Binder.restoreCallingIdentity(identity); }
+        h.asApp(() -> check(closeOwnedTask(handle), "Owned non-minimized task was not closed"));
+        check(!live(h, root), "Conditional close answered success without finishing its task");
+        h.asApp(() -> rejects(IllegalArgumentException.class, () -> closeOwnedTask(handle)));
+
+        // Stop at the real result-preparation PM monitor, after the first minimized check.
+        // The actual lifecycle API then minimizes/restores or replaces the owner before commit.
+        for (int scenario = 0; scenario < 3; scenario++) {
+            Harness race = new Harness();
+            race.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Object activity = race.record("Root"); race.acknowledge("activityResumed", activity);
+            IBinder task = race.api.getAppTasks(PKG).get(0);
+            var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            boolean[] closed = {false};
+            Thread close = new Thread(() -> {
+                try { race.asApp(() -> closed[0] = closeOwnedTask(task)); }
+                catch (Throwable error) { failure.set(error); }
+            }, "conditional-window-close-fixture");
+            try {
+                synchronized (race.packages) {
+                    close.start();
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    boolean preparing = false;
+                    do {
+                        for (StackTraceElement frame : close.getStackTrace()) {
+                            if (frame.getMethodName().equals("finishTogether")) preparing = true;
+                        }
+                        if (preparing || !close.isAlive()) break;
+                        Thread.sleep(1);
+                    } while (System.nanoTime() < deadline);
+                    check(preparing && close.getState() == Thread.State.BLOCKED,
+                            "Conditional close never reached its real pre-commit monitor");
+                    if (scenario == 2) {
+                        publishFixtureCode(race, PKG, code(PKG, UID));
+                    } else {
+                        race.asApp(() -> check(race.api.getActivityClientController().moveActivityTaskToBack(
+                                (IBinder)get(activity, "token"), true), "Concurrent minimize was rejected"));
+                        if (scenario == 1) race.asApp(() -> race.api.moveTaskToFront(race.thread, PKG,
+                                (Integer)get(activity, "taskId"), 0, null));
+                    }
+                }
+            } finally { close.join(5000); }
+            check(!close.isAlive(), "Conditional task close did not retire");
+            if (failure.get() != null) throw new AssertionError("Concurrent close failed", failure.get());
+            check(closed[0] == (scenario == 1),
+                    "Conditional close did not use the minimized/owner state at lifecycle commit: " + scenario);
+            check(live(race, activity) == (scenario != 1),
+                    "Conditional close changed a minimized/retired task or lost a restored close: " + scenario);
+        }
+    }
+
+    /** Spawner boundary only: no child/PID is invented by this service admission fixture. */
+    private static final class ModeStart implements AutoCloseable {
+        final CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicReference<Throwable> failure =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        volatile List<String> environment;
+        volatile long sequence;
+        Thread thread;
+        void ready() throws Exception {
+            check(entered.await(5, TimeUnit.SECONDS), "Process admission never reached the spawner");
+            if (failure.get() != null) throw new AssertionError("Admission failed", failure.get());
+        }
+        boolean separate() { return environment.contains("GESHER_SEPARATE_WINDOWS=1"); }
+        @Override public void close() throws Exception {
+            release.countDown();
+            thread.join(5000);
+            check(!thread.isAlive(), "Failed-spawn admission thread did not retire");
+            if (failure.get() != null) throw new AssertionError("Admission failed", failure.get());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> admittedEnvironment(Harness h, String pkg, long sequence) throws Exception {
+        try {
+            Method mode = h.tasks.getClass().getDeclaredMethod("appWindowsEnvironment", String.class, long.class);
+            mode.setAccessible(true);
+            try { return (List<String>)mode.invoke(h.tasks, pkg, sequence); }
+            catch (java.lang.reflect.InvocationTargetException e) {
+                if (e.getCause() instanceof RuntimeException failure) throw failure;
+                throw e;
+            }
+        } catch (NoSuchMethodException oldSource) {
+            // Exact old-source control: this was SystemServer's actual spawner call.
+            return (List<String>)Class.forName("com.gesher.app.window.AppWindows")
+                    .getMethod("environment", String.class).invoke(null, pkg);
+        }
+    }
+
+    private static java.util.Map<String, ModeStart> modeStarter(Harness h) throws Exception {
+        java.util.Map<String, ModeStart> starts = new java.util.concurrent.ConcurrentHashMap<>();
+        Class<?> starter = type("ActivityTaskManagerService$ProcessStarter");
+        Object proxy = java.lang.reflect.Proxy.newProxyInstance(starter.getClassLoader(),
+                new Class<?>[]{starter}, (self, method, args) -> {
+                    if (!method.getName().equals("start") || args.length != 5) {
+                        throw new AssertionError("Unexpected process starter call: " + method);
+                    }
+                    ModeStart pending = starts.get((String)args[1]);
+                    if (pending == null) throw new AssertionError("Unrequested process " + args[1]);
+                    try {
+                        pending.sequence = (Long)args[2];
+                        pending.environment = admittedEnvironment(h, (String)args[0], pending.sequence);
+                        pending.entered.countDown();
+                        if (!pending.release.await(10, TimeUnit.SECONDS)) {
+                            throw new AssertionError("Admission fixture release timed out");
+                        }
+                        return -1; // A real failed spawn result: exercise the actual rollback.
+                    } catch (Throwable failure) {
+                        pending.failure.set(failure); pending.entered.countDown(); throw failure;
+                    }
+                });
+        Method install = h.tasks.getClass().getDeclaredMethod("setProcessStarter", starter);
+        install.setAccessible(true); install.invoke(h.tasks, proxy);
+        return starts;
+    }
+
+    private static ModeStart beginModeStart(Harness h, java.util.Map<String, ModeStart> starts,
+            String pkg, String process) throws Exception {
+        ModeStart pending = new ModeStart();
+        starts.put(process, pending);
+        Method start = h.tasks.getClass().getDeclaredMethod("startProcess", String.class, String.class, String.class);
+        start.setAccessible(true);
+        pending.thread = new Thread(() -> {
+            try { start.invoke(h.tasks, pkg, process, "window-mode-contract"); }
+            catch (Throwable failure) { pending.failure.set(failure); pending.entered.countDown(); }
+        }, "window-mode-admission-fixture");
+        pending.thread.start();
+        return pending;
+    }
+
+    private static void retireModeProcess(Harness h) throws Exception {
+        Method died = h.tasks.getClass().getDeclaredMethod("processDied", h.process.getClass());
+        died.setAccessible(true); died.invoke(h.tasks, h.process);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean retainedWindowMode(String pkg) throws Exception {
+        java.util.Map<String, Boolean> map = (java.util.Map<String, Boolean>)field(
+                Class.forName("com.gesher.app.window.AppWindows"), "sStarted").get(null);
+        synchronized (map) { return map.containsKey(pkg); }
+    }
+
+    /** Actual saved preferences and ATM pending/live records, with a failed OS-spawn boundary. */
+    private static void packageWindowModeLifetime() throws Exception {
+        boolean saved = com.gesher.app.window.AppWindows.saved(PKG);
+        String other = PKG + ".second";
+        boolean otherSaved = com.gesher.app.window.AppWindows.saved(other);
+        try {
+            separateWindows(PKG, null);
+            com.gesher.app.window.AppWindows.save(PKG, false);
+            Harness h = new Harness();
+            retireModeProcess(h); // Retire the harness's pre-admitted process through real cleanup.
+            var starts = modeStarter(h);
+            try (ModeStart first = beginModeStart(h, starts, PKG, PKG + ":first")) {
+                first.ready();
+                check(!first.separate(), "First package lifetime did not capture the shared default");
+                com.gesher.app.window.AppWindows.save(PKG, true);
+                try (ModeStart second = beginModeStart(h, starts, PKG, PKG + ":second")) {
+                    second.ready();
+                    check(!second.separate() && !com.gesher.app.window.AppWindows.separate(PKG),
+                            "Saved next-start setting changed an overlapping pending package lifetime");
+                    check(second.environment.equals(first.environment),
+                            "The same package's pending processes received different mode environments");
+                    rejects(IllegalStateException.class,
+                            () -> admittedEnvironment(h, other, second.sequence));
+                    com.gesher.app.window.AppWindows.save(other, true);
+                    try (ModeStart unrelated = beginModeStart(h, starts, other, other + ":one")) {
+                        unrelated.ready();
+                        check(unrelated.separate(), "Another package inherited the first package's mode");
+                    }
+                    check(!retainedWindowMode(other), "Failed unrelated spawn retained an ownerless mode");
+                }
+                check(!com.gesher.app.window.AppWindows.separate(PKG),
+                        "One failed pending start retired another pending owner's mode");
+            }
+            check(((java.util.Map<?, ?>)get(h.tasks, "mStarting")).isEmpty()
+                    && !retainedWindowMode(PKG), "Last failed spawn leaked pending mode state");
+            try (ModeStart next = beginModeStart(h, starts, PKG, PKG + ":next")) {
+                next.ready();
+                check(next.separate(), "The next package lifetime did not pick up the saved setting");
+            }
+            check(!retainedWindowMode(PKG), "Repeated failed starts retained package entries");
+
+            // An already admitted process keeps the choice after every pending start fails.
+            Harness live = new Harness();
+            separateWindows(PKG, false);
+            try { set(live.process, "separateWindows", false); }
+            catch (NoSuchFieldException oldSource) { /* old process has no captured mode */ }
+            var liveStarts = modeStarter(live);
+            try (ModeStart extra = beginModeStart(live, liveStarts, PKG, PKG + ":extra")) {
+                extra.ready();
+                check(!extra.separate(), "Additional process ignored its still-live package owner");
+            }
+            check(!com.gesher.app.window.AppWindows.separate(PKG),
+                    "Failed extra process replaced the live package's mode");
+            retireModeProcess(live);
+            check(!retainedWindowMode(PKG) && com.gesher.app.window.AppWindows.separate(PKG),
+                    "The last live owner did not retire its captured mode");
+            check(!retainedWindowMode(PKG), "An idle-package query retained a permanent mode record");
+
+            // A queued admission belongs to its exact package code, not a later replacement.
+            Harness stale = new Harness(); retireModeProcess(stale);
+            var staleStarts = modeStarter(stale);
+            try (ModeStart pending = beginModeStart(stale, staleStarts, PKG, PKG + ":stale")) {
+                pending.ready();
+                publishFixtureCode(stale, PKG, code(PKG, UID));
+                rejects(IllegalStateException.class,
+                        () -> admittedEnvironment(stale, PKG, pending.sequence));
+            }
+            check(!retainedWindowMode(PKG), "Retired package admission leaked its mode");
+        } finally {
+            com.gesher.app.window.AppWindows.save(PKG, saved);
+            com.gesher.app.window.AppWindows.save(other, otherSaved);
+            separateWindows(PKG, true); separateWindows(other, null);
+        }
+    }
+
     public static int run(boolean binder, String selected) throws Exception {
         realBinder = binder; checks = 0;
         // The other groups check each task as a window of its own (multi-resume): the
         // app's separate-windows setting. oneWindowPerApp checks the default.
+        // Use the saved setting too: process-death tests genuinely retire the last
+        // mode owner, so a cache-only override must not outlive that package lifetime.
+        boolean saved = com.gesher.app.window.AppWindows.saved(PKG);
+        com.gesher.app.window.AppWindows.save(PKG, true);
         separateWindows(PKG, true);
         try {
             return runSelected(selected);
         } finally {
+            com.gesher.app.window.AppWindows.save(PKG, saved);
             separateWindows(PKG, null);
         }
     }
@@ -1496,6 +1825,10 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("permissions")) permissions();
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
         if (selected.equals("all") || selected.equals("back")) backOnTaskRoot();
+        if (selected.equals("all") || selected.equals("windowclose")) {
+            closeMinimizedAppTasks(); conditionalCloseOwnership();
+        }
+        if (selected.equals("all") || selected.equals("windowmode")) packageWindowModeLifetime();
         return checks;
     }
     public static void main(String[] args) throws Exception {

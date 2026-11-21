@@ -40,7 +40,7 @@ public final class AppWindows {
     public static final int MOVE_TASK_FROM_WINDOW = 0x40000000;
     private static final String KEY = "separate.";
 
-    /** What the system server gave each package's processes it started last. */
+    /** The mode owned by each live or pending package process lifetime. */
     private static final Map<String, Boolean> sStarted = new HashMap<>();
 
     public static File file() {
@@ -84,16 +84,23 @@ public final class AppWindows {
         }
     }
 
-    /**
-     * The system server, as it starts a process of the package: its environment for the
-     * setting, which the package's tasks are grouped by from now on.
-     */
-    public static java.util.List<String> environment(String packageName) {
-        boolean separate = saved(packageName);
+    /** ATM records a choice while admitting the first process of a package lifetime. */
+    public static void started(String packageName, boolean separate) {
         synchronized (sStarted) {
             sStarted.put(packageName, separate);
         }
-        return separate ? java.util.List.of(ENV + "=1") : java.util.List.of();
+    }
+
+    /** Exact admitted process mode, including an explicit shared override of inherited env. */
+    public static java.util.List<String> environment(boolean separate) {
+        return java.util.List.of(ENV + (separate ? "=1" : "=0"));
+    }
+
+    /** ATM retires the choice after the last live/pending process record is removed. */
+    public static void retired(String packageName) {
+        synchronized (sStarted) {
+            sStarted.remove(packageName);
+        }
     }
 
     /**
@@ -105,12 +112,9 @@ public final class AppWindows {
             Boolean v = sStarted.get(packageName);
             if (v != null) return v;
         }
-        boolean separate = saved(packageName);
-        synchronized (sStarted) {
-            // Read once; the package's next process start reads it again.
-            sStarted.putIfAbsent(packageName, separate);
-        }
-        return separate;
+        // An unstarted package has no mode owner. Do not retain a lookup forever or
+        // let it replace the choice of the next admitted package lifetime.
+        return saved(packageName);
     }
 
     /** This app process: whether its tasks are windows of their own ({@link #ENV}). */
