@@ -429,7 +429,7 @@ public final class SplitPackageContractTest {
         // those types, even when no uses-split dependency makes parsing itself fail.
         Files.write(base.toPath(), inputs.get("base-required"));
         Files.write(core.toPath(), inputs.get("core-typed"));
-        result = (String[]) fullInstall.invoke(installer, base.getPath(), sessionMetadata);
+        result = (String[]) fullInstall.invoke(installer, base.getPath(), sessionMetadata, null);
         require("updated".equals(result[1]), "Complete required-split set was not installed");
         loadFeature(metadata(pm.get(PACKAGE)));
         Files.delete(core.toPath());
@@ -442,7 +442,7 @@ public final class SplitPackageContractTest {
         for (String mode : new String[]{"full-session", "archive-without-types", "archive-without-splits"}) {
             try {
                 if (mode.equals("full-session")) {
-                    fullInstall.invoke(installer, base.getPath(), sessionMetadata);
+                    fullInstall.invoke(installer, base.getPath(), sessionMetadata, null);
                 } else {
                     Map<String, byte[]> incomplete = new LinkedHashMap<>();
                     incomplete.put("base.apk", inputs.get("base-required"));
