@@ -214,7 +214,7 @@ public final class PermissionPerformanceHost {
             System.out.println("startup: " + count + " packages/custom permissions, " + packageVisits + " full-map package visits");
             packageVisits = 0;
             fixture.policy.initializePackages();
-            check(packageVisits == 2L * count, "Reconciliation of the same publication reuses only the UID index");
+            check(packageVisits == count, "Reconciliation of the same publication reuses the UID and declaration indexes: " + packageVisits);
         }
         CountingPackages packages = new CountingPackages();
         for (int i = 0; i < 100; i++) {
@@ -261,7 +261,19 @@ public final class PermissionPerformanceHost {
                             && entry.getValue().protectionLevel == direct.protectionLevel,
                     "Snapshot and individual permission definitions agree");
         }
+        packageVisits = 0;
+        for (int i = 0; i < 10000; i++) {
+            PermissionInfo declared = fixture.catalog.get("fixture.LAST");
+            if (declared == null || !declared.packageName.equals(same.packageName)) throw new AssertionError("Declared definition changed");
+            declared.protectionLevel = PermissionInfo.PROTECTION_SIGNATURE;  // callers receive private copies
+        }
+        System.out.println("catalog: 10000 app-declared definition lookups, " + packageVisits + " full-map package visits");
+        check(packageVisits == 0, "Warm app-declared definitions must not scan installed packages; got " + packageVisits);
+        check(fixture.catalog.get("fixture.LAST").protectionLevel == PermissionInfo.PROTECTION_NORMAL,
+                "A caller's copy cannot change the published definition");
+        check(fixture.catalog.get("fixture.MISSING") == null && packageVisits == 0, "Undeclared names remain absent without a scan");
         fixture.publish(packages(first));
+        check(fixture.catalog.get("fixture.LAST") == null, "A removed declaration is not served from the previous publication");
         check(fixture.catalog.permissions().get("fixture.CONFLICT") != null,
                 "Removing the conflicting declaration is reflected by the next catalogue snapshot");
     }

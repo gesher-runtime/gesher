@@ -102,7 +102,17 @@ boundaries are explicit; this is not a Windows/ART application launch test.
 | Startup: 100 such packages | 1,020,100 visits in the preceding audit | 300 |
 | Startup: 100 requested custom runtime definitions | — | 300 visits; all 100 complete UID states persisted |
 | 1,000 fixed-mode AppOps checks | 1,000 global UID-state snapshots | 0 |
+| 10,000 warm lookups of an app-declared definition; three declaring packages | 30,000 package visits (this PR's first head) | 0 |
+| Startup reconciliation repeated on the same publication; 25 packages | 50 package visits (this PR's first head) | 25 |
 | First later microG policy check after full verification of the official 4,210,169-byte Companion APK | 4,199,678 additional SHA-256 input bytes | 753 certificate bytes |
+
+App-declared definitions (for example AndroidX's per-application
+`DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, checked on receiver delivery) are
+indexed by the same immutable published package-map object as UID membership.
+Conflicting signers, reserved names, same-signer last-definition and catalogue
+order keep the previous single-pass rules, and callers still receive copies.
+The later rows were measured on Windows (JDK 25, a JNI host DLL built with
+llvm-mingw) against the earlier head's `PermissionCatalog` as negative control.
 
 The zero steady-state counts exclude initial index construction and mandatory
 identity admission. The package-visit results concern these catalogue/index
@@ -140,6 +150,14 @@ fixture preparation. It is an informational host observation. Identical files
 still require reading both contents; a first-chunk mismatch now stops after
 512 KiB total rather than reading and hashing 128 MiB. Stable valid release
 metadata already avoids this comparison and continues doing so.
+
+The first published head used a generic delegate type literal that Windows
+PowerShell 5.1 cannot parse, so the launcher helper failed to load there. The
+comparator now calls the emitted static `memcmp` directly. On Windows
+PowerShell 5.1 (Windows Server 2025), nine alternating samples on identical
+64 MiB files gave medians of 110.2 ms for the old two-hash comparison and
+42.8 ms for the exact comparison; a first-byte mismatch returned in 0.9 ms.
+`tests/windows/shell/RuntimeFileChecks.ps1` passes 87 checks under 5.1.
 
 ## Memory, invalidation and concurrency
 
@@ -210,8 +228,8 @@ tests are included in the launcher suite.
 Local sanitizer executions disabled LeakSanitizer because of the execution
 environment's ptrace limitation. ASan, UBSan and separate TSan execution remained
 enabled. Windows object compilation is not Windows execution. The launcher
-host run is PowerShell 7 on Linux; Windows PowerShell 5.1's .NET Framework branch
-must run in the existing Windows jobs. Java host contracts do not replace ART
+host run is PowerShell 7 on Linux; the Windows PowerShell 5.1 branch was later
+run locally on Windows and must also pass the existing Windows jobs. Java host contracts do not replace ART
 Binder execution. Physical-adapter readback/keepalive performance is not measured
 by these probes.
 
