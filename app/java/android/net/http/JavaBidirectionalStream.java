@@ -27,6 +27,10 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     private volatile Response info;
     private int initialHeaderCount;
     private int pendingCallbacks;
+    private static final int TRANSFER_BYTES=32768;
+    // Only the serial writer uses these bytes. Terminal publication drops its
+    // reference without modifying a buffer still owned by an in-flight write.
+    private byte[] writeScratch;
     private static void trace(String value) {
         if ("1".equals(System.getenv("GESHER_HTTP_ENGINE_TRACE"))) System.err.println("HttpEngine stream: "+value);
     }
@@ -131,13 +135,21 @@ final class JavaBidirectionalStream extends BidirectionalStream {
             for (Write write:batch) {
                 for (;;) {
                     byte[] bytes;
+                    int count;
                     synchronized (this) {
                         if (done) return;
                         if (!write.buffer.hasRemaining()) break;
-                        bytes=new byte[Math.min(32768,write.buffer.remaining())];
-                        write.buffer.get(bytes);
+                        int desired=Math.min(TRANSFER_BYTES,write.buffer.remaining());
+                        if (writeScratch==null || writeScratch.length<desired) {
+                            int capacity=writeScratch==null ? Math.max(256,desired)
+                                    : Math.max(writeScratch.length*2,desired);
+                            writeScratch=new byte[Math.min(TRANSFER_BYTES,capacity)];
+                        }
+                        bytes=writeScratch;
+                        count=Math.min(bytes.length,write.buffer.remaining());
+                        write.buffer.get(bytes,0,count);
                     }
-                    transport.write(bytes);
+                    transport.write(bytes,0,count);
                 }
                 if (done) return;
                 transport.flush(write.end);
@@ -163,10 +175,11 @@ final class JavaBidirectionalStream extends BidirectionalStream {
      * requiring an extra application read: gRPC stops reading at message end.
      */
     private void pump() throws Exception {
+        byte[] bytes=new byte[TRANSFER_BYTES];
         for (;;) {
-            byte[] bytes=transport.read(32768);
+            int length=transport.read(bytes,0,bytes.length);
             if (done) return;
-            if (bytes==null) {
+            if (length<0) {
                 List<Map.Entry<String,String>> all=transport.headers();
                 List<Map.Entry<String,String>> trailing=new ArrayList<>();
                 for (int index=0;index<all.size();index++) {
@@ -192,13 +205,13 @@ final class JavaBidirectionalStream extends BidirectionalStream {
                 return;
             }
             int offset=0;
-            while (offset<bytes.length) {
+            while (offset<length) {
                 ByteBuffer buffer;
                 synchronized (this) {
                     while (pendingRead==null && !done) wait();
                     if (done) return;
                     buffer=pendingRead; pendingRead=null; readPending=false;
-                    int count=Math.min(buffer.remaining(),bytes.length-offset);
+                    int count=Math.min(buffer.remaining(),length-offset);
                     buffer.put(bytes,offset,count); offset+=count; info.received+=count;
                 }
                 callback(() -> callback.onReadCompleted(this,info,buffer,false));
@@ -228,7 +241,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         final Response terminalInfo;
         synchronized (this) {
             if (done) return;
-            done=true; terminalInfo=info; writes.clear(); pendingRead=null; notifyAll();
+            done=true; terminalInfo=info; writes.clear(); pendingRead=null; writeScratch=null; notifyAll();
         }
         trace(canceled ? "canceled" : error==null ? "succeeded" : "failed");
         try { engine.io.execute(() -> { Http2Transport t=transport; if (t!=null) try { t.close(); } catch (Exception ignored) {} }); }

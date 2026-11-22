@@ -217,6 +217,21 @@ Only that owner or the trusted host can read passwords/user data or mutate
 protected account secrets. Enumeration respects per-client visibility;
 visibility alone does not grant a normal authentication token.
 
+Visibility resolves as Android's `resolveAccountVisibility`: the authenticator
+always sees its accounts, and a value stored for a client's package and code
+identity wins. A client with no stored value gets the authenticator's
+`PACKAGE_NAME_KEY_LEGACY_VISIBLE` value (default `USER_MANAGED_VISIBLE`) when
+it shares the authenticator's signing certificate, holds
+`GET_ACCOUNTS_PRIVILEGED`, targets below API 26 with `GET_ACCOUNTS`, or holds
+`READ_CONTACTS` for a type whose authenticator holds `WRITE_CONTACTS`.
+Otherwise it gets the `PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE` value (default
+`USER_MANAGED_NOT_VISIBLE`), so an unset client sees nothing in ordinary
+enumeration unless the authenticator changed that default. As on Android,
+`getAccountsByTypeForPackage` called by the type's authenticator also returns
+accounts that are `USER_MANAGED_NOT_VISIBLE` to the client, but never explicit
+denials. microG's account provider (`com.google.android.gms.auth.accounts`)
+uses this call to list the accounts it may offer a calling app.
+
 Token requests bind the real declared authenticator service and retain the
 authenticated requesting application's identity. Normal token access requires
 an explicit client/token-type grant; interactive access uses host credential
