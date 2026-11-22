@@ -21,6 +21,7 @@ final class Http2Transport implements Closeable {
     private final Http2SessionPool pool;
     private final boolean privatePool;
     private Http2SessionPool.Session lease;
+    private Http2SessionPool.Route route;
     private int operations;
     private Object connection, stream, source, sink;
     private volatile boolean closed;
@@ -76,6 +77,11 @@ final class Http2Transport implements Closeable {
     private void reset(Object value) throws IOException {
         if (value==null) return;
         try {
+            // A stream whose both directions completed is already closed
+            // (RFC 9113 section 5.1). A request body ends with Sink.close, which
+            // the provider records as closed rather than finished; resetting
+            // that stream would add a spurious RST_STREAM to every success.
+            if (!(Boolean)call(streamClass,value,"isOpen",new Class<?>[0])) return;
             Class<?> error=Class.forName(HTTP+"internal.framed.ErrorCode");
             call(streamClass,value,"closeLater",new Class<?>[]{error},error.getField("CANCEL").get(null));
         } catch (Exception failure) { throw new IOException("Cannot retire HTTP/2 stream",failure); }
@@ -101,15 +107,31 @@ final class Http2Transport implements Closeable {
     void connect(URL url, Network network) throws Exception {
         enter();
         try {
-            Http2SessionPool.Session acquired=pool.acquire(new Http2SessionPool.Route(url,network));
-            synchronized (this) { lease=acquired; }
-            if (closed) { acquired.cancelConnectingOrWake(); throw new IOException("Stream closed"); }
-            acquired.connect();
-            synchronized (this) {
-                if (closed) throw new IOException("Stream closed");
-                connection=acquired.connection;
-            }
+            Http2SessionPool.Route selected=new Http2SessionPool.Route(url,network);
+            synchronized (this) { route=selected; }
+            lease(selected);
         } finally { leave(); }
+    }
+    private void lease(Http2SessionPool.Route selected) throws Exception {
+        Http2SessionPool.Session acquired=pool.acquire(selected);
+        synchronized (this) { lease=acquired; }
+        if (closed) { acquired.cancelConnectingOrWake(); throw new IOException("Stream closed"); }
+        acquired.connect();
+        synchronized (this) {
+            if (closed) throw new IOException("Stream closed");
+            connection=acquired.connection;
+        }
+    }
+    /** The leased session stopped admitting streams before this request had one. */
+    private void replaceSession() throws Exception {
+        Http2SessionPool.Session retired;
+        Http2SessionPool.Route selected;
+        synchronized (this) {
+            if (closed) throw new IOException("Stream closed");
+            retired=lease; lease=null; connection=null; selected=route;
+        }
+        if (retired!=null) pool.release(retired);
+        lease(selected);
     }
     void start(URL url, String method, List<Map.Entry<String,String>> headers, String agent, boolean hasBody) throws Exception {
         Class<?> headerClass=Class.forName(HTTP+"internal.framed.Header");
@@ -133,7 +155,15 @@ final class Http2Transport implements Closeable {
         if (!hasAgent) encoded.add(constructor.newInstance("user-agent",agent));
         enter();
         try {
-            Object opened=lease.start(encoded,hasBody,() -> closed);
+            Object opened;
+            try { opened=lease.start(encoded,hasBody,() -> closed); }
+            catch (Http2SessionPool.SessionUnavailableException retired) {
+                // GOAWAY or connection loss raced session selection. No stream
+                // id was allocated and no request byte was written, so the
+                // request is still unsent: admit it once on a fresh session.
+                replaceSession();
+                opened=lease.start(encoded,hasBody,() -> closed);
+            }
             Object inbound=call(streamClass,opened,"getSource",new Class<?>[0]);
             synchronized (this) {
                 stream=opened; source=inbound;

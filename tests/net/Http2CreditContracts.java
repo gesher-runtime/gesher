@@ -101,13 +101,31 @@ public final class Http2CreditContracts {
             }
             return sum;
         }
+        /** SETTINGS_INITIAL_WINDOW_SIZE in the actual client preface, or -1. */
+        synchronized long streamWindow() throws Exception {
+            Buffer frames=bytes.clone();
+            if (frames.size()<24) return -1;
+            frames.skip(24);
+            while (frames.size()>=9) {
+                int length=(frames.readByte()&255)<<16 | (frames.readByte()&255)<<8 | (frames.readByte()&255);
+                int type=frames.readByte()&255, flags=frames.readByte()&255; int stream=frames.readInt()&0x7fffffff;
+                if (frames.size()<length) break;
+                if (type==4 && stream==0 && (flags&1)==0 && length%6==0) {
+                    for (int i=0;i<length;i+=6) {
+                        int id=frames.readShort()&0xffff; long value=frames.readInt()&0xffffffffL;
+                        if (id==4) return value;
+                    }
+                } else frames.skip(length);
+            }
+            return -1;
+        }
     }
     private static final class Harness implements AutoCloseable {
         final ParkedSource input=new ParkedSource();
         final RecordedSink output=new RecordedSink();
         final FramedConnection connection;
         final FrameReader.Handler handler;
-        final long initialUpdates;
+        final long initialUpdates, initialStreamWindow;
         Harness() throws Exception {
             Socket boundary=new Socket() { @Override public void close() { input.close(); } };
             connection=new FramedConnection.Builder(true).protocol(Protocol.HTTP_2)
@@ -115,6 +133,7 @@ public final class Http2CreditContracts {
             if (!input.entered.await(1,TimeUnit.SECONDS)) throw new AssertionError("reader did not enter");
             connection.sendConnectionPreface();
             initialUpdates=output.connectionUpdates();
+            initialStreamWindow=output.streamWindow();
             // A public SETTINGS transition after the original preface keeps
             // normal tests below the ack threshold without changing defaults.
             window(1024*1024);
@@ -124,6 +143,14 @@ public final class Http2CreditContracts {
             Settings settings=new Settings();
             call(settings,"set",new Class<?>[]{int.class,int.class,int.class},7,0,size);
             connection.setSettings(settings);
+            // A provider with a separate connection receive window derives its
+            // acknowledgement threshold from that window, not from SETTINGS.
+            // Lower both together; an unchanged provider has no such field.
+            try {
+                Field shared=FramedConnection.class.getDeclaredField("connectionReceiveWindow");
+                shared.setAccessible(true);
+                synchronized (connection) { shared.setInt(connection,size); }
+            } catch (NoSuchFieldException unchangedProvider) { }
         }
         FramedStream stream() throws Exception {
             return connection.newStream(Arrays.asList(new Header(":method","GET"),
@@ -267,8 +294,21 @@ public final class Http2CreditContracts {
         }
     }
 
+    private static void windowGeometry() throws Exception {
+        try (Harness h=new Harness()) {
+            long connectionWindow=65535+h.initialUpdates;
+            check(h.initialStreamWindow>0,"actual preface advertises a stream receive window");
+            // Cronet: 6 MiB per stream, about 15 MiB per session. A stream whose
+            // application paused reading must leave credit for its siblings.
+            check(h.initialStreamWindow*2<=connectionWindow,
+                    "paused stream cannot consume the shared connection window (stream "
+                    +h.initialStreamWindow+", connection "+connectionWindow+")");
+            check(connectionWindow>=15L*1024*1024,"connection window still avoids 64 KiB update thrashing ("+connectionWindow+")");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
-        basicRetirement(); paddingAndPush(); receiveResetRace(); thresholdAndOverflow();
+        windowGeometry(); basicRetirement(); paddingAndPush(); receiveResetRace(); thresholdAndOverflow();
         System.out.println("Http2CreditContracts: "+checks+" checks, "+failures+" failures; in-memory only, max DATA 1025 bytes");
         if (failures!=0) throw new AssertionError("HTTP/2 receive credit ownership failures: "+failures);
     }

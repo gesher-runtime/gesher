@@ -69,12 +69,18 @@ final class Http2SessionPool implements Closeable {
         }
     }
 
+    /** The session admitted no stream for this request; nothing was written. */
+    static final class SessionUnavailableException extends IOException {
+        SessionUnavailableException(String message) { super(message); }
+        SessionUnavailableException(String message, Throwable cause) { super(message, cause); }
+    }
+
     static final class Session implements Closeable {
         final Route route;
         final Object starts = new Object();
         private volatile Socket socket;
         volatile Object connection;
-        private Field shutdown;
+        private Field shutdown, nextStreamId;
         private volatile boolean closed, ready;
         // The pool monitor owns these fields; each transport holds one lease.
         int leases = 1;
@@ -188,6 +194,8 @@ final class Http2SessionPool implements Closeable {
                 }
                 shutdown = opened.getClass().getDeclaredField("shutdown");
                 shutdown.setAccessible(true);
+                nextStreamId = opened.getClass().getDeclaredField("nextStreamId");
+                nextStreamId.setAccessible(true);
                 Http2Transport.call(opened.getClass(), opened, "sendConnectionPreface", new Class<?>[0]);
                 ready = true;
             } catch (Exception | Error failure) {
@@ -214,14 +222,30 @@ final class Http2SessionPool implements Closeable {
                 if (canceled.getAsBoolean()) throw new IOException("Stream closed");
                 synchronized (starts) {
                     boolean available;
+                    int allocated;
                     synchronized (connection) {
-                        if (!healthy()) throw new IOException("HTTP/2 session shut down");
+                        if (!healthy()) throw new SessionUnavailableException("HTTP/2 session shut down");
                         int open = (Integer) Http2Transport.call(connection.getClass(), connection,
                                 "openStreamCount", new Class<?>[0]);
                         available = open < streamLimit(connection);
+                        allocated = nextStreamId.getInt(connection);
                     }
-                    if (available) return Http2Transport.call(connection.getClass(), connection, "newStream",
-                            new Class<?>[]{List.class, boolean.class, boolean.class}, headers, hasBody, true);
+                    if (available) {
+                        try {
+                            return Http2Transport.call(connection.getClass(), connection, "newStream",
+                                    new Class<?>[]{List.class, boolean.class, boolean.class}, headers, hasBody, true);
+                        } catch (IOException failure) {
+                            // Admission is serialized here. An unchanged stream id
+                            // means the provider refused before allocating a stream
+                            // or writing HEADERS (GOAWAY/close raced the check).
+                            boolean unsent;
+                            synchronized (connection) { unsent = nextStreamId.getInt(connection) == allocated; }
+                            if (unsent && !healthy()) {
+                                throw new SessionUnavailableException("HTTP/2 session shut down", failure);
+                            }
+                            throw failure;
+                        }
+                    }
                 }
                 synchronized (connection) {
                     if (canceled.getAsBoolean()) throw new IOException("Stream closed");
