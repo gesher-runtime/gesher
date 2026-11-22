@@ -13,6 +13,10 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+; The microG release Setup downloads (the URLs in NextButtonClick and
+; gesher-app-microg.ps1 -AutoDownload; keep them together). gesher-app-microg.ps1
+; records it in MicrogVersionFile, so a later update offers the newer release.
+#define MicrogRelease "v0.3.17.252432"
 
 [Setup]
 AppId={{6A1F3C2E-5B7D-4E8A-9C0F-1D2E3F4A5B6C}
@@ -137,8 +141,11 @@ Source: "gesher-runtime-files.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-ui.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ui-messages.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "licenses\APKSIG-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
-Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme; Languages: en
-Source: "README.he.txt"; DestDir: "{app}"; DestName: "README.txt"; Flags: ignoreversion isreadme; Languages: he
+Source: "licenses\BIONIC-GDTOA-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "licenses\ICU-CALENDAR-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; Reached from the Start menu entry; the finish page offers no "show README".
+Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion; Languages: en
+Source: "README.he.txt"; DestDir: "{app}"; DestName: "README.txt"; Flags: ignoreversion; Languages: he
 Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [INI]
@@ -151,7 +158,11 @@ Filename: "{app}\gesher-version.ini"; Section: "Gesher"; Key: "Version"; String:
 ; Windows 11 has its runtime; elsewhere Setup offers to install it (Microsoft's
 ; Evergreen bootstrapper, downloaded; a per-user install without elevation).
 Name: "webview2"; Description: "{cm:setup_webview}"; Check: not WebView2Installed
-Name: "microg"; Description: "{cm:setup_microg}"; Flags: unchecked
+; microG: offered unchecked when this profile has none; when it has microG staged
+; (gesher-app-microg.ps1) from another release, or from an unrecorded one, Setup
+; offers the update instead, checked; when it already has this release, neither.
+Name: "microg"; Description: "{cm:setup_microg}"; Flags: unchecked; Check: not MicrogInstalled
+Name: "microgupdate"; Description: "{cm:setup_microg_update}"; Check: MicrogOutdated
 Name: "aurora"; Description: "{cm:setup_aurora}"; Flags: unchecked
 
 [Icons]
@@ -274,6 +285,40 @@ begin
     Result := (Version <> '') and (Version <> '0.0.0.0');
 end;
 
+// microG staged in this user's Gesher profile by gesher-app-microg.ps1: its
+// marker and GmsCore's APK slot (the profile Setup's own uninstall removes).
+function MicrogProfile(): String;
+begin
+  Result := ExpandConstant('{localappdata}\Gesher');
+end;
+
+function MicrogVersionFile(): String;
+begin
+  Result := MicrogProfile() + '\microg.release';
+end;
+
+function MicrogInstalled(): Boolean;
+begin
+  Result := FileExists(MicrogProfile() + '\microg.enabled') and
+            FileExists(MicrogProfile() + '\system\priv-app\com.google.android.gms\base.apk');
+end;
+
+// Installed, but not recorded as the release this Setup downloads (staged by an
+// earlier Setup, or from APKs the user passed to gesher-app-microg.ps1).
+function MicrogOutdated(): Boolean;
+var
+  Release: AnsiString;
+begin
+  Result := MicrogInstalled();
+  if Result and LoadStringFromFile(MicrogVersionFile(), Release) then
+    Result := Trim(String(Release)) <> '{#MicrogRelease}';
+end;
+
+function MicrogSelected(): Boolean;
+begin
+  Result := WizardIsTaskSelected('microg') or WizardIsTaskSelected('microgupdate');
+end;
+
 var
   DownloadPage: TDownloadWizardPage;
 
@@ -285,6 +330,23 @@ end;
 procedure InitializeWizard();
 begin
   DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
+end;
+
+var
+  MicrogUpdateOffered: Boolean;
+
+// UsePreviousTasks would restore an earlier run's unchecked update: an outdated
+// microG is offered checked each time the tasks page first shows; the user can
+// still clear it.
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  // Silent runs keep /TASKS, /MERGETASKS and the previous choice as given.
+  if (CurPageID = wpSelectTasks) and not MicrogUpdateOffered and not WizardSilent() then
+  begin
+    MicrogUpdateOffered := True;
+    if MicrogOutdated() then
+      WizardSelectTasks('microgupdate');
+  end;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -302,7 +364,7 @@ begin
         'MicrosoftEdgeWebview2Setup.exe', '');
       DownloadsNeeded := DownloadsNeeded + 1;
     end;
-    if WizardIsTaskSelected('microg') then
+    if MicrogSelected() then
     begin
       if not FileExists(ExpandConstant('{tmp}\com.google.android.gms.apk')) then
       begin
@@ -339,10 +401,22 @@ begin
           Result := True;
         except
           if DownloadPage.AbortedByUser then
-            Log('Download cancelled by user.')
+          begin
+            Log('Download cancelled by user.');
+            Result := False;
+          end
+          else if WizardSilent() then
+          begin
+            // A silent update (the microG update is on by default) goes on
+            // without the optional downloads: each step retries or skips its own.
+            Log('Optional download failed: ' + GetExceptionMessage);
+            Result := True;
+          end
           else
+          begin
             SuppressibleMsgBox(AddPeriod(GetExceptionMessage), mbCriticalError, MB_OK, IDOK);
-          Result := False;
+            Result := False;
+          end;
         end;
       finally
         DownloadPage.Hide;
@@ -436,12 +510,13 @@ begin
   TmpDir := ExpandConstant('{tmp}');
   Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
             ExpandConstant('{app}\gesher-app-microg.ps1') + '"';
-  if WizardIsTaskSelected('microg') then
+  if MicrogSelected() then
   begin
     if FileExists(TmpDir + '\com.google.android.gms.apk') then
       Params := Params + ' -GmsCoreApk "' + TmpDir + '\com.google.android.gms.apk"' +
                          ' -CompanionApk "' + TmpDir + '\com.android.vending.apk"' +
-                         ' -GsfProxyApk "' + TmpDir + '\com.google.android.gsf.apk"'
+                         ' -GsfProxyApk "' + TmpDir + '\com.google.android.gsf.apk"' +
+                         ' -Release {#MicrogRelease}'
     else
       Params := Params + ' -AutoDownload';
   end
@@ -457,7 +532,9 @@ begin
   end;
 
   WizardForm.StatusLabel.Caption := CustomMessage('setup_configuring_microg');
-  Exec('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code);
+  // gesher-app-microg.ps1 records the staged release (microg.release) itself.
+  if not Exec('powershell.exe', Params, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
+    Log('microG setup exited with code ' + IntToStr(Code));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -468,7 +545,7 @@ begin
   begin
     if WizardIsTaskSelected('webview2') then
       InstallWebView2();
-    if WizardIsTaskSelected('microg') or WizardIsTaskSelected('aurora') then
+    if MicrogSelected() or WizardIsTaskSelected('aurora') then
       InstallMicrogAndStore();
     Path := PathEntries();
     Dir := ExpandConstant('{app}');

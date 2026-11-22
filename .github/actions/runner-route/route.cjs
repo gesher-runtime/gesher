@@ -18,8 +18,31 @@ function eligible(context, requested, enabled) {
     SHA.test(pr.head.sha) && SHA.test(pr.base.sha) && SHA.test(context.sha);
 }
 
-async function route({github, context, requested, enabled}) {
+function isRateLimit(error) {
+  const status = error?.status;
+  const response = error?.response;
+  const message = response?.data?.message;
+  return (status === 403 || status === 429) && response?.status === status &&
+    typeof message === 'string' && message.length <= 16384 &&
+    (message.startsWith('API rate limit exceeded for ') ||
+      message.startsWith('You have exceeded a secondary rate limit'));
+}
+
+async function route({github, context, requested, enabled, warn = console.warn}) {
   if (!eligible(context, requested, enabled)) return 'ubuntu-24.04';
+  try {
+    return await trustedRoute(github, context);
+  } catch (error) {
+    if (!isRateLimit(error)) throw error;
+    // Local routing is optional. A failed authorization read cannot grant the
+    // restricted runner; the ordinary hosted runner still performs every build
+    // and test. Do not retry while GitHub is limiting requests, or log its body.
+    warn('BUILD_RUNNER_ROUTE_RATE_LIMIT status=' + error.status + ' runner=ubuntu-24.04');
+    return 'ubuntu-24.04';
+  }
+}
+
+async function trustedRoute(github, context) {
   const args = {owner: context.repo.owner, repo: context.repo.repo};
   const payload = context.payload.pull_request;
   const {data: pr} = await github.rest.pulls.get({...args, pull_number: payload.number});

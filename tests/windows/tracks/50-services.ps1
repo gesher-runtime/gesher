@@ -198,11 +198,36 @@ CheckTimed 'binder: CursorWindow types/data and descriptor lifetime across two p
   ($dvm + 'gesher.services.CursorWindowParcelTest', 'client', $cursorName) @(
     'CursorWindowParcelTest: two-process Binder inline/shared-memory cursor transfer preserves types/data and descriptor lifetime',
     'CursorWindowParcelTest all passed')
-foreach ($p in $cursorService, $service, $servicemanager, $binderd) {
+# android.view.Surface in Parcels (compat/framework/surface_parcel.cc, docs/graphics.md):
+# read back in its consumer's process, the consumer's own surface; across processes a
+# producer whose frames reach the consumer through a memfd (a browser's GPU process
+# drawing into its SurfaceView), the consumer's size and its release coming back.
+CheckTimed 'graphics: a Surface in a Parcel read back in its consumer''s process is the consumer''s own' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.SurfaceParcelTest') @(
+    'SurfaceParcelTest: a SurfaceTexture''s Surface read back in its own process is the same native surface',
+    'SurfaceParcelTest: a released Surface travels as no surface',
+    'SurfaceParcelTest all passed')
+$surfaceName = "gesher.surface.tests.$PID"
+$surfaceService = Start-Process "$Dir/dalvikvm.exe" `
+  -ArgumentList ($dvm + 'gesher.services.SurfaceParcelTest', 'service', $surfaceName) `
+  -PassThru -WindowStyle Hidden -RedirectStandardOutput "$logs/surface-service.out" -RedirectStandardError "$logs/surface-service.err"
+CheckTimed 'graphics: a Surface parceled to another process: its frames, sizes, release and memfds' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.SurfaceParcelTest', 'client', $surfaceName) @(
+    'SurfaceParcelTest: an ImageReader''s Surface drawn by process',
+    '64x32, 0 pixels differ, the producer''s time stamp',
+    'SurfaceParcelTest: six frames through one memfd the producer reuses; the consumer keeps no descriptor',
+    'SurfaceParcelTest: parceled again it stays the same producer; parceled back, the consumer''s own Surface',
+    'SurfaceParcelTest: a SurfaceTexture''s Surface read into the producer''s releases the earlier one',
+    'SurfaceParcelTest: SurfaceTexture.setDefaultBufferSize(48, 24) reaches the producer with its next frame',
+    'SurfaceParcelTest: the SurfaceTexture released, the producer''s lockCanvas throws IllegalArgumentException and its memfd is closed',
+    'SurfaceParcelTest: a producer''s Surface released takes its memfd with it',
+    'SurfaceParcelTest all passed') 180
+foreach ($p in $surfaceService, $cursorService, $service, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }
 if ($failed -ne $failedBefore) {
-  foreach ($f in 'service.out', 'service.err', 'cursor-service.out', 'cursor-service.err', 'servicemanager.log', 'binderd.log') {
+  foreach ($f in 'service.out', 'service.err', 'cursor-service.out', 'cursor-service.err', 'surface-service.out',
+      'surface-service.err', 'servicemanager.log', 'binderd.log') {
     Write-Host "--- $f"
     Get-Content "$logs/$f" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
   }
@@ -215,7 +240,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
+    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, gesher.wifi, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, speech_recognition, statusbar, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -248,16 +273,54 @@ function CheckOrdered([string] $Name, [string] $Out, [string[]] $Expect, [int] $
 # destroys the activity (PauseActivityItem, StopActivityItem,
 # DestroyActivityItem) and ends the process (scheduleExit). A second run asks
 # the activity to finish() itself.
+# Keep the exact handles from each successful Start-Process. Every later throw
+# (including fixture prerequisites) must retire the manual device before returning.
+$manualServicesOwned = [Collections.Generic.List[object]]::new()
+$manualServicesFailure = $null
+$manualServicesBinder = $env:GESHER_BINDER
+function Own-ManualService([Diagnostics.Process] $Process, [string] $Role) {
+  # Retain the object even if reading its identity fails; the finally must still
+  # try to retire this successful start, and must report any unproved cleanup.
+  $record = [pscustomobject]@{ Process=$Process; Handle=$null; Role=$Role; Pid=$null; Created=$null }
+  $manualServicesOwned.Add($record)
+  $record.Handle = $Process.SafeHandle
+  $record.Pid = $Process.Id
+  $record.Created = $Process.StartTime.ToUniversalTime().ToFileTimeUtc()
+  Write-Host "SERVICE_FIXTURE_OWN role=$Role pid=$($record.Pid) created=$($record.Created)"
+}
+try {
 $device = "apps-$PID"
 $env:GESHER_BINDER = $device
 $binderd = Start-Process "$Dir/binderd.exe" -ArgumentList $device -PassThru -NoNewWindow `
   -RedirectStandardOutput "$logs/apps-binderd.out" -RedirectStandardError "$logs/apps-binderd.log"
+Own-ManualService $binderd binderd
 $servicemanager = Start-ReadyServiceManager $binderd $device "$logs/apps-servicemanager" "$logs/apps-binderd.log"
+Own-ManualService $servicemanager servicemanager
 $dvmApp = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false')
+function SettingsFixtureSetup([string[]] $Arguments) {
+  $savedUid = $env:GESHER_UID; $savedBinderUid = $env:GESHER_BINDER_UID
+  try {
+    $env:GESHER_UID = '1000'; $env:GESHER_BINDER_UID = '1000'
+    RunTimed "$Dir/dalvikvm.exe" ($dvmApp + '-cp', (NoDrive "$Dir/services-tests.dex"),
+      'gesher.services.FixtureSettingsSetup' + $Arguments) 90
+  } finally {
+    $env:GESHER_UID = $savedUid; $env:GESHER_BINDER_UID = $savedBinderUid
+  }
+}
+# A declared special permission is not a runtime/signature grant. Commit the
+# actual fixture's WRITE_SETTINGS AppOp before the server loads its policy snapshot.
+$settingsSetup = SettingsFixtureSetup @((NoDrive "$Dir/components.apk"))
+if ($LASTEXITCODE -ne 0 -or $settingsSetup -notmatch 'FixtureSettingsSetup persisted special access UID ([0-9]+) package com\.gesher\.components') {
+  throw "Components special-access setup failed: $settingsSetup"
+}
+$componentsUid = [int]$Matches[1]
+if ($componentsUid -lt 10000 -or $componentsUid -gt 19999) { throw 'Components fixture requires an ordinary admitted UID' }
+Write-Host $settingsSetup
 $server = Start-Process "$Dir/dalvikvm.exe" -PassThru -NoNewWindow `
   -ArgumentList ($dvmApp + 'com.gesher.server.SystemServer', (NoDrive "$Dir/lifecycle.apk"), (NoDrive "$Dir/components.apk")) `
   -RedirectStandardOutput "$logs/system_server.out" -RedirectStandardError "$logs/system_server.err"
+Own-ManualService $server system_server
 $failedBefore = $failed
 $appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server',
   (NoDrive "$Dir/lifecycle.apk")) 400
@@ -312,9 +375,15 @@ if (-not (CheckOrdered 'services: LifecycleActivity finish(): the system server 
   'gesher-app: done') $appCode)) { Write-Host $appOut }
 
 # A runtime permission request (lifecycle.apk with com.gesher.lifecycle.REQUEST_PERMISSIONS):
-# Activity.requestPermissions asks permissionmgr for each permission's request state; every
-# permission is granted, so the result comes without a permission dialog.
-$appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server',
+# The test operator grants the actual requested permission through the normal host
+# shell API. The application still requests it and must receive its real callback.
+$grantOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.server.RuntimeCommands',
+  'pm', 'grant', 'com.gesher.lifecycle', 'android.permission.CAMERA') 45
+if ($LASTEXITCODE -ne 0 -or -not $grantOut.Contains('Permission grant completed for com.gesher.lifecycle')) {
+  throw "Lifecycle CAMERA prerequisite grant failed: $grantOut"
+}
+try {
+$appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server', '--keep-task',
   '--ez', 'com.gesher.lifecycle.REQUEST_PERMISSIONS', 'true', (NoDrive "$Dir/lifecycle.apk")) 400
 $appCode = $LASTEXITCODE
 if (-not (CheckOrdered 'services: requestPermissions: permissionmgr grants it, onRequestPermissionsResult' $appOut @(
@@ -322,6 +391,13 @@ if (-not (CheckOrdered 'services: requestPermissions: permissionmgr grants it, o
   'LifecycleActivity onRequestPermissionsResult 7: android.permission.CAMERA=0',
   'LifecycleActivity onDestroy',
   'gesher-app: done') $appCode)) { Write-Host $appOut }
+} finally {
+  $revokeOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.server.RuntimeCommands',
+    'pm', 'revoke', 'com.gesher.lifecycle', 'android.permission.CAMERA') 45
+  if ($LASTEXITCODE -ne 0 -or -not $revokeOut.Contains('Permission revoke completed for com.gesher.lifecycle')) {
+    throw "Lifecycle CAMERA prerequisite cleanup failed: $revokeOut"
+  }
+}
 
 # The rest of the app model in the system server (tests/apps/components):
 # MainActivity runs each step after the previous one ended, then finishes;
@@ -415,7 +491,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $s = 'system_server: '
 $null = CheckSequences 'services: system_server drives components.apk: NewIntentItem, ActivityResultItem, services, receivers, providers, notifications' $serverOut @(
-  ,@("${s}com.gesher.components parsed by PackageParser2: 7 activities, 3 services, 1 receivers, 1 providers",
+  ,@("${s}com.gesher.components parsed by PackageParser2: 9 activities, 4 services, 1 receivers, 1 providers",
     "${s}publishContentProviders: com.gesher.components.items (com.gesher.components.ItemsProvider)",
     "${s}scheduleTransaction NewIntentItem to com.gesher.components/com.gesher.components.SingleTopActivity",
     "${s}scheduleTransaction ActivityResultItem, ResumeActivityItem to com.gesher.components/com.gesher.components.MainActivity",
@@ -429,8 +505,78 @@ $null = CheckSequences 'services: system_server drives components.apk: NewIntent
     "${s}scheduleReceiver com.gesher.components/com.gesher.components.ManifestReceiver",
     "${s}settings: updated system key gesher_test", "${s}scheduleExit: process ")
 )
-foreach ($p in $server, $servicemanager, $binderd) {
-  if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+# A real SpellCheckerService runs in the fixture's :checker process. Only the
+# host may select it, then real AOSP client APIs exercise both remote sessions.
+$checkerRun = $dvmApp + 'com.gesher.app.Main', '--system-server', '--keep-task',
+  '--activity', '.SpellCheckerActivity'
+$checkerApk = NoDrive "$Dir/components.apk"
+$checkerUnselected = RunTimed "$Dir/dalvikvm.exe" ($checkerRun + '--ez',
+  'spell-checker-unselected', 'true', $checkerApk) 90
+$checkerCode = $LASTEXITCODE
+$null = CheckOrdered 'text services: installed unselected APK is discoverable but inactive' `
+  $checkerUnselected @('spell checker contract: unselected APK remains inactive') $checkerCode
+$checkerCommand = $dvmApp + 'com.gesher.server.RuntimeCommands', 'spell-checker'
+foreach ($checkerOptions in @(
+  @{ Args = @('use', 'com.gesher.components/.TestSpellChecker') },
+  @{ Args = @('language', '1002') },
+  @{ Args = @('enable') }
+)) {
+  $checkerAdminOut = RunTimed "$Dir/dalvikvm.exe" ($checkerCommand + $checkerOptions.Args) 45
+  $checkerAdminCode = $LASTEXITCODE
+  $null = CheckOrdered "text services: trusted host $($checkerOptions.Args[0])" `
+    $checkerAdminOut @('Spell-checker setting updated') $checkerAdminCode
+}
+try {
+  $checkerOut = RunTimed "$Dir/dalvikvm.exe" ($checkerRun + $checkerApk) 90
+  $checkerCode = $LASTEXITCODE
+  $null = CheckOrdered 'text services: real word, sentence, language and cancellation Binder contracts' `
+    $checkerOut @('spell checker contract: distinct process, words, sentence, locale, cancel and close passed') $checkerCode
+  $checkerServerOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
+  $null = CheckOrdered 'text services: provider binding is released after both sessions close' `
+    $checkerServerOut @('scheduleBindService com.gesher.components/.TestSpellChecker',
+    'publishService com.gesher.components/.TestSpellChecker', 'scheduleUnbindService com.gesher.components/.TestSpellChecker')
+} finally {
+  $checkerResetOut = RunTimed "$Dir/dalvikvm.exe" ($checkerCommand + 'automatic') 45
+  $checkerResetCode = $LASTEXITCODE
+  $null = CheckOrdered 'text services: restore automatic checker selection' `
+    $checkerResetOut @('Spell-checker setting updated') $checkerResetCode
+}
+} catch {
+  $manualServicesFailure = $_
+  throw
+} finally {
+  $manualServicesExitCode = $global:LASTEXITCODE
+  $manualServicesCleanup = @()
+  for ($index = $manualServicesOwned.Count - 1; $index -ge 0; $index--) {
+    $record = $manualServicesOwned[$index]
+    $retired = $false; $problem = ''
+    try {
+      if ($null -eq $record.Handle -or $record.Handle.IsClosed) {
+        throw 'Owned process handle was already closed by startup failure cleanup'
+      }
+      if (-not $record.Process.HasExited) { $record.Process.Kill($true) }
+      $retired = $record.Process.WaitForExit(5000)
+      if (-not $retired) { throw 'Owned manual service did not retire within five seconds' }
+    } catch { $problem = [string]$_ }
+    finally {
+      try { $record.Process.Dispose() }
+      catch { $problem += " Dispose failed: $_" }
+    }
+    Write-Host "SERVICE_FIXTURE_RETIRE role=$($record.Role) pid=$($record.Pid) created=$($record.Created) exited=$retired closed=$($record.Handle.IsClosed) problem=$problem"
+    if ($problem -or -not $retired -or -not $record.Handle.IsClosed) {
+      $manualServicesCleanup += "$($record.Role): $problem (exited=$retired, closed=$($record.Handle.IsClosed))"
+    }
+  }
+  $env:GESHER_BINDER = $manualServicesBinder
+  $global:LASTEXITCODE = $manualServicesExitCode
+  if ($manualServicesCleanup.Count) {
+    $script:failed++
+    $cleanupMessage = 'Owned manual-device cleanup failed: ' + ($manualServicesCleanup -join '; ')
+    if ($null -ne $manualServicesFailure) {
+      # Report cleanup too, without replacing the original exception/exit status.
+      Write-Error -ErrorAction Continue $cleanupMessage
+    } else { throw $cleanupMessage }
+  }
 }
 Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
@@ -453,7 +599,7 @@ if ($failed -ne $failedBefore) {
     Get-Content "$logs/$f" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
   }
 }
-Remove-Item Env:GESHER_BINDER
+# The manual-device finally restored the prior Binder environment.
 
 # The Gesher device (docs/services.md, ADR 0026): binderd, servicemanager and a
 # persistent system server that every launch shares, started detached by the
@@ -674,12 +820,35 @@ if (-not (CheckSequences 'services: gesher-app launch lifecycle.apk: the system 
     'gesher-app: the process of com.gesher.lifecycle ended (exit code 0)')
 ) $code)) { Write-Host $out }
 
-# A second app on the same device (installed by its first launch):
+# A second app on the same device, installed and explicitly authorized before launch:
 # components.apk runs its activities, services, broadcasts and providers to the
 # end (--keep-task).
-$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive "$Dir/components.apk"), '--keep-task') 500
+$componentsInstall = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'install', (NoDrive "$Dir/components.apk")) 180
+if ($LASTEXITCODE -ne 0 -or -not $componentsInstall.Contains('gesher-app: installed com.gesher.components (version 1) in ')) {
+  throw "Components actual installation failed: $componentsInstall"
+}
+foreach ($settingsMode in @(3, 1, 2, 0)) {
+  $settingsAllowed = if ($settingsMode -eq 0) { 'true' } else { 'false' }
+  $modeSetup = SettingsFixtureSetup @('--remote', [string]$componentsUid, 'com.gesher.components', [string]$settingsMode)
+  if ($LASTEXITCODE -ne 0 -or -not $modeSetup.Contains("FixtureSettingsSetup live special access UID $componentsUid package com.gesher.components source ") -or
+      -not $modeSetup.Contains(" mode $settingsMode")) { throw "Real settings mode setup failed: $modeSetup" }
+  $modeOut = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', 'com.gesher.components', '--activity', '.SettingsAccessActivity',
+    '--keep-task', '--headless', '--ez', 'allowed', $settingsAllowed) 180
+  $modeCode = $LASTEXITCODE
+  Write-Host $modeSetup
+  $null = CheckOrdered "services: Settings.System.canWrite and actual provider write, AppOp mode $settingsMode" $modeOut @(
+    "components: settings special access canWrite $settingsAllowed uid $componentsUid pid ",
+    '; secure/global and foreign package denied', 'gesher-app: done') $modeCode
+  if ($modeCode -ne 0 -or -not $modeOut.Contains("components: settings special access canWrite $settingsAllowed uid $componentsUid pid ")) { Write-Host $modeOut }
+}
+$settingsSetup = SettingsFixtureSetup @('--remote', [string]$componentsUid, 'com.gesher.components')
+if ($LASTEXITCODE -ne 0 -or -not $settingsSetup.Contains("FixtureSettingsSetup live special access UID $componentsUid package com.gesher.components source ")) {
+  throw "Components installed special-access setup failed: $settingsSetup"
+}
+Write-Host $settingsSetup
+$out = $componentsInstall + "`n" + (RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive "$Dir/components.apk"), '--keep-task') 500)
 $code = $LASTEXITCODE
-$ok = CheckOrdered 'services: gesher-app launch components.apk --keep-task: installed on first launch, its own process, every step' $out @(
+$ok = CheckOrdered 'services: gesher-app launch components.apk --keep-task: installed and authorized before launch, its own process, every step' $out @(
   'gesher-app: connected to the running Gesher device ',
   'gesher-app: installed com.gesher.components (version 1) in ',
   'gesher-app: app process for com.gesher.components: pid ',
@@ -840,6 +1009,8 @@ try {
   CheckTimed 'services: thermal usage shortcuts and unmanaged device policy contracts' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceFixtureRunner' + 'SoftwareServiceContractTest' +
       (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/unsigned.apk'))) @('SoftwareServiceContractTest all passed') 30
+  CheckTimed 'services: statusbar without a SystemUI bar: tile listening and add-tile answers' "$Dir/dalvikvm.exe" `
+    ($dvmContracts + 'gesher.services.StatusBarContractTest') @('StatusBarContractTest all passed') 30
   CheckTimed 'services: existing and future registration callbacks, cancellation and death cleanup' "$Dir/dalvikvm.exe" `
     ($dvmContracts + 'gesher.services.ServiceRegistrationCallbackTest') @('ServiceRegistrationCallbackTest all passed') 30
   CheckTimed 'services: actual storage volumes, capacity, credential state and file allocation' "$Dir/dalvikvm.exe" `
@@ -850,16 +1021,36 @@ try {
   $canonicalChecks = @(
     @{ Class = 'UserManagerProfilesTest'; Count = 49; Name = 'single-user profile, serial, identity and restriction contracts' },
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
-    @{ Class = 'BlobStoreContractTest'; Count = 25; Name = 'empty shared-blob queries, zero quota and unsupported storage' },
+    @{ Class = 'BlobStoreContractTest'; Count = 87; Name = 'blob sessions, digest publication, quota admission, leases, and restart' },
     @{ Class = 'NsdContractTest'; Count = 65; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
-    @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
-    @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' },
+    @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'observed Wi-Fi state and unsupported controller mutations'; SystemContext = $true },
+    @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service'; SystemContext = $true },
     @{ Class = 'RoleManagerUnsupportedTest'; Count = 168; Name = 'RoleManager absence, permission, callback and mutation contracts' }
   )
   foreach ($contract in $canonicalChecks) {
-    CheckTimed "services: $($contract.Name)" "$Dir/dalvikvm.exe" `
-      ($dvmContracts + "gesher.services.$($contract.Class)") @("$($contract.Class) all passed: $($contract.Count)") 30
+    $savedContractUid = $env:GESHER_UID
+    $savedContractBinderUid = $env:GESHER_BINDER_UID
+    try {
+      # These two fixtures create a system Context without admitting an APK.
+      # Run that declared identity; an unadmitted application must stay denied.
+      if ($contract.ContainsKey('SystemContext') -and $contract.SystemContext) {
+        $env:GESHER_UID = '1000'; $env:GESHER_BINDER_UID = '1000'
+      }
+      CheckTimed "services: $($contract.Name)" "$Dir/dalvikvm.exe" `
+        ($dvmContracts + "gesher.services.$($contract.Class)") @("$($contract.Class) all passed: $($contract.Count)") 30
+    } finally {
+      $env:GESHER_UID = $savedContractUid
+      $env:GESHER_BINDER_UID = $savedContractBinderUid
+    }
   }
+  # Test-only classes call package-private WLAN parsers from gesher-app.jar.
+  # On ART, the defining class loader is part of Java's runtime package identity.
+  # Use the same boot class loader for the fixture without changing production APIs.
+  $wifiBoot = "${bcpApp}:$(NoDrive "$Dir/services-tests.dex")"
+  $wifiArgs = @("-Xbootclasspath:$wifiBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', 'gesher.services.WindowsWifiTest')
+  CheckTimed 'services: native WLAN data and nonblocking live reads' "$Dir/dalvikvm.exe" `
+    $wifiArgs @('WindowsWifiTest all passed: live nonblocking Windows API boundary') 30
 } finally {
   $env:ANDROID_DATA = $savedContractsData
   $env:GESHER_BINDER = $savedContractsBinder

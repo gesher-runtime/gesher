@@ -26,6 +26,8 @@ $script:UpdateDirectory = Join-Path $root 'updates'
 # open: GESHER_PANEL_REOPEN lets that start through.
 $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
 $script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
+# Apps whose tasks are windows of their own (ADR 0088; AppWindows.java): separate.<package>=true.
+$script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
 $script:PanelInstanceCreated = $false
 $script:PanelInstance = [System.Threading.Mutex]::new($false, 'Local\Gesher.ControlPanel', [ref] $script:PanelInstanceCreated)
@@ -44,6 +46,34 @@ $script:IsBusy = $false
 $script:ActionState = @{ Worker = $null; Completing = $false; Closed = $false }
 $script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{} }
 $script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; Tick = 0 }
+
+# Packages whose tasks are windows of their own (AppWindows.java's file).
+function Get-SeparateWindowApps {
+    $set = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    if (-not (Test-Path -LiteralPath $script:AppWindowsFile)) { return ,$set }
+    foreach ($line in Get-Content -LiteralPath $script:AppWindowsFile) {
+        if ($line -match '^\s*separate\.([A-Za-z0-9_.]+)\s*[=:]\s*true\s*$') { [void]$set.Add($Matches[1]) }
+    }
+    return ,$set
+}
+
+# Saves whether an app's tasks are windows of their own (from its next start).
+function Set-AppSeparateWindows([string] $pkg, [bool] $separate) {
+    if ($pkg -notmatch '^[A-Za-z0-9_.]+$') { return }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if (Test-Path -LiteralPath $script:AppWindowsFile) {
+        foreach ($line in Get-Content -LiteralPath $script:AppWindowsFile) {
+            if ($line -match ('^\s*separate\.' + [regex]::Escape($pkg) + '\s*[=:]')) { continue }
+            $lines.Add($line)
+        }
+    } else {
+        $lines.Add('#Gesher''s app windows: gesher-app windows PACKAGE separate|shared')
+    }
+    if ($separate) { $lines.Add("separate.$pkg=true") }
+    $directory = Split-Path -Parent $script:AppWindowsFile
+    if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
+    [IO.File]::WriteAllLines($script:AppWindowsFile, $lines, [Text.UTF8Encoding]::new($false))
+}
 
 # Helper to query device running state
 function Get-DeviceStatus {
@@ -361,6 +391,7 @@ function Get-InstalledApps {
                                             <TextBlock Text="{Binding Package}" FontSize="12" Foreground="#667085" Margin="0,2,0,0"/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <CheckBox Content="$(Get-GesherText 'cp_separate_windows')" ToolTip="$(Get-GesherText 'cp_separate_windows_tip')" IsChecked="{Binding SeparateWindows, Mode=OneWay}" Tag="{Binding Package}" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                             <Button Content="$(Get-GesherText 'cp_btn_launch')" Tag="{Binding Package}" Margin="0,0,8,0"/>
                                             <Button Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_uninstall')" Tag="{Binding Package}"/>
                                         </StackPanel>
@@ -570,6 +601,8 @@ function Update-AppsView($installed) {
         "$($app.Package)`t$($app.Label)`t$($app.IconPath)`t$(if ($app.IconPath) { $iconStamps[$app.IconPath] })"
     }) -join "`n"
     $signature += "`n$($iconStamps[$icoFile])"
+    $separateApps = Get-SeparateWindowApps
+    $signature += "`n" + (@($separateApps | Sort-Object) -join ',')
     $script:ViewState.AppFiles = $appFiles.ToArray()
     if ($script:ViewState.AppsSignature -ceq $signature) { return }
 
@@ -587,6 +620,7 @@ function Update-AppsView($installed) {
             Package = $app.Package
             Label = $app.Label
             IconImage = $imgSource
+            SeparateWindows = $separateApps.Contains([string]$app.Package)
         })
     }
     $appsList.ItemsSource = $items
@@ -1811,6 +1845,11 @@ $script:OnAppUninstall = {
 # Attach click events through visual tree dispatcher
 $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
     param($sender, $e)
+    $box = $e.OriginalSource -as [System.Windows.Controls.CheckBox]
+    if ($box -and $box.Tag) {
+        try { Set-AppSeparateWindows ([string]$box.Tag) ([bool]$box.IsChecked) } catch { }
+        return
+    }
     $btn = $e.OriginalSource -as [System.Windows.Controls.Button]
     if ($btn -and $btn.Tag) {
         $pkg = [string]$btn.Tag

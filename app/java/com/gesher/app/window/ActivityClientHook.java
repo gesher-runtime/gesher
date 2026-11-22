@@ -24,6 +24,9 @@ import java.lang.reflect.Proxy;
  *       (the process draws them: WindowSession.minimizeTask), as a desktop's window manager
  *       does with a task sent to the back, instead of their being hidden as stopped
  *       Activities' windows are;
+ *   <li>{@code onBackPressed} (oneway) on a task root the home screen launched moves the task
+ *       to the back in the system server (Android's rule): its windows are minimized here
+ *       when its Activity then stops (WindowSession.backPressed);
  *   <li>gesher-app's single process, which has no system server for its one Activity
  *       (its token is its own), answers for that Activity itself ({@link Local}):
  *       {@code setRequestedOrientation} turns its window, {@code getRequestedOrientation},
@@ -115,6 +118,12 @@ public final class ActivityClientHook implements InvocationHandler {
                 default:
                     break;
             }
+        }
+        if (name.equals("onBackPressed") && token != null) {
+            // The server answers later (a oneway call): finishing the Activity, or moving its
+            // task to the back, which stops it; the stop then minimizes its windows.
+            WindowSession session = WindowSession.get();
+            if (session != null) session.backPressed(token);
         }
         Object result;
         try {

@@ -11,6 +11,7 @@
     android:versionCode="1"
     android:versionName="1.0">
     <application
+        android:name=".IdentityApplication"
         android:label="@string/app_name"
         android:theme="@style/WinTheme">
         <activity
@@ -38,6 +39,10 @@
             android:label="@string/pan_label"
             android:windowSoftInputMode="adjustPan|stateUnspecified"
             android:exported="true" />
+        <activity android:name=".ResumeTaskActivity" android:label="Gesher windows3 resume task"
+            android:launchMode="singleTask" android:taskAffinity="com.gesher.winapp.resume"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
+            android:exported="true" />
         <activity android:name=".DisplayActivity" android:label="Gesher windows4 display"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
             android:exported="true" />
@@ -47,5 +52,13 @@
             android:exported="true" />
         <activity android:name=".TsfActivity" android:label="Gesher windows4 TSF"
             android:windowSoftInputMode="adjustResize|stateAlwaysHidden" android:exported="true" />
+        <activity android:name=".WindowTasksActivity" android:label="Gesher app tasks WindowTasksActivity"
+            android:taskAffinity="com.gesher.winapp.windowtasks" android:exported="true" />
+        <activity android:name=".RemoteWindowActivity" android:label="Gesher app tasks RemoteWindowActivity"
+            android:process=":window_remote" android:taskAffinity="com.gesher.winapp.remote"
+            android:exported="true" />
+        <activity android:name=".SecondRemoteWindowActivity" android:label="Gesher app tasks SecondRemoteWindowActivity"
+            android:process=":window_remote_second" android:taskAffinity="com.gesher.winapp.remote.second"
+            android:exported="true" />
     </application>
 </manifest>

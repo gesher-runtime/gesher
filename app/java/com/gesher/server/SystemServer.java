@@ -15,6 +15,7 @@ import static com.gesher.app.locale.UiText.text;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -181,6 +182,7 @@ public final class SystemServer {
                 File apk = new File(androidRoot, "priv-app/" + name + "/base.apk");
                 if (!apk.isFile()) continue;
                 ApkPackage p = MicrogAddons.load(apk, name);
+                boolean fromPrivApp = true;
                 for (ApkPackage installed : packages) {
                     if (!name.equals(installed.packageName)) continue;
                     if (!GmsSignatureSpoofing.verifyAddonApk(name, installed.apkPath)) {
@@ -193,6 +195,26 @@ public final class SystemServer {
                     // release and its privileges, with the staged APK as fallback.
                     if (installed.versionCode() >= p.versionCode()) {
                         p = installed;
+                        fromPrivApp = false;
+                    }
+                }
+                if (fromPrivApp) {
+                    // As the package manager's scan of a system package: its libraries
+                    // on disk for every process that loads its code (Dynamite modules).
+                    try {
+                        int libs = MicrogAddons.prepareNativeLibraries(p);
+                        if (libs > 0) {
+                            log("microg addon " + name + ": " + libs + " native "
+                                    + (libs == 1 ? "library" : "libraries") + " in "
+                                    + p.nativeLibraryDir());
+                        }
+                    } catch (IOException | java.io.UncheckedIOException
+                            | java.nio.file.InvalidPathException e) {
+                        // Not published: the package keeps its default library path,
+                        // which a device run does not fill, so it runs without native
+                        // libraries until a later startup prepares them (fail closed).
+                        log("microg addon " + name + ": native libraries not prepared: "
+                                + e.getMessage());
                     }
                 }
                 packages.removeIf(old -> name.equals(old.packageName));
@@ -204,7 +226,11 @@ public final class SystemServer {
             ApkPackage p = ApkPackage.parse(apk);
             selectCommandLinePackage(packages, p);
         }
-        preparePackageStorage(committed, packages);
+        try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {
+            identity.commit();
+            preparePackageStorage(committed, packages);
+            identity.accept();
+        }
 
         // The services, published with servicemanager.
         Map<String, IBinder> services = Services.create(packages);
@@ -212,16 +238,14 @@ public final class SystemServer {
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.
         created.am.invalidatePermissionCaches();
-        // Providers answering other processes ask the permission checker.
-        services.put("permission_checker", StandIn.of(
-                android.permission.IPermissionChecker.class,
-                new Services.PermissionChecker()).asBinder());
         startAppProcessesOnDemand(created.atm, created.pm);
         PersistentDevice device = null;
         if (persistent) {
             device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
                     idleTimeoutS);
             services.put(GesherService.NAME, new GesherService(device));
+        } else {
+            Installer.attachMetadata(created.pm, created.atm);
         }
         for (Map.Entry<String, IBinder> e : services.entrySet()) {
             ServiceManager.addService(e.getKey(), e.getValue());
@@ -305,6 +329,8 @@ public final class SystemServer {
             if (inet != null) env.add(inet);
             // Gesher's own proxy for the package, over Windows' (docs/network.md).
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
+            // One window for the app's tasks, or one each (ADR 0088).
+            env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk))), env, logFile.getPath(), false);
@@ -478,6 +504,7 @@ public final class SystemServer {
                 SystemClock.sleep(200);
                 log("shutting down: " + reason);
                 mServices.atm.endAllProcesses(5000);
+                mServices.atm.flushUsageStats();
                 java.util.Properties state = Device.read(Device.stateFile());
                 if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
                     Device.stateFile().delete();

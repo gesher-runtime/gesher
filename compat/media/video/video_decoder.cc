@@ -10,6 +10,7 @@
 #include <media/NdkMediaFormat.h>
 
 #include "../audio/log.h"
+#include "yuv_rgba.h"
 
 namespace gesher::media {
 
@@ -255,6 +256,18 @@ void I420ToRgba(const VideoFrame& f, uint32_t* dst, int dst_stride, int dst_w, i
   const uint8_t* up = f.u();
   const uint8_t* vp = f.v();
   const bool same = dst_w == vw && dst_h == vh;
+  if (same && (f.crop_left & 1) == 0) {
+    // The frame at its own size (a decoder's output drawn into its Surface):
+    // whole rows at a time, the same pixels (yuv_rgba.h).
+    for (int y = 0; y < dst_h; y++) {
+      const int sy = f.crop_top + y;
+      yuv::RowToRgba(yp + static_cast<size_t>(sy) * f.stride_y + f.crop_left,
+                     up + static_cast<size_t>(sy / 2) * f.stride_uv + f.crop_left / 2,
+                     vp + static_cast<size_t>(sy / 2) * f.stride_uv + f.crop_left / 2,
+                     dst + static_cast<size_t>(y) * dst_stride, dst_w);
+    }
+    return;
+  }
   for (int y = 0; y < dst_h; y++) {
     int sy = f.crop_top + (same ? y : static_cast<int>(static_cast<int64_t>(y) * vh / dst_h));
     const uint8_t* yr = yp + static_cast<size_t>(sy) * f.stride_y;

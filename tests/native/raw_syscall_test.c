@@ -14,6 +14,7 @@
 //    when it first runs.
 #include <errno.h>
 #include <regex.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -144,6 +145,26 @@ int gesher_selftest(void) {
     check("raw rt_sigprocmask validates kernel sigsetsize",
           raw6(SYS_rt_sigprocmask, 0, 0, 0, 0, 0, 0) == -EINVAL);
 
+    static unsigned char alt_stack_buf[16384];
+    stack_t old_ss, prev_ss, cur_ss, new_ss;
+    memset(&old_ss, 0, sizeof(old_ss));
+    memset(&prev_ss, 0, sizeof(prev_ss));
+    memset(&cur_ss, 0, sizeof(cur_ss));
+    memset(&new_ss, 0, sizeof(new_ss));
+    new_ss.ss_sp = alt_stack_buf;
+    new_ss.ss_flags = 0;
+    new_ss.ss_size = sizeof(alt_stack_buf);
+    check("raw sigaltstack queries initial stack",
+          raw3(SYS_sigaltstack, 0, (long)&old_ss, 0) == 0 && (old_ss.ss_flags & SS_DISABLE) != 0);
+    check("raw sigaltstack installs alternate stack",
+          raw3(SYS_sigaltstack, (long)&new_ss, (long)&prev_ss, 0) == 0 &&
+              prev_ss.ss_sp == old_ss.ss_sp && prev_ss.ss_flags == old_ss.ss_flags);
+    check("raw sigaltstack reads back installed stack",
+          raw3(SYS_sigaltstack, 0, (long)&cur_ss, 0) == 0 && cur_ss.ss_sp == alt_stack_buf &&
+              cur_ss.ss_flags == 0 && cur_ss.ss_size == sizeof(alt_stack_buf));
+    check("raw sigaltstack restores previous stack",
+          raw3(SYS_sigaltstack, (long)&old_ss, 0, 0) == 0);
+
     int fds[2];
     if (pipe(fds) == 0) {
         char buf[8] = {0};
@@ -170,6 +191,9 @@ int gesher_selftest(void) {
     check("raw uname", raw3(SYS_uname, (long)&uts, 0, 0) == 0 && uname(&libc_uts) == 0 &&
                            strcmp(uts.sysname, libc_uts.sysname) == 0 &&
                            strcmp(uts.machine, "x86_64") == 0);
+    // Android's kernel is Linux; the release names no kernel, so version checks fail.
+    check("uname sysname is Linux", strcmp(libc_uts.sysname, "Linux") == 0 &&
+                                        strncmp(libc_uts.release, "0.", 2) == 0);
     struct timespec ts = {0, 0};
     check("raw clock_gettime", raw3(SYS_clock_gettime, CLOCK_MONOTONIC, (long)&ts, 0) == 0 &&
                                    (ts.tv_sec != 0 || ts.tv_nsec != 0));

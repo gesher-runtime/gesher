@@ -75,9 +75,12 @@ public final class SystemBindingCleanupTest {
         @SuppressWarnings("unchecked")
         Harness(Object apk) throws Exception {
             owner = (String) apk.getClass().getField("packageName").get(apk);
-            appUid = (Integer) apk.getClass().getMethod("uid").invoke(apk);
             component = new ComponentName(owner, owner + ".TestJobService");
             pm = construct(pmType, new Class<?>[]{Collection.class}, Collections.singletonList(apk));
+            // A parsed APK receives its installed Binder UID from package admission.
+            appUid = (Integer) apk.getClass().getMethod("uid").invoke(apk);
+            require(appUid >= android.os.Process.FIRST_APPLICATION_UID,
+                    "Fixture package did not receive an installed application UID");
             atm = construct(atmType, new Class<?>[]{pmType}, pm);
             Class<?> notifications = Class.forName("com.gesher.server.NotificationManagerService");
             am = (IActivityManager) construct(amType, new Class<?>[]{atmType, pmType, notifications},

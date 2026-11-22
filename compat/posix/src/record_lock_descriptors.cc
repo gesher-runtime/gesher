@@ -2,6 +2,7 @@
 #include "record_lock_duplicate.h"
 #include "internal.h"
 #include <bcrypt.h>
+#include <cstdlib>
 #include <new>
 
 namespace gesher::record_locks {
@@ -216,8 +217,31 @@ int Description(RegistryState* state, HANDLE file, const File& identity, bool cr
 }
 }  // namespace
 
-DescriptorGuard::DescriptorGuard() { if (descriptor_depth++ == 0) AcquireSRWLockExclusive(&descriptor_lock); }
-DescriptorGuard::~DescriptorGuard() { if (--descriptor_depth == 0) ReleaseSRWLockExclusive(&descriptor_lock); }
+extern "C" void gesher_descriptor_transaction_anchor_v1() {}
+extern "C" __declspec(dllexport) void gesher_descriptor_enter_v1() {
+  if (descriptor_depth++ == 0) AcquireSRWLockExclusive(&descriptor_lock);
+}
+extern "C" __declspec(dllexport) void gesher_descriptor_leave_v1() {
+  if (--descriptor_depth == 0) ReleaseSRWLockExclusive(&descriptor_lock);
+}
+
+DescriptorGuard::DescriptorGuard() {
+  using Enter = void (*)();
+  static auto enter = reinterpret_cast<Enter>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(nullptr), "gesher_descriptor_enter_v1")));
+  // The private link anchor makes this an executable-owned transaction even
+  // when callers reside in different AOSP DLLs. A private fallback would split
+  // descriptor publication and allow capture to race close/dup2.
+  if (!enter) std::abort();
+  enter();
+}
+DescriptorGuard::~DescriptorGuard() {
+  using Leave = void (*)();
+  static auto leave = reinterpret_cast<Leave>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(nullptr), "gesher_descriptor_leave_v1")));
+  if (!leave) std::abort();
+  leave();
+}
 
 int DescriptorFcntl(int descriptor, int command, void* user_flock) {
   const int saved_errno = errno;

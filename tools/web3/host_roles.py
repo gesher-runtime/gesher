@@ -34,6 +34,11 @@ def require(condition, message):
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+def supplier_context(path, consumer, role):
+    sys.path.insert(0, str(ROOT / 'tools/ci'))
+    from producer_context import authenticate
+    return authenticate(path, consumer, role)
+
 def context():
     require(os.environ.get("GITHUB_ACTIONS") == "true", "Host-role proof executes only in CI")
     result = {name: os.environ[variable] for name, variable in (
@@ -128,9 +133,14 @@ def compiler(build):
             "compile_database_form": forms.pop(),
             "launcher": str(launcher_path) if launcher_path is not None else None,
             "launcher_sha256": sha(launcher_path) if launcher_path is not None else None}
-    selected = selected_ledger().compiler_identity(configured)
-    if selected is not None:
-        result['selected_toolchain'] = selected
+    if os.environ.get('GESHER_HOST_PTHREAD_SELECTION') == 'publisher-cancel':
+        sys.path.insert(0, str(ROOT / 'tools/toolchain'))
+        import prepare_pthread_cancel
+        result['production_pthread'] = prepare_pthread_cancel.compiler_identity(configured)
+    else:
+        selected = selected_ledger().compiler_identity(configured)
+        if selected is not None:
+            result['selected_toolchain'] = selected
     return result
 
 
@@ -346,18 +356,19 @@ def verify(args):
     info = context()
     dist = Path(args.dist)
     production = json.loads((dist / "web3-production-role.json").read_text(encoding="utf-8"))
-    require(all(production[key] == value for key, value in info.items()), "Production supplier context mismatch")
+    producer = supplier_context(dist / 'web3-production-role.json', info, 'production')
     require(production["role"] == "production" and production["test_hook_compiled"] is False,
             "Expected default-OFF production role")
     require(sha(dist / "dalvikvm.exe") == production["executable_sha256"], "Production executable copy mismatch")
     require(SENTINEL not in (dist / "dalvikvm.exe").read_bytes(), "Test registration in normal runtime")
     require(sha(dist / "dalvikvm.map") == production["executable_map_sha256"], "Production exact map copy mismatch")
     installer_excludes_fixture()
-    verify_selected(dist, production.get('selected_link'), production['compiler'], info,
+    verify_selected(dist, production.get('selected_link'), production['compiler'], producer,
                     production_targets(dist, production, info, hook=args.hook), 'production')
     if args.hook:
         hook = json.loads((dist / "web3-query-hook-role.json").read_text(encoding="utf-8"))
-        require(all(hook[key] == value for key, value in info.items()), "Hook supplier context mismatch")
+        hook_producer = supplier_context(dist / 'web3-query-hook-role.json', info, 'query-hook')
+        require(hook_producer == producer, 'Query-hook and production came from different executions')
         require(hook["role"] == "query-hook" and hook["test_hook_compiled"] is True, "Expected hook-only runtime role")
         require(hook["executable"] == HOOK and sha(dist / HOOK) == hook["executable_sha256"], "Hook executable copy mismatch")
         require(SENTINEL in (dist / HOOK).read_bytes(), "Missing actual test registration in hook runtime")
@@ -366,7 +377,7 @@ def verify(args):
                 "Different compiler or production code for query-hook runtime")
         require(hook["production_runtime_sha256"] == production["executable_sha256"] and
                 set(hook["changed_compile_definitions"]) == CHANGED, "Different role boundary")
-        verify_selected(dist, hook.get('selected_link'), hook['compiler'], info, {HOOK}, 'query-hook')
+        verify_selected(dist, hook.get('selected_link'), hook['compiler'], hook_producer, {HOOK}, 'query-hook')
         print("VERIFIED_WEB3_FULL_ROLES source=" + info["source"] + " production=" + production["executable_sha256"] +
               " hook=" + hook["executable_sha256"] + " shared-source-identical=True compiler-identical=True")
     else:

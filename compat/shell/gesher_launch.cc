@@ -176,6 +176,34 @@ void ShowLaunchFailure(const std::wstring& reason) {
   MessageBoxW(nullptr, text.c_str(), GesherUiText(language, "brand"), flags);
 }
 
+// A failing app starts this short-lived host process rather than waiting inside
+// Android's dying main thread. No PowerShell, APK launch, splash or retry here.
+int ShowAppCrash(int argc, LPWSTR* argv) {
+  if (argc != 6 || wcslen(argv[2]) == 0 || wcslen(argv[2]) > 255 ||
+      wcslen(argv[4]) == 0 || wcslen(argv[4]) > 8192 ||
+      wcslen(argv[5]) == 0 || wcslen(argv[5]) > 64) return 1;
+  const char* key = nullptr;
+  if (wcscmp(argv[3], L"generic") == 0) key = "app_crash_generic";
+  else if (wcscmp(argv[3], L"bluetooth") == 0) key = "app_crash_bluetooth";
+  else if (wcscmp(argv[3], L"security") == 0) key = "app_crash_security";
+  else if (wcscmp(argv[3], L"compatibility") == 0) key = "app_crash_compatibility";
+  if (key == nullptr) return 1;
+  const auto language = GesherUiCurrentLanguage();
+  const std::wstring pattern = GesherUiText(language, key);
+  std::wstring message;
+  // Substitute once: package/path data containing braces is never a template.
+  for (size_t i = 0; i < pattern.size();) {
+    if (pattern.compare(i, 3, L"{0}") == 0) { message += argv[2]; i += 3; }
+    else if (pattern.compare(i, 3, L"{1}") == 0) { message += argv[4]; i += 3; }
+    else if (pattern.compare(i, 3, L"{2}") == 0) { message += argv[5]; i += 3; }
+    else message += pattern[i++];
+  }
+  UINT flags = MB_OK | MB_ICONERROR | MB_SETFOREGROUND;
+  if (GesherUiRtl(language)) flags |= MB_RTLREADING | MB_RIGHT;
+  MessageBoxW(nullptr, message.c_str(), GesherUiText(language, "brand"), flags);
+  return 0;
+}
+
 // A small file's bytes (at most 4 MB).
 bool ReadBytes(const std::wstring& path, std::string* out) {
   HANDLE f = CreateFileW(path.c_str(), GENERIC_READ,
@@ -353,7 +381,8 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
     // gesher-app.ps1's other commands show no window of an app; anything else is an APK.
     static const wchar_t* const kCommands[] = {L"install", L"uninstall", L"view", L"list",
                                                L"status", L"start", L"shutdown",
-                                               L"toast-activated", L"apk-icon", L"proxy",
+                                               L"toast-activated", L"apk-icon", L"proxy", L"spell-checker",
+                                               L"windows",
                                                L"control-panel", L"settings", L"dashboard", L"gui"};
     for (const wchar_t* command : kCommands) {
       if (Lower(args[0]) == command) return false;
@@ -731,6 +760,18 @@ bool SplashWhileStarting(const std::wstring& here, HANDLE process, DWORD pid, bo
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+  {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv != nullptr) {
+      if (argc > 1 && wcscmp(argv[1], L"--app-crash") == 0) {
+        int result = ShowAppCrash(argc, argv);
+        LocalFree(argv);
+        return result;
+      }
+      LocalFree(argv);
+    }
+  }
   wchar_t self[MAX_PATH * 4];
   DWORD n = GetModuleFileNameW(nullptr, self, static_cast<DWORD>(sizeof(self) / sizeof(self[0])));
   if (n == 0 || n >= sizeof(self) / sizeof(self[0])) return 1;

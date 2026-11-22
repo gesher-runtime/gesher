@@ -67,13 +67,14 @@ class QuotaReads(unittest.TestCase):
             self.assertEqual(reader.get_json(ENDPOINT), {'id': 7})
         self.assertEqual([c.args for c in self.sleep.call_args_list], [(10,)])
 
-    def test_secondary_without_retry_after_waits_a_minute_then_stops_within_budget(self):
-        self.run.side_effect = [reply(403, SECONDARY), reply(403, SECONDARY)]
+    def test_secondary_without_retry_after_doubles_its_wait_then_stops_at_four_requests(self):
+        self.run.side_effect = [reply(403, SECONDARY)] * 4
         with self.assertRaisesRegex(reader.GitHubReadError, 'bounded'):
             reader.get_json(ENDPOINT)
-        self.assertEqual(self.run.call_count, 2)
-        self.assertEqual([c.args for c in self.sleep.call_args_list], [(60,)])
-        self.assertEqual(self.clock, 60)
+        self.assertEqual(self.run.call_count, 4)
+        # 60 + 120 + 240 seconds, slept in chunks of at most a minute.
+        self.assertEqual([c.args for c in self.sleep.call_args_list], [(60,)] * 7)
+        self.assertEqual(self.clock, 420)
 
     def test_secondary_retry_after_can_recover(self):
         self.run.side_effect = [reply(429, SECONDARY, {'retry-after': '8'}), reply()]
@@ -88,24 +89,64 @@ class QuotaReads(unittest.TestCase):
         self.sleep.assert_not_called()
         self.assertIn('reset=' + str(NOW + 3600), self.logs.getvalue())
         self.run.reset_mock()
-        self.run.side_effect = [reply(403, PRIMARY, headers(59)), reply(403, PRIMARY, headers(69))]
+        # 600 + 400 seconds exceeds the 15-minute cumulative quota wait budget.
+        self.run.side_effect = [reply(403, PRIMARY, headers(599)), reply(403, PRIMARY, headers(399))]
         with self.assertRaisesRegex(reader.GitHubReadError, 'bounded'):
             reader.get_json(ENDPOINT)
         self.assertEqual(self.run.call_count, 2)
-        self.assertEqual([c.args for c in self.sleep.call_args_list], [(60,)])
+        self.assertEqual([c.args for c in self.sleep.call_args_list], [(60,)] * 10)
 
-    def test_rate_wait_does_not_extend_original_247_second_read_envelope(self):
-        responses = [reply(502), reply(503), reply(403, PRIMARY, headers(69))]
+    def test_reset_within_fifteen_minutes_is_awaited_instead_of_failing(self):
+        self.run.side_effect = [reply(403, PRIMARY, headers(839)), reply()]
+        self.assertEqual(reader.get_json(ENDPOINT), {'id': 7})
+        self.assertEqual(sum(c.args[0] for c in self.sleep.call_args_list), 840)
+        self.assertIn('action=wait', self.logs.getvalue())
+        self.assertEqual(self.run.call_count, 2)
+
+    def test_fifteen_minute_budget_boundary(self):
+        # delay = reset - server date + 1: 899 waits exactly 900 seconds, 900 fails at once.
+        self.run.side_effect = [reply(403, PRIMARY, headers(899)), reply()]
+        self.assertEqual(reader.get_json(ENDPOINT), {'id': 7})
+        self.assertEqual(sum(c.args[0] for c in self.sleep.call_args_list), 900)
+        self.run.reset_mock(); self.sleep.reset_mock()
+        self.run.side_effect = [reply(403, PRIMARY, headers(900))]
+        with self.assertRaisesRegex(reader.GitHubReadError, 'bounded'):
+            reader.get_json(ENDPOINT)
+        self.sleep.assert_not_called()
+
+    def test_rate_wait_does_not_consume_the_247_second_transport_envelope(self):
+        responses = [reply(502), reply(503), reply(403, PRIMARY, headers(69)), reply()]
         def invoke(*args, **kwargs):
             self.assertLessEqual(kwargs['timeout'], 60)
             self.advance(59)
             return responses.pop(0)
         self.run.side_effect = invoke
-        with self.assertRaisesRegex(reader.GitHubReadError, 'bounded'):
+        self.assertEqual(reader.get_json(ENDPOINT), {'id': 7})
+        self.assertEqual(self.run.call_count, 4)
+        self.assertEqual([c.args for c in self.sleep.call_args_list], [(1,), (2,), (60,), (10,)])
+
+    def test_transport_time_alone_still_ends_within_247_seconds(self):
+        responses = [reply(502), reply(503), reply(504), reply()]
+        def invoke(*args, **kwargs):
+            self.assertLessEqual(kwargs['timeout'], 60)
+            self.advance(80)
+            return responses.pop(0)
+        self.run.side_effect = invoke
+        with self.assertRaisesRegex(reader.GitHubReadError, 'failed after 3 attempt'):
             reader.get_json(ENDPOINT)
         self.assertEqual(self.run.call_count, 3)
         self.assertEqual([c.args for c in self.sleep.call_args_list], [(1,), (2,)])
         self.assertLess(self.clock, 247)
+
+    def test_quota_waits_inside_a_no_retry_read_and_never_becomes_a_fallback(self):
+        self.run.side_effect = [reply(403, PRIMARY, headers(9)), reply()]
+        self.assertEqual(reader.get_json(ENDPOINT, retry_transient=False), {'id': 7})
+        self.assertEqual([c.args for c in self.sleep.call_args_list], [(10,)])
+        self.run.reset_mock(); self.sleep.reset_mock()
+        self.run.side_effect = [reply(403, PRIMARY, headers(3600))]
+        with self.assertRaises(reader.GitHubReadError) as caught:
+            reader.get_json(ENDPOINT, retry_transient=False)
+        self.assertNotIsInstance(caught.exception, reader.GitHubTransientError)
 
     def test_auth_errors_and_quota_looking_headers_are_not_transient(self):
         for status in (401, 403, 404, 429):

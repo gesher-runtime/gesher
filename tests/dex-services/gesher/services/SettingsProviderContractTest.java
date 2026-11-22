@@ -14,6 +14,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.provider.Settings;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.PrintStream;
@@ -39,12 +40,15 @@ public final class SettingsProviderContractTest {
         throw new AssertionError("Expected " + expected.getSimpleName());
     }
     private static ContentProvider provider(File file) throws Exception {
+        return provider(file, null);
+    }
+    private static ContentProvider provider(File file, Object packages) throws Exception {
         Class<?> type = Class.forName("com.gesher.server.SettingsProvider");
         Constructor<?> constructor; Object[] arguments;
         try {
             constructor = type.getDeclaredConstructor(Class.forName("com.gesher.server.PackageManagerService"),
                     Class.forName("com.gesher.server.ActivityTaskManagerService"), File.class);
-            arguments = new Object[]{null, null, file};
+            arguments = new Object[]{packages, null, file};
         } catch (NoSuchMethodException baseline) {
             constructor = type.getDeclaredConstructor(); arguments = new Object[0];
         }
@@ -160,6 +164,59 @@ public final class SettingsProviderContractTest {
         check(old.equals(read(broken, "font_scale")), "Failed persistence rolls back update");
         rejects(IllegalStateException.class, () -> broken.call("DELETE_system", "font_scale", null));
         check(old.equals(read(broken, "font_scale")), "Failed persistence rolls back deletion");
+        checkerSubtypeGeneration(file, loaded);
+    }
+    private static void checkerSubtypeGeneration(File file, ContentProvider p) throws Exception {
+        String checker = Settings.Secure.SELECTED_SPELL_CHECKER;
+        String subtype = Settings.Secure.SELECTED_SPELL_CHECKER_SUBTYPE;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            p.call("PUT_secure", subtype, value("1002"));
+            p.call("PUT_secure", checker, value(""));
+            check("0".equals(p.call("GET_secure", subtype, null).getString("value")),
+                    "New spell-checker selection resets the previous subtype");
+            p.call("PUT_secure", subtype, value("1002"));
+            check("1002".equals(p.call("GET_secure", subtype, null).getString("value")),
+                    "Explicit same-ID subtype selection updates its generation");
+            check("1002".equals(provider(file).call("GET_secure", subtype, null).getString("value")),
+                    "Re-selected subtype survives settings reload");
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+    private static void transientCheckerRows(File file) throws Exception {
+        Class<?> packageType = Class.forName("com.gesher.server.PackageManagerService");
+        Constructor<?> constructor = packageType.getDeclaredConstructor(java.util.Collection.class, boolean.class);
+        constructor.setAccessible(true);
+        ContentProvider p = provider(file, constructor.newInstance(java.util.List.of(), false));
+        Class<?> type = p.getClass();
+        var settings = type.getDeclaredMethod("spellCheckerSettings");
+        settings.setAccessible(true);
+        var initialize = type.getDeclaredMethod("initializeSpellChecker",
+                Class.forName("com.gesher.server.SettingsProvider$SpellCheckerSettings"),
+                Class.forName("com.gesher.server.SpellCheckerCatalog$Entry"));
+        initialize.setAccessible(true);
+        check((Boolean) initialize.invoke(p, settings.invoke(p), null), "Transient checker initialization");
+        Uri secure = Uri.parse("content://settings/secure");
+        java.util.Set<Long> ids = new java.util.HashSet<>();
+        int textRows = 0;
+        try (Cursor c = p.query(secure, null, null, null, null)) {
+            while (c.moveToNext()) {
+                check(ids.add(c.getLong(c.getColumnIndexOrThrow("_id"))), "Duplicate secure row ID");
+                String name = c.getString(c.getColumnIndexOrThrow("name"));
+                String value = c.getString(c.getColumnIndexOrThrow("value"));
+                if (Settings.Secure.SELECTED_SPELL_CHECKER.equals(name)) {
+                    check("".equals(value), "Transient checker row value"); textRows++;
+                } else if (Settings.Secure.SELECTED_SPELL_CHECKER_SUBTYPE.equals(name)) {
+                    check("0".equals(value), "Transient subtype row value"); textRows++;
+                }
+            }
+        }
+        check(textRows == 2, "Transient text-service rows missing from query");
+        rejects(SecurityException.class, () -> p.call("PUT_secure",
+                Settings.Secure.SELECTED_SPELL_CHECKER_SUBTYPE, value("42")));
+        check(!new File(file.toString() + ".spell-checker").exists(),
+                "Transient profile touched privileged checker storage");
     }
     private static void limits(ContentProvider p) throws Exception {
         p.call("PUT_system", "limit", value("x".repeat(32768)));
@@ -210,12 +267,13 @@ public final class SettingsProviderContractTest {
         clock.setAccessible(true); clock.set(null, Boolean.TRUE); // Declared host locale boundary.
         File directory = Files.createTempDirectory("gesher-settings-contract-").toFile();
         try {
-            for (String name : new String[]{"query", "crud", "call", "persistence", "limits", "observers"}) {
+            for (String name : new String[]{"query", "crud", "call", "persistence", "transient", "limits", "observers"}) {
                 if (!group.equals("all") && !group.equals(name)) continue;
                 File file = new File(directory, name + ".bin"); ContentProvider p = provider(file);
                 switch (name) {
                     case "query": query(p); break; case "crud": crud(p); break;
                     case "call": call(p); break; case "persistence": persistence(file); break;
+                    case "transient": transientCheckerRows(file); break;
                     case "limits": limits(p); break; case "observers": observers(p); break;
                     default: throw new AssertionError(name);
                 }
@@ -229,5 +287,6 @@ public final class SettingsProviderContractTest {
     public static void main(String[] args) throws Exception {
         contracts(args.length == 0 ? "all" : args[0]);
         System.out.println("Settings provider contracts passed: " + checks + " checks");
+        System.out.println("Settings write access passed: " + SettingsWriteAccessTest.run(true) + " checks");
     }
 }

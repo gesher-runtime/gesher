@@ -44,7 +44,7 @@ def main():
         binary.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(shlex.split(args.cxx) + ['-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fno-exceptions', '-static', '-pthread',
                        '-I' + str(ROOT / 'compat/posix/include'), '-idirafter', str(args.aosp_dir / 'bionic/libc/kernel/uapi'),
-                       str(source), '-o', str(binary)], check=True, timeout=90)
+                       str(source), '-o', str(binary), '-lbcrypt'], check=True, timeout=90)
         if not args.compile_only:
             subprocess.run([str(binary)], check=True, timeout=45)
 

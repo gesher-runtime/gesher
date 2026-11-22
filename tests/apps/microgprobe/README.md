@@ -56,7 +56,9 @@ checks a seeded victim job remains untouched, unknown PID/UID rejection,
 callback ownership and replacement of code during a pending service binding.
 
 `PermissionCacheActivity` separately keeps the same app process alive while the
-host grants and revokes POST. The runner requires `READY_INITIAL_DENIED`,
+host grants and revokes POST. The revoke uses Android's test-only
+`revokePostNotificationPermissionWithoutKillForTest`, because an ordinary runtime
+revoke kills the UID as on Android. The runner requires `READY_INITIAL_DENIED`,
 `GRANT_OBSERVED` and `PASS deny-grant-deny in same process` for that PID. It checks
 both `checkSelfPermission` and `areNotificationsEnabled` without driving a native
 permission prompt; the ordinary negative probe runs with POST denied.

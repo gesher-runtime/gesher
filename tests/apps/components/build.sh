@@ -5,4 +5,6 @@
 #       --framework-classes <dir|jar> [--core-classes <dir>]
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-APP_DIR=$here exec bash "$here/../lifecycle/build.sh" "$@"
+# Persistent special-access decisions belong to this real APK's verified signer.
+# Sign only this fixture; the shared builder's other callers keep their own mode.
+SIGN_TEST_APK=1 APP_DIR=$here exec bash "$here/../lifecycle/build.sh" "$@"

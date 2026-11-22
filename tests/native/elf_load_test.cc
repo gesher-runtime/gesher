@@ -22,6 +22,9 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 
+#include <elf.h>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -131,6 +134,40 @@ int main(int argc, char** argv) {
     if (e & 4) Check("%fs:(%reg) accesses moved out of line", fs.stubbed > 0);
     Check("no %fs access left that cannot be rewritten", fs.trapped == 0);
   }
+#if defined(__x86_64__)
+  // The %fs rewrite makes a code segment writable (copy-on-write) for its
+  // patches; the segment's own protection is restored once it is loaded. No
+  // page of any loaded object's read-execute segment may be writable.
+  {
+    size_t code_pages = 0, writable = 0;
+    elf::ForEachLoaded([&](const elf::PhdrInfo& info) {
+      const auto* ph = static_cast<const Elf64_Phdr*>(info.phdr);
+      for (uint16_t i = 0; i < info.phnum; ++i) {
+        if (ph[i].p_type != PT_LOAD || (ph[i].p_flags & PF_X) == 0 || (ph[i].p_flags & PF_W) != 0)
+          continue;
+        // Whole pages only: a page shared with a writable segment is that segment's.
+        const uintptr_t segment = info.addr + ph[i].p_vaddr;
+        const uintptr_t end = (segment + ph[i].p_filesz) & ~uintptr_t{0xfff};
+        for (uintptr_t page = (segment + 0xfff) & ~uintptr_t{0xfff}; page < end;) {
+          MEMORY_BASIC_INFORMATION mbi;
+          if (VirtualQuery(reinterpret_cast<void*>(page), &mbi, sizeof(mbi)) != sizeof(mbi)) break;
+          const uintptr_t run_end =
+              std::min(end, reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize);
+          const size_t pages = (run_end - page) / 0x1000;
+          const DWORD writes = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE |
+                               PAGE_EXECUTE_WRITECOPY;
+          code_pages += pages;
+          if ((mbi.Protect & writes) != 0) writable += pages;
+          page = run_end;
+        }
+      }
+      return 0;
+    });
+    char detail[96];
+    std::snprintf(detail, sizeof(detail), "%zu of %zu code pages writable", writable, code_pages);
+    Check("read-execute segments are not writable after the load", writable == 0, detail);
+  }
+#endif
   if (auto set_dir = reinterpret_cast<void (SYSV*)(const char*)>(
           elf::Lookup(lib, "gesher_set_search_dir"))) {
     set_dir(argc > 2 ? argv[2] : ".");

@@ -19,7 +19,6 @@ import android.os.Process;
 import android.os.ServiceManager;
 import com.gesher.app.Main;
 import com.gesher.server.Services;
-import com.gesher.server.StandIn;
 import com.gesher.server.SystemServer;
 import java.io.File;
 import java.nio.file.Files;
@@ -29,20 +28,24 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Ordinary-UID ContentProvider.Transport calls over two real Windows ART processes. */
+/** Real remote Settings transport: ordinary-UID denial and system-authorized CRUD. */
 public final class SettingsProviderRemoteTest {
     private static final String NAME = "gesher.settings.contract";
     private static int checks;
     private static synchronized void check(boolean result, String why) { if (!result) throw new AssertionError(why); checks++; }
+    private interface RemoteOperation { void run() throws Exception; }
+    private static void denied(RemoteOperation operation, String why) throws Exception {
+        try { operation.run(); }
+        catch (SecurityException expected) { checks++; return; }
+        throw new AssertionError(why);
+    }
     private static void server(String readyFile) throws Exception {
         String root = System.getenv("ANDROID_ROOT");
         Main.bootstrap("settings-contract", root + "/build.prop", root + "/framework/framework-res.apk");
         check(Process.myUid() == Process.SYSTEM_UID, "Server must run as the system UID");
         Map<String, IBinder> services = Services.create(Collections.emptyList());
-        // ContentProvider.getType asks this same policy-backed service in production.
-        services.put("permission_checker", StandIn.of(
-                android.permission.IPermissionChecker.class,
-                new Services.PermissionChecker()).asBinder());
+        // Exercise the same shared policy service that production registers.
+        check(services.get("permission_checker") != null, "Real permission checker registered");
         for (Map.Entry<String, IBinder> service : services.entrySet()) ServiceManager.addService(service.getKey(), service.getValue());
         IActivityManager am = IActivityManager.Stub.asInterface(services.get("activity"));
         ContentProviderHolder holder = am.getContentProviderExternal("settings", 0, null, "settings-contract");
@@ -55,14 +58,41 @@ public final class SettingsProviderRemoteTest {
     }
     private static void client() throws Exception {
         System.loadLibrary("android_runtime");
-        check(Process.myUid() == 10042, "Client must use an ordinary distinct UID");
+        boolean authorized = Process.myUid() == Process.SYSTEM_UID;
+        check(authorized || Process.myUid() == 10042, "Expected system or ordinary fixture UID");
         IBinder binder = ServiceManager.getService(NAME);
         check(binder != null && !(binder instanceof Binder), "Provider is a remote BinderProxy");
         IContentProvider provider = ContentProviderNative.asInterface(binder);
-        AttributionSource caller = new AttributionSource.Builder(Process.myUid()).setPackageName("gesher.settings.contract").build();
+        AttributionSource caller = new AttributionSource.Builder(Process.myUid())
+                .setPackageName(authorized ? "android" : "gesher.settings.contract").build();
         Uri table = Uri.parse("content://settings/system"), item = Uri.withAppendedPath(table, "remote-contract");
         IContentService content = IContentService.Stub.asInterface(ServiceManager.getService("content"));
         check(content != null && !(content.asBinder() instanceof Binder), "Content service is remote");
+        SystemServer.startBinderThreads("settings-client", 2);
+        if (!authorized) {
+            check("vnd.android.cursor.dir/system".equals(provider.getType(caller, table)),
+                    "Ordinary caller still receives public MIME type");
+            ContentValues values = new ContentValues();
+            values.put("name", "remote-contract"); values.put("value", "denied");
+            denied(() -> provider.insert(caller, table, values, null), "Ordinary insert accepted");
+            denied(() -> provider.update(caller, item, values, null), "Ordinary update accepted");
+            denied(() -> provider.delete(caller, item, null), "Ordinary delete accepted");
+            Bundle before = provider.call(caller, "settings", "GET_secure", "default_input_method", null);
+            Bundle write = new Bundle(); write.putString("value", "fixture.invalid/.InputMethod");
+            denied(() -> provider.call(caller, "settings", "PUT_secure", "default_input_method", write),
+                    "Ordinary caller changed the secure default IME");
+            Bundle after = provider.call(caller, "settings", "GET_secure", "default_input_method", null);
+            check(java.util.Objects.equals(before.getString("value"), after.getString("value")),
+                    "Rejected secure write changed stored value");
+            check(provider.call(caller, "settings", "GET_system", "remote-contract", null)
+                    .getString("value") == null, "Rejected insert changed stored value");
+            try (Cursor cursor = provider.query(caller, item, new String[]{"value"}, null, null)) {
+                check(cursor != null && !cursor.moveToFirst(), "Ordinary query sees no rejected row");
+            }
+            System.out.println("SettingsProviderRemoteTest ordinary passed: " + checks
+                    + " checks; ordinary UID, BinderProxy, public MIME/read and denied writes");
+            return;
+        }
         CountDownLatch observed = new CountDownLatch(3);
         AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
         IContentObserver observer = new IContentObserver.Stub() {
@@ -79,7 +109,6 @@ public final class SettingsProviderRemoteTest {
                 for (Uri uri : uris) changed(uri);
             }
         };
-        SystemServer.startBinderThreads("settings-client", 2);
         content.registerContentObserver(item, false, observer, 0, 36);
         try {
             check("vnd.android.cursor.dir/system".equals(provider.getType(caller, table)), "Remote directory MIME");
@@ -100,7 +129,7 @@ public final class SettingsProviderRemoteTest {
             if (callbackFailure.get() != null) throw new AssertionError("Remote callback failed", callbackFailure.get());
         } finally { content.unregisterContentObserver(observer); }
         System.out.println("SettingsProviderRemoteTest all passed: " + checks
-                + " checks; ordinary UID, BinderProxy, CRUD, nullable CursorWindow and reentrant observers");
+                + " checks; system UID, BinderProxy, authorized CRUD, nullable CursorWindow and reentrant observers");
     }
     public static void main(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("server")) {
