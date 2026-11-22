@@ -37,7 +37,8 @@ bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result);
 // path. Zero for writable eventfd/non-event descriptors, EBADF for inotify,
 // EINVAL for epoll and read-only timer readiness.
 int EventObjectWriteError(int fd);
-// Drops fd's reference to its object; the caller closes the CRT fd.
+// Drops fd's reference to its object (including a native fence, which does not
+// change the result); the caller closes the CRT fd.
 bool ForgetEventObject(int fd);
 // After `fd2` was made a CRT duplicate of `fd`: fd2 shares fd's object.
 void DupEventObject(int fd, int fd2);

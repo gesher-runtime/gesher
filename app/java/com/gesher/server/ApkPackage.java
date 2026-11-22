@@ -39,6 +39,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -514,6 +517,36 @@ public final class ApkPackage {
             }
         }
         return mVerifiedSignatures == null ? null : mVerifiedSignatures.clone();
+    }
+
+    /** Matches a SHA-256 certificate digest against the verified APK identity. */
+    synchronized boolean hasVerifiedSigningCertificate(byte[] certificate) {
+        Signature[] current = verifiedSignatures();
+        if (current == null) return false;
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
+        for (Signature signature : current) {
+            if (MessageDigest.isEqual(certificate, digest.digest(signature.toByteArray()))) return true;
+        }
+        // Like Android, only a lone current signer can have signing history.
+        if (current.length != 1 || mVerifiedLineage == null) return false;
+        try {
+            List<X509Certificate> history = mVerifiedLineage.getCertificatesInLineage();
+            if (history.isEmpty() || !current[0].equals(new Signature(
+                    history.get(history.size() - 1).getEncoded()))) return false;
+            for (int i = 0; i < history.size() - 1; i++) {
+                if (MessageDigest.isEqual(certificate, digest.digest(history.get(i).getEncoded()))) {
+                    return true;
+                }
+            }
+        } catch (CertificateEncodingException invalid) {
+            return false;
+        }
+        return false;
     }
 
     public static Signature[] verifySignatures(String path) {

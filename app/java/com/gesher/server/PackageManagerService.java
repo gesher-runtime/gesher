@@ -961,10 +961,17 @@ public final class PackageManagerService extends IPackageManager.Default {
      * (touchscreen and faketouch, matching {@link com.gesher.app.DeviceProfile#configuration()},
      * both orientations) whose launcher could host app widgets (apps reach
      * AppWidgetManager only on devices with app_widgets, and phone apps assume it).
-     * Telephony, Wi-Fi, camera, sensors and the rest are absent. Bluetooth
+     * Telephony, Wi-Fi, sensors and the rest are absent. Bluetooth
      * (docs/bluetooth.md) is there when the host has a radio: FEATURE_BLUETOOTH with an
      * adapter, FEATURE_BLUETOOTH_LE when Windows reports LE support (apps such as
-     * companion apps check it before anything else).
+     * companion apps check it before anything else). Cameras follow the real devices
+     * ({@link #addCameraFeatures}). FEATURE_MICROPHONE is there when Windows has an audio
+     * capture endpoint, the input AudioRecord and AudioManager report. FEATURE_LOCATION and
+     * FEATURE_LOCATION_NETWORK describe {@link LocationManagerService}'s network provider,
+     * which is always registered (Windows' location service, with the IP fallback);
+     * FEATURE_LOCATION_GPS is not claimed, as no GNSS receiver is known. Google Play filters
+     * on these (a RECORD_AUDIO or location permission implies the feature unless the app
+     * marks it not required), so an absent one hides an app the device can run.
      */
     static final android.util.ArrayMap<String, android.content.pm.FeatureInfo> FEATURES =
             new android.util.ArrayMap<>();
@@ -988,6 +995,33 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no cameras to report.
         }
+        try {
+            addMicrophoneFeature(FEATURES, hasAudioInput());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no input to report.
+        }
+        addLocationFeatures(FEATURES);
+    }
+
+    /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */
+    private static boolean hasAudioInput() {
+        android.util.IntArray types = new android.util.IntArray();
+        int status = android.media.AudioSystem.getSupportedDeviceTypes(
+                android.media.AudioManager.GET_DEVICES_INPUTS, types);
+        return status == android.media.AudioSystem.SUCCESS && types.size() > 0;
+    }
+
+    /** FEATURE_MICROPHONE when there is an audio input device. */
+    public static void addMicrophoneFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean input) {
+        if (input) addFeature(features, PackageManager.FEATURE_MICROPHONE);
+    }
+
+    /** The network location provider's features; no GPS claim. */
+    static void addLocationFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features) {
+        addFeature(features, PackageManager.FEATURE_LOCATION);
+        addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
     }
 
     /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */

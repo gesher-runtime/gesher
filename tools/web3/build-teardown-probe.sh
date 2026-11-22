@@ -11,6 +11,10 @@ case "${GESHER_HOST_PTHREAD_SELECTION:-publisher}" in
     link_launcher=(python3 tools/toolchain/selected_link.py launch)
     diagnostics=(-Wl,--verbose "-Wl,-Map,$output/web3_process_waits.map")
     ;;
+  publisher-cancel)
+    python3 -c 'from tools.toolchain.prepare_pthread_cancel import compiler_identity; import sys; compiler_identity(sys.argv[1])' \
+      "$toolchain/bin/x86_64-w64-mingw32-clang++"
+    ;;
   publisher) ;;
   *) exit 1 ;;
 esac

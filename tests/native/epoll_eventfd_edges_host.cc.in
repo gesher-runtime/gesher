@@ -82,6 +82,10 @@ struct EventFd; struct Inotify; struct TimerFd; class NativeFence;
 // This corpus creates eventfds, not GPU fences. The latter's Win32 descriptor
 // boundary is exercised by the dedicated native-fence Windows fixture.
 static std::shared_ptr<NativeFence> LookupNativeFence(int) { return nullptr; }
+// Records the production ForgetEventObject retirement call; the native fence
+// registry itself is covered by the Windows fence fixture.
+static std::atomic<int> native_fence_forgets{0}, last_native_fence_forget{-1};
+static void ForgetNativeFence(int fd) { ++native_fence_forgets; last_native_fence_forget = fd; }
 struct SocketFd {};
 static bool LookupSocket(int, SocketFd*) { return false; }
 static HANDLE HandleFromFd(int fd) { return HostValid(fd) ? reinterpret_cast<HANDLE>(intptr_t(fd + 1)) : INVALID_HANDLE_VALUE; }
@@ -178,6 +182,15 @@ static void check(const char* label, int passed) {
 #include "epoll_eventfd_edge_test.inc"
 #include "epoll_eventfd_edge_wait_test.inc"
 int main() {
+  {
+    // Every close path retires a possible native fence identity of that slot
+    // through the same production ForgetEventObject body.
+    int probe = eventfd(0, EFD_NONBLOCK);
+    const int before = gesher::native_fence_forgets.load();
+    check("descriptor close retires its native fence identity through ForgetEventObject",
+          probe >= 0 && close(probe) == 0 && gesher::native_fence_forgets.load() == before + 1 &&
+          gesher::last_native_fence_forget.load() == probe);
+  }
   test_epoll_eventfd_edges();
   test_epoll_eventfd_edge_waits();
   // Actual production wait code must call its blocking boundary a bounded

@@ -478,6 +478,9 @@ int EventObjectWriteError(int fd) {
 }
 
 bool ForgetEventObject(int fd) {
+  // Completed native fences are NUL-backed virtual objects as well. Every
+  // close, dup2 replacement and CRT stream retirement reaches this point.
+  ForgetNativeFence(fd);
   if (object_count.load(std::memory_order_acquire) == 0) return false;
   Object old;  // released after the lock
   std::lock_guard<std::mutex> lock(objects_mutex);

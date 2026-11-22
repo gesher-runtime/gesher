@@ -76,6 +76,8 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "ordinary_os_contract_test.inc"
 #include "sendfile_contract_test.inc"
 #include "freopen_mode_contract_test.inc"
+#include "file_description_contract_test.inc"
+#include "stdio_ofd_contract.inc"
 #include "statvfs_contract_test.inc"
 #include "sleep_contract_test.inc"
 #include "bionic_signal_range_contracts.h"
@@ -946,6 +948,8 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_ordinary_os_contracts();
   test_sendfile_contracts();
   test_freopen_mode_contracts();
+  test_file_description_contracts();
+  test_stdio_ofd_contracts();
   test_statvfs_contracts();
   test_sleep_contracts();
   test_timerfd_syscalls();

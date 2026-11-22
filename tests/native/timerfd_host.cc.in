@@ -155,6 +155,7 @@ namespace gesher {
 // descriptor registry empty at this declared boundary.
 class NativeFence;
 std::shared_ptr<NativeFence> LookupNativeFence(int) { return {}; }
+void ForgetNativeFence(int) {}
 static std::atomic<int64_t> suspended_ns{0};
 #if @HAS_ANDROID_CLOCKS@
 int64_t MonotonicNanos() { return monotonic_ns; }

@@ -35,10 +35,52 @@ static void check(const char* name,bool value) {
 struct StreamLock {
   explicit StreamLock(FILE*) { ++lock_depth; }
   ~StreamLock() { --lock_depth; }
+  explicit operator bool() const { return true; }
 };
+static constexpr int INVALID_HANDLE_VALUE = -1;
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
 void ForgetStreamDevice(int,bool) {}
+int HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? fd : INVALID_HANDLE_VALUE; }
+void ForgetOfd(int) {}
+int RegisterOfd(int,int) { return 0; }
+struct RetiredDescriptor { void Retire(int) {} int Finish() { return 0; } };
+namespace stdio {
+// The shared buffer and CRT-lock composition run in test_stdio_contracts.py.
+// This envelope supplies only bounded orientation/retirement and I/O counters.
+struct Orientation { FILE* stream = nullptr; int mode = 0; };
+static std::array<Orientation, 32> orientations;
+static bool fail_orientation;
+int Orient(FILE* stream, int mode, bool) {
+  if (mode && fail_orientation) return errno = ENOMEM, 0;
+  for (auto& item : orientations) if (item.stream == stream) {
+    if (item.mode == 0 && mode) item.mode = mode > 0 ? 1 : -1;
+    return item.mode;
+  }
+  if (mode) for (auto& item : orientations) if (!item.stream) {
+    item = {stream, mode > 0 ? 1 : -1}; return item.mode;
+  }
+  return 0;
+}
+int FlushOutput(FILE*) { return 0; }
+void Forget(FILE* stream) {
+  for (auto& item : orientations) if (item.stream == stream) item = {};
+}
+int PrepareReopenedStream(FILE* stream, int) { Forget(stream); return 0; }
+int Get(FILE* stream, bool) { ++io_calls; return getc_unlocked(stream); }
+int Put(int value, FILE* stream, bool) { ++io_calls; return putc_unlocked(value, stream); }
+int Error(FILE* stream, bool unlocked) {
+  check("guest status uses the unlocked shared boundary", unlocked);
+  return ferror_unlocked(stream);
+}
+void Clear(FILE* stream, bool unlocked) {
+  check("guest clear uses the unlocked shared boundary", unlocked);
+  clearerr_unlocked(stream);
+}
+size_t Write(const void* data, size_t size, size_t count, FILE* stream, bool) {
+  ++io_calls; return fwrite_unlocked(data, size, count, stream);
+}
+}
 PathKind MapPath(const char* path,std::wstring* output) {
   if(std::strcmp(path,"missing:")==0)return PathKind::kMissing;
   *output=std::wstring(path,path+std::strlen(path));return PathKind::kFile;
@@ -94,16 +136,16 @@ static FILE* F(void* f){return static_cast<FILE*>(f);}
 // witnesses establish that failed metadata allocation reaches no codec/I/O.
 static uint32_t ReadWide(FILE*, StreamState&) { ++io_calls; return 'A'; }
 static bool WriteWide(FILE*, StreamState&, uint32_t) { ++io_calls; return true; }
-static int _getc_nolock(FILE* f) { ++io_calls; return getc_unlocked(f); }
-static int _putc_nolock(int c, FILE* f) { ++io_calls; return putc_unlocked(c, f); }
-static int _ungetc_nolock(int c, FILE* f) { ++io_calls; return std::ungetc(c, f); }
-static size_t _fwrite_nolock(const void* p, size_t size, size_t n, FILE* f) {
+[[maybe_unused]] static int _getc_nolock(FILE* f) { ++io_calls; return getc_unlocked(f); }
+[[maybe_unused]] static int _putc_nolock(int c, FILE* f) { ++io_calls; return putc_unlocked(c, f); }
+[[maybe_unused]] static int _ungetc_nolock(int c, FILE* f) { ++io_calls; return std::ungetc(c, f); }
+[[maybe_unused]] static size_t _fwrite_nolock(const void* p, size_t size, size_t n, FILE* f) {
   ++io_calls; return fwrite_unlocked(p, size, n, f);
 }
 static size_t ReadStream(void* p, size_t size, size_t n, FILE* f) {
   ++io_calls; return fread_unlocked(p, size, n, f);
 }
-static bool gesher_is_device_fd(int) { return false; }
+[[maybe_unused]] static bool gesher_is_device_fd(int) { return false; }
 @WIDE@
 @BYTE@
 @UNGETC@
@@ -208,6 +250,30 @@ static void allocation_contracts() {
         existing_worked && allocation_attempts == 0 && errno == EDOM && lock_depth == 0);
   check("recovered stream closes normally", shim::CloseBionicStream(f) == 0 && !recorded(f));
 }
+static void shared_orientation_contracts() {
+  FILE* f = std::tmpfile();
+  if (!f) std::abort();
+  auto* state = shim::State(f);
+  if (!state) std::abort();
+  uint32_t wide[3] = {0xfeed, 0xbeef, 0};
+  gesher::stdio::fail_orientation = true;
+  auto rejected = [&](const char* name, auto operation) {
+    errno = 0; io_calls = 0;
+    bool result = operation();
+    check(name, result && errno == ENOMEM && io_calls == 0 &&
+        state->pushback == shim::kWeof && state->orientation == 0 && lock_depth == 0);
+  };
+  rejected("fgetwc stops before I/O if shared orientation fails", [&] { return shim::Fgetwc(f) == shim::kWeof; });
+  rejected("fgetws preserves output if shared orientation fails", [&] {
+    return shim::Fgetws(wide, 3, f) == nullptr && wide[0] == 0xfeed;
+  });
+  rejected("ungetwc preserves pushback if shared orientation fails", [&] { return shim::Ungetwc('B', f) == shim::kWeof; });
+  rejected("fputwc stops before I/O if shared orientation fails", [&] { return shim::Fputwc('B', f) == shim::kWeof; });
+  rejected("fputws stops before I/O if shared orientation fails", [&] { return shim::Fputws(wide, f) == -1; });
+  gesher::stdio::fail_orientation = false;
+  check("shared orientation failure permits a later successful retry", shim::Fgetwc(f) == 'A' && state->orientation == 1);
+  check("shared orientation failure preserves stream ownership", shim::CloseBionicStream(f) == 0 && !recorded(f));
+}
 int main(){
   FILE* f=prepared();int fd=fileno(f);int calls=crt_calls;admission_error=EBUSY;
   check("pre-close failure is returned",shim::CloseBionicStream(f)==EOF && errno==EBUSY);
@@ -269,5 +335,6 @@ int main(){
   size_t remaining=0;for(auto& bucket:shim::g_stream_states)remaining+=bucket.streams.size();
   check("no retired state accumulates",remaining==0);
   allocation_contracts();
+  shared_orientation_contracts();
   std::printf("stdio lifetime: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

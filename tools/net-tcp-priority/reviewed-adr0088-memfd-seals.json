@@ -17,45 +17,25 @@
     ]
    ],
    [
-    171,
-    [
-     "  if (!LookupDevice(fd, &device)) return;\n"
-    ],
-    [
-     "  const bool is_device = LookupDevice(fd, &device);\n",
-     "  const bool is_fence = LookupNativeFence(fd) != nullptr;\n",
-     "  const bool is_memfd = IsRegisteredMemfd(fd);\n",
-     "  if (!is_device && !is_fence && !is_memfd) return;\n"
-    ]
-   ],
-   [
-    173,
-    [
-     "  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) ForgetDevice(fd);\n"
-    ],
-    [
-     "  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) {\n",
-     "    if (is_device) ForgetDevice(fd);\n",
-     "    // CRT fclose/freopen bypass close(). Retire the same typed identity here,\n",
-     "    // under their descriptor transaction, before that fd number is reused.\n",
-     "    if (is_fence) { ForgetNativeFence(fd); ForgetEpollEntries(fd); }\n",
-     "    if (is_memfd) ForgetMemfd(fd);\n",
-     "  }\n"
-    ]
-   ],
-   [
-    191,
-    [],
-    [
-     "    gesher::ForgetNativeFence(fd);\n"
-    ]
-   ],
-   [
     192,
     [],
     [
      "    gesher::ForgetMemfd(fd);\n"
     ]
+   ],
+   [
+    266,
+    [],
+    [
+     "    int result;\n"
+    ]
+   ],
+   [
+    268,
+    [
+     "    int result;\n"
+    ],
+    []
    ],
    [
     270,
@@ -85,13 +65,6 @@
     [],
     [
      "    if (fd2 >= 0) gesher::CopyMemfdRegistration(fd, fd2);\n"
-    ]
-   ],
-   [
-    335,
-    [],
-    [
-     "    gesher::ForgetNativeFence(fd2);\n"
     ]
    ],
    [

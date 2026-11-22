@@ -1,6 +1,7 @@
 // Copyright 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "native_fence_internal.h"
+#include "binder_wire.h"
 #include "event_internal.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
@@ -22,6 +23,8 @@
 
 namespace gesher {
 using Microsoft::WRL::ComPtr;
+static_assert(kTransferredCompletedFence == binder_wire::kCompletedNativeFenceMetadata,
+              "Binder and SCM_RIGHTS validate the completed-fence transport type");
 
 class NativeFence {
  public:

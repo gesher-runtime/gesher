@@ -1021,7 +1021,7 @@ try {
   $canonicalChecks = @(
     @{ Class = 'UserManagerProfilesTest'; Count = 49; Name = 'single-user profile, serial, identity and restriction contracts' },
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
-    @{ Class = 'BlobStoreContractTest'; Count = 25; Name = 'empty shared-blob queries, zero quota and unsupported storage' },
+    @{ Class = 'BlobStoreContractTest'; Count = 87; Name = 'blob sessions, digest publication, quota admission, leases, and restart' },
     @{ Class = 'NsdContractTest'; Count = 65; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
     @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'observed Wi-Fi state and unsupported controller mutations'; SystemContext = $true },
     @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service'; SystemContext = $true },

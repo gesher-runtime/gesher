@@ -9,10 +9,11 @@
 // Linux refuses writes the seals forbid in the kernel. Windows cannot, so
 // gesher-base refuses them in its own write paths: write/pwrite (and the
 // vector forms built on them), ftruncate, fallocate, and MAP_SHARED writable
-// mmap/mprotect (mman.cc). A descriptor is known to be a memfd by a registry
-// (memfd_create, Binder receive, dup). A bounded atomic bitmap classifies the
-// common descriptor range, so an ordinary write needs no registry mutex even
-// while unrelated memfds are live. Large descriptor numbers use the registry.
+// mmap/mprotect (mman.cc). Descriptor registration supports fcntl and aliases;
+// I/O checks the pinned handle and caches only whether its open description is
+// a memfd. It always rereads a memfd's seals, which another process may add.
+// A bounded atomic bitmap classifies registered descriptors in the common
+// range without a registry mutex; large descriptor numbers use the registry.
 //
 // F_SEAL_WRITE requires that no writable shared mapping of the file exists.
 // Mappings of other processes cannot be counted here: once any process has
@@ -231,64 +232,82 @@ int AddMemfdSeals(int fd, unsigned seals) {
   return OrValue(file, seals, nullptr) ? 0 : -1;
 }
 
-int MemfdWriteError(int fd, bool at_position, uint64_t offset, uint64_t length) {
-  if (!IsRegisteredMemfd(fd)) return 0;
-  HANDLE file = HandleFromFd(fd);
+bool FileHasMemfdSeals(HANDLE file) {
+  uint32_t value = 0;
+  return file != INVALID_HANDLE_VALUE && file != nullptr && ReadValue(file, &value);
+}
+
+int MemfdWriteHandleError(HANDLE file, bool at_position, uint64_t offset,
+                          uint64_t length, bool append) {
   uint32_t seals = 0;
   if (file == INVALID_HANDLE_VALUE || !ReadValue(file, &seals)) return 0;
   if ((seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0) return EPERM;
   if ((seals & F_SEAL_GROW) != 0 && length != 0) {
-    if (at_position) {
-      const __int64 position = _telli64(fd);
-      if (position < 0) return 0;  // the write itself reports the descriptor's error
-      offset = static_cast<uint64_t>(position);
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size)) return ErrnoFromWin32(GetLastError());
+    if (append) offset = static_cast<uint64_t>(size.QuadPart);
+    else if (at_position) {
+      LARGE_INTEGER zero{}, position{};
+      if (!SetFilePointerEx(file, zero, &position, FILE_CURRENT)) return ErrnoFromWin32(GetLastError());
+      offset = static_cast<uint64_t>(position.QuadPart);
     }
-    LARGE_INTEGER size;
-    if (GetFileSizeEx(file, &size) && offset + length > static_cast<uint64_t>(size.QuadPart)) {
-      return EPERM;
-    }
+    if (offset > static_cast<uint64_t>(size.QuadPart) ||
+        length > static_cast<uint64_t>(size.QuadPart) - offset) return EPERM;
   }
   return 0;
 }
 
-int MemfdResizeError(int fd, uint64_t new_size) {
+int MemfdWriteError(int fd, bool at_position, uint64_t offset, uint64_t length) {
   if (!IsRegisteredMemfd(fd)) return 0;
-  HANDLE file = HandleFromFd(fd);
+  return MemfdWriteHandleError(HandleFromFd(fd), at_position, offset, length, false);
+}
+
+int MemfdResizeHandleError(HANDLE file, uint64_t new_size) {
   uint32_t seals = 0;
   if (file == INVALID_HANDLE_VALUE || !ReadValue(file, &seals)) return 0;
   if ((seals & (F_SEAL_GROW | F_SEAL_SHRINK)) == 0) return 0;
-  LARGE_INTEGER size;
-  if (!GetFileSizeEx(file, &size)) return 0;
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(file, &size)) return ErrnoFromWin32(GetLastError());
   const uint64_t current = static_cast<uint64_t>(size.QuadPart);
   if (new_size > current && (seals & F_SEAL_GROW) != 0) return EPERM;
   if (new_size < current && (seals & F_SEAL_SHRINK) != 0) return EPERM;
   return 0;
 }
 
-int MemfdGrowError(int fd, uint64_t end) {
+int MemfdResizeError(int fd, uint64_t new_size) {
   if (!IsRegisteredMemfd(fd)) return 0;
-  HANDLE file = HandleFromFd(fd);
+  return MemfdResizeHandleError(HandleFromFd(fd), new_size);
+}
+
+int MemfdGrowHandleError(HANDLE file, uint64_t end) {
   uint32_t seals = 0;
   if (file == INVALID_HANDLE_VALUE || !ReadValue(file, &seals) || (seals & F_SEAL_GROW) == 0) return 0;
-  LARGE_INTEGER size;
-  return GetFileSizeEx(file, &size) && end > static_cast<uint64_t>(size.QuadPart) ? EPERM : 0;
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(file, &size)) return ErrnoFromWin32(GetLastError());
+  return end > static_cast<uint64_t>(size.QuadPart) ? EPERM : 0;
+}
+
+int MemfdGrowError(int fd, uint64_t end) {
+  if (!IsRegisteredMemfd(fd)) return 0;
+  return MemfdGrowHandleError(HandleFromFd(fd), end);
+}
+
+int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
+  *deny_write = false;
+  uint32_t seals = 0;
+  if (file == INVALID_HANDLE_VALUE || !ReadValue(file, &seals)) return 0;
+  const bool sealed = (seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0;
+  if (writable && sealed) return EPERM;
+  // Linux clears VM_MAYWRITE for a shared mapping created after a write seal.
+  *deny_write = sealed;
+  if (writable && (seals & kWritablyMapped) == 0 && !OrValue(file, kWritablyMapped, nullptr)) return errno;
+  return 0;
 }
 
 int MemfdSharedMapError(int fd, bool writable, bool* deny_write) {
-  *deny_write = false;
   HANDLE file = HandleFromFd(fd);
-  uint32_t seals = 0;
-  if (file == INVALID_HANDLE_VALUE || !ReadValue(file, &seals)) return 0;  // not a memfd
-  RegisterMemfd(fd);
-  const bool sealed = (seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0;
-  if (writable && sealed) return EPERM;
-  // A shared mapping made after a write seal can never become writable
-  // (Linux clears its VM_MAYWRITE).
-  *deny_write = sealed;
-  if (writable && (seals & kWritablyMapped) == 0 && !OrValue(file, kWritablyMapped, nullptr)) {
-    return errno;
-  }
-  return 0;
+  RegisterMemfdIfSealed(fd, file);
+  return MemfdSharedMapHandleError(file, writable, deny_write);
 }
 
 }  // namespace gesher

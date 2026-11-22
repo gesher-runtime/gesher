@@ -5,7 +5,8 @@
 #include <poll.h>
 
 namespace gesher {
-// Metadata occupies its own type bits, disjoint from socket state.
+// Metadata occupies its own type bits, disjoint from socket state. It must
+// equal binder_wire::kCompletedNativeFenceMetadata (checked in native_fence.cc).
 inline constexpr uint64_t kTransferredCompletedFence = 0x4;
 void ForgetNativeFence(int fd);
 void DupNativeFence(int from, int to);
