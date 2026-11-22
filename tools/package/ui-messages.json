@@ -380,6 +380,10 @@
       "en": "Setting up Google Play services and applications...",
       "he": "מגדיר שירותי Google Play ויישומים..."
     },
+    "setup_download_skipped": {
+      "en": "Setup could not download these components and will continue without them:\n\n%1\nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).",
+      "he": "לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:\n\n%1\nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר)."
+    },
     "cp_title": {
       "en": "Gesher Control Center",
       "he": "לוח הבקרה של גשר"

@@ -57,14 +57,15 @@ public final class MicrogIdentityHost {
     private static void set(Object target, String name, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(name); field.setAccessible(true); field.set(target, value);
     }
-    private static ApkPackage metadata(Path path) throws Exception {
+    private static ApkPackage metadata(Path path) throws Exception { return metadata(path, 0); }
+    private static ApkPackage metadata(Path path, int versionCode) throws Exception {
         String name;
         try (RandomAccessFile file = new RandomAccessFile(path.toFile(), "r")) {
             name = ApkUtils.getPackageNameFromBinaryAndroidManifest(
                     ApkUtils.getAndroidManifest(DataSources.asDataSource(file)));
         }
         PackageImpl parsed = (PackageImpl)PackageImpl.forTesting(name, path.toString());
-        parsed.setEnabled(true); parsed.setTargetSdkVersion(36);
+        parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.setVersionCode(versionCode);
         parsed.addUsesPermission(new ParsedUsesPermissionImpl(GmsSignatureSpoofing.PERMISSION_FAKE_PACKAGE_SIGNATURE, 0, Set.of()));
         parsed.hideAsFinal();
         ApkPackage pkg = (ApkPackage)UNSAFE.allocateInstance(ApkPackage.class);
@@ -217,6 +218,59 @@ public final class MicrogIdentityHost {
         check(denied && selected.size() == 1 && selected.get(0) == previous && !current.isSystemAddon(),
                 "Admission must recheck current file contents even when an earlier identity and manifest name match");
     }
+    /** Google's Play Store installed as an app, then microG's Companion staged in its slot. */
+    private static void otherSignerInstalled(Path companion, Path fixtures, Path keystore, Path directory)
+            throws Exception {
+        java.security.KeyStore keys = java.security.KeyStore.getInstance("PKCS12");
+        char[] password = "fixture-only".toCharArray();
+        try (java.io.InputStream input = Files.newInputStream(keystore)) { keys.load(input, password); }
+        com.android.apksig.ApkSigner.SignerConfig signer = new com.android.apksig.ApkSigner.SignerConfig.Builder(
+                "fixture", (java.security.PrivateKey)keys.getKey("fixture", password),
+                List.of((java.security.cert.X509Certificate)keys.getCertificate("fixture"))).build();
+        Path resigned = directory.resolve("vending-other-signer.apk");
+        new com.android.apksig.ApkSigner.Builder(List.of(signer)).setInputApk(companion.toFile())
+                .setOutputApk(resigned.toFile()).setV1SigningEnabled(true).setV2SigningEnabled(true)
+                .setV3SigningEnabled(false).setV4SigningEnabled(false).build().sign();
+        ApkPackage user = metadata(resigned);
+        check("com.android.vending".equals(user.packageName) && user.verifiedSignatures() != null
+                && !user.hasVerifiedMicrogSigner(), "Fixture is a validly signed non-microG com.android.vending");
+        ApkPackage staged = metadata(companion); staged.setSystemAddon(true);
+        ApkPackage other = metadata(fixtures.resolve("v2only.apk"));
+        List<ApkPackage> installed = new ArrayList<>(List.of(other, user));
+        check(SystemServer.selectStagedAddon(installed, "com.android.vending", staged) == null,
+                "An installed app with another signer keeps the slot's name instead of failing startup");
+        check(!user.isSystemAddon() && !GmsSignatureSpoofing.isTrustedPackage(user) && !other.isSystemAddon()
+                && installed.size() == 2 && installed.get(1) == user,
+                "The installed app stays an ordinary, untrusted app and the selection is unchanged");
+        Path official = directory.resolve("vending-installed-official.apk");
+        Files.copy(companion, official, StandardCopyOption.REPLACE_EXISTING);
+        ApkPackage update = metadata(official);
+        check(SystemServer.selectStagedAddon(new ArrayList<>(List.of(other, update)), "com.android.vending", staged) == update
+                && update.isSystemAddon(), "A microG-signed installed update at least as new is still selected as the addon");
+        check(SystemServer.selectStagedAddon(new ArrayList<>(List.of(other)), "com.android.vending", staged) == staged,
+                "Without an installed package the staged addon is selected");
+        ApkPackage newerStaged = metadata(companion, 2); newerStaged.setSystemAddon(true);
+        ApkPackage older = metadata(official, 1);
+        check(SystemServer.selectStagedAddon(new ArrayList<>(List.of(older)), "com.android.vending", newerStaged) == newerStaged
+                && older.isSystemAddon(), "An older microG update yields to the newer staged addon, keeping its system record");
+        ApkPackage newer = metadata(official, 3);
+        check(SystemServer.selectStagedAddon(new ArrayList<>(List.of(newer)), "com.android.vending", newerStaged) == newer,
+                "A newer microG update is selected over the staged addon");
+        Path tampered = directory.resolve("vending-installed-tampered.apk");
+        Files.copy(companion, tampered, StandardCopyOption.REPLACE_EXISTING); corruptDex(tampered);
+        ApkPackage changed = metadata(tampered);
+        boolean denied = false;
+        try { SystemServer.selectStagedAddon(new ArrayList<>(List.of(changed)), "com.android.vending", staged); }
+        catch (SecurityException expected) { denied = true; }
+        check(denied && !changed.isSystemAddon(),
+                "Changed content of a microG update is not another signer: startup still fails closed");
+        ApkPackage unsigned = metadata(fixtures.resolve("unsigned.apk"));
+        set(unsigned, "packageName", "com.android.vending");
+        denied = false;
+        try { SystemServer.selectStagedAddon(new ArrayList<>(List.of(unsigned)), "com.android.vending", staged); }
+        catch (SecurityException expected) { denied = true; }
+        check(denied && !unsigned.isSystemAddon(), "An installed package with no verified signer fails closed");
+    }
     public static void main(String[] args) throws Exception {
         System.load(args[0]);
         Provider provider = new Provider("GesherMicrogCountSHA256", "1.0", "Delegating real APK digest counter") { };
@@ -226,6 +280,7 @@ public final class MicrogIdentityHost {
             changedManifest(companion, gsf, work);
             changedVerifiedContent(companion, work);
             reusedIdentity(companion); replacement(companion, work); legacyPin(gsf, work);
+            otherSignerInstalled(companion, fixtures, Path.of(args[5]), work);
             for (String name : List.of("v2only.apk", "rotated.apk", "unsigned.apk")) {
                 ApkPackage other = metadata(fixtures.resolve(name));
                 check(!other.hasVerifiedMicrogSigner(), "Non-microG/unsigned identity remains denied: " + name);
