@@ -117,3 +117,88 @@ function Complete-GesherRuntimeSync {
         if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
     }
 }
+
+function Resolve-GesherAsciiPath {
+    param([Parameter(Mandatory = $false)][AllowEmptyString()][string] $Path)
+    if ([string]::IsNullOrEmpty($Path) -or $Path -notmatch '[^\x00-\x7F]') {
+        return $Path
+    }
+    $native = $Path.Replace('/', '\')
+    if ($native.StartsWith('\') -and -not $native.StartsWith('\\')) {
+        $native = (Get-Location).Drive.Name + ':' + $native
+    } elseif ($native -notmatch '^[A-Za-z]:\\') {
+        return $Path
+    }
+    try {
+        $native = [IO.Path]::GetFullPath($native)
+        $hadTrailingSep = ($native.Length -gt 3 -and $native.EndsWith('\'))
+        $probe = if ($native.Length -gt 3) { $native.TrimEnd('\') } else { $native }
+        $trailing = [System.Collections.Generic.List[string]]::new()
+        # The leaf keeps its long name: an 8.3 alias truncates and upper-cases
+        # extensions (.xapk -> .XAP), and callers key behaviour on file names.
+        # Only the ancestors are shortened; a non-ASCII leaf leaves the whole
+        # path long (see the check at the end).
+        $leafName = [IO.Path]::GetFileName($probe)
+        $leafParent = [IO.Path]::GetDirectoryName($probe)
+        if ($leafName -and $leafParent -and $leafParent -ne $probe) {
+            $trailing.Add($leafName)
+            $probe = if ($leafParent.Length -gt 3) { $leafParent.TrimEnd('\') } else { $leafParent }
+        }
+        while ($probe -and (([IO.Path]::GetFileName($probe) -notmatch '[^\x00-\x7F]') -or -not ([IO.Directory]::Exists($probe) -or [IO.File]::Exists($probe)))) {
+            $leaf = [IO.Path]::GetFileName($probe)
+            $parent = [IO.Path]::GetDirectoryName($probe)
+            if (-not $parent -or $parent -eq $probe) { break }
+            $trailing.Add($leaf)
+            $probe = if ($parent.Length -gt 3) { $parent.TrimEnd('\') } else { $parent }
+        }
+        if (-not ([IO.Directory]::Exists($probe) -or [IO.File]::Exists($probe))) {
+            return $Path
+        }
+        if ($null -eq $script:GesherFso) {
+            $script:GesherFso = [Activator]::CreateInstance([Type]::GetTypeFromProgID('Scripting.FileSystemObject'))
+        }
+        $short = if ([IO.Directory]::Exists($probe)) {
+            $script:GesherFso.GetFolder($probe).ShortPath
+        } else {
+            $script:GesherFso.GetFile($probe).ShortPath
+        }
+        if ([string]::IsNullOrEmpty($short)) {
+            return $Path
+        }
+        for ($i = $trailing.Count - 1; $i -ge 0; $i--) {
+            $short = [IO.Path]::Combine($short, $trailing[$i])
+        }
+        if ($hadTrailingSep -and -not $short.EndsWith('\')) {
+            $short += '\'
+        }
+        if ($short -notmatch '[^\x00-\x7F]') {
+            return $short
+        }
+    } catch {
+        # Volumes with 8.3 short names disabled or restricted COM environments fall back cleanly.
+    }
+    return $Path
+}
+
+function ConvertTo-GesherAndroidPath {
+    param(
+        [Parameter(Mandatory = $false)][AllowEmptyString()][string] $Path,
+        [Parameter(Mandatory = $false)][AllowEmptyString()][string] $BaseDrive = '',
+        # User-supplied paths (an APK, a dex, other arguments) are passed as
+        # given: only Gesher's own roots are rewritten to 8.3 short paths.
+        [switch] $KeepLongPath
+    )
+    if ([string]::IsNullOrEmpty($Path)) { return $Path }
+    $resolved = if ($KeepLongPath) { $Path } else { Resolve-GesherAsciiPath -Path $Path }
+    $posix = $resolved.Replace('\', '/')
+    if ($posix -match '^([A-Za-z]):(.*)$') {
+        $drive = $Matches[1]
+        $rest = $Matches[2]
+        if ([string]::IsNullOrEmpty($BaseDrive)) {
+            $BaseDrive = (Get-Location).Drive.Name
+        }
+        if ($drive -ieq $BaseDrive) { return $rest }
+        return "/mnt/$($drive.ToLower())$rest"
+    }
+    return $posix
+}

@@ -244,7 +244,9 @@ close the cross-process notifications gap.
 - `tools/package/gesher.iss` (tzdata + TZDATA-NOTICES.txt),
   `gesher.ps1` and `gesher-app.ps1` (`NoDrive` writes `/mnt/<drive>` for other
   drives; the same-drive checks for the .dex/.apk are gone;
-  `ANDROID_TZDATA_ROOT` is the install folder's tzdata).
+  `ANDROID_TZDATA_ROOT` is the install folder's tzdata). Non-ASCII ancestors of
+  Gesher's own roots are now written as 8.3 short names, user APK/dex paths are
+  not; see installer.md, "Non-ASCII profile and install paths".
 - `cmake/aosp/framework.cmake` + `compat/framework/android_runtime.cc`:
   `android_util_FileObserver.cpp` and its registration;
   `patches/frameworks/base/0450-posix-fileobserver-inotify.patch` (new).

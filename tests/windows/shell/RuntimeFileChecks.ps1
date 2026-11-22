@@ -214,6 +214,79 @@ try {
         if ($worker) { $worker.Dispose() }
         $runspace.Dispose()
     }
+
+    $currentDrive = (Get-Location).Drive.Name
+    $otherDrive = if ($currentDrive -ieq 'Z') { 'Y' } else { 'Z' }
+    Assert-RuntimeFile ((Resolve-GesherAsciiPath "$($currentDrive):\gesher-ascii\data") -ceq "$($currentDrive):\gesher-ascii\data") 'Pure ASCII path was modified unnecessarily'
+    Assert-RuntimeFile ((ConvertTo-GesherAndroidPath "$($currentDrive):\gesher-ascii\data") -ceq '/gesher-ascii/data') 'Current-drive ASCII path did not strip drive letter'
+    Assert-RuntimeFile ((ConvertTo-GesherAndroidPath "$($otherDrive):\gesher-ascii\app.apk" -BaseDrive $currentDrive) -ceq "/mnt/$($otherDrive.ToLower())/gesher-ascii/app.apk") 'Other-drive ASCII path did not map to /mnt/<drive>'
+
+    $hebrew = -join ([char[]](0x05E2, 0x05D1, 0x05E8, 0x05D9, 0x05EA))
+    $nonAsciiDir = Join-Path $work ("gesher-$hebrew-test")
+    $null = [IO.Directory]::CreateDirectory($nonAsciiDir)
+    $asciiDataDir = Join-Path $nonAsciiDir 'data'
+    $null = [IO.Directory]::CreateDirectory($asciiDataDir)
+    $asciiMarker = Join-Path $asciiDataDir 'marker.txt'
+    $longAsciiFile = Join-Path $nonAsciiDir 'core-libart.jar'
+    $nonAsciiFile = Join-Path $nonAsciiDir ("file-$hebrew.txt")
+    $missingChild = Join-Path $nonAsciiDir 'pending/child.txt'
+    # A user bundle: non-ASCII name with a four-letter extension whose 8.3 alias
+    # would read D7A9~1.XAP and stop being recognized as a bundle.
+    $nonAsciiBundle = Join-Path $nonAsciiDir ("$hebrew.xapk")
+    $asciiBundle = Join-Path $nonAsciiDir 'app.xapk'
+    [IO.File]::WriteAllText($asciiMarker, 'ascii-path-marker')
+    [IO.File]::WriteAllText($longAsciiFile, 'jar-marker')
+    [IO.File]::WriteAllText($nonAsciiFile, 'file-marker')
+    [IO.File]::WriteAllText($nonAsciiBundle, 'bundle-marker')
+    [IO.File]::WriteAllText($asciiBundle, 'ascii-bundle-marker')
+
+    $resolvedDir = Resolve-GesherAsciiPath $asciiDataDir
+    $resolvedFile = Resolve-GesherAsciiPath $nonAsciiFile
+    Assert-RuntimeFile ([IO.File]::ReadAllText((Join-Path $resolvedDir 'marker.txt')) -ceq 'ascii-path-marker') 'Resolved directory under a non-ASCII parent does not point to the physical marker file'
+    Assert-RuntimeFile ([IO.File]::ReadAllText($resolvedFile) -ceq 'file-marker') 'Resolved non-ASCII file path does not read the physical marker file'
+
+    # The leaf name is never replaced by its 8.3 alias, whether or not the
+    # volume has short names: a non-ASCII leaf leaves the whole path long.
+    $resolvedBundle = Resolve-GesherAsciiPath $nonAsciiBundle
+    Assert-RuntimeFile ($resolvedBundle -ceq $nonAsciiBundle) "Non-ASCII .xapk leaf was rewritten: $resolvedBundle"
+    $androidBundle = ConvertTo-GesherAndroidPath $nonAsciiBundle
+    Assert-RuntimeFile ($androidBundle.EndsWith("/$hebrew.xapk")) "Non-ASCII .xapk leaf or extension was not preserved: $androidBundle"
+
+    # The user-APK path as gesher-app.ps1 passes it (UserPath): kept long
+    # entirely, so file name and extension reach the installer as given.
+    $userBundle = ConvertTo-GesherAndroidPath $nonAsciiBundle -KeepLongPath
+    Assert-RuntimeFile ($userBundle -ceq (ConvertTo-GesherAndroidPath $nonAsciiBundle -KeepLongPath -BaseDrive $currentDrive)) 'User APK path depends on an implicit base drive'
+    Assert-RuntimeFile ($userBundle.EndsWith("/gesher-$hebrew-test/$hebrew.xapk")) "User APK path was not kept in long form: $userBundle"
+    $userAsciiBundle = ConvertTo-GesherAndroidPath $asciiBundle -KeepLongPath
+    Assert-RuntimeFile ($userAsciiBundle.EndsWith("/gesher-$hebrew-test/app.xapk")) "User APK directory was shortened: $userAsciiBundle"
+    $appScript = Join-Path (Split-Path -Parent $HelperPath) 'gesher-app.ps1'
+    if (Test-Path -LiteralPath $appScript -PathType Leaf) {
+        # Every place gesher-app.ps1 hands the user's APK to the runtime goes
+        # through UserPath, never through NoDrive's short-path rewrite.
+        $appSource = [IO.File]::ReadAllText($appScript)
+        Assert-RuntimeFile ($appSource -match 'function UserPath\(\[string\] \$p\) \{\s*return ConvertTo-GesherAndroidPath -Path \$p -KeepLongPath') 'gesher-app.ps1 UserPath does not keep long paths'
+        $apkUses = [regex]::Matches($appSource, '(\w+) \$apkFull\b') | Where-Object { $_.Groups[1].Value -match '^(NoDrive|UserPath)$' }
+        Assert-RuntimeFile (@($apkUses).Count -gt 0) 'gesher-app.ps1 no longer converts the user APK path'
+        Assert-RuntimeFile (-not ($apkUses | Where-Object { $_.Groups[1].Value -ne 'UserPath' })) 'gesher-app.ps1 passes the user APK through NoDrive'
+    } else {
+        "SKIP: gesher-app.ps1 not beside $HelperPath; user-APK wiring check not run"
+    }
+
+    $fso = [Activator]::CreateInstance([Type]::GetTypeFromProgID('Scripting.FileSystemObject'))
+    $shortDir = $fso.GetFolder($nonAsciiDir).ShortPath
+    if ($shortDir -and $shortDir -notmatch '[^\x00-\x7F]') {
+        $androidDataDir = ConvertTo-GesherAndroidPath $asciiDataDir
+        $androidLongAscii = ConvertTo-GesherAndroidPath $longAsciiFile
+        $androidChild = ConvertTo-GesherAndroidPath $missingChild
+        $androidAsciiBundle = ConvertTo-GesherAndroidPath $asciiBundle
+        Assert-RuntimeFile ($androidDataDir -notmatch '[^\x00-\x7F]' -and $androidDataDir.EndsWith('/data')) "Expected pure ASCII Android path ending in /data, got: $androidDataDir"
+        Assert-RuntimeFile ($androidLongAscii -notmatch '[^\x00-\x7F]' -and $androidLongAscii.EndsWith('/core-libart.jar')) "Trailing ASCII filename was mangled: $androidLongAscii"
+        Assert-RuntimeFile ($androidChild -notmatch '[^\x00-\x7F]' -and $androidChild.EndsWith('/pending/child.txt')) "Expected pure ASCII Android path for pending child, got: $androidChild"
+        Assert-RuntimeFile ($androidAsciiBundle -notmatch '[^\x00-\x7F]' -and $androidAsciiBundle.EndsWith('/app.xapk')) "Shortened path did not keep the .xapk leaf: $androidAsciiBundle"
+    } else {
+        "SKIP: no ASCII 8.3 short name for $nonAsciiDir (8dot3name disabled on this volume?); short-path ASCII checks not run"
+    }
+
     'PASS: runtime file upgrade contracts ({0} checks)' -f $script:Checks
 } finally {
     if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }

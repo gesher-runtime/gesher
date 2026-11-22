@@ -33,6 +33,10 @@ inline int CrtResult(int result) {
 // The Win32 handle behind a CRT file descriptor, or INVALID_HANDLE_VALUE.
 HANDLE HandleFromFd(int fd);
 
+// Make invalid CRT descriptors report their documented errors instead of
+// terminating the process. Lazy OFD import can run before C++ initializers.
+void InitializeCrtDescriptorErrors();
+
 // After a successful write to `fd` (fd.cc's write, pwrite): IN_MODIFY for the
 // inotify watches on the file or its directory in this process at once, as
 // Linux reports each write; NTFS tells ReadDirectoryChangesW only when it
@@ -149,12 +153,20 @@ enum class Device { kZero, kRandom };
 bool DeviceFromFd(int fd, Device* device);
 // Takes over `fd`, which must be open on NUL.
 void RegisterDevice(int fd, Device device);
-// CRT stream close/reopen bypasses close(). Retire its device marker after
+// CRT stream close/reopen bypasses close(). Retire its device OFD slot after
 // the real operation, while the descriptor guard still prevents fd reuse.
 // On failure the CRT may already have closed the descriptor (e.g. after a
 // flush error); a still-open descriptor keeps its marker.
 void ForgetStreamDevice(int fd, bool closed_or_replaced);
 
+// Open file description management and file status flags (ofd.cc).
+int RegisterOfd(int fd, int flags);
+int DupOfd(int old_fd, int new_fd);
+void ForgetOfd(int fd);
+int GetFileStatusFlags(int fd);
+int SetFileStatusFlags(int fd, int flags);
+bool IsAppendMode(int fd);
+bool IsNonBlockingMode(int fd);
 // memfd seals (memfd_seals.cc): stored on the file, so every descriptor of it,
 // in any process, shares them. Descriptors known to be memfds are registered.
 bool InitMemfdSeals(HANDLE file, bool allow_sealing);
@@ -174,14 +186,6 @@ bool TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata);
 // A new fd for `socket`, this process's own handle (taken over, closed on
 // failure), with the description `metadata` describes; -1 with errno.
 int AdoptSocket(uintptr_t socket, uint64_t metadata);
-// Any descriptor that can travel to another process (unix_rights.cc): its
-// handle and metadata (a socket's, or 0). False with EINVAL for descriptors
-// gesher-base serves itself (eventfd, epoll, inotify, timerfd, binder,
-// devices), EBADF for none.
-bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata);
-// A new descriptor for a received handle (this process's own, taken over) with
-// its metadata; -1 with errno.
-int AdoptTransferred(HANDLE owned, uint64_t metadata);
 // dup/dup2/F_DUPFD: `to` is a memfd exactly when `from` is.
 void CopyMemfdRegistration(int from, int to);
 // fcntl F_GET_SEALS / F_ADD_SEALS: -1 with errno (EINVAL for another file).
@@ -196,5 +200,12 @@ int MemfdGrowError(int fd, uint64_t end);
 // A MAP_SHARED mapping of fd: EPERM when writable and write-sealed; sets
 // *deny_write when a write seal must keep the mapping from becoming writable.
 int MemfdSharedMapError(int fd, bool writable, bool* deny_write);
+// Snapshot I/O must check the pinned object, never a recycled descriptor.
+bool FileHasMemfdSeals(HANDLE file);
+int MemfdWriteHandleError(HANDLE file, bool at_position, uint64_t offset,
+                          uint64_t length, bool append);
+int MemfdResizeHandleError(HANDLE file, uint64_t new_size);
+int MemfdGrowHandleError(HANDLE file, uint64_t end);
+int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write);
 
 }  // namespace gesher

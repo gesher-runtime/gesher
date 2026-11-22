@@ -11,6 +11,7 @@ ELF guest fixtures. --source-ref is the same-harness old-source control.
 
 The scratch host compiles the actual outer poll, EpollWaiter and nested epoll
 sampling/delivery with Linux eventfds/poll behind the Win32/Winsock seams. It
+also pins actual Linux pipe descriptors behind the OFD snapshot boundary and
 checks ownership, recursion, deadlines and allocation budgets without claiming
 Windows scheduling, whole-application memory or native WSAPoll performance.
 """
@@ -35,7 +36,10 @@ def between(text, begin, end):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source-ref')
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--source-ref')
+    source.add_argument('--fd-source', type=Path,
+                        help='use an exact descriptor source for focused negative controls')
     parser.add_argument('--sanitize', action='store_true')
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'c++'))
     parser.add_argument('--case', choices=['epoll', 'vector', 'select', 'scratch'])
@@ -50,7 +54,7 @@ def main():
 
     epoll = read('compat/posix/src/epoll.cc')
     system = read('compat/posix/src/system.cc')
-    fd = read('compat/posix/src/fd.cc')
+    fd = args.fd_source.read_text() if args.fd_source else read('compat/posix/src/fd.cc')
     select = read('compat/posix/src/select.cc')
     scratch_header = (read('compat/posix/src/poll_scratch.h')
                       if 'PollScratchLease' in fd or 'PollScratchLease' in epoll else '')
@@ -67,7 +71,10 @@ def main():
         'vector': {
             '@VECTOR_HELPERS@': between(system, '// readv/writev on a socket fd:', '}  // namespace\n\nssize_t readv('),
             '@WRITEV@': between(system, 'ssize_t writev(', '\nssize_t preadv('),
-            '@SCALAR_WRITE@': between(fd, 'int write(int fd,', '\nint dup('),
+            '@PWRITEV@': between(system, 'ssize_t pwritev(', '\nssize_t process_vm_readv('),
+            '@SCALAR_WRITE@': (
+                between(fd, 'void ReleaseCanceledSnapshot(', '// The caller owns an exact native object')
+                if 'void ReleaseCanceledSnapshot(' in fd else '') + between(fd, 'int write(int fd,', '\nint dup('),
             '@VIRTUAL_WRITE@': between(epoll, 'bool WriteEventObject(', '\nbool ForgetEventObject('),
         },
         'select': {'@SELECT_SOURCE@': re.sub(r'^#include[^\n]*\n', '', select, flags=re.M)},

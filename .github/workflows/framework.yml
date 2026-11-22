@@ -603,6 +603,12 @@ jobs:
           path: work/sdk-36/android.jar
           key: sdk-public-api-36-r02-d9eb9da824d9
 
+      - name: Floating activity roots and task window placement
+        run: |
+          python3 tools/test_window_parent_placement.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
       - name: Speech recognition dispatch and client lifecycle contracts
         run: |
           python3 tools/test_speech_recognition.py --java-home "$JAVA_HOME" \

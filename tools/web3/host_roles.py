@@ -133,9 +133,14 @@ def compiler(build):
             "compile_database_form": forms.pop(),
             "launcher": str(launcher_path) if launcher_path is not None else None,
             "launcher_sha256": sha(launcher_path) if launcher_path is not None else None}
-    selected = selected_ledger().compiler_identity(configured)
-    if selected is not None:
-        result['selected_toolchain'] = selected
+    if os.environ.get('GESHER_HOST_PTHREAD_SELECTION') == 'publisher-cancel':
+        sys.path.insert(0, str(ROOT / 'tools/toolchain'))
+        import prepare_pthread_cancel
+        result['production_pthread'] = prepare_pthread_cancel.compiler_identity(configured)
+    else:
+        selected = selected_ledger().compiler_identity(configured)
+        if selected is not None:
+            result['selected_toolchain'] = selected
     return result
 
 
