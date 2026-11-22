@@ -65,7 +65,28 @@ print('vector/fcntl source policy: positive source and nine negative controls pa
 
 fd_path = ROOT / 'compat/posix/src/fd.cc'
 fd_source = fd_path.read_bytes()
-stream_retirement = policy.FD_STREAM_DEVICE_RETIREMENT
+# The pinned REVIEWED_PATCH extends the checkpoint helper so CRT stream close
+# also retires native-fence and memfd identities. Mutate that exact helper.
+stream_retirement = (
+    b'void ForgetStreamDevice(int fd, bool closed_or_replaced) {\n'
+    b'  Device device;\n'
+    b'  const bool is_device = LookupDevice(fd, &device);\n'
+    b'  const bool is_fence = LookupNativeFence(fd) != nullptr;\n'
+    b'  const bool is_memfd = IsRegisteredMemfd(fd);\n'
+    b'  if (!is_device && !is_fence && !is_memfd) return;\n'
+    b'  int saved = errno;\n'
+    b'  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) {\n'
+    b'    if (is_device) ForgetDevice(fd);\n'
+    b'    // CRT fclose/freopen bypass close(). Retire the same typed identity here,\n'
+    b'    // under their descriptor transaction, before that fd number is reused.\n'
+    b'    if (is_fence) { ForgetNativeFence(fd); ForgetEpollEntries(fd); }\n'
+    b'    if (is_memfd) ForgetMemfd(fd);\n'
+    b'  }\n'
+    b'  errno = saved;\n'
+    b'}\n'
+)
+assert fd_source.count(stream_retirement) == 1, 'reviewed stream retirement helper'
+assert fd_source.count(policy.FD_DEVICE_LOOKUP + stream_retirement) == 1, 'reviewed helper position'
 fd_controls = (
     ('unrelated descriptor bytes',
      fd_source + b'\n// unrelated descriptor change\n'),

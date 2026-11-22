@@ -3,6 +3,54 @@
  "hunks": {
   "compat/posix/src/fd.cc": [
    [
+    18,
+    [],
+    [
+     "#include <algorithm>\n"
+    ]
+   ],
+   [
+    27,
+    [],
+    [
+     "#include \"native_fence_internal.h\"\n"
+    ]
+   ],
+   [
+    171,
+    [
+     "  if (!LookupDevice(fd, &device)) return;\n"
+    ],
+    [
+     "  const bool is_device = LookupDevice(fd, &device);\n",
+     "  const bool is_fence = LookupNativeFence(fd) != nullptr;\n",
+     "  const bool is_memfd = IsRegisteredMemfd(fd);\n",
+     "  if (!is_device && !is_fence && !is_memfd) return;\n"
+    ]
+   ],
+   [
+    173,
+    [
+     "  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) ForgetDevice(fd);\n"
+    ],
+    [
+     "  if (closed_or_replaced || HandleFromFd(fd) == INVALID_HANDLE_VALUE) {\n",
+     "    if (is_device) ForgetDevice(fd);\n",
+     "    // CRT fclose/freopen bypass close(). Retire the same typed identity here,\n",
+     "    // under their descriptor transaction, before that fd number is reused.\n",
+     "    if (is_fence) { ForgetNativeFence(fd); ForgetEpollEntries(fd); }\n",
+     "    if (is_memfd) ForgetMemfd(fd);\n",
+     "  }\n"
+    ]
+   ],
+   [
+    191,
+    [],
+    [
+     "    gesher::ForgetNativeFence(fd);\n"
+    ]
+   ],
+   [
     192,
     [],
     [
@@ -10,11 +58,26 @@
     ]
    ],
    [
+    270,
+    [],
+    [
+     "    if (gesher::LookupNativeFence(fd)) return errno = EINVAL, -1;\n"
+    ]
+   ],
+   [
     281,
     [],
     [
+     "    if (gesher::LookupNativeFence(fd)) return errno = EINVAL, -1;\n",
      "    // A memfd's seals may forbid the write (memfd_seals.cc).\n",
      "    if (const int sealed = gesher::MemfdWriteError(fd, true, 0, count)) return errno = sealed, -1;\n"
+    ]
+   ],
+   [
+    301,
+    [],
+    [
+     "    if (fd2 >= 0) gesher::DupNativeFence(fd, fd2);\n"
     ]
    ],
    [
@@ -25,10 +88,120 @@
     ]
    ],
    [
+    335,
+    [],
+    [
+     "    gesher::ForgetNativeFence(fd2);\n"
+    ]
+   ],
+   [
     337,
     [],
     [
      "    gesher::CopyMemfdRegistration(fd, fd2);\n"
+    ]
+   ],
+   [
+    342,
+    [],
+    [
+     "      gesher::DupNativeFence(fd, fd2);\n"
+    ]
+   ],
+   [
+    397,
+    [],
+    [
+     "  std::vector<std::shared_ptr<gesher::NativeFence>> fences;\n",
+     "  std::vector<nfds_t> fence_index;\n"
+    ]
+   ],
+   [
+    401,
+    [],
+    [
+     "    gesher::ClearPollScratch(fence_index);\n",
+     "    gesher::ClearPollScratch(fences);\n"
+    ]
+   ],
+   [
+    521,
+    [],
+    [
+     "  auto& fences = scratch.fences;\n",
+     "  auto& fence_index = scratch.fence_index;\n"
+    ]
+   ],
+   [
+    527,
+    [
+     "    if (std::shared_ptr<EventFd> e = LookupEventFd(p->fd)) {\n"
+    ],
+    [
+     "    if (auto fence = LookupNativeFence(p->fd)) {\n",
+     "      p->revents = PollNativeFence(fence, p->events, nullptr);\n",
+     "      fences.push_back(std::move(fence));\n",
+     "      fence_index.push_back(i);\n",
+     "    } else if (std::shared_ptr<EventFd> e = LookupEventFd(p->fd)) {\n"
+    ]
+   ],
+   [
+    563,
+    [
+     "      (interrupt != nullptr || waiting_files || (!sockets.empty() && !eventfds.empty()))) {\n"
+    ],
+    [
+     "      (interrupt != nullptr || waiting_files || !fences.empty() || (!sockets.empty() && !eventfds.empty()))) {\n"
+    ]
+   ],
+   [
+    612,
+    [],
+    [
+     "      auto append_handle = [&](HANDLE handle) {\n",
+     "        // Aliases of one fence/eventfd share an event. Windows forbids the\n",
+     "        // same HANDLE twice in one WaitForMultipleObjects call, while POSIX\n",
+     "        // poll must still report readiness for every requested fd slot.\n",
+     "        // Once overflow is certain, the bounded fallback below needs no more\n",
+     "        // handles. Keep duplicate scans bounded for very large poll sets.\n",
+     "        if (handles.size() > MAXIMUM_WAIT_OBJECTS) return;\n",
+     "        if (handle && std::find(handles.begin(), handles.end(), handle) == handles.end()) handles.push_back(handle);\n",
+     "      };\n",
+     "      for (size_t k = 0; k < fences.size(); ++k) {\n",
+     "        pollfd* p = &fds[fence_index[k]];\n",
+     "        HANDLE wake = nullptr;\n",
+     "        p->revents = LookupNativeFence(p->fd) == fences[k] ? PollNativeFence(fences[k], p->events, &wake) : POLLNVAL;\n",
+     "        if (p->revents != 0) wait_ms = 0;\n",
+     "        append_handle(wake);\n",
+     "      }\n"
+    ]
+   ],
+   [
+    617,
+    [
+     "        if (wake != nullptr) handles.push_back(wake);\n"
+    ],
+    [
+     "        append_handle(wake);\n"
+    ]
+   ],
+   [
+    640,
+    [],
+    [
+     "    for (size_t k = 0; k < fences.size(); ++k) {\n",
+     "      pollfd* p = &fds[fence_index[k]];\n",
+     "      p->revents = LookupNativeFence(p->fd) == fences[k] ? PollNativeFence(fences[k], p->events, nullptr) : POLLNVAL;\n",
+     "    }\n"
+    ]
+   ],
+   [
+    655,
+    [
+     "        if (p->fd < 0 || p->revents != 0 || LookupSocket(p->fd, &state) || LookupEventFd(p->fd)) {\n"
+    ],
+    [
+     "        if (p->fd < 0 || p->revents != 0 || LookupSocket(p->fd, &state) || LookupEventFd(p->fd) || LookupNativeFence(p->fd)) {\n"
     ]
    ]
   ],

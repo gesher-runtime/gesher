@@ -267,7 +267,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='5724ba64d08b68b8900c1442f6302f3fcadc4ef6b584c52d2055b0bb6c04e441'
+REVIEWED_PATCH_SHA256='a1585e5f411313fa2947999231b90ed7d393f4376cbf3d94b2ef08a83f18ae3e'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH

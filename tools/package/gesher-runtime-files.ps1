@@ -61,9 +61,9 @@ function Get-GesherRuntimeByteComparer {
             [Reflection.CallingConventions]::Standard, [int], [Type[]]@([byte[]], [byte[]], [UIntPtr]),
             [Runtime.InteropServices.CallingConvention]::Cdecl, [Runtime.InteropServices.CharSet]::Ansi)
         $method.SetImplementationFlags($method.GetMethodImplementationFlags() -bor [Reflection.MethodImplAttributes]::PreserveSig)
-        $native = $type.CreateType()
-        $script:GesherRuntimeByteComparer = [Delegate]::CreateDelegate(
-            [Func[byte[], byte[], UIntPtr, int]], $native.GetMethod('memcmp'))
+        # Keep the created type itself: Windows PowerShell 5.1 cannot parse a
+        # generic delegate type literal with array arguments inside a call.
+        $script:GesherRuntimeByteComparer = $type.CreateType()
     }
     return $script:GesherRuntimeByteComparer
 }
@@ -106,7 +106,7 @@ function Test-GesherRuntimeFileEqual {
                 $rightCount = Read-GesherRuntimeChunk $right $rightBuffer
                 if ($leftCount -ne $rightCount) { return $false }
                 if ($leftCount -eq 0) { return $true }
-                if ($compare.Invoke($leftBuffer, $rightBuffer, [UIntPtr]::new([uint64] $leftCount)) -ne 0) { return $false }
+                if ($compare::memcmp($leftBuffer, $rightBuffer, [UIntPtr]::new([uint64] $leftCount)) -ne 0) { return $false }
             } while ($true)
         } finally { $right.Dispose() }
     } finally { $left.Dispose() }
