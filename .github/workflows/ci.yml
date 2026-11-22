@@ -101,6 +101,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Durable settings journal, replacement and crash recovery contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
       - name: Build actual app identity restart implementation
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
