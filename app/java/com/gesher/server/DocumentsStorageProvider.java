@@ -47,7 +47,6 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
     private final UriGrants mGrants;
     private final CallerIdentity mCallers;
     final ContentProviders.RegisteredProvider registration;
-    private static volatile libcore.content.type.MimeMap sMimeMap;
 
     DocumentsStorageProvider(ContentProviders providers, UriGrants grants) {
         mGrants = java.util.Objects.requireNonNull(grants);
@@ -150,42 +149,11 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
         } catch (IOException | IllegalArgumentException error) { throw missing("Invalid selection", error); }
     }
 
-    static libcore.content.type.MimeMap mimeMap() {
-        libcore.content.type.MimeMap cached = sMimeMap;
-        if (cached != null) return cached;
-        libcore.content.type.MimeMap resolved = null;
-        try {
-            Object created = Class.forName("android.content.type.DefaultMimeMapFactory")
-                    .getMethod("create").invoke(null);
-            if (created instanceof libcore.content.type.MimeMap) {
-                libcore.content.type.MimeMap full = (libcore.content.type.MimeMap) created;
-                libcore.content.type.MimeMap.setDefaultSupplier(() -> full);
-                resolved = full;
-            }
-        } catch (ReflectiveOperationException | LinkageError | RuntimeException ignored) { }
-        if (resolved == null) {
-            libcore.content.type.MimeMap base = libcore.content.type.MimeMap.getDefault();
-            libcore.content.type.MimeMap.Builder builder = base.buildUpon();
-            String[][] mediaFallback = {
-                    {"image/jpeg", "jpeg"}, {"image/png", "png"}, {"image/gif", "gif"},
-                    {"image/webp", "webp"}, {"image/heif", "heif"}, {"image/heic", "heic"},
-                    {"video/mp4", "mp4"}, {"video/mp4", "m4v"}, {"video/quicktime", "mov"},
-                    {"video/webm", "webm"}, {"video/x-matroska", "mkv"}, {"video/3gpp", "3gp"}
-            };
-            for (String[] entry : mediaFallback) {
-                if (!base.hasExtension(entry[1])) builder.addMimeMapping("?" + entry[0], entry[1]);
-            }
-            resolved = builder.build();
-        }
-        sMimeMap = resolved;
-        return resolved;
-    }
-
     static String mimeType(File file) {
         if (file.isDirectory()) return Document.MIME_TYPE_DIR;
         String name = file.getName();
         int dot = name.lastIndexOf('.');
-        String type = dot < 0 ? null : mimeMap()
+        String type = dot < 0 ? null : libcore.content.type.MimeMap.getDefault()
                 .guessMimeTypeFromExtension(name.substring(dot + 1).toLowerCase(Locale.ROOT));
         return type != null ? type : "application/octet-stream";
     }

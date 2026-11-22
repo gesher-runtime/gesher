@@ -374,13 +374,14 @@ public final class SafDocumentsContractTest {
     static final class ChoiceDialog {
         final CountDownLatch opened = new CountDownLatch(1), finish = new CountDownLatch(1);
         volatile BooleanSupplier active;
+        volatile String[] labels;
         int selected = -1;
         void install(Harness h) throws Exception {
             Class<?> api = type("IntentChooser$Dialog");
             Object dialog = Proxy.newProxyInstance(api.getClassLoader(), new Class<?>[]{api}, (o, m, a) -> {
                 if (m.getName().equals("available")) return true;
                 if (!m.getName().equals("choose")) throw new AssertionError(m);
-                active = (BooleanSupplier)a[4]; opened.countDown();
+                labels = ((String[])a[2]).clone(); active = (BooleanSupplier)a[4]; opened.countDown();
                 if (!finish.await(8, TimeUnit.SECONDS)) throw new AssertionError("Choice fixture was not closed");
                 return selected;
             });
@@ -786,7 +787,7 @@ public final class SafDocumentsContractTest {
         check((boolean)get(singleDialog.request, "pickImages")
                 && !(boolean)get(singleDialog.request, "multiple")
                 && (int)get(singleDialog.request, "maxItems") == 1
-                && "Select media".equals(get(singleDialog.request, "title"))
+                && "Select a photo or video".equals(get(singleDialog.request, "title"))
                 && Arrays.equals((String[])get(singleDialog.request, "mimeTypes"), new String[]{"image/*", "video/*"}),
                 "ACTION_PICK_IMAGES sets media defaults and single-pick bounds");
         check(singleResult.mResultCode == Activity.RESULT_OK && singleResult.mData.getData().equals(document(photo)),
@@ -833,35 +834,83 @@ public final class SafDocumentsContractTest {
                 .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 2), overMaxOrigin) == ActivityManager.START_SUCCESS,
                 "ACTION_PICK_IMAGES starts for over-limit check");
         ResultInfo overMax = finishSelection(pickOverMax, overMaxDialog, photo.getPath(), photo2.getPath(), video.getPath());
-        check(overMax.mResultCode == Activity.RESULT_CANCELED && overMax.mData == null,
+        check("Select up to 2 photos or videos".equals(get(overMaxDialog.request, "title")),
+                "The Windows multi-select dialog states the EXTRA_PICK_IMAGES_MAX limit");
+        check(overMax.mResultCode == Activity.RESULT_CANCELED && overMax.mData == null
+                && !pickOverMax.grants.canAccess(pickOverMax.client, document(photo), READ, 0),
                 "ACTION_PICK_IMAGES rejects selection exceeding EXTRA_PICK_IMAGES_MAX");
-        for (int badLimit : new int[]{0, -1, MediaStore.getPickImagesMaxLimit() + 1}) {
-            rejects(IllegalArgumentException.class, () -> pickOverMax.start(
-                    new Intent(MediaStore.ACTION_PICK_IMAGES).putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, badLimit), overMaxOrigin));
-        }
         pickOverMax.grants.flush();
 
-        // EXTRA_ALLOW_MULTIPLE works for ACTION_PICK_IMAGES as well.
+        // AOSP's picker starts and then cancels an illegal limit: no exception from startActivity.
+        int badIndex = 0;
+        for (int badLimit : new int[]{0, -1, MediaStore.getPickImagesMaxLimit() + 1}) {
+            cancelledWithoutUi(dir, "pick-bad-limit-" + badIndex++, new Intent(MediaStore.ACTION_PICK_IMAGES)
+                    .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, badLimit), "EXTRA_PICK_IMAGES_MAX=" + badLimit);
+        }
+        cancelledWithoutUi(dir, "pick-bad-limit-type", new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 2L), "non-int EXTRA_PICK_IMAGES_MAX");
+        // Non-media EXTRA_MIME_TYPES without the wildcard type is an illegal photo picker filter.
+        cancelledWithoutUi(dir, "pick-nonmedia-extra", new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/png", "application/pdf"}),
+                "non-media EXTRA_MIME_TYPES");
+        cancelledWithoutUi(dir, "pick-nonmedia-list", new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putStringArrayListExtra(Intent.EXTRA_MIME_TYPES, new ArrayList<>(List.of("text/plain"))),
+                "non-media EXTRA_MIME_TYPES list");
+
+        // The photo picker's filters accept only image/*, video/* or no type: other types do not resolve.
+        Harness pickPdf = new Harness(new File(dir, "pick-pdf.xml"));
+        Object pdfOrigin = pickPdf.activity("Origin", "RESUMED");
+        Dialog pdfDialog = new Dialog(); pdfDialog.install(pickPdf);
+        check(pickPdf.start(new Intent(MediaStore.ACTION_PICK_IMAGES).setType("application/pdf"), pdfOrigin)
+                == ActivityManager.START_INTENT_NOT_RESOLVED
+                && pickPdf.start(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                        .setData(Uri.parse("https://example.invalid/a.jpg")), pdfOrigin)
+                == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_PICK_IMAGES with an explicit non-media type or untyped data is not resolved");
+        pickPdf.settled();
+        check(pdfDialog.opened.getCount() == 1 && pickPdf.thread.results().isEmpty()
+                && get(pdfOrigin, "state") == state("RESUMED"),
+                "An unresolved photo picker request opens no UI and delivers no result");
+        pickPdf.grants.flush();
+
+        // An explicit wildcard type, or a wildcard among mixed EXTRA_MIME_TYPES, means all media.
+        for (int variant = 0; variant < 2; variant++) {
+            Harness pickAll = new Harness(new File(dir, "pick-all-" + variant + ".xml"));
+            Object allOrigin = pickAll.activity("Origin", "RESUMED");
+            Dialog allDialog = new Dialog(); allDialog.install(pickAll);
+            Intent all = variant == 0 ? new Intent(MediaStore.ACTION_PICK_IMAGES).setType("*/*")
+                    : new Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/png")
+                            .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"text/plain", "*/*"});
+            check(pickAll.start(all, allOrigin) == ActivityManager.START_SUCCESS,
+                    "ACTION_PICK_IMAGES accepts the wildcard type: " + variant);
+            ResultInfo allRes = finishSelection(pickAll, allDialog, video.getPath());
+            check(Arrays.equals((String[])get(allDialog.request, "mimeTypes"), new String[]{"image/*", "video/*"})
+                    && allRes.mResultCode == Activity.RESULT_OK && allRes.mData.getData().equals(document(video)),
+                    "The wildcard type is narrowed to image/* and video/*: " + variant);
+            pickAll.grants.flush();
+        }
+
+        // EXTRA_ALLOW_MULTIPLE is not an ACTION_PICK_IMAGES extra: the default limit stays 1.
         Harness pickAllowMulti = new Harness(new File(dir, "pick-allow-multi.xml"));
         Object allowOrigin = pickAllowMulti.activity("Origin", "RESUMED");
         Dialog allowDialog = new Dialog(); allowDialog.install(pickAllowMulti);
         check(pickAllowMulti.start(new Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*")
                 .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), allowOrigin) == ActivityManager.START_SUCCESS,
-                "ACTION_PICK_IMAGES honors EXTRA_ALLOW_MULTIPLE");
+                "ACTION_PICK_IMAGES with EXTRA_ALLOW_MULTIPLE starts");
         ResultInfo allowRes = finishSelection(pickAllowMulti, allowDialog, photo.getPath(), photo2.getPath());
-        check((int)get(allowDialog.request, "maxItems") == MediaStore.getPickImagesMaxLimit()
-                && allowRes.mResultCode == Activity.RESULT_OK && allowRes.mData.getClipData().getItemCount() == 2,
-                "EXTRA_ALLOW_MULTIPLE caps at MediaStore.getPickImagesMaxLimit()");
+        check(!(boolean)get(allowDialog.request, "multiple") && (int)get(allowDialog.request, "maxItems") == 1
+                && allowRes.mResultCode == Activity.RESULT_CANCELED && allowRes.mData == null,
+                "EXTRA_ALLOW_MULTIPLE does not enable ACTION_PICK_IMAGES multi-select");
         pickAllowMulti.grants.flush();
 
-        // Unresolvable ACTION_CHOOSER wrapping ACTION_GET_CONTENT delegates to DocumentPicker (Muse fallback upload path).
+        // ACTION_CHOOSER wrapping ACTION_GET_CONTENT offers the system picker; as the only choice it auto-launches.
         Harness chooserGet = new Harness(new File(dir, "chooser-get.xml"));
         Object chooserOrigin = chooserGet.activity("Origin", "RESUMED");
         Dialog chooserDialog = new Dialog(); chooserDialog.install(chooserGet);
         Intent getContent = new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
         Intent wrappedGet = Intent.createChooser(getContent, "Choose photo");
         check(chooserGet.start(wrappedGet, chooserOrigin) == ActivityManager.START_SUCCESS,
-                "Unresolvable ACTION_CHOOSER wrapping ACTION_GET_CONTENT delegates to DocumentPicker");
+                "ACTION_CHOOSER wrapping ACTION_GET_CONTENT auto-launches its only choice, the system picker");
         ResultInfo chooserGetRes = finishSelection(chooserGet, chooserDialog, photo.getPath());
         check((boolean)get(chooserDialog.request, "getContent")
                 && chooserGetRes.mResultCode == Activity.RESULT_OK
@@ -870,13 +919,13 @@ public final class SafDocumentsContractTest {
                 "Delegated ACTION_CHOOSER GET_CONTENT returns read-only selected URI");
         chooserGet.grants.flush();
 
-        // Unresolvable ACTION_CHOOSER wrapping ACTION_PICK_IMAGES also delegates cleanly.
+        // ACTION_CHOOSER wrapping ACTION_PICK_IMAGES offers the system picker in the same way.
         Harness chooserPick = new Harness(new File(dir, "chooser-pick.xml"));
         Object chooserPickOrigin = chooserPick.activity("Origin", "RESUMED");
         Dialog chooserPickDialog = new Dialog(); chooserPickDialog.install(chooserPick);
         Intent wrappedPick = Intent.createChooser(new Intent(MediaStore.ACTION_PICK_IMAGES).setType("video/*"), "Choose video");
         check(chooserPick.start(wrappedPick, chooserPickOrigin) == ActivityManager.START_SUCCESS,
-                "Unresolvable ACTION_CHOOSER wrapping ACTION_PICK_IMAGES delegates to DocumentPicker");
+                "ACTION_CHOOSER wrapping ACTION_PICK_IMAGES auto-launches the system picker");
         ResultInfo chooserPickRes = finishSelection(chooserPick, chooserPickDialog, video.getPath());
         check((boolean)get(chooserPickDialog.request, "pickImages")
                 && chooserPickRes.mResultCode == Activity.RESULT_OK
@@ -897,6 +946,94 @@ public final class SafDocumentsContractTest {
                 .putExtra(Intent.EXTRA_CHOOSER_REFINEMENT_INTENT_SENDER, new Intent());
         check(chooserGet.start(withRefinement, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
                 "ACTION_CHOOSER with unsupported extra does not bypass into DocumentPicker");
+        Intent withResultSender = Intent.createChooser(getContent, "With result callback")
+                .putExtra(Intent.EXTRA_CHOOSER_RESULT_INTENT_SENDER, callbackSender);
+        check(chooserGet.start(withResultSender, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_CHOOSER with EXTRA_CHOOSER_RESULT_INTENT_SENDER does not offer the componentless picker");
+        // Picker request validation in a chooser is "not offered", never an exception from startActivity.
+        check(chooserGet.start(Intent.createChooser(new Intent(Intent.ACTION_GET_CONTENT), "Untyped"),
+                chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED
+                && chooserGet.start(Intent.createChooser(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                        .setType("application/pdf"), "Non-media"), chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "An invalid or unresolvable document target leaves the chooser without a picker entry");
+        chooserGet.settled();
+        check(chooserGet.thread.results().size() == 1, "Rejected choosers deliver no extra result");
+        chooserGet.grants.flush();
+
+        // With other choices the system picker is still listed, like DocumentsUI in Android's chooser.
+        Harness chooserBoth = new Harness(new File(dir, "chooser-both.xml"));
+        Object bothOrigin = chooserBoth.activity("Origin", "RESUMED");
+        Dialog bothDocuments = new Dialog(); bothDocuments.install(chooserBoth);
+        ChoiceDialog bothChoices = new ChoiceDialog(); bothChoices.selected = 1; bothChoices.install(chooserBoth);
+        Intent wrappedBoth = Intent.createChooser(getContent, "Choose source").putExtra(Intent.EXTRA_INITIAL_INTENTS,
+                new Intent[]{new Intent().setComponent(new ComponentName(CLIENT, CLIENT + ".Top"))});
+        check(chooserBoth.start(wrappedBoth, bothOrigin) == ActivityManager.START_SUCCESS
+                && bothChoices.opened.await(3, TimeUnit.SECONDS),
+                "A document chooser with an application choice shows the host chooser");
+        check(bothChoices.labels.length == 2 && bothChoices.labels[0].contains("(" + CLIENT + ")")
+                && "Files (Windows file picker)".equals(bothChoices.labels[1]),
+                "The system picker is listed beside the application choice");
+        bothChoices.finish.countDown();
+        ResultInfo bothRes = finishSelection(chooserBoth, bothDocuments, photo.getPath());
+        workersRetired("intent-chooser");
+        check((boolean)get(bothDocuments.request, "getContent") && bothRes.mResultCode == Activity.RESULT_OK
+                && bothRes.mData.getData().equals(document(photo))
+                && chooserBoth.grants.canAccess(chooserBoth.client, document(photo), READ, 0),
+                "Choosing the system picker returns its selection to the chooser's caller");
+        check(get(bothOrigin, "state") == state("RESUMED") && (int)get(bothOrigin, "nativeUiCount") == 0
+                && (int)get(bothOrigin, "chooserCoverCount") == 0,
+                "Chooser and picker release their own coverage and the caller resumes once");
+        chooserBoth.grants.flush();
+
+        // EXTRA_AUTO_LAUNCH_SINGLE_CHOICE=false shows the chooser even for the picker alone.
+        Harness chooserSingle = new Harness(new File(dir, "chooser-single.xml"));
+        Object singleChoiceOrigin = chooserSingle.activity("Origin", "RESUMED");
+        Dialog singleDocuments = new Dialog(); singleDocuments.install(chooserSingle);
+        ChoiceDialog singleChoices = new ChoiceDialog(); singleChoices.selected = 0; singleChoices.install(chooserSingle);
+        check(chooserSingle.start(Intent.createChooser(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 3), "Choose media")
+                .putExtra(Intent.EXTRA_AUTO_LAUNCH_SINGLE_CHOICE, false), singleChoiceOrigin) == ActivityManager.START_SUCCESS
+                && singleChoices.opened.await(3, TimeUnit.SECONDS)
+                && Arrays.equals(singleChoices.labels, new String[]{"Photos and videos (Windows file picker)"}),
+                "A chooser that must not auto-launch lists the photo picker as its one choice");
+        singleChoices.finish.countDown();
+        ResultInfo singleChoiceRes = finishSelection(chooserSingle, singleDocuments, photo.getPath(), video.getPath());
+        workersRetired("intent-chooser");
+        check((int)get(singleDocuments.request, "maxItems") == 3 && singleChoiceRes.mResultCode == Activity.RESULT_OK
+                && singleChoiceRes.mData.getClipData().getItemCount() == 2,
+                "The chosen photo picker keeps the target's EXTRA_PICK_IMAGES_MAX");
+        chooserSingle.grants.flush();
+
+        // A NEW_TASK chooser cancels the caller's result once; the picker then has no result recipient.
+        Harness chooserTask = new Harness(new File(dir, "chooser-new-task.xml"));
+        Object taskOrigin = chooserTask.activity("Origin", "RESUMED");
+        Dialog taskDocuments = new Dialog(); taskDocuments.install(chooserTask);
+        Intent wrappedTask = Intent.createChooser(getContent, "New task").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        check(chooserTask.start(wrappedTask, taskOrigin) == ActivityManager.START_SUCCESS,
+                "A NEW_TASK document chooser starts the system picker");
+        ResultInfo taskRes = finishSelection(chooserTask, taskDocuments, photo.getPath());
+        check(taskRes.mResultCode == Activity.RESULT_CANCELED && taskRes.mData == null
+                && (int)get(taskDocuments.request, "mode") == 0
+                && !chooserTask.grants.canAccess(chooserTask.client, document(photo), READ, 0),
+                "NEW_TASK is forwarded: one immediate RESULT_CANCELED and no late result or grant");
+        check(get(taskOrigin, "state") == state("RESUMED") && (int)get(taskOrigin, "nativeUiCount") == 0,
+                "The NEW_TASK picker covered and then released the focused caller");
+        chooserTask.grants.flush();
+    }
+
+    /** An accepted ACTION_PICK_IMAGES request that AOSP's picker cancels without showing media. */
+    static void cancelledWithoutUi(File dir, String name, Intent request, String why) throws Exception {
+        Harness h = new Harness(new File(dir, name + ".xml"));
+        Object origin = h.activity("Origin", "RESUMED");
+        Dialog dialog = new Dialog(); dialog.install(h);
+        check(h.start(request, origin) == ActivityManager.START_SUCCESS, "Illegal photo picker request still starts: " + why);
+        h.settled();
+        List<ResultInfo> results = h.thread.results();
+        check(results.size() == 1 && results.get(0).mResultCode == Activity.RESULT_CANCELED
+                && results.get(0).mData == null && dialog.opened.getCount() == 1,
+                "Illegal photo picker request returns RESULT_CANCELED without UI: " + why);
+        check(get(origin, "state") == state("RESUMED"), "Caller resumes after the cancelled request: " + why);
+        h.grants.flush();
     }
 
     static void lifecycle(File dir) throws Exception {
@@ -1217,7 +1354,28 @@ public final class SafDocumentsContractTest {
         withServiceContext(() -> contractsWithServiceContext(descriptors));
     }
 
+    /**
+     * Test-only: Main.bootstrap installs Android's MIME map in production processes,
+     * and these fixtures do not run it. Use the framework factory when its jar
+     * resources are present (ART); a host JVM without them gets an isolated map with
+     * the media extensions the fixtures name.
+     */
+    static void fixtureMimeMap() {
+        libcore.content.type.MimeMap map;
+        try {
+            map = android.content.type.DefaultMimeMapFactory.create();
+        } catch (RuntimeException missingResources) {
+            map = libcore.content.type.MimeMap.getDefault().buildUpon()
+                    .addMimeMapping("image/png", "png").addMimeMapping("video/mp4", "mp4")
+                    .addMimeMapping("image/webp", "webp").addMimeMapping("video/quicktime", "mov")
+                    .build();
+        }
+        libcore.content.type.MimeMap fixture = map;
+        libcore.content.type.MimeMap.setDefaultSupplier(() -> fixture);
+    }
+
     private static void contractsWithServiceContext(boolean descriptors) throws Exception {
+        fixtureMimeMap();
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
         try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);

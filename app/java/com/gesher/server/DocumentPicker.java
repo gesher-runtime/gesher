@@ -20,7 +20,20 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
-/** Android request/result semantics around real Windows open/save/folder dialogs. */
+/**
+ * Android request/result semantics around real Windows open/save/folder dialogs.
+ *
+ * <p>{@link MediaStore#ACTION_PICK_IMAGES} follows the AOSP photo picker's request
+ * contract (its manifest filters, {@code getPhotopickerSelectionLimitOrDefault} and
+ * {@code getPhotopickerMimeTypes}) and result shape (read access plus a persistable
+ * grant). Known difference: the selected media are returned as
+ * {@code content://com.gesher.documents} SAF document URIs, not AOSP's
+ * {@code content://media/picker/...} URIs. Both are opaque content URIs that support
+ * {@code ContentResolver.openInputStream}, {@code query} for display name/size and
+ * {@code takePersistableUriPermission}; an app that parses the picker URI's
+ * authority or path, or passes it to {@code MediaStore}-specific APIs, sees the
+ * difference.
+ */
 final class DocumentPicker {
     static final int OPEN = 0, CREATE = 1, TREE = 2;
     interface Backend {
@@ -49,12 +62,80 @@ final class DocumentPicker {
                 || MediaStore.ACTION_PICK_IMAGES.equals(action);
     }
 
+    /**
+     * Whether the system picker's intent filters match this request. The AOSP photo
+     * picker declares ACTION_PICK_IMAGES only with image/* and video/* types, or with
+     * no data at all, so an explicit non-media type (or data without a type) is an
+     * unresolvable intent, exactly as for any other activity start.
+     */
+    static boolean resolves(Intent intent, String resolvedType) {
+        if (!handles(intent)) return false;
+        if (!MediaStore.ACTION_PICK_IMAGES.equals(intent.getAction())) return true;
+        String type = resolvedType != null ? resolvedType : intent.getType();
+        Uri data = intent.getData();
+        if (type == null) return data == null;
+        String scheme = data == null ? null : data.getScheme();
+        return ("*/*".equals(type) || isMediaType(type))
+                && (scheme == null || "content".equals(scheme) || "file".equals(scheme));
+    }
+
+    /**
+     * A chooser target the system picker can serve: it resolves and its request is
+     * well formed. Request validation that would make a direct start throw is
+     * reported here as "not offered", so a chooser never throws for its picker entry.
+     */
+    static boolean offers(Intent intent) {
+        if (!resolves(intent, null)) return false;
+        try {
+            new Request(intent, null, 36);
+            return true;
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
+    }
+
+    private static boolean isMediaType(String type) {
+        return type != null && (type.startsWith("image/") || type.startsWith("video/"));
+    }
+
+    private static final String[] ALL_MEDIA = {"image/*", "video/*"};
+
+    /**
+     * The photo picker's MIME filter (AOSP photopicker Intent.getPhotopickerMimeTypes):
+     * EXTRA_MIME_TYPES, in either array form, wins over the intent type; an all-media
+     * list is kept; a list or type containing the wildcard type means image/* and
+     * video/*. Any other non-media filter is an illegal request: null.
+     */
+    private static String[] pickImagesMimeTypes(Intent intent, String type) {
+        String[] list = intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES);
+        if (list == null) {
+            ArrayList<String> values = intent.getStringArrayListExtra(Intent.EXTRA_MIME_TYPES);
+            if (values != null) list = values.toArray(new String[0]);
+        }
+        if (list != null) {
+            boolean media = true, all = false;
+            for (String value : list) {
+                media &= isMediaType(value);
+                all |= "*/*".equals(value);
+            }
+            if (media) return list.length == 0 ? ALL_MEDIA.clone() : list.clone();
+            return all ? ALL_MEDIA.clone() : null;
+        }
+        if (type == null || "*/*".equals(type)) return ALL_MEDIA.clone();
+        return isMediaType(type) ? new String[]{type} : null;
+    }
+
     static final class Request {
         final int mode, targetSdk, maxItems;
         final boolean multiple, getContent, pickImages, localOnly;
         final String title, suggestedName, initialDirectory, filter, extension;
         final String mimeType;
         final String[] mimeTypes;
+        /**
+         * Why this accepted request ends with RESULT_CANCELED without showing UI, or
+         * null. The AOSP photo picker starts, then cancels an illegal configuration.
+         */
+        final String rejection;
 
         Request(Intent original, String resolvedType, int targetSdk) {
             if (!handles(original)) throw new IllegalArgumentException("Not an implicit document request");
@@ -65,30 +146,42 @@ final class DocumentPicker {
             mode = Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action) ? TREE
                     : Intent.ACTION_CREATE_DOCUMENT.equals(action) ? CREATE : OPEN;
             getContent = Intent.ACTION_GET_CONTENT.equals(action);
-            if (pickImages) {
-                if (intent.hasExtra(MediaStore.EXTRA_PICK_IMAGES_MAX)) {
-                    int limit = intent.getIntExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, -1);
-                    if (limit < 1 || limit > MediaStore.getPickImagesMaxLimit()) {
-                        throw new IllegalArgumentException("Invalid EXTRA_PICK_IMAGES_MAX limit");
-                    }
-                    multiple = limit > 1;
-                    maxItems = limit;
-                } else {
-                    multiple = intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
-                    maxItems = multiple ? MediaStore.getPickImagesMaxLimit() : 1;
-                }
-            } else {
-                multiple = mode == OPEN && intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
-                maxItems = multiple ? 0 : 1;
-            }
             localOnly = intent.getBooleanExtra(Intent.EXTRA_LOCAL_ONLY, false);
             String explicitType = resolvedType != null ? resolvedType : intent.getType();
-            String[] extras = mode == OPEN ? intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES) : null;
-            if (pickImages && explicitType == null) {
+            if (pickImages) {
+                // AOSP getPhotopickerSelectionLimitOrDefault(1): only EXTRA_PICK_IMAGES_MAX
+                // selects more than one item; EXTRA_ALLOW_MULTIPLE is not part of this action.
+                String failure = null;
+                int limit = intent.hasExtra(MediaStore.EXTRA_PICK_IMAGES_MAX)
+                        ? intent.getIntExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, -1) : 1;
+                if (limit < 1 || limit > MediaStore.getPickImagesMaxLimit()) {
+                    failure = "EXTRA_PICK_IMAGES_MAX not in 1.." + MediaStore.getPickImagesMaxLimit();
+                    limit = 1;
+                }
+                String[] media = pickImagesMimeTypes(intent, explicitType);
+                if (media == null) {
+                    failure = "Only media MIME types can be accepted";
+                    media = ALL_MEDIA.clone();
+                }
+                for (String type : media) {
+                    if (!validMime(type)) {
+                        failure = "Invalid MIME filter";
+                        media = ALL_MEDIA.clone();
+                        break;
+                    }
+                }
+                rejection = failure;
+                maxItems = limit;
+                multiple = limit > 1;
                 mimeType = "*/*";
-                mimeTypes = extras != null && extras.length != 0
-                        ? extras.clone() : new String[]{"image/*", "video/*"};
+                mimeTypes = media;
+                // The Windows multi-select dialog cannot stop at the limit itself; the
+                // title states it and a larger selection is cancelled, never truncated.
+                title = multiple ? "Select up to " + limit + " photos or videos" : "Select a photo or video";
             } else {
+                rejection = null;
+                multiple = mode == OPEN && intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
+                maxItems = multiple ? 0 : 1;
                 mimeType = explicitType;
                 if (mode != TREE && !validMime(mimeType)) {
                     throw new IllegalArgumentException("Missing or invalid MIME type");
@@ -97,15 +190,15 @@ final class DocumentPicker {
                         || DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType))) {
                     throw new IllegalArgumentException("CREATE_DOCUMENT requires a concrete file MIME type");
                 }
+                String[] extras = mode == OPEN ? intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES) : null;
                 mimeTypes = mode == TREE ? new String[0] : extras != null && extras.length != 0
                         ? extras.clone() : new String[]{mimeType};
+                for (String type : mimeTypes) if (!validMime(type)) throw new IllegalArgumentException("Invalid MIME filter");
+                title = mode == CREATE ? "Create document" : mode == TREE ? "Select folder" : "Open document";
             }
-            for (String type : mimeTypes) if (!validMime(type)) throw new IllegalArgumentException("Invalid MIME filter");
-            title = pickImages ? "Select media"
-                    : mode == CREATE ? "Create document" : mode == TREE ? "Select folder" : "Open document";
             String suggested = mode == CREATE ? intent.getStringExtra(Intent.EXTRA_TITLE) : null;
             suggestedName = suggested == null ? "" : FileUtils.buildValidFatFilename(suggested);
-            extension = mode == CREATE ? DocumentsStorageProvider.mimeMap()
+            extension = mode == CREATE ? libcore.content.type.MimeMap.getDefault()
                     .guessExtensionFromMimeType(mimeType) : null;
             initialDirectory = initialDirectory(intent.getParcelableExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.class));
             filter = buildFilter(mimeTypes);
@@ -126,7 +219,7 @@ final class DocumentPicker {
     private static String buildFilter(String[] mimeTypes) {
         for (String type : mimeTypes) if ("*/*".equals(type)) return "*";
         Set<String> extensions = new java.util.TreeSet<>();
-        libcore.content.type.MimeMap map = DocumentsStorageProvider.mimeMap();
+        libcore.content.type.MimeMap map = libcore.content.type.MimeMap.getDefault();
         for (String extension : map.extensions()) {
             if (!extension.matches("[A-Za-z0-9][A-Za-z0-9_.+\\-]*")) continue;
             String actual = map.guessMimeTypeFromExtension(extension);
