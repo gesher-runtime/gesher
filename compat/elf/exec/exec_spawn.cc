@@ -4,6 +4,8 @@
 #include "pe_exports.h"
 
 #include <gesher/reserved_names.h>
+#include <gesher/environment.h>
+#include <gesher/environment_utf16.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -105,11 +107,11 @@ std::string ToolName(const std::string& name) {
 
 // The directories of PATH: ';'-separated on Windows; a Linux-style ':' list
 // is accepted too (a drive letter's colon is not a separator there).
-std::wstring ProcessPath() {
-  const wchar_t* env = _wgetenv(L"PATH");
-  return env != nullptr ? env : L"";
+std::wstring EnvironmentValue(const char* value) {
+  std::wstring wide;
+  if (value && !gesher::DecodeEnvironmentUtf8(value, &wide)) errno = EILSEQ;
+  return wide;
 }
-
 std::vector<std::wstring> PathDirectories(const std::wstring& path) {
   std::vector<std::wstring> dirs;
   wchar_t sep = path.find(L';') != std::wstring::npos ? L';' : L':';
@@ -131,8 +133,8 @@ std::vector<std::wstring> PathDirectories(const std::wstring& path) {
 }
 
 std::wstring ComSpec() {
-  const wchar_t* c = _wgetenv(L"ComSpec");
-  if (c != nullptr && *c != 0) return c;
+  const char* c = gesher::GetWindowsEnvironment("ComSpec");
+  if (c != nullptr && *c != 0) return EnvironmentValue(c);
   wchar_t sys[MAX_PATH];
   UINT n = GetSystemDirectoryW(sys, MAX_PATH);
   return std::wstring(sys, n) + L"\\cmd.exe";
@@ -146,11 +148,14 @@ void AppendArgs(std::wstring* cmd, const std::vector<std::string>& argv, size_t 
 }
 
 int Finish(Launch* launch) {
+  // A failed environment-controlled application decode must never become a
+  // successful launch with CreateProcess choosing an image from its command.
+  if (launch->application.empty()) return EILSEQ;
   return launch->command_line.size() + 1 > kMaxCommandLine ? kE2BIG : 0;
 }
 
 int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int depth, Launch* launch,
-              const std::wstring& path_value);
+              const std::string* path_override);
 
 // The launch for the file found at `path`, run as `argv`.
 int LaunchFile(const std::wstring& path, const std::string& head, const std::vector<std::string>& argv,
@@ -222,8 +227,8 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
     args.push_back(argv[0]);
     args.insert(args.end(), argv.begin() + 1, argv.end());
     Launch inner;
-    int r = PrepareAt(args, dir, depth + 1, &inner, ProcessPath());
-    if (r != 0) return r == kENOENT ? kENOENT : kENOEXEC;
+    int r = PrepareAt(args, dir, depth + 1, &inner, nullptr);
+    if (r != 0) return r == kENOENT || r == EILSEQ ? r : kENOEXEC;
     inner.kind = "script";
     *launch = inner;
     return 0;
@@ -266,6 +271,7 @@ const char* ErrorText(int error) {
   switch (error) {
     case kENOENT: return "No such file or directory";
     case kEIO: return "I/O error";
+    case EILSEQ: return "Invalid environment encoding";
     case kE2BIG: return "Argument list too long";
     case kENOEXEC: return "Exec format error";
     case kENOMEM: return "Out of memory";
@@ -307,6 +313,8 @@ int ErrnoFromWin32(DWORD error) {
       return kEBADF;
     case ERROR_INVALID_PARAMETER:
       return kEINVAL;
+    case ERROR_NO_UNICODE_TRANSLATION:
+      return EILSEQ;
     case ERROR_NOT_SUPPORTED:
       return kEOPNOTSUPP;
     default:
@@ -355,8 +363,8 @@ std::wstring WindowsPath(const std::string& path, const std::string& dir) {
 }
 
 std::wstring LauncherPath() {
-  const wchar_t* env = _wgetenv(L"GESHER_EXEC_LAUNCHER");
-  if (env != nullptr && *env != 0) return env;
+  const char* env = gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
+  if (env != nullptr && *env != 0) return EnvironmentValue(env);
   std::wstring self(MAX_PATH, L'\0');
   for (;;) {
     DWORD n = GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size()));
@@ -373,7 +381,7 @@ std::wstring LauncherPath() {
 namespace {
 
 int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv, const std::string& dir,
-                   int depth, bool search, Launch* launch, const std::wstring& path_value) {
+                   int depth, bool search, Launch* launch, const std::string* path_override) {
   if (argv.empty() || prog.empty()) return kENOENT;
   if (IsShName(prog)) {
     launch->kind = "sh";
@@ -405,6 +413,9 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
   }
   // A bare name: PATH, also with Windows' executable extensions when the name
   // has none. As execvp, EACCES is reported only if nothing runnable is found.
+  const char* environment_path = path_override ? path_override->c_str() : gesher::GetWindowsEnvironment("PATH");
+  std::wstring path_value;
+  if (environment_path && !gesher::DecodeEnvironmentUtf8(environment_path, &path_value)) return EILSEQ;
   bool has_ext = !Extension(Widen(prog)).empty();
   static const wchar_t* const kExtensions[] = {L"", L".exe", L".com", L".cmd", L".bat"};
   int seen = kENOENT;
@@ -429,20 +440,20 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
 }
 
 int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int depth, Launch* launch,
-              const std::wstring& path_value) {
+              const std::string* path_override) {
   if (argv.empty()) return kENOENT;
-  return PrepareProgram(argv[0], argv, dir, depth, true, launch, path_value);
+  return PrepareProgram(argv[0], argv, dir, depth, true, launch, path_override);
 }
 
 }  // namespace
 
 int PrepareLaunch(const std::vector<std::string>& argv, const std::string& dir, Launch* launch) {
-  return PrepareAt(argv, dir, 0, launch, ProcessPath());
+  return PrepareAt(argv, dir, 0, launch, nullptr);
 }
 
 int PrepareLaunchInPath(const std::vector<std::string>& argv, const std::string& dir, const std::string& path,
                         Launch* launch) {
-  return PrepareAt(argv, dir, 0, launch, Widen(path));
+  return PrepareAt(argv, dir, 0, launch, &path);
 }
 
 std::wstring FindInPath(const std::string& name, const std::string& path) {
@@ -465,19 +476,40 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
 
 int PrepareLaunchProgram(const std::string& program, const std::vector<std::string>& argv,
                          const std::string& dir, bool search_path, Launch* launch) {
-  return PrepareProgram(program, argv, dir, 0, search_path, launch, ProcessPath());
+  return PrepareProgram(program, argv, dir, 0, search_path, launch, nullptr);
 }
 
 int PrepareLaunchProgramInPath(const std::string& program, const std::vector<std::string>& argv,
                                const std::string& dir, bool search_path, const std::string& path,
                                Launch* launch) {
-  return PrepareProgram(program, argv, dir, 0, search_path, launch, Widen(path));
+  return PrepareProgram(program, argv, dir, 0, search_path, launch, &path);
 }
 
 bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
 
 DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,
                    const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info, DWORD extra_flags) try {
+  // Default native/Java launches inherit the same live POSIX bytes as ELF
+  // execv. Windows' copied environment cannot observe putenv buffer edits.
+  std::wstring inherited_environment;
+  if (!environment) {
+    std::vector<std::string> entries;
+    if (!gesher::VisitEnvironment([](const char* entry, void* context) {
+          static_cast<std::vector<std::string>*>(context)->emplace_back(entry);
+        }, &entries)) return ERROR_NOT_ENOUGH_MEMORY;
+    // Native inheritance also includes Windows' per-drive working directories.
+    // Keep these native-only UTF16 entries out of POSIX environ, but preserve
+    // them when replacing CreateProcess's previous null-environment behavior.
+    std::unique_ptr<wchar_t, decltype(&FreeEnvironmentStringsW)> native(
+        GetEnvironmentStringsW(), &FreeEnvironmentStringsW);
+    if (!native) {
+      const DWORD error = GetLastError();
+      return error ? error : ERROR_NOT_ENOUGH_MEMORY;
+    }
+    inherited_environment = EnvironmentBlock(entries, native.get());
+    if (inherited_environment.empty()) return ERROR_NO_UNICODE_TRANSLATION;
+    environment = inherited_environment.c_str();
+  }
   struct ImagePin {
     HANDLE value = nullptr;
     ~ImagePin() { if (value) CloseHandle(value); }
@@ -642,7 +674,12 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   startup.StartupInfo.lpReserved2 = block.data();
   startup.lpAttributeList = attributes;
   std::wstring command_line = launch.command_line;
-  DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | extra_flags;
+  DWORD flags = CREATE_UNICODE_ENVIRONMENT | extra_flags;
+  // With no inherited handles, CREATE_NO_WINDOW still supplies fresh console
+  // standard handles. Default to detaching this native child, while preserving
+  // any console mode the caller explicitly requested.
+  if (!(extra_flags & (CREATE_NEW_CONSOLE | CREATE_NO_WINDOW | DETACHED_PROCESS)))
+    flags |= owned.values.empty() ? DETACHED_PROCESS : CREATE_NO_WINDOW;
   if (attributes) flags |= EXTENDED_STARTUPINFO_PRESENT;
   BOOL started = CreateProcessW(launch.application.c_str(), command_line.data(), nullptr, nullptr, attributes ? TRUE : FALSE,
       flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, info);
@@ -667,19 +704,24 @@ DWORD Spawn(const Launch& launch, const wchar_t* environment, const std::wstring
   return ERROR_NOT_ENOUGH_MEMORY;
 }
 
-std::wstring EnvironmentBlock(const std::vector<std::string>& entries) {
+std::wstring EnvironmentBlock(const std::vector<std::string>& entries,
+                              const wchar_t* native_defaults) {
   std::vector<std::wstring> wide;
+  for (const wchar_t* entry = native_defaults; entry && *entry; entry += std::wcslen(entry) + 1)
+    if (*entry == L'=') wide.emplace_back(entry);
   for (const std::string& e : entries) {
     if (e.find('=', 1) == std::string::npos) continue;
-    wide.push_back(Widen(e));
+    std::wstring value;
+    if (!gesher::DecodeEnvironmentUtf8(e, &value)) return errno = EILSEQ, std::wstring{};
+    wide.push_back(std::move(value));
   }
   auto name = [](const std::wstring& s) {
     size_t eq = s.find(L'=', 1);
-    return s.substr(0, eq);
+    return std::wstring_view(s).substr(0, eq);
   };
   std::stable_sort(wide.begin(), wide.end(), [&](const std::wstring& a, const std::wstring& b) {
-    std::wstring na = name(a), nb = name(b);
-    return CompareStringOrdinal(na.c_str(), static_cast<int>(na.size()), nb.c_str(), static_cast<int>(nb.size()),
+    const auto na = name(a), nb = name(b);
+    return CompareStringOrdinal(na.data(), static_cast<int>(na.size()), nb.data(), static_cast<int>(nb.size()),
                                 TRUE) == CSTR_LESS_THAN;
   });
   std::wstring block;

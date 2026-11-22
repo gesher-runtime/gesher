@@ -135,6 +135,10 @@ int Start(const Shell& sh, const std::vector<std::string>& args, const Io& io,
   }
   fds.insert(fds.end(), extra.begin(), extra.end());
   std::wstring environment = EnvironmentBlock(ChildEnv(sh));
+  if (environment.empty()) {
+    ShErr(sh, io, args[0] + ": " + ErrorText(EILSEQ));
+    return 126;
+  }
   DWORD failed = SpawnWithFds(launch, environment.c_str(), WindowsPath(sh.cwd),
                               fds, process);
   if (failed != 0) {

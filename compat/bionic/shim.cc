@@ -17,6 +17,7 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/clocks.h>
+#include <gesher/environment.h>
 
 #include <windows.h>
 // bcrypt.h needs windows.h first.
@@ -565,23 +566,14 @@ void BIONIC_SYSV SetAbortMessage(const char* msg) {
   std::fprintf(stderr, "gesher bionic: abort message: %s\n", msg ? msg : "");
 }
 
-// The environment is the CRT's (environ is its _environ). gesher-base's
-// setenv/unsetenv keep every string they replace or remove, as bionic does
-// (compat/posix/src/unistd.cc), so what getenv returns and what environ points
-// at stay valid: mozglue reads environ through its own getenv.
-char* BIONIC_SYSV Getenv(const char* name) { return name != nullptr ? std::getenv(name) : nullptr; }
+// Host and guest calls share a POSIX table. Owned strings survive replacement;
+// putenv keeps caller storage, which must never be handed to UCRT for freeing.
+char* BIONIC_SYSV Getenv(const char* name) { return gesher::GetEnvironment(name); }
 int BIONIC_SYSV Setenv(const char* name, const char* value, int overwrite) {
   return ::setenv(name, value, overwrite);
 }
 int BIONIC_SYSV Unsetenv(const char* name) { return ::unsetenv(name); }
-// putenv goes through the same retaining setenv/unsetenv (a name without '='
-// removes it), so earlier getenv results and environ entries stay valid.
-int BIONIC_SYSV Putenv(char* assignment) {
-  if (assignment == nullptr) return errno = EINVAL, -1;
-  const char* eq = std::strchr(assignment, '=');
-  if (eq == nullptr) return Unsetenv(assignment);
-  return Setenv(std::string(assignment, eq - assignment).c_str(), eq + 1, 1);
-}
+int BIONIC_SYSV Putenv(char* assignment) { return gesher::PutEnvironment(assignment); }
 
 int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Gettid() { return static_cast<int>(GetCurrentThreadId()); }

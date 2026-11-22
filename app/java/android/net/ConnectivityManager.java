@@ -13,8 +13,10 @@ import android.os.RemoteException;
 import android.os.ServiceManager;
 
 import com.gesher.net.IConnectivity;
+import com.gesher.net.IWindowsWifi;
 import com.gesher.net.WindowsNetworks;
 import com.gesher.net.WindowsProxy;
+import com.gesher.net.WifiAccess;
 
 import java.net.InetAddress;
 import java.util.ArrayList;
@@ -86,7 +88,7 @@ public class ConnectivityManager {
     private final Context mContext;
 
     public ConnectivityManager(Context context) {
-        mContext = context;
+        mContext = WifiAccess.context(context);
     }
 
     /** As the module's hidden {@code from}. */
@@ -202,10 +204,19 @@ public class ConnectivityManager {
     /** @hide Also the job scheduler's network constraints (hwsvc2, ADR 0051). */
     public static NetworkCapabilities capabilitiesOf(WindowsNetworks.Snapshot s,
             WindowsNetworks.Net n) {
+        // Queries, jobs and broadcasts have no callback opt-in to location data.
+        return capabilitiesOf(s, n, null, false);
+    }
+
+    private static NetworkCapabilities capabilitiesOf(WindowsNetworks.Snapshot s,
+            WindowsNetworks.Net n, Context context, boolean includeLocation) {
         NetworkCapabilities nc = new NetworkCapabilities();
         nc.clearAll();
         switch (n.kind) {
-            case "wifi": nc.addTransportType(NetworkCapabilities.TRANSPORT_WIFI); break;
+            case "wifi":
+                nc.addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+                nc.setTransportInfo(wifiInfo(n, context, includeLocation));
+                break;
             case "cellular": nc.addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR); break;
             case "vpn": nc.addTransportType(NetworkCapabilities.TRANSPORT_VPN); break;
             default: nc.addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET); break;
@@ -239,6 +250,27 @@ public class ConnectivityManager {
         return nc;
     }
 
+    private static android.net.wifi.WifiInfo wifiInfo(WindowsNetworks.Net network,
+            Context context, boolean includeLocation) {
+        if (context != null) {
+            try {
+                IWindowsWifi wifi = IWindowsWifi.Stub.asInterface(
+                        ServiceManager.getService(IWindowsWifi.NAME));
+                if (wifi != null) {
+                    // Context supplies attribution only. The service authenticates the
+                    // Binder caller and evaluates its current grants before disclosure.
+                    android.net.wifi.WifiInfo info = wifi.getConnectionInfoForNetwork(
+                            context.getOpPackageName(), context.getAttributionTag(),
+                            network.ifIndex, includeLocation);
+                    if (info != null) return info;
+                }
+            } catch (RemoteException | RuntimeException | LinkageError unavailable) {
+                // Optional Wi-Fi detail remains unavailable on service/identity failure.
+            }
+        }
+        return new android.net.wifi.WifiInfo();
+    }
+
     static LinkProperties linkPropertiesOf(WindowsNetworks.Net n) {
         LinkProperties lp = new LinkProperties();
         String iface = interfaceName(n);
@@ -261,9 +293,22 @@ public class ConnectivityManager {
     }
 
     static NetworkInfo networkInfoOf(WindowsNetworks.Net n) {
+        // The sticky broadcast is shared by all receivers and must not carry SSID.
+        return networkInfoOf(n, null);
+    }
+
+    private static NetworkInfo networkInfoOf(WindowsNetworks.Net n, Context context) {
         int type = legacyType(n);
         NetworkInfo info = new NetworkInfo(type, 0, legacyTypeName(type), "");
-        info.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null, null);
+        String extra = null;
+        if (type == TYPE_WIFI) {
+            android.net.wifi.WifiInfo wi = wifiInfo(n, context, true);
+            if (wi.getSupplicantState() == android.net.wifi.SupplicantState.COMPLETED
+                    && !android.net.wifi.WifiManager.UNKNOWN_SSID.equals(wi.getSSID())) {
+                extra = wi.getSSID();
+            }
+        }
+        info.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null, extra);
         info.setIsAvailable(true);
         info.setRoaming(n.roaming);
         return info;
@@ -284,7 +329,7 @@ public class ConnectivityManager {
     @Deprecated
     public NetworkInfo getActiveNetworkInfo() {
         WindowsNetworks.Net n = snapshot().defaultNetwork();
-        return n != null ? networkInfoOf(n) : null;
+        return n != null ? networkInfoOf(n, mContext) : null;
     }
 
     public Network[] getAllNetworks() {
@@ -298,7 +343,7 @@ public class ConnectivityManager {
     public NetworkInfo[] getAllNetworkInfo() {
         List<WindowsNetworks.Net> nets = snapshot().networks;
         NetworkInfo[] out = new NetworkInfo[nets.size()];
-        for (int i = 0; i < out.length; i++) out[i] = networkInfoOf(nets.get(i));
+        for (int i = 0; i < out.length; i++) out[i] = networkInfoOf(nets.get(i), mContext);
         return out;
     }
 
@@ -306,9 +351,9 @@ public class ConnectivityManager {
     public NetworkInfo getNetworkInfo(int networkType) {
         WindowsNetworks.Snapshot s = snapshot();
         WindowsNetworks.Net best = s.defaultNetwork();
-        if (best != null && legacyType(best) == networkType) return networkInfoOf(best);
+        if (best != null && legacyType(best) == networkType) return networkInfoOf(best, mContext);
         for (WindowsNetworks.Net n : s.networks) {
-            if (legacyType(n) == networkType) return networkInfoOf(n);
+            if (legacyType(n) == networkType) return networkInfoOf(n, mContext);
         }
         return null;
     }
@@ -317,14 +362,14 @@ public class ConnectivityManager {
     public NetworkInfo getNetworkInfo(Network network) {
         if (network == null) return null;
         WindowsNetworks.Net n = snapshot().byNetId(network.netId);
-        return n != null ? networkInfoOf(n) : null;
+        return n != null ? networkInfoOf(n, mContext) : null;
     }
 
     public NetworkCapabilities getNetworkCapabilities(Network network) {
         if (network == null) return null;
         WindowsNetworks.Snapshot s = snapshot();
         WindowsNetworks.Net n = s.byNetId(network.netId);
-        return n != null ? capabilitiesOf(s, n) : null;
+        return n != null ? capabilitiesOf(s, n, mContext, false) : null;
     }
 
     public LinkProperties getLinkProperties(Network network) {
@@ -616,7 +661,7 @@ public class ConnectivityManager {
         IConnectivity service = service();
         WindowsNetworks.Snapshot first;
         CallbackRecord r = new CallbackRecord(request, cb,
-                handler != null ? handler : connectivityHandler(), kind);
+                handler != null ? handler : connectivityHandler(), kind, mContext);
         Listener failedListener = null;
         try {
             synchronized (sLock) {
@@ -692,6 +737,7 @@ public class ConnectivityManager {
         final NetworkCallback callback;
         final Handler handler;
         final Kind kind;
+        final Context context;
         volatile boolean active = true;
         boolean everAvailable;
         Runnable timeout; // guarded by sLock
@@ -706,11 +752,12 @@ public class ConnectivityManager {
         final Map<Integer, LinkProperties> currentLp = new HashMap<>();
 
         CallbackRecord(NetworkRequest request, NetworkCallback callback, Handler handler,
-                Kind kind) {
+                Kind kind, Context context) {
             this.request = request;
             this.callback = callback;
             this.handler = handler;
             this.kind = kind;
+            this.context = context;
         }
 
         void post(WindowsNetworks.Snapshot s) {
@@ -730,7 +777,8 @@ public class ConnectivityManager {
             WindowsNetworks.Net def = s.defaultNetwork();
             if (kind == Kind.LISTEN) {
                 for (WindowsNetworks.Net n : s.networks) {
-                    NetworkCapabilities nc = capabilitiesOf(s, n);
+                    NetworkCapabilities nc = capabilitiesOf(s, n, context,
+                            (callback.mFlags & NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) != 0);
                     if (matches(nc)) {
                         targets.put(n.netId(), n);
                         caps.put(n.netId(), nc);
@@ -745,7 +793,8 @@ public class ConnectivityManager {
                     for (WindowsNetworks.Net n : s.networks) if (n != def) order.add(n);
                 }
                 for (WindowsNetworks.Net n : order) {
-                    NetworkCapabilities nc = capabilitiesOf(s, n);
+                    NetworkCapabilities nc = capabilitiesOf(s, n, context,
+                            (callback.mFlags & NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) != 0);
                     if (kind == Kind.DEFAULT || matches(nc)) {
                         targets.put(n.netId(), n);
                         caps.put(n.netId(), nc);
@@ -801,11 +850,17 @@ public class ConnectivityManager {
 
         /** Guarded by sLock; retained by the callback, not a global history collection. */
         private boolean mWasRegistered;
+        private final int mFlags;
 
         public NetworkCallback() {
+            this(FLAG_NONE);
         }
 
         public NetworkCallback(int flags) {
+            if ((flags & ~FLAG_INCLUDE_LOCATION_INFO) != 0) {
+                throw new IllegalArgumentException("Unsupported NetworkCallback flags: " + flags);
+            }
+            mFlags = flags;
         }
 
         public void onPreCheck(Network network) {

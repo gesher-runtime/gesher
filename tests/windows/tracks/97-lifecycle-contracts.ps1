@@ -60,3 +60,14 @@ try {
 } finally {
   Remove-Item $stdioExitPath -Force -ErrorAction SilentlyContinue
 }
+
+$stdioTlsOut = RunTimed "$Dir/stdio_ofd_test.exe" @('--tls-exit') 30
+$stdioTlsCode = $LASTEXITCODE
+Check 'stdio: concurrent output and pthread TLS destruction' {
+  $global:LASTEXITCODE = $stdioTlsCode
+  $stdioTlsOut
+} @('stdio TLS exit: all passed')
+
+Check 'environment: native font snapshots and CRT callback reads' {
+  & "$PSScriptRoot/../run-environment-owner-regression.ps1" -Fixture "$Dir/font_environment_test.exe"
+} @('font environment regression: 5 cases passed')

@@ -95,17 +95,31 @@ SDK inventory that separates structural gaps from demonstrated failures.
 
 ## Building
 
-Requirements: CMake 3.24+, Ninja, Python 3, git, and
-[llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (works on Linux and
-Windows hosts). CI does all of this on every push.
+The production build runs on Linux or WSL and produces Windows x64 binaries.
+Requirements: CMake 3.24+, Ninja, Python 3.12+, git, curl, and GNU Make. The
+recipe downloads the pinned [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)
+archive and builds a separate runtime overlay fixing a pthread cancellation
+lock inversion during TLS destructor logging. Its source, ABI and actual link
+ownership checks also run in CI; the original publisher cache stays intact.
 
 ```sh
 tools/fetch-aosp.sh                       # pinned AOSP sources + Gesher patches
-cmake -S . -B out -G Ninja \
+python3 tools/toolchain/prepare_pthread_cancel.py build
+export GESHER_HOST_PTHREAD_SELECTION=publisher-cancel
+export GESHER_PTHREAD_CANCEL_RECEIPT="$PWD/out-pthread-cancel/pthread-cancel-receipt.json"
+export GESHER_PTHREAD_CANCEL_RECEIPT_SHA256="$(sha256sum "$GESHER_PTHREAD_CANCEL_RECEIPT" | cut -d' ' -f1)"
+gesher_llvm="$PWD/out-pthread-cancel/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64"
+cmake --fresh -S . -B out -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
-  -DLLVM_MINGW=/path/to/llvm-mingw
+  -DLLVM_MINGW="$gesher_llvm" \
+  -DCMAKE_PROJECT_INCLUDE="$PWD/tools/toolchain/pthread_cancel_link.cmake"
 ninja -C out
+python3 tools/toolchain/prepare_pthread_cancel.py links --receipt "$GESHER_PTHREAD_CANCEL_RECEIPT"
 ```
+
+An existing exact compiler archive can be supplied with `build --archive PATH`;
+its SHA256 is still checked. See the [runtime repair and evidence notes](docs/research/pthread-self-cancellation-2026-11-22.md)
+for the separate publisher reference and selected-minimum experiment.
 
 Outputs include:
 

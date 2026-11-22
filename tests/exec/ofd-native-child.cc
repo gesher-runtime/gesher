@@ -9,6 +9,11 @@ int main(int argc, char** argv) {
     HANDLE handle = GetStdHandle(which);
     if (handle != nullptr && handle != INVALID_HANDLE_VALUE) return 10;
   }
+  for (int fd = 0; fd < 3; ++fd) {
+    // UCRT uses -2 for a standard descriptor with no associated stream.
+    const intptr_t handle = _get_osfhandle(fd);
+    if (handle != -1 && handle != -2) return 19;
+  }
   if (argc != 2) return 11;
   if (std::strcmp(argv[1], "--empty") == 0) return 0;
   if (std::strcmp(argv[1], "--pipe") == 0) {

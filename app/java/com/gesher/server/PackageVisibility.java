@@ -26,7 +26,7 @@ import java.util.function.Predicate;
 
 /**
  * Android 16's static package visibility rules over one installed-package snapshot.
- * The runtime has no retained interaction, install-source, overlay-actor, instant-app
+ * The runtime has no retained interaction, overlay-actor, instant-app
  * or SDK-sandbox visibility graph; this class does not invent those relationships.
  */
 final class PackageVisibility {
@@ -147,6 +147,9 @@ final class PackageVisibility {
 
     private boolean declaresVisibility(Entry source, Entry target) {
         if (source.apk == null) return false;
+        // Android preserves both the current installer and the still-installed initiator.
+        if (source.apk.installSource().isInstaller(target.apk)
+                || source.apk.installSource().isInitiator(target.apk)) return true;
         ParsedPackage querying = source.apk.parsed;
         if (querying.getQueriesPackages().contains(target.name)) return true;
         if (target.apk == null) {

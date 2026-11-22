@@ -5,6 +5,8 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.IPackageManager;
+import android.content.pm.InstallSourceInfo;
+import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.net.Uri;
@@ -281,6 +283,88 @@ public final class PackageVisibilityContractTest {
         check(f.hasAction(ACTION) && !f.hasAction("*") && f.countDataTypes() == 1,
                 "Visibility matching mutated installed filters");
     }
+    private static void installSourceVisibility() throws Exception {
+        ApkPackage target = record(parsed(A)), installer = record(parsed(B));
+        PackageImpl observer = parsed(C);
+        observer.addQueriesPackage(A);
+        ApkPackage observerRecord = record(observer);
+        PackageManagerService pm = service(target, installer, observerRecord);
+        String generation = "951630b6-0775-4a4c-9366-7d4a7cc2c433";
+        // Bind the controlled test record to a specific installation, as Session does.
+        set(installer, "mEnabledOwner", generation);
+        Class<?> type = Class.forName("com.gesher.server.PackageInstallSource");
+        var decode = type.getDeclaredMethod("decode", String.class);
+        decode.setAccessible(true);
+        Object attribution = decode.invoke(null, B + "," + generation + ",2");
+        set(target, "mInstallSource", attribution);
+        PackageManager publicClient = client(pm);
+        as(target.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(B.equals(source.getInstallingPackageName()) && B.equals(source.getInitiatingPackageName())
+                    && source.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE,
+                    "Own authenticated installer was filtered");
+            check(B.equals(publicClient.getInstallerPackageName(A)) && publicClient.canPackageQuery(A, B),
+                    "Legacy getter or installer visibility edge disagreed with install source");
+        });
+        if (target.uid() != observerRecord.uid()) {
+            as(observerRecord.uid(), () -> check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                    "Observer learned about an otherwise hidden installer"));
+            as(installer.uid(), () -> expect(PackageManager.NameNotFoundException.class,
+                    () -> publicClient.getInstallSourceInfo(A), "Installer visibility was made bidirectional"));
+        }
+        // AOSP grants separate visibility edges to the still-installed initiator and
+        // the reassigned installer. Third-party callers filter those two roles independently.
+        String d = "fixture.visibility.d", e = "fixture.visibility.e";
+        ApkPackage nextInstaller = record(parsed(d));
+        set(nextInstaller, "mEnabledOwner", "932c12b3-57c3-40eb-9d6e-d0913c506914");
+        PackageImpl seesNext = parsed(C); seesNext.addQueriesPackage(A); seesNext.addQueriesPackage(d);
+        observerRecord = record(seesNext);
+        PackageImpl seesInitiator = parsed(e); seesInitiator.addQueriesPackage(A); seesInitiator.addQueriesPackage(B);
+        ApkPackage initiatingObserver = record(seesInitiator);
+        var replace = type.getDeclaredMethod("withInstaller", ApkPackage.class); replace.setAccessible(true);
+        set(target, "mInstallSource", replace.invoke(attribution, nextInstaller));
+        set(pm, "mPackages", Map.of(A, target, B, installer, C, observerRecord, d, nextInstaller, e, initiatingObserver));
+        as(target.uid(), () -> {
+            InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+            check(B.equals(source.getInitiatingPackageName()) && d.equals(source.getInstallingPackageName()),
+                    "Reassignment replaced the historical initiator");
+            check(publicClient.canPackageQuery(A, B) && publicClient.canPackageQuery(A, d),
+                    "Installed initiator lost its visibility edge after reassignment");
+        });
+        if (target.uid() != observerRecord.uid()) {
+            as(observerRecord.uid(), () -> {
+                InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+                check(source.getInitiatingPackageName() == null && d.equals(source.getInstallingPackageName()),
+                        "Current installer visibility leaked the independent initiator");
+            });
+            as(initiatingObserver.uid(), () -> {
+                InstallSourceInfo source = publicClient.getInstallSourceInfo(A);
+                check(B.equals(source.getInitiatingPackageName()) && source.getInstallingPackageName() == null,
+                        "Initiator visibility depended on visibility of the current installer");
+            });
+        }
+        set(pm, "mPackages", Map.of(A, target, C, observerRecord));
+        check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                "Removed installer remained installer of record");
+        ApkPackage replacement = record(parsed(B));
+        set(replacement, "mEnabledOwner", "5cebb932-01c0-4015-b0fa-b8218e4df7cd");
+        set(pm, "mPackages", Map.of(A, target, B, replacement, C, observerRecord));
+        check(publicClient.getInstallSourceInfo(A).getInstallingPackageName() == null,
+                "A same-name reinstall inherited attribution from an earlier generation");
+
+        var fromSession = type.getDeclaredMethod("fromSession", ApkPackage.class, int.class);
+        fromSession.setAccessible(true);
+        var encode = type.getDeclaredMethod("encode");
+        encode.setAccessible(true);
+        Object categoryOnly = fromSession.invoke(null, null, PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE);
+        set(target, "mInstallSource", decode.invoke(null, encode.invoke(categoryOnly)));
+        InstallSourceInfo categorySource = publicClient.getInstallSourceInfo(A);
+        check(categorySource.getPackageSource() == PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE
+                && categorySource.getInitiatingPackageName() == null
+                && categorySource.getInstallingPackageName() == null,
+                "Durable source category required or manufactured an installer identity");
+    }
+
     private static boolean serviceQuery(PackageManagerService pm, String source, String target)
             throws Exception {
         var query = PackageManagerService.class.getDeclaredMethod(
@@ -313,6 +397,7 @@ public final class PackageVisibilityContractTest {
     }
     public static int run(boolean onArt) throws Exception {
         art = onArt; checks = 0; shapesAndCallers();
+        installSourceVisibility();
         authenticatedServiceVisibility();
         declarations(); components();
         return checks;

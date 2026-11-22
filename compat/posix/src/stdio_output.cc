@@ -42,8 +42,9 @@
 #undef putwchar
 
 // These formatter cores are part of the pinned MinGW runtime already used for
-// C99 printf. They emit through public fputc/fputwc, routed below. Formatting
-// once also avoids double evaluation of a %n conversion.
+// C99 printf. Select their public fputc/fputwc output path, routed below;
+// the wide core's unlimited FILE shortcut writes through the private CRT
+// buffer instead. Formatting once avoids double evaluation of %n.
 extern "C" int __mingw_pformat(int, void*, int, const char*, va_list);
 extern "C" int __mingw_wpformat(int, void*, int, const wchar_t*, va_list);
 extern "C" int __real___mingw_vfscanf(FILE*, const char*, va_list);
@@ -388,15 +389,19 @@ int OrientLocal(FILE* stream, int mode, bool unlocked) {
   AccessStream state(stream, unlocked, mode != 0);
   return state ? state->buffer.Orient(mode) : 0;
 }
-wint_t PutWideLocal(wchar_t value, FILE* stream) {
-  AccessStream state(stream, false);
-  if (!state) return WEOF;
+wint_t PutWide(State* state, wchar_t value) {
   state->buffer.Orient(1);
   char encoded[MB_LEN_MAX];
   size_t count = std::wcrtomb(encoded, value, &state->output_conversion);
   if (count == static_cast<size_t>(-1)) { state->buffer.SetError(gesher_errno_from_crt(errno)); return WEOF; }
   const size_t written = state->buffer.Write(encoded, 1, count, Writer(state->fd));
   return written == count ? static_cast<wint_t>(value) : WEOF;
+}
+wint_t PutWideLocal(wchar_t value, FILE* stream) {
+  if (formatting_stream && formatting_stream->stream == stream)
+    return PutWide(formatting_stream, value);
+  AccessStream state(stream, false);
+  return state ? PutWide(state.Get(), value) : WEOF;
 }
 wint_t GetWideLocal(FILE* stream) {
   AccessStream state(stream, false);
@@ -448,7 +453,11 @@ int PrintWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
   state->buffer.Orient(1);
   const uint64_t failures = state->buffer.Failures();
   FormatScope callbacks(state.Get());
-  int result = __mingw_wpformat(0x6000 /* TO_FILE | NOLIMIT */, stream, 0, format, arguments);
+  // In the pinned MinGW core, NOLIMIT sends literal and string chunks to
+  // __ms_fwprintf, bypassing this buffer and the descriptor's current OFD
+  // flags. TO_FILE with the largest representable return count keeps every
+  // character on fputwc, including strings, padding and numeric conversions.
+  int result = __mingw_wpformat(0x2000 /* TO_FILE */, stream, INT_MAX, format, arguments);
   return state->buffer.Failures() != failures ? -1 : result;
 }
 int ScanLocal(FILE* stream, const char* format, va_list arguments) {

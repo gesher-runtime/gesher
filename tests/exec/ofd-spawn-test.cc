@@ -18,10 +18,19 @@ static void Check(const char* what, bool result) {
 static bool WaitChild(PROCESS_INFORMATION* child) {
   if (child->hThread) CloseHandle(child->hThread);
   child->hThread = nullptr;
-  bool completed = WaitForSingleObject(child->hProcess, 10000) == WAIT_OBJECT_0;
+  const DWORD wait = WaitForSingleObject(child->hProcess, 10000);
+  DWORD error = wait == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
   DWORD code = 127;
-  if (completed) GetExitCodeProcess(child->hProcess, &code);
-  else TerminateProcess(child->hProcess, 127);
+  bool completed = wait == WAIT_OBJECT_0;
+  if (completed && !GetExitCodeProcess(child->hProcess, &code)) {
+    error = GetLastError();
+    completed = false;
+  } else if (!completed) {
+    TerminateProcess(child->hProcess, 127);
+    WaitForSingleObject(child->hProcess, 1000);
+  }
+  if (!completed || code != 0)
+    std::printf("OFD child failed: wait=%lu exit=0x%08lx win32=%lu\n", wait, code, error);
   CloseHandle(child->hProcess);
   child->hProcess = nullptr;
   return completed && code == 0;

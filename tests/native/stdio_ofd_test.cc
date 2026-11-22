@@ -13,6 +13,7 @@ static void check(const char* name, int ok) {
 #include "stdio_ofd_contract.inc"
 #include "stdio_virtual_contract.inc"
 #include "stdio_cancel_contract.inc"
+#include "stdio_tls_exit_contract.inc"
 static FILE* exit_stream;
 static void ExitOutput() { fputs("late", exit_stream); }
 // Exercise the wide real parser too: the shared corpus already executes the
@@ -74,6 +75,7 @@ static void ExternalPipeStreams() {
   check("native input token closes", fclose(input) == 0);
 }
 int main(int argc, char** argv) {
+  if (argc == 2 && strcmp(argv[1], "--tls-exit") == 0) return StdioTlsExitContract();
   if (argc == 3 && strcmp(argv[1], "--exit-output") == 0) {
     atexit(ExitOutput);
     exit_stream = fopen(argv[2], "w");

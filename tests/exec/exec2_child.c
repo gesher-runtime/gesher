@@ -207,6 +207,16 @@ int main(int argc, char** argv) {
     fflush(stdout);
     return 0;
   }
+  if ((strcmp(mode, "env-mutated-exec") == 0 || strcmp(mode, "env-empty-exec") == 0) && argc > 2) {
+    char assignment[] = "GESHER_EXEC4_ENV=first";
+    if (putenv(assignment) != 0) return 1;
+    char* value = strchr(assignment, '=') + 1;
+    if (strcmp(mode, "env-empty-exec") == 0) *value = '\0';
+    else memcpy(value, "after", sizeof("after"));
+    char* next[] = {argv[0], (char*)"env", (char*)"GESHER_EXEC4_ENV", NULL};
+    execv(argv[0], next);
+    return 1;
+  }
   if (strcmp(mode, "env") == 0 && argc > 2) {
     const char* v = getenv(argv[2]);
     printf("%s\n", v ? v : "(null)");

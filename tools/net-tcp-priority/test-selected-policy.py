@@ -88,6 +88,27 @@ SOCKET_BASE='d5ad9aa318583ae3c3cca2d062ee964680e99e32'
 # pending flags, wake sockets, bounded retention and thread-exit destruction.
 WINSOCK_BASE='eb652ece90f327622d1971867ab1730ae71ea786'
 WINSOCK_SHA256='190b659777f3df317e4dc90f9df322a95bd2c840ea00ad2976f9dbf56935b02d'
+# One zero-time native sample confirms a waited OOB notification before it
+# becomes Linux POLLPRI. Undo only this exact reviewed replacement before the
+# unchanged checkpoint, hunk and full-byte validations below. The original
+# shared TCP contract, including its immediate select before sender join, stays
+# byte-identical. The native Poll fixture covers early wake, timeout, error,
+# mixed readiness and real delayed data at the production boundary.
+TCP_PRIORITY_WAKE_BEFORE=b'''      if (result != SOCKET_ERROR) break;
+'''
+TCP_PRIORITY_WAKE_AFTER=b'''      if (result != SOCKET_ERROR) {
+        // A waited Winsock OOB notification can precede the readable byte.
+        // Confirm the current level once without waiting before publishing
+        // POLLPRI. The outer poll keeps its original deadline if it is absent.
+        bool confirm_priority = false;
+        if (sample_wait != 0 && result > 0) {
+          for (const auto& fd : active)
+            confirm_priority |= (fd.revents & fd.events & POLLRDBAND) != 0;
+        }
+        if (confirm_priority) { sample_wait = 0; continue; }
+        break;
+      }
+'''
 # The reviewed file repairs change only statvfs/fstatvfs volume queries,
 # sched_getaffinity capacity validation, posix_fallocate, its limits header and
 # memfd_create, the virtual-descriptor writev route and fcntl argument selection.
@@ -244,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'd4c62908038e65ab90f7c7dfe5e892919309eca2f038286bc59019a19f74cdca'
+OFD_QUALIFICATION_SHA256 = 'afa97bf2083efd57e0894f13dea7d3b96648421e8293808a9b920c138c81686a'
 # Valid pipes can now fail a control operation explicitly. These two exact
 # non-socket dispatch substitutions are the only PollFdsImpl changes allowed;
 # normalize them before comparing every byte of the original native poll core.
@@ -340,6 +361,9 @@ def check():
          CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
   expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
   actual=preceding.get(path,(ROOT/path).read_bytes())
+  if path=='compat/posix/src/winsock.cc':
+   assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
+   actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
   if path in REVIEWED_PATHS:actual=reviewed(path,actual)
   if path=='compat/posix/src/winsock.cc':
    assert actual==expected and hashlib.sha256(actual).hexdigest()==WINSOCK_SHA256,path
@@ -425,7 +449,7 @@ def check():
  assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
  for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
- print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow original_fixture_assertions_deadlines=EXACT reviewed_select_and_owner_thread_diagnostics_only controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
+ print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
 def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes

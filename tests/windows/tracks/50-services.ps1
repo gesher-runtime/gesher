@@ -240,7 +240,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, speech_recognition, statusbar, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
+    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, gesher.wifi, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, speech_recognition, statusbar, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, user, vibrator_manager, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -1023,14 +1023,34 @@ try {
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
     @{ Class = 'BlobStoreContractTest'; Count = 87; Name = 'blob sessions, digest publication, quota admission, leases, and restart' },
     @{ Class = 'NsdContractTest'; Count = 65; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
-    @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'disabled Wi-Fi manager and unsupported controller operations' },
-    @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service' },
+    @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'observed Wi-Fi state and unsupported controller mutations'; SystemContext = $true },
+    @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service'; SystemContext = $true },
     @{ Class = 'RoleManagerUnsupportedTest'; Count = 168; Name = 'RoleManager absence, permission, callback and mutation contracts' }
   )
   foreach ($contract in $canonicalChecks) {
-    CheckTimed "services: $($contract.Name)" "$Dir/dalvikvm.exe" `
-      ($dvmContracts + "gesher.services.$($contract.Class)") @("$($contract.Class) all passed: $($contract.Count)") 30
+    $savedContractUid = $env:GESHER_UID
+    $savedContractBinderUid = $env:GESHER_BINDER_UID
+    try {
+      # These two fixtures create a system Context without admitting an APK.
+      # Run that declared identity; an unadmitted application must stay denied.
+      if ($contract.ContainsKey('SystemContext') -and $contract.SystemContext) {
+        $env:GESHER_UID = '1000'; $env:GESHER_BINDER_UID = '1000'
+      }
+      CheckTimed "services: $($contract.Name)" "$Dir/dalvikvm.exe" `
+        ($dvmContracts + "gesher.services.$($contract.Class)") @("$($contract.Class) all passed: $($contract.Count)") 30
+    } finally {
+      $env:GESHER_UID = $savedContractUid
+      $env:GESHER_BINDER_UID = $savedContractBinderUid
+    }
   }
+  # Test-only classes call package-private WLAN parsers from gesher-app.jar.
+  # On ART, the defining class loader is part of Java's runtime package identity.
+  # Use the same boot class loader for the fixture without changing production APIs.
+  $wifiBoot = "${bcpApp}:$(NoDrive "$Dir/services-tests.dex")"
+  $wifiArgs = @("-Xbootclasspath:$wifiBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', 'gesher.services.WindowsWifiTest')
+  CheckTimed 'services: native WLAN data and nonblocking live reads' "$Dir/dalvikvm.exe" `
+    $wifiArgs @('WindowsWifiTest all passed: live nonblocking Windows API boundary') 30
 } finally {
   $env:ANDROID_DATA = $savedContractsData
   $env:GESHER_BINDER = $savedContractsBinder

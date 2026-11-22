@@ -21,6 +21,8 @@
 #include "shim_internal.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/environment.h>
+#include <gesher/environment_utf16.h>
 
 #include <windows.h>
 
@@ -99,15 +101,10 @@ void Track(int pid, HANDLE process) {
 
 // --- the environment and working directory as UTF-8 ----------------------------
 
-std::vector<std::string> CurrentEnv() {
-  std::vector<std::string> out;
-  if (wchar_t* block = GetEnvironmentStringsW()) {
-    for (const wchar_t* e = block; *e != 0; e += wcslen(e) + 1) {
-      if (*e != L'=') out.push_back(ex::Narrow(e));
-    }
-    FreeEnvironmentStringsW(block);
-  }
-  return out;
+bool CurrentEnv(std::vector<std::string>* out) {
+  return gesher::VisitEnvironment([](const char* entry, void* context) {
+    static_cast<std::vector<std::string>*>(context)->emplace_back(entry);
+  }, out);
 }
 
 std::string CurrentDir() {
@@ -142,6 +139,7 @@ FcntlFn g_fcntl = nullptr;
 int SpawnPrepared(const ex::Launch& launch, const std::vector<std::string>& env,
                    const std::string& dir, const std::vector<ex::ChildFd>& fds) {
   std::wstring environment = ex::EnvironmentBlock(env);
+  if (environment.empty()) return -1;
   std::wstring cwd = dir.empty() ? L"" : ex::WindowsPath(dir);
   PROCESS_INFORMATION pi = {};
   DWORD werr = ex::SpawnWithFds(launch, environment.c_str(), cwd, fds, &pi);
@@ -207,7 +205,9 @@ int DoExec(const char* path, char* const argv[], char* const envp[], bool search
   if (path == nullptr || argv == nullptr) return errno = EFAULT, -1;
   std::vector<std::string> args = FromList(argv);
   if (args.empty()) args.push_back(path);
-  std::vector<std::string> env = envp != nullptr ? FromList(envp) : CurrentEnv();
+  std::vector<std::string> env;
+  if (envp) env = FromList(envp);
+  else if (!CurrentEnv(&env)) return -1;
   ExecReplace(path, args, env, search);  // returns only on failure
   return -1;
 }
@@ -273,7 +273,9 @@ int BIONIC_SYSV System(const char* command) {
   std::vector<std::string> argv{"/system/bin/sh", "-c", command};
   std::vector<ex::ChildFd> fds;
   if (!InheritedFds(&fds)) return -1;
-  int pid = SpawnProgram("/system/bin/sh", argv, CurrentEnv(), CurrentDir(), false, fds);
+  std::vector<std::string> env;
+  if (!CurrentEnv(&env)) return -1;
+  int pid = SpawnProgram("/system/bin/sh", argv, env, CurrentDir(), false, fds);
   fds.clear();
   if (pid < 0) return -1;
   int status = 0;
@@ -331,7 +333,8 @@ void* BIONIC_SYSV Popen(const char* command, const char* mode) {
   for (auto& f : fds) found = found || f.fd == target;
   if (!found) fds.push_back({target, child_description->handle, child_description});
   std::vector<std::string> argv{"/system/bin/sh", "-c", command};
-  int pid = SpawnProgram("/system/bin/sh", argv, CurrentEnv(), CurrentDir(), false, fds);
+  std::vector<std::string> env;
+  int pid = CurrentEnv(&env) ? SpawnProgram("/system/bin/sh", argv, env, CurrentDir(), false, fds) : -1;
   fds.clear();
   CloseHandle(child_end);
   child_description.reset();
@@ -490,8 +493,16 @@ int DoPosixSpawn(int* pid_out, const char* path, const BionicFileActions* const*
   ex::SpawnRequest request;
   request.search = search;
   request.program = path;
-  const wchar_t* search_path = _wgetenv(L"PATH");
-  if (search_path != nullptr) request.search_path = ex::Narrow(search_path);
+  if (search && request.program.find_first_of("/\\") == std::string::npos &&
+      request.program != "sh" && !ex::IsToolName(request.program)) {
+    const char* search_path = gesher::GetEnvironment("PATH");
+    if (search_path != nullptr) request.search_path = search_path;
+    // Reject malformed borrowed PATH before the request becomes UTF16 argv;
+    // generic command-line conversion must not replace its bytes first.
+    std::wstring decoded;
+    if (!gesher::DecodeEnvironmentUtf8(request.search_path, &decoded) ||
+        ex::Narrow(decoded) != request.search_path) return EILSEQ;
+  }
   request.argv = FromList(argv);
   if (request.argv.empty()) request.argv.push_back(path);
   std::vector<ex::ChildFd> fds;
@@ -520,6 +531,7 @@ int DoPosixSpawn(int* pid_out, const char* path, const BionicFileActions* const*
   }
   ex::Launch launch;
   launch.application = ex::LauncherPath();
+  if (launch.application.empty()) return EILSEQ;
   ex::AppendQuoted(&launch.command_line, launch.application);
   launch.command_line += L" --spawn";
   for (const std::string& arg : ex::EncodeSpawn(request)) {
@@ -527,7 +539,9 @@ int DoPosixSpawn(int* pid_out, const char* path, const BionicFileActions* const*
     ex::AppendQuoted(&launch.command_line, ex::Widen(arg));
   }
   if (launch.command_line.size() + 1 > 32767) return E2BIG;
-  std::vector<std::string> env = envp != nullptr ? FromList(envp) : CurrentEnv();
+  std::vector<std::string> env;
+  if (envp) env = FromList(envp);
+  else if (!CurrentEnv(&env)) return errno;
   int pid = SpawnPrepared(launch, env, CurrentDir(), fds);
   if (pid < 0) return errno;  // posix_spawn returns the error number
   if (pid_out != nullptr) *pid_out = pid;

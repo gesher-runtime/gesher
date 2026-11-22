@@ -65,6 +65,40 @@ public final class PackageUids {
         }
     }
 
+    /** The shared identity survives a member's removal, until the final member retires. */
+    static SigningDetails sharedSigningDetails(ApkPackage member) {
+        String shared = group(member.sharedUserId());
+        if (shared == null) return member.verifiedSigningDetails();
+        try (Admission admission = new Admission()) {
+            Properties ids = admission.after;
+            if (!shared.equals(ids.getProperty("shared-pkg:" + member.packageName))
+                    || !"true".equals(ids.getProperty("active:" + member.packageName))
+                    || !Integer.toString(member.uid()).equals(ids.getProperty(member.packageName))) {
+                throw new SecurityException("Shared UID requires a current admitted member");
+            }
+            SigningDetails signing = sharedSigner(ids, shared);
+            if (signing == SigningDetails.UNKNOWN) throw new SecurityException("Shared UID has no verified signer");
+            return signing;
+        }
+    }
+
+    private static SigningDetails sharedSigner(Properties ids, String shared) {
+        SigningDetails signing = readSigner(ids, "shared:" + shared);
+        if (signing != SigningDetails.UNKNOWN) return signing;
+        // Older registries have only per-package records. Merge all their verified
+        // active members; the next admission/retirement persists the shared snapshot.
+        for (String key : ids.stringPropertyNames()) {
+            if (!key.startsWith("shared-pkg:") || !shared.equals(ids.getProperty(key))) continue;
+            String member = key.substring("shared-pkg:".length());
+            if (!"true".equals(ids.getProperty("active:" + member))) continue;
+            SigningDetails peer = readSigner(ids, member);
+            if (peer == SigningDetails.UNKNOWN) throw new SecurityException("Shared UID has no verified owner");
+            signing = signing == SigningDetails.UNKNOWN ? peer : signing.mergeLineageWith(peer,
+                    SigningDetails.CapabilityMergeRule.MERGE_RESTRICTED_CAPABILITY);
+        }
+        return signing;
+    }
+
     /** Validate the complete candidate before boot, direct launch, or install publication. */
     static Admission prepare(Collection<ApkPackage> incoming, Collection<ApkPackage> installed) {
         List<ApkPackage> pending = new ArrayList<>();
@@ -129,11 +163,14 @@ public final class PackageUids {
                 if (signing == SigningDetails.UNKNOWN) throw new SecurityException("Shared UID has no verified owner");
                 groups.computeIfAbsent(ids.getProperty(key), unused -> new LinkedHashMap<>()).put(peerName, signing);
             }
+            Map<String, SigningDetails> previousShared = new HashMap<>();
             for (ApkPackage pkg : pending) {
                 String shared = group(pkg.sharedUserId());
                 if (shared == null) continue;
                 List<SigningDetails> peers = new ArrayList<>();
-                SigningDetails combined = null;
+                SigningDetails combined = previousShared.computeIfAbsent(shared,
+                        value -> sharedSigner(admission.before, value));
+                if (combined == SigningDetails.UNKNOWN) combined = null;
                 for (Map.Entry<String, SigningDetails> peer : groups.get(shared).entrySet()) {
                     if (peer.getKey().equals(pkg.packageName)) continue;
                     peers.add(peer.getValue());
@@ -145,6 +182,25 @@ public final class PackageUids {
                 if (combined != null && !canJoin(verified.get(pkg.packageName), combined, peers, updating)) {
                     throw new SecurityException("INSTALL_FAILED_SHARED_USER_INCOMPATIBLE: " + pkg.packageName);
                 }
+            }
+            Map<String, SigningDetails> updatedGroups = new LinkedHashMap<>();
+            for (ApkPackage pkg : pending) {
+                String shared = group(pkg.sharedUserId());
+                if (shared == null) continue;
+                SigningDetails before = updatedGroups.getOrDefault(shared, previousShared.get(shared));
+                SigningDetails incomingSigning = verified.get(pkg.packageName);
+                // ReconcilePackageUtils lets the incoming lineage update ancestor
+                // capabilities, then intersects them with the other current members.
+                updatedGroups.put(shared, before == SigningDetails.UNKNOWN ? incomingSigning
+                        : before.mergeLineageWith(incomingSigning));
+            }
+            for (Map.Entry<String, SigningDetails> entry : updatedGroups.entrySet()) {
+                SigningDetails signing = entry.getValue();
+                for (SigningDetails peer : groups.get(entry.getKey()).values()) {
+                    signing = signing.mergeLineageWith(peer,
+                            SigningDetails.CapabilityMergeRule.MERGE_RESTRICTED_CAPABILITY);
+                }
+                writeSigner(ids, "shared:" + entry.getKey(), signing);
             }
             for (ApkPackage pkg : pending) {
                 String shared = group(pkg.sharedUserId());
@@ -193,9 +249,27 @@ public final class PackageUids {
             if (!Integer.toString(pkg.uid()).equals(admission.after.getProperty(pkg.packageName))) {
                 throw new IllegalStateException("Retiring package identity changed");
             }
+            String shared = group(admission.after.getProperty("shared-pkg:" + pkg.packageName));
+            SigningDetails sharedSigning = shared == null ? SigningDetails.UNKNOWN
+                    : sharedSigner(admission.after, shared);
             admission.after.remove("active:" + pkg.packageName);
             admission.after.remove("signer:" + pkg.packageName);
             admission.after.remove("lineage:" + pkg.packageName);
+            if (shared != null) {
+                boolean survives = false;
+                for (String key : admission.after.stringPropertyNames()) {
+                    if (key.startsWith("shared-pkg:") && shared.equals(admission.after.getProperty(key))
+                            && "true".equals(admission.after.getProperty("active:"
+                                    + key.substring("shared-pkg:".length())))) {
+                        survives = true;
+                        break;
+                    }
+                }
+                // AOSP removes the SharedUserSetting only with its final package.
+                // Keep the app-ID tombstone, but reset signing for a later group lifetime.
+                writeSigner(admission.after, "shared:" + shared,
+                        survives ? sharedSigning : SigningDetails.UNKNOWN);
+            }
             admission.removals.add(pkg.packageName);
             return admission;
         } catch (RuntimeException failure) {

@@ -431,6 +431,26 @@
       "en": "Launch",
       "he": "הפעל"
     },
+    "cp_separate_windows": {
+      "en": "Separate windows",
+      "he": "חלונות נפרדים"
+    },
+    "cp_separate_windows_tip": {
+      "en": "Each task of the app opens in a window of its own, instead of one window for the app. Applies from the app's next start.",
+      "he": "כל משימה של האפליקציה נפתחת בחלון משלה, במקום חלון אחד לאפליקציה. חל מההפעלה הבאה של האפליקציה."
+    },
+    "windows_separate_saved": {
+      "en": "{0}: each task in a window of its own, from the app's next start",
+      "he": "{0}: כל משימה בחלון משלה, מההפעלה הבאה של האפליקציה"
+    },
+    "windows_shared_saved": {
+      "en": "{0}: one window for the app, from its next start",
+      "he": "{0}: חלון אחד לאפליקציה, מההפעלה הבאה שלה"
+    },
+    "window_close_task": {
+      "en": "Close this task",
+      "he": "סגירת המשימה הזו"
+    },
     "cp_btn_uninstall": {
       "en": "Uninstall",
       "he": "הסר"

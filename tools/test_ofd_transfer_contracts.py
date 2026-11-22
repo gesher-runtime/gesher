@@ -43,9 +43,11 @@ def main():
     template = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
     sections = {
         "@PE_EXPORTS_HEADER@": str(ROOT / "compat/elf/exec/pe_exports.h"),
+        "@ENVIRONMENT_ENCODING_HEADER@": str(ROOT / "compat/posix/include/gesher/environment_utf16.h"),
         "@OFD_DECLARATIONS@": without_includes(public) + without_includes(private),
         "@OFD_IMPLEMENTATION@": without_includes(implementation),
         "@SPAWN_IMPLEMENTATION@": builder,
+        "@ENVIRONMENT_BLOCK@": spawn[spawn.index("std::wstring EnvironmentBlock("):spawn.index("\nint ExitStatus(")],
     }
     for token, section in sections.items():
         if template.count(token) != 1:

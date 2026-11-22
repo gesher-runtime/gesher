@@ -309,7 +309,7 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
   uses `DnsQueryEx.InterfaceIndex` without falling back to another adapter.
   `Network`'s socket factory and HTTP connection factory use these bindings.
 - VPNs are recognized by adapter type and name, a heuristic.
-- No Wi-Fi details (`TransportInfo`, SSID, signal strength).
+- Wi-Fi observations and asynchronous scans use [Native Wi-Fi](windows-wifi.md); radio configuration and hotspot control remain unsupported.
 - BoringSSL without assembly (slower AES-GCM and bignum than a phone's).
 - Pending CI (web3 continuation): the Network List Manager's
   `NA_InternetConnectivityV4/V6` `WEBHIJACK` flags map to

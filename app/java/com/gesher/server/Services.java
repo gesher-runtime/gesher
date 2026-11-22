@@ -105,6 +105,7 @@ public final class Services {
     static Created create(PackageManagerService pm, boolean persistentAccounts) {
         Map<String, IBinder> services = new LinkedHashMap<>();
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        pm.attachInstallSourceCallers(atm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         ClipboardService clipboard = new ClipboardService(atm, pm);
@@ -213,8 +214,11 @@ public final class Services {
         services.put(Context.VIBRATOR_MANAGER_SERVICE, StandIn.of(
                 android.os.IVibratorManagerService.class, new VibratorManagerService()).asBinder());
         // Devices (docs/devices.md): location over Windows' location service.
+        LocationManagerService location = new LocationManagerService(pm, am);
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
-                new LocationManagerService(pm, am)).asBinder());
+                location).asBinder());
+        services.put(com.gesher.net.IWindowsWifi.NAME,
+                new WifiService(am, atm, pm, () -> location.isLocationEnabledForUser(0)));
         // Bluetooth (docs/bluetooth.md): Windows' radio, its broadcasts and discovery. The
         // android.bluetooth classes run scans, GATT and sockets in the app's process.
         services.put(BluetoothManagerService.NAME, new BluetoothManagerService(am, pm));

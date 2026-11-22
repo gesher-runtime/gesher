@@ -13,12 +13,14 @@ import android.os.RemoteException;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
+import android.content.pm.InstallSourceInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ProviderInfo;
 import android.content.pm.PermissionGroupInfo;
 import android.content.pm.Signature;
+import android.content.pm.SigningDetails;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
 import android.content.pm.VersionedPackage;
@@ -716,7 +718,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public int getComponentEnabledSetting(ComponentName componentName, int userId) {
         // ComputerEngine checks cross-user access before looking up a component's
         // user; a privileged lookup of a nonexistent user reports DISABLED.
-        enforceEnabledCrossUser(userId);
+        enforceCrossUser(userId);
         if (componentName == null) return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
         if (userId != 0) return PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
         String pkg = componentName.getPackageName();
@@ -755,7 +757,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (userId != 0) return;
         if (settings == null) throw new IllegalArgumentException("settings is null");
         if (settings.isEmpty()) throw new IllegalArgumentException("settings is empty");
-        enforceEnabledCrossUser(userId);
+        enforceCrossUser(userId);
         // Capture caller-owned input, then validate the entire batch before any state,
         // persistence, cache, process or broadcast change.
         List<PackageManager.ComponentEnabledSetting> captured = new ArrayList<>(settings);
@@ -872,7 +874,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (services != null && services.pm == this) services.atm.restartForEnabledState(pkg);
     }
 
-    private void enforceEnabledCrossUser(int userId) {
+    private void enforceCrossUser(int userId) {
         if (userId < 0) throw new IllegalArgumentException("Invalid userId " + userId);
         int callingUid = Binder.getCallingUid();
         if (android.os.UserHandle.getUserId(callingUid) != userId
@@ -882,7 +884,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                         Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED
                 && mPermissions.checkProcessPermission("android.permission.INTERACT_ACROSS_USERS",
                         Binder.getCallingPid(), callingUid) != PackageManager.PERMISSION_GRANTED) {
-            throw new SecurityException("Enabled-state access requires cross-user permission");
+            throw new SecurityException("Package access requires cross-user permission");
         }
     }
 
@@ -935,7 +937,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public int getApplicationEnabledSetting(String packageName, int userId) {
         // Unlike the component getter, AOSP checks user existence before permissions.
         if (userId != 0) return PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
-        enforceEnabledCrossUser(userId);
+        enforceCrossUser(userId);
         ApkPackage installed = get(packageName);
         if (installed != null) return installed.applicationEnabledState();
         if (synthetic(packageName)
@@ -1237,24 +1239,163 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getInstallerPackageName(String packageName) {
-        return null;
+        InstallSourceInfo info = getInstallSourceInfo(packageName,
+                android.os.UserHandle.getUserId(Binder.getCallingUid()));
+        if (info == null) throw new IllegalArgumentException("Unknown package: " + packageName);
+        return info.getInstallingPackageName();
     }
 
-    /**
-     * Where an installed package came from: nowhere known (sideloaded through Gesher's
-     * installer), but it is installed. IPackageManager.Default returns null, which
-     * ApplicationPackageManager turns into NameNotFoundException for every package, so
-     * code that asks about its own package (Flutter's package_info_plus, store checks)
-     * failed.
-     */
+    /** Capture the actual attached code before entering Installer or PM (ATM calls PM). */
+    private ApkPackage installSourceCaller(int uid) {
+        ActivityTaskManagerService atm = mInstallSourceAtm;
+        return atm == null ? null : atm.authenticatedPackageCodeForPid(Binder.getCallingPid(), uid);
+    }
+
     @Override
-    public android.content.pm.InstallSourceInfo getInstallSourceInfo(String packageName,
-            int userId) {
-        if (get(packageName) == null && !synthetic(packageName)
-                && !BrowserPackageSupport.isBrowserPackage(packageName)) {
-            return null;
+    public InstallSourceInfo getInstallSourceInfo(String packageName, int userId) {
+        Objects.requireNonNull(packageName);
+        enforceCrossUser(userId);
+        if (userId != 0) return null;
+        int uid = Binder.getCallingUid();
+        ApkPackage caller = installSourceCaller(uid);
+        synchronized (this) {
+            ApkPackage target = get(packageName);
+            if (isRemovalPending(packageName) || (target == null && !"android".equals(packageName)
+                    && !synthetic(packageName) && !BrowserPackageSupport.isBrowserPackage(packageName))) {
+                return null;
+            }
+            // Revalidate the authenticated caller under the same lock as target, source, UID and
+            // removal state. A replacement between ATM authentication and this snapshot confers
+            // no authority to disclose retired history. This path is O(1) for the target itself.
+            boolean sameAppCaller = caller != null && target != null
+                    && get(caller.packageName) == caller && !isRemovalPending(caller.packageName)
+                    && caller.uid() == uid && sameInstallSourceIdentity(caller, target);
+            boolean core = uid >= 0 && android.os.UserHandle.getAppId(uid)
+                    < android.os.Process.FIRST_APPLICATION_UID;
+            PackageVisibility visibility = core || sameAppCaller ? null : packageVisibility();
+            if (visibility != null && !visibility.canSee(uid, packageName)) return null;
+            PackageInstallSource source = target == null ? PackageInstallSource.UNKNOWN : target.installSource();
+            String installer = null, initiator = null;
+            if (source.isInstaller(get(source.installer())) && !isRemovalPending(source.installer())
+                    && (visibility == null || visibility.canSee(uid, source.installer()))) {
+                installer = source.installer();
+            }
+            if (source.isInitiator(get(source.initiator())) && !isRemovalPending(source.initiator())) {
+                // A reassignment never makes the initiator's visibility depend on the new installer.
+                if (visibility == null || visibility.canSee(uid, source.initiator())) initiator = source.initiator();
+            } else if (sameAppCaller) {
+                // AOSP's isCallerSameApp includes admitted shared-user peers. Current
+                // attached code and group membership exclude legacy numeric collisions.
+                initiator = source.initiator();
+            }
+            return new InstallSourceInfo(initiator, initiator == null ? null : source.signingInfo(),
+                    null, installer, null, source.category());
         }
-        return new android.content.pm.InstallSourceInfo(null, null, null, null);
+    }
+
+    @Override
+    public void setInstallerPackageName(String targetPackage, String installerPackageName) {
+        int uid = Binder.getCallingUid();
+        CallerIdentity callers = mInstallSourceCallers;
+        if (callers == null) throw new SecurityException("Unknown calling UID: " + uid);
+        // Never enter ATM while holding Installer or PM. Currentness is checked again below.
+        String name = callers.callerPackage();
+        ApkPackage caller = installSourceCaller(uid);
+        boolean system = "android".equals(name) && uid == android.os.Process.SYSTEM_UID;
+        if ((!system && (caller == null || !name.equals(caller.packageName))) || android.os.UserHandle.getUserId(uid) != 0) {
+            throw new SecurityException("Unknown calling UID: " + uid);
+        }
+        Installer storage = mInstallSourceStorage;
+        if (storage == null) throw new IllegalStateException("Package metadata storage is not attached");
+        synchronized (storage) {
+            synchronized (this) {
+                if (!system && (get(name) != caller || caller.uid() != uid || isRemovalPending(name))) {
+                    throw new SecurityException("Calling package changed during installer reassignment");
+                }
+                PackageVisibility visibility = packageVisibility();
+                ApkPackage target = get(targetPackage);
+                if (target == null || isRemovalPending(targetPackage)
+                        || !visibility.canSee(uid, targetPackage)) {
+                    throw new IllegalArgumentException("Unknown target package: " + targetPackage);
+                }
+                ApkPackage installer = installerPackageName == null ? null : get(installerPackageName);
+                if (installerPackageName != null && (installer == null
+                        || isRemovalPending(installerPackageName)
+                        || !visibility.canSee(uid, installerPackageName))) {
+                    throw new IllegalArgumentException("Unknown installer package: " + installerPackageName);
+                }
+                SigningDetails signing = system ? SigningDetails.UNKNOWN : caller.verifiedSigningDetails();
+                int targetSdk = system ? android.os.Build.VERSION.SDK_INT : caller.parsed.getTargetSdkVersion();
+                if (!system && caller.sharedUserId() != null && !caller.sharedUserId().isEmpty()) {
+                    // AOSP retains the shared signing identity across member removals;
+                    // rebuilding it from the remaining APKs could roll a rotated signer back.
+                    signing = PackageUids.sharedSigningDetails(caller);
+                    // The compatibility exception is enabled only for every current member.
+                    for (ApkPackage peer : mPackages.values()) {
+                        if (peer == caller || isRemovalPending(peer.packageName)
+                                || !sameInstallSourceIdentity(caller, peer)) continue;
+                        targetSdk = Math.min(targetSdk, peer.parsed.getTargetSdkVersion());
+                    }
+                }
+                if (installer != null && !sameCurrentSignatures(signing, installer)) {
+                    throw new SecurityException("Caller does not have same cert as new installer package "
+                            + installerPackageName);
+                }
+                PackageInstallSource source = target.installSource();
+                ApkPackage previous = get(source.installer());
+                if (source.isInstaller(previous) && !isRemovalPending(previous.packageName)) {
+                    if (!sameCurrentSignatures(signing, previous)) {
+                        throw new SecurityException("Caller does not have same cert as old installer package "
+                                + previous.packageName);
+                    }
+                } else if (!system && !mPermissions.granted(android.Manifest.permission.INSTALL_PACKAGES, name)) {
+                    // AOSP change 150857253: denial on every SDK; R+ reports SecurityException.
+                    if (targetSdk >= android.os.Build.VERSION_CODES.R) {
+                        throw new SecurityException("Neither user " + uid + " nor current process has "
+                                + android.Manifest.permission.INSTALL_PACKAGES);
+                    }
+                    return;
+                }
+                try {
+                    storage.persistInstallSource(target, source.withInstaller(installer));
+                } catch (java.io.IOException failure) {
+                    throw new IllegalStateException("Cannot persist installer attribution", failure);
+                }
+            }
+        }
+    }
+
+    /** Called with PM locked after checking current installations; admission verified shared signers. */
+    private static boolean sameInstallSourceIdentity(ApkPackage first, ApkPackage second) {
+        if (first == second) return true;
+        String group = first.sharedUserId();
+        return first.uid() == second.uid() && group != null && !group.isEmpty()
+                && group.equals(second.sharedUserId());
+    }
+
+    /** PackageManagerServiceUtils.compareSignatures uses current certs, not rotation capability. */
+    private static boolean sameCurrentSignatures(SigningDetails caller, ApkPackage installer) {
+        Signature[] first = caller == null || caller == SigningDetails.UNKNOWN ? null : caller.getSignatures();
+        Signature[] second = installer.verifiedSignatures();
+        return first != null && second != null && first.length == second.length
+                && new java.util.HashSet<>(java.util.Arrays.asList(first))
+                        .equals(new java.util.HashSet<>(java.util.Arrays.asList(second)));
+    }
+
+    private volatile CallerIdentity mInstallSourceCallers;
+    private volatile ActivityTaskManagerService mInstallSourceAtm;
+    private volatile Installer mInstallSourceStorage;
+
+    void attachInstallSourceCallers(ActivityTaskManagerService atm) {
+        mInstallSourceAtm = atm;
+        mInstallSourceCallers = new CallerIdentity(this, atm);
+    }
+
+    synchronized void attachInstallSourceStorage(Installer installer) {
+        if (mInstallSourceStorage != null && mInstallSourceStorage != installer) {
+            throw new IllegalStateException("Package metadata storage already attached");
+        }
+        mInstallSourceStorage = installer;
     }
 
     private final PackageInstallerService mInstallerService = new PackageInstallerService(this);
@@ -1281,6 +1422,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     void attachInstaller(ActivityTaskManagerService atm, Installer installer) {
+        attachInstallSourceCallers(atm);
+        attachInstallSourceStorage(installer);
         mInstallerService.attach(atm, installer);
     }
     private final android.content.pm.IPackageInstaller mInstaller =

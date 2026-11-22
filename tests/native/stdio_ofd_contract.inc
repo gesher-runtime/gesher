@@ -161,6 +161,22 @@ static void test_stdio_ofd_contracts(void) {
     fclose(stream);
   } else close(fd);
 
+  fd = open(path, O_RDWR | O_TRUNC);
+  check("wide formatting initializes an existing descriptor", fd >= 0 && write(fd, "base", 4) == 4 && lseek(fd, 0, SEEK_SET) == 0);
+  stream = fdopen(fd, "r+");
+  check("wide formatting wraps the same descriptor", stream != NULL);
+  if (stream) {
+    int written = -1;
+    alias = dup(fd);
+    check("wide formatting combines literal, string, padding and character output",
+          fwprintf(stream, L"[%4.2ls|%-4.2s|%lc]%n", L"wxyz", "abcd", L'!', &written) == 13 && written == 13);
+    check("wide formatting changes append through duplicate", alias >= 0 && fcntl(alias, F_SETFL, O_APPEND) == 0);
+    check("all wide formatting output shares the current append status",
+          fflush(stream) == 0 && stdio_bytes_equal(alias, "base[  wx|ab  |!]"));
+    close(alias);
+    fclose(stream);
+  } else close(fd);
+
   stream = fopen(path, "w+");
   check("stdio opens recursive-lock fixture", stream != NULL);
   if (stream) {

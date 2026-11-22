@@ -158,14 +158,30 @@ public final class PackageInstallerIdentityHost {
         String code = Path.of(pkg.apkPath).getParent().toString();
         check(!Files.exists(Dexopt.oatDir(code).toPath().resolve("base.odex")),
                 "Fixture unexpectedly contains compiled code");
-        Class<?> entry = Class.forName("com.gesher.server.Installer$Entry");
-        var constructor = entry.getDeclaredConstructor(String.class, String.class, long.class, long.class);
-        constructor.setAccessible(true);
-        Object installed = constructor.newInstance(pkg.packageName, code, 1L, 1L);
-        var unchanged = Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
-                ApkPackage.class, entry);
+        // Decode the supported legacy registry row rather than constructing
+        // private Entry state, whose fields grow with installer metadata.
+        Path registry = data.resolve("system/packages.list");
+        Files.createDirectories(registry.getParent());
+        Files.writeString(registry, pkg.packageName + "\t" + code + "\t1\t1\n");
+        var readRegistry = Installer.class.getDeclaredMethod("readRegistry");
+        readRegistry.setAccessible(true);
+        Object installed = ((Map<?, ?>)readRegistry.invoke(null)).get(pkg.packageName);
+        check(installed != null, "Legacy registry row did not restore the installed entry");
+        Class<?> entry = installed.getClass();
+        // The runner also accepts pre-attribution app classes for its negative
+        // controls. Only that declared baseline lacks the attribution type.
+        Class<?> source;
+        try { source = Class.forName("com.gesher.server.PackageInstallSource"); }
+        catch (ClassNotFoundException baselineWithoutAttribution) { source = null; }
+        var unchanged = source == null
+                ? Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
+                        ApkPackage.class, entry)
+                : Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
+                        ApkPackage.class, entry, source);
         unchanged.setAccessible(true);
-        String[] result = (String[])unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed);
+        String[] result = (String[])(source == null
+                ? unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed)
+                : unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null));
         check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
                 "Compiled-code refresh changed the installed generation identity");
     }

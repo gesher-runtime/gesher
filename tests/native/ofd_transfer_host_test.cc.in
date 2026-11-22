@@ -31,6 +31,7 @@
 #include <utility>
 #include <vector>
 #include "@PE_EXPORTS_HEADER@"
+#include "@ENVIRONMENT_ENCODING_HEADER@"
 
 static thread_local int allocation_failure = -1;
 void* operator new(size_t count) {
@@ -41,6 +42,10 @@ void* operator new(size_t count) {
 }
 void operator delete(void* value) noexcept { std::free(value); }
 void operator delete(void* value, size_t) noexcept { std::free(value); }
+void* operator new(size_t count, const std::nothrow_t&) noexcept {
+  try { return ::operator new(count); } catch (const std::bad_alloc&) { return nullptr; }
+}
+void operator delete(void* value, const std::nothrow_t&) noexcept { std::free(value); }
 
 #define WINAPI
 #define CALLBACK
@@ -60,7 +65,7 @@ constexpr BOOL TRUE = 1, FALSE = 0;
 #define INVALID_HANDLE_VALUE reinterpret_cast<HANDLE>(static_cast<intptr_t>(-1))
 constexpr DWORD ERROR_SUCCESS = 0, ERROR_NOT_ENOUGH_MEMORY = 8, ERROR_INVALID_HANDLE = 6,
     ERROR_INVALID_PARAMETER = 87, ERROR_ACCESS_DENIED = 5, ERROR_NOT_SUPPORTED = 50,
-    ERROR_GEN_FAILURE = 31;
+    ERROR_GEN_FAILURE = 31, ERROR_NO_UNICODE_TRANSLATION = 1113;
 constexpr DWORD ERROR_ALREADY_EXISTS = 183, WAIT_OBJECT_0 = 0, WAIT_ABANDONED = 128,
     WAIT_TIMEOUT = 258, WAIT_FAILED = 0xffffffffu, SYNCHRONIZE = 0x100000, MUTEX_MODIFY_STATE = 1;
 constexpr DWORD BCRYPT_USE_SYSTEM_PREFERRED_RNG = 2;
@@ -78,7 +83,7 @@ constexpr DWORD GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000,
     FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, OPEN_EXISTING = 3;
 constexpr DWORD PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x20002, STARTF_USESTDHANDLES = 0x100;
 constexpr DWORD CREATE_UNICODE_ENVIRONMENT = 0x400, EXTENDED_STARTUPINFO_PRESENT = 0x80000,
-    CREATE_NO_WINDOW = 0x8000000;
+    CREATE_NO_WINDOW = 0x8000000, DETACHED_PROCESS = 0x8, CREATE_NEW_CONSOLE = 0x10;
 constexpr int _O_BINARY = 0x8000;
 constexpr int _O_NOINHERIT = 0x0080;
 struct SECURITY_ATTRIBUTES { DWORD length; void* security; BOOL inherit; };
@@ -499,7 +504,37 @@ static FARPROC GetProcAddress(HMODULE module, const char* name) {
   return nullptr;
 }
 
+namespace gesher {
+// This OFD envelope supplies one owned ASCII environment fixture. The actual
+// environment owner/borrowed storage uses the separate production-owner and
+// native ELF/exec tests; UTF16 conversion remains a Windows boundary here.
+bool VisitEnvironment(void (*visit)(const char*, void*), void* context) {
+  visit("GESHER_OFD_TRANSFER_ENV=fixture", context);
+  return true;
+}
+}
 namespace gesher::exec {
+static wchar_t* GetEnvironmentStringsW() {
+  // Only the native-only entries survive; the owner's live assignment wins.
+  static constexpr wchar_t values[] = L"=D:=D:\\fixture\xd83d\xde00\0"
+      L"=C:=C:\\fixture\xd800\0GESHER_OFD_TRANSFER_ENV=stale-native\0";
+  auto* copy = static_cast<wchar_t*>(std::malloc(sizeof(values)));
+  if (copy) std::memcpy(copy, values, sizeof(values));
+  return copy;
+}
+static void FreeEnvironmentStringsW(wchar_t* value) { std::free(value); }
+static constexpr int CSTR_LESS_THAN = 1;
+static int CompareStringOrdinal(const wchar_t* left, int left_size, const wchar_t* right, int right_size, BOOL) {
+  const int size = std::min(left_size, right_size);
+  for (int i = 0; i < size; ++i) {
+    wchar_t a = left[i], b = right[i];
+    if (a >= L'a' && a <= L'z') a -= L'a' - L'A';
+    if (b >= L'a' && b <= L'z') b -= L'a' - L'A';
+    if (a != b) return a < b ? 1 : 3;
+  }
+  return left_size == right_size ? 2 : left_size < right_size ? 1 : 3;
+}
+@ENVIRONMENT_BLOCK@
 struct Launch { std::wstring application, command_line; };
 struct ChildFd { int fd; HANDLE handle; gesher::DescriptorSnapshotPtr snapshot{}; };
 static DWORD DescriptorTransportSupport(const std::wstring& path, bool* supported, HANDLE* image) {
@@ -518,10 +553,14 @@ static BOOL CreateProcessW(const wchar_t* app, wchar_t* command, void*, void*, B
                            DWORD flags, void* environment, const wchar_t* cwd,
                            STARTUPINFOW* raw_startup, PROCESS_INFORMATION* info) {
   ++host::create_process_calls;
-  host::Require(!environment && !cwd &&
-      (flags & ~EXTENDED_STARTUPINFO_PRESENT) == (CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW));
+  const auto* inherited = static_cast<const wchar_t*>(environment);
+  static constexpr wchar_t expected[] = L"=C:=C:\\fixture\xd800\0"
+      L"=D:=D:\\fixture\xd83d\xde00\0GESHER_OFD_TRANSFER_ENV=fixture\0";
   auto* startup = reinterpret_cast<STARTUPINFOEXW*>(raw_startup);
   const bool extended = (flags & EXTENDED_STARTUPINFO_PRESENT) != 0;
+  host::Require(inherited && std::memcmp(inherited, expected, sizeof(expected)) == 0 && !cwd &&
+      (flags & ~EXTENDED_STARTUPINFO_PRESENT) ==
+      (CREATE_UNICODE_ENVIRONMENT | (extended ? CREATE_NO_WINDOW : DETACHED_PROCESS)));
   host::Require(inherit == extended && raw_startup->cb == (extended ? sizeof(*startup) : sizeof(*raw_startup)) &&
       raw_startup->dwFlags == STARTF_USESTDHANDLES && extended == (startup->lpAttributeList != nullptr));
   host::last_inherited_handles = extended ? startup->lpAttributeList->count : 0;

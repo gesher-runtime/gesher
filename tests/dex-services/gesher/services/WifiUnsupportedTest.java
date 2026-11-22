@@ -18,7 +18,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 
-/** Real Context service registration, with explicit unsupported hardware behavior. */
+/** Real Context registration, available WLAN reads and explicit unsupported controller mutations. */
 public final class WifiUnsupportedTest {
     private static int checks;
     private static void require(boolean value, String reason) {
@@ -62,15 +62,17 @@ public final class WifiUnsupportedTest {
         require(wifi != null, "Typed Context lookup did not create the Wi-Fi wrapper");
         require(wifi == context.getSystemService(Context.WIFI_SERVICE), "String and typed service lookup differ");
         require(!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI), "Wrapper declared Wi-Fi hardware");
-        require(!wifi.isWifiEnabled() && wifi.getWifiState() == WifiManager.WIFI_STATE_DISABLED, "No-controller Wi-Fi state incorrect");
+        int wifiState = wifi.getWifiState();
+        require(wifiState == WifiManager.WIFI_STATE_DISABLED || wifiState == WifiManager.WIFI_STATE_ENABLED
+                || wifiState == WifiManager.WIFI_STATE_UNKNOWN, "Invalid observed Wi-Fi radio state");
         require(wifi.getWifiApState() == WifiManager.WIFI_AP_STATE_DISABLED, "Unsupported access point reported enabled");
         require(!wifi.isWpa3SaeSupported(), "Unsupported WPA3 reported supported");
-        require(wifi.getScanResults().isEmpty(), "Unsupported controller exposed scan entries");
-        require(!wifi.startScan() && wifi.getScanResults().isEmpty(), "Unsupported legacy scan reported success or data");
+        require(wifi.getScanResults() != null, "WLAN scan cache returned null");
+        require(wifi.getConfiguredNetworks().isEmpty(), "WLAN reads invented Android-owned network profiles");
         WifiInfo info = wifi.getConnectionInfo();
-        require(info != null && WifiManager.UNKNOWN_SSID.equals(info.getSSID()), "Disconnected SSID incorrect");
-        require(info.getBSSID() == null && info.getNetworkId() == -1, "Disconnected snapshot invented a network identity");
-        require(info.getRssi() == -127 && info.getLinkSpeed() == -1, "Unknown signal and speed differ from API 36 defaults");
+        require(info != null && info.getSSID() != null, "WLAN snapshot or SSID is null");
+        require(info.getNetworkId() == -1, "WLAN snapshot invented an Android network profile");
+        require(info.getRssi() >= -127 && info.getRssi() <= 0 && info.getLinkSpeed() >= -1, "Observed signal and rate are invalid");
         require(info != wifi.getConnectionInfo(), "Connection snapshots unexpectedly share mutable identity");
         require(!wifi.setWifiEnabled(true) && !wifi.setWifiEnabled(false), "Unsupported radio control reported success");
         WifiConfiguration config = new WifiConfiguration();
@@ -78,7 +80,7 @@ public final class WifiUnsupportedTest {
         require(config.networkId == -1 && config.wepKeys.length == 4, "Configuration defaults differ from API 36");
         require(config.allowedKeyManagement.isEmpty() && config.allowedGroupCiphers.isEmpty(), "Configuration invented security parameters");
         require(wifi.addNetwork(config) == -1 && !wifi.enableNetwork(0, true), "Unsupported network mutation reported success");
-        require(!wifi.isWifiEnabled() && wifi.getScanResults().isEmpty(), "Rejected mutation changed controller state");
+        require(wifi.getConfiguredNetworks().isEmpty() && wifi.getWifiApState() == WifiManager.WIFI_AP_STATE_DISABLED, "Rejected mutation created a profile or access point");
         config.setSecurityParams(0);
         require(config.allowedKeyManagement.get(0), "Open security data was not represented");
         config.setSecurityParams(2);
@@ -100,14 +102,20 @@ public final class WifiUnsupportedTest {
         multicast.acquire(); multicast.acquire(); multicast.release();
         require(multicast.isHeld(), "Multicast token lost a live reference");
         multicast.release(); require(!multicast.isHeld(), "Multicast token leaked");
-        require(!wifi.isWifiEnabled() && wifi.getScanResults().isEmpty(), "Logical tokens fabricated a Wi-Fi controller");
+        require(wifi.getConfiguredNetworks().isEmpty() && wifi.getWifiApState() == WifiManager.WIFI_AP_STATE_DISABLED, "Logical tokens fabricated a saved profile or access point");
         require(WifiManager.calculateSignalLevel(-110, 5) == 0, "Low RSSI clamp incorrect");
         require(WifiManager.calculateSignalLevel(-55, 5) == 4, "High RSSI clamp incorrect");
         require(WifiManager.calculateSignalLevel(-77, 5) == 2, "Legacy RSSI interpolation incorrect");
         require(WifiManager.calculateSignalLevel(-77, 1) == 0, "Single signal level incorrect");
         WifiInfo infoCopy = roundTrip(info, WifiInfo.CREATOR);
-        require(WifiManager.UNKNOWN_SSID.equals(infoCopy.getSSID()) && infoCopy.getNetworkId() == -1
-                && infoCopy.getRssi() == -127, "Disconnected parcel invented a network");
+        require(java.util.Objects.equals(info.getSSID(), infoCopy.getSSID())
+                && java.util.Objects.equals(info.getBSSID(), infoCopy.getBSSID())
+                && info.getNetworkId() == infoCopy.getNetworkId()
+                && info.getRssi() == infoCopy.getRssi() && info.getLinkSpeed() == infoCopy.getLinkSpeed()
+                && info.getFrequency() == infoCopy.getFrequency()
+                && info.getIpAddress() == infoCopy.getIpAddress()
+                && info.getSupplicantState() == infoCopy.getSupplicantState(),
+                "Observed Wi-Fi parcel changed connection identity, signal, rate or state");
         config.networkId = 7; config.BSSID = "02:00:00:00:00:01"; config.preSharedKey = "synthetic-secret";
         config.hiddenSSID = true; config.wepKeys[2] = "synthetic-wep"; config.wepTxKeyIndex = 2;
         config.allowedProtocols.set(31); config.allowedAuthAlgorithms.set(3);

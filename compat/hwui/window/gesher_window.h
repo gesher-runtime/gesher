@@ -63,6 +63,9 @@ struct WindowEvent {
     // nothing (hidden, or beside the window); -2 means a visible floating
     // pane with no Android edge inset.
     kInputPane = 30,
+    // ADR 0088: the user chose item `button` of the window menu's task list
+    // (SetTaskMenu).
+    kTaskMenu = 31,
   };
   int32_t type = 0;
   float x = 0, y = 0;
@@ -90,6 +93,13 @@ constexpr unsigned kMsgApplyStyle = 0x8000 + 0x42;      // set the popup's exten
 constexpr unsigned kMsgInputPane = 0x8000 + 0x43;
 // The COM callback changed its complete screen rectangle, held by InputPane.
 constexpr unsigned kMsgInputPaneChanged = 0x8000 + 0x44;
+// SetTaskMenu changed the task list: the window's thread rebuilds its menu.
+constexpr unsigned kMsgTaskMenu = 0x8000 + 0x45;
+// The task list's window menu commands: kTaskMenuFirst + 16 * index (WM_SYSCOMMAND
+// keeps the low four bits for Windows; commands below SC_SIZE are the program's).
+constexpr unsigned kTaskMenuFirst = 0x1000;
+constexpr unsigned kTaskMenuSeparator = 0x0FF0;
+constexpr int kTaskMenuMax = 64;
 
 class Window {
  public:
@@ -104,6 +114,8 @@ class Window {
   ~Window();  // destroys the window and joins its thread
 
   void Show();
+  // Restores an iconic window to its previous normal or maximized placement.
+  void Restore();
   void Hide();
   // Minimizes the window without activating anything (an app's
   // Activity.moveTaskToBack: its taskbar button stays, restoring it brings
@@ -116,6 +128,11 @@ class Window {
   // rest stale (the parts outside the virtual screen are never painted).
   void ShowOffscreen();
   void SetTitle(const std::string& title_utf8);
+  // ADR 0088 (one window per app): `labels` are listed at the top of the
+  // window menu (Alt+Space, a right click on the title bar), `checked` checked
+  // (-1: none), then a separator; none when `labels` is empty. Choosing item i
+  // queues kTaskMenu with button i. Any thread.
+  void SetTaskMenu(const std::vector<std::string>& labels_utf8, int checked);
   // Lets the user resize (and maximize) the window, or not.
   void SetResizable(bool resizable);
   // Resizes the window so its client area is width x height pixels.
@@ -244,6 +261,8 @@ class Window {
   // The window moved or was resized: what the keyboard covers again.
   void UpdateInputPane();
   int Modifiers() const;  // the window's thread
+  // The window's thread: the window menu shows task_menu_ (SetTaskMenu).
+  void ApplyTaskMenu();
 
   void* hwnd_ = nullptr;
   int event_fd_ = -1;
@@ -288,6 +307,13 @@ class Window {
   InputPaneFactory input_pane_factory_ = nullptr;  // native COM test source only
   int input_pane_screen_[4] = {0, 0, 0, 0};
   int input_pane_top_ = -2, input_pane_bottom_ = -2;
+
+  // The window menu's task list (SetTaskMenu; task_menu_mutex_), and how many
+  // items the menu has now (the window's thread).
+  std::mutex task_menu_mutex_;
+  std::vector<std::wstring> task_menu_;
+  int task_menu_checked_ = -1;
+  int task_menu_shown_ = 0;
 
   // Popups (gesher_popup.cc). The anchor, anchored popups and routes are
   // guarded by the popup registry's mutex.

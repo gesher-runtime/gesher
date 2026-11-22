@@ -14,6 +14,7 @@
 #include <winioctl.h>
 #include <winternl.h>
 #include <gesher/font_environment.h>
+#include <gesher/environment.h>
 #include <gesher/file_description.h>
 
 #include <atomic>
@@ -72,35 +73,39 @@ bool FinalPath(HANDLE h, std::string* out) {
 // frees the string _putenv_s replaces, so before a change the CRT's string for
 // the variable is swapped for a copy, which the CRT frees, and the original is
 // kept for the life of the process. Gesher's own writes are serialized here.
-std::mutex& EnvironmentWrites() {
-  static std::mutex* mutex = new std::mutex();
-  return *mutex;
-}
-
-void KeepEnvironmentString(const char* name) {
-  if (_environ == nullptr) return;
+bool KeepEnvironmentString(const char* name) {
+  if (_environ == nullptr) return true;
   const size_t length = strlen(name);
   for (char** entry = _environ; *entry != nullptr; ++entry) {
     // The CRT matches names without regard to case.
     if (_strnicmp(*entry, name, length) != 0 || (*entry)[length] != '=') continue;
-    if (char* copy = _strdup(*entry)) *entry = copy;
-    return;
+    char* copy = _strdup(*entry);
+    if (!copy) return false;
+    *entry = copy;
+    return true;
   }
+  return true;
 }
-
-// _putenv_s(name, value), or the removal of name for nullptr, keeping the
-// replaced string. Setting the value it already has changes nothing.
-int PutEnvironment(const char* name, const char* value) {
-  if (name == nullptr || *name == '\0' || strchr(name, '=') != nullptr) return errno = EINVAL, -1;
-  std::lock_guard<std::mutex> lock(EnvironmentWrites());
-  const char* current = getenv(name);
-  if (value != nullptr ? current != nullptr && strcmp(current, value) == 0 : current == nullptr)
-    return 0;
-  KeepEnvironmentString(name);
-  return _putenv_s(name, value != nullptr ? value : "") == 0 ? 0 : (errno = EINVAL, -1);
-}
-
 }  // namespace
+
+namespace gesher {
+bool PreserveCrtEnvironment(const char* name) { return KeepEnvironmentString(name); }
+int WriteNativeEnvironment(const char* name, const char* value) {
+  // The POSIX owner serialized and prepared this transaction. The CRT sees
+  // copied bytes only, never a putenv buffer, and its older pointers remain
+  // protected for native users that read the raw CRT environment directly.
+  if (!KeepEnvironmentString(name)) return ENOMEM;
+  if (auto result = WriteFontEnvironment(name, value ? value : "", 1)) return *result;
+  return RawPutEnvironment(name, value ? value : "");
+}
+int WriteWideNativeEnvironment(const char* name, const char* value,
+                               const wchar_t* wide_name, const wchar_t* wide_value) {
+  if (!KeepEnvironmentString(name)) return ENOMEM;
+  if (auto result = WriteWideFontEnvironment(name, value ? value : "", wide_name, wide_value))
+    return *result;
+  return RawPutWideEnvironment(wide_name, wide_value);
+}
+}  // namespace gesher
 
 extern "C" {
 
@@ -780,17 +785,11 @@ char* realpath(const char* path, char* resolved_path) {
 }
 
 int setenv(const char* name, const char* value, int overwrite) {
-  if (auto result = gesher::WriteFontEnvironment(name, value, overwrite))
-    return *result == 0 ? 0 : (errno = EINVAL, -1);
-  if (!overwrite && name != nullptr && getenv(name) != nullptr) return 0;
-  if (value == nullptr) return errno = EINVAL, -1;
-  return PutEnvironment(name, value);
+  return gesher::SetEnvironment(name, value, overwrite);
 }
 
 int unsetenv(const char* name) {
-  if (auto result = gesher::WriteFontEnvironment(name, "", 1))
-    return *result == 0 ? 0 : (errno = EINVAL, -1);
-  return PutEnvironment(name, nullptr);
+  return gesher::UnsetEnvironment(name);
 }
 
 }  // extern "C"

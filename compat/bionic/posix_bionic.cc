@@ -14,6 +14,7 @@
 
 #include <gesher/reserved_names.h>
 #include <gesher/file_description.h>
+#include <gesher/environment.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -878,12 +879,15 @@ void RegisterPosix(SymbolTable& t) {
   E("__gnu_basename", Basename);
   E("dirname", Dirname);
 #undef E
-  // Export the live data object, not a snapshot of its array. Host startup
-  // (including Java Os.setenv and the property session's _wputenv_s) can
-  // resize/free that array after ELF relocations have bound this address.
-  // The CRT keeps this slot current for both narrow and wide mutations.
-  t["environ"] = &_environ;
-  t["__environ"] = &_environ;
+  // Export the stable owner slot, shared with host setenv and guest putenv.
+  // The caller-owned putenv strings never become CRT-owned allocations.
+  char*** environment = gesher::EnvironmentSlot();
+  if (!environment) {
+    std::fputs("gesher: cannot initialize the POSIX environment\n", stderr);
+    std::abort();
+  }
+  t["environ"] = environment;
+  t["__environ"] = environment;
   t["__progname"] = &g_progname;
 }
 

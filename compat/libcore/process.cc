@@ -126,7 +126,10 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
   if (error != 0) return ThrowIOException(env, error), -1;
 
   std::wstring environment;
-  if (env_block != nullptr) environment = ex::EnvironmentBlock(Strings(ByteString(env, env_block), envc));
+  if (env_block != nullptr) {
+    environment = ex::EnvironmentBlock(Strings(ByteString(env, env_block), envc));
+    if (environment.empty()) return ThrowIOException(env, EILSEQ), -1;
+  }
 
   jint fds[3];
   env->GetIntArrayRegion(std_fds, 0, 3, fds);

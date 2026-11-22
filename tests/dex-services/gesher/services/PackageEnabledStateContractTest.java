@@ -621,6 +621,14 @@ public final class PackageEnabledStateContractTest {
                 && h.client.getComponentEnabledSetting(component(a, "Alias")) == 1,
                 "Separate VM did not retain application/component state");
     }
+
+    private static Object readInstallEntry(Method readRegistry, Path registry, String packageName,
+            Path codePath, long firstInstall, long lastUpdate) throws Exception {
+        Files.writeString(registry, packageName + "\t" + codePath + "\t" + firstInstall
+                + "\t" + lastUpdate + "\n");
+        return ((Map<?, ?>) readRegistry.invoke(null)).get(packageName);
+    }
+
     /** Real install publication/storage boundary; the APK parser has already supplied the records. */
     private static void installationPublication() throws Exception {
         String existing = "fixture.enabled.install.existing", added = "fixture.enabled.install.added";
@@ -630,17 +638,21 @@ public final class PackageEnabledStateContractTest {
         Files.createDirectories(firstCode); Files.createDirectories(addedCode);
         Class<?> installerType = Class.forName("com.gesher.server.Installer");
         Class<?> entryType = Class.forName("com.gesher.server.Installer$Entry");
-        var entryCtor = entryType.getDeclaredConstructor(String.class, String.class, long.class, long.class);
-        entryCtor.setAccessible(true);
-        Object previous = entryCtor.newInstance(existing, firstCode.toString(), 1L, 1L);
-        Object addition = entryCtor.newInstance(added, addedCode.toString(), 2L, 2L);
+        var readRegistry = installerType.getDeclaredMethod("readRegistry");
+        readRegistry.setAccessible(true);
+        Path registry = root.resolve("system/packages.list"), marker = root.resolve("system/package-enabled-owners/" + added);
+        Files.createDirectories(registry.getParent());
+        // Read the supported legacy rows through Installer, independent of its private Entry constructor.
+        Object previous = readInstallEntry(readRegistry, registry, existing, firstCode, 1, 1);
+        Object addition = readInstallEntry(readRegistry, registry, added, addedCode, 2, 2);
+        Object replacement = readInstallEntry(readRegistry, registry, added, addedCode, 2, 3);
+        Object failed = readInstallEntry(readRegistry, registry, added, addedCode, 2, 4);
         Map<String, Object> entries = new LinkedHashMap<>(); entries.put(existing, previous);
         var installerCtor = installerType.getDeclaredConstructor(PackageManagerService.class,
                 Class.forName("com.gesher.server.ActivityTaskManagerService"), Map.class);
         installerCtor.setAccessible(true);
         Object installer = installerCtor.newInstance(h.service, null, entries);
         invoke(installer, "writeRegistry", new Class<?>[0]);
-        Path registry = root.resolve("system/packages.list"), marker = root.resolve("system/package-enabled-owners/" + added);
         byte[] before = Files.readAllBytes(registry);
         ApkPackage candidate = record(added, true);
         Files.createDirectories(marker); // A deterministic owner-publication I/O failure.
@@ -657,7 +669,6 @@ public final class PackageEnabledStateContractTest {
         h.client.setApplicationEnabledSetting(added, 3, KEEP);
         byte[] owner = Files.readAllBytes(marker);
         ApkPackage update = record(added, true);
-        Object replacement = entryCtor.newInstance(added, addedCode.toString(), 2L, 3L);
         invoke(installer, "publishInstalled", new Class<?>[]{entryType, ApkPackage.class}, replacement, update);
         check(h.service.get(added) == update && h.client.getApplicationEnabledSetting(added) == 3
                 && Arrays.equals(owner, Files.readAllBytes(marker)), "Update replaced its installation owner or enabled state");
@@ -667,7 +678,6 @@ public final class PackageEnabledStateContractTest {
         Path saved = registry.resolveSibling("packages.saved");
         Files.move(registry, saved); Files.createDirectory(registry);
         try {
-            Object failed = entryCtor.newInstance(added, addedCode.toString(), 2L, 4L);
             expect(java.io.IOException.class,
                     () -> invoke(installer, "publishInstalled", new Class<?>[]{entryType, ApkPackage.class}, failed, record(added, true)),
                     "Registry replacement failure returned success");

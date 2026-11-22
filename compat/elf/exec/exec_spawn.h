@@ -134,8 +134,10 @@ DWORD Spawn(const Launch& launch, const wchar_t* environment, const std::wstring
             HANDLE std_in, HANDLE std_out, HANDLE std_err, PROCESS_INFORMATION* info);
 
 // A UTF-16 environment block from "NAME=value" strings, sorted by name as
-// Windows expects.
-std::wstring EnvironmentBlock(const std::vector<std::string>& entries);
+// Windows expects. WTF8 preserves inherited unpaired native surrogates. An
+// empty result reports EILSEQ; a valid empty environment has two NUL units.
+std::wstring EnvironmentBlock(const std::vector<std::string>& entries,
+                              const wchar_t* native_defaults = nullptr);
 
 // An exit status as Linux code sees it: the low 8 bits for exit codes
 // gesher-exec and most programs use, 128 + signal for a crash (NTSTATUS

@@ -242,6 +242,8 @@ int main(int argc,char** argv){
   State state=mode=="missing"?State::kAbsent:mode=="invalid-wide"?State::kError:State::kValue;
   std::string_view initial=mode=="wide"?kInitial:mode=="supplementary"?kSupplementary:"";
   InitialWide(0,mode);InitialWide(1,mode);
+  char unrelated[]="GESHER_FONT_ENV_BORROWED=unrelated";
+  Require(putenv(unrelated)==0,"unrelated borrowed setup");
   auto retained=Check(0,state,initial);Check(1,state,initial);
   if(mode=="invalid-wide"){
     auto files=gesher::SystemFontFiles();
@@ -269,8 +271,34 @@ int main(int argc,char** argv){
     Require(setenv(kNames[key],"",1)==0,"legacy empty-value removal");Check(key,State::kAbsent,"");
     std::printf("FONT_ENV_HOST_KEY key=%s initial_crt_present=%d overwrite0=1 retained_snapshot=1 external_owned_policy=1 unset_tombstone=1 legacy_empty_removal=1\n",kNames[key],existed);
   }
+  Require(unsetenv("GESHER_FONT_ENV_BORROWED")==0,"unrelated borrowed cleanup");
   Require(retained.state==state&&retained.value()==initial,"initial snapshot lifetime");
   Require(setenv("android_root",kA,1)==0,"ASCII key alias");Check(0,State::kValue,kA);
+  // The font key aliases remain case-insensitive; POSIX getenv does not.
+  Require(setenv("ANDROID_ROOT",kA,1)==0,"restore exact POSIX key before callback tests");
+  char borrowed[80]="android_root=first";
+  Require(putenv(borrowed)==0,"borrowed font alias");Check(0,State::kValue,"first");
+  std::strcpy(std::strchr(borrowed,'=')+1,"after");Check(0,State::kValue,"after");
+  Require(std::getenv("ANDROID_ROOT")&&std::strcmp(std::getenv("ANDROID_ROOT"),kA)==0,
+          "font aliases do not change POSIX exact-case lookup");
+  std::strchr(borrowed,'=')[1]='\0';Check(0,State::kAbsent,"");
+  Require(std::getenv("android_root")&&*std::getenv("android_root")=='\0',"borrowed empty POSIX value");
+  borrowed[0]='z';Check(0,State::kAbsent,"");
+  Require(unsetenv("zndroid_root")==0,"renamed borrowed font cleanup");
+  std::strcpy(borrowed,"android_root=first");Require(putenv(borrowed)==0,"borrowed before wide write");
+  std::strcpy(std::strchr(borrowed,'=')+1,"after");Check(0,State::kValue,"after");
+  Require(_wputenv_s(L"ANDROID_ROOT",L"wide-font-\u05d0")==0,"wide write replaces font owner");
+  Check(0,State::kValue,"wide-font-\xd7\x90");
+  Require(unsetenv("android_root")==0,"borrowed alias removal");
+  Require(setenv("ANDROID_ROOT",kA,1)==0,"restore font owner after borrowed controls");
+  std::strcpy(borrowed,"GESHER_FONT_OLD=first");Require(putenv(borrowed)==0,"rename-into-font setup");
+  std::strcpy(borrowed,"GESHER_FONT_CURRENT=first");
+  Require(setenv("GESHER_FONT_OLD","replacement",1)==0,"reuse original name while pointer remains live");
+  std::strcpy(borrowed,"android_root=renamed");Check(0,State::kValue,"renamed");
+  Require(setenv("ANDROID_ROOT",kA,1)==0,"later explicit font owner wins");Check(0,State::kValue,kA);
+  Require(unsetenv("android_root")==0&&unsetenv("GESHER_FONT_OLD")==0,"dynamic font cleanup");
+  Require(setenv("ANDROID_ROOT",kA,1)==0,"restore before invalid handler");
+  std::puts("FONT_ENV_HOST_BORROWED unrelated_native_visible=1 mutable_alias=1 empty_posix=1 renamed_identity=1 wide_transition=1 last_writer=1");
   Require(setenv("GESHER_FONT_ENV_UNRELATED","canary",1)==0,"unrelated setenv");
   Require(std::getenv("GESHER_FONT_ENV_UNRELATED")&&std::strcmp(std::getenv("GESHER_FONT_ENV_UNRELATED"),"canary")==0,"unrelated getter");
   Check(0,State::kValue,kA);
