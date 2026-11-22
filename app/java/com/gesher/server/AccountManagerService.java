@@ -520,13 +520,67 @@ public final class AccountManagerService extends IAccountManager.Default {
                 || AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE.equals(packageName);
     }
 
+    /**
+     * AccountManagerService.resolveAccountVisibility: the authenticator always sees its
+     * accounts; a stored per-client value (bound to the client's code identity) wins;
+     * otherwise the authenticator's legacy default for the client's category applies.
+     * Never VISIBILITY_UNDEFINED.
+     */
     private int visibility(Caller c, Entry e) {
         if (e == null || retiring(e)) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (owns(c, e)) return AccountManager.VISIBILITY_VISIBLE;
-        // Legacy keys describe policy categories, not grants to every client. Until
-        // Android's permission/target-SDK eligibility policy is implemented here,
-        // retain the existing explicit, code-identity-scoped visibility policy.
-        return e.visibility.getOrDefault(c.key(), AccountManager.VISIBILITY_NOT_VISIBLE);
+        if (c.name == null || c.code == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
+        Integer stored = e.visibility.get(c.key());
+        if (stored != null && stored != AccountManager.VISIBILITY_UNDEFINED) return stored;
+        return legacyVisibility(e, legacyEligible(c, e)
+                ? AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE
+                : AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE);
+    }
+
+    /**
+     * The clients Android gives the authenticator's legacy-visible default: a signature
+     * match with the authenticator, GET_ACCOUNTS_PRIVILEGED, a pre-O app with GET_ACCOUNTS,
+     * or READ_CONTACTS for a type whose authenticator holds WRITE_CONTACTS. No device or
+     * profile owner exists here.
+     */
+    private boolean legacyEligible(Caller c, Entry e) {
+        if (e.ownerIdentity != null && e.ownerIdentity.startsWith("cert:")
+                && e.ownerIdentity.equals(c.code)) return true;
+        ApkPackage pkg = mPm.get(c.name);
+        if (pkg == null) return false;
+        if (permitted(pkg, android.Manifest.permission.GET_ACCOUNTS_PRIVILEGED)) return true;
+        if (pkg.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O
+                && permitted(pkg, android.Manifest.permission.GET_ACCOUNTS,
+                        android.Manifest.permission.GET_ACCOUNTS_PRIVILEGED)) return true;
+        ApkPackage owner = e.owner == null ? null : mPm.get(e.owner);
+        return owner != null && permitted(pkg, android.Manifest.permission.READ_CONTACTS)
+                && permitted(owner, android.Manifest.permission.WRITE_CONTACTS);
+    }
+
+    /** AccountManagerService.isPermittedForPackage: granted, and its app op (if any) allowed. */
+    private boolean permitted(ApkPackage pkg, String... permissions) {
+        for (String permission : permissions) {
+            if (mPm.checkPermission(permission, pkg.packageName, 0)
+                    != PackageManager.PERMISSION_GRANTED) continue;
+            int op = android.app.AppOpsManager.permissionToOpCode(permission);
+            if (op == android.app.AppOpsManager.OP_NONE || appOpAllowed(op, pkg)) return true;
+        }
+        return false;
+    }
+
+    private static boolean appOpAllowed(int op, ApkPackage pkg) {
+        long token = Binder.clearCallingIdentity();
+        try {
+            IBinder binder = android.os.ServiceManager.getService(Context.APP_OPS_SERVICE);
+            if (binder == null) return false;
+            return com.android.internal.app.IAppOpsService.Stub.asInterface(binder)
+                    .checkOperation(op, pkg.uid(), pkg.packageName)
+                    == android.app.AppOpsManager.MODE_ALLOWED;
+        } catch (RemoteException | RuntimeException e) {
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
     }
 
     private static int legacyVisibility(Entry e, String key) {
@@ -535,6 +589,12 @@ public final class AccountManagerService extends IAccountManager.Default {
         return AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE.equals(key)
                 ? AccountManager.VISIBILITY_USER_MANAGED_VISIBLE
                 : AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE;
+    }
+
+    /** Visible, or USER_MANAGED_NOT_VISIBLE (Android's includeUserManagedNotVisible). */
+    private boolean offered(Caller c, Account account, Entry e) {
+        return visible(c, account, e)
+                || visibility(c, e) == AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE;
     }
 
     private boolean visible(Caller c, Account account, Entry e) {
@@ -589,7 +649,10 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (packageName.equals(c.name)) return filterAccounts(type, c);
         // Authenticators query which of their own accounts a client may already
         // see (microG's account provider uses this for calling applications).
-        // This typed delegation never grants visibility or credential access.
+        // As Android's getAccountsByTypeForPackage for the managing authenticator
+        // (includeUserManagedNotVisible), this includes accounts the client may be
+        // offered (USER_MANAGED_NOT_VISIBLE) but not explicit denials. It changes no
+        // visibility and grants no credential access.
         Authenticator authenticator = authenticator(type);
         if (authenticator == null || !authenticator.service.getPackageName().equals(c.name)
                 || !callerUnchanged(c)) throw new SecurityException("Account client mismatch");
@@ -598,7 +661,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         List<Account> result = new ArrayList<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             Account account = item.getKey(); Entry entry = item.getValue();
-            if (type.equals(account.type) && owns(c, entry) && visible(target, account, entry)) {
+            if (type.equals(account.type) && owns(c, entry) && offered(target, account, entry)) {
                 result.add(account);
             }
         }

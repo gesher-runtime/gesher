@@ -31,12 +31,15 @@
 #include <gesher/reserved_names.h>
 
 #include <io.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <windows.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -89,14 +92,15 @@ bool IsNumber(const std::string& s) {
 // Writes all of `s` to `h`; false if the handle is closed or broken (EPIPE).
 bool WriteAll(HANDLE h, const std::string& s) {
   if (h == nullptr || h == INVALID_HANDLE_VALUE) return false;
+  auto description = gesher::CaptureFileHandle(h);
+  if (!description) return false;
   size_t done = 0;
   while (done < s.size()) {
-    DWORD wrote = 0;
-    DWORD chunk =
-        static_cast<DWORD>(std::min<size_t>(s.size() - done, 1u << 20));
-    if (!WriteFile(h, s.data() + done, chunk, &wrote, nullptr) || wrote == 0)
-      return false;
-    done += wrote;
+    unsigned chunk = static_cast<unsigned>(std::min<size_t>(s.size() - done, 0x7ffff000u));
+    int wrote = gesher::WriteFileDescription(description, s.data() + done, chunk);
+    if (wrote < 0 && errno == EINTR) continue;
+    if (wrote <= 0) return false;
+    done += static_cast<unsigned>(wrote);
   }
   return true;
 }
@@ -110,6 +114,20 @@ bool WriteAll(HANDLE h, const std::string& s) {
 constexpr int kMaxSig = 65;
 std::atomic<int> g_trap_mode[kMaxSig];  // 0 default, 1 ignored, 2 trapped
 std::atomic<uint64_t> g_pending_signals[2];
+std::atomic<HANDLE> g_pipe_signal_event{nullptr};
+INIT_ONCE g_pipe_signal_once = INIT_ONCE_STATIC_INIT;
+
+HANDLE PipeSignalEvent() {
+  // One process-lifetime event, shared by the shell's serial command reader.
+  // A signal hook may run concurrently, so never close or recycle this handle.
+  if (!InitOnceExecuteOnce(&g_pipe_signal_once, [](PINIT_ONCE, void*, void**) -> BOOL {
+        HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!event) return FALSE;
+        g_pipe_signal_event.store(event, std::memory_order_release);
+        return TRUE;
+      }, nullptr, nullptr)) return nullptr;
+  return g_pipe_signal_event.load(std::memory_order_acquire);
+}
 std::mutex g_fg_mutex;
 std::set<DWORD> g_fg_pids;
 
@@ -159,6 +177,7 @@ int ShellSignalHook(int sig, int /*sender*/) {
   if (mode == 1) return 1;  // ignored
   if (mode == 2) {
     g_pending_signals[sig / 64].fetch_or(uint64_t{1} << (sig % 64));
+    if (HANDLE event = g_pipe_signal_event.load(std::memory_order_acquire)) SetEvent(event);
     return 1;
   }
   if (DefaultIgnored(sig)) return 1;
@@ -199,9 +218,29 @@ using NodeP = std::shared_ptr<Node>;
 // last user lets go.
 struct OwnedHandle {
   HANDLE h = nullptr;
-  explicit OwnedHandle(HANDLE handle) : h(handle) {}
+  int descriptor = -1;
+  explicit OwnedHandle(HANDLE handle, int adopted_descriptor = -1, int fresh_pipe_flags = -1)
+      : h(handle), descriptor(adopted_descriptor) {
+    if (descriptor >= 0 || !h || h == INVALID_HANDLE_VALUE) return;
+    // Process job handles keep their native ownership. File/pipe handles
+    // enter the canonical fd table, so repeated launches and shell aliases
+    // retain one description rather than rediscovering unrelated flag copies.
+    if (GetFileType(h) == FILE_TYPE_UNKNOWN) return;
+    auto snapshot = gesher::CaptureFileHandle(h);
+    // Only the creator can attest the initial mode of an unpublished pipe.
+    // Raw inherited/native handles keep their actual access without an
+    // invented wait policy.
+    if (snapshot && fresh_pipe_flags >= 0 &&
+        gesher::InitializePipeDescription(snapshot, fresh_pipe_flags) < 0) snapshot.reset();
+    descriptor = snapshot ? gesher::AttachFileDescription(snapshot, true) : -1;
+    int error = errno;
+    CloseHandle(h);
+    h = descriptor >= 0 ? reinterpret_cast<HANDLE>(_get_osfhandle(descriptor)) : INVALID_HANDLE_VALUE;
+    errno = error;
+  }
   ~OwnedHandle() {
-    if (h != nullptr && h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (descriptor >= 0) ::close(descriptor);
+    else if (h != nullptr && h != INVALID_HANDLE_VALUE) CloseHandle(h);
   }
   OwnedHandle(const OwnedHandle&) = delete;
   OwnedHandle& operator=(const OwnedHandle&) = delete;

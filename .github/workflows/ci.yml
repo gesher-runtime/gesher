@@ -102,6 +102,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Durable settings journal, replacement and crash recovery contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
       - name: Build actual app identity restart implementation
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib
@@ -122,6 +126,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/test-process-reader-handles.ps1
+      - name: Storage scan coalescing, bounded admission and real filesystem contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell
@@ -244,7 +252,10 @@ jobs:
           python3 tools/test_hwui_renderer_policy.py --sanitize
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
+          python3 tools/test_memmem_performance.py --sanitize
           python3 tools/test_bionic_system_contracts.py --sanitize
+          python3 tools/test_environment_contracts.py --sanitize
+          python3 tools/test_environment_lookup_contracts.py
           python3 tools/test_bionic_signal_masks.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
@@ -252,6 +263,10 @@ jobs:
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
+          python3 tools/test_ofd_transfer_contracts.py --sanitize
+          python3 tools/test_file_io_contracts.py --sanitize
+          python3 tools/test_pipe_io_contracts.py --sanitize
+          python3 tools/test_revocable_file_contracts.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
@@ -304,6 +319,11 @@ jobs:
 
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
+
+      - name: Descriptor-backed stdio and stream lifetime contracts
+        run: |
+          python3 tools/test_stdio_contracts.py --sanitize
+          python3 tools/test_socket_registry_lifetime.py --sanitize
 
       - name: MediaPlayer PCM priming and playback lifecycle contracts
         run: python3 tools/test_media_player_priming.py --sanitize
@@ -382,6 +402,8 @@ jobs:
           python3 tools/test_media_http_contracts.py --sanitize
           python3 tools/test_mf_encoder_input.py --sanitize
           python3 tools/test_media_surface_contracts.py --sanitize
+          python3 tools/test_codec_output_storage.py --sanitize
+          python3 tools/test_codec_reader_delivery.py --sanitize
           cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
             tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
           "$RUNNER_TEMP/filesystem-metadata-reference"
@@ -438,6 +460,7 @@ jobs:
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
         run: |
           python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
@@ -530,7 +553,7 @@ jobs:
     needs: [source-identity]
     runs-on: ubuntu-24.04
     env:
-      GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher' }}
+      GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
       GESHER_HOST_PTHREAD_CALLER: ${{ github.ref == 'refs/heads/wip/coherent-selected-tcp' && 'coherent-selected-full/build' || 'ci/build' }}
       GESHER_COHERENT_FULL_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
       GESHER_COHERENT_FULL_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
@@ -542,7 +565,8 @@ jobs:
         with:
           # The former runtime-port job's cache already holds the runtime.
           ccache-key: runtime
-          # Source-only proposal: no main/default change and no dispatch approval.
+          # Production repair is a separate original-publisher overlay. The
+          # selected-minimum reference remains on its explicit experimental refs.
           pthread-supplier: ${{ env.GESHER_HOST_PTHREAD_SELECTION }}
           pthread-caller: ${{ env.GESHER_HOST_PTHREAD_CALLER }}
 
@@ -551,6 +575,9 @@ jobs:
           SELECTED_LLVM: ${{ steps.host_toolchain.outputs.selected_compiler_root }}
           SELECTED_RECEIPT: ${{ steps.host_toolchain.outputs.selected_receipt }}
           SELECTED_RECEIPT_SHA256: ${{ steps.host_toolchain.outputs.selected_receipt_sha256 }}
+          PRODUCTION_LLVM: ${{ steps.host_toolchain.outputs.production_compiler_root }}
+          PRODUCTION_RECEIPT: ${{ steps.host_toolchain.outputs.production_receipt }}
+          PRODUCTION_RECEIPT_SHA256: ${{ steps.host_toolchain.outputs.production_receipt_sha256 }}
         run: |
           set -euo pipefail
           case "$GESHER_HOST_PTHREAD_SELECTION" in
@@ -558,6 +585,13 @@ jobs:
               test -n "$SELECTED_LLVM" && test -n "$SELECTED_RECEIPT" && test -n "$SELECTED_RECEIPT_SHA256"
               llvm="$SELECTED_LLVM"
               printf 'GESHER_SELECTED_PTHREAD_RECEIPT=%s\nGESHER_SELECTED_PTHREAD_RECEIPT_SHA256=%s\n' "$SELECTED_RECEIPT" "$SELECTED_RECEIPT_SHA256" >> "$GITHUB_ENV"
+              ;;
+            publisher-cancel)
+              test -n "$PRODUCTION_LLVM" && test -n "$PRODUCTION_RECEIPT" && test -n "$PRODUCTION_RECEIPT_SHA256"
+              printf '%s  %s\n' "$PRODUCTION_RECEIPT_SHA256" "$PRODUCTION_RECEIPT" | sha256sum --check --strict
+              python3 tools/toolchain/prepare_pthread_cancel.py verify "$PRODUCTION_RECEIPT"
+              llvm="$PRODUCTION_LLVM"
+              printf 'GESHER_PTHREAD_CANCEL_RECEIPT=%s\nGESHER_PTHREAD_CANCEL_RECEIPT_SHA256=%s\n' "$PRODUCTION_RECEIPT" "$PRODUCTION_RECEIPT_SHA256" >> "$GITHUB_ENV"
               ;;
             publisher) llvm="$HOME/toolchain/$LLVM_MINGW_NAME" ;;
             *) exit 1 ;;
@@ -598,7 +632,7 @@ jobs:
       - name: Build
         run: |
           # Canonical suite/package/e2e always receive the production role.
-          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum || "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
@@ -626,6 +660,18 @@ jobs:
           # Native fixtures are CI-only; none is installed by gesher.iss.
           ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
+          ninja -C out font_environment_test
+
+      - name: Verify cancellation repair in actual production links
+        if: env.GESHER_HOST_PTHREAD_SELECTION == 'publisher-cancel'
+        run: python3 tools/toolchain/prepare_pthread_cancel.py links --receipt "$GESHER_PTHREAD_CANCEL_RECEIPT"
+
+      - uses: actions/upload-artifact@v4
+        if: env.GESHER_HOST_PTHREAD_SELECTION == 'publisher-cancel'
+        with:
+          name: pthread-cancel-runtime
+          path: dist-pthread-cancel/
+          if-no-files-found: error
 
       - name: Build and isolate ordinary Binder host actor under production OFF
         run: |
@@ -752,7 +798,7 @@ jobs:
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
         run: |
-          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
+          if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum || "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
             cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
@@ -835,7 +881,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@2c096437d9474a59e4fd6f78d1670c9c7afc573f
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@8b316aebf09ab46d5407e955bf86ed748a1e739f
     with:
       local-runner: false
 
@@ -1982,6 +2028,7 @@ jobs:
       - name: Run tests
         env:
           GESHER_TRACE_TOAST_IDENTITY: ${{ matrix.shard == 'services' && '1' || '0' }}
+          GESHER_FONT_REGRESSION_SCOPE: ${{ matrix.os == 'windows-2022' && 'functional-and-strict' || matrix.os == 'windows-2025' && 'functional' || 'unselected' }}
         shell: pwsh
         run: |
           pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Shard ${{ matrix.shard }} -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt

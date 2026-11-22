@@ -457,6 +457,7 @@ public class VideoActivity extends Activity {
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         int rendered = 0;
         boolean nullBuffer = true;
+        for (ByteBuffer buffer : codec.getOutputBuffers()) nullBuffer &= buffer == null;
         long deadline = System.currentTimeMillis() + 20000;
         while (rendered <= last && System.currentTimeMillis() < deadline) {
             int i = codec.dequeueInputBuffer(10000);
@@ -473,6 +474,7 @@ public class VideoActivity extends Activity {
             if (o >= 0) {
                 if (info.size > 0) {
                     nullBuffer &= codec.getOutputBuffer(o) == null;
+                    nullBuffer &= codec.getOutputImage(o) == null;
                     codec.releaseOutputBuffer(o, true);
                     rendered++;
                 } else {
@@ -484,7 +486,7 @@ public class VideoActivity extends Activity {
         codec.stop();
         codec.release();
         ex.release();
-        if (!nullBuffer) say("surfaces: an output buffer was not null with a Surface");
+        if (!nullBuffer) throw new IllegalStateException("Surface output exposed CPU buffers or Images");
         return rendered;
     }
 
