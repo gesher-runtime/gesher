@@ -191,7 +191,7 @@ std::shared_ptr<TimerFd> LookupTimerFd(int);
 int RegisterTimerFd(std::shared_ptr<TimerFd>, std::shared_ptr<EventFd>);
 @EVENT_FD@
 namespace {
-struct Epoll {};
+@OBJECT_STATE@
 @OBJECT_REGISTRY@
 @OBJECT_LOOKUP@
 @OBJECT_INSERT@
