@@ -34,6 +34,7 @@
 #include "binder_sg.h"
 #include "binder_wire.h"
 #include "internal.h"
+#include "native_fence_internal.h"
 #include "record_lock_descriptors.h"
 
 namespace gesher {
@@ -318,7 +319,9 @@ void CloseThreadPipe(BinderFile* file) {
 // pad_flags and the high 32 bits of the object's cookie (TransferSocket's low
 // and high 32 bits, ADR 0088 phase 3). binderd copies an fd object's cookie
 // unchanged; its low 32 bits keep libbinder's value (the sender's ownership
-// flag), which the receiver gets back as sent. Ordinary files retain their
+// flag), which the receiver gets back as sent. A completed native fence
+// travels as its read-only completion event (kNativeFenceFileDescription), with
+// its type in pad_flags and no shared description. Ordinary files retain their
 // full cookie and carry shared descriptions in the separate side table.
 // Only fds backed by a Windows handle (files, memfds, pipes, sockets) travel;
 // any other goes as handle 0,
@@ -351,6 +354,23 @@ bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
     DescriptorSnapshotPtr snapshot;
     {
       record_locks::DescriptorGuard guard;
+      uintptr_t fence_event = 0;
+      uint64_t fence_metadata = 0;
+      if (TransferNativeFence(fd, &fence_event, &fence_metadata)) {
+        // A completed native fence is its typed read-only event, not the NUL
+        // reservation behind the descriptor. Pin a duplicate until the broker
+        // consumes this stream, even if the sender closes its last fd.
+        auto pin = std::make_shared<DescriptorSnapshot>();
+        if (!DuplicateHandle(GetCurrentProcess(), reinterpret_cast<HANDLE>(fence_event),
+                             GetCurrentProcess(), &pin->handle, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          ok = false; obj.pad_binder = 0; return;
+        }
+        obj.pad_flags = static_cast<__u32>(fence_metadata);
+        obj.pad_binder = reinterpret_cast<uintptr_t>(pin->handle);
+        descriptions->push_back({offset, 0, wire::kNativeFenceFileDescription, 0});
+        pins->push_back(std::move(pin));
+        return;
+      }
       if (TransferSocket(fd, &socket, &metadata)) {
         // Keep the actual socket alive until the broker consumes this stream.
         auto pin = std::make_shared<DescriptorSnapshot>();
@@ -393,6 +413,9 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
       if (description.kind == wire::kSocketFileDescription) {
         fd = AdoptSocket(reinterpret_cast<uintptr_t>(owned),
                          uint64_t{obj.pad_flags} | (obj.cookie & 0xffffffff00000000ull));
+      } else if (description.kind == wire::kNativeFenceFileDescription) {
+        // Consumes the handle; admits only an immutable signaled completion event.
+        fd = AdoptNativeFence(owned, obj.pad_flags);
       } else {
         HANDLE shared_staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(description.shared_handle));
         if (DuplicateHandle(GetCurrentProcess(), shared_staging, GetCurrentProcess(), &shared,

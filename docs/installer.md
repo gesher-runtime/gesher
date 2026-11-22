@@ -166,9 +166,12 @@ menu shortcut, as a launcher lists it
   updated (new label or icon) or the shortcut is missing; it says so in the
   console (`gesher-app: Start menu shortcut ...`). `gesher-app uninstall
   PACKAGE` removes it and its icon, and the `Gesher Apps` folder once it is
-  empty. A failure never fails the install or the launch. `GESHER_SHORTCUTS=0`
-  turns shortcuts off; runs from a build folder without `gesher-app.cmd` make
-  none.
+  empty. An install committed through Android's `PackageInstaller` session API
+  (an app store such as Aurora Store) makes the shortcut and URL protocols too,
+  from the system server, once the install is published; a removal committed
+  through `PackageInstaller` removes them (ADR 0028's amendment). A failure never
+  fails the install, the removal or the launch. `GESHER_SHORTCUTS=0` turns
+  shortcuts off; runs from a build folder without `gesher-app.cmd` make none.
 - **Window icon without a shortcut**: the app's windows take the shortcut's
   `icon.ico`. A package with no launcher activity, and a staged microG addon
   (its verified `system\priv-app\<package>` slot, which `gesher-app-microg.ps1`

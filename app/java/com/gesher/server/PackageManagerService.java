@@ -358,11 +358,16 @@ public final class PackageManagerService extends IPackageManager.Default {
         return mPackages.values();
     }
 
+    /** The map is replaced as a whole; package metadata is admitted before publication. */
+    Map<String, ApkPackage> packageSnapshot() { return mPackages; }
+
     /** Called under this monitor, or before the constructor publishes this service. */
     private void publishPackages(Map<String, ApkPackage> packages) {
         mPackages = packages;
-        // Retire references to removed/replaced code even if no provider is queried.
+        // Retire references to removed/replaced code even if no provider or
+        // permission query follows.
         mProviderAuthorityIndex = null;
+        mPermissions.invalidatePackageIndex();
     }
 
     /** All possible owners in installed order; never cache a visibility decision. */

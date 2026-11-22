@@ -69,7 +69,7 @@ namespace gesher {
 
 @NATIVE_PIPE_ROUTE@
 
-// Socket/event owners are outside this disk/pipe corpus. Their false lookup
+// Socket/event/native-fence owners are outside this disk/pipe corpus. Their false lookup
 // boundary leaves the real scalar dispatcher to select the captured object.
 namespace gesher {
 namespace ws {
@@ -83,6 +83,7 @@ static bool LookupSocket(int, SocketFd*) { return false; }
 static bool LookupDevice(int fd, Device* device) { return DeviceFromFd(fd, device); }
 static bool ReadEventObject(int, void*, unsigned, int*) { return false; }
 static bool WriteEventObject(int, const void*, unsigned, int*) { return false; }
+static bool LookupNativeFence(int) { return false; }
 static int CrtResult(int result) { return result; }
 }
 static int _read(int fd, void* bytes, unsigned count) { return static_cast<int>(::read(fd, bytes, count)); }
