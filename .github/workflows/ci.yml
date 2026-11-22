@@ -121,6 +121,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/test-process-reader-handles.ps1
+      - name: Storage scan coalescing, bounded admission and real filesystem contracts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell
@@ -437,6 +441,7 @@ jobs:
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
         run: |
           python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
