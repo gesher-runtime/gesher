@@ -48,6 +48,30 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     private static final int MAX_SESSIONS = 16, MAX_OWNER_SESSIONS = 4, MAX_FILES = 64;
     interface Consent { boolean allow(String installer, String target, long version); }
     interface UninstallConsent { boolean allow(String requester, String target, long version); }
+    /**
+     * The Windows shell's view of committed session installs and removals (ADR 0028): the
+     * Start menu shortcut and URL protocols that gesher-app makes from the launcher. Best
+     * effort: a failure is logged and never changes the install or removal result.
+     */
+    interface DesktopShell {
+        void installed(String pkg, String codePath, boolean changed);
+        /** Under the publication lock, before removal: what to retire once it is removed. */
+        Runnable prepareRemoval(String pkg);
+    }
+    static final DesktopShell WINDOWS_SHELL = new DesktopShell() {
+        @Override public void installed(String pkg, String codePath, boolean changed) {
+            AppShell.registerQuietly(pkg, codePath, changed);
+            AppShell.registerUrlProtocolsQuietly(pkg, codePath, changed);
+        }
+        @Override public Runnable prepareRemoval(String pkg) {
+            Properties shortcut = AppShell.shortcutOf(pkg);
+            Properties protocols = AppShell.urlProtocolsOf(pkg);
+            return () -> {
+                AppShell.unregisterQuietly(pkg, shortcut);
+                AppShell.unregisterUrlProtocolsQuietly(pkg, protocols);
+            };
+        }
+    };
 
     private final PackageManagerService mPm;
     private final Executor mExecutor;
@@ -55,6 +79,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     private final UninstallConsent mUninstallConsent;
     private final Supplier<String> mTestCaller;
     private final InstallFileBridge.Transport mTransport;
+    /** Server-local test injection (tests/dex-services); never exposed through Binder. */
+    private volatile DesktopShell mShell = WINDOWS_SHELL;
     private final AtomicInteger mIds = new AtomicInteger(1);
     private final Map<Integer, Session> mSessions = new LinkedHashMap<>();
     private final Map<IBinder, CallbackOwner> mCallbacks = new HashMap<>();
@@ -85,6 +111,24 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         mPm = pm; mExecutor = executor; mConsent = consent; mTestCaller = caller; mTransport = transport;
         mUninstallConsent = removal;
         pm.onPackageRemoval(this::packageRemoved);
+    }
+    /** The shell's removal step for {@code pkg}, or nothing to do if it cannot be prepared. */
+    private Runnable shellRemoval(String pkg) {
+        try {
+            Runnable step = mShell.prepareRemoval(pkg);
+            return step != null ? step : () -> { };
+        } catch (RuntimeException | LinkageError e) {
+            SystemServer.log("package shell removal unavailable: " + e.getClass().getSimpleName());
+            return () -> { };
+        }
+    }
+    /** Runs a shell step after a committed install or removal; its failure is not the result's. */
+    private static void shellStep(String pkg, Runnable step) {
+        try {
+            step.run();
+        } catch (RuntimeException | LinkageError e) {
+            SystemServer.log("package shell update failed for " + pkg + ": " + e.getClass().getSimpleName());
+        }
     }
     private void packageRemoved(String name) {
         List<Session> sessions;
@@ -397,19 +441,16 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             // removal. Neither a manifest claim nor a flag grants DELETE_PACKAGES,
             // and even a privileged caller cannot bypass this fresh default-No dialog.
             if (!mUninstallConsent.allow(owner, name, target.versionCode())) return;
-            Properties shortcut;
-            Properties protocols;
+            Runnable retireShell;
             synchronized (mInstaller) {
                 if (!removalCallerCurrent(owner, ownerCode, pid, system, process) || mPm.get(name) != target
                         || !mInstaller.ordinaryInstalled(target)) {
                     throw new SecurityException("Removal caller or target changed");
                 }
-                shortcut = AppShell.shortcutOf(name);
-                protocols = AppShell.urlProtocolsOf(name);
+                retireShell = shellRemoval(name);
                 if (!mInstaller.uninstall(name)) throw new IllegalStateException("Package was not removed");
             }
-            AppShell.unregisterQuietly(name, shortcut);
-            AppShell.unregisterUrlProtocolsQuietly(name, protocols);
+            shellStep(name, retireShell);
             status = PackageInstaller.STATUS_SUCCESS; legacy = 1; message = "Removed";
         } catch (SecurityException changed) {
             status = PackageInstaller.STATUS_FAILURE_BLOCKED; legacy = -1;
@@ -780,9 +821,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                                     hasApplicationInitiator ? ownerCode : null, packageSource));
                     if (!pkg.equals(installed[0]) || mPm.get(pkg) == null) throw new IllegalStateException("Not published");
                 }
-                boolean changed = !"unchanged".equals(installed[1]);
-                AppShell.registerQuietly(installed[0], installed[2], changed);
-                AppShell.registerUrlProtocolsQuietly(installed[0], installed[2], changed);
+                String[] published = installed;
+                shellStep(published[0], () -> mShell.installed(published[0], published[2],
+                        !"unchanged".equals(published[1])));
                 status = PackageInstaller.STATUS_SUCCESS; message = "Installed";
             } catch (SecurityException e) {
                 status = PackageInstaller.STATUS_FAILURE_BLOCKED; message = "Package identity or consent changed";
