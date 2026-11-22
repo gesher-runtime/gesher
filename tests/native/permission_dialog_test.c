@@ -5,6 +5,7 @@
 #endif
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 #include <wchar.h>
 #include "../../compat/locale/ui_locale.h"
 #include "../../compat/credentials/permission_dialog.inc"
@@ -14,6 +15,7 @@ static int action;
 static int checks;
 static int failures;
 static int phase;
+static BOOL expect_icon;
 static enum GesherUiLanguage language;
 static WCHAR permissions[8193];
 
@@ -35,6 +37,12 @@ static void CALLBACK Inspect(HWND dialog, UINT message, UINT_PTR timer, DWORD ti
   HWND deny = GetDlgItem(dialog, IDCANCEL);
   HWND allow = GetDlgItem(dialog, IDYES);
   Check(package && details && deny && allow, "all interactive controls exist");
+  Check(GetWindow(dialog, GW_OWNER) == NULL && (GetWindowLongW(dialog, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0,
+      "unowned, non-tool window gets its own taskbar button");
+  Check((SendMessageW(dialog, WM_GETICON, ICON_BIG, 0) != 0) == expect_icon,
+      expect_icon ? "gesher.ico is the taskbar icon" : "no icon is set without gesher.ico (big)");
+  Check((SendMessageW(dialog, WM_GETICON, ICON_SMALL, 0) != 0) == expect_icon,
+      expect_icon ? "gesher.ico is the title-bar icon" : "no icon is set without gesher.ico (small)");
   Check(GetFocus() == deny, "initial focus is Deny");
   Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == IDCANCEL, "default action is Deny");
   Check((GetWindowLongW(package, GWL_EXSTYLE) & (WS_EX_RTLREADING | WS_EX_LAYOUTRTL)) == 0,
@@ -91,6 +99,62 @@ static DWORD WINAPI Watchdog(void* completed) {
   return 0;
 }
 
+// The synthetic fixture: a 16x16 32-bit .ico (directory, entry, DIB header
+// with doubled height, pixels, then an all-opaque AND mask).
+enum { FIXTURE_ICON_BYTES = 6 + 16 + 40 + 16 * 16 * 4 + 16 * 4 };
+
+static void FixtureIcon(BYTE* data) {
+  memset(data, 0, FIXTURE_ICON_BYTES);
+  const DWORD image = FIXTURE_ICON_BYTES - 22;
+  BYTE header[22] = {0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0,
+      (BYTE)image, (BYTE)(image >> 8), 0, 0, 22, 0, 0, 0};
+  memcpy(data, header, sizeof(header));
+  BITMAPINFOHEADER info = {sizeof(info), 16, 32, 1, 32, BI_RGB, 0, 0, 0, 0, 0};
+  memcpy(data + 22, &info, sizeof(info));
+  for (int i = 0; i < 16 * 16; ++i) {
+    BYTE* pixel = data + 62 + i * 4;
+    pixel[0] = 0xd0; pixel[1] = 0x70; pixel[2] = 0x20; pixel[3] = 0xff;
+  }
+}
+
+// gesher.ico next to this executable, where the dialog looks for it (beside
+// the module holding its code).
+static BOOL IconPath(WCHAR* path) {
+  DWORD length = GetModuleFileNameW(NULL, path, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) return FALSE;
+  WCHAR* name = path;
+  for (WCHAR* at = path; *at; ++at) if (*at == L'\\' || *at == L'/') name = at + 1;
+  wcscpy(name, L"gesher.ico");
+  return TRUE;
+}
+
+// A fixture left by a run that was killed mid-way is removed, so the run
+// without gesher.ico still happens. Any other gesher.ico is left alone.
+static void RemoveStaleFixture(const WCHAR* path) {
+  HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) return;
+  BYTE expected[FIXTURE_ICON_BYTES], actual[FIXTURE_ICON_BYTES + 1];
+  FixtureIcon(expected);
+  DWORD read = 0;
+  BOOL same = ReadFile(file, actual, sizeof(actual), &read, NULL) && read == FIXTURE_ICON_BYTES
+      && memcmp(expected, actual, FIXTURE_ICON_BYTES) == 0;
+  CloseHandle(file);
+  if (same) DeleteFileW(path);
+}
+
+// Writes the fixture; false if a gesher.ico already exists there.
+static BOOL WriteFixtureIcon(const WCHAR* path) {
+  BYTE data[FIXTURE_ICON_BYTES];
+  FixtureIcon(data);
+  HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) return FALSE;
+  DWORD written = 0;
+  BOOL ok = WriteFile(file, data, sizeof(data), &written, NULL) && written == sizeof(data);
+  CloseHandle(file);
+  if (!ok) DeleteFileW(path);
+  return ok;
+}
+
 int main(void) {
   HANDLE completed = CreateEventW(NULL, TRUE, FALSE, NULL);
   if (!completed) return 2;
@@ -103,8 +167,21 @@ int main(void) {
   if (!desktop || !SetThreadDesktop(desktop)) return 2;
   HHOOK hook = SetWindowsHookExW(WH_CALLWNDPROCRET, AfterInit, NULL, GetCurrentThreadId());
   if (!hook) return 3;
+  WCHAR icon_path[MAX_PATH + 16];
+  BOOL have_path = IconPath(icon_path);
+  Check(have_path, "test executable path resolves");
+  if (have_path) RemoveStaleFixture(icon_path);
+  BOOL fixture_icon = FALSE;
   for (int locale = 0; locale < 2; ++locale) {
     language = locale ? GESHER_UI_HE : GESHER_UI_EN;
+    // English runs without gesher.ico (the dialog still works), Hebrew with it.
+    if (locale == 0) {
+      expect_icon = have_path && GetFileAttributesW(icon_path) != INVALID_FILE_ATTRIBUTES;
+    } else if (have_path && !expect_icon) {
+      fixture_icon = WriteFixtureIcon(icon_path);
+      Check(fixture_icon, "synthetic gesher.ico written next to the test");
+      expect_icon = fixture_icon;
+    }
     permissions[0] = 0;
     for (int row = 0; row < 90; ++row) {
       wcscat(permissions, locale
@@ -118,6 +195,7 @@ int main(void) {
       printf("scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", action, allowed);
     }
   }
+  if (fixture_icon) DeleteFileW(icon_path);
   UnhookWindowsHookEx(hook);
   SetThreadDesktop(original);
   CloseDesktop(desktop);
