@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "fifo_internal.h"
 #include "internal.h"
 
 extern "C" int gesher_is_socket(int fd);
@@ -100,6 +101,10 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
         std::string target;
         buf->st_mode = S_IFLNK | 0777;
         buf->st_size = gesher::ReadSymlinkHandle(h, &target) ? static_cast<long long>(target.size()) : 0;
+      } else if (result == 0 && (buf->st_mode & S_IFMT) == S_IFREG && buf->st_size == 16 &&
+                 gesher::IsFifoPath(windows)) {
+        buf->st_mode = S_IFIFO | (buf->st_mode & 0777);
+        buf->st_size = 0;
       }
       CloseHandle(h);
       return result;
@@ -150,6 +155,7 @@ int fstat(int fd, struct stat* buf) {
   if (buf == nullptr) return errno = EFAULT, -1;
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  if (gesher::FstatFifo(fd, buf)) return 0;
   if (gesher_is_socket(fd)) {
     Clear(buf);
     buf->st_mode = S_IFSOCK | 0777;

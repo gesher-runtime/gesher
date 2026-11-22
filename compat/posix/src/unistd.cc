@@ -22,6 +22,7 @@
 #include "internal.h"
 #include "binder_internal.h"
 #include "event_internal.h"
+#include "fifo_internal.h"
 #include "record_lock_descriptors.h"
 
 namespace {
@@ -490,7 +491,7 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
     if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
     short ready;
     if (gesher_is_socket(fd) || gesher::IsBinderFd(fd) || gesher::LookupEventFd(fd) ||
-        gesher::PollEpoll(fd, 0, &ready)) return errno = ESPIPE, -1;
+        gesher::IsFifoFd(fd) || gesher::PollEpoll(fd, 0, &ready)) return errno = ESPIPE, -1;
     SetLastError(ERROR_SUCCESS);
     type = GetFileType(file);
     if (type == FILE_TYPE_UNKNOWN && GetLastError() != ERROR_SUCCESS) return gesher::FailWithLastError();

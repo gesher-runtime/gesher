@@ -33,6 +33,7 @@
 
 #include "binder_internal.h"
 #include "event_internal.h"
+#include "fifo_internal.h"
 #include "internal.h"
 #include "linux_socket.h"
 #include "record_lock_descriptors.h"
@@ -359,6 +360,11 @@ int ioctl(int fd, unsigned long request, ...) {
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   if (request != FIONREAD) return errno = ENOTTY, -1;
+  int fifo_avail = 0;
+  if (gesher::FifoAvailable(fd, &fifo_avail)) {
+    *argp = fifo_avail;
+    return 0;
+  }
   switch (GetFileType(h)) {
     case FILE_TYPE_PIPE: {
       DWORD avail = 0;
@@ -445,6 +451,8 @@ int fcntl(int fd, int cmd, ...) {
       return 0;
     }
   }
+  int fifo_rc = 0;
+  if (gesher::FcntlFifo(fd, cmd, arg, &fifo_rc)) return fifo_rc;
   switch (cmd) {
     case F_GETFD: {
       DWORD flags = 0;
@@ -464,7 +472,10 @@ int fcntl(int fd, int cmd, ...) {
     case F_DUPFD:
     case F_DUPFD_CLOEXEC: {
       const int duplicate = gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
-      if (duplicate >= 0) gesher::CopyMemfdRegistration(fd, duplicate);
+      if (duplicate >= 0) {
+        gesher::DupFifo(fd, duplicate);
+        gesher::CopyMemfdRegistration(fd, duplicate);
+      }
       return duplicate;
     }
     case F_ADD_SEALS:
@@ -645,6 +656,7 @@ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
 ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
   if (BadVector(fd, iovcnt)) return -1;
   if (int error = gesher::EventObjectWriteError(fd)) return errno = error, -1;
+  if (int error = gesher::FifoWriteError(fd)) return errno = error, -1;
   // A zero-total vector performs no device operation (eventfd rejects a
   // zero-byte scalar write). Preserve each vector boundary otherwise: Linux's
   // legacy .write fallback, including eventfd, writes one element at a time.
@@ -712,8 +724,7 @@ ssize_t process_vm_readv(pid_t, const struct iovec*, unsigned long, const struct
 
 // --- extra stat calls (lstat, fstatat, mkdirat: path.cc) ----------------------
 
-// fchown is in unistd.cc, with chown.
-int mkfifo(const char*, mode_t) { return errno = ENOSYS, -1; }
+// fchown is in unistd.cc, with chown. mkfifo is in fifo.cc.
 
 int mknod(const char* path, mode_t mode, dev_t) {
   switch (mode & S_IFMT) {

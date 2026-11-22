@@ -24,6 +24,7 @@
 
 #include "binder_internal.h"
 #include "event_internal.h"
+#include "fifo_internal.h"
 #include "internal.h"
 #include "poll_scratch.h"
 #include "record_lock_descriptors.h"
@@ -189,6 +190,7 @@ int CloseFdBody(int fd, bool unpublished, SocketFd* deferred = nullptr) {
   if (!gesher::Remove(fd, &state, &last)) {
     gesher::ForgetDevice(fd);
     gesher::ForgetEventObject(fd);
+    gesher::ForgetFifo(fd);
     gesher::ForgetBinder(fd);
     gesher::ForgetMemfd(fd);
     // A pipe's last writer closing makes its reader readable (end of file).
@@ -269,6 +271,7 @@ int read(int fd, void* buf, unsigned int count) {
     if (gesher::LookupDevice(fd, &device)) return gesher::ReadDevice(device, buf, count);
     int result;
     if (gesher::ReadEventObject(fd, buf, count, &result)) return result;
+    if (gesher::ReadFifo(fd, buf, count, &result)) return result;
     return gesher::CrtResult(_read(fd, buf, count));
   }
   gesher::ws::Buffer buffer = {buf, count};
@@ -280,6 +283,7 @@ int write(int fd, const void* buf, unsigned int count) {
   if (!gesher::LookupSocket(fd, &state)) {
     int result;
     if (gesher::WriteEventObject(fd, buf, count, &result)) return result;
+    if (gesher::WriteFifo(fd, buf, count, &result)) return result;
     // A memfd's seals may forbid the write (memfd_seals.cc).
     if (const int sealed = gesher::MemfdWriteError(fd, true, 0, count)) return errno = sealed, -1;
     result = gesher::CrtResult(_write(fd, buf, count));
@@ -302,6 +306,7 @@ int dup(int fd) {
     Device device;
     if (fd2 >= 0 && gesher::LookupDevice(fd, &device)) gesher::RegisterDevice(fd2, device);
     if (fd2 >= 0) gesher::DupEventObject(fd, fd2);
+    if (fd2 >= 0) gesher::DupFifo(fd, fd2);
     if (fd2 >= 0) gesher::DupBinder(fd, fd2);
     if (fd2 >= 0) gesher::CopyMemfdRegistration(fd, fd2);
     return fd2;
@@ -337,6 +342,7 @@ int dup2(int fd, int fd2) {
     // fd2's old file is closed: forget what it was.
     gesher::ForgetDevice(fd2);
     gesher::ForgetEventObject(fd2);
+    gesher::ForgetFifo(fd2);
     gesher::ForgetEpollEntries(fd2);
     gesher::ForgetBinder(fd2);
     gesher::CopyMemfdRegistration(fd, fd2);
@@ -345,6 +351,7 @@ int dup2(int fd, int fd2) {
       gesher::RegisterDevice(fd2, device);
     } else if (!source_is_socket) {
       gesher::DupEventObject(fd, fd2);
+      gesher::DupFifo(fd, fd2);
       gesher::DupBinder(fd, fd2);
     }
   }
@@ -418,6 +425,7 @@ bool PollFile(pollfd* p) {
   // The NUL fd reserves a number, but an epoll is readable only when its
   // interest list has a reportable event. It is never a writable file.
   if (gesher::PollEpoll(p->fd, p->events, &p->revents)) return p->revents != 0;
+  if (gesher::PollFifo(p->fd, p->events, &p->revents)) return p->revents != 0;
   HANDLE h = gesher::HandleFromFd(p->fd);
   if (h == INVALID_HANDLE_VALUE) {
     p->revents = POLLNVAL;

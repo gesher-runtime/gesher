@@ -32,6 +32,7 @@
 #include <string_view>
 
 #include "binder_internal.h"
+#include "fifo_internal.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
 
@@ -221,6 +222,10 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   if (directory && (access & GENERIC_WRITE) != 0) {
     CloseHandle(h);
     return errno = EISDIR, -1;
+  }
+  int fifo_fd = -1;
+  if (!directory && (flags & O_PATH) == 0 && TryOpenFifo(path, h, flags, &fifo_fd)) {
+    return fifo_fd;
   }
   return FdFromHandle(h, flags);
 }

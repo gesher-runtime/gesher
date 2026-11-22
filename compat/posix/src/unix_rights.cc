@@ -25,6 +25,7 @@
 #include "binder_internal.h"
 #include "binder_wire.h"
 #include "event_internal.h"
+#include "fifo_internal.h"
 #include "internal.h"
 #include "socket_internal.h"
 
@@ -201,7 +202,8 @@ bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata) {
   // Descriptors gesher-base serves itself have no handle another process
   // could use: they cannot travel (ADR 0088: EINVAL, nothing is sent).
   if (IsBinderFd(fd) || DeviceFromFd(fd, &device) || LookupEventFd(fd) != nullptr ||
-      LookupInotify(fd) != nullptr || LookupTimerFd(fd) != nullptr || PollEpoll(fd, 0, &ready)) {
+      IsFifoFd(fd) || LookupInotify(fd) != nullptr || LookupTimerFd(fd) != nullptr ||
+      PollEpoll(fd, 0, &ready)) {
     return errno = EINVAL, false;
   }
   const intptr_t h = _get_osfhandle(fd);
