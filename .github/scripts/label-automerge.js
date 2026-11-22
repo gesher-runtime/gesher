@@ -59,9 +59,10 @@ async function nativeReleaseState(github, pr) {
   // The protected immediate mutation checks the head when it executes. Native
   // waiting would outlive this authorization and could consume an old review
   // after a write-capable contributor changes to an already-green commit.
-  if (['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(node.mergeStateStatus)) return 'merge';
-  if (['BLOCKED', 'BEHIND'].includes(node.mergeStateStatus)) return 'blocked';
-  throw new Error('Native merge state cannot be released: ' + node.mergeStateStatus);
+  const state = node.mergeStateStatus;
+  if (['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(state)) return {mode: 'merge', state};
+  if (['BLOCKED', 'BEHIND'].includes(state)) return {mode: 'blocked', state};
+  throw new Error('Native merge state cannot be released: ' + state);
 }
 
 // The controller republishes the required QA status immediately before it reads
@@ -72,12 +73,35 @@ async function nativeReleaseState(github, pr) {
 // times before deferring. Required evidence is still rechecked after this read.
 const RELEASE_STATE = {attempts: 7, delayMs: 5000};
 async function settledReleaseState(github, pr) {
-  let mode = await nativeReleaseState(github, pr);
-  for (let attempt = 1; mode === 'blocked' && attempt < RELEASE_STATE.attempts; attempt++) {
+  let read = await nativeReleaseState(github, pr);
+  for (let attempt = 1; read.mode === 'blocked' && attempt < RELEASE_STATE.attempts; attempt++) {
     await new Promise(resolve => setTimeout(resolve, RELEASE_STATE.delayMs));
-    mode = await nativeReleaseState(github, pr);
+    read = await nativeReleaseState(github, pr);
   }
-  return mode;
+  return read;
+}
+
+// GitHub can keep reporting BLOCKED for minutes after the gate turns green,
+// typically right after main advanced. No later event reaches a green PR, and
+// scheduled recovery runs are often dropped by GitHub, so a deferral used to
+// strand the PR until someone merged it by hand. Queue a bounded number of
+// fresh reconciliations for the same exact head instead. Each one rechecks
+// every approval and CI condition and never arms native waiting.
+const RELEASE_RETRY = {max: 8};
+async function deferRelease(prGithub, owner, repo, pr, state, attempt, core) {
+  const where = '#' + pr.number + ': GitHub reports ' + state + ' for a green exact-head gate';
+  if (attempt >= RELEASE_RETRY.max) {
+    core.warning(where + ' after ' + attempt + ' queued release retries; ' +
+      'waiting for the next PR event or recovery run');
+    return;
+  }
+  try {
+    await prGithub.rest.repos.createDispatchEvent({owner, repo, event_type: RECONCILE_EVENT,
+      client_payload: {pull_request_number: pr.number, head_sha: pr.head.sha, release_retry: attempt + 1}});
+    core.info(where + '; queued release retry ' + (attempt + 1) + '/' + RELEASE_RETRY.max);
+  } catch (error) {
+    core.warning(where + '; release retry could not be queued: ' + error.message);
+  }
 }
 
 async function release(mergeGithub, pr) {
@@ -216,7 +240,8 @@ async function unlabeledAndSettled(github, statusReader, owner, repo, number, he
   return !values.some(s => [STATUS, qaStatuses.APP_STATUS].includes(s.context) && s.state === 'success');
 }
 
-async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub, publisher, expectedHead) {
+async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub, publisher, expectedHead,
+    releaseRetry = 0) {
   const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
   if (pr.state !== 'open' || (expectedHead && pr.head.sha !== expectedHead)) return;
   let nativeOff = false;
@@ -274,7 +299,7 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
         await statuses.set(pr.head.sha, false);
         return await cancel(github, owner, repo, pr, mergeGithub);
       }
-      const mode = await settledReleaseState(github, pr);
+      const native = await settledReleaseState(github, pr);
       const finalEvent = await p.labelEvent(github, owner, repo, number);
       const finalEvidence = await ciEvidence(github, owner, repo, pr);
       if (finalEvidence.failed) {
@@ -288,7 +313,8 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
         return await cancel(github, owner, repo, pr, mergeGithub);
       }
       await statuses.verifySuccess(pr.head.sha, receipt);
-      if (mode === 'blocked') return;
+      if (native.mode === 'blocked')
+        return await deferRelease(prGithub, owner, repo, pr, native.state, releaseRetry, core);
       // This policy-enforced, exact-head mutation is the only release point.
       // An error never falls back to native waiting or another merge API.
       await release(mergeGithub, pr);
@@ -330,11 +356,15 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
       client_payload: {pull_request_number: pr.number, head_sha: pr.head.sha}});
   };
   if (context.eventName === 'repository_dispatch') {
-    if (payload.action !== RECONCILE_EVENT || !appQaStatus) return;
-    const {pull_request_number: number, head_sha: head} = payload.client_payload ?? {};
-    if (!Number.isSafeInteger(number) || number <= 0 || !p.SHA.test(head))
+    const {pull_request_number: number, head_sha: head, release_retry: retry} = payload.client_payload ?? {};
+    // Release retries are queued in both legacy and App modes.
+    const retrying = retry !== undefined;
+    if (payload.action !== RECONCILE_EVENT || (!appQaStatus && !retrying)) return;
+    if (!Number.isSafeInteger(number) || number <= 0 || !p.SHA.test(head) ||
+        (retrying && (!Number.isSafeInteger(retry) || retry < 1 || retry > RELEASE_RETRY.max)))
       throw new Error('Invalid queued PR reconciliation');
-    return reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses, head);
+    return reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses, head,
+      retrying ? retry : 0);
   }
   if (context.eventName === 'workflow_run') {
     const run = payload.workflow_run;
@@ -456,6 +486,7 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
 };
 module.exports.approved = approved;
 module.exports.RELEASE_STATE = RELEASE_STATE;
+module.exports.RELEASE_RETRY = RELEASE_RETRY;
 module.exports.ciReady = ciReady;
 module.exports.STATUS = STATUS;
 module.exports.APP_SLUG = p.APP_SLUG;

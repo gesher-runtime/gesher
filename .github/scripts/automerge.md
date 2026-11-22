@@ -107,6 +107,22 @@ fetched. Registered workflow identities, paths and enabled states are reread at
 each CI evidence pass, including after App status publication. Title or body
 edits do not start the job; base changes still do.
 
+### Deferred release retries
+
+GitHub computes `mergeStateStatus` asynchronously. After the gate turns green,
+and especially right after `main` advanced, it can keep reporting `BLOCKED` for
+minutes even though every rule is already satisfied. The controller re-reads it
+7 times, 5 seconds apart. If GitHub still reports `BLOCKED` or `BEHIND`, the
+controller logs that state and, with the App token, queues a
+`gesher-automerge-reconcile` dispatch for the same PR and exact head with a
+`release_retry` count. The dispatched job joins that PR's concurrency queue and
+runs the full reconciliation again: label, permission, receipt, CI evidence and
+gate verification, then the same protected exact-head SQUASH release. It never
+arms native waiting. Retries are queued in legacy and App modes, stop after 8,
+and end at once if the head changed or the PR closed. After the last retry a
+warning names the state; the next PR event or recovery run tries again. A
+failed dispatch is logged and leaves the green gate as it is.
+
 ### Recovery schedule
 
 A controller run that fails after CI completion, for example on an exhausted API
