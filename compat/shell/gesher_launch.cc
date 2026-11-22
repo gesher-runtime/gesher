@@ -382,6 +382,7 @@ bool SplashFor(const std::wstring& here, Splash* splash) {
     static const wchar_t* const kCommands[] = {L"install", L"uninstall", L"view", L"list",
                                                L"status", L"start", L"shutdown",
                                                L"toast-activated", L"apk-icon", L"proxy", L"spell-checker",
+                                               L"windows",
                                                L"control-panel", L"settings", L"dashboard", L"gui"};
     for (const wchar_t* command : kCommands) {
       if (Lower(args[0]) == command) return false;

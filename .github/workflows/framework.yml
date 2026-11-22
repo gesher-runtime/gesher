@@ -55,7 +55,7 @@ jobs:
     outputs:
       runner: ${{ steps.route.outputs.runner }}
     steps:
-      - uses: gesher-runtime/gesher/.github/actions/runner-route@b9510513a538d80669895521d1061b54fbe11aff
+      - uses: gesher-runtime/gesher/.github/actions/runner-route@5d76cae649c2257c376aaf87a5283099c99f111c
         id: route
         with:
           requested: ${{ inputs.local-runner }}
@@ -76,7 +76,7 @@ jobs:
           persist-credentials: false
       - name: Initialize local build inputs
         if: runner.environment == 'self-hosted'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: initialize
 
@@ -108,7 +108,7 @@ jobs:
 
       - name: Cache AOSP sources
         if: steps.reuse.outputs.build == 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: third_party/aosp
@@ -121,7 +121,7 @@ jobs:
 
       - name: Save fetched AOSP inputs
         if: steps.reuse.outputs.build == 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: third_party/aosp
@@ -137,7 +137,7 @@ jobs:
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
         if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: ~/.cache/ccache
@@ -170,7 +170,7 @@ jobs:
 
       - name: Save compiler output
         if: always() && steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: ~/.cache/ccache
@@ -201,7 +201,7 @@ jobs:
           persist-credentials: false
       - name: Initialize local build inputs
         if: runner.environment == 'self-hosted'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: initialize
 
@@ -241,7 +241,7 @@ jobs:
 
       - name: Restore AOSP sources
         id: aosp
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: third_party/aosp
@@ -270,7 +270,7 @@ jobs:
       # after it is built.
       - name: Restore the framework's JVM tools (kotlinc, JavaPoet, Guava)
         id: jvm
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: out/framework/jvm-tools
@@ -278,7 +278,7 @@ jobs:
 
       - name: Restore the coremod
         id: coremod
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: out/coremod
@@ -292,7 +292,7 @@ jobs:
 
       - name: Save the coremod
         if: steps.coremod.outputs.cache-hit != 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: out/coremod
@@ -300,7 +300,7 @@ jobs:
 
       - name: Restore framework-res
         id: res
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: out/framework-res
@@ -311,7 +311,7 @@ jobs:
       # with retries, as dl.google.com fails now and then.
       - name: Restore build-tools
         id: bt
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: work/build-tools-36.1
@@ -332,7 +332,7 @@ jobs:
 
       - name: Save build-tools
         if: steps.bt.outputs.cache-hit != 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: work/build-tools-36.1
@@ -344,7 +344,7 @@ jobs:
 
       - name: Save framework-res
         if: steps.res.outputs.cache-hit != 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: out/framework-res
@@ -516,6 +516,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Package visibility and authenticated shared-UID queries in both GMS modes
+        run: |
+          python3 tools/test_package_visibility.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Unsupported connectionless handwriting callback contracts
         run: |
           python3 tools/test_handwriting_unavailable.py --java-home "$JAVA_HOME" \
@@ -564,7 +571,7 @@ jobs:
 
       - name: Cache public SDK 36 API reference
         id: sdk-contract-reference
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
           path: work/sdk-36/android.jar
@@ -583,7 +590,7 @@ jobs:
 
       - name: Save public SDK 36 API reference
         if: steps.sdk-contract-reference.outputs.cache-hit != 'true'
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: work/sdk-36/android.jar
@@ -636,12 +643,13 @@ jobs:
             -d "$RUNNER_TEMP/notification-delegation-sdk" \
             tests/notification-delegation/sdk/java/gesher/notificationdelegation/ControlReceiver.java
 
-      - name: Activity finish, null binding and public media receiver contracts
+      - name: Activity finish, Bluetooth requests, null binding and public media receiver contracts
         run: |
           args=(--java-home "$JAVA_HOME" --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar")
           python3 tools/test_activity_finish.py "${args[@]}"
+          python3 tools/test_bluetooth_requests.py "${args[@]}"
           python3 tools/test_null_bindings.py "${args[@]}"
           python3 tools/test_service_rebinding.py "${args[@]}"
           "$JAVA_HOME/bin/javac" -cp work/sdk-36/android.jar \
@@ -664,6 +672,12 @@ jobs:
       - name: Notification storage identity and legacy migration contracts
         run: |
           python3 tools/test_notification_identity.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+
+      - name: Geolocation request and timeout lifetime contracts
+        run: |
+          python3 tools/test_geolocation_retention.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 
@@ -770,6 +784,18 @@ jobs:
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
+      - name: SDK36 suggestion and Passpoint value contracts
+        run: |
+          python3 tools/test_wifi_suggestion_values.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      - name: SDK36 Wi-Fi network specifier and matcher contracts
+        run: |
+          python3 tools/test_wifi_network_specifier_contracts.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
       - name: Collect framework artifacts
         run: |
           mkdir -p dist-framework
@@ -830,7 +856,7 @@ jobs:
 
       - name: Save the framework's JVM tools
         if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: out/framework/jvm-tools
@@ -845,7 +871,7 @@ jobs:
 
       - name: Save AOSP sources
         if: always() && !cancelled() && steps.after.outputs.sparse != '' && (steps.aosp.outputs.cache-matched-key != format('{0}-{1}', env.AOSP_KEY, steps.after.outputs.sparse))
-        uses: gesher-runtime/gesher/.github/actions/local-build-cache@b9510513a538d80669895521d1061b54fbe11aff
+        uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
           path: third_party/aosp

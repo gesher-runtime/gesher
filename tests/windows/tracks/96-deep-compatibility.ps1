@@ -101,6 +101,59 @@ Check 'framework: Wi-Fi Direct NSD values, coherent providers and complete nativ
     'P2P_NSD_PROFILE android16-r4; bp4a; sdk36; declarations=40',
     'P2P NSD native readers and Android16-r4 initial/rewrite bytes qualified: 20 cases')
 
+$deepSuggestionOut = FixesRun ($dvmFixes + 'gesher.services.WifiSuggestionValuesNativeTest', '--require-parcel') 90
+$deepSuggestionCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiSuggestionValuesParcel.ps1"
+$deepSuggestionWireOK = $false
+$deepSuggestionWireFailure = ''
+try {
+  Assert-WifiSuggestionValuesParcelEvidence -Output $deepSuggestionOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-suggestion-android-reference-2026-11-18.json')
+  $deepSuggestionWireOK = $true
+} catch { $deepSuggestionWireFailure = $_.Exception.Message }
+Check 'framework: suggestion and Passpoint values, copy ownership and native Parcelable contracts' {
+  $global:LASTEXITCODE = $deepSuggestionCode
+  $deepSuggestionOut
+  if ($deepSuggestionWireOK) { 'Suggestion/Passpoint native Parcel bytes match pinned Android16-r4: 24 cases' }
+  else { $global:LASTEXITCODE = 1; "Suggestion/Passpoint native Parcel evidence failed: $deepSuggestionWireFailure" }
+} @('Wifi suggestion values:', 'parcel=true', 'WIFI_SUGGESTION_NATIVE_PARCEL_REQUIRED_OK',
+    'Suggestion/Passpoint dependency parameter and return identities verified',
+    'Suggestion/Passpoint native Parcel bytes match pinned Android16-r4: 24 cases')
+
+$deepWifiSpecifierOut = FixesRun ($dvmFixes + 'gesher.services.WifiNetworkSpecifierContractTest') 90
+$deepWifiSpecifierCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiNetworkSpecifierParcel.ps1"
+$deepWifiSpecifierWireOK = $false
+$deepWifiSpecifierWireFailure = ''
+try {
+  Assert-WifiNetworkSpecifierParcelEvidence -Output $deepWifiSpecifierOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-network-specifier-android-reference-2026-11-18.json')
+  $deepWifiSpecifierWireOK = $true
+} catch { $deepWifiSpecifierWireFailure = $_.Exception.Message }
+Check 'framework: Wi-Fi specifier validation, matching and native NetworkRequest Parcel' {
+  $global:LASTEXITCODE = $deepWifiSpecifierCode
+  $deepWifiSpecifierOut
+  if ($deepWifiSpecifierWireOK) { 'WifiNetworkSpecifier native Parcel bytes match pinned AOSP r4 reference: 12 cases' }
+  else { $global:LASTEXITCODE = 1; "WifiNetworkSpecifier native Parcel evidence failed: $deepWifiSpecifierWireFailure" }
+} @('WifiNetworkSpecifierContractTest all passed:', 'parcel=true', 'WifiNetworkSpecifier boot NetworkRequest Parcel passed: 4 checks', 'WifiNetworkSpecifier native Parcel bytes match pinned AOSP r4 reference: 12 cases')
+
+$deepP2pDiscoveryOut = FixesRun ($dvmFixes + 'gesher.services.WifiP2pDiscoveryValuesContractTest') 90
+$deepP2pDiscoveryCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiP2pDiscoveryValuesParcel.ps1"
+$deepP2pDiscoveryWireOK = $false
+$deepP2pDiscoveryWireFailure = ''
+try {
+  Assert-WifiP2pDiscoveryValuesParcelEvidence -Output $deepP2pDiscoveryOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-p2p-discovery-values-android-reference-2026-11-18.json')
+  $deepP2pDiscoveryWireOK = $true
+} catch { $deepP2pDiscoveryWireFailure = $_.Exception.Message }
+Check 'framework: Wi-Fi Direct discovery values and complete native readers' {
+  $global:LASTEXITCODE = $deepP2pDiscoveryCode
+  $deepP2pDiscoveryOut
+  if ($deepP2pDiscoveryWireOK) { 'P2P discovery native readers and pinned Android16-r4 bytes qualified: 17 cases' }
+  else { $global:LASTEXITCODE = 1; "P2P discovery native Parcel evidence failed: $deepP2pDiscoveryWireFailure" }
+} @('P2P_DISCOVERY_VALUES: PASS',
+    'P2P_DISCOVERY_PROVIDERS coherent production boot graph; complete original readers',
+    'P2P_DISCOVERY_PROFILE android16-r4; sdk36; declarations=41',
+    'P2P discovery native readers and pinned Android16-r4 bytes qualified: 17 cases')
+
 $deepNetworkOut = FixesRun ($dvmFixes + 'gesher.services.NetworkSnapshotContractTest') 90
 $deepNetworkCode = $LASTEXITCODE
 Check 'framework: network route, address, snapshot and proxy contracts with native Parcel' {
@@ -148,3 +201,22 @@ try {
   }
   Remove-Item -LiteralPath $deepAudioRoot -Recurse -Force -ErrorAction Stop
 }
+
+$deepChannelBlockingOut = FixesRun ($dvmFixes + 'gesher.services.WifiChannelBlockingValuesContractTest') 90
+$deepChannelBlockingCode = $LASTEXITCODE
+. "$PSScriptRoot/../helpers/AssertWifiChannelBlockingValuesParcel.ps1"
+$deepChannelBlockingWireOK = $false
+$deepChannelBlockingWireFailure = ''
+try {
+  Assert-WifiChannelBlockingValuesParcelEvidence -Output $deepChannelBlockingOut -Reference (Join-Path $PSScriptRoot '../../../docs/research/wifi-channel-blocking-values-android-reference-2026-11-18.json')
+  $deepChannelBlockingWireOK = $true
+} catch { $deepChannelBlockingWireFailure = $_.Exception.Message }
+Check 'framework: Wi-Fi channel and blocking values with complete native readers' {
+  $global:LASTEXITCODE = $deepChannelBlockingCode
+  $deepChannelBlockingOut
+  if ($deepChannelBlockingWireOK) { 'Channel/blocking native readers match pinned Android16-r4: 16 cases' }
+  else { $global:LASTEXITCODE = 1; "Channel/blocking native Parcel evidence failed: $deepChannelBlockingWireFailure" }
+} @('WIFI_CHANNEL_BLOCKING_VALUES: PASS',
+    'WIFI_CHANNEL_BLOCKING_PROVIDERS coherent production boot graph; complete original readers',
+    'WIFI_CHANNEL_BLOCKING_PROFILE android16-r4; sdk36; declarations=27',
+    'Channel/blocking native readers match pinned Android16-r4: 16 cases')

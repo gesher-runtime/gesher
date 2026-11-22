@@ -1,0 +1,1413 @@
+{
+  "a07_complete": false,
+  "comparison_id": "official-sdk-36-r02-to-37.0-r02-api-history",
+  "delta_rows": 3827,
+  "delta_rows_sha256": "e589c87310d972447a874cd3100d2a28d60c87edc250bb1b78f6a9a226ffc099",
+  "dimensions": {
+    "class": {
+      "added": 217,
+      "after": 6952,
+      "before": 6735,
+      "changed": 346,
+      "removed": 0,
+      "unchanged": 6389
+    },
+    "extends": {
+      "added": 217,
+      "after": 6994,
+      "before": 6777,
+      "changed": 0,
+      "removed": 0,
+      "unchanged": 6777
+    },
+    "extension_catalog": {
+      "added": 1,
+      "after": 8,
+      "before": 7,
+      "changed": 0,
+      "removed": 0,
+      "unchanged": 7
+    },
+    "field": {
+      "added": 1382,
+      "after": 33573,
+      "before": 32191,
+      "changed": 71,
+      "removed": 0,
+      "unchanged": 32120
+    },
+    "implements": {
+      "added": 74,
+      "after": 2607,
+      "before": 2533,
+      "changed": 0,
+      "removed": 0,
+      "unchanged": 2533
+    },
+    "method": {
+      "added": 1458,
+      "after": 51590,
+      "before": 50132,
+      "changed": 60,
+      "removed": 0,
+      "unchanged": 50072
+    },
+    "root_metadata": {
+      "added": 0,
+      "after": 1,
+      "before": 1,
+      "changed": 1,
+      "removed": 0,
+      "unchanged": 0
+    }
+  },
+  "generator_sha256": {
+    "sdk_api_history_diff.py": "2cd92a1dc64d7d81476ac29fd2b834af64e7b39bbcdf30ffeb7fdafdc89c1c83",
+    "sdk_platform_diff.py": "df91c8d5a1abd8de789f63c8a150c5401be281cfb49619de1e2535c12ad78856"
+  },
+  "interpretation": [
+    "A historical record can describe an API removed before either selected SDK; record additions are not proof of API introduction in the later release.",
+    "An omitted since/deprecated/removed/sdks attribute is retained as absent. Parent metadata is not expanded; absent does not mean zero, unsupported, or never deprecated.",
+    "Module and jar labels are verbatim metadata. They do not identify a Gesher class loader, installed Mainline module, provider revision, or runtime capability.",
+    "SDK extension catalog entries and sdks membership versions are metadata, not observations of SdkExtensions.getExtensionVersion on a device.",
+    "Method identity includes the complete XML name/descriptor. Fields and inheritance edges retain their encoded identities; JVM access, linkage and behavior are not tested.",
+    "The selected SDK packages, their XML schema versions, platform major/minor versions, extension levels and the project's AOSP source tag are distinct profiles."
+  ],
+  "manifest_sha256": "422dd49c8270960fb924f9a472bd7c3ab842b1d4401505a8bbe20997a60b2c45",
+  "profiles": {
+    "after": {
+      "android_codename": "",
+      "api_level_raw": "37.0",
+      "api_major": 37,
+      "api_minor": 0,
+      "api_minor_explicit_in_source_properties": true,
+      "archive": {
+        "bytes": 67281901,
+        "member_root": "android-37.0",
+        "sha1": "ed8ebf7f8822a4de5686d427f237d2fa30ff7410",
+        "sha256": "840b23e827f96e64aea4c89a1194aac3dc5f6bad37edb231c5c795d890330e8d",
+        "url": "https://dl.google.com/android/repository/platform-37.0_r02.zip"
+      },
+      "artifacts": {
+        "data/api-versions.xml": {
+          "bytes": 5911928,
+          "sha256": "9fd47aaab29946a5f5d179797365b2d04e38132d2e7e942f5ea8504e41e6c8e5"
+        },
+        "source.properties": {
+          "bytes": 343,
+          "sha256": "fa89029fc0cee414cb5e44a37cd3033771217eeecb5086577bb6d9b1b03b5b5f"
+        }
+      },
+      "base_sdk": true,
+      "beta_version": "",
+      "extension_level": 22,
+      "history": {
+        "explicit_metadata": {
+          "class": {
+            "jar_absent": 6952,
+            "jar_labels": {},
+            "module_absent": 6492,
+            "module_labels": {
+              "conscrypt": 3,
+              "framework-adservices": 98,
+              "framework-appsearch": 33,
+              "framework-connectivity": 35,
+              "framework-connectivity-t": 5,
+              "framework-healthfitness": 223,
+              "framework-mediaprovider": 13,
+              "framework-pdf": 30,
+              "framework-photopicker": 10,
+              "framework-sdksandbox": 10
+            },
+            "sdks": {
+              "absent": 6492,
+              "empty": 0,
+              "membership_id_counts": {
+                "0": 460,
+                "1000000": 108,
+                "30": 13,
+                "31": 78,
+                "33": 116,
+                "34": 338,
+                "35": 148,
+                "36": 95,
+                "37": 29
+              },
+              "platform_version_raw_counts": {
+                "33": 15,
+                "34": 248,
+                "35": 91,
+                "36": 63,
+                "36.1": 14,
+                "37.0": 29
+              },
+              "present": 460
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 5931,
+                "explicit_minor": 175,
+                "present": 1021,
+                "raw_values": {
+                  "1": 2,
+                  "11": 4,
+                  "12": 1,
+                  "13": 3,
+                  "14": 4,
+                  "15": 2,
+                  "16": 35,
+                  "17": 4,
+                  "18": 3,
+                  "19": 2,
+                  "21": 32,
+                  "22": 366,
+                  "23": 7,
+                  "24": 37,
+                  "26": 11,
+                  "28": 42,
+                  "29": 59,
+                  "3": 8,
+                  "30": 47,
+                  "31": 103,
+                  "33": 11,
+                  "34": 2,
+                  "35": 15,
+                  "36": 3,
+                  "37.0": 175,
+                  "4": 4,
+                  "5": 32,
+                  "9": 7
+                }
+              },
+              "removed": {
+                "absent": 6498,
+                "explicit_minor": 4,
+                "present": 454,
+                "raw_values": {
+                  "12": 6,
+                  "17": 2,
+                  "18": 36,
+                  "21": 4,
+                  "23": 364,
+                  "24": 3,
+                  "26": 4,
+                  "3": 13,
+                  "31": 4,
+                  "34": 1,
+                  "35": 2,
+                  "37.0": 4,
+                  "4": 2,
+                  "9": 9
+                }
+              },
+              "since": {
+                "absent": 0,
+                "explicit_minor": 217,
+                "present": 6952,
+                "raw_values": {
+                  "1": 2256,
+                  "10": 16,
+                  "11": 229,
+                  "12": 22,
+                  "13": 2,
+                  "14": 119,
+                  "15": 12,
+                  "16": 72,
+                  "17": 44,
+                  "18": 67,
+                  "19": 122,
+                  "2": 3,
+                  "20": 10,
+                  "21": 255,
+                  "22": 10,
+                  "23": 152,
+                  "24": 352,
+                  "25": 5,
+                  "26": 356,
+                  "27": 20,
+                  "28": 198,
+                  "29": 197,
+                  "3": 109,
+                  "30": 217,
+                  "31": 329,
+                  "32": 6,
+                  "33": 200,
+                  "34": 445,
+                  "35": 258,
+                  "36": 250,
+                  "36.1": 43,
+                  "37.0": 174,
+                  "4": 43,
+                  "5": 107,
+                  "7": 7,
+                  "8": 128,
+                  "9": 117
+                }
+              }
+            }
+          },
+          "extends": {
+            "jar_absent": 6994,
+            "jar_labels": {},
+            "module_absent": 6994,
+            "module_labels": {},
+            "sdks": {
+              "absent": 6994,
+              "empty": 0,
+              "membership_id_counts": {},
+              "platform_version_raw_counts": {},
+              "present": 0
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 6994,
+                "explicit_minor": 0,
+                "present": 0,
+                "raw_values": {}
+              },
+              "removed": {
+                "absent": 6951,
+                "explicit_minor": 0,
+                "present": 43,
+                "raw_values": {
+                  "11": 2,
+                  "14": 4,
+                  "16": 1,
+                  "19": 8,
+                  "21": 1,
+                  "22": 10,
+                  "23": 4,
+                  "26": 2,
+                  "28": 4,
+                  "29": 2,
+                  "33": 1,
+                  "5": 1,
+                  "9": 3
+                }
+              },
+              "since": {
+                "absent": 6951,
+                "explicit_minor": 0,
+                "present": 43,
+                "raw_values": {
+                  "11": 2,
+                  "14": 4,
+                  "16": 1,
+                  "19": 8,
+                  "21": 1,
+                  "22": 10,
+                  "23": 4,
+                  "26": 2,
+                  "28": 4,
+                  "29": 2,
+                  "33": 1,
+                  "5": 1,
+                  "9": 3
+                }
+              }
+            }
+          },
+          "field": {
+            "jar_absent": 33573,
+            "jar_labels": {},
+            "module_absent": 33573,
+            "module_labels": {},
+            "sdks": {
+              "absent": 33272,
+              "empty": 0,
+              "membership_id_counts": {
+                "0": 301,
+                "1000000": 19,
+                "30": 26,
+                "31": 40,
+                "33": 101,
+                "34": 269,
+                "35": 251,
+                "36": 204,
+                "37": 144
+              },
+              "platform_version_raw_counts": {
+                "33": 9,
+                "34": 32,
+                "35": 51,
+                "36": 41,
+                "36.1": 24,
+                "37.0": 144
+              },
+              "present": 301
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 32540,
+                "explicit_minor": 29,
+                "present": 1033,
+                "raw_values": {
+                  "15": 195,
+                  "16": 29,
+                  "17": 68,
+                  "18": 25,
+                  "19": 6,
+                  "20": 4,
+                  "21": 34,
+                  "22": 1,
+                  "23": 88,
+                  "24": 28,
+                  "25": 1,
+                  "26": 63,
+                  "27": 2,
+                  "28": 103,
+                  "29": 108,
+                  "30": 56,
+                  "31": 57,
+                  "33": 40,
+                  "34": 21,
+                  "35": 35,
+                  "36": 31,
+                  "36.1": 1,
+                  "37.0": 28,
+                  "8": 9
+                }
+              },
+              "removed": {
+                "absent": 33334,
+                "explicit_minor": 1,
+                "present": 239,
+                "raw_values": {
+                  "11": 3,
+                  "14": 16,
+                  "16": 4,
+                  "17": 3,
+                  "18": 1,
+                  "21": 2,
+                  "22": 13,
+                  "23": 83,
+                  "24": 5,
+                  "28": 8,
+                  "29": 25,
+                  "3": 1,
+                  "30": 8,
+                  "31": 2,
+                  "35": 2,
+                  "37.0": 1,
+                  "4": 29,
+                  "7": 1,
+                  "8": 30,
+                  "9": 2
+                }
+              },
+              "since": {
+                "absent": 21054,
+                "explicit_minor": 981,
+                "present": 12519,
+                "raw_values": {
+                  "10": 10,
+                  "11": 621,
+                  "12": 87,
+                  "13": 68,
+                  "14": 413,
+                  "15": 38,
+                  "16": 174,
+                  "17": 156,
+                  "18": 133,
+                  "19": 392,
+                  "2": 4,
+                  "20": 45,
+                  "21": 1152,
+                  "22": 53,
+                  "23": 467,
+                  "24": 585,
+                  "25": 53,
+                  "26": 585,
+                  "27": 43,
+                  "28": 640,
+                  "29": 543,
+                  "3": 296,
+                  "30": 754,
+                  "31": 727,
+                  "32": 47,
+                  "33": 734,
+                  "34": 961,
+                  "35": 431,
+                  "36": 516,
+                  "36.1": 185,
+                  "37.0": 796,
+                  "4": 208,
+                  "5": 234,
+                  "6": 7,
+                  "7": 22,
+                  "8": 195,
+                  "9": 144
+                }
+              }
+            }
+          },
+          "implements": {
+            "jar_absent": 2607,
+            "jar_labels": {},
+            "module_absent": 2607,
+            "module_labels": {},
+            "sdks": {
+              "absent": 2591,
+              "empty": 0,
+              "membership_id_counts": {
+                "0": 16,
+                "33": 16,
+                "34": 16,
+                "35": 16,
+                "36": 1
+              },
+              "platform_version_raw_counts": {
+                "35": 15,
+                "36.1": 1
+              },
+              "present": 16
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 2607,
+                "explicit_minor": 0,
+                "present": 0,
+                "raw_values": {}
+              },
+              "removed": {
+                "absent": 2566,
+                "explicit_minor": 0,
+                "present": 41,
+                "raw_values": {
+                  "11": 2,
+                  "14": 5,
+                  "22": 10,
+                  "23": 5,
+                  "24": 5,
+                  "26": 5,
+                  "28": 4,
+                  "31": 2,
+                  "9": 3
+                }
+              },
+              "since": {
+                "absent": 2402,
+                "explicit_minor": 2,
+                "present": 205,
+                "raw_values": {
+                  "11": 10,
+                  "13": 2,
+                  "14": 9,
+                  "16": 5,
+                  "17": 1,
+                  "18": 1,
+                  "19": 16,
+                  "21": 2,
+                  "22": 1,
+                  "23": 6,
+                  "24": 17,
+                  "26": 7,
+                  "27": 1,
+                  "28": 6,
+                  "29": 8,
+                  "3": 33,
+                  "30": 3,
+                  "31": 10,
+                  "33": 2,
+                  "34": 14,
+                  "35": 25,
+                  "36": 1,
+                  "36.1": 1,
+                  "37.0": 1,
+                  "4": 3,
+                  "5": 1,
+                  "8": 4,
+                  "9": 15
+                }
+              }
+            }
+          },
+          "method": {
+            "jar_absent": 51590,
+            "jar_labels": {},
+            "module_absent": 51590,
+            "module_labels": {},
+            "sdks": {
+              "absent": 51191,
+              "empty": 0,
+              "membership_id_counts": {
+                "0": 399,
+                "1000000": 86,
+                "30": 18,
+                "31": 34,
+                "33": 246,
+                "34": 282,
+                "35": 249,
+                "36": 204,
+                "37": 49
+              },
+              "platform_version_raw_counts": {
+                "30": 1,
+                "33": 27,
+                "34": 54,
+                "35": 97,
+                "36": 117,
+                "36.1": 54,
+                "37.0": 49
+              },
+              "present": 399
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 50001,
+                "explicit_minor": 31,
+                "present": 1589,
+                "raw_values": {
+                  "15": 298,
+                  "16": 45,
+                  "17": 18,
+                  "18": 35,
+                  "19": 19,
+                  "20": 4,
+                  "21": 103,
+                  "22": 5,
+                  "23": 94,
+                  "24": 47,
+                  "25": 2,
+                  "26": 102,
+                  "27": 2,
+                  "28": 128,
+                  "29": 134,
+                  "30": 117,
+                  "31": 105,
+                  "33": 159,
+                  "34": 56,
+                  "35": 39,
+                  "36": 46,
+                  "36.1": 2,
+                  "37.0": 29
+                }
+              },
+              "removed": {
+                "absent": 51274,
+                "explicit_minor": 0,
+                "present": 316,
+                "raw_values": {
+                  "10": 1,
+                  "11": 30,
+                  "12": 9,
+                  "14": 60,
+                  "16": 25,
+                  "17": 19,
+                  "18": 4,
+                  "19": 4,
+                  "2": 1,
+                  "20": 1,
+                  "21": 39,
+                  "22": 5,
+                  "23": 37,
+                  "24": 5,
+                  "26": 11,
+                  "28": 6,
+                  "29": 11,
+                  "3": 1,
+                  "30": 1,
+                  "31": 1,
+                  "33": 4,
+                  "34": 11,
+                  "35": 11,
+                  "36": 5,
+                  "4": 2,
+                  "8": 1,
+                  "9": 11
+                }
+              },
+              "since": {
+                "absent": 39397,
+                "explicit_minor": 583,
+                "present": 12193,
+                "raw_values": {
+                  "10": 7,
+                  "11": 404,
+                  "12": 77,
+                  "13": 17,
+                  "14": 294,
+                  "15": 29,
+                  "16": 379,
+                  "17": 134,
+                  "18": 158,
+                  "19": 273,
+                  "2": 7,
+                  "20": 28,
+                  "21": 843,
+                  "22": 77,
+                  "23": 508,
+                  "24": 787,
+                  "25": 48,
+                  "26": 770,
+                  "27": 46,
+                  "28": 486,
+                  "29": 814,
+                  "3": 349,
+                  "30": 610,
+                  "31": 689,
+                  "32": 12,
+                  "33": 907,
+                  "34": 828,
+                  "35": 619,
+                  "36": 420,
+                  "36.1": 206,
+                  "37.0": 377,
+                  "4": 81,
+                  "5": 181,
+                  "7": 53,
+                  "8": 198,
+                  "9": 477
+                }
+              }
+            }
+          }
+        },
+        "extension_catalog": {
+          "1000000": {
+            "id": "1000000",
+            "name": "Ad Services Extensions",
+            "reference": "android/os/ext/SdkExtensions$AD_SERVICES",
+            "shortname": "AD_SERVICES-ext"
+          },
+          "30": {
+            "id": "30",
+            "name": "R Extensions",
+            "reference": "android/os/Build$VERSION_CODES$R",
+            "shortname": "R-ext"
+          },
+          "31": {
+            "id": "31",
+            "name": "S Extensions",
+            "reference": "android/os/Build$VERSION_CODES$S",
+            "shortname": "S-ext"
+          },
+          "33": {
+            "id": "33",
+            "name": "T Extensions",
+            "reference": "android/os/Build$VERSION_CODES$TIRAMISU",
+            "shortname": "T-ext"
+          },
+          "34": {
+            "id": "34",
+            "name": "U Extensions",
+            "reference": "android/os/Build$VERSION_CODES$UPSIDE_DOWN_CAKE",
+            "shortname": "U-ext"
+          },
+          "35": {
+            "id": "35",
+            "name": "V Extensions",
+            "reference": "android/os/Build$VERSION_CODES$VANILLA_ICE_CREAM",
+            "shortname": "V-ext"
+          },
+          "36": {
+            "id": "36",
+            "name": "B Extensions",
+            "reference": "android/os/Build$VERSION_CODES$BAKLAVA",
+            "shortname": "B-ext"
+          },
+          "37": {
+            "id": "37",
+            "name": "C Extensions",
+            "reference": "android/os/Build$VERSION_CODES$CINNAMON_BUN",
+            "shortname": "C-ext"
+          }
+        },
+        "minimum_version": null,
+        "records_by_kind": {
+          "class": 6952,
+          "extends": 6994,
+          "field": 33573,
+          "implements": 2607,
+          "method": 51590
+        },
+        "root_attributes": {
+          "version": "4"
+        },
+        "unresolved_extension_catalog_memberships": {}
+      },
+      "id": "sdk-37.0-base-ext22-r2",
+      "package_path": "platforms;android-37.0",
+      "platform_codename": "",
+      "platform_version": "17",
+      "preview_sdk_int": "0",
+      "release_classification_basis": "Repository channel and observed codename/preview fields are reported separately; absent properties remain null.",
+      "repository_channel": {
+        "id": "channel-0",
+        "name": "stable"
+      },
+      "repository_codename": "",
+      "sdk_package_revision": "2",
+      "source_properties": {
+        "AndroidVersion.ApiLevel": "37.0",
+        "AndroidVersion.BetaVersion": "",
+        "AndroidVersion.CodeName": "",
+        "AndroidVersion.ExtensionLevel": "22",
+        "AndroidVersion.IsBaseSdk": "true",
+        "AndroidVersion.PreviewSdkInt": "0",
+        "Layoutlib.Api": "15",
+        "Layoutlib.Revision": "1",
+        "Pkg.Desc": "Android SDK Platform 17",
+        "Pkg.Revision": "2",
+        "Pkg.UserSrc": "false",
+        "Platform.CodeName": "",
+        "Platform.MinToolsRev": "22",
+        "Platform.Version": "17"
+      }
+    },
+    "before": {
+      "android_codename": null,
+      "api_level_raw": "36",
+      "api_major": 36,
+      "api_minor": 0,
+      "api_minor_explicit_in_source_properties": false,
+      "archive": {
+        "bytes": 65878410,
+        "member_root": "android-36",
+        "sha1": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
+        "sha256": "37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e",
+        "url": "https://dl.google.com/android/repository/platform-36_r02.zip"
+      },
+      "artifacts": {
+        "data/api-versions.xml": {
+          "bytes": 5674817,
+          "sha256": "923f7e6367759e127679b6b5a4156ee801100e3cc07dc1d99cb811e791e45435"
+        },
+        "source.properties": {
+          "bytes": 257,
+          "sha256": "72291ff6611dbfc46fdfb6de2821c4a62c87befa5200713847eda426e3a501c2"
+        }
+      },
+      "base_sdk": true,
+      "beta_version": null,
+      "extension_level": 17,
+      "history": {
+        "explicit_metadata": {
+          "class": {
+            "jar_absent": 6735,
+            "jar_labels": {},
+            "module_absent": 6471,
+            "module_labels": {
+              "framework-adservices": 98,
+              "framework-appsearch": 29,
+              "framework-connectivity": 29,
+              "framework-connectivity-t": 5,
+              "framework-healthfitness": 55,
+              "framework-mediaprovider": 13,
+              "framework-pdf": 19,
+              "framework-photopicker": 6,
+              "framework-sdksandbox": 10
+            },
+            "sdks": {
+              "absent": 6471,
+              "empty": 0,
+              "membership_id_counts": {
+                "0": 264,
+                "1000000": 108,
+                "30": 13,
+                "31": 59,
+                "33": 93,
+                "34": 143,
+                "35": 106,
+                "36": 53
+              },
+              "platform_version_raw_counts": {
+                "33": 15,
+                "34": 95,
+                "35": 91,
+                "36": 63
+              },
+              "present": 264
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 5881,
+                "explicit_minor": 0,
+                "present": 854,
+                "raw_values": {
+                  "1": 2,
+                  "11": 4,
+                  "12": 1,
+                  "13": 3,
+                  "14": 4,
+                  "15": 2,
+                  "16": 35,
+                  "17": 4,
+                  "18": 3,
+                  "19": 2,
+                  "21": 32,
+                  "22": 366,
+                  "23": 7,
+                  "24": 37,
+                  "26": 11,
+                  "28": 40,
+                  "29": 65,
+                  "3": 8,
+                  "30": 47,
+                  "31": 101,
+                  "33": 11,
+                  "34": 2,
+                  "35": 14,
+                  "36": 10,
+                  "4": 4,
+                  "5": 32,
+                  "9": 7
+                }
+              },
+              "removed": {
+                "absent": 6286,
+                "explicit_minor": 0,
+                "present": 449,
+                "raw_values": {
+                  "12": 6,
+                  "17": 2,
+                  "18": 36,
+                  "21": 4,
+                  "23": 364,
+                  "24": 3,
+                  "26": 4,
+                  "3": 13,
+                  "31": 4,
+                  "35": 2,
+                  "4": 2,
+                  "9": 9
+                }
+              },
+              "since": {
+                "absent": 0,
+                "explicit_minor": 0,
+                "present": 6735,
+                "raw_values": {
+                  "1": 2256,
+                  "10": 16,
+                  "11": 229,
+                  "12": 22,
+                  "13": 2,
+                  "14": 119,
+                  "15": 12,
+                  "16": 72,
+                  "17": 44,
+                  "18": 67,
+                  "19": 122,
+                  "2": 3,
+                  "20": 10,
+                  "21": 255,
+                  "22": 10,
+                  "23": 152,
+                  "24": 352,
+                  "25": 5,
+                  "26": 356,
+                  "27": 20,
+                  "28": 196,
+                  "29": 196,
+                  "3": 109,
+                  "30": 217,
+                  "31": 327,
+                  "32": 6,
+                  "33": 200,
+                  "34": 445,
+                  "35": 258,
+                  "36": 255,
+                  "4": 43,
+                  "5": 107,
+                  "7": 7,
+                  "8": 128,
+                  "9": 117
+                }
+              }
+            }
+          },
+          "extends": {
+            "jar_absent": 6777,
+            "jar_labels": {},
+            "module_absent": 6777,
+            "module_labels": {},
+            "sdks": {
+              "absent": 6777,
+              "empty": 0,
+              "membership_id_counts": {},
+              "platform_version_raw_counts": {},
+              "present": 0
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 6777,
+                "explicit_minor": 0,
+                "present": 0,
+                "raw_values": {}
+              },
+              "removed": {
+                "absent": 6734,
+                "explicit_minor": 0,
+                "present": 43,
+                "raw_values": {
+                  "11": 2,
+                  "14": 4,
+                  "16": 1,
+                  "19": 8,
+                  "21": 1,
+                  "22": 10,
+                  "23": 4,
+                  "26": 2,
+                  "28": 4,
+                  "29": 2,
+                  "33": 1,
+                  "5": 1,
+                  "9": 3
+                }
+              },
+              "since": {
+                "absent": 6734,
+                "explicit_minor": 0,
+                "present": 43,
+                "raw_values": {
+                  "11": 2,
+                  "14": 4,
+                  "16": 1,
+                  "19": 8,
+                  "21": 1,
+                  "22": 10,
+                  "23": 4,
+                  "26": 2,
+                  "28": 4,
+                  "29": 2,
+                  "33": 1,
+                  "5": 1,
+                  "9": 3
+                }
+              }
+            }
+          },
+          "field": {
+            "jar_absent": 32191,
+            "jar_labels": {},
+            "module_absent": 32191,
+            "module_labels": {},
+            "sdks": {
+              "absent": 32059,
+              "empty": 0,
+              "membership_id_counts": {
+                "0": 132,
+                "1000000": 18,
+                "30": 25,
+                "31": 25,
+                "33": 69,
+                "34": 105,
+                "35": 87,
+                "36": 40
+              },
+              "platform_version_raw_counts": {
+                "33": 9,
+                "34": 32,
+                "35": 51,
+                "36": 40
+              },
+              "present": 132
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 31154,
+                "explicit_minor": 0,
+                "present": 1037,
+                "raw_values": {
+                  "15": 195,
+                  "16": 29,
+                  "17": 68,
+                  "18": 25,
+                  "19": 6,
+                  "20": 4,
+                  "21": 34,
+                  "22": 1,
+                  "23": 88,
+                  "24": 28,
+                  "25": 1,
+                  "26": 63,
+                  "27": 2,
+                  "28": 103,
+                  "29": 108,
+                  "30": 68,
+                  "31": 61,
+                  "33": 45,
+                  "34": 32,
+                  "35": 29,
+                  "36": 38,
+                  "8": 9
+                }
+              },
+              "removed": {
+                "absent": 31952,
+                "explicit_minor": 0,
+                "present": 239,
+                "raw_values": {
+                  "11": 3,
+                  "14": 16,
+                  "16": 4,
+                  "17": 3,
+                  "18": 1,
+                  "21": 2,
+                  "22": 13,
+                  "23": 83,
+                  "24": 5,
+                  "28": 8,
+                  "29": 26,
+                  "3": 1,
+                  "30": 8,
+                  "31": 2,
+                  "35": 2,
+                  "4": 29,
+                  "7": 1,
+                  "8": 30,
+                  "9": 2
+                }
+              },
+              "since": {
+                "absent": 20653,
+                "explicit_minor": 0,
+                "present": 11538,
+                "raw_values": {
+                  "10": 10,
+                  "11": 621,
+                  "12": 87,
+                  "13": 68,
+                  "14": 413,
+                  "15": 38,
+                  "16": 174,
+                  "17": 156,
+                  "18": 133,
+                  "19": 392,
+                  "2": 4,
+                  "20": 45,
+                  "21": 1152,
+                  "22": 53,
+                  "23": 467,
+                  "24": 585,
+                  "25": 53,
+                  "26": 585,
+                  "27": 43,
+                  "28": 640,
+                  "29": 543,
+                  "3": 296,
+                  "30": 754,
+                  "31": 727,
+                  "32": 47,
+                  "33": 734,
+                  "34": 961,
+                  "35": 431,
+                  "36": 516,
+                  "4": 208,
+                  "5": 234,
+                  "6": 7,
+                  "7": 22,
+                  "8": 195,
+                  "9": 144
+                }
+              }
+            }
+          },
+          "implements": {
+            "jar_absent": 2533,
+            "jar_labels": {},
+            "module_absent": 2533,
+            "module_labels": {},
+            "sdks": {
+              "absent": 2518,
+              "empty": 0,
+              "membership_id_counts": {
+                "0": 15,
+                "33": 15,
+                "34": 15,
+                "35": 15
+              },
+              "platform_version_raw_counts": {
+                "35": 15
+              },
+              "present": 15
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 2533,
+                "explicit_minor": 0,
+                "present": 0,
+                "raw_values": {}
+              },
+              "removed": {
+                "absent": 2492,
+                "explicit_minor": 0,
+                "present": 41,
+                "raw_values": {
+                  "11": 2,
+                  "14": 5,
+                  "22": 10,
+                  "23": 5,
+                  "24": 5,
+                  "26": 5,
+                  "28": 4,
+                  "31": 2,
+                  "9": 3
+                }
+              },
+              "since": {
+                "absent": 2330,
+                "explicit_minor": 0,
+                "present": 203,
+                "raw_values": {
+                  "11": 10,
+                  "13": 2,
+                  "14": 9,
+                  "16": 5,
+                  "17": 1,
+                  "18": 1,
+                  "19": 16,
+                  "21": 2,
+                  "22": 1,
+                  "23": 6,
+                  "24": 17,
+                  "26": 7,
+                  "27": 1,
+                  "28": 6,
+                  "29": 8,
+                  "3": 33,
+                  "30": 3,
+                  "31": 10,
+                  "33": 2,
+                  "34": 14,
+                  "35": 25,
+                  "36": 1,
+                  "4": 3,
+                  "5": 1,
+                  "8": 4,
+                  "9": 15
+                }
+              }
+            }
+          },
+          "method": {
+            "jar_absent": 50132,
+            "jar_labels": {},
+            "module_absent": 50132,
+            "module_labels": {},
+            "sdks": {
+              "absent": 49838,
+              "empty": 0,
+              "membership_id_counts": {
+                "0": 294,
+                "1000000": 85,
+                "30": 16,
+                "31": 15,
+                "33": 190,
+                "34": 182,
+                "35": 149,
+                "36": 104
+              },
+              "platform_version_raw_counts": {
+                "30": 1,
+                "33": 26,
+                "34": 54,
+                "35": 97,
+                "36": 116
+              },
+              "present": 294
+            },
+            "versions": {
+              "deprecated": {
+                "absent": 48563,
+                "explicit_minor": 0,
+                "present": 1569,
+                "raw_values": {
+                  "15": 298,
+                  "16": 45,
+                  "17": 18,
+                  "18": 35,
+                  "19": 19,
+                  "20": 4,
+                  "21": 103,
+                  "22": 5,
+                  "23": 94,
+                  "24": 47,
+                  "25": 2,
+                  "26": 102,
+                  "27": 2,
+                  "28": 126,
+                  "29": 134,
+                  "30": 120,
+                  "31": 102,
+                  "33": 163,
+                  "34": 52,
+                  "35": 32,
+                  "36": 66
+                }
+              },
+              "removed": {
+                "absent": 49816,
+                "explicit_minor": 0,
+                "present": 316,
+                "raw_values": {
+                  "10": 1,
+                  "11": 30,
+                  "12": 9,
+                  "14": 60,
+                  "16": 25,
+                  "17": 19,
+                  "18": 4,
+                  "19": 4,
+                  "2": 1,
+                  "20": 1,
+                  "21": 39,
+                  "22": 5,
+                  "23": 37,
+                  "24": 5,
+                  "26": 11,
+                  "28": 6,
+                  "29": 11,
+                  "3": 1,
+                  "30": 1,
+                  "31": 1,
+                  "33": 4,
+                  "34": 11,
+                  "35": 11,
+                  "36": 5,
+                  "4": 2,
+                  "8": 1,
+                  "9": 11
+                }
+              },
+              "since": {
+                "absent": 38522,
+                "explicit_minor": 0,
+                "present": 11610,
+                "raw_values": {
+                  "10": 7,
+                  "11": 404,
+                  "12": 77,
+                  "13": 17,
+                  "14": 294,
+                  "15": 29,
+                  "16": 379,
+                  "17": 134,
+                  "18": 158,
+                  "19": 273,
+                  "2": 7,
+                  "20": 28,
+                  "21": 843,
+                  "22": 77,
+                  "23": 508,
+                  "24": 787,
+                  "25": 48,
+                  "26": 770,
+                  "27": 46,
+                  "28": 484,
+                  "29": 814,
+                  "3": 349,
+                  "30": 610,
+                  "31": 686,
+                  "32": 12,
+                  "33": 907,
+                  "34": 828,
+                  "35": 618,
+                  "36": 426,
+                  "4": 81,
+                  "5": 181,
+                  "7": 53,
+                  "8": 198,
+                  "9": 477
+                }
+              }
+            }
+          }
+        },
+        "extension_catalog": {
+          "1000000": {
+            "id": "1000000",
+            "name": "Ad Services Extensions",
+            "reference": "android/os/ext/SdkExtensions$AD_SERVICES",
+            "shortname": "AD_SERVICES-ext"
+          },
+          "30": {
+            "id": "30",
+            "name": "R Extensions",
+            "reference": "android/os/Build$VERSION_CODES$R",
+            "shortname": "R-ext"
+          },
+          "31": {
+            "id": "31",
+            "name": "S Extensions",
+            "reference": "android/os/Build$VERSION_CODES$S",
+            "shortname": "S-ext"
+          },
+          "33": {
+            "id": "33",
+            "name": "T Extensions",
+            "reference": "android/os/Build$VERSION_CODES$TIRAMISU",
+            "shortname": "T-ext"
+          },
+          "34": {
+            "id": "34",
+            "name": "U Extensions",
+            "reference": "android/os/Build$VERSION_CODES$UPSIDE_DOWN_CAKE",
+            "shortname": "U-ext"
+          },
+          "35": {
+            "id": "35",
+            "name": "V Extensions",
+            "reference": "android/os/Build$VERSION_CODES$VANILLA_ICE_CREAM",
+            "shortname": "V-ext"
+          },
+          "36": {
+            "id": "36",
+            "name": "B Extensions",
+            "reference": "android/os/Build$VERSION_CODES$BAKLAVA",
+            "shortname": "B-ext"
+          }
+        },
+        "minimum_version": null,
+        "records_by_kind": {
+          "class": 6735,
+          "extends": 6777,
+          "field": 32191,
+          "implements": 2533,
+          "method": 50132
+        },
+        "root_attributes": {
+          "version": "3"
+        },
+        "unresolved_extension_catalog_memberships": {}
+      },
+      "id": "sdk-36-base-ext17-r2",
+      "package_path": "platforms;android-36",
+      "platform_codename": "",
+      "platform_version": "16",
+      "preview_sdk_int": null,
+      "release_classification_basis": "Repository channel and observed codename/preview fields are reported separately; absent properties remain null.",
+      "repository_channel": {
+        "id": "channel-0",
+        "name": "stable"
+      },
+      "repository_codename": null,
+      "sdk_package_revision": "2",
+      "source_properties": {
+        "AndroidVersion.ApiLevel": "36",
+        "AndroidVersion.ExtensionLevel": "17",
+        "AndroidVersion.IsBaseSdk": "true",
+        "Layoutlib.Api": "15",
+        "Layoutlib.Revision": "1",
+        "Pkg.Desc": "Android SDK Platform 16",
+        "Pkg.Revision": "2",
+        "Pkg.UserSrc": "false",
+        "Platform.CodeName": "",
+        "Platform.MinToolsRev": "22",
+        "Platform.Version": "16"
+      }
+    }
+  },
+  "repository_metadata_provenance": {
+    "captured_utc_date": "2026-11-18",
+    "selection": "The two package records and channel labels below were extracted from this hashed official XML snapshot. The comparison verifies archives and measured files against these pins; it does not fetch or revalidate the mutable repository URL.",
+    "snapshot_bytes": 436016,
+    "snapshot_sha256": "8db7cc1bd65bf8c9dffc3678a70d6dc98b02781a24d1ef0d31ecf111a55cc2d5",
+    "source_url": "https://dl.google.com/android/repository/repository2-3.xml"
+  },
+  "runtime_sdk_int_changed": false,
+  "schema_version": 1,
+  "scope": "Explicit SDK API-history metadata; not current declarations, installed providers, or runtime compatibility.",
+  "source_platform_manifest_sha256": "24b22fb2cb012aced9efa7ab036364ced68dfd284ad0c387b3a31e895bc4e325"
+}

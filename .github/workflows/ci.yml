@@ -205,6 +205,10 @@ jobs:
         shell: pwsh
         run: tests/windows/test-test-shards.ps1
 
+      - name: Wi-Fi specifier native evidence checker contracts
+        shell: pwsh
+        run: tests/windows/WifiNetworkSpecifierParcelChecks.ps1
+
       - name: Strict archive adversarial controls
         run: |
           python3 tools/ci/receipt_identity.py
@@ -226,6 +230,7 @@ jobs:
           python3 -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
           python3 -m unittest discover -s tools/tests -p 'test_*api_inventory.py'
           python3 -m unittest discover -s tools/tests -p test_java_member_inventory.py
+          python3 -m unittest discover -s tools/tests -p test_sdk_api_history_diff.py
           python3 -m unittest discover -s tools/tests -p test_audit_services_jni.py
           python3 -m unittest discover -s tools/tests -p test_host_bp_srcs.py
           python3 -m unittest discover -s tools/tests -p test_framework_tree.py
@@ -827,10 +832,10 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     needs: [source-identity]
-    # This immutable policy, not PR-controlled workflow YAML, may use the runner.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@fcb7b44d982a8d8a9faf42a5075966d1f8f0ce23
+    # Keep the complete reviewed recipe immutable and use hosted build runners.
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@2c096437d9474a59e4fd6f78d1670c9c7afc573f
     with:
-      local-runner: true
+      local-runner: false
 
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
