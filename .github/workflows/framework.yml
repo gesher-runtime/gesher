@@ -540,6 +540,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Durable installer attribution and reassignment contracts
+        run: |
+          python3 tools/test_install_source.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: PackageInstaller attached identity contracts
         run: |
           python3 tools/test_package_installer_identity.py --java-home "$JAVA_HOME" \

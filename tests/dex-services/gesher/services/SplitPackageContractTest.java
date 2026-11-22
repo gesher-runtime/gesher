@@ -407,8 +407,9 @@ public final class SplitPackageContractTest {
         // it describes a complete set and discards unspecified optional splits.
         Class<?> metadataType = Class.forName("com.gesher.server.InstallSessionMetadata");
         Object sessionMetadata = construct(metadataType, new Class<?>[]{File.class}, source);
-        Method fullInstall = method(installerType, "install", String.class, metadataType);
-        result = (String[]) fullInstall.invoke(installer, base.getPath(), sessionMetadata);
+        Class<?> sourceType = Class.forName("com.gesher.server.PackageInstallSource");
+        Method fullInstall = method(installerType, "install", String.class, metadataType, sourceType);
+        result = (String[]) fullInstall.invoke(installer, base.getPath(), sessionMetadata, null);
         require("updated".equals(result[1]) && pm.get(PACKAGE).applicationInfo(0).splitNames == null
                 && pm.getProviderInfo(new ComponentName(PACKAGE, PACKAGE + ".FeatureProvider"), 0, 0) == null
                 && pm.getActivityInfo(new ComponentName(PACKAGE, PACKAGE + ".FeatureActivity"), 0, 0) == null,
@@ -428,7 +429,7 @@ public final class SplitPackageContractTest {
         // those types, even when no uses-split dependency makes parsing itself fail.
         Files.write(base.toPath(), inputs.get("base-required"));
         Files.write(core.toPath(), inputs.get("core-typed"));
-        result = (String[]) fullInstall.invoke(installer, base.getPath(), sessionMetadata);
+        result = (String[]) fullInstall.invoke(installer, base.getPath(), sessionMetadata, null);
         require("updated".equals(result[1]), "Complete required-split set was not installed");
         loadFeature(metadata(pm.get(PACKAGE)));
         Files.delete(core.toPath());
@@ -441,7 +442,7 @@ public final class SplitPackageContractTest {
         for (String mode : new String[]{"full-session", "archive-without-types", "archive-without-splits"}) {
             try {
                 if (mode.equals("full-session")) {
-                    fullInstall.invoke(installer, base.getPath(), sessionMetadata);
+                    fullInstall.invoke(installer, base.getPath(), sessionMetadata, null);
                 } else {
                     Map<String, byte[]> incomplete = new LinkedHashMap<>();
                     incomplete.put("base.apk", inputs.get("base-required"));

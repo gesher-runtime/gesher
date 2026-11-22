@@ -1558,7 +1558,18 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
         active.pop_back();
       }
       if (observer) { observer(false, result, native_error, context); observer = nullptr; }
-      if (result != SOCKET_ERROR) break;
+      if (result != SOCKET_ERROR) {
+        // A waited Winsock OOB notification can precede the readable byte.
+        // Confirm the current level once without waiting before publishing
+        // POLLPRI. The outer poll keeps its original deadline if it is absent.
+        bool confirm_priority = false;
+        if (sample_wait != 0 && result > 0) {
+          for (const auto& fd : active)
+            confirm_priority |= (fd.revents & fd.events & POLLRDBAND) != 0;
+        }
+        if (confirm_priority) { sample_wait = 0; continue; }
+        break;
+      }
       if (native_error != WSAEINVAL && native_error != WSAENOTSOCK) return errno = ErrnoFromWsa(native_error), -1;
       // An invalid sentinel or a positively closed SOCKET can produce global
       // WSAEINVAL/WSAENOTSOCK rather than counted POLLNVAL. Recover only endpoints

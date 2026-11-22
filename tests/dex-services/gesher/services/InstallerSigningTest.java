@@ -86,14 +86,20 @@ public final class InstallerSigningTest {
         Class<?> amClass = Class.forName("com.gesher.server.ActivityManagerService");
         Class<?> notifications = Class.forName("com.gesher.server.NotificationManagerService");
         Class<?> installerClass = Class.forName("com.gesher.server.Installer");
-        Class<?> entryClass = Class.forName(installerClass.getName() + "$Entry");
         Object pm = construct(pmClass, new Class<?>[] {java.util.Collection.class}, Collections.singletonList(previous));
         Object atm = construct(atmClass, new Class<?>[] {pmClass}, pm);
         construct(amClass, new Class<?>[] {atmClass, pmClass, notifications}, atm, pm,
                 construct(notifications, new Class<?>[0]));
-        Map<String, Object> entries = new LinkedHashMap<>();
-        entries.put(pkg, construct(entryClass, new Class<?>[] {String.class, String.class, long.class, long.class},
-                pkg, oldCode.getPath(), 12345L, 12345L));
+        // Seed the supported on-disk registry format, as system-server startup
+        // does. Entry is private implementation state and gains fields as
+        // installer metadata evolves; this also verifies legacy-row migration.
+        File registry = new File(device, "system/packages.list");
+        Files.createDirectories(registry.toPath().getParent());
+        Files.writeString(registry.toPath(), pkg + "\t" + oldCode.getPath() + "\t12345\t12345\n");
+        Method readRegistry = installerClass.getDeclaredMethod("readRegistry");
+        readRegistry.setAccessible(true);
+        Map<?, ?> entries = (Map<?, ?>) readRegistry.invoke(null);
+        require(entries.containsKey(pkg), "Legacy registry row did not restore the installed entry");
         Object installer = construct(installerClass, new Class<?>[] {pmClass, atmClass, Map.class}, pm, atm, entries);
         File marker = new File((String) apkClass.getMethod("dataDir").invoke(previous), "rotation-data.txt");
         Files.createDirectories(marker.toPath().getParent());

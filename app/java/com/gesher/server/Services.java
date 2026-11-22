@@ -105,6 +105,7 @@ public final class Services {
     static Created create(PackageManagerService pm, boolean persistentAccounts) {
         Map<String, IBinder> services = new LinkedHashMap<>();
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        pm.attachInstallSourceCallers(atm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         ClipboardService clipboard = new ClipboardService(atm, pm);

@@ -4,7 +4,10 @@
  */
 package com.gesher.server;
 
+import com.gesher.app.NativeLibs;
+
 import java.io.File;
+import java.io.IOException;
 
 /** Fixed addon slots; all checks precede manifest parsing and app code loading. */
 public final class MicrogAddons {
@@ -21,6 +24,27 @@ public final class MicrogAddons {
         ApkPackage parsed = ApkPackage.parse(apk.getPath());
         parsed.setSystemAddon(true);
         return parsed;
+    }
+
+    /**
+     * The package manager's native-library setup for a staged {@code priv-app} addon, as
+     * at a system package scan: the APK's libraries for its best ABI in
+     * {@code <code dir>/lib/<isa>} (stale ones removed), and the package's
+     * {@code nativeLibraryDir} and {@code primaryCpuAbi}. The package is changed only
+     * once its directory is ready; returns how many libraries the APK has.
+     */
+    static int prepareNativeLibraries(ApkPackage pkg) throws IOException {
+        File codeDir = new File(pkg.apkPath).getParentFile();
+        if (codeDir == null) throw new IOException("No code directory: " + pkg.apkPath);
+        String abi = NativeLibs.abiFor(pkg.apkPath);
+        String libDir = new File(codeDir, "lib/"
+                + NativeLibs.instructionSetDir(abi != null ? abi : NativeLibs.ABI)).getPath();
+        // Without native code this only clears libraries an earlier release left.
+        int count = NativeLibs.syncDirectory(pkg.apkPath, libDir,
+                abi != null ? abi : NativeLibs.ABI);
+        pkg.setNativeLibraryDir(libDir);
+        pkg.setPrimaryCpuAbi(abi);
+        return count;
     }
 
     /** Packaging preflight, with no Binder connection, account or network traffic. */
