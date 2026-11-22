@@ -18,18 +18,19 @@ if ($Dex -eq '') { $Dex = Join-Path $here 'hello.dex' }  # PowerShell 5: no $PSS
 
 $dexFull = (Resolve-Path $Dex).Path
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
+. (Join-Path $here 'gesher-runtime-files.ps1')
 # Drive-less paths resolve on the current drive.
-Set-Location $here
+Set-Location -LiteralPath $here
 # A Windows path as gesher-base's path model reads it (docs/posix.md): no drive
 # on the current drive, /mnt/<drive>/... on another, so ':'-separated lists
 # hold no drive colons.
 function NoDrive([string] $p) {
-  $p = $p -replace '\\', '/'
-  if ($p -match '^([A-Za-z]):(.*)$') {
-    if ($Matches[1] -ieq (Get-Location).Drive.Name) { return $Matches[2] }
-    return "/mnt/$($Matches[1].ToLower())$($Matches[2])"
-  }
-  return $p
+  return ConvertTo-GesherAndroidPath -Path $p
+}
+# The user's own dex path keeps its long form: only Gesher's roots take
+# 8.3 short paths, so file names and extensions stay as given (docs/installer.md).
+function UserPath([string] $p) {
+  return ConvertTo-GesherAndroidPath -Path $p -KeepLongPath
 }
 
 # The directories Android's runtime expects.
@@ -38,7 +39,6 @@ foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
 }
 # ICU's data, where the i18n module keeps it on Android; refreshed when a new
 # version of Gesher brings a different one.
-. (Join-Path $here 'gesher-runtime-files.ps1')
 $runtimeSync = New-GesherRuntimeSync -InstallDirectory $here -ProfileDirectory $root -Component dex
 $data = Get-Item (Join-Path $here 'icudt*l.dat')
 $icu = Join-Path $root "i18n/etc/icu/$($data.Name)"
@@ -55,5 +55,5 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$here/tzdata"
 $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.
 & (Join-Path $here 'dalvikvm.exe') "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$here/framework/boot.art")" `
-  -Xint '-Xusejit:false' -cp (NoDrive $dexFull) $Class @ProgramArgs
+  -Xint '-Xusejit:false' -cp (UserPath $dexFull) $Class @ProgramArgs
 exit $LASTEXITCODE

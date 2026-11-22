@@ -1,0 +1,16 @@
+{
+  "shared_baseline": "537936e89a450107821b0bcf4cd40cec0d060f24",
+  "main_baseline": "452372561e0a50c63f072a5ae1e7ca5aa81354b8",
+  "shared_policy_sha256": "6fb25a0c98cae7e71f7601a77f466dba9ca70e56a791dd78795af9eb3a376456",
+  "main_policy_sha256": "a32bc8e65cf655635c04fb86f1ea23d668d125a79a8fef4732c86055b2985ac0",
+  "original_ofd_sha256": "1847217ffc744c9362c264f40d658ab2e7bf31510e0e83d4267bf24ae4640171",
+  "main_ofd_sha256": "f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146",
+  "owner_path": "compat/posix/src/stdio_output.cc",
+  "owner_before_sha256": "437ff8960772d27aaa44349b691dec2c9e6493e1b35716c63000d08c8fd4c19f",
+  "owner_after_sha256": "c45162bef254bbcc42898cefd7ecfddab9df1a2f2dd94f2f5b51ab824efd6e75",
+  "owner_patch_sha256": "0520e8d737175cecae5fd99a54375ba55d8d42bd774c1e3edccd591d0f3dd968",
+  "main_path": "compat/bionic/stdio_bionic.cc",
+  "main_before_sha256": "9fedaef9b3bd5e658a74daa7199dff6d99711bcf1c5aca9204cdb5dd1e8e1777",
+  "main_after_sha256": "bb8aba18f5794919f0338eb42df7807b89203ffd3371f9e3a53aad40982ecfa1",
+  "main_patch_sha256": "e6ff43e7a52e6f1242a7e9bcf797f3171245f88ca13bfa2538efe71ea13c9b67"
+}

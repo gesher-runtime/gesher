@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <array>
 #include <atomic>
 #include <climits>
 #include <cstdarg>
@@ -81,12 +82,42 @@ class FormatScope {
   CancellationCleanup cleanup_;
 };
 using Streams = std::map<FILE*, StatePtr>;
+struct StreamGeneration {
+  std::atomic<uint64_t> value{1};
+};
 struct Registry {
   std::mutex mutex;
   Streams streams;
+  std::array<StreamGeneration, 32> generations;
 };
 INIT_ONCE once = INIT_ONCE_STATIC_INIT;
 Registry* registry = nullptr;
+
+// A positive cache points at the map's stable shared_ptr slot, not at a
+// separate Bionic record. The CRT FILE lock (or the caller's unlocked-stdio
+// synchronization) keeps that slot alive while Find copies its ownership.
+// Other streams may insert/erase without invalidating this map node. Before
+// retiring or replacing a node, advance its bucket generation under the
+// registry mutex. No TLS destructor can retain or retire a stream owner.
+struct CachedStreamOwner {
+  FILE* stream = nullptr;
+  const StatePtr* owner = nullptr;
+  uint64_t generation = 0;
+};
+thread_local std::array<CachedStreamOwner, 8> t_stream_owners{};
+
+std::atomic<uint64_t>& OwnerGeneration(FILE* stream) {
+  return registry->generations[(reinterpret_cast<uintptr_t>(stream) >> 4) %
+                               registry->generations.size()].value;
+}
+// Caller holds registry->mutex and the stream's retirement synchronization.
+void InvalidateCachedOwner(FILE* stream) {
+  auto& epoch = OwnerGeneration(stream);
+  const uint64_t generation = epoch.load(std::memory_order_relaxed);
+  // Zero permanently disables this bucket after wrap; never resurrect an old
+  // pointer by reusing its generation. The locked lookup remains available.
+  if (generation != 0) epoch.store(generation + 1, std::memory_order_release);
+}
 
 auto Writer(int fd) { return [fd](const char* bytes, unsigned count) { return ::write(fd, bytes, count); }; }
 auto Seeker(int fd) { return [fd](int64_t offset, int whence) { return static_cast<int64_t>(::lseek64(fd, offset, whence)); }; }
@@ -142,10 +173,20 @@ int ConfigureDefaults(State& state, FILE* stream, int fd, int flags, bool standa
 }
 StatePtr Find(FILE* stream, bool create) {
   if (!Initialize()) return {};
+  auto& generation = OwnerGeneration(stream);
+  auto& cached = t_stream_owners[(reinterpret_cast<uintptr_t>(stream) >> 4) %
+                                 t_stream_owners.size()];
+  if (cached.stream == stream && cached.owner != nullptr && cached.generation != 0 &&
+      cached.generation == generation.load(std::memory_order_acquire)) {
+    return *cached.owner;
+  }
   {
     std::lock_guard<std::mutex> lock(registry->mutex);
     auto found = registry->streams.find(stream);
-    if (found != registry->streams.end()) return found->second;
+    if (found != registry->streams.end()) {
+      cached = {stream, &found->second, generation.load(std::memory_order_relaxed)};
+      return found->second;
+    }
   }
   if (!create) return {};
   // Query the descriptor outside the registry mutex. Descriptor replacement
@@ -163,7 +204,9 @@ StatePtr Find(FILE* stream, bool create) {
     auto candidate = std::make_shared<State>();
     if (ConfigureDefaults(*candidate, stream, fd, flags, true) < 0) return {};
     std::lock_guard<std::mutex> lock(registry->mutex);
-    return registry->streams.emplace(stream, candidate).first->second;
+    auto found = registry->streams.emplace(stream, candidate).first;
+    cached = {stream, &found->second, generation.load(std::memory_order_relaxed)};
+    return found->second;
   } catch (const std::bad_alloc&) {
     errno = ENOMEM;
     return {};
@@ -237,7 +280,10 @@ void ForgetLocal(FILE* stream) {
   state->live = false;
   std::lock_guard<std::mutex> lock(registry->mutex);
   auto found = registry->streams.find(stream);
-  if (found != registry->streams.end() && found->second == state) registry->streams.erase(found);
+  if (found != registry->streams.end() && found->second == state) {
+    InvalidateCachedOwner(stream);
+    registry->streams.erase(found);
+  }
 }
 int RegisterLocal(FILE* stream, int flags) {
   auto state = Find(stream, true);
@@ -266,6 +312,7 @@ FILE* OpenDescriptorLocal(int fd, const char* mode, int flags) {
     std::lock_guard<std::mutex> lock(registry->mutex);
     // A raw external CRT close can leave stale metadata, but no participating
     // live stream can have the token _fdopen has just allocated.
+    InvalidateCachedOwner(stream);
     registry->streams.erase(stream);
     registry->streams.insert(std::move(node));
   }

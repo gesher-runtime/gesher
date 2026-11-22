@@ -166,9 +166,12 @@ menu shortcut, as a launcher lists it
   updated (new label or icon) or the shortcut is missing; it says so in the
   console (`gesher-app: Start menu shortcut ...`). `gesher-app uninstall
   PACKAGE` removes it and its icon, and the `Gesher Apps` folder once it is
-  empty. A failure never fails the install or the launch. `GESHER_SHORTCUTS=0`
-  turns shortcuts off; runs from a build folder without `gesher-app.cmd` make
-  none.
+  empty. An install committed through Android's `PackageInstaller` session API
+  (an app store such as Aurora Store) makes the shortcut and URL protocols too,
+  from the system server, once the install is published; a removal committed
+  through `PackageInstaller` removes them (ADR 0028's amendment). A failure never
+  fails the install, the removal or the launch. `GESHER_SHORTCUTS=0` turns
+  shortcuts off; runs from a build folder without `gesher-app.cmd` make none.
 - **Window icon without a shortcut**: the app's windows take the shortcut's
   `icon.ico`. A package with no launcher activity, and a staged microG addon
   (its verified `system\priv-app\<package>` slot, which `gesher-app-microg.ps1`
@@ -268,6 +271,38 @@ The packaged `gesher-runtime-files.ps1` helper invalidates the profile's cached
 runtime copies once per installed version, even for equal-size resources. App
 and dex launchers record separate completed generations; a failed copy is retried
 and neither path changes app data.
+
+### Non-ASCII profile and install paths
+
+When the Windows user name (and so `%LOCALAPPDATA%\Gesher`) or the install
+folder contains non-ASCII characters, the launchers (`gesher.ps1`,
+`gesher-app.ps1`, `gesher-app-microg.ps1`) pass Gesher's own roots to the
+runtime through `ConvertTo-GesherAndroidPath`, which rewrites the non-ASCII
+ancestors to their NTFS 8.3 short names: `ANDROID_ROOT`, `ANDROID_ART_ROOT`,
+`ANDROID_DATA`, `ANDROID_I18N_ROOT`, `ANDROID_TZDATA_ROOT`, the boot class path
+and the boot image. The leaf name is never replaced by its 8.3 alias, so file
+names and extensions stay as they are (a non-ASCII leaf leaves the whole path in
+long form).
+
+User-supplied paths are not rewritten: the APK given to `gesher-app` (`install`,
+`launch`, a double-clicked `.apk`/`.apks`/`.xapk`) and the dex given to `gesher`
+are passed in long form (`UserPath`), so the installer still sees the real file
+name, recognizes `.apks`/`.xapk` bundles by their suffix and finds a `.dm` file
+beside the APK.
+
+Limitations:
+
+- 8.3 names can be disabled per volume (`fsutil 8dot3name`), and folders created
+  while they were disabled have none. Then no ASCII short name exists and the
+  long, non-ASCII path is used unchanged.
+- Only the path strings handed to the runtime change. Canonical paths
+  (`GetFinalPathNameByHandleW`, and so `realpath`/`File.getCanonicalPath`) still
+  expand to the long form, so an app's `sourceDir`, `nativeLibraryDir` and other
+  canonicalized paths remain non-ASCII.
+- For existing users with a non-ASCII profile, visible paths (environment
+  variables, logs, and paths derived from `ANDROID_DATA` without
+  canonicalization) change form from the long name to the `XXXX~N` short name
+  after the update; both name the same files.
 
 The device runs `dalvikvm.exe`, `binderd.exe` and `servicemanager.exe` from the
 install folder and keeps files of `%LOCALAPPDATA%\Gesher` open, so:

@@ -172,6 +172,7 @@ bool IsNonBlockingMode(int fd);
 bool InitMemfdSeals(HANDLE file, bool allow_sealing);
 void RegisterMemfd(int fd);
 void ForgetMemfd(int fd);
+bool IsRegisteredMemfd(int fd);
 // After receiving a descriptor from another process (Binder): registers it if
 // its file carries seals.
 void RegisterMemfdIfSealed(int fd, HANDLE file);

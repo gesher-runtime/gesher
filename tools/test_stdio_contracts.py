@@ -30,8 +30,10 @@ def main() -> int:
     parser.add_argument("--cc", default=os.environ.get("CC", "gcc"))
     parser.add_argument("--sanitize", action="store_true")
     parser.add_argument("--source-ref", help="Run the unchanged current fixture against exact historical adapter/fsops/header sources")
-    parser.add_argument("--adapter-case", choices=["bionic-unlocked"],
-                        help="Run the bounded guest-unlocked regression against the selected production sources")
+    parser.add_argument("--adapter-case", choices=["bionic-unlocked", "owner-cache"],
+                        help="Run one bounded actual-source regression against the selected production sources")
+    parser.add_argument("--cache-counterfactual", choices=["lookup", "retirement", "replacement", "wrap"],
+                        help="Mutate only the generated owner-cache fixture for a named negative control")
     args = parser.parse_args()
     def read_source(path: str) -> bytes:
         if args.source_ref:
@@ -42,6 +44,21 @@ def main() -> int:
     sockets = read_source("compat/posix/src/fd.cc").decode()
     guest = read_source("compat/bionic/stdio_bionic.cc").decode()
     adapter = adapter[adapter.index('extern "C" int __mingw_pformat'):]
+    has_owner_cache = "struct CachedStreamOwner {" in adapter
+    if args.cache_counterfactual:
+        if args.adapter_case != "owner-cache" or args.source_ref:
+            raise ValueError("cache counterfactual requires the current owner-cache case")
+        changes = {
+            "lookup": ("if (cached.stream == stream && cached.owner != nullptr", "if (false && cached.stream == stream && cached.owner != nullptr"),
+            "retirement": ("if (found != registry->streams.end() && found->second == state) {\n    InvalidateCachedOwner(stream);", "if (found != registry->streams.end() && found->second == state) {"),
+            "replacement": ("    InvalidateCachedOwner(stream);\n    registry->streams.erase(stream);", "    registry->streams.erase(stream);"),
+            "wrap": ("if (generation != 0) epoch.store(generation + 1, std::memory_order_release);", "epoch.store(generation + 1, std::memory_order_release);"),
+        }
+        before, after = changes[args.cache_counterfactual]
+        if adapter.count(before) != 1:
+            raise ValueError("cache counterfactual boundary changed")
+        adapter = adapter.replace(before, after, 1)
+        print("CACHE_COUNTERFACTUAL " + args.cache_counterfactual, flush=True)
     writer = 'return ::write(fd, bytes, count);'
     if adapter.count(writer) != 1:
         raise ValueError("production descriptor writer boundary changed")
@@ -65,6 +82,7 @@ def main() -> int:
     renames = "\n".join("#define " + name + " adapter_" + name for name in names)
     renames += "\n#define fseeko gesher_fseeko64\n#define ftello gesher_ftello64\n"
     sections = {
+        "@OWNER_CACHE_CAPABILITY@": "#define GESHER_STDIO_OWNER_CACHE 1" if has_owner_cache else "",
         "@RENAME_PUBLIC_SYMBOLS@": renames,
         "@STDIO_ADAPTER@": adapter,
         "@PARSE_MODE@": section(fsops, "bool ParseMode(", "// Random characters"),
@@ -77,6 +95,8 @@ def main() -> int:
         "@BIONIC_ORIENT@": section(guest, "int Orient(FILE* stream,", "using StreamLock"),
         "@BIONIC_READ_STREAM@": section(guest, "size_t ReadStream(", "// fopen through"),
         "@BIONIC_UNLOCKED@": section(guest, "size_t BIONIC_SYSV FreadUnlocked(", "int BIONIC_SYSV FputsUnlocked("),
+        "@BIONIC_GETC_UNLOCKED@": section(guest, "int BIONIC_SYSV GetcUnlocked(", "int BIONIC_SYSV PutcUnlocked("),
+        "@BIONIC_GETC@": section(guest, "int BIONIC_SYSV Fgetc(", "int BIONIC_SYSV Getchar("),
     }
     template = (ROOT / "tests/native/stdio_adapter_host.cc.in").read_text()
     for marker, source in sections.items():

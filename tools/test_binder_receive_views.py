@@ -54,6 +54,7 @@ def main() -> int:
     substitutions = {
         "@SHARED_DESCRIPTIONS@": str(int(shared_descriptions)),
         "@SOCKET_DESCRIPTIONS@": str(int(b"kSocketFileDescription" in wire)),
+        "@NATIVE_FENCES@": str(int(b"kNativeFenceFileDescription" in wire)),
         "@PIPE@": section(text, "bool ReadExact(HANDLE pipe,", "std::wstring PipeName() {"),
         "@ALLOCATION@": section(text, "struct Allocation {", "std::mutex files_mutex;"),
         "@FD@": section(text, "template <typename F>\nvoid ForEachFdObject", "// The uid the driver gives"),

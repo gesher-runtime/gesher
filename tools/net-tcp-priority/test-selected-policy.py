@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '1847217ffc744c9362c264f40d658ab2e7bf31510e0e83d4267bf24ae4640171'
+OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -281,7 +281,7 @@ SHARED_STDIO_PATHS = (
  'compat/posix/src/stdio_output.cc',
 )
 
-def preceding_shared_stdio_sources(qualification):
+def preceding_shared_stdio_sources(qualification, current_sources=None):
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'shared-stdio-source.json').read_bytes()
  assert hashlib.sha256(raw).hexdigest()==SHARED_STDIO_TRANSITION_SHA256,'shared-stdio source transition changed'
@@ -301,7 +301,7 @@ def preceding_shared_stdio_sources(qualification):
      ('diff --git a/'+path+' b/'+path).encode() for path in paths],'shared-stdio patch paths changed'
  current={};baseline={}
  for path in paths:
-  current[path]=(ROOT/path).read_bytes()
+  current[path]=current_sources[path] if current_sources is not None else (ROOT/path).read_bytes()
   assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
   baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':'+path])
   assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
@@ -321,6 +321,73 @@ def preceding_shared_stdio_sources(qualification):
   for path in paths:
    assert (work/path).read_bytes()==current[path],('shared-stdio forward endpoint',path)
  return baseline
+
+# Preserve both published authorities while composing main's positive cache
+# with PR73's one shared owner. First reverse ONLY the new owner-cache delta
+# to published PR73. The original four-file transition then runs with its
+# unchanged manifest/patch and its original, Git-verified OFD receipt. Finally
+# replay main's exact Bionic cache delta onto that proven old main endpoint.
+# The result must equal current main in every byte before its original 71-file
+# qualification and the independent fence transition can accept the source.
+CACHED_STDIO_SHARED_BASE='537936e89a450107821b0bcf4cd40cec0d060f24'
+CACHED_STDIO_MAIN_BASE='452372561e0a50c63f072a5ae1e7ca5aa81354b8'
+CACHED_STDIO_ORIGINAL_OFD_SHA256='1847217ffc744c9362c264f40d658ab2e7bf31510e0e83d4267bf24ae4640171'
+CACHED_STDIO_TRANSITION_SHA256='e54ee905557be89735c05926f8180e6c6a63a0c764f8e3508bff172beeca6e32'
+
+def preceding_cached_shared_stdio_sources(qualification):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'shared-stdio-cache-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==CACHED_STDIO_TRANSITION_SHA256,'cached-stdio transition changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'shared_baseline','main_baseline','shared_policy_sha256',
+                         'main_policy_sha256','original_ofd_sha256','main_ofd_sha256',
+                         'owner_path','owner_before_sha256','owner_after_sha256',
+                         'owner_patch_sha256','main_path','main_before_sha256',
+                         'main_after_sha256','main_patch_sha256'},'cached-stdio schema changed'
+ assert transition['shared_baseline']==CACHED_STDIO_SHARED_BASE,'cached-stdio shared baseline changed'
+ assert transition['main_baseline']==CACHED_STDIO_MAIN_BASE,'cached-stdio main baseline changed'
+ assert transition['original_ofd_sha256']==CACHED_STDIO_ORIGINAL_OFD_SHA256,'cached-stdio original authority changed'
+ assert transition['main_ofd_sha256']==OFD_QUALIFICATION_SHA256,'cached-stdio main authority changed'
+ owner='compat/posix/src/stdio_output.cc'
+ bionic='compat/bionic/stdio_bionic.cc'
+ assert transition['owner_path']==owner and transition['main_path']==bionic,'cached-stdio paths changed'
+ def source(ref,path):
+  return subprocess.check_output(['git','-C',str(ROOT),'show',ref+':'+path])
+ for ref,key in [(CACHED_STDIO_SHARED_BASE,'shared_policy_sha256'),
+                 (CACHED_STDIO_MAIN_BASE,'main_policy_sha256')]:
+  policy=source(ref,'tools/net-tcp-priority/test-selected-policy.py')
+  assert hashlib.sha256(policy).hexdigest()==transition[key],('cached-stdio policy changed',key)
+ original_raw=source(SHARED_STDIO_BASE,'tools/net-tcp-priority/qualified/ofd-stream-source.json')
+ assert hashlib.sha256(original_raw).hexdigest()==CACHED_STDIO_ORIGINAL_OFD_SHA256,'cached-stdio original receipt changed'
+ original_qualification=json.loads(original_raw)
+ def round_trip(path,before,after,filename,prefix):
+  assert before!=after,('empty cached-stdio transition',path)
+  assert hashlib.sha256(before).hexdigest()==transition[prefix+'_before_sha256'],path
+  assert hashlib.sha256(after).hexdigest()==transition[prefix+'_after_sha256'],path
+  patch=(folder/filename).read_bytes()
+  assert hashlib.sha256(patch).hexdigest()==transition[prefix+'_patch_sha256'],('cached-stdio patch changed',filename)
+  assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+      ('diff --git a/'+path+' b/'+path).encode()],('cached-stdio patch paths changed',filename)
+  with tempfile.TemporaryDirectory(prefix='gesher-cached-stdio-qualification-') as temporary:
+   work=Path(temporary)
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(after)
+   for direction,expected,label in [(['--reverse'],before,'reverse'),([],after,'forward')]:
+    subprocess.run(['git','apply',*direction,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+    subprocess.run(['git','apply',*direction,'-'],input=patch,cwd=work,check=True,capture_output=True)
+    assert (work/path).read_bytes()==expected,('cached-stdio '+label+' endpoint',path)
+ previous_owner=source(CACHED_STDIO_SHARED_BASE,owner)
+ round_trip(owner,previous_owner,(ROOT/owner).read_bytes(),'shared-stdio-cache.patch','owner')
+ previous_current={path:previous_owner if path==owner else (ROOT/path).read_bytes()
+                   for path in SHARED_STDIO_PATHS}
+ previous=preceding_shared_stdio_sources(original_qualification,previous_current)
+ main_bionic=source(CACHED_STDIO_MAIN_BASE,bionic)
+ round_trip(bionic,previous[bionic],main_bionic,'shared-stdio-main-cache.patch','main')
+ previous[bionic]=main_bionic
+ for path in SHARED_STDIO_PATHS:
+  assert previous[path]==source(CACHED_STDIO_MAIN_BASE,path),('cached-stdio qualified main endpoint',path)
+  assert hashlib.sha256(previous[path]).hexdigest()==qualification['source_sha256'][path],path
+ return previous
 
 # Bionic's independently reviewed memmem search changes only this include and
 # complete wrapper. Restore those exact bytes before applying the UNCHANGED
@@ -352,6 +419,47 @@ def preceding_memmem_source(actual):
   assert actual.count(after)==1 and before not in actual,'exact reviewed memmem substitution changed'
   actual=actual.replace(after,before,1)
  return actual
+# The receiver-selected fence flag is an exact, separately bounded transition.
+# Restore all three coupled files to the complete main972 bytes in both
+# directions before the UNCHANGED 71-file OFD qualification runs. The original
+# OFD patch, checkpoint, authority, supplier inputs and runtime approval remain
+# unchanged; this is source preservation, not native runtime approval.
+FENCE_RECEIVE_BASE='972c2b42b40c4ac799e147f5e352d07ba615d0fb'
+FENCE_RECEIVE_POLICY_SHA256='a32bc8e65cf655635c04fb86f1ea23d668d125a79a8fef4732c86055b2985ac0'
+FENCE_RECEIVE_QUALIFICATION_SHA256='a34d606deb33143e43d67b6b21eef5eee1ae66780aac8ead055656d1259b1190'
+FENCE_RECEIVE_PATHS=['compat/posix/src/native_fence.cc',
+                     'compat/posix/src/native_fence_internal.h',
+                     'compat/posix/src/unix_rights.cc']
+def preceding_fence_receive_sources():
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'native-fence-receive-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==FENCE_RECEIVE_QUALIFICATION_SHA256,'fence receive qualification changed'
+ qualification=json.loads(raw)
+ assert qualification['baseline']==FENCE_RECEIVE_BASE
+ assert qualification['baseline_policy_sha256']==FENCE_RECEIVE_POLICY_SHA256
+ assert qualification['ofd_qualification_sha256']==OFD_QUALIFICATION_SHA256
+ assert qualification['paths']==FENCE_RECEIVE_PATHS
+ assert list(qualification['before_sha256'])==list(qualification['after_sha256'])==FENCE_RECEIVE_PATHS
+ original_policy=subprocess.check_output(['git','show',FENCE_RECEIVE_BASE+':tools/net-tcp-priority/test-selected-policy.py'],cwd=ROOT)
+ assert hashlib.sha256(original_policy).hexdigest()==FENCE_RECEIVE_POLICY_SHA256,'fence baseline policy changed'
+ patch=(folder/'native-fence-receive-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'fence receive patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==FENCE_RECEIVE_PATHS
+ current={path:(ROOT/path).read_bytes() for path in FENCE_RECEIVE_PATHS}
+ previous={path:subprocess.check_output(['git','show',FENCE_RECEIVE_BASE+':'+path],cwd=ROOT) for path in FENCE_RECEIVE_PATHS}
+ for path in FENCE_RECEIVE_PATHS:
+  assert hashlib.sha256(current[path]).hexdigest()==qualification['after_sha256'][path],path
+  assert hashlib.sha256(previous[path]).hexdigest()==qualification['before_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-fence-receive-qualification-') as temporary:
+  work=Path(temporary)
+  for path in FENCE_RECEIVE_PATHS:
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(current[path])
+  for direction,expected in [(['--reverse'],previous),([],current)]:
+   subprocess.run(['git','apply',*direction,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+   subprocess.run(['git','apply',*direction,'-'],input=patch,cwd=work,check=True,capture_output=True)
+   assert {path:(work/path).read_bytes() for path in FENCE_RECEIVE_PATHS}==expected,'fence receive exact roundtrip changed'
+ return previous
 # Valid pipes can now fail a control operation explicitly. These two exact
 # non-socket dispatch substitutions are the only PollFdsImpl changes allowed;
 # normalize them before comparing every byte of the original native poll core.
@@ -370,6 +478,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 '''),
 )
 def preceding_ofd_sources():
+ fence_previous=preceding_fence_receive_sources()
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'ofd-stream-source.json').read_bytes()
  assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
@@ -380,9 +489,9 @@ def preceding_ofd_sources():
         'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
- shared_stdio=preceding_shared_stdio_sources(qualification)
+ shared_stdio=preceding_cached_shared_stdio_sources(qualification)
  for path,digest in qualification['source_sha256'].items():
-  actual=shared_stdio[path] if path in shared_stdio else (ROOT/path).read_bytes()
+  actual=shared_stdio[path] if path in shared_stdio else fence_previous[path] if path in fence_previous else (ROOT/path).read_bytes()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
@@ -422,7 +531,7 @@ def preceding_ofd_sources():
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='5724ba64d08b68b8900c1442f6302f3fcadc4ef6b584c52d2055b0bb6c04e441'
+REVIEWED_PATCH_SHA256='5fe00fbb94e27fe5d5b5fe29e035b28f4ab3c3a2ac7fe0318ba3918e325d2433'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
@@ -583,6 +692,19 @@ def transition_negative_controls():
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
   (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
+  ('compat/posix/src/unix_rights.cc',b'AdoptNativeFence(h, metadata, close_on_exec)',b'AdoptNativeFence(h, metadata, true)'),
+  ('compat/posix/src/unix_rights.cc',b'AdoptNativeFence(h, metadata, close_on_exec)',b'AdoptNativeFence(h, metadata, false)'),
+  ('compat/posix/src/native_fence_internal.h',b'bool close_on_exec = true',b'bool close_on_exec = false'),
+  ('compat/posix/src/native_fence_internal.h',b'// Consumes owned on every outcome.',b'// Unqualified header mutation.'),
+  ('compat/posix/src/native_fence.cc',b'if (!close_on_exec &&',b'if (close_on_exec &&'),
+  ('compat/posix/src/native_fence.cc',b'CloseUnpublishedDuplicate(fd);',b'_close(fd);'),
+  ('compat/posix/src/native_fence.cc',b'Register(result, close_on_exec)',b'Register(result)'),
+  ('compat/posix/src/native_fence.cc',b'completed->metadata = kTransferredCompletedFence;',b'completed->metadata = 5;'),
+  ('tools/net-tcp-priority/qualified/native-fence-receive-source.patch',b'@@',b'@x'),
+  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',FENCE_RECEIVE_BASE.encode(),b'0'*40),
+  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',FENCE_RECEIVE_POLICY_SHA256.encode(),b'0'*64),
+  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',b'"compat/posix/src/native_fence_internal.h"',b'"compat/posix/src/unqualified.h"'),
+  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',OFD_QUALIFICATION_SHA256.encode(),b'0'*64),
  ]
  for name,before,after in cases:
   target=ROOT/name
@@ -595,6 +717,39 @@ def transition_negative_controls():
    try:check()
    except (AssertionError,subprocess.CalledProcessError):rejected=True
   assert rejected,'unqualified mutation accepted: '+name
+ for name,value in [('FENCE_RECEIVE_BASE','0'*40),
+                    ('FENCE_RECEIVE_POLICY_SHA256','0'*64),
+                    ('FENCE_RECEIVE_QUALIFICATION_SHA256','0'*64),
+                    ('FENCE_RECEIVE_PATHS',FENCE_RECEIVE_PATHS[:-1])]:
+  rejected=False
+  with patch.dict(globals(),{name:value}):
+   try:check()
+   except (AssertionError,subprocess.CalledProcessError):rejected=True
+  assert rejected,'fence receive authority pin mutation accepted: '+name
+ print('FENCE_RECEIVE_PIN_NEGATIVE_CONTROLS_PASS cases=4')
+ # Updating a current-source digest together with the manifest pin must still
+ # fail the independently pinned baseline and exact reverse/forward patch.
+ manifest_path=ROOT/'tools/net-tcp-priority/qualified/native-fence-receive-source.json'
+ for name,before,after in [
+   ('compat/posix/src/native_fence.cc',b'if (!close_on_exec &&',b'if (close_on_exec &&'),
+   ('compat/posix/src/native_fence_internal.h',b'bool close_on_exec = true',b'bool close_on_exec = false')]:
+  target=ROOT/name
+  current=original(target)
+  assert current.count(before)==1,name
+  modified=current.replace(before,after,1)
+  manifest=json.loads(original(manifest_path))
+  manifest['after_sha256'][name]=hashlib.sha256(modified).hexdigest()
+  forged=(json.dumps(manifest,indent=2)+'\n').encode()
+  def changed(path):
+   if path==manifest_path:return forged
+   if path==target:return modified
+   return original(path)
+  rejected=False
+  with patch.object(Path,'read_bytes',changed),patch.dict(globals(),{'FENCE_RECEIVE_QUALIFICATION_SHA256':hashlib.sha256(forged).hexdigest()}):
+   try:check()
+   except (AssertionError,subprocess.CalledProcessError):rejected=True
+  assert rejected,'fence receive current-digest repin accepted: '+name
+ print('FENCE_RECEIVE_REPIN_NEGATIVE_CONTROLS_PASS cases=2')
  print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases)))
 if __name__=='__main__':
  import sys

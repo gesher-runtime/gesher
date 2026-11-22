@@ -2,6 +2,7 @@
 // lookup and the native FILE-token allocator. I/O and test files are real.
 // Native MinGW parser/formatter linkage still requires the Windows CI target.
 #define _GNU_SOURCE 1
+@OWNER_CACHE_CAPABILITY@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -274,6 +275,8 @@ static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
 @BIONIC_ORIENT@
 @BIONIC_READ_STREAM@
 @BIONIC_UNLOCKED@
+@BIONIC_GETC_UNLOCKED@
+@BIONIC_GETC@
 }
 
 // The envelope's formatting backend uses the host formatter, then the exact
@@ -501,7 +504,106 @@ static void TestBionicUnlockedProgress() {
     unlink(path);
   }
 }
+static bool Await(const std::atomic<bool>& flag) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!flag.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  return flag.load(std::memory_order_acquire);
+}
+static void TestOwnerCacheProgress() {
+  char path[] = "stdio-owner-cache-XXXXXX";
+  int fd = mkstemp(path);
+  if (fd < 0) std::abort();
+  std::string bytes(16384, 'q');
+  if (write(fd, bytes.data(), bytes.size()) != static_cast<ssize_t>(bytes.size()) ||
+      lseek(fd, 0, SEEK_SET) != 0) std::abort();
+  FILE* stream = adapter_fdopen(fd, "r");
+  if (!stream) std::abort();
+  std::atomic<bool> warm{false}, start{false}, done{false};
+  uint64_t sum = 0;
+  int end = 0;
+  std::thread reader([&] {
+    sum = guest::Fgetc(stream);  // Warm this thread's actual positive owner lookup.
+    warm.store(true, std::memory_order_release);
+    while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+    for (size_t i = 1; i < bytes.size(); ++i) sum += guest::Fgetc(stream);
+    end = guest::Fgetc(stream);
+    done.store(true, std::memory_order_release);
+  });
+  const bool warmed = Await(warm);
+  bool before_unlock;
+  {
+    // This is the actual production registry mutex, held by another thread.
+    // A cache miss must wait; a valid positive lookup must keep doing real I/O.
+    std::unique_lock<std::mutex> lock(gesher::stdio::registry->mutex);
+    start.store(true, std::memory_order_release);
+    before_unlock = Await(done);
+  }
+  reader.join();  // The counterfactual always gets its lock back before joining.
+  check("positive owner cache reads while another thread holds the registry mutex", warmed && before_unlock);
+  check("cached guest Fgetc preserves every byte and EOF", sum == bytes.size() * uint64_t('q') && end == EOF);
+  check("cached stream closes its real descriptor", adapter_fclose(stream) == 0 && fcntl(fd, F_GETFD) == -1);
+  unlink(path);
+}
+static void TestOwnerCacheLifetime() {
+#ifdef GESHER_STDIO_OWNER_CACHE
+  char path[] = "stdio-owner-generation-XXXXXX";
+  int fd = mkstemp(path);
+  if (fd < 0) std::abort();
+  std::array<uint64_t, 32> before{};
+  for (size_t i = 0; i < before.size(); ++i)
+    before[i] = gesher::stdio::registry->generations[i].value.load();
+  FILE* stream = adapter_fdopen(fd, "r+");
+  if (!stream) std::abort();
+  auto& epoch = gesher::stdio::OwnerGeneration(stream);
+  const size_t bucket = (reinterpret_cast<uintptr_t>(stream) >> 4) % before.size();
+  check("native token registration invalidates the positive cache bucket", epoch.load() == before[bucket] + 1);
+  _lock_file(stream);
+  auto old = gesher::stdio::Find(stream, false);
+  old->bionic.conversion_error = true;
+  old->bionic.pushback = 'Q';
+  old->bionic.input_state[2] = 7;
+  const uint64_t generation = epoch.load();
+  gesher::stdio::Forget(stream);
+  const bool invalidated = epoch.load() != generation;
+  check("retirement invalidates cached map slots before release", invalidated && !old->live);
+  // A deliberately broken retirement must report the invariant failure before
+  // the counterfactual could dereference its now-freed map slot. Cleanup does
+  // not turn that failure into a pass or replace a production lookup.
+  if (!invalidated) gesher::stdio::t_stream_owners = {};
+  check("retired FILE has no shared metadata", gesher::stdio::BionicMetadata(stream, false) == nullptr);
+  check("same live FILE can register a new owner", gesher::stdio::Register(stream, O_RDWR) == 0);
+  auto current = gesher::stdio::Find(stream, false);
+  check("new owner does not reuse the retained retired state", current && current != old && current->live);
+  check("new owner resets all guest codec metadata", !current->bionic.conversion_error &&
+        current->bionic.pushback == 0xffffffffu && current->bionic.input_state == std::array<uint8_t, 8>{});
+  // Reach the otherwise impractical overflow boundary on the actual counter.
+  // The permanent-zero state must survive further retirement and registration.
+  epoch.store(UINT64_MAX);
+  check("positive lookup works at the final generation", gesher::stdio::Find(stream, false) == current);
+  for (int i = 0; i < 3; ++i) {
+    gesher::stdio::Forget(stream);
+    check("generation wrap permanently disables cached pointers", epoch.load() == 0);
+    if (epoch.load() != 0) gesher::stdio::t_stream_owners = {};  // Failed-control cleanup before another lookup.
+    check("locked lookup still registers after generation wrap", gesher::stdio::Register(stream, O_RDWR) == 0);
+    auto found = gesher::stdio::Find(stream, false);
+    check("uncached owner remains live after generation wrap", found && found->live && found != current);
+  }
+  _unlock_file(stream);
+  check("wrapped-cache stream retires its real descriptor", adapter_fclose(stream) == 0 && fcntl(fd, F_GETFD) == -1);
+  unlink(path);
+#endif
+}
 int main(int argc, char** argv) {
+  if (argc == 2 && std::strcmp(argv[1], "--owner-cache") == 0) {
+    TestOwnerCacheProgress();
+    TestOwnerCacheLifetime();
+    char summary[128];
+    const int count = snprintf(summary, sizeof(summary), "Shared owner cache: %d checks, %d failures\n", checks, failures);
+    if (count < 0 || static_cast<size_t>(count) >= sizeof(summary) ||
+        ::write(STDOUT_FILENO, summary, static_cast<size_t>(count)) != count) return 2;
+    return failures != 0;
+  }
   if (argc == 2 && std::strcmp(argv[1], "--bionic-unlocked") == 0) {
     TestBionicUnlockedProgress();
     char summary[128];
@@ -522,6 +624,8 @@ int main(int argc, char** argv) {
   test_stdio_ofd_contracts();
   TestAllocationOwnership();
   TestBionicOwnerLifetime();
+  TestOwnerCacheProgress();
+  TestOwnerCacheLifetime();
   test_stdio_cancel_contracts();
   TestCrtLockComposition();
   TestBionicUnlockedProgress();
