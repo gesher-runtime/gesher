@@ -51,6 +51,9 @@ struct EpollWakeChannels {
 
 struct EventFdEdgeWatch {
   uint32_t events;  // protected by the owning EventFd mutex; zero after ONESHOT
+  // Level-triggered entries only need a wake when the source becomes ready;
+  // repeated writes to an already readable counter do not change the level.
+  bool level = false;
   std::shared_ptr<EpollWakeChannels> wake;
 };
 
@@ -108,7 +111,8 @@ struct EventFd {
       for (auto& weak : edge_watches) {
         if (auto watch = weak.lock()) {
           edge_watches[kept++] = weak;
-          if ((watch->events & wake_notification) != 0) {
+          const uint32_t match = watch->level ? became_ready : wake_notification;
+          if ((watch->events & match) != 0) {
             watch->wake->Notify();
             edge_notified = true;
           }
@@ -259,6 +263,7 @@ void ConfigureEventFdEntry(Entry& entry, const std::shared_ptr<EventFd>& source,
   watch->events = ((entry.events & (EPOLLIN | (source->read_only ? uint32_t{EPOLLRDNORM} : 0))) != 0
                        ? uint32_t{EPOLLIN} : 0) |
                   (source->read_only ? 0 : entry.events & EPOLLOUT);
+  watch->level = (entry.events & EPOLLET) == 0 || !entry.ordinary_eventfd;
   watch->wake = wake;
   std::lock_guard<std::mutex> lock(source->mutex);
   std::erase_if(source->edge_watches, [](const auto& weak) { return weak.expired(); });
