@@ -1471,10 +1471,12 @@ public final class WindowSession extends IWindowSession.Stub {
                 if (v != w && v.shown && v.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
                         && (w.taskId < 0 || v.taskId == w.taskId)
                         && (below == null || v.seq > below.seq)) {
+                    android.app.Activity a = activity(v.attrs.token);
+                    if (a != null && (a.isFinishing() || a.isDestroyed())) continue;
                     below = v;
                 }
             }
-            return below != null ? below : activeRoot();
+            return below;
         }
         if (isApplicationWindow(type)) {
             AppWindow activity = null;
@@ -1776,7 +1778,7 @@ public final class WindowSession extends IWindowSession.Stub {
                     break;
                 }
             }
-            if (at == null && mOneWindow && !isTranslucentOrFloating(w.attrs.token)) {
+            if (at == null && mOneWindow) {
                 for (int i = 0; i < mWindows.size(); i++) {
                     AppWindow v = mWindows.valueAt(i);
                     if (v != w && !v.popup && v.taskId >= 0 && v.taskId != w.taskId && v.shown
@@ -1851,6 +1853,12 @@ public final class WindowSession extends IWindowSession.Stub {
         NativeWindow owner = w.parent != null
                 ? (w.parent.nativeWindow != null ? w.parent.nativeWindow : root.nativeWindow)
                 : null;
+        if (owner == null) {
+            AppWindow active = activeRoot();
+            if (active != null && active != w && active.nativeWindow != null) {
+                owner = active.nativeWindow;
+            }
+        }
         Rect in = w.attrs.surfaceInsets;
         NativeWindow nw = NativeWindow.createPopup(title(w), width + in.left + in.right,
                 height + in.top + in.bottom, owner);
@@ -1891,7 +1899,13 @@ public final class WindowSession extends IWindowSession.Stub {
     private void place(AppWindow w) {
         if (w.nativeWindow == null || w.frame.isEmpty()) return;
         AppWindow root = root(w);
-        NativeWindow anchor = root != w ? root.nativeWindow : null;
+        NativeWindow anchor = root != w && root.nativeWindow != null ? root.nativeWindow : null;
+        if (anchor == null) {
+            AppWindow active = activeRoot();
+            if (active != null && active != w && active.nativeWindow != null) {
+                anchor = active.nativeWindow;
+            }
+        }
         Rect r = surfaceRect(w);
         if (w.placed.equals(r)) return;
         w.nativeWindow.setPopupBounds(anchor, r.left, r.top, r.width(), r.height());
@@ -2561,6 +2575,14 @@ public final class WindowSession extends IWindowSession.Stub {
         AppWindow w;
         synchronized (mWindows) {
             w = mWindows.remove(clientToken);
+            if (w != null) {
+                for (int i = 0; i < mWindows.size(); i++) {
+                    AppWindow child = mWindows.valueAt(i);
+                    if (child.parent == w) {
+                        child.parent = w.parent;
+                    }
+                }
+            }
         }
         if (w != null) {
             w.identity.retire(w.handler);
