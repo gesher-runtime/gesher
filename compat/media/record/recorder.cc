@@ -2,11 +2,13 @@
 
 #include "recorder.h"
 
+#include <fcntl.h>
 #include <time.h>
 #include <gesher/clocks.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 
@@ -24,6 +26,7 @@ constexpr int kAudioDefault = 0, kAudioAac = 3, kAudioOpus = 7;
 constexpr int kVideoDefault = 0, kVideoH264 = 2;
 constexpr int kVideoSourceCamera = 1, kVideoSourceSurface = 2;
 constexpr int kInfoMaxDuration = 800, kInfoMaxFileSize = 801, kInfoMaxFileSizeApproaching = 802;
+constexpr int kInfoNextOutputFileStarted = 803;
 constexpr int kEventError = 1, kEventInfo = 2, kErrorUnknown = 1;
 
 }  // namespace
@@ -64,6 +67,48 @@ bool Recorder::Prepare(std::string* error, bool* invalid_state) {
   close(config_.fd);
   config_.fd = -1;
   prepared_ = true;
+  return true;
+}
+
+bool Recorder::SetNextOutputFile(int fd, std::string* error, bool* invalid_state) {
+  if (invalid_state != nullptr) *invalid_state = false;
+  // The native MediaRecorder checks writable access before Stagefright checks
+  // its output format/writer state. Failure here does not put it into ERROR.
+  const int flags = fcntl(fd, F_GETFL);
+  if (flags >= 0 && (flags & (O_RDWR | O_WRONLY)) == 0) {
+    *error = "next output file is not a writable descriptor";
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(mux_mu_);
+  if (config_.output_format != kOutMpeg4 || !prepared_ || error_state_ || muxer_ == nullptr) {
+    if (invalid_state != nullptr) *invalid_state = true;
+    *error = "setNextOutputFile requires a prepared MPEG_4 recorder";
+    return false;
+  }
+  // An invalid descriptor cannot be transported to Android's media service.
+  // Preserve the documented pre-prepare/unsupported-format state error; for
+  // an available MP4 writer report the bad descriptor as a nonfatal I/O error.
+  if (flags < 0) {
+    *error = "next output file is not a writable descriptor";
+    return false;
+  }
+  if (lseek(fd, 0, SEEK_CUR) < 0 || ftruncate(fd, 0) < 0) {
+    *error = "next output file must be seekable and truncatable";
+    return false;
+  }
+  // Stagefright truncates before MPEG4Writer rejects an already pending fd.
+  // A second call cannot replace the previously chosen pending output.
+  if (next_fd_ >= 0) {
+    if (invalid_state != nullptr) *invalid_state = true;
+    *error = "a next output file is already pending";
+    return false;
+  }
+  next_fd_ = dup(fd);
+  if (next_fd_ < 0) {
+    *error = std::string("cannot duplicate next output file: ") + strerror(errno);
+    return false;
+  }
+  next_file_cv_.notify_one();
   return true;
 }
 
@@ -327,18 +372,23 @@ void Recorder::RequestStopLocked(StopReason reason, std::string error) {
   if (reason == StopReason::kSize || reason == StopReason::kError) frames_.clear();
   if (capture_ != nullptr) capture_->Stop();
   cv_.notify_all();
+  next_file_cv_.notify_all();
 }
 
 bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64_t* last_us) {
+  // Only an MP4 size boundary can start another file. Keep ordinary unlimited
+  // and other-container recording on its existing single writer-lock path.
+  std::unique_lock<std::mutex> event_lock(writer_event_mu_, std::defer_lock);
+  if (config_.output_format == kOutMpeg4 && config_.max_file_size > 0) event_lock.lock();
   std::unique_lock<std::mutex> lock(mux_mu_);
-  bool notify_approaching = false;
-  auto finish = [&](bool result) {
+  auto notify = [&](int info) {
     lock.unlock();
-    // Posting may enter Java; keep it outside both recorder mutexes. This
-    // worker remains active until after the post, so the terminal callback
-    // cannot overtake its approaching-limit callback.
-    if (notify_approaching && listener_) listener_(kEventInfo, kInfoMaxFileSizeApproaching);
-    return result;
+    // JNI posts to Java's Handler. The app can supply the next descriptor
+    // while this post is in flight; it never needs writer_event_mu_. Keeping
+    // that lock orders 802 before 803 across audio and video workers without
+    // buffering callbacks or holding the recorder state/writer locks in Java.
+    if (listener_) listener_(kEventInfo, info);
+    lock.lock();
   };
   for (const EncodedPacket& p : packets) {
     StopReason reason;
@@ -346,38 +396,97 @@ bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64
       std::lock_guard<std::mutex> state_lock(mu_);
       reason = stop_reason_;
     }
-    if (size_reached_ || reason == StopReason::kError) return finish(false);
+    if (size_reached_ || reason == StopReason::kError) return false;
     int64_t t = p.time_us;
+    int64_t duration_origin = segment_first_us_;
     if (!p.config) {
       t = std::max(t, *last_us + 1);
-      if (config_.max_duration_ms > 0 && t / 1000 >= config_.max_duration_ms) {
-        RequestStop(StopReason::kDuration);
+      if (track == video_track_ && awaiting_video_key_ && !p.key) {
+        // MPEG4Writer starts each new video track at a real sync sample.
+        // Skipped dependent packets do not start its new duration timeline.
+        *last_us = t;
         continue;
       }
+      if (config_.max_duration_ms > 0) {
+        if (duration_origin < 0 || t < duration_origin) duration_origin = t;
+        if ((t - duration_origin) / 1000 >= config_.max_duration_ms) {
+          RequestStop(StopReason::kDuration);
+          continue;
+        }
+      }
       *last_us = t;
+      if (track == video_track_) awaiting_video_key_ = false;
     }
     const int flags = (p.config ? 2 : 0) | (p.key && !p.config ? 1 : 0);
     std::string error;
     if (!muxer_->WriteSample(track, p.data.data(), p.data.size(), t, flags, &error)) {
       RequestStop(StopReason::kError, std::move(error));
-      return finish(false);
+      return false;
     }
     if (muxer_->FileSizeLimitApproaching() && !size_approaching_) {
       size_approaching_ = true;
-      notify_approaching = true;
+      notify(kInfoMaxFileSizeApproaching);
     }
     if (muxer_->FileSizeLimitReached()) {
+      // Android allows the pending fd's Binder delivery a bounded 100 ms
+      // grace. Stop/reset wakes this wait; neither writer nor state mutex
+      // is held while waiting, so the app can deliver its selected output.
+      if (config_.output_format == kOutMpeg4) {
+        next_file_cv_.wait_for(lock, std::chrono::milliseconds(100), [&] {
+          if (next_fd_ >= 0) return true;
+          std::lock_guard<std::mutex> state_lock(mu_);
+          return stop_reason_ != StopReason::kNone;
+        });
+      }
+      {
+        std::lock_guard<std::mutex> state_lock(mu_);
+        reason = stop_reason_;
+      }
+      if (next_fd_ >= 0 && reason == StopReason::kNone) {
+        if ((audio_track_ >= 0 && segment_audio_samples_ == 0) ||
+            (video_track_ >= 0 && segment_video_samples_ == 0)) {
+          RequestStop(StopReason::kError, "rollover failed: a configured track recorded no samples");
+          return false;
+        }
+        const int next = next_fd_;
+        next_fd_ = -1;
+        const bool switched = muxer_->SwitchFile(next, &error);
+        close(next);
+        if (!switched) {
+          RequestStop(StopReason::kError, std::move(error));
+          return false;
+        }
+        size_approaching_ = false;
+        // Android resets each track's duration when starting a new file,
+        // while the existing encoder/source timestamps continue advancing.
+        segment_first_us_ = -1;
+        has_rolled_over_ = true;
+        segment_audio_samples_ = segment_video_samples_ = 0;
+        awaiting_video_key_ = video_track_ >= 0;
+        force_video_key_ = awaiting_video_key_;
+        notify(kInfoNextOutputFileStarted);
+        // Like MPEG4Writer, discard the packet which crossed the old file's
+        // limit. Continue reading the same live source/encoder for this file.
+        continue;
+      }
       size_reached_ = true;
       RequestStop(StopReason::kSize);
-      return finish(false);
+      return false;
     }
     if (!p.config) {
+      if (config_.max_duration_ms > 0) segment_first_us_ = duration_origin;
       samples_written_++;
-      if (track == video_track_) ++video_muxed_packets_;
-      if (track == audio_track_) ++audio_muxed_packets_;
+      if (track == video_track_) {
+        ++video_muxed_packets_;
+        ++segment_video_samples_;
+      }
+      if (track == audio_track_) {
+        ++audio_muxed_packets_;
+        ++segment_audio_samples_;
+      }
     }
   }
-  return finish(true);
+  return true;
 }
 
 void Recorder::AudioLoop() {
@@ -419,7 +528,8 @@ void Recorder::AudioLoop() {
     }
     frames += got;
     if (!Write(audio_track_, packets, &last_us)) break;
-    if (config_.max_duration_ms > 0 && static_cast<int64_t>(frames * 1000 / rate) >= config_.max_duration_ms) {
+    if (config_.max_duration_ms > 0 && !has_rolled_over_ &&
+        static_cast<int64_t>(frames * 1000 / rate) >= config_.max_duration_ms) {
       RequestStop(StopReason::kDuration);
     }
   }
@@ -481,7 +591,8 @@ void Recorder::VideoLoop() {
     std::vector<EncodedPacket> packets;
     ++video_encode_inputs_;
     video_last_encode_input_us_ = f->time_us;
-    if (!video_enc_->Encode(*f, first, &packets)) {
+    const bool request_key = force_video_key_.exchange(false);
+    if (!video_enc_->Encode(*f, first || request_key, &packets)) {
       ++video_encode_failures_;
       RequestStop(StopReason::kError, "video encoder failed");
       break;
@@ -489,7 +600,7 @@ void Recorder::VideoLoop() {
     for (const auto& p : packets) if (!p.config) ++video_encode_packets_;
     first = false;
     if (!Write(video_track_, packets, &last_us)) break;
-    if (config_.max_duration_ms > 0 && f->time_us / 1000 >= config_.max_duration_ms) {
+    if (config_.max_duration_ms > 0 && !has_rolled_over_ && f->time_us / 1000 >= config_.max_duration_ms) {
       RequestStop(StopReason::kDuration);
     }
   }
@@ -526,19 +637,26 @@ void Recorder::CompleteWorker() {
   // media/configuration. Do not call that incomplete recording successful.
   // The worker-count handoff above makes both per-track counters stable.
   if (samples_written_ > 0 && stop_error_.empty() &&
-      ((audio_enc_ != nullptr && audio_muxed_packets_ == 0) ||
-       (video_enc_ != nullptr && video_muxed_packets_ == 0))) {
+      ((audio_enc_ != nullptr && segment_audio_samples_ == 0) ||
+       (video_enc_ != nullptr && segment_video_samples_ == 0))) {
     stop_error_ = "stop failed: a configured track recorded no samples";
     reason = StopReason::kError;
   }
   std::string error;
-  if (!muxer_->Stop(&error) && stop_error_.empty()) {
-    stop_error_ = std::move(error);
-    reason = StopReason::kError;
+  {
+    // A public setNextOutputFile may race terminal worker cleanup. Retire
+    // both descriptors under the same lock used for admission and rollover.
+    std::lock_guard<std::mutex> lock(mux_mu_);
+    if (!muxer_->Stop(&error) && stop_error_.empty()) {
+      stop_error_ = std::move(error);
+      reason = StopReason::kError;
+    }
+    MEDIA_LOGI("MediaRecorder: stopped: %lld samples, %lld bytes", static_cast<long long>(samples_written_.load()),
+               static_cast<long long>(muxer_->BytesWritten()));
+    muxer_.reset();
+    if (next_fd_ >= 0) close(next_fd_);
+    next_fd_ = -1;
   }
-  MEDIA_LOGI("MediaRecorder: stopped: %lld samples, %lld bytes", static_cast<long long>(samples_written_.load()),
-             static_cast<long long>(muxer_->BytesWritten()));
-  muxer_.reset();
   const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
   if (video_enc_ != nullptr && trace != nullptr && trace[0] == '1') {
     std::lock_guard<std::mutex> lock(mu_);
@@ -604,7 +722,12 @@ void Recorder::ReleasePipeline() {
   input_surface_.reset();
   audio_enc_.reset();
   video_enc_.reset();
-  muxer_.reset();
+  {
+    std::lock_guard<std::mutex> lock(mux_mu_);
+    muxer_.reset();
+    if (next_fd_ >= 0) close(next_fd_);
+    next_fd_ = -1;
+  }
   audio_track_ = video_track_ = -1;
   audio_mime_.clear();
   video_mime_.clear();
@@ -624,6 +747,11 @@ void Recorder::Clear() {
   stop_error_.clear();
   size_reached_ = false;
   size_approaching_ = false;
+  awaiting_video_key_ = false;
+  segment_first_us_ = 0;
+  has_rolled_over_ = false;
+  segment_audio_samples_ = segment_video_samples_ = 0;
+  force_video_key_ = false;
   frames_.clear();
   amplitude_ = 0;
   samples_written_ = 0;

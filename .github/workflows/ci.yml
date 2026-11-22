@@ -517,6 +517,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
           python3 tools/test_media_recorder_lifecycle.py
+          python3 tools/test_media_recorder_rollover.py --sanitize
+          python3 tools/test_mp4_rollover_work.py
           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
 
       - name: libcore System.nanoTime shares Android awake-time domain
