@@ -10,8 +10,8 @@
 // out as I420 (COLOR_FormatYUV420Planar, also as an Image), or, with an
 // output Surface, is drawn into it (RGBA through ANativeWindow_lock) when
 // the app releases the buffer with render = true; an ImageReader's Surface
-// gets the frame as an Image (media3, ADR 0059: through the camera's frame
-// path, com.gesher.server.CameraFrames).
+// gets the frame as an Image directly through the native reader queue
+// (media3, ADR 0059), without a Java byte-array round trip.
 //
 // Encoders (media3, ADR 0059) are compat/media/encode's behind the same slots:
 // raw input (I420 or NV12 video, 16-bit or float PCM) in ByteBuffers or Images,
@@ -50,6 +50,7 @@
 #include "../encode/encoder.h"
 #include "../video/input_surface.h"
 #include "../video/video_decoder.h"
+#include "../../devices/camera_frames.h"
 #include "jni_util.h"
 #include "media_jni.h"
 
@@ -337,7 +338,7 @@ Format FormatFromJava(JNIEnv* env, jobjectArray keys, jobjectArray values) {
 // --- ImageReader surfaces ------------------------------------------------------------------
 
 // com.gesher.server.CameraFrames (gesher-app.jar, the boot class path): an ImageReader's
-// Surface is Gesher's in-process queue (compat/devices/camera_frames.cc), fed NV12 frames.
+// Surface is Gesher's in-process queue (compat/devices/camera_frames.cc).
 jclass CameraFramesClass(JNIEnv* env) {
   static jclass cls = [env] {
     jclass local = env->FindClass("com/gesher/server/CameraFrames");
@@ -365,49 +366,12 @@ bool IsReaderSurface(JNIEnv* env, jobject surface) {
   return r == JNI_TRUE;
 }
 
-// A decoded frame into an ImageReader (YUV_420_888 / PRIVATE readers take NV12).
+// A decoded frame into an ImageReader, directly from native I420 storage.
 int DeliverToReader(jobject surface, const VideoFrame& f, int64_t timestamp_ns) {
   JNIEnv* env = AttachedEnv("gesher-codec");
   if (env == nullptr) return android::UNKNOWN_ERROR;
-  jclass cls = CameraFramesClass(env);
-  if (cls == nullptr) return android::UNKNOWN_ERROR;
-  jmethodID m = env->GetStaticMethodID(cls, "deliver", "(Landroid/view/Surface;[BIIJ[B)I");
-  if (m == nullptr) {
-    env->ExceptionClear();
-    return android::UNKNOWN_ERROR;
-  }
-  const int w = f.visible_width() & ~1, h = f.visible_height() & ~1;
-  if (w <= 0 || h <= 0) return android::BAD_VALUE;
-  std::vector<uint8_t> nv12(static_cast<size_t>(w) * h * 3 / 2);
-  for (int y = 0; y < h; y++) {
-    memcpy(nv12.data() + static_cast<size_t>(y) * w,
-           f.y() + static_cast<size_t>(f.crop_top + y) * f.stride_y + f.crop_left, static_cast<size_t>(w));
-  }
-  uint8_t* uv = nv12.data() + static_cast<size_t>(w) * h;
-  for (int y = 0; y < h / 2; y++) {
-    const size_t row = static_cast<size_t>(f.crop_top / 2 + y) * f.stride_uv + f.crop_left / 2;
-    for (int x = 0; x < w / 2; x++) {
-      uv[static_cast<size_t>(y) * w + 2 * x] = f.u()[row + x];
-      uv[static_cast<size_t>(y) * w + 2 * x + 1] = f.v()[row + x];
-    }
-  }
-  if (env->PushLocalFrame(8) < 0) {
-    CheckException(env, "CameraFrames local frame");
-    return android::NO_MEMORY;
-  }
-  jbyteArray a = env->NewByteArray(static_cast<jsize>(nv12.size()));
-  jint result = android::NO_MEMORY;
-  if (a != nullptr) {
-    env->SetByteArrayRegion(a, 0, static_cast<jsize>(nv12.size()),
-                            reinterpret_cast<const jbyte*>(nv12.data()));
-    if (!env->ExceptionCheck()) {
-      result = env->CallStaticIntMethod(cls, m, surface, a, w, h,
-                                        static_cast<jlong>(timestamp_ns), nullptr);
-    }
-  }
-  const bool threw = CheckException(env, "CameraFrames.deliver");
-  env->PopLocalFrame(nullptr);
-  if (threw && result != android::NO_MEMORY) return android::UNKNOWN_ERROR;
+  const int result = android::QueueImageReaderVideoFrame(env, surface, f, timestamp_ns);
+  if (CheckException(env, "ImageReader native delivery")) return android::UNKNOWN_ERROR;
   // CameraFrames distinguishes an unsupported format (1) from a closed or
   // missing consumer (NO_INIT); only the latter invalidates MediaCodec output.
   return result == 1 ? android::BAD_VALUE : result;

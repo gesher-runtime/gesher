@@ -107,6 +107,27 @@ fetched. Registered workflow identities, paths and enabled states are reread at
 each CI evidence pass, including after App status publication. Title or body
 edits do not start the job; base changes still do.
 
+### Deferred release retries
+
+GitHub computes `mergeStateStatus` asynchronously. After the gate turns green,
+and especially right after `main` advanced, it can keep reporting `BLOCKED` for
+minutes even though every rule is already satisfied. The controller re-reads it
+7 times, 5 seconds apart, and logs the state when it still defers. When CI
+completion or a new `automerge` label started the pass and GitHub still reports
+`BLOCKED`, the controller uses the App token to queue a
+`gesher-automerge-reconcile` dispatch for the same PR and exact head with a
+`release_retry` count. The dispatched job joins that PR's concurrency queue and
+runs the full reconciliation again: label, permission, receipt, CI evidence and
+gate verification, then the same protected exact-head SQUASH release. It never
+arms native waiting. A retry rewrites the gate before reading the state, so it
+polls twice as long (14 reads). Retries are queued in legacy and App modes, stop
+after 8, and end at once if the head changed or the PR closed. Recovery runs,
+reviews and manual runs make one release attempt and start no chain, so a PR
+that stays blocked cannot accumulate retry jobs. `BEHIND` needs a branch update
+and queues no retry. Without the App token, or after the last retry, a warning
+names the state and the next PR event or recovery run tries again. A failed
+dispatch is logged and leaves the green gate as it is.
+
 ### Recovery schedule
 
 A controller run that fails after CI completion, for example on an exhausted API
@@ -191,7 +212,8 @@ status publication or new native approval receipt. The controller authenticates 
 approval and CI again, writes the legacy success, then rechecks current approval,
 registered CI and the exact App receipt before releasing native SQUASH pinned to
 the reviewed head. `CLEAN`, `HAS_HOOKS` and `UNSTABLE` permit a protected
-`mergePullRequest` attempt; `BLOCKED` and `BEHIND` defer it without a mutation.
+`mergePullRequest` attempt; `BLOCKED` and `BEHIND` defer it without a mutation
+(see Deferred release retries).
 Unknown, conflicting, changed, closed or draft targets do not release. The
 mutation supplies `expectedHeadOid` and remains subject to all native required
 checks, approvals and other rules. This is the authorized label controller, not
