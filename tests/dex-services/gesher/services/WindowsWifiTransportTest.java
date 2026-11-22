@@ -104,6 +104,8 @@ public final class WindowsWifiTransportTest {
         } finally { data.recycle(); reply.recycle(); }
     }
     public static void main(String[] args) throws Exception {
+        // Exercise real Binder/Parcel JNI, as in the other ART integration fixtures.
+        System.loadLibrary("android_runtime");
         Endpoint endpoint = new Endpoint();
         check(IWindowsWifi.Stub.asInterface(null) == null, "Null service binder");
         check(IWindowsWifi.Stub.asInterface(endpoint) == endpoint, "Local service path");
