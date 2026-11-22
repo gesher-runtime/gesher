@@ -62,7 +62,9 @@ int RegisterTimerFd(std::shared_ptr<TimerFd> timer, std::shared_ptr<EventFd> rea
 std::shared_ptr<TimerFd> LookupTimerFd(int fd);
 int ReadTimerFd(TimerFd& timer, void* buf, unsigned int count);
 
-// Takes a closed (or replaced) fd number out of every epoll interest list.
+// Retires the existing numeric registrations for non-virtual backends.
+// Virtual registrations instead belong to their shared event object: aliases
+// and actual in-flight I/O retain them, while epoll observations do not.
 void ForgetEpollEntries(int fd);
 
 // A pipe has no handle to wait for, and WSAPoll waits for sockets only, so a
