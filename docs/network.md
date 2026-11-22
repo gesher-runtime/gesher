@@ -49,10 +49,23 @@ Bidirectional reads may be queued from `onStreamReady`, and direct read-only
 buffers are accepted for writes. Gzip headers are decoded after dispatching the
 response-header callback so a duplex peer can wait for that callback's upload.
 
-Each bidirectional stream currently opens a separate HTTP/2 connection; connection
-pooling across streams is not implemented. The adapter copies bounded 32 KiB
-chunks, while AOSP OkHttp also retains its own flow-control buffers and reader
-threads. The current implementation has no high-concurrency throughput benchmark.
+Bidirectional streams reuse eligible HTTP/2 sessions owned by their `HttpEngine`.
+The route includes the exact origin, selected proxy, supplied Network object and
+TLS socket-factory identity. A warm session can multiplex streams; one stream's
+cancellation or peer reset does not close its healthy peers. GOAWAY stops new
+admission while accepted streams drain. Actual peer stream limits, including
+zero, are respected. Concurrent cold connections can still open separately.
+
+Completed transports release their leases only after admitted I/O retires.
+Engine shutdown rejects active requests, then closes all owned connections.
+The pool retains at most five idle sessions, expires them after 60 seconds, and
+uses a single process-wide parked expiry worker. Stream I/O and physical socket
+writes have separate 30-second deadlines; a broken physical connection still
+fails its dependent streams. Each stream keeps its existing bounded 32 KiB
+copies, while AOSP OkHttp owns framing and flow-control storage. The qualified
+loopback corpus covers 16 concurrent warm streams and measured connection/TLS
+handshake reduction, not general high-concurrency throughput. See the
+[session ownership and measurement report](research/http2-sessions-2026-11-22.md).
 
 The transport does not implement QUIC, Brotli or engine-private disk caches.
 Protocol/DNS/cache tuning is advisory and does not install process-global settings;
@@ -66,7 +79,12 @@ Cronet module is not shipped.
 `tools/test_http_engine.py --java-home <JDK>` tests the production adapter over
 real local HTTP sockets in CI. Adding `--okhttp-source <AOSP external/okhttp>`
 compiles the pinned Android 16 framing and Okio sources for host HTTP/2 wire
-tests, including gzip-header ordering and direct-buffer callback contracts.
+tests, including gzip-header ordering, direct-buffer callback contracts, shared
+session cancellation, GOAWAY, TLS/proxy/Network route isolation and real idle
+descriptor retirement. The helper applies this revision's receive-credit patch
+to the pinned provider; bounded in-memory contracts verify discard, reset and
+padding accounting and are also mandatory on Windows. The complete framework
+CI requires that pinned checkout.
 `tests/net/HttpEngineDeviceSmoke.java` and
 `Http2DeviceSmoke.java` also run on Gesher ART in Windows track 94, with an
 independent local HTTP/2 wire peer. `GESHER_HTTP_ENGINE_TRACE=1` logs numeric
