@@ -12,6 +12,8 @@ import android.app.Instrumentation;
 import android.app.PendingIntent;
 import android.app.ResultInfo;
 import android.app.usage.IUsageStatsManager;
+import android.app.usage.UsageEvents;
+import android.app.usage.UsageEventsQuery;
 import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
 import android.app.servertransaction.ActivityResultItem;
@@ -46,6 +48,7 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.LongSupplier;
 import java.util.concurrent.atomic.AtomicLong;
@@ -1136,6 +1139,147 @@ public final class ActivityFinishFixture {
         }
     }
 
+    private record UsageRow(long time, String pkg, String cls, int id, int event) { }
+    private interface UsageQuery { UsageEvents run() throws Exception; }
+    private static volatile long usageSink;
+
+    private static List<UsageRow> usageRows(Iterable<UsageRow> model, long begin, long end,
+            Set<String> packages, int event) {
+        List<UsageRow> rows = new ArrayList<>();
+        for (UsageRow row : model) {
+            if (row.time >= begin && row.time < end && (packages.isEmpty() || packages.contains(row.pkg))
+                    && (event == 0 || event == row.event)) rows.add(row);
+        }
+        return rows;
+    }
+
+    private static long verifyUsage(UsageEvents result, List<UsageRow> expected) {
+        check(result != null, "Authorized usage query returned null");
+        UsageEvents.Event actual = new UsageEvents.Event();
+        long checksum = 0;
+        for (UsageRow row : expected) {
+            check(result.getNextEvent(actual), "Usage query lost a lifecycle event");
+            check(actual.getTimeStamp() == row.time && actual.getInstanceId() == row.id,
+                    "Usage query changed event time/order/instance");
+            check(row.pkg.equals(actual.getPackageName()) && row.cls.equals(actual.getClassName())
+                            && actual.getEventType() == row.event,
+                    "Usage query changed the authenticated package/class/state");
+            checksum += actual.getTimeStamp() * 31 + actual.getInstanceId() * 7 + actual.getEventType();
+        }
+        check(!result.getNextEvent(actual) && !result.hasNextEvent(), "Usage query leaked an extra event");
+        return checksum;
+    }
+
+    private static void measureUsage(String name, UsageQuery query, List<UsageRow> expected,
+            int repeats, long perQueryBudget) throws Exception {
+        if (binder) { verifyUsage(query.run(), expected); return; }
+        // Optional host-only counters are reached by reflection so ART has no management dependency.
+        Object bean = Class.forName("java.lang.management.ManagementFactory")
+                .getMethod("getThreadMXBean").invoke(null);
+        Class<?> extended = Class.forName("com.sun.management.ThreadMXBean");
+        Class<?> common = Class.forName("java.lang.management.ThreadMXBean");
+        check((Boolean) extended.getMethod("isThreadAllocatedMemorySupported").invoke(bean),
+                "Host allocation counter is unavailable");
+        extended.getMethod("setThreadAllocatedMemoryEnabled", boolean.class).invoke(bean, true);
+        common.getMethod("setThreadCpuTimeEnabled", boolean.class).invoke(bean, true);
+        var heap = extended.getMethod("getThreadAllocatedBytes", long.class);
+        var cpu = common.getMethod("getCurrentThreadCpuTime");
+        long id = Thread.currentThread().getId();
+        for (int i = 0; i < Math.min(repeats, 256); i++) usageSink = verifyUsage(query.run(), expected);
+        long allocatedBefore = (Long) heap.invoke(bean, id), cpuBefore = (Long) cpu.invoke(bean);
+        long started = System.nanoTime(), checksum = 0;
+        for (int i = 0; i < repeats; i++) checksum += verifyUsage(query.run(), expected);
+        long elapsed = System.nanoTime() - started;
+        long cpuNanos = (Long) cpu.invoke(bean) - cpuBefore;
+        long heapBytes = (Long) heap.invoke(bean, id) - allocatedBefore;
+        usageSink = checksum;
+        System.out.println("USAGE_QUERY_RESOURCE {\"workload\":\"" + name + "\",\"queries\":" + repeats
+                + ",\"events_per_query\":" + expected.size() + ",\"heap_bytes\":" + heapBytes
+                + ",\"cpu_ns\":" + cpuNanos + ",\"elapsed_ns\":" + elapsed
+                + ",\"checksum\":" + checksum + "}");
+        if (!Boolean.getBoolean("gesher.usage.query.baseline")) {
+            check(heapBytes <= perQueryBudget * repeats,
+                    "Usage query allocation still scales with the unselected event suffix: " + name);
+        }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void usageQueryResources() throws Exception {
+        String other = OWNER + ".query.peer";
+        ApkPackage peer = code(other); set(peer, "mUid", UID + 1);
+        Harness h = new Harness(null, peer);
+        set(h.process, "packageCode", h.apk);
+        Path directory = Files.createTempDirectory("gesher-usage-query-service-");
+        Path file = directory.resolve("usage.bin");
+        AtomicLong clock = new AtomicLong(100);
+        Object implementation = construct(type("DesktopUsageStatsService"),
+                new Class<?>[]{PackageManagerService.class, type("CallerIdentity"), Path.class, LongSupplier.class},
+                h.pm, get(get(h.atm, "mAm"), "mCallers"), file, (LongSupplier) clock::get);
+        Object history = get(implementation, "mHistory");
+        try {
+            IUsageStatsManager direct = (IUsageStatsManager) implementation;
+            IUsageStatsManager service;
+            if (binder) {
+                IBinder target = StandIn.of(IUsageStatsManager.class, direct).asBinder();
+                service = IUsageStatsManager.Stub.asInterface(new Binder() {
+                    @Override public IInterface queryLocalInterface(String descriptor) { return null; }
+                    @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+                            throws RemoteException { return target.transact(code, data, reply, flags); }
+                });
+            } else service = direct;
+            Class<? extends Enum> states = type("ActivityUsageHistory$State").asSubclass(Enum.class);
+            Object resumed = Enum.valueOf(states, "RESUMED"), paused = Enum.valueOf(states, "PAUSED");
+            var transition = implementation.getClass().getDeclaredMethod("transition",
+                    Object.class, String.class, String.class, states);
+            transition.setAccessible(true);
+            Object[] tokens = new Object[32]; String[] classes = new String[32];
+            for (int i = 0; i < tokens.length; i++) { tokens[i] = new Object(); classes[i] = "Activity" + i; }
+            ArrayDeque<UsageRow> model = new ArrayDeque<>();
+            final int transitions = 24_000;
+            for (int i = 0; i < transitions; i++) {
+                int actor = i % tokens.length;
+                String pkg = (actor & 1) == 0 ? OWNER : other;
+                boolean foreground = (i / tokens.length & 1) == 0;
+                clock.set(100 + i / 4);
+                transition.invoke(implementation, tokens[actor], pkg, classes[actor], foreground ? resumed : paused);
+                if (model.size() == 12_000) model.removeFirst();
+                model.addLast(new UsageRow(clock.get(), pkg, classes[actor], actor + 1,
+                        foreground ? UsageEvents.Event.ACTIVITY_RESUMED : UsageEvents.Event.ACTIVITY_PAUSED));
+            }
+            long end = clock.get() + 1, recent = end - 5;
+            List<UsageRow> latest = usageRows(model, recent, end, Set.of(), 0);
+            check(latest.size() == 20, "Recent query workload did not contain twenty real events");
+            measureUsage("recent-global", () -> service.queryEvents(recent, end, OWNER), latest, 1_000, 16_384);
+            measureUsage("empty-future", () -> service.queryEvents(end, end + 1, OWNER), List.of(), 1_000, 4_096);
+            UsageEventsQuery filtered = new UsageEventsQuery.Builder(end - 64, end)
+                    .setPackageNames(OWNER).setEventTypes(UsageEvents.Event.ACTIVITY_RESUMED).build();
+            List<UsageRow> filteredRows = usageRows(model, end - 64, end, Set.of(OWNER), UsageEvents.Event.ACTIVITY_RESUMED);
+            measureUsage("package-type-window", () -> service.queryEventsWithFilter(filtered, OWNER),
+                    filteredRows, 1_000, 32_768);
+            UsageEventsQuery absent = new UsageEventsQuery.Builder(1, end).setPackageNames("no.such.package").build();
+            measureUsage("absent-package-wide", () -> service.queryEventsWithFilter(absent, OWNER),
+                    List.of(), 256, 4_096);
+            measureUsage("full-global-control", () -> service.queryEvents(1, end, OWNER),
+                    new ArrayList<>(model), 8, 3_500_000);
+            verifyUsage(service.queryEvents(end, recent, OWNER), List.of());
+            h.asApp(() -> verifyUsage(service.queryEventsForPackage(recent, end, OWNER),
+                    usageRows(model, recent, end, Set.of(OWNER), 0)));
+            h.asApp(() -> {
+                check(service.queryEvents(recent, end, OWNER) == null, "Filtered query bypassed usage access");
+                try {
+                    service.queryEventsForPackage(recent, end, other);
+                    throw new AssertionError("Self query admitted a foreign package identity");
+                } catch (SecurityException expected) { checks++; }
+            });
+            System.out.println("Usage query service contracts passed: actual public result iteration, "
+                    + (binder ? "generated AIDL/Parcel transport" : "controlled host native identity; no Parcel transport"));
+        } finally {
+            ((AutoCloseable) history).close();
+            Files.deleteIfExists(file);
+            Files.delete(directory);
+        }
+    }
+
     public static int run(boolean realBinder, String group) throws Exception {
         binder = realBinder; checks = 0;
         if (group.equals("all") || group.equals("task")) removeTask();
@@ -1151,6 +1295,7 @@ public final class ActivityFinishFixture {
             usagePausedLifecycle();
             usageAccessModes();
         }
+        if (group.equals("all") || group.equals("usage-query")) usageQueryResources();
         return checks;
     }
 }
