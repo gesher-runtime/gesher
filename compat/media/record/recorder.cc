@@ -80,14 +80,19 @@ bool Recorder::SetNextOutputFile(int fd, std::string* error, bool* invalid_state
     return false;
   }
   std::lock_guard<std::mutex> lock(mux_mu_);
-  if (config_.output_format != kOutMpeg4 || !prepared_ || error_state_ || muxer_ == nullptr) {
+  // A writer completed by its size/duration limit stays the recorder's MP4
+  // writer until stop/reset (AOSP clears mWriter only there, and
+  // MPEG4Writer::setNextFd has no started check). Admission therefore does
+  // not depend on muxer_: a late descriptor is retained unused and closed by
+  // ReleasePipeline on stop/reset.
+  if (config_.output_format != kOutMpeg4 || !prepared_ || error_state_) {
     if (invalid_state != nullptr) *invalid_state = true;
     *error = "setNextOutputFile requires a prepared MPEG_4 recorder";
     return false;
   }
   // An invalid descriptor cannot be transported to Android's media service.
   // Preserve the documented pre-prepare/unsupported-format state error; for
-  // an available MP4 writer report the bad descriptor as a nonfatal I/O error.
+  // a prepared MP4 recorder report the bad descriptor as a nonfatal I/O error.
   if (flags < 0) {
     *error = "next output file is not a writable descriptor";
     return false;
@@ -339,6 +344,7 @@ bool Recorder::Resume(std::string* error, bool* invalid_state) {
     }
   }
   if (restart_failed) {
+    WakeGrace();
     if (audio_thread_.joinable()) audio_thread_.join();
     if (video_thread_.joinable()) video_thread_.join();
     return false;
@@ -355,8 +361,27 @@ bool Recorder::HasAudioInput() {
 }
 
 void Recorder::RequestStop(StopReason reason, std::string error) {
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    RequestStopLocked(reason, std::move(error));
+  }
+  WakeGrace();
+}
+
+void Recorder::RequestStopUnderMux(StopReason reason, std::string error) {
+  // The caller holds mux_mu_, so a writer in the rollover grace wait is
+  // blocked in it (mux_mu_ released) and RequestStopLocked's notify reaches it.
   std::lock_guard<std::mutex> lock(mu_);
   RequestStopLocked(reason, std::move(error));
+}
+
+void Recorder::WakeGrace() {
+  // The grace predicate reads stop_reason_ while holding mux_mu_. Passing
+  // through mux_mu_ after publishing the stop orders this notify after any
+  // predicate check that missed it, so the waiter cannot sleep the full
+  // grace. Lock order is mux_mu_ then mu_; no other recorder lock is held.
+  { std::lock_guard<std::mutex> lock(mux_mu_); }
+  next_file_cv_.notify_all();
 }
 
 void Recorder::RequestStopLocked(StopReason reason, std::string error) {
@@ -372,6 +397,9 @@ void Recorder::RequestStopLocked(StopReason reason, std::string error) {
   if (reason == StopReason::kSize || reason == StopReason::kError) frames_.clear();
   if (capture_ != nullptr) capture_->Stop();
   cv_.notify_all();
+  // Callers holding mux_mu_ (Write) make this notify reliable. Others hold
+  // only mu_, which follows mux_mu_; RequestStop/WakeGrace repeat the wake
+  // after taking mux_mu_ once mu_ is released.
   next_file_cv_.notify_all();
 }
 
@@ -410,7 +438,7 @@ bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64
       if (config_.max_duration_ms > 0) {
         if (duration_origin < 0 || t < duration_origin) duration_origin = t;
         if ((t - duration_origin) / 1000 >= config_.max_duration_ms) {
-          RequestStop(StopReason::kDuration);
+          RequestStopUnderMux(StopReason::kDuration);
           continue;
         }
       }
@@ -420,7 +448,7 @@ bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64
     const int flags = (p.config ? 2 : 0) | (p.key && !p.config ? 1 : 0);
     std::string error;
     if (!muxer_->WriteSample(track, p.data.data(), p.data.size(), t, flags, &error)) {
-      RequestStop(StopReason::kError, std::move(error));
+      RequestStopUnderMux(StopReason::kError, std::move(error));
       return false;
     }
     if (muxer_->FileSizeLimitApproaching() && !size_approaching_) {
@@ -445,7 +473,7 @@ bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64
       if (next_fd_ >= 0 && reason == StopReason::kNone) {
         if ((audio_track_ >= 0 && segment_audio_samples_ == 0) ||
             (video_track_ >= 0 && segment_video_samples_ == 0)) {
-          RequestStop(StopReason::kError, "rollover failed: a configured track recorded no samples");
+          RequestStopUnderMux(StopReason::kError, "rollover failed: a configured track recorded no samples");
           return false;
         }
         const int next = next_fd_;
@@ -453,7 +481,7 @@ bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64
         const bool switched = muxer_->SwitchFile(next, &error);
         close(next);
         if (!switched) {
-          RequestStop(StopReason::kError, std::move(error));
+          RequestStopUnderMux(StopReason::kError, std::move(error));
           return false;
         }
         size_approaching_ = false;
@@ -470,7 +498,7 @@ bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64
         continue;
       }
       size_reached_ = true;
-      RequestStop(StopReason::kSize);
+      RequestStopUnderMux(StopReason::kSize);
       return false;
     }
     if (!p.config) {

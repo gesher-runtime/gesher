@@ -113,9 +113,21 @@ void AudioSegments(const std::string& directory) {
   feed_audio(1000);
   CHECK(events.Wait());
   CHECK(switched == 2 && capture_released && !capture_running);
+  // The completed writer leaves the public recorder RECORDING. As in AOSP
+  // (mWriter is cleared only by stop/reset), a late next file is accepted,
+  // retained unused, and retired by stop. A second one is still rejected.
+  const unsigned completed = OpenFds();
+  SetNext(recorder, directory + "/audio-late.mp4");
+  CHECK(OpenFds() == completed + 1);
+  {
+    const int fd = OpenOutput(directory + "/audio-late-second.mp4");
+    bool state = false;
+    CHECK(!recorder.SetNextOutputFile(fd, &error, &state) && state && !recorder.InError());
+    CHECK(close(fd) == 0);
+  }
   CHECK(recorder.Stop(&error));
   events.Check({{2, 802}, {2, 803}, {2, 802}, {2, 803}, {2, 802}, {2, 801}});
-  CHECK(OpenFds() == fds);
+  CHECK(OpenFds() == fds && OutputSize(directory + "/audio-late.mp4") == 0);
   std::cout << "AUDIO_ROLLOVER encoded=" << encoded_batches << " segments=3 captures=1 encoders=1\n";
 }
 

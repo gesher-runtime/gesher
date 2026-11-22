@@ -102,10 +102,12 @@ The media proxy ignores that status. Gesher does not fabricate successful output
 admission from an invalid descriptor or infer backend precedence across a failed
 transport.
 
-Gesher also rejects delivery after terminal worker cleanup has destroyed its
-writer. The documented call window ends before the 801 notification. The pinned
-raw writer may still retain an otherwise unused fd after its recording has
-ended; that undocumented late-call behavior is not claimed as parity.
+A writer completed by its size or duration limit remains the recorder's writer
+until stop/reset: StagefrightRecorder clears `mWriter` only there, and
+`MPEG4Writer::setNextFd` has no started check. A call after completion, while
+the public recorder is still recording, is therefore accepted (subject to the
+same descriptor and second-pending checks). Gesher retains that duplicate
+unused and closes it on stop/reset; it never starts another file.
 
 The existing complete-file size admission remains unchanged. It includes the
 pending MP4 metadata and declines a sample which would reach/exceed the limit.
@@ -131,7 +133,8 @@ that post, and a Java callback can acquire the writer mutex to supply its fd.
 There is no added native queue of pending events; the framework's normal Handler
 delivery retains its Android behavior. Only the two fixed recorder workers
 participate in writer serialization. The 100 ms wait releases `mux_mu_` and can be woken by the fd setter
-or stop/reset. All uses of both writer/state locks follow writer then state;
+or stop/reset. A stop published without `mux_mu_` passes through `mux_mu_`
+before its wake-up, so a stop racing the wait's predicate is not missed. All uses of both writer/state locks follow writer then state;
 terminal cleanup releases the state lock before taking the writer lock.
 
 `Mp4Muxer::SwitchFile` secures a duplicate of the pending fd before finalizing the

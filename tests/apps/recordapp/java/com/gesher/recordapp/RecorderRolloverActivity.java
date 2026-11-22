@@ -55,7 +55,12 @@ public final class RecorderRolloverActivity extends Activity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        new Thread(this::exercise, "recorder-rollover-acceptance").start();
+        // Run here, in onCreate, like RecordActivity: the single-process launch
+        // (com.gesher.app.Main --activity) ends the VM once launch returns, so a
+        // background thread would be cut off before it reports. Recorder
+        // callbacks arrive on exercise()'s own HandlerThread, never on this
+        // looper, so nothing here waits for the main thread.
+        exercise();
     }
 
     private static final class Producer implements AutoCloseable {
@@ -341,7 +346,7 @@ public final class RecorderRolloverActivity extends Activity {
             }
             if (thread.isAlive() || callbackFailure.get() != null) passed = false;
             if (passed) say("PASS same EGL producer and recorder across 3 decoded MP4 files; ordered 802/803/801, caller fd closure and lifecycle verified");
-            runOnUiThread(this::finish);
+            finish();
         }
     }
 }

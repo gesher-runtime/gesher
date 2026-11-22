@@ -93,6 +93,9 @@ class Recorder {
   void Clear();
   void RequestStop(StopReason reason, std::string error = {});
   void RequestStopLocked(StopReason reason, std::string error);
+  // RequestStop for Write, which already holds mux_mu_.
+  void RequestStopUnderMux(StopReason reason, std::string error = {});
+  void WakeGrace();
   bool ShouldDrain();
   void CompleteWorker();
   void AudioLoop();
