@@ -148,14 +148,14 @@ foreach ($entry in $entries) {
     }
     $entry.Source = (Resolve-Path -LiteralPath $entry.Source).ProviderPath
 }
+$runtimeFilesHelper = Join-Path $RuntimeDir 'gesher-runtime-files.ps1'
+if (-not (Test-Path -LiteralPath $runtimeFilesHelper -PathType Leaf)) {
+    $runtimeFilesHelper = Join-Path $scriptRoot 'gesher-runtime-files.ps1'
+}
+. $runtimeFilesHelper
 $runtimeDrive = [IO.Path]::GetPathRoot($RuntimeDir).TrimEnd('\').TrimEnd(':')
 function AndroidPath([string] $path) {
-    $full = [IO.Path]::GetFullPath($path) -replace '\\', '/'
-    if ($full -match '^([A-Za-z]):(/.*)$') {
-        if ($Matches[1] -ieq $runtimeDrive) { return $Matches[2] }
-        return "/mnt/$($Matches[1].ToLower())$($Matches[2])"
-    }
-    return $full
+    return ConvertTo-GesherAndroidPath -Path ([IO.Path]::GetFullPath($path)) -BaseDrive $runtimeDrive
 }
 $dalvikvm = Join-Path $RuntimeDir 'dalvikvm.exe'
 if (-not (Test-Path -LiteralPath $dalvikvm)) {

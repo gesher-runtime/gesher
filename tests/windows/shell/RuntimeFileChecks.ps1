@@ -214,6 +214,45 @@ try {
         if ($worker) { $worker.Dispose() }
         $runspace.Dispose()
     }
+
+    $currentDrive = (Get-Location).Drive.Name
+    $otherDrive = if ($currentDrive -ieq 'Z') { 'Y' } else { 'Z' }
+    Assert-RuntimeFile ((Resolve-GesherAsciiPath "$($currentDrive):\gesher-ascii\data") -ceq "$($currentDrive):\gesher-ascii\data") 'Pure ASCII path was modified unnecessarily'
+    Assert-RuntimeFile ((ConvertTo-GesherAndroidPath "$($currentDrive):\gesher-ascii\data") -ceq '/gesher-ascii/data') 'Current-drive ASCII path did not strip drive letter'
+    Assert-RuntimeFile ((ConvertTo-GesherAndroidPath "$($otherDrive):\gesher-ascii\app.apk" -BaseDrive $currentDrive) -ceq "/mnt/$($otherDrive.ToLower())/gesher-ascii/app.apk") 'Other-drive ASCII path did not map to /mnt/<drive>'
+
+    $hebrew = -join ([char[]](0x05E2, 0x05D1, 0x05E8, 0x05D9, 0x05EA))
+    $nonAsciiDir = Join-Path $work ("gesher-$hebrew-test")
+    $null = [IO.Directory]::CreateDirectory($nonAsciiDir)
+    $asciiMarker = Join-Path $nonAsciiDir 'marker.txt'
+    $longAsciiFile = Join-Path $nonAsciiDir 'core-libart.jar'
+    $nonAsciiFile = Join-Path $nonAsciiDir ("file-$hebrew.txt")
+    $missingChild = Join-Path $nonAsciiDir 'pending/child.txt'
+    [IO.File]::WriteAllText($asciiMarker, 'ascii-path-marker')
+    [IO.File]::WriteAllText($longAsciiFile, 'jar-marker')
+    [IO.File]::WriteAllText($nonAsciiFile, 'file-marker')
+
+    $resolvedDir = Resolve-GesherAsciiPath $nonAsciiDir
+    $resolvedFile = Resolve-GesherAsciiPath $nonAsciiFile
+    Assert-RuntimeFile ([IO.File]::ReadAllText((Join-Path $resolvedDir 'marker.txt')) -ceq 'ascii-path-marker') 'Resolved non-ASCII directory does not point to the physical marker file'
+    Assert-RuntimeFile ([IO.File]::ReadAllText($resolvedFile) -ceq 'file-marker') 'Resolved non-ASCII file path does not read the physical marker file'
+
+    $fso = [Activator]::CreateInstance([Type]::GetTypeFromProgID('Scripting.FileSystemObject'))
+    $shortDir = $fso.GetFolder($nonAsciiDir).ShortPath
+    if ($shortDir -and $shortDir -notmatch '[^\x00-\x7F]') {
+        $androidDir = ConvertTo-GesherAndroidPath $nonAsciiDir
+        $androidLongAscii = ConvertTo-GesherAndroidPath $longAsciiFile
+        $androidChild = ConvertTo-GesherAndroidPath $missingChild
+        Assert-RuntimeFile ($androidDir -notmatch '[^\x00-\x7F]') "Expected pure ASCII Android path for non-ASCII dir, got: $androidDir"
+        Assert-RuntimeFile ($androidLongAscii -notmatch '[^\x00-\x7F]' -and $androidLongAscii.EndsWith('/core-libart.jar')) "Trailing ASCII filename was mangled: $androidLongAscii"
+        Assert-RuntimeFile ($androidChild -notmatch '[^\x00-\x7F]' -and $androidChild.EndsWith('/pending/child.txt')) "Expected pure ASCII Android path for pending child, got: $androidChild"
+    }
+    $shortFile = $fso.GetFile($nonAsciiFile).ShortPath
+    if ($shortFile -and $shortFile -notmatch '[^\x00-\x7F]') {
+        $androidFile = ConvertTo-GesherAndroidPath $nonAsciiFile
+        Assert-RuntimeFile ($androidFile -notmatch '[^\x00-\x7F]') "Expected pure ASCII Android path for non-ASCII file, got: $androidFile"
+    }
+
     'PASS: runtime file upgrade contracts ({0} checks)' -f $script:Checks
 } finally {
     if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
