@@ -587,6 +587,10 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   requires a public SDK app to preserve all pixels through a separate Binder
   process after both sending Bitmaps are recycled; that Windows/ART/Skia
   acceptance is not inferred from the host tests.
+  Seals live in an extended attribute of the `%TEMP%` file, so where `%TEMP%`
+  is on a volume without extended attributes (ReFS, including Dev Drive)
+  `memfd_create(MFD_ALLOW_SEALING)` fails with `EOPNOTSUPP` and `asShared()`
+  fails instead of returning unsealed storage.
 - **Surfaces in Parcels** (`compat/framework/surface_parcel.cc`, the QueueSurface side in
   `compat/media/surface/surface_parcel_bridge.h`): on a device a parceled Surface is its
   IGraphicBufferProducer. Here a QueueSurface's parcel is a producer endpoint, a binder in
