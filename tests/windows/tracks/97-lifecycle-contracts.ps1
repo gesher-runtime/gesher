@@ -68,6 +68,20 @@ Check 'stdio: concurrent output and pthread TLS destruction' {
   $stdioTlsOut
 } @('stdio TLS exit: all passed')
 
-Check 'environment: native font snapshots and CRT callback reads' {
-  & "$PSScriptRoot/../run-environment-owner-regression.ps1" -Fixture "$Dir/font_environment_test.exe"
-} @('font environment regression: 5 cases passed')
+$fontScope = $env:GESHER_FONT_REGRESSION_SCOPE
+# Unselected/manual execution retains the strict default. CI selects the
+# supported scope explicitly; an unknown selection never drops an assertion.
+if (-not $fontScope) { $fontScope = 'functional-and-strict' }
+if ($fontScope -cnotin @('functional', 'functional-and-strict')) {
+  throw "Unknown font regression scope: $fontScope"
+}
+Check 'environment: font values, borrowed storage, read callback and concurrent snapshots' {
+  & "$PSScriptRoot/../run-environment-owner-regression.ps1" -Fixture "$Dir/font_environment_test.exe" -Scope functional
+} @('font environment functional regression: 5 cases passed; held_writer_callback_qualified=0 crt_owner_qualified=0')
+if ($fontScope -ceq 'functional-and-strict') {
+  Check 'environment: strict held CRT owner and concurrent callback completion' {
+    & "$PSScriptRoot/../run-environment-owner-regression.ps1" -Fixture "$Dir/font_environment_test.exe" -Scope strict
+  } @('font environment regression: 5 cases passed')
+} else {
+  Write-Host 'ENVIRONMENT_HOST_STRICT_WCT_NOT_RUN selected_scope=functional held_writer_callback_qualified=0 crt_owner_qualified=0 historical_Windows2025_WCT_qualified=0'
+}

@@ -166,10 +166,17 @@ static void test_stdio_ofd_contracts(void) {
   stream = fdopen(fd, "r+");
   check("wide formatting wraps the same descriptor", stream != NULL);
   if (stream) {
-    int written = -1;
     alias = dup(fd);
+#if defined(__BIONIC__)
+    // Android deliberately rejects printf %n. Keep the mixed-format output
+    // and return-count contract here; native hosts also check its side effect.
+    check("wide formatting combines literal, string, padding and character output",
+          fwprintf(stream, L"[%4.2ls|%-4.2s|%lc]", L"wxyz", "abcd", L'!') == 13);
+#else
+    int written = -1;
     check("wide formatting combines literal, string, padding and character output",
           fwprintf(stream, L"[%4.2ls|%-4.2s|%lc]%n", L"wxyz", "abcd", L'!', &written) == 13 && written == 13);
+#endif
     check("wide formatting changes append through duplicate", alias >= 0 && fcntl(alias, F_SETFL, O_APPEND) == 0);
     check("all wide formatting output shares the current append status",
           fflush(stream) == 0 && stdio_bytes_equal(alias, "base[  wx|ab  |!]"));

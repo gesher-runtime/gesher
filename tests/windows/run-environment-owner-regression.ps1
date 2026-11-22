@@ -1,7 +1,10 @@
 # Ordinary current-build host regression. The enclosing suite verifies the
 # current source/run/attempt runtime artifact; this does not reuse or qualify
 # the separately pinned font component's supplier/owner evidence.
-param([Parameter(Mandatory)][string]$Fixture)
+param(
+  [Parameter(Mandatory)][string]$Fixture,
+  [ValidateSet('strict', 'functional')][string]$Scope = 'strict'
+)
 $ErrorActionPreference = 'Stop'
 $fixturePath = (Resolve-Path -LiteralPath $Fixture).Path
 $beforeHash = (Get-FileHash -LiteralPath $fixturePath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -15,6 +18,7 @@ Write-Host ('ENVIRONMENT_HOST_REGRESSION_INPUT ' + (@{
   source = $source; tree = $tree; repository = $env:GITHUB_REPOSITORY
   run = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT
   executable_sha256 = $beforeHash; role = 'ORDINARY_HOST_FONT_REGRESSION'
+  scope = $Scope; held_writer_callback_requested = ($Scope -ceq 'strict')
   historical_component_qualification = $false
 } | ConvertTo-Json -Compress))
 $work = Join-Path $env:RUNNER_TEMP ('environment-regression-' + [guid]::NewGuid())
@@ -25,6 +29,7 @@ try {
   foreach ($mode in @('wide', 'missing', 'empty', 'invalid-wide', 'supplementary')) {
     $info = [Diagnostics.ProcessStartInfo]::new($fixturePath)
     $info.ArgumentList.Add($mode)
+    if ($Scope -ceq 'functional') { $info.ArgumentList.Add('--functional') }
     $info.WorkingDirectory = $work
     $info.UseShellExecute = $false
     $info.RedirectStandardOutput = $true
@@ -57,12 +62,21 @@ try {
         throw 'Bounded child/pipe completion failed'
       }
       $text = $stdout.Result + "`n" + $stderr.Result
-      $pass = [regex]::Matches($text, '(?m)^FONT_ENV_HOST_PASS mode=' + [regex]::Escape($mode) + ' [^\r\n]*')
+      $passPrefix = if ($Scope -ceq 'strict') { 'FONT_ENV_HOST_PASS' } else { 'FONT_ENV_FUNCTIONAL_PASS' }
+      $pass = [regex]::Matches($text, '(?m)^' + $passPrefix + ' mode=' + [regex]::Escape($mode) + ' [^\r\n]*')
       $wide = [regex]::Matches($text, '(?m)^FONT_ENV_HOST_INITIAL_WIDE key=(ANDROID_ROOT|GESHER_WINDOWS_FONTS) [^\r\n]*')
       $borrowed = [regex]::Matches($text, '(?m)^FONT_ENV_HOST_BORROWED unrelated_native_visible=1 mutable_alias=1 empty_posix=1 renamed_identity=1 wide_transition=1 last_writer=1\r?$')
       $wct = 'FONT_ENV_WCT_PASS own_process=1 specific_writer_wait=CRITICAL_SECTION held_owner=INVALID_HANDLER concurrent_read_callback=1 unset_writer=1 true_kernel_completion=1 privilege_restored=1 session_token_handles_closed=1 arbitrary_writer_reentry_qualified=0'
+      $scopeEvidence = if ($Scope -ceq 'strict') {
+        $text.Contains($wct) -and $text.Contains('FONT_ENV_WCT_PRIVILEGE_RESTORE success=1 error=0') -and
+          -not $text.Contains('FONT_ENV_FUNCTIONAL_PASS')
+      } else {
+        $pass.Count -eq 1 -and $pass[0].Value.Contains('pre_mutation_reentrant_read=1') -and
+          $pass[0].Value.Contains('concurrency=1000 handles_closed=1 held_writer_callback_qualified=0 crt_owner_qualified=0') -and
+          -not $text.Contains('FONT_ENV_WCT_PASS') -and -not $text.Contains('FONT_ENV_HOST_PASS')
+      }
       if ($child.ExitCode -ne 0 -or $pass.Count -ne 1 -or $wide.Count -ne 2 -or $borrowed.Count -ne 1 -or
-          -not $text.Contains($wct) -or -not $text.Contains('FONT_ENV_WCT_PRIVILEGE_RESTORE success=1 error=0') -or
+          -not $scopeEvidence -or
           $text.Contains('FONT_ENV_HOST_FAIL')) {
         Write-Output $text
         throw "Native font/environment assertions failed with exit $($child.ExitCode)"
@@ -70,7 +84,8 @@ try {
       # Preserve actual received UTF16, native outcomes and WCT proof in the
       # run log; never print the inherited environment or unrelated variables.
       foreach ($line in ($text -split '\r?\n')) {
-        if ($line -cmatch '^FONT_ENV_HOST_(INITIAL_WIDE|BORROWED|PASS) ' -or $line -cmatch '^FONT_ENV_WCT_(PASS|PRIVILEGE_RESTORE) ') {
+        if ($line -cmatch '^FONT_ENV_HOST_(INITIAL_WIDE|BORROWED|PASS) ' -or
+            $line -cmatch '^FONT_ENV_FUNCTIONAL_PASS ' -or $line -cmatch '^FONT_ENV_WCT_(PASS|PRIVILEGE_RESTORE) ') {
           Write-Host $line
         }
       }
@@ -96,8 +111,9 @@ if ((Get-FileHash -LiteralPath $fixturePath -Algorithm SHA256).Hash.ToLowerInvar
 }
 if ($passed -eq 5 -and $failedModes.Count -eq 0) {
   $global:LASTEXITCODE = 0
-  Write-Output 'font environment regression: 5 cases passed'
+  if ($Scope -ceq 'strict') { Write-Output 'font environment regression: 5 cases passed' }
+  else { Write-Output 'font environment functional regression: 5 cases passed; held_writer_callback_qualified=0 crt_owner_qualified=0' }
 } else {
   $global:LASTEXITCODE = 1
-  Write-Output ('font environment regression: failed modes=' + ($failedModes -join ','))
+  Write-Output ('font environment regression: scope=' + $Scope + ' failed modes=' + ($failedModes -join ','))
 }

@@ -47,9 +47,15 @@ not retain the snapshot lock, allowing callbacks to read the prior committed
 state. Inputs whose lengths UCRT rejects before mutation enter that original
 CRT primitive without either owner lock; an existing value with `overwrite=0`
 still skips the write. This preserves the invalid-parameter callback's original
-lock boundary. The font fixture requires an actual wait chain through the held
-CRT critical section, followed by successful callback and writer completion;
-a different wait or a timeout is not a pass.
+lock boundary. The font fixture's default strict mode requires an actual wait
+chain through the held CRT critical section, followed by successful callback
+and writer completion; a different wait or a timeout is not a pass.
+
+Its explicit `--functional` mode has a narrower scope: initial and owned font
+values, borrowed-buffer changes, the pre-mutation invalid-handler read callback,
+and concurrent snapshot reads. It does not run the held-writer callback test and
+reports `held_writer_callback_qualified=0` and `crt_owner_qualified=0` in a separate
+result marker. A functional result cannot satisfy the strict result parser.
 
 ## Regression evidence
 
@@ -63,11 +69,20 @@ a different wait or a timeout is not a pass.
   native narrow/wide writes, mutable and empty assignments, `posix_spawn` and
   a real child `execv` without an explicit environment argument.
 - The ordinary Windows lifecycle suite builds `font_environment_test` and runs
-  all five initial UTF16 modes, the existing invalid-handler wait-chain check
-  and concurrent font reads. The authenticated runtime artifact supplies that
-  executable. This does not reuse the older font component's frozen supplier
-  qualification.
+  the functional scope in all five initial UTF16 modes on Windows 2022 and 2025.
+  The CI runner explicitly selects the additional unchanged strict five-mode
+  wait-chain gate on Windows 2022. The authenticated runtime artifact supplies
+  that executable. Missing strict owner evidence is never accepted as a strict
+  pass, and the older font component's frozen supplier qualification is unchanged.
+
+Windows 2025 held-writer/reentrant-reader and full WCT owner qualification remain
+open. That limitation predates this environment owner; the existing
+[font resource handoff](../handoff/tracks/fonts-resource-parser-source.md) retains
+the historical five Windows 2025 WCT failures. Ordinary functional results do not
+replace those failures or the separate owner investigation.
 
 Linux envelopes and cross-compilation establish only their stated boundaries.
-The native ELF, process-inheritance and five-mode font gates must execute on
-the composed Windows build before those runtime results can be claimed.
+The native ELF, process-inheritance and selected five-mode font gates must execute
+on the composed Windows build before their respective runtime results can be
+claimed. The functional gate alone does not establish progress for a reentrant
+read while another writer is blocked inside the CRT.

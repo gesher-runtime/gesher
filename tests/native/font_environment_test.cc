@@ -29,6 +29,9 @@ bool HeldCallback() noexcept;
   DWORD last = GetLastError(); int saved_errno = errno;
   if (g_failure_cleanup) g_failure_cleanup();
   std::fprintf(stderr,"FONT_ENV_HOST_FAIL %s errno=%d winerror=%lu\n",message,saved_errno,last);
+  // ExitProcess deliberately bypasses CRT shutdown. Preserve the final
+  // cleanup/callback diagnostics even when stdout is a buffered CI pipe.
+  std::fflush(stdout);std::fflush(stderr);
   ExitProcess(1); // Never return stack-backed state while a worker may live.
 }
 void Require(bool value,const char* message){if(!value)Die(message);}
@@ -189,7 +192,7 @@ void ConcurrentReadCallback(){
   do{
     count=kWaitChainCapacity;is_cycle=FALSE;
     SetLastError(ERROR_SUCCESS);BOOL query=GetThreadWaitChain(cycle.session,0,0,cycle.writer_tid,&count,nodes,&is_cycle);DWORD query_error=GetLastError();
-    ++sample;if(sample<=1024)std::printf("FONT_ENV_WCT_QUERY phase=writer sample=%u success=%d count=%lu cycle=%d error=%lu error_meaningful=%d\n",sample,query,count,is_cycle,query_error,!query);
+    ++sample;if(sample<=4||!query)std::printf("FONT_ENV_WCT_QUERY phase=writer sample=%u success=%d count=%lu cycle=%d error=%lu error_meaningful=%d\n",sample,query,count,is_cycle,query_error,!query);
     bool changed=count!=previous_count||is_cycle!=previous_cycle;
     for(DWORD i=0;!changed&&i<count&&i<kWaitChainCapacity;++i){
       const auto& a=nodes[i];const auto& b=previous_nodes[i];
@@ -207,7 +210,7 @@ void ConcurrentReadCallback(){
       nodes[2].ObjectType==WctThreadType&&nodes[2].ThreadObject.ProcessId==GetCurrentProcessId()&&nodes[2].ThreadObject.ThreadId==cycle.handler_tid;
     if(!observed)Sleep(10);
   }while(!observed&&GetTickCount64()<deadline);
-  std::printf("FONT_ENV_WCT_SAMPLE_TOTAL queries=%u query_record_limit=1024 full_dumps=%u full_dump_limit=32\n",sample,dumps);
+  std::printf("FONT_ENV_WCT_SAMPLE_TOTAL queries=%u initial_query_records=4 query_failures_recorded=1 full_dumps=%u full_dump_limit=32\n",sample,dumps);
   cycle.DiagnosticState("final_before_ownership_gate");
   for(DWORD i=0;i<count&&i<kWaitChainCapacity;++i)
     std::printf("FONT_ENV_WCT_NODE index=%lu type=%u status=%u pid=%lu tid=%lu\n",i,static_cast<unsigned>(nodes[i].ObjectType),static_cast<unsigned>(nodes[i].ObjectStatus),nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ProcessId:0,nodes[i].ObjectType==WctThreadType?nodes[i].ThreadObject.ThreadId:0);
@@ -237,7 +240,8 @@ DWORD WINAPI Worker(void* argument){
 }
 int main(int argc,char** argv){
   Require(std::getenv("GITHUB_ACTIONS")&&std::strcmp(std::getenv("GITHUB_ACTIONS"),"true")==0,"CI execution only");
-  Require(argc==2,"one explicit initial-state mode");std::string_view mode(argv[1]);
+  Require(argc==2||(argc==3&&std::strcmp(argv[2],"--functional")==0),"one explicit initial-state mode and optional functional scope");
+  const bool functional=argc==3;std::string_view mode(argv[1]);
   Require(mode=="wide"||mode=="missing"||mode=="empty"||mode=="invalid-wide"||mode=="supplementary","initial mode");
   State state=mode=="missing"?State::kAbsent:mode=="invalid-wide"?State::kError:State::kValue;
   std::string_view initial=mode=="wide"?kInitial:mode=="supplementary"?kSupplementary:"";
@@ -313,7 +317,9 @@ int main(int argc,char** argv){
   Require(std::getenv("ANDROID_ROOT")&&std::strcmp(std::getenv("ANDROID_ROOT"),kA)==0,"pre-mutation CRT change");
   Require(setenv("ANDROID_ROOT","\xff",1)==0,"owned raw-byte control");Check(0,State::kError,"");
   auto files=gesher::SystemFontFiles();Require(files.xml.empty()&&files.directory.empty(),"invalid bytes used defaults");
-  ConcurrentReadCallback();
+  // The ordinary value/concurrent-snapshot regression has a separate claim.
+  // Default execution still requires the exact held-CRT owner chain above.
+  if(!functional)ConcurrentReadCallback();
   Require(setenv("ANDROID_ROOT",kA,1)==0,"restore before concurrency");
   HANDLE start=CreateEventW(nullptr,TRUE,FALSE,nullptr);Require(start!=nullptr,"start event");
   std::atomic<int> failures{0};Work work[]={{start,true,&failures},{start,false,&failures}};
@@ -323,6 +329,9 @@ int main(int argc,char** argv){
   DWORD codes[2]{};
   Require(GetExitCodeThread(threads[0],&codes[0])&&GetExitCodeThread(threads[1],&codes[1])&&codes[0]==0&&codes[1]==0&&failures.load()==0,"concurrent snapshots");
   Require(CloseHandle(threads[0])&&CloseHandle(threads[1])&&CloseHandle(start),"worker handle cleanup");
-  std::printf("FONT_ENV_HOST_PASS mode=%s two_keys=1 initial_wide=1 copy_move_lifetime=1 native_POSIX=1 overwrite0=1 callback_failure=PRE_MUTATION_READ_ONLY concurrent_read_callback_WCT=1 writer_callback_reentrancy_qualification=0 preparation_oom_qualification=0 raw_partial_rollback_claim=0 invalid_owned_fail_closed=1 concurrency=1000 handles_closed=1 global_getenv_repair=0 font_fallback_qualified=0\n",argv[1]);
+  if(functional)
+    std::printf("FONT_ENV_FUNCTIONAL_PASS mode=%s two_keys=1 initial_wide=1 copy_move_lifetime=1 native_POSIX=1 overwrite0=1 pre_mutation_reentrant_read=1 invalid_owned_fail_closed=1 concurrency=1000 handles_closed=1 held_writer_callback_qualified=0 crt_owner_qualified=0 font_fallback_qualified=0\n",argv[1]);
+  else
+    std::printf("FONT_ENV_HOST_PASS mode=%s two_keys=1 initial_wide=1 copy_move_lifetime=1 native_POSIX=1 overwrite0=1 callback_failure=PRE_MUTATION_READ_ONLY concurrent_read_callback_WCT=1 writer_callback_reentrancy_qualification=0 preparation_oom_qualification=0 raw_partial_rollback_claim=0 invalid_owned_fail_closed=1 concurrency=1000 handles_closed=1 global_getenv_repair=0 font_fallback_qualified=0\n",argv[1]);
   return 0;
 }
