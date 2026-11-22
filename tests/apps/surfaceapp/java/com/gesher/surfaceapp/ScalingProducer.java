@@ -153,30 +153,47 @@ final class ScalingProducer implements AutoCloseable {
             }
         }
 
+        // One complete stream per render: the IDR sample, then END_OF_STREAM. A
+        // decoder need not emit a lone frame before input ends (Android's and
+        // Media Foundation's may hold it), so draining is what guarantees output.
+        // flush() then readies the started codec for the next stream; unlike
+        // configure()/stop()/reset(), it keeps the video scaling mode.
         void render(int mode, long timestampUs) throws Exception {
             if (mode != 0) codec.setVideoScalingMode(mode);
-            boolean queued = false;
+            int queued = 0;
+            boolean rendered = false;
             long deadline = System.nanoTime() + 15_000_000_000L;
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             while (System.nanoTime() < deadline) {
-                if (!queued) {
+                if (queued < 2) {
                     int input = codec.dequeueInputBuffer(WAIT_US);
                     if (input >= 0) {
-                        ByteBuffer buffer = codec.getInputBuffer(input);
-                        buffer.clear(); buffer.put(encoded.sample);
-                        codec.queueInputBuffer(input, 0, encoded.sample.length, timestampUs, 0);
-                        queued = true;
+                        if (queued == 0) {
+                            ByteBuffer buffer = codec.getInputBuffer(input);
+                            buffer.clear(); buffer.put(encoded.sample);
+                            codec.queueInputBuffer(input, 0, encoded.sample.length, timestampUs, 0);
+                        } else {
+                            codec.queueInputBuffer(input, 0, 0, timestampUs,
+                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                        }
+                        queued++;
                     }
                 }
                 int output = codec.dequeueOutputBuffer(info, WAIT_US);
                 if (output >= 0) {
-                    boolean frame = info.size > 0;
+                    boolean frame = info.size > 0 && !rendered;
                     if (frame) require(info.presentationTimeUs == timestampUs, "decoder changed timestamp");
                     codec.releaseOutputBuffer(output, frame);
-                    if (frame) return;
+                    rendered |= frame;
+                    if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        require(rendered, "decoder reached end of stream without frame for mode " + mode);
+                        codec.flush();
+                        return;
+                    }
                 }
             }
-            throw new AssertionError("decoder did not produce frame for mode " + mode);
+            throw new AssertionError("decoder did not finish stream for mode " + mode
+                    + (rendered ? " (frame rendered, no end of stream)" : " (no frame)"));
         }
 
         void reset() {

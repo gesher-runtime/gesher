@@ -366,10 +366,20 @@ void CropGeometry() {
           "fit always retains entire valid source");
   }
   for (auto c : {Case{0, 4, 8, 8, 0, 0, 0, 0}, Case{4, -1, 8, 8, 0, 0, 0, 0},
-                 Case{4, 4, 0, 8, 0, 0, 0, 0}, Case{4, 4, 8, -1, 0, 0, 0, 0}}) {
-    auto crop = VideoDisplayCrop(c.w, c.h, c.tw, c.th, 2);
-    Check(crop.left == 0 && crop.top == 0 && crop.right == 0 && crop.bottom == 0,
-          "invalid display dimensions return empty crop");
+                 Case{0, 0, 0, 0, 0, 0, 0, 0}}) {
+    for (int mode : {1, 2}) {
+      auto crop = VideoDisplayCrop(c.w, c.h, c.tw, c.th, mode);
+      Check(crop.left == 0 && crop.top == 0 && crop.right == 0 && crop.bottom == 0,
+            "invalid source dimensions return empty crop");
+    }
+  }
+  for (auto c : {Case{4, 3, 0, 8, 0, 0, 4, 3}, Case{4, 3, 8, -1, 0, 0, 4, 3},
+                 Case{4, 3, 0, 0, 0, 0, 4, 3}}) {
+    for (int mode : {1, 2}) {
+      auto crop = VideoDisplayCrop(c.w, c.h, c.tw, c.th, mode);
+      Check(crop.left == c.l && crop.top == c.t && crop.right == c.r && crop.bottom == c.b,
+            "unsized display target (e.g. 0x0 TextureView layer) keeps the whole source");
+    }
   }
   uint32_t rng = 0x13579bdu;
   auto side = [&] { rng = rng * 1664525u + 1013904223u; return int(1 + rng % 16384); };

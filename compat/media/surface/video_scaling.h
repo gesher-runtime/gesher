@@ -16,9 +16,9 @@ struct VideoCrop {
 // Android's GLConsumer does. Wide arithmetic keeps valid dimensions bounded.
 inline VideoCrop VideoDisplayCrop(int width, int height, int target_width,
                                   int target_height, int mode) {
-  if (width <= 0 || height <= 0 || target_width <= 0 || target_height <= 0)
-    return {0, 0, 0, 0};
-  if (mode != 2) return {0, 0, width, height};
+  if (width <= 0 || height <= 0) return {0, 0, 0, 0};
+  // An unsized target has no aspect to crop to; keep the whole valid source.
+  if (mode != 2 || target_width <= 0 || target_height <= 0) return {0, 0, width, height};
   const int64_t across = static_cast<int64_t>(width) * target_height;
   const int64_t down = static_cast<int64_t>(height) * target_width;
   if (across > down) {

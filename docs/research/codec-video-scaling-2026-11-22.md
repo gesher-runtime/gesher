@@ -101,11 +101,12 @@ explicit boundaries. Source hashes are printed for every production input.
 The focused run passes **42,157 assertions** with AddressSanitizer and
 UndefinedBehaviorSanitizer, including 10,000 comparisons with the exact Android
 16 r4 `GLConsumer::scaleDownCrop` method. Without that optional primary source,
-the self-contained CI run contains 32,157 assertions. Cases cover:
+the self-contained CI run contains 32,165 assertions. Cases cover:
 
 - Fit and crop in both actual display consumers and Bitmap readback, including a
   Bitmap whose aspect differs from the view; unchanged paint/transform/clip state.
-- Odd and extreme dimensions, bounds, integer centering, empty/invalid targets,
+- Odd and extreme dimensions, bounds, integer centering, empty/invalid sources,
+  unsized (0x0) targets keeping the whole source in both modes,
   overflow-safe arithmetic, and the official algorithm comparison.
 - Actual RenderFrame publication, full raw pixels, timestamps, retained owners,
   resize without a new frame, surface replacement, live return to fit, abandon
@@ -166,6 +167,8 @@ these are behavioral failures rather than fixture compilation failures.
 The surfaceapp fixture adds `CodecScalingActivity` and a private `:scaling`
 service. Its test producer encodes a 192x64 I420 red/green/blue frame through the
 real AVC encoder, then sends that compressed key frame through two real decoders.
+Each render is a complete stream: the key frame, then END_OF_STREAM; the
+producer renders the drained frame and flushes, which keeps the scaling mode.
 No runtime backend or capability is replaced by this fixture.
 
 `tests/windows/tracks/52-surfaces.ps1` invokes this Activity directly, then through
