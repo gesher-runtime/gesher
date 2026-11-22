@@ -687,12 +687,14 @@ see "After that" for what is left._
   (`ucontext` is zeroed); `alarm`/`setitimer` timers; `sigaltstack` is only
   recorded; `kill` of other processes is `ESRCH`. A `SIG_DFL` that would
   terminate does (`abort()` for the core-dumping signals).
-- **libandroid stand-ins**: sensors (none), tracing (off), OBB mounting
-  (unsupported; scanning works), AChoreographer's vsync (a 60 Hz clock, not
-  the display's). Not provided at all (they bind to the aborting stubs):
+- **libandroid stand-ins**: sensors (none), tracing (off), performance hints
+  (unsupported; `APerformanceHint_getManager` returns `nullptr`, sessions
+  fail cleanly), OBB mounting (unsupported; scanning works),
+  AChoreographer's vsync (a 60 Hz clock, not the display's). Not provided at
+  all (they bind to the aborting stubs):
   `ASurfaceTexture_*`, `AHardwareBuffer_fromHardwareBuffer`/`toHardwareBuffer`
   (Java HardwareBuffer has no natives), `ASurfaceTransaction_fromJava`,
-  `ASurfaceTransaction_setLuts`, `AThermal_*`, `APerformanceHint_*`,
+  `ASurfaceTransaction_setLuts`, `AThermal_*`,
   `ASharedMemory_dupFromJava`, `android_getaddrinfofornetwork` & co.
   AInputReceivers are refused (null): no input channels for layers.
 - **NativeActivity** (0032): `onConfigurationChanged`, `onLowMemory` and
@@ -713,10 +715,12 @@ see "After that" for what is left._
   drivers may do). GLES 1 (`libGLESv1_CM.so`) resolves but is untested.
   `ASurfaceTexture` is not provided. `eglDestroySurface` of a surface that is
   still current releases the window at once (Android defers it).
-- **AHardwareBuffer and ASurfaceControl limits** (ADR 0089): a native fence
-  made without an fd waits for its context's commands when it is made
-  (glFinish) and its fd is a signaled `/dev/null` descriptor without
-  `sync_file` ioctls; GPU writes to a buffer reach another process's mapping
+- **AHardwareBuffer and ASurfaceControl limits** (ADR 0089): local fence
+  creation records asynchronous DXGI completion. Exporting a native fd waits
+  for completion outside ANGLE's mutex and returns an immutable native event;
+  this preserves server-wait isolation with ANGLE's shared immediate queue,
+  but native export still costs CPU/GPU overlap. `sync_file` ioctls remain
+  unsupported. GPU writes to a buffer reach another process's mapping
   only after the writing process reads the buffer back (a CPU lock there, or
   when it sends the buffer); a window's layers and frames the app posts to
   the same window directly replace each other; damage regions, data spaces,

@@ -43,6 +43,7 @@ add_library(gesher_ndk_graphics OBJECT
   ${CMAKE_CURRENT_LIST_DIR}/egl_child_surface.cc
   # ADR 0089: AHardwareBuffer, ASurfaceControl, their EGL half, the GPU thread.
   ${CMAKE_CURRENT_LIST_DIR}/gpu_interop.cc
+  ${CMAKE_CURRENT_LIST_DIR}/gpu_fence.cc
   ${CMAKE_CURRENT_LIST_DIR}/hardware_buffer.cc
   ${CMAKE_CURRENT_LIST_DIR}/surface_control.cc
   ${CMAKE_CURRENT_LIST_DIR}/egl_native_buffer.cc
@@ -82,6 +83,15 @@ target_include_directories(gpu_keepalive_test PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(gpu_keepalive_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
   gesher_window_surface graphics_native_headers user32 gdi32 winmm)
 target_compile_options(gpu_keepalive_test PRIVATE -Wall -Wextra -Werror)
+
+# Real GPU fences, nonblocking server waits, context concurrency, pending
+# destruction, fd aliases and cross-process ownership (also on WARP).
+add_executable(egl_fence_test ${CMAKE_SOURCE_DIR}/tests/native/egl_fence_test.cc)
+target_include_directories(egl_fence_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}
+  ${CMAKE_SOURCE_DIR}/compat/posix/src ${_gl_include})
+target_link_libraries(egl_fence_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
+  gesher_window_surface graphics_native_headers user32 gdi32 d3d11)
+target_compile_options(egl_fence_test PRIVATE -Wall -Wextra -Werror)
 
 # A GL test library's gesher_selftest() with the same EGL/GLES
 # (tests/native/gl_extension_test.cc; gl_extension_procs_test.so in CI).

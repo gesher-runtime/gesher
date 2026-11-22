@@ -263,3 +263,27 @@ contracts** including the pinned Android crop comparison. The input gate still
 observes zero inactive frame allocations and conversions at all three measured
 resolutions. This proves local source composition; it does not substitute for
 the required Windows runtime acceptance.
+
+## Published-head CI: clock fixture composition repair
+
+The exact published head `dda3fad72e11e1ff880822adcc0b79a846e3604a` ran in
+[full fork CI 45059623451](https://github.com/yom-chadash/gesher/actions/runs/45059623451).
+All 66 jobs completed: 50 success, seven failure and nine skipped. The
+[artifact-preflight log](https://github.com/yom-chadash/gesher/actions/runs/45059623451/job/137322541764)
+shows a real integration failure: `test_clock_domains.py --sanitize` extracts
+the updated production `OnSurfaceFrame`, but its `CodecProbe` lacked the new
+release/fatal/flush and generation fields. Compilation stopped before the clock
+assertions ran. This was reproduced locally, independently of fork guards.
+
+The repair adds only those six fields and a fixture-boundary explanation. The
+probe retains its existing active encoder state. No clock assertion, production
+method, extraction boundary, pinned source, sanitizer option or CI gate changes.
+The complete sanitized clock gate now passes **74 assertions, zero failures**
+against this production source and separately against pre-feature
+`b915b0c46599e360bf345e85a033c6fe87d8558b`. Local LSan alone is disabled for ptrace.
+
+The other six failed jobs are the two canonical TCP-context prerequisites, the
+canonical DNS-context prerequisite, both Windows skipped-shard aggregates and
+`ci-required`. Their diagnostic fixes are tracked in #281/#285. This local clock
+repair is not a complete remote CI or Windows persistent-input execution pass;
+the published-head workflow must run again on the corrected source.
