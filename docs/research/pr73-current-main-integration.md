@@ -1,5 +1,142 @@
 # PR 73: current-main integration and runtime repair
 
+## Shared owner and main cache integration, 2026-11-22
+
+This author round starts from published PR73
+537936e89a450107821b0bcf4cd40cec0d060f24 and preserves its ancestry. It
+integrates the exact prepared PR296 composition
+3ad165e47c91ed830c61a3528bd35db801bbf13a, whose parents are main
+452372561e0a50c63f072a5ae1e7ca5aa81354b8 and fence repair
+8df95e1cc29e74ef2d0853074bdc5cf6548baf0a, followed by main
+0d25937fac3548c5e97f07df0e57def7f43ae868. This composition requires its own
+independent review; older review results below are historical evidence, not
+approval of the new owner/cache implementation.
+
+The first merge has two source conflicts: Bionic stdio and the selected-source
+policy. Incoming main's Bionic change is its positive TLS metadata cache.
+PR73's codec, conversion error and wide pushback already belong to the actual
+shared stream owner, so keeping a second Bionic metadata registry would split
+that lifetime again. The integration retains the published Bionic delegation
+and places the positive cache at the shared owner's actual lookup.
+
+### One owner and a bounded positive cache
+
+stdio_output.cc adds eight trivial TLS entries pointing to stable std::map
+shared-owner slots. A successful lookup copies the existing shared_ptr while
+the caller holds the outer CRT FILE lock, or supplies the synchronization
+required by an explicitly unlocked API. The TLS entries own no stream,
+allocate no state and run no ownership destructor. Missing streams are never
+cached.
+
+Thirty-two atomic generation buckets invalidate positive entries before their
+map slots are erased. Both ordinary retirement and replacement after native
+FILE-token reuse advance the bucket while holding the registry mutex.
+Generation zero permanently disables that bucket after wrap; the original
+locked lookup remains available. A miss acquires the registry mutex and
+records the exact current slot and generation. Insertions and retirement of
+other map nodes do not move a live stream's slot.
+
+The original stream lock ordering, cancellation cleanup, flush-all pinning,
+descriptor snapshots and retirement rules remain. Buffering, seek/reopen,
+conversion state, errors and pushback still share the same owner.
+Already-guarded and explicitly unlocked guest calls retain unlocked
+orientation; public fwide retains its normal lock. Main's descriptor-backed
+wide formatter path and closed-standard-handle spawn assertions are preserved.
+
+Against main0d plus the approved fence repair, PR73 changes the same four
+production paths listed in the earlier round below. Of PR73's four production
+paths, only stdio_output.cc changes against the published PR73. No separate
+socket correction outside the approved incoming main/fence inputs is included.
+
+### Exact authority composition
+
+The current OFD qualification manifest, its patch, all 71 source digests and
+the native approval state are byte-for-byte the incoming main authority.
+The native-fence manifest and patch are likewise unchanged. The original
+PR73 shared-stdio manifest, patch and its 23 negative controls remain unchanged.
+The cache integration does not replace these receipts.
+
+A separate shared-stdio-cache-source.json pins two minimal patches and the
+literal historical endpoints:
+
+1. Reverse the owner-cache patch to the published PR73 owner bytes at
+   537936e; check both reverse and forward endpoints.
+2. Run the unchanged original four-file shared-stdio transition against its
+   SHA-verified original main751 receipt, read from that immutable Git object.
+3. Prove main's separate Bionic cache patch from its literal main751 source to
+   literal main452 bytes in both directions.
+4. Require all four resulting predecessor files to equal literal main452 and
+   the current 71-path qualification before continuing the original checks.
+
+The later main0d refresh changes none of these endpoints or protected paths,
+so it requires no pin or baseline update. The 23 additional cache-policy
+controls reject changed source/patch bytes, repinned false predecessors,
+expanded paths, altered baseline or authority identities, changed endpoints
+and invented approval fields. They run alongside the common 33, fence 4+2,
+and unchanged original shared-stdio 23 controls: 85 controls in total.
+This establishes bounded source preservation, not behavioral approval.
+
+### Actual-source host evidence
+
+The current adapter fixture compiles the complete production owner and the
+actual guest Fgetc, unlocked read/write and orientation bodies. Its Linux
+envelope declares the Win32 descriptor and CRT lock-lifetime boundaries;
+files, descriptors, pipes and byte effects are real. Historical comparisons
+read the selected revision's private/public headers as well as its production
+bodies.
+
+The sanitizer run passes 269 core, 191 adapter and 71 Linux-reference checks,
+including all four cancellation phases, unlocked progress, shutdown ordering
+and the existing late socket-registry controls. The other affected suites pass
+114 lifetime checks; 446 host, 446 guest and 160 Linux reopen checks; and 229
+device-lifetime plus 36 Linux checks. ASan/UBSan are fatal for these runs;
+LeakSanitizer is disabled in this host environment.
+
+Twenty-four cache-specific adapter checks cover progress while another thread
+holds the actual registry mutex, every byte and EOF, cross-thread registration
+after an earlier miss, retirement of another thread's cached owner, codec/error
+reset, same-FILE replacement, native token registration, generation wrap and
+real descriptor close. The unchanged current fixture rejects published PR73's
+uncached owner at the bounded progress assertion. Four isolated generated-source
+mutations separately disable the positive lookup, omit retirement invalidation,
+omit replacement invalidation and re-enable a wrapped bucket. Each is rejected
+by the intended assertion, without sanitizer errors. Failed-invalidation
+controls clear only the test's dangling TLS cache after recording failure, so
+the negative terminates safely without making a broken lookup pass.
+
+benchmark_stdio_metadata.py now builds that same production adapter twice,
+once from immutable published PR73 and once from current source. It no longer
+replaces the owner with separate orientation/read stubs. Timing excludes file
+creation and thread startup; order alternates, and each sample checks every
+byte, EOF and descriptor close. A three-sample, 65,536-byte-per-thread host run
+measured median after/before ratios of 0.840 with one thread and 0.787 with four.
+These short host-envelope timings are diagnostic, not Windows performance
+claims or approval gates.
+
+### Bounded newer-main preservation and target limits
+
+Main452 to main0d adds eight linear merges across 51 paths: PRs277,279,282,281,
+307,308,311 and313. The merge is conflict-free. Fifty incoming paths equal
+main0d byte-for-byte; the only composed path is ci.yml, which retains all
+existing gates and adds exactly main's two NativeStderrChecks.ps1 calls.
+Incoming regex optimization and FileIdInfo fallback stay intact. Neither stdio,
+the descriptor owner, the 71 protected paths nor qualification inputs change.
+
+The native build uses this worktree's exact AOSP lock and ordered patches,
+not PR107's additional ART patches, and its own verified publisher-cancellation
+toolchain receipt. x64 stdio/OFD, guest shim, native3 workers and ELF loader
+compilation/linking, plus ARM64 compilation, check target ABI/build composition.
+Such cross-build results must remain bound to their actual source commit/tree
+and supplier receipt.
+
+Actual Windows execution remains required for MinGW wide formatting,
+cancellation, native3 lock/owner observations, the libc ELF load and both native
+tracks. The genuine-CI identity guard is retained; no local CI identity or
+Windows result is synthesized. The reproduced old unlocked-call defect and the
+cache counterfactuals do not establish the cause of the complete historical
+Windows timeout or the service/Puzzles failures. Those require the new composed
+candidate's real CI execution after independent review.
+
 ## Main refresh, 2026-11-22
 
 This refresh preserves the previously reviewed PR73 candidate

@@ -349,79 +349,128 @@ begin
   end;
 end;
 
+var
+  // Optional downloads that failed in an interactive run: the user was told, and
+  // the post-install step skips them instead of fetching the same URL again.
+  WebView2Skipped, MicrogSkipped, AuroraSkipped: Boolean;
+
+// Downloads one file into {tmp} unless it is already there; a failure is logged
+// and returns False. DownloadPage.Download stops at the first failed file, so each
+// optional component gets its own call and one blocked URL does not stop the rest.
+function DownloadOptional(const Url, FileName: String; var Cancelled, Failed: Boolean;
+  var Error: String): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{tmp}\' + FileName));
+  if Result or Cancelled then
+    Exit;
+  DownloadPage.Clear;
+  DownloadPage.Add(Url, FileName, '');
+  try
+    DownloadPage.Download;
+    Result := True;
+  except
+    if DownloadPage.AbortedByUser then
+    begin
+      Log('Download cancelled by user.');
+      Cancelled := True;
+    end
+    else
+    begin
+      Log('Optional download of ' + FileName + ' failed: ' + GetExceptionMessage);
+      Failed := True;
+      if Error = '' then
+        Error := GetExceptionMessage;
+    end;
+  end;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  DownloadsNeeded: Integer;
+  Cancelled, Failed: Boolean;
+  Error, Skipped: String;
 begin
   Result := True;
-  if CurPageID = wpReady then
-  begin
-    DownloadPage.Clear;
-    DownloadsNeeded := 0;
-    if WizardIsTaskSelected('webview2') and not FileExists(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe')) then
+  if CurPageID <> wpReady then
+    Exit;
+  WebView2Skipped := False;
+  MicrogSkipped := False;
+  AuroraSkipped := False;
+  if not ((WizardIsTaskSelected('webview2') and not FileExists(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'))) or
+          (MicrogSelected() and not (FileExists(ExpandConstant('{tmp}\com.google.android.gms.apk')) and
+                                     FileExists(ExpandConstant('{tmp}\com.android.vending.apk')) and
+                                     FileExists(ExpandConstant('{tmp}\com.google.android.gsf.apk')))) or
+          (WizardIsTaskSelected('aurora') and not FileExists(ExpandConstant('{tmp}\AuroraStore.apk')))) then
+    Exit;
+
+  Cancelled := False;
+  Error := '';
+  Skipped := '';
+  DownloadPage.Show;
+  try
+    if WizardIsTaskSelected('webview2') then
     begin
-      DownloadPage.Add('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
-        'MicrosoftEdgeWebview2Setup.exe', '');
-      DownloadsNeeded := DownloadsNeeded + 1;
+      Failed := False;
+      DownloadOptional('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
+        'MicrosoftEdgeWebview2Setup.exe', Cancelled, Failed, Error);
+      if Failed then
+      begin
+        WebView2Skipped := True;
+        Skipped := Skipped + '  - Microsoft Edge WebView2' + #13#10;
+      end;
     end;
     if MicrogSelected() then
     begin
-      if not FileExists(ExpandConstant('{tmp}\com.google.android.gms.apk')) then
+      // The three microG APKs are one component: the rest are not fetched once one fails.
+      Failed := False;
+      if DownloadOptional('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
+           'com.google.android.gms.apk', Cancelled, Failed, Error) then
+        if DownloadOptional('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
+             'com.android.vending.apk', Cancelled, Failed, Error) then
+          DownloadOptional('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
+            'com.google.android.gsf.apk', Cancelled, Failed, Error);
+      if Failed then
       begin
-        DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.google.android.gms-252432034.apk',
-          'com.google.android.gms.apk', '');
-        DownloadsNeeded := DownloadsNeeded + 1;
-      end;
-      if not FileExists(ExpandConstant('{tmp}\com.android.vending.apk')) then
-      begin
-        DownloadPage.Add('https://github.com/microg/GmsCore/releases/download/v0.3.17.252432/com.android.vending-84022634.apk',
-          'com.android.vending.apk', '');
-        DownloadsNeeded := DownloadsNeeded + 1;
-      end;
-      if not FileExists(ExpandConstant('{tmp}\com.google.android.gsf.apk')) then
-      begin
-        DownloadPage.Add('https://github.com/microg/GsfProxy/releases/download/v0.1.0/GsfProxy.apk',
-          'com.google.android.gsf.apk', '');
-        DownloadsNeeded := DownloadsNeeded + 1;
+        MicrogSkipped := True;
+        Skipped := Skipped + '  - microG' + #13#10;
       end;
     end;
-    if WizardIsTaskSelected('aurora') and not FileExists(ExpandConstant('{tmp}\AuroraStore.apk')) then
+    if WizardIsTaskSelected('aurora') then
     begin
-      DownloadPage.Add('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
-        'AuroraStore.apk', '');
-      DownloadsNeeded := DownloadsNeeded + 1;
+      Failed := False;
+      DownloadOptional('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
+        'AuroraStore.apk', Cancelled, Failed, Error);
+      if Failed then
+      begin
+        AuroraSkipped := True;
+        Skipped := Skipped + '  - Aurora Store' + #13#10;
+      end;
     end;
+  finally
+    DownloadPage.Hide;
+  end;
 
-    if DownloadsNeeded > 0 then
+  if Cancelled then
+  begin
+    WebView2Skipped := False;
+    MicrogSkipped := False;
+    AuroraSkipped := False;
+    Result := False;
+  end
+  else if Skipped <> '' then
+  begin
+    if WizardSilent() then
     begin
-      DownloadPage.Show;
-      try
-        try
-          DownloadPage.Download;
-          Result := True;
-        except
-          if DownloadPage.AbortedByUser then
-          begin
-            Log('Download cancelled by user.');
-            Result := False;
-          end
-          else if WizardSilent() then
-          begin
-            // A silent update (the microG update is on by default) goes on
-            // without the optional downloads: each step retries or skips its own.
-            Log('Optional download failed: ' + GetExceptionMessage);
-            Result := True;
-          end
-          else
-          begin
-            SuppressibleMsgBox(AddPeriod(GetExceptionMessage), mbCriticalError, MB_OK, IDOK);
-            Result := False;
-          end;
-        end;
-      finally
-        DownloadPage.Hide;
-      end;
-    end;
+      // A silent update (the microG update is on by default) goes on as before:
+      // each post-install step retries or skips its own download.
+      WebView2Skipped := False;
+      MicrogSkipped := False;
+      AuroraSkipped := False;
+    end
+    else
+      // Setup goes on without the components it could not download (a filtered
+      // or offline network): only those are skipped, and the user is told which.
+      MsgBox(FmtMessage(CustomMessage('setup_download_skipped'), [Skipped, Error]),
+        mbInformation, MB_OK);
   end;
 end;
 
@@ -510,9 +559,12 @@ begin
   TmpDir := ExpandConstant('{tmp}');
   Params := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
             ExpandConstant('{app}\gesher-app-microg.ps1') + '"';
-  if MicrogSelected() then
+  if MicrogSelected() and not MicrogSkipped then
   begin
-    if FileExists(TmpDir + '\com.google.android.gms.apk') then
+    // All three APKs, or none: a silent run goes on after a partial download.
+    if FileExists(TmpDir + '\com.google.android.gms.apk') and
+       FileExists(TmpDir + '\com.android.vending.apk') and
+       FileExists(TmpDir + '\com.google.android.gsf.apk') then
       Params := Params + ' -GmsCoreApk "' + TmpDir + '\com.google.android.gms.apk"' +
                          ' -CompanionApk "' + TmpDir + '\com.android.vending.apk"' +
                          ' -GsfProxyApk "' + TmpDir + '\com.google.android.gsf.apk"' +
@@ -523,7 +575,7 @@ begin
   else
     Params := Params + ' -StoreOnly';
 
-  if WizardIsTaskSelected('aurora') then
+  if WizardIsTaskSelected('aurora') and not AuroraSkipped then
   begin
     if FileExists(TmpDir + '\AuroraStore.apk') then
       Params := Params + ' -InstallStore -StoreApk "' + TmpDir + '\AuroraStore.apk"'
@@ -543,9 +595,10 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    if WizardIsTaskSelected('webview2') then
+    if WizardIsTaskSelected('webview2') and not WebView2Skipped then
       InstallWebView2();
-    if MicrogSelected() or WizardIsTaskSelected('aurora') then
+    if (MicrogSelected() and not MicrogSkipped) or
+       (WizardIsTaskSelected('aurora') and not AuroraSkipped) then
       InstallMicrogAndStore();
     Path := PathEntries();
     Dir := ExpandConstant('{app}');

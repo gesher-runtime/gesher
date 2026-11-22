@@ -147,6 +147,7 @@ jobs:
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
+          tests/windows/shell/NativeStderrChecks.ps1
       - name: Production modal dialogs on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         timeout-minutes: 2
@@ -1052,6 +1053,7 @@ jobs:
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
+          tests/windows/shell/NativeStderrChecks.ps1
 
       - name: Production modal dialogs on Windows PowerShell 5.1
         timeout-minutes: 2
