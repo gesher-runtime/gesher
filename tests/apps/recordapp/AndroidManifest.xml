@@ -15,7 +15,7 @@
         <activity android:name=".PersistentInputActivity" android:exported="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <service android:name=".PersistentInputService" android:exported="false"
-            android:process=":persistent-input" />
+            android:process=":persistentinput" />
         <activity
             android:name=".RecordActivity"
             android:exported="true"
