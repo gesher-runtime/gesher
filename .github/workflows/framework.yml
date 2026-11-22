@@ -529,6 +529,13 @@ jobs:
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 
+      - name: Provider authority lookup generation and work bounds
+        run: |
+          python3 tools/test_provider_authority_index.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Durable package enabled-state public manager contracts
         run: |
           python3 tools/test_package_enabled_state.py --java-home "$JAVA_HOME" \

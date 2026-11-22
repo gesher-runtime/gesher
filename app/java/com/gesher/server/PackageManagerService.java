@@ -46,6 +46,9 @@ import java.util.function.Consumer;
  */
 public final class PackageManagerService extends IPackageManager.Default {
     private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
+    // Candidate metadata only. Enabled state, removal, query flags and fresh Android
+    // result objects remain the responsibility of each resolution under this monitor.
+    private ProviderAuthorityIndex mProviderAuthorityIndex;
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
@@ -199,7 +202,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
             identity.commit();
-            mPackages = map;
+            publishPackages(map);
             enabledStore();
             identity.accept();
         }
@@ -249,7 +252,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         map.put(p.packageName, p);
         Runnable permissions = mPermissions.publishPackage(p, () -> {
-            mPackages = map;
+            publishPackages(map);
             PackageManager.invalidatePackageInfoCache();
         }, publicationLock);
         mPackageEventExecutor.execute(() -> {
@@ -276,7 +279,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage p = map.get(packageName);
         if (p != null) enabledStore().retire(packageName, p.enabledStateOwner());
         map.remove(packageName);
-        mPackages = map;
+        publishPackages(map);
         if (p != null) {
             p.clearComponentStates();
             PackageManager.invalidatePackageInfoCache();
@@ -353,6 +356,52 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** The packages, now. */
     Collection<ApkPackage> packages() {
         return mPackages.values();
+    }
+
+    /** Called under this monitor, or before the constructor publishes this service. */
+    private void publishPackages(Map<String, ApkPackage> packages) {
+        mPackages = packages;
+        // Retire references to removed/replaced code even if no provider is queried.
+        mProviderAuthorityIndex = null;
+    }
+
+    /** All possible owners in installed order; never cache a visibility decision. */
+    synchronized List<ApkPackage> providerPackages(String authority) {
+        if (authority == null) return List.of();
+        Map<String, ApkPackage> packages = mPackages;
+        ProviderAuthorityIndex index = mProviderAuthorityIndex;
+        if (index == null || index.packages != packages) {
+            index = new ProviderAuthorityIndex(packages);
+            mProviderAuthorityIndex = index;
+        }
+        return index.owners.getOrDefault(authority, List.of());
+    }
+
+    /** Immutable, bounded by installed declarations, and tied to one package map. */
+    private static final class ProviderAuthorityIndex {
+        final Map<String, ApkPackage> packages;
+        final Map<String, List<ApkPackage>> owners;
+
+        ProviderAuthorityIndex(Map<String, ApkPackage> packages) {
+            this.packages = packages;
+            Map<String, List<ApkPackage>> candidates = new LinkedHashMap<>();
+            for (ApkPackage pkg : packages.values()) {
+                Set<String> components = new java.util.HashSet<>();
+                Set<String> authorities = new java.util.HashSet<>();
+                for (var provider : pkg.parsed.getProviders()) {
+                    // ApkPackage.providers registers the first declaration before
+                    // applying enabled/direct-boot flags; a duplicate adds no owner.
+                    if (!components.add(provider.getName()) || provider.getAuthority() == null) continue;
+                    for (String authority : provider.getAuthority().split(";")) {
+                        if (authorities.add(authority)) {
+                            candidates.computeIfAbsent(authority, key -> new ArrayList<>()).add(pkg);
+                        }
+                    }
+                }
+            }
+            candidates.replaceAll((authority, values) -> List.copyOf(values));
+            owners = Map.copyOf(candidates);
+        }
     }
 
     public ApkPackage get(String packageName) {
@@ -543,7 +592,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     /** The provider with authority {@code authority} (one of its authorities), or null. */
     synchronized ProviderInfo provider(String authority, long flags) {
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : providerPackages(authority)) {
             if (isRemovalPending(p.packageName)) continue;
             for (ProviderInfo info : p.providers(flags)) {
                 if (info.authority == null) continue;
