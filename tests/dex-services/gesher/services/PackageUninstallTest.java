@@ -235,7 +235,8 @@ public final class PackageUninstallTest {
         android.app.job.JobInfo jobInfo=new android.app.job.JobInfo.Builder(7,new ComponentName(name,"fixture.Job"))
                 .setMinimumLatency(100000).setPersisted(true).build();
         Object job=make(jobType,new Class<?>[]{jobsType,String.class,String.class,android.app.job.JobInfo.class},scheduler,name,null,jobInfo);
-        List<Object> jobs=(List<Object>)field(jobsType,"mJobs").get(scheduler);jobs.add(job);
+        List<Object> jobs=(List<Object>)field(jobsType,"mJobs").get(scheduler);
+        synchronized(scheduler){method(jobsType,"addJobLocked",jobType).invoke(scheduler,job);}
         method(jobsType,"persist",jobType).invoke(scheduler,job);
         File persisted=(File)method(jobsType,"persistFile",jobType).invoke(null,job);
         require(persisted.isFile(),"Persisted synthetic job not written");

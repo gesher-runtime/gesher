@@ -516,10 +516,20 @@ final class JobSchedulerService extends IJobScheduler.Default
     }
 
     private void removeJobLocked(Job job) {
-        if (!mJobs.remove(job) || job.quotaUid < 0) return;
-        int remaining = mJobsPerUid.get(job.quotaUid) - 1;
-        if (remaining == 0) mJobsPerUid.remove(job.quotaUid);
-        else mJobsPerUid.put(job.quotaUid, remaining);
+        int index = mJobs.indexOf(job);
+        if (index < 0) return;
+        if (job.quotaUid >= 0) {
+            // Every registry insertion goes through addJobLocked. A record
+            // without a reservation would make this count underflow; fail
+            // before mutating either structure instead of skipping it.
+            Integer count = mJobsPerUid.get(job.quotaUid);
+            if (count == null || count <= 0) {
+                throw new IllegalStateException("Unaccounted job " + job + " for uid " + job.quotaUid);
+            }
+            if (count == 1) mJobsPerUid.remove(job.quotaUid);
+            else mJobsPerUid.put(job.quotaUid, count - 1);
+        }
+        mJobs.remove(index);
     }
 
     private void removeJobsLocked(List<Job> jobs) {
@@ -701,38 +711,51 @@ final class JobSchedulerService extends IJobScheduler.Default
         start();
         Run stop = null;
         Job job;
-        synchronized (this) {
-            if (capturedOwner == null || mPm.get(pkg) != capturedOwner || mPm.isRemovalPending(pkg)) {
-                throw new SecurityException("Job owner changed before publication");
-            }
-            Job old = find(pkg, namespace, info.getId());
-            if (work != null && old != null && old.info.equals(info)) {
-                // enqueue onto the same job: its work queue grows.
-                job = old;
-            } else {
-                // Android 16 r4 tests >150 before publication: 151 distinct jobs
-                // are admitted, then ordinary replacements/new jobs fail too.
-                // The identical-info enqueue fast path above bypasses this check.
-                if (!attributed && mJobsPerUid.getOrDefault(callingUid, 0) > MAX_JOBS_PER_APP) {
-                    throw new IllegalStateException("Apps may not schedule more than "
-                            + MAX_JOBS_PER_APP + " distinct jobs");
+        List<Job> stale = new ArrayList<>();
+        try {
+            synchronized (this) {
+                if (capturedOwner == null || mPm.get(pkg) != capturedOwner || mPm.isRemovalPending(pkg)) {
+                    throw new SecurityException("Job owner changed before publication");
                 }
-                int quotaUid = !attributed || callingUid == capturedOwner.uid() ? callingUid : -1;
-                job = new Job(pkg, namespace, info, quotaUid);
-                timesForNew(job);
-                if (old != null) {
-                    removeJobLocked(old);
-                    job.work.addAll(old.work);
-                    job.nextWorkId = old.nextWorkId;
-                    if (old.run != null && !old.run.stopping) stop = old.run;
+                // Records with this key whose owner code changed can never run or be
+                // found again; this schedule supersedes them, so they must not keep
+                // holding a reservation alongside the replacement.
+                for (Job j : mJobs) {
+                    if (j.same(pkg, namespace, info.getId()) && !current(j)) stale.add(j);
                 }
-                addJobLocked(job);
+                removeJobsLocked(stale);
+                Job old = find(pkg, namespace, info.getId());
+                if (work != null && old != null && old.info.equals(info)) {
+                    // enqueue onto the same job: its work queue grows.
+                    job = old;
+                } else {
+                    // Android 16 r4 tests >150 before publication: 151 distinct jobs
+                    // are admitted, then ordinary replacements/new jobs fail too.
+                    // The identical-info enqueue fast path above bypasses this check.
+                    if (!attributed && mJobsPerUid.getOrDefault(callingUid, 0) > MAX_JOBS_PER_APP) {
+                        throw new IllegalStateException("Apps may not schedule more than "
+                                + MAX_JOBS_PER_APP + " distinct jobs");
+                    }
+                    int quotaUid = !attributed || callingUid == capturedOwner.uid() ? callingUid : -1;
+                    job = new Job(pkg, namespace, info, quotaUid);
+                    timesForNew(job);
+                    if (old != null) {
+                        removeJobLocked(old);
+                        job.work.addAll(old.work);
+                        job.nextWorkId = old.nextWorkId;
+                        if (old.run != null && !old.run.stopping) stop = old.run;
+                    }
+                    addJobLocked(job);
+                }
+                if (work != null) {
+                    work.setWorkId(job.nextWorkId++);
+                    job.work.add(work);
+                }
+                notifyAll();
             }
-            if (work != null) {
-                work.setWorkId(job.nextWorkId++);
-                job.work.add(work);
-            }
-            notifyAll();
+        } finally {
+            // Delivered outside the monitor like cancel(), also when admission fails.
+            if (!stale.isEmpty()) cancelled(stale, "superseded");
         }
         if (stop != null) stopRun(stop, JobParameters.STOP_REASON_CANCELLED_BY_APP,
                 JobParameters.INTERNAL_STOP_REASON_CANCELED, "rescheduled");

@@ -157,8 +157,11 @@ public final class JobSchedulerAdmissionTest {
     }
 
     /** Install only fixture metadata; source ownership/permission checks stay in production. */
-    @SuppressWarnings("unchecked")
     private static void owner(JobSchedulerConstraintContractTest.Harness h, String name, int uid, int pid) throws Exception {
+        owner(h, name, uid, pid, (byte) 42);
+    }
+    @SuppressWarnings("unchecked")
+    private static void owner(JobSchedulerConstraintContractTest.Harness h, String name, int uid, int pid, byte signer) throws Exception {
         PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(name, "/fixture/" + name + "/base.apk");
         ParsedServiceImpl service = new ParsedServiceImpl();
         service.setName(name + ".TestJobService"); service.setPackageName(name); service.setProcessName(name);
@@ -169,7 +172,7 @@ public final class JobSchedulerAdmissionTest {
         set(pkg, "apkPath", "/fixture/" + name + "/base.apk"); set(pkg, "mDataDir", "/fixture/" + name + "/data");
         Object original = call(h.pm, "get", new Class<?>[]{String.class}, PACKAGE);
         set(pkg, "sharedLibraries", get(original, "sharedLibraries"));
-        set(pkg, "mSigningIdentityChecked", true); set(pkg, "mVerifiedSignatures", new Signature[]{new Signature(new byte[]{42})});
+        set(pkg, "mSigningIdentityChecked", true); set(pkg, "mVerifiedSignatures", new Signature[]{new Signature(new byte[]{signer})});
         synchronized (h.pm) {
             Map<String, Object> all = new LinkedHashMap<>((Map<String, Object>) get(h.pm, "mPackages"));
             all.put(name, pkg); call(h.pm, "publishPackages", new Class<?>[]{Map.class}, all);
@@ -229,6 +232,29 @@ public final class JobSchedulerAdmissionTest {
             accounting(h);
             jobs.cancelAll(); accounting(h);
             check(((Map<?, ?>) get(h.scheduler, "mJobsPerUid")).isEmpty(), "Retired UID counts leaked");
+        }
+    }
+
+    /** A same-key record left by a replaced owner is retired, not counted twice. */
+    private static void superseded() throws Exception {
+        try (var h = new JobSchedulerConstraintContractTest.Harness()) {
+            IJobScheduler jobs = jobs(h);
+            String updated = PACKAGE + ".updated";
+            owner(h, updated, UID, PID + 4);
+            try (var identity = new Identity(PID + 4, UID)) { jobs.schedule("superseded", info(updated, 1)); }
+            Object stale = find(h, updated, "superseded", 1);
+            check(stale != null, "Fixture job was not scheduled");
+            owner(h, updated, UID, PID + 5, (byte) 43); // Same UID, different signer: old record is no longer current.
+            check(find(h, updated, "superseded", 1) == null && records(h).contains(stale), "Fixture record did not become stale");
+            try (var identity = new Identity(PID + 5, UID)) { jobs.schedule("superseded", info(updated, 1)); }
+            Object replacement = find(h, updated, "superseded", 1);
+            check(replacement != null && replacement != stale && !records(h).contains(stale) && records(h).size() == 1,
+                    "Stale same-key record was retained beside its replacement");
+            check(Integer.valueOf(1).equals(((Map<?, ?>) get(h.scheduler, "mJobsPerUid")).get(UID)),
+                    "Replacement of a stale record was counted twice");
+            accounting(h);
+            try (var identity = new Identity(PID + 5, UID)) { jobs.cancelAll(); }
+            check(records(h).isEmpty() && ((Map<?, ?>) get(h.scheduler, "mJobsPerUid")).isEmpty(), "Superseded records leaked quota");
         }
     }
 
@@ -422,7 +448,7 @@ public final class JobSchedulerAdmissionTest {
         }
     }
     public static void contracts(boolean realParcel) throws Exception {
-        boundary(); identities(); retirements(); concurrent();
+        boundary(); identities(); superseded(); retirements(); concurrent();
         if (realParcel) persistence();
         measure(151);
         System.out.println("JobSchedulerAdmissionTest all passed: " + checks + " checks; persisted_parcel=" + realParcel);
