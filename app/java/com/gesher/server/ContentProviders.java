@@ -404,8 +404,10 @@ final class ContentProviders {
                                 published.provider.asBinder(), name, declaredCode, declared.name);
                         boolean held = c.stable != 0 || c.unstable != 0;
                         if (stable) c.stable++; else c.unstable++;
-                        if (!held) publishShortcutStateLocked();
-                        acquired = true;
+                        if (!held) {
+                            publishShortcutStateLocked();
+                            acquired = true; // a new dependency edge to observe
+                        }
                         h.connection = c;
                         h.noReleaseNeeded = false;
                         owner.markActive(SystemClock.uptimeMillis());
@@ -633,7 +635,7 @@ final class ContentProviders {
         // isSystem resolves the caller through ATM. Never acquire ATM under this monitor.
         int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
         boolean system = mCallers.isSystem();
-        boolean alive;
+        boolean alive, changed;
         synchronized (this) {
             Connection c = callerConnectionLocked(connection, system, pid, uid);
             if (c == null) return false;
@@ -646,11 +648,13 @@ final class ContentProviders {
             boolean held = c.stable != 0 || c.unstable != 0;
             c.stable = Math.max(0, c.stable + stable);
             c.unstable = Math.max(0, c.unstable + unstable);
-            if (held != (c.stable != 0 || c.unstable != 0)) publishShortcutStateLocked();
+            changed = held != (c.stable != 0 || c.unstable != 0);
+            if (changed) publishShortcutStateLocked();
             c.owner.markActive(SystemClock.uptimeMillis());
             alive = !c.owner.exiting && !c.owner.dead;
         }
-        mAtm.noteShortcutForeground(null, 0);
+        // Only a held-state flip changes the provider dependency graph.
+        if (changed) mAtm.noteShortcutForeground(null, 0);
         return alive;
     }
 
@@ -662,6 +666,7 @@ final class ContentProviders {
     void removeContentProvider(IBinder connection, boolean stable) {
         int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
         boolean system = mCallers.isSystem();
+        boolean removed = false;
         synchronized (this) {
             Connection c = callerConnectionLocked(connection, system, pid, uid);
             if (c == null) return;
@@ -675,9 +680,10 @@ final class ContentProviders {
             if (c.stable == 0 && c.unstable == 0) {
                 mConnections.remove(c);
                 publishShortcutStateLocked();
+                removed = true;
             }
         }
-        mAtm.noteShortcutForeground(null, 0);
+        if (removed) mAtm.noteShortcutForeground(null, 0);
     }
 
     /** Whether processes of other packages use the process's providers. */

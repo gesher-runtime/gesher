@@ -568,11 +568,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (!app.ready || app.dead || app.exiting || app.pidSuperseded || app.packageCode == null
                     || app.packageCode.uid() != app.uid || mPm.get(app.packageName) != app.packageCode
                     || mPm.isRemovalPending(app.packageName)) continue;
-            boolean top = app.inProcessActivityState == State.RESUMED || app.inProcessActivityState == State.RESUMING;
+            // OomAdjuster: a process with a visible activity, or one pausing or paused
+            // (an activity Gesher keeps paused under a translucent one), is TOP.
+            State own = app.inProcessActivityState;
+            boolean top = own == State.RESUMED || own == State.RESUMING
+                    || own == State.PAUSING || own == State.PAUSED;
             for (ActivityRecord activity : app.activities) {
-                if (!top && !activity.finishing && !mHiddenTasks.contains(activity.taskId)
-                        && mActivities.contains(activity) && activityCodeCurrent(activity)
-                        && (activity.state == State.RESUMED || activity.state == State.RESUMING)) top = true;
+                if (top) break;
+                if (activity.finishing || !mActivities.contains(activity)
+                        || !activityCodeCurrent(activity)) continue;
+                State state = activity.state;
+                boolean visibleState = state == State.RESUMED || state == State.RESUMING
+                        || state == State.STARTED
+                        || state == State.LAUNCHING && !activity.launchingPaused;
+                top = state == State.PAUSING || state == State.PAUSED
+                        || visibleState && isVisible(activity);
             }
             if (top) {
                 if (roots == null) roots = new java.util.HashMap<>();

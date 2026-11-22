@@ -468,6 +468,27 @@ public final class ShortcutQuotaContractTest {
                     "current activity foreground was throttled");
             check(h.api.getRemainingCallCount(OWNER, 0) == 10, "foreground query did not reset its counter");
         });
+        // OomAdjuster: an activity paused (or started) and still visible under a
+        // translucent activity in its task keeps its process TOP. The translucent
+        // activity belongs to another app, so only the covered one can exempt OWNER.
+        Object other = h.extra("fixture.shortcut.translucent", UID + 7, PID + 7);
+        Object cover = h.activity();
+        ((List<Object>) get(h.process, "activities")).remove(cover);
+        set(cover, "app", other); ((List<Object>) get(other, "activities")).add(cover);
+        set(cover, "translucent", true); set(cover, "state", state("RESUMED"));
+        for (String covered : List.of("PAUSED", "STARTED")) {
+            set(activity, "state", state(covered));
+            h.app(() -> {
+                for (int i = 0; i < 11; i++) check(h.api.setDynamicShortcuts(OWNER, ParceledListSlice.emptyList(), 0),
+                        "visible activity under a translucent one was throttled: " + covered);
+                check(h.api.getRemainingCallCount(OWNER, 0) == 10, "visible covered activity lost TOP: " + covered);
+            });
+        }
+        set(activity, "state", state("STOPPED")); h.exhaust(OWNER);
+        set(cover, "translucent", false); set(activity, "state", state("STARTED")); h.exhaust(OWNER);
+        ((List<Object>) get(other, "activities")).clear();
+        ((List<Object>) get(h.atm, "mActivities")).remove(cover);
+        ((List<Object>) get(h.atm, "mProcesses")).remove(other);
         set(activity, "state", state("STOPPED"));
         ((List<Object>) get(h.process, "activities")).clear();
         ((List<Object>) get(h.atm, "mActivities")).clear();
