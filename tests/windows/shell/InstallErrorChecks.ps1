@@ -148,6 +148,7 @@ if ($bridgeThrows) { throw 'VM invocation failed' }
 exit $bridgeExitCode
 '@
     function NoDrive([string] $p) { $p }
+    function UserPath([string] $p) { $p }
     $unicodePath = Join-Path $work ('error ' + [string][char]0x05D0 + [char]0x4E2D + '.txt')
     $commands = @('install', 'view', 'launch')
     $dvm = @('-Xint')

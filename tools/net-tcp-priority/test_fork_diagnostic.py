@@ -24,6 +24,10 @@ identity = fork.identity
 minimum = selected.minimum
 ROOT = selected.ROOT
 BASE = '0da2b7f18fa8013932a6cb77dac32423df9ef8ab'
+# Upstream added canonical release-tag pushes after the diagnostic branch base.
+# Qualify those exact canonical entry/test bytes without rebasing any supplier,
+# compiler, source-preservation or runtime baseline below.
+CANONICAL_CONTEXT_BASE = '20252fde18db387b4d99d99f7050d6336f58bf6e'
 
 
 def old_source(path):
@@ -155,6 +159,18 @@ class ContextTest(unittest.TestCase):
         for key, value in changes:
             with self.subTest(key=key), self.assertRaises((RuntimeError, KeyError)):
                 identity.validate(dict(env, **{key: value}), event, repo, run, env['GITHUB_SHA'], 'compile')
+        # Upstream's canonical release-tag extension grants no fork authority.
+        # Match the workflow ref as well so rejection is specifically about the
+        # diagnostic event/branch contract, not a stale companion field.
+        for job in identity.JOBS:
+            for event_name in ('push', 'workflow_dispatch'):
+                changed = dict(env, GITHUB_JOB=job, GITHUB_EVENT_NAME=event_name,
+                               GITHUB_REF='refs/tags/v0.2.0',
+                               GITHUB_WORKFLOW_REF=env['GITHUB_REPOSITORY'] +
+                               '/.github/workflows/ci.yml@refs/tags/v0.2.0')
+                reason = 'requires manual dispatch' if event_name == 'push' else 'requires a branch'
+                with self.subTest(job=job, event=event_name), self.assertRaisesRegex(RuntimeError, reason):
+                    identity.validate(changed, event, repo, run, env['GITHUB_SHA'], job)
         with self.assertRaises(RuntimeError):
             identity.validate(env, event, repo, run, 'f' * 40, 'compile')
         for authority in (True, 0, 1, 'false', None):
@@ -420,7 +436,11 @@ class CorrelationTest(unittest.TestCase):
 class SourcePreservationTest(unittest.TestCase):
     def test_canonical_entries_pins_and_shell_are_byte_exact(self):
         for path in ('tools/toolchain/coherent_tcp_context.py',
-                     'tools/host-pthread-authority/build-minimum-supplier.sh',
+                     'tools/toolchain/test_coherent_tcp_context.py'):
+            upstream = subprocess.check_output(
+                ['git', 'show', CANONICAL_CONTEXT_BASE + ':' + path], cwd=ROOT, text=True)
+            self.assertEqual((ROOT / path).read_text(), upstream, path)
+        for path in ('tools/host-pthread-authority/build-minimum-supplier.sh',
                      'tools/host-pthread-authority/minimum-inputs.json',
                      'tools/host-pthread-authority/minimum-detached-retirement.patch',
                      'tools/host-pthread-authority/minimum-noattach-join.patch'):

@@ -166,6 +166,21 @@ not the present publisher-cancel workflow. It is not invoked by current
 Historical first-link/native-off/union source receipts and their immutable pins
 are also preserved, not reused as evidence for this new source snapshot.
 
+## Upstream release-context composition
+
+Upstream commit `20252fde18db387b4d99d99f7050d6336f58bf6e` subsequently added
+canonical `push` events for version tags to the canonical context. The
+diagnostic source-preservation fixture now compares that context and its test
+byte-for-byte with this exact upstream commit. Every other original baseline,
+minimum factory/input/patch pin, factual comparison and canonical supplier
+mutation comparison remains at `0da2b7f18fa8013932a6cb77dac32423df9ef8ab`.
+The fork context is unchanged: all four roles reject both a push and a manual
+dispatch of `refs/tags/v0.2.0`, with matching workflow refs, at the explicit
+manual-event or branch gate. The 18 diagnostic groups and 564 canonical
+supplier comparisons pass, as do upstream's four canonical roles and 273
+negative controls. This is a test-only qualification of an upstream policy
+extension, not a new authority or a generalized source-normalization rule.
+
 Reproduce the active checks with:
 
 ```sh

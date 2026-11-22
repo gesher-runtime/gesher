@@ -318,6 +318,14 @@ jobs:
       - name: Bionic stream state across close and reopen failures
         run: python3 tools/test_stdio_lifetime_contracts.py --sanitize
 
+      - name: Native metadata reader contention and retirement contracts
+        run: |
+          python3 tools/test_native_metadata_hot_paths.py --sanitize
+          python3 tools/test_native_metadata_hot_paths.py --thread-sanitize
+
+      - name: EGL fence asynchronous creation and ownership contracts
+        run: python3 tools/test_egl_fence_contracts.py --sanitize
+
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh
 
@@ -882,7 +890,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@8b316aebf09ab46d5407e955bf86ed748a1e739f
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@972c2b42b40c4ac799e147f5e352d07ba615d0fb
     with:
       local-runner: false
 
