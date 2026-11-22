@@ -11,6 +11,7 @@ import hashlib
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import tempfile
 
@@ -34,7 +35,11 @@ def main() -> int:
                         help="Run one bounded actual-source regression against the selected production sources")
     parser.add_argument("--cache-counterfactual", choices=["lookup", "retirement", "replacement", "wrap"],
                         help="Mutate only the generated owner-cache fixture for a named negative control")
+    parser.add_argument("--build-adapter", type=Path,
+                        help="Compile the selected actual-source adapter to this executable without running it (benchmark input)")
     args = parser.parse_args()
+    if args.build_adapter and (not args.adapter_case or args.cache_counterfactual):
+        parser.error("--build-adapter requires --adapter-case and cannot export a counterfactual")
     def read_source(path: str) -> bytes:
         if args.source_ref:
             return subprocess.check_output(["git", "show", args.source_ref + ":" + path], cwd=ROOT)
@@ -87,8 +92,9 @@ def main() -> int:
         "@STDIO_ADAPTER@": adapter,
         "@PARSE_MODE@": section(fsops, "bool ParseMode(", "// Random characters"),
         "@OPEN_CLOSE@": section(fsops, "FILE* fopen(", "// The stream is reopened"),
-        "@STDIO_INTERNAL_HEADER@": str(ROOT / "compat/posix/src/stdio_internal.h"),
-        "@STREAM_BUFFER_HEADER@": str(ROOT / "compat/posix/src/stdio_stream_buffer.h"),
+        "@STDIO_INTERNAL_HEADER@": "stdio_internal.h",
+        "@STREAM_BUFFER_HEADER@": "stdio_stream_buffer.h",
+        "@OWNER_CACHE_BENCHMARK@": (ROOT / "tests/native/stdio_metadata_benchmark.cc.in").read_text(),
         "@SOCKET_REGISTRY@": section(sockets, "struct SocketRegistry {", "// Takes the socket out"),
         "@SOCKET_INSERT@": section(sockets, "void Insert(", "// Publish a successful CRT replacement"),
         "@SOCKET_LOOKUP@": section(sockets, "bool LookupSocket(", "void RegisterDevice("),
@@ -111,6 +117,8 @@ def main() -> int:
         include.mkdir(parents=True)
         (include / "stdio.h").write_bytes(read_source("compat/posix/include/gesher/stdio.h"))
         (include / "cancellation.h").write_bytes(read_source("compat/posix/include/gesher/cancellation.h"))
+        for name in ("stdio_internal.h", "stdio_stream_buffer.h", "stdio_output_buffer.h"):
+            (folder / name).write_bytes(read_source("compat/posix/src/" + name))
         generated = folder / "adapter.cc"
         generated.write_text(template)
         cxx = shlex.split(args.cxx) + ["-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fno-builtin", "-pthread"]
@@ -125,6 +133,9 @@ def main() -> int:
                 continue
             executable = folder / name
             subprocess.run(cxx + extra + [str(source), "-o", str(executable)], check=True, timeout=120)
+            if args.build_adapter:
+                shutil.copy2(executable, args.build_adapter)
+                return 0
             subprocess.run([str(executable)] + (["--" + args.adapter_case] if args.adapter_case else []),
                            cwd=folder, check=True, timeout=45)
             if args.adapter_case:

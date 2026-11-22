@@ -1,96 +1,57 @@
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <barrier>
-#include <cerrno>
-#include <chrono>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <mutex>
-#include <new>
-#include <stdexcept>
-#include <thread>
-#include <unordered_map>
-#include <vector>
-
-#define BIONIC_SYSV __attribute__((noinline))
-constexpr int kENOMEM = ENOMEM;
-static FILE* F(void* f) { return static_cast<FILE*>(f); }
-static int _fileno(FILE* f) { return fileno(f); }
-static int _getc_nolock(FILE* f) { return getc_unlocked(f); }
-static bool gesher_is_device_fd(int) { return false; }
-// The stdio output owner boundary (orientation and the unlocked byte read)
-// maps to the glibc FILE that backs these streams.
-namespace gesher::stdio {
-static int Orient(FILE* f, int mode, bool) { return fwide(f, mode); }
-static int Get(FILE* f, bool) { return getc_unlocked(f); }
-}
-static size_t ReadStream(void* p, size_t s, size_t n, FILE* f) { return fread_unlocked(p, s, n, f); }
-struct StreamLock {
-  FILE* f;
-  explicit StreamLock(FILE* p) : f(p) { flockfile(f); }
-  ~StreamLock() { funlockfile(f); }
-};
-namespace before {
-@BEFORE@
-}
-namespace after {
-@AFTER@
-}
-using Fn = int (*)(void*);
-static double Sample(Fn fn, int threads, size_t bytes, uint64_t* checksum) {
+// Included only in the declared Linux adapter envelope. The guest Fgetc,
+// shared owner, buffering, registration and retirement are production bodies.
+// File creation and thread startup are outside timing. Every byte and EOF are
+// checked; this measures host-envelope cost, not Windows application speed.
+static int OwnerCacheBenchmark(size_t bytes, int thread_count) {
   std::vector<FILE*> files;
-  std::vector<char> data(bytes, 'q');
-  for (int i = 0; i < threads; ++i) {
-    FILE* f = tmpfile();
-    if (!f || fwrite(data.data(), 1, bytes, f) != bytes) std::abort();
-    rewind(f); files.push_back(f);
+  std::vector<int> descriptors;
+  const std::string data(bytes, 'q');
+  for (int i = 0; i < thread_count; ++i) {
+    char path[] = "stdio-owner-bench-XXXXXX";
+    const int fd = mkstemp(path);
+    if (fd < 0 || unlink(path) != 0 ||
+        write(fd, data.data(), bytes) != static_cast<ssize_t>(bytes) ||
+        lseek(fd, 0, SEEK_SET) != 0) return 2;
+    FILE* stream = adapter_fdopen(fd, "r");
+    if (!stream) return 2;
+    files.push_back(stream);
+    descriptors.push_back(fd);
   }
-  std::barrier start(threads + 1);
+  struct Observation { uint64_t sum = 0; bool bytes_ok = true; int end = 0; };
+  std::vector<Observation> observations(thread_count);
+  std::atomic<int> ready{0};
+  std::atomic<bool> start{false};
   std::vector<std::thread> workers;
-  std::vector<uint64_t> sums(threads);
-  for (int t = 0; t < threads; ++t) workers.emplace_back([&, t] {
-    start.arrive_and_wait();
-    uint64_t sum = 0;
-    for (size_t i = 0; i < bytes; ++i) sum += fn(files[t]);
-    sums[t] = sum;
-  });
-  const auto began = std::chrono::steady_clock::now();
-  start.arrive_and_wait();
-  for (auto& worker : workers) worker.join();
-  const auto end = std::chrono::steady_clock::now();
-  *checksum = 0;
-  for (int t = 0; t < threads; ++t) {
-    *checksum += sums[t];
-    if (fgetc(files[t]) != EOF) std::abort();
-    { StreamLock lock(files[t]); before::ResetStream(files[t]); after::ResetStream(files[t]); }
-    fclose(files[t]);
-  }
-  if (*checksum != static_cast<uint64_t>(threads) * bytes * 'q') std::abort();
-  return std::chrono::duration<double, std::milli>(end - began).count();
-}
-int main() {
-  std::thread([] {}).join();  // Enable glibc's real threaded FILE locking.
-  constexpr size_t bytes = 4u * 1024u * 1024u;
-  for (int threads : {1, 4}) {
-    std::vector<double> old_times, new_times;
-    uint64_t check;
-    for (int run = 0; run < 7; ++run) {
-      double old_ms, new_ms;
-      if (run % 2 == 0) {
-        old_ms = Sample(before::Fgetc, threads, bytes, &check);
-        new_ms = Sample(after::Fgetc, threads, bytes, &check);
-      } else {
-        new_ms = Sample(after::Fgetc, threads, bytes, &check);
-        old_ms = Sample(before::Fgetc, threads, bytes, &check);
-      }
-      old_times.push_back(old_ms); new_times.push_back(new_ms);
-      std::printf("run=%d threads=%d bytes_each=%zu before_ms=%.3f after_ms=%.3f ratio=%.3f checksum=%llu\n",
-                  run, threads, bytes, old_ms, new_ms, new_ms / old_ms, static_cast<unsigned long long>(check));
+  for (int t = 0; t < thread_count; ++t) workers.emplace_back([&, t] {
+    ready.fetch_add(1, std::memory_order_release);
+    while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+    auto& observation = observations[t];
+    for (size_t i = 0; i < bytes; ++i) {
+      const int value = guest::Fgetc(files[t]);
+      observation.bytes_ok = observation.bytes_ok && value == 'q';
+      observation.sum += value;
     }
-    std::sort(old_times.begin(), old_times.end()); std::sort(new_times.begin(), new_times.end());
-    std::printf("MEDIAN threads=%d before_ms=%.3f after_ms=%.3f ratio=%.3f\n",
-                threads, old_times[3], new_times[3], new_times[3] / old_times[3]);
+    observation.end = guest::Fgetc(files[t]);
+  });
+  while (ready.load(std::memory_order_acquire) != thread_count) std::this_thread::yield();
+  const auto began = std::chrono::steady_clock::now();
+  start.store(true, std::memory_order_release);
+  for (auto& worker : workers) worker.join();
+  const double elapsed = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - began).count();
+  uint64_t checksum = 0;
+  int errors = 0;
+  for (int t = 0; t < thread_count; ++t) {
+    checksum += observations[t].sum;
+    if (!observations[t].bytes_ok || observations[t].end != EOF ||
+        adapter_fclose(files[t]) != 0 || fcntl(descriptors[t], F_GETFD) != -1) ++errors;
   }
+  if (checksum != static_cast<uint64_t>(thread_count) * bytes * 'q') ++errors;
+  char result[256];
+  const int count = snprintf(result, sizeof(result),
+      "{\"threads\":%d,\"bytes_each\":%zu,\"milliseconds\":%.6f,\"checksum\":%llu,\"errors\":%d}\n",
+      thread_count, bytes, elapsed, static_cast<unsigned long long>(checksum), errors);
+  if (count < 0 || static_cast<size_t>(count) >= sizeof(result) ||
+      write(STDOUT_FILENO, result, static_cast<size_t>(count)) != count) return 2;
+  return errors ? 1 : 0;
 }

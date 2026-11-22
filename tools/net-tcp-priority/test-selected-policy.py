@@ -758,3 +758,4 @@ if __name__=='__main__':
   transition_negative_controls()
   import runpy
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')
+  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-cache-policy.py'),run_name='__main__')

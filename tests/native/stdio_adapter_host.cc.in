@@ -594,9 +594,82 @@ static void TestOwnerCacheLifetime() {
   unlink(path);
 #endif
 }
+static void TestCrossThreadOwnerCache() {
+#ifdef GESHER_STDIO_OWNER_CACHE
+  char path[] = "stdio-owner-publish-XXXXXX";
+  int fd = mkstemp(path);
+  if (fd < 0) std::abort();
+  FILE* stream = HostFdopen(fd, "r+");  // A real native FILE, initially unregistered.
+  if (!stream) std::abort();
+  std::atomic<bool> missed{false}, publish{false}, warmed{false}, retire{false};
+  std::atomic<bool> safe_lookup{true};
+  bool initial_absent = false, observed_publish = false, observed_retirement = false;
+  std::thread observer([&] {
+    _lock_file(stream);
+    initial_absent = gesher::stdio::BionicMetadata(stream, false) == nullptr;
+    _unlock_file(stream);
+    missed.store(true, std::memory_order_release);
+    while (!publish.load(std::memory_order_acquire)) std::this_thread::yield();
+    _lock_file(stream);
+    auto cached = gesher::stdio::Find(stream, false);
+    observed_publish = cached && cached->bionic.conversion_error && cached->bionic.pushback == 'P';
+    _unlock_file(stream);
+    warmed.store(true, std::memory_order_release);
+    while (!retire.load(std::memory_order_acquire)) std::this_thread::yield();
+    _lock_file(stream);
+    if (safe_lookup.load(std::memory_order_acquire)) {
+      auto current = gesher::stdio::Find(stream, false);
+      observed_retirement = cached && !cached->live && current && current != cached &&
+          current->live && !current->bionic.conversion_error &&
+          current->bionic.pushback == 0xffffffffu && current->bionic.input_state == std::array<uint8_t, 8>{};
+    } else {
+      gesher::stdio::t_stream_owners = {};  // Cleanup after an already detected broken invalidation.
+    }
+    _unlock_file(stream);
+  });
+  const bool saw_miss = Await(missed);
+  _lock_file(stream);
+  const int first_registration = gesher::stdio::Register(stream, O_RDWR);
+  auto* metadata = gesher::stdio::BionicMetadata(stream);
+  if (!metadata) std::abort();
+  metadata->conversion_error = true;
+  metadata->pushback = 'P';
+  metadata->input_state[1] = 0x55;
+  _unlock_file(stream);
+  publish.store(true, std::memory_order_release);
+  const bool saw_warm = Await(warmed);
+  _lock_file(stream);
+  auto& epoch = gesher::stdio::OwnerGeneration(stream);
+  const uint64_t before = epoch.load();
+  gesher::stdio::Forget(stream);
+  const bool invalidated = before == 0 || epoch.load() != before;
+  if (!invalidated) gesher::stdio::t_stream_owners = {};
+  const int second_registration = gesher::stdio::Register(stream, O_RDWR);
+  safe_lookup.store(invalidated, std::memory_order_release);
+  _unlock_file(stream);
+  retire.store(true, std::memory_order_release);
+  observer.join();
+  check("unregistered lookup is not a negative cache entry", saw_miss && initial_absent);
+  check("another thread sees registration after its earlier miss", first_registration == 0 && observed_publish && saw_warm);
+  check("retirement invalidates another thread's positive cache", invalidated && second_registration == 0 && observed_retirement);
+  check("cross-thread cache stream closes its real descriptor", adapter_fclose(stream) == 0 && fcntl(fd, F_GETFD) == -1);
+  unlink(path);
+#endif
+}
+@OWNER_CACHE_BENCHMARK@
+
 int main(int argc, char** argv) {
+  if (argc == 4 && std::strcmp(argv[1], "--owner-cache-benchmark") == 0) {
+    char* end = nullptr;
+    const unsigned long long bytes = std::strtoull(argv[2], &end, 10);
+    if (!end || *end || bytes == 0 || bytes > 16u * 1024u * 1024u) return 2;
+    const unsigned long threads = std::strtoul(argv[3], &end, 10);
+    if (!end || *end || (threads != 1 && threads != 4)) return 2;
+    return OwnerCacheBenchmark(static_cast<size_t>(bytes), static_cast<int>(threads));
+  }
   if (argc == 2 && std::strcmp(argv[1], "--owner-cache") == 0) {
     TestOwnerCacheProgress();
+    TestCrossThreadOwnerCache();
     TestOwnerCacheLifetime();
     char summary[128];
     const int count = snprintf(summary, sizeof(summary), "Shared owner cache: %d checks, %d failures\n", checks, failures);
@@ -625,6 +698,7 @@ int main(int argc, char** argv) {
   TestAllocationOwnership();
   TestBionicOwnerLifetime();
   TestOwnerCacheProgress();
+  TestCrossThreadOwnerCache();
   TestOwnerCacheLifetime();
   test_stdio_cancel_contracts();
   TestCrtLockComposition();
