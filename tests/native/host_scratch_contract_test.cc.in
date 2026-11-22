@@ -109,7 +109,11 @@ static DWORD WaitForMultipleObjects(DWORD count, const HANDLE* handles, int, DWO
   if (fail_wait) { fail_wait = false; errno = EIO; return WAIT_FAILED; }
   std::array<pollfd, MAXIMUM_WAIT_OBJECTS> fds{};
   if (count > fds.size()) std::abort();
-  for (DWORD i = 0; i < count; ++i) fds[i] = {handles[i]->fd, POLLIN, 0};
+  for (DWORD i = 0; i < count; ++i) {
+    // Win32 forbids duplicate HANDLEs even though Linux poll accepts aliases.
+    for (DWORD j = 0; j < i; ++j) if (handles[j] == handles[i]) { errno = EINVAL; return WAIT_FAILED; }
+    fds[i] = {handles[i]->fd, POLLIN, 0};
+  }
   const int result = ::poll(fds.data(), count, planned_wait(milliseconds == INFINITE ? -1 : int(milliseconds)));
   if (result < 0) return WAIT_FAILED;
   for (DWORD i = 0; i < count; ++i) {
@@ -141,6 +145,12 @@ static bool PeekNamedPipe(HANDLE h, void*, DWORD, void*, DWORD* available, void*
 }
 
 namespace gesher {
+// This corpus constructs sockets, files, eventfds and epolls, but no GPU
+// fences. Declare that registry boundary explicitly; reaching a fence wait
+// here is a fixture error, not an emulation of native completion.
+class NativeFence;
+static std::shared_ptr<NativeFence> LookupNativeFence(int) { return {}; }
+static short PollNativeFence(const std::shared_ptr<NativeFence>&, short, HANDLE*) { std::abort(); }
 void WakePollers();
 @EVENTFD_STATE@
 @EPOLL_STATE@
@@ -527,12 +537,19 @@ void deadlines() {
   start_plan({{25, 5, add_unready, &change}, {20, 20}});
   const int epoll_result = EpollWaitImpl(ep, &out, 1, 25, nullptr, nullptr);
   check("topology wake rebuild does not restart epoll deadline", epoll_result == 0 && finish_plan());
-  // Larger than the native handle-set limit: the existing sliced fallback remains.
+  // Repeated POSIX slots share a wait HANDLE and do not exceed Win32's limit.
+  std::array<pollfd, 65> aliases;
+  for (auto& item : aliases) item = {event, POLLIN, 0};
+  start_plan({{25, 25}});
+  const int aliases_result = run_poll(aliases.data(), aliases.size(), 25);
+  check("aliased wait handles are unique and retain the caller deadline", aliases_result == 0 && finish_plan());
+  // Distinct events exceed the native handle-set limit: keep sliced fallback.
   std::array<pollfd, 65> large;
-  for (auto& item : large) item = {event, POLLIN, 0};
+  for (auto& item : large) item = {new_event(false), POLLIN, 0};
   start_plan({{10, 10}, {10, 10}, {5, 5}});
   const int large_result = run_poll(large.data(), large.size(), 25);
   check("oversized handle set keeps fallback timeout budget", large_result == 0 && finish_plan());
+  for (const auto& item : large) erase_fd(item.fd);
   erase_fd(ep); erase_fd(added); erase_fd(event); erase_fd(socket);
   check_empty_cache();
 }

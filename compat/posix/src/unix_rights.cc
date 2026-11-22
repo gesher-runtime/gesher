@@ -26,6 +26,7 @@
 #include "binder_wire.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "native_fence_internal.h"
 #include "socket_internal.h"
 
 namespace gesher {
@@ -194,7 +195,9 @@ volatile LONG64* PositionOf(uint16_t port, bool sent) {
 
 }  // namespace
 
-bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata) {
+bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata,
+                         std::shared_ptr<NativeFence>* retained_fence) {
+  if (TransferNativeFence(fd, handle, metadata, retained_fence)) return true;
   if (TransferSocket(fd, handle, metadata)) return true;
   gesher::Device device;
   short ready = 0;
@@ -212,9 +215,13 @@ bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata) {
 }
 
 int AdoptTransferred(HANDLE owned, uint64_t metadata) {
+  if (metadata == kTransferredCompletedFence) {
+    return AdoptNativeFence(owned, metadata);
+  }
   if ((metadata & kTransferredSocket) != 0) {
     return AdoptSocket(reinterpret_cast<uintptr_t>(owned), metadata);
   }
+  if (metadata != 0) { CloseHandle(owned); return errno = EINVAL, -1; }
   const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
   if (fd < 0) {
     CloseHandle(owned);
@@ -254,10 +261,13 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
   request.Put<uint64_t>(queue);
   request.Put<uint64_t>(position);
   request.Put<uint32_t>(static_cast<uint32_t>(fds.size()));
+  std::vector<std::shared_ptr<NativeFence>> retained_fences;
   for (int fd : fds) {
     uintptr_t handle;
     uint64_t metadata;
-    if (!DescribeForTransfer(fd, &handle, &metadata)) return false;
+    std::shared_ptr<NativeFence> retained;
+    if (!DescribeForTransfer(fd, &handle, &metadata, &retained)) return false;
+    if (retained) retained_fences.push_back(std::move(retained));
     request.Put<uint64_t>(handle);
     request.Put<uint64_t>(metadata);
   }

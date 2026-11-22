@@ -23,6 +23,13 @@ using HANDLE = intptr_t;
 #define IOV_MAX 1024
 #endif
 namespace gesher {
+// Explicit native-fence registry boundary. A Linux NUL fd reproduces the CRT
+// placeholder; the actual production scalar/vector dispatch must reject I/O.
+struct NativeFence {};
+static std::map<int, std::shared_ptr<NativeFence>> fences;
+static std::shared_ptr<NativeFence> LookupNativeFence(int fd) {
+  auto found = fences.find(fd); return found == fences.end() ? nullptr : found->second;
+}
 struct EventFd {
   // Retain the kernel description independently of the first public fd, just
   // as a production registry object survives closing one of its aliases.
@@ -114,8 +121,13 @@ static int adapted_timerfd_create() {
   if (fd >= 0) gesher::objects[fd] = {std::make_shared<gesher::EventFd>(fd, true), {}, {}};
   return fd;
 }
-static int adapted_dup(int fd) { int alias = ::dup(fd); if (alias >= 0 && gesher::objects.count(fd)) gesher::objects[alias] = gesher::objects[fd]; return alias; }
-static int adapted_close(int fd) { gesher::objects.erase(fd); return ::close(fd); }
+static int adapted_dup(int fd) {
+  int alias = ::dup(fd);
+  if (alias >= 0 && gesher::objects.count(fd)) gesher::objects[alias] = gesher::objects[fd];
+  if (alias >= 0 && gesher::fences.count(fd)) gesher::fences[alias] = gesher::fences[fd];
+  return alias;
+}
+static int adapted_close(int fd) { gesher::objects.erase(fd); gesher::fences.erase(fd); return ::close(fd); }
 static int failed, checked;
 static void check(const char* label, int passed) { ++checked; if (!passed) { ++failed; std::printf("FAIL %s\n", label); } }
 #define eventfd adapted_eventfd
@@ -135,6 +147,28 @@ static void check(const char* label, int passed) { ++checked; if (!passed) { ++f
 #undef write
 int main() {
   test_writev_event_contract();
+  int fence = ::open("/dev/null", O_RDWR);
+  check("fence routing placeholder created", fence >= 0);
+  if (fence >= 0) {
+    gesher::fences[fence] = std::make_shared<gesher::NativeFence>();
+    uint64_t payload = 1;
+    iovec bytes[] = {{&payload, sizeof(payload)}}, empty[] = {{nullptr, 0}};
+    auto check_fence = [&](int fd) {
+      errno = 0;
+      check("native fence scalar write rejected", routed_write(fd, &payload, sizeof(payload)) == -1 && errno == EINVAL);
+      errno = 0;
+      check("native fence vector write rejected", routed_writev(fd, bytes, 1) == -1 && errno == EINVAL);
+      errno = 0;
+      check("native fence empty vector rejected", routed_writev(fd, nullptr, 0) == -1 && errno == EINVAL);
+      errno = 0;
+      check("native fence zero-length vector rejected", routed_writev(fd, empty, 1) == -1 && errno == EINVAL);
+    };
+    check_fence(fence);
+    int alias = adapted_dup(fence);
+    check("native fence routing alias created", alias >= 0);
+    adapted_close(fence);
+    if (alias >= 0) { check_fence(alias); adapted_close(alias); }
+  }
   int timer = adapted_timerfd_create();
   check("routing timer created", timer >= 0);
   if (timer >= 0) {

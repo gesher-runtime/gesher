@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -527,8 +528,21 @@ struct StreamState {
 struct StreamStateBucket {
   std::mutex mutex;
   std::unordered_map<FILE*, StreamState> streams;
+  std::atomic<uint64_t> generation{1};
 };
 std::array<StreamStateBucket, 32> g_stream_states;
+
+// The FILE lock (or the caller of an unlocked API) protects each record's
+// lifetime and contents. unordered_map rehashing preserves record addresses.
+// Cache only positive lookups: another thread may orient a previously unseen
+// stream. A close/reopen invalidates every cached pointer in its bucket before
+// erasing the record, while it still holds the CRT's persistent FILE lock.
+struct CachedStreamState {
+  FILE* stream = nullptr;
+  StreamState* state = nullptr;
+  uint64_t generation = 0;
+};
+constinit thread_local std::array<CachedStreamState, 8> t_stream_states{};
 
 StreamStateBucket& StreamBucket(FILE* stream) {
   auto key = reinterpret_cast<uintptr_t>(stream);
@@ -537,14 +551,24 @@ StreamStateBucket& StreamBucket(FILE* stream) {
 
 StreamState* State(FILE* stream, bool create = true) {
   auto& bucket = StreamBucket(stream);
+  auto& cached = t_stream_states[(reinterpret_cast<uintptr_t>(stream) >> 4) % t_stream_states.size()];
+  if (cached.stream == stream && cached.state != nullptr && cached.generation != 0 &&
+      cached.generation == bucket.generation.load(std::memory_order_acquire)) {
+    return cached.state;
+  }
   std::lock_guard<std::mutex> lock(bucket.mutex);
   auto found = bucket.streams.find(stream);
-  if (found != bucket.streams.end()) return &found->second;
+  if (found != bucket.streams.end()) {
+    cached = {stream, &found->second, bucket.generation.load(std::memory_order_relaxed)};
+    return cached.state;
+  }
   if (!create) return nullptr;
   // The registry is a host implementation detail. Allocation failure must
   // remain a stdio error, rather than unwinding through the guest's C ABI.
   try {
-    return &bucket.streams.try_emplace(stream).first->second;
+    auto* state = &bucket.streams.try_emplace(stream).first->second;
+    cached = {stream, state, bucket.generation.load(std::memory_order_relaxed)};
+    return state;
   } catch (const std::bad_alloc&) {
     errno = kENOMEM;
     return nullptr;
@@ -568,6 +592,10 @@ int Orient(FILE* stream, int mode) {
 void ResetStream(FILE* stream) {
   auto& bucket = StreamBucket(stream);
   std::lock_guard<std::mutex> lock(bucket.mutex);
+  // Never wrap back to an old cache generation, even after UINT64_MAX resets.
+  // Zero permanently disables the cache for this bucket; lookup stays valid.
+  const uint64_t generation = bucket.generation.load(std::memory_order_relaxed);
+  if (generation != 0) bucket.generation.store(generation + 1, std::memory_order_release);
   bucket.streams.erase(stream);
 }
 

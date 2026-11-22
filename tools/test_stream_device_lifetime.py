@@ -57,7 +57,7 @@ def main() -> int:
         executable = folder / "stream_device_test"
         generated.write_text(template)
         command = shlex.split(args.cxx) + [
-            "-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fno-builtin",
+            "-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fno-builtin",
             "-I", str(ROOT / "tests/native"), str(generated), "-o", str(executable),
         ]
         if args.sanitize:

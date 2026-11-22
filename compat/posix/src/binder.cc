@@ -334,20 +334,23 @@ void ForEachFdObject(uint8_t* data, size_t data_size, const void* offsets, size_
   }
 }
 
-void SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
-  ForEachFdObject(data, data_size, offsets, offsets_size, [](binder_fd_object& obj) {
+void SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size,
+             std::vector<std::shared_ptr<gesher::NativeFence>>* retained_fences) {
+  ForEachFdObject(data, data_size, offsets, offsets_size, [&](binder_fd_object& obj) {
     const int fd = static_cast<int>(obj.fd);
-    uintptr_t socket = 0;
+    uintptr_t handle = 0;
     uint64_t metadata = 0;
-    if (gesher::TransferSocket(fd, &socket, &metadata)) {
+    std::shared_ptr<gesher::NativeFence> retained;
+    if (gesher::DescribeForTransfer(fd, &handle, &metadata, &retained)) {
+      if (retained) retained_fences->push_back(std::move(retained));
       obj.pad_flags = static_cast<__u32>(metadata);
       obj.cookie = (obj.cookie & 0xffffffffu) | (metadata >> 32) << 32;
-      obj.pad_binder = static_cast<binder_uintptr_t>(socket);
+      obj.pad_binder = static_cast<binder_uintptr_t>(handle);
       return;
     }
-    intptr_t h = _get_osfhandle(fd);
     obj.pad_flags = 0;
-    obj.pad_binder = h == -1 || h == -2 ? 0 : static_cast<binder_uintptr_t>(h);
+    obj.cookie &= 0xffffffffu;
+    obj.pad_binder = 0;  // an unsupported virtual fd cannot travel as its NUL reservation
   });
 }
 
@@ -460,6 +463,9 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
     return errno = EFAULT, -1;
   }
   const uint8_t* wbase = command_bytes.data();
+  // Keep completion HANDLEs alive until the broker acknowledges its duplicate,
+  // including when another thread closes the sender's final descriptor.
+  std::vector<std::shared_ptr<gesher::NativeFence>> retained_fences;
   size_t wpos = bwr->write_consumed;
   while (wpos < bwr->write_size) {
     if (bwr->write_size - wpos < 4) return errno = EINVAL, -1;
@@ -517,7 +523,8 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       if (size > sizeof(tr)) m.Write(arg + sizeof(tr), size - sizeof(tr));  // buffers_size
       m.Put(copy_error);
       if (copy_error == 0) {
-        SendFds(snapshot.data(), snapshot.size(), snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t));
+        SendFds(snapshot.data(), snapshot.size(), snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t),
+                 &retained_fences);
         m.Write(snapshot.data(), snapshot.size());
         m.Write(snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t));
         m.Write(extra.data(), extra.size());

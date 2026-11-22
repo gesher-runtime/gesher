@@ -78,7 +78,10 @@ static int HostRead(int fd, void* buffer, unsigned count) { return int(::read(fd
 static int HostWrite(int fd, const void* buffer, unsigned count) { return int(::write(fd, buffer, count)); }
 
 namespace gesher {
-struct EventFd; struct Inotify; struct TimerFd;
+struct EventFd; struct Inotify; struct TimerFd; class NativeFence;
+// This corpus creates eventfds, not GPU fences. The latter's Win32 descriptor
+// boundary is exercised by the dedicated native-fence Windows fixture.
+static std::shared_ptr<NativeFence> LookupNativeFence(int) { return nullptr; }
 struct SocketFd {};
 static bool LookupSocket(int, SocketFd*) { return false; }
 static HANDLE HandleFromFd(int fd) { return HostValid(fd) ? reinterpret_cast<HANDLE>(intptr_t(fd + 1)) : INVALID_HANDLE_VALUE; }

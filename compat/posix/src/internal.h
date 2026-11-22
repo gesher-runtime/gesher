@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <string>
+#include <memory>
 #include <vector>
 
 namespace gesher {
@@ -149,8 +150,8 @@ enum class Device { kZero, kRandom };
 bool DeviceFromFd(int fd, Device* device);
 // Takes over `fd`, which must be open on NUL.
 void RegisterDevice(int fd, Device device);
-// CRT stream close/reopen bypasses close(). Retire its device marker after
-// the real operation, while the descriptor guard still prevents fd reuse.
+// CRT stream close/reopen bypasses close(). Retire device, native-fence and
+// memfd markers after the real operation, while the guard prevents fd reuse.
 // On failure the CRT may already have closed the descriptor (e.g. after a
 // flush error); a still-open descriptor keeps its marker.
 void ForgetStreamDevice(int fd, bool closed_or_replaced);
@@ -160,6 +161,7 @@ void ForgetStreamDevice(int fd, bool closed_or_replaced);
 bool InitMemfdSeals(HANDLE file, bool allow_sealing);
 void RegisterMemfd(int fd);
 void ForgetMemfd(int fd);
+bool IsRegisteredMemfd(int fd);
 // After receiving a descriptor from another process (Binder): registers it if
 // its file carries seals.
 void RegisterMemfdIfSealed(int fd, HANDLE file);
@@ -178,7 +180,9 @@ int AdoptSocket(uintptr_t socket, uint64_t metadata);
 // handle and metadata (a socket's, or 0). False with EINVAL for descriptors
 // gesher-base serves itself (eventfd, epoll, inotify, timerfd, binder,
 // devices), EBADF for none.
-bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata);
+class NativeFence;
+bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata,
+                         std::shared_ptr<NativeFence>* retained_fence = nullptr);
 // A new descriptor for a received handle (this process's own, taken over) with
 // its metadata; -1 with errno.
 int AdoptTransferred(HANDLE owned, uint64_t metadata);

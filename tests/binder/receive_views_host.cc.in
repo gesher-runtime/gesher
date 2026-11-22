@@ -82,6 +82,12 @@ struct MEMORY_BASIC_INFORMATION {
 };
 
 #include "binder_wire.h"
+namespace gesher {
+// Declared Win32 descriptor boundary: this object models a live transferable
+// completion HANDLE, not GPU work. Production SendFds/WriteRead must retain its
+// actual shared ownership until the broker has duplicated the HANDLE.
+struct NativeFence { uintptr_t handle; uint64_t metadata; };
+}
 namespace fixture {
 std::atomic<unsigned> checks{0}, failed{0};
 void Check(bool ok, const char* why) {
@@ -108,6 +114,11 @@ struct Peer {
   std::array<Adopted, 32> adopted{};
   unsigned duplicates = 0, opens = 0, closes = 0, fail_duplicate = 0, fail_open = 0;
   void (*on_claim)() = nullptr;
+  int sending_fence_fd = -1;
+  std::shared_ptr<gesher::NativeFence> sending_fence;
+  std::weak_ptr<gesher::NativeFence> sent_fence;
+  bool verify_fence_retention = false;
+  unsigned fence_send_checks = 0, fence_reply_checks = 0;
 };
 thread_local Peer* peer = nullptr;
 struct SelectPeer {
@@ -142,6 +153,13 @@ BOOL WriteFile(HANDLE, const void* data, DWORD wanted, DWORD* written, void*) {
   if (p.request_at < 4 || p.request_at < 4 + Load<uint32_t>(p.request.data())) return 1;
   p.operation = Load<uint32_t>(p.request.data() + 4);
   p.request_at = p.read_at = 0;
+  if (p.operation == gesher::binder_wire::kWriteRead && p.verify_fence_retention) {
+    // Close the sender's final descriptor after serialization, before the
+    // broker duplicate/acknowledgement. Only production's transfer pin remains.
+    p.sending_fence.reset();
+    ++p.fence_send_checks;
+    Check(!p.sent_fence.expired(), "native fence survives final sender close during transport");
+  }
   if (p.operation == p.fail_write_operation) return 0;
   if (p.operation == gesher::binder_wire::kWriteRead) {
     p.reading = p.response.data(); p.reading_size = static_cast<uint32_t>(p.response.size());
@@ -157,6 +175,10 @@ BOOL WriteFile(HANDLE, const void* data, DWORD wanted, DWORD* written, void*) {
 }
 BOOL ReadFile(HANDLE, void* data, DWORD wanted, DWORD* read, void*) {
   auto& p = *fixture::peer;
+  if (p.operation == gesher::binder_wire::kWriteRead && p.verify_fence_retention) {
+    ++p.fence_reply_checks;
+    fixture::Check(!p.sent_fence.expired(), "native fence remains live through broker reply");
+  }
   if (p.operation == p.fail_read_operation) { *read = 0; return 0; }
   size_t count = std::min<size_t>(wanted, p.chunk);
   if (p.read_at < 4) {
@@ -225,9 +247,24 @@ int FixtureClose(int fd) {
 #define close FixtureClose
 #include "binder_sg.h"
 namespace gesher {
-// The fixture's descriptors are plain handles, never sockets: production
+// Receive-side descriptors are plain handles, never sockets: production
 // adopts those with _open_osfhandle (unix_rights.cc's AdoptTransferred).
 bool TransferSocket(int, uintptr_t*, uint64_t*) { return false; }
+bool DescribeForTransfer(int fd, uintptr_t* handle, uint64_t* metadata,
+                         std::shared_ptr<NativeFence>* retained_fence = nullptr) {
+  auto& p = *fixture::peer;
+  if (fd == p.sending_fence_fd && p.sending_fence) {
+    *handle = p.sending_fence->handle;
+    *metadata = p.sending_fence->metadata;
+    if (retained_fence) *retained_fence = p.sending_fence;
+    return true;
+  }
+  intptr_t native = _get_osfhandle(fd);
+  if (native == -1 || native == -2) return errno = EBADF, false;
+  *handle = static_cast<uintptr_t>(native);
+  *metadata = 0;
+  return true;
+}
 int AdoptTransferred(HANDLE owned, uint64_t) {
   const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
   if (fd < 0) CloseHandle(owned);  // as production: a failed adoption closes the handle
@@ -556,6 +593,46 @@ void SenderSnapshots() {
   Check(Load<int32_t>(bad.request.data() + copy_error_at) == EFAULT, "sender guarded copy error preserved");
 }
 
+void SenderFenceRetention() {
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Mapping mapping; Peer p; BeginReply(p, 0, 1); Output output;
+    p.sending_fence_fd = 71;
+    p.sending_fence = std::make_shared<gesher::NativeFence>(gesher::NativeFence{0x123400, 2});
+    p.sent_fence = p.sending_fence;
+    p.verify_fence_retention = true;
+    p.chunk = 7;
+    if (failure == 1) p.fail_write_operation = gesher::binder_wire::kWriteRead;
+    if (failure == 2) p.fail_read_operation = gesher::binder_wire::kWriteRead;
+    binder_fd_object object{};
+    object.hdr.type = BINDER_TYPE_FD;
+    object.fd = static_cast<uint32_t>(p.sending_fence_fd);
+    object.cookie = 0xaabbccdd00000001ULL;
+    const std::array<uint64_t, 1> offsets{0};
+    binder_transaction_data transaction{};
+    transaction.data_size = sizeof(object);
+    transaction.offsets_size = sizeof(offsets);
+    transaction.data.ptr.buffer = reinterpret_cast<uintptr_t>(&object);
+    transaction.data.ptr.offsets = reinterpret_cast<uintptr_t>(offsets.data());
+    std::vector<uint8_t> command;
+    Append<uint32_t>(&command, BC_TRANSACTION); Append(&command, transaction);
+    output.request.write_buffer = reinterpret_cast<uintptr_t>(command.data());
+    output.request.write_size = command.size();
+    errno = 0;
+    const int result = output.Run(mapping, p);
+    Check(result == (failure ? -1 : 0), "native fence sender transaction result");
+    if (failure) Check(errno == EBADF, "native fence transport failure keeps errno");
+    Check(p.fence_send_checks == 1, "native fence final descriptor closed exactly once");
+    Check((p.fence_reply_checks != 0) == (failure != 1), "native fence pin reaches expected reply boundary");
+    Check(p.sent_fence.expired(), "native fence transfer pin released after success or failure");
+    constexpr size_t data_at = 4 + 4 + 8 + 4 + 4 + 4 + sizeof(binder_transaction_data) + 4;
+    const auto sent = Load<binder_fd_object>(p.request.data() + data_at);
+    Check(sent.pad_binder == 0x123400 && sent.pad_flags == 2 && sent.cookie == 1,
+          "native fence transports real HANDLE and generated type, preserving ownership cookie");
+    Check(object.fd == 71 && object.cookie == 0xaabbccdd00000001ULL,
+          "native fence sender object remains unchanged");
+  }
+}
+
 thread_local Mapping* reentrant_mapping = nullptr;
 void NestedDelivery() {
   Peer nested; BeginReply(nested); Payload payload(321); payload.AppendTo(nested, 902);
@@ -622,6 +699,7 @@ int main(int argc, char** argv) {
   fixture::FdAndOwnershipFailures();
   fixture::MixedCommands();
   fixture::SenderSnapshots();
+  fixture::SenderFenceRetention();
   fixture::ReentryAndConcurrency();
   fixture::Measure(gate);
   std::printf("Binder receive views: %u checks, %u failures\n", fixture::checks.load(), fixture::failed.load());

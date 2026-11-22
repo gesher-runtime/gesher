@@ -7,11 +7,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -30,6 +32,30 @@ using HANDLE = intptr_t;
 constexpr HANDLE INVALID_HANDLE_VALUE = -1;
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+// Native registry is an explicit boundary; the inserted production stream
+// retirement helper must remove it only when CRT really closes/replaces fd.
+struct NativeFence {};
+static std::unordered_map<int, std::shared_ptr<NativeFence>> fences;
+static int fence_epoll_retirements;
+static std::shared_ptr<NativeFence> LookupNativeFence(int fd) {
+  auto found = fences.find(fd); return found == fences.end() ? nullptr : found->second;
+}
+static void ForgetNativeFence(int fd) {
+  check("fence retirement stays under descriptor guard", descriptor_depth == 1);
+  fences.erase(fd);
+}
+static void ForgetEpollEntries(int) {
+  check("fence epoll retirement stays under descriptor guard", descriptor_depth == 1);
+  ++fence_epoll_retirements;
+}
+// Seals/EA behavior is covered separately; this boundary records only the
+// process-local memfd membership that CRT stream retirement must clear.
+static std::unordered_set<int> memfds;
+static bool IsRegisteredMemfd(int fd) { return memfds.count(fd) != 0; }
+static void ForgetMemfd(int fd) {
+  check("memfd retirement stays under descriptor guard", descriptor_depth == 1);
+  memfds.erase(fd);
+}
 enum class Device { kZero, kRandom };
 static HANDLE HandleFromFd(int fd) {
   check("device failure inspection stays under the descriptor guard", descriptor_depth == 1);
@@ -186,9 +212,114 @@ static void test_failed_closes(void) {
     if (aliased) host::fclose(aliased);
   }
 }
+static FILE* FenceOpen() {
+  FILE* stream = std::fopen("/dev/null", "rb");
+  if (stream) gesher::fences[fileno(stream)] = std::make_shared<gesher::NativeFence>();
+  return stream;
+}
+static void test_fence_stream_lifetime() {
+  for (int mode : {0, 1, 2}) {
+    FILE* stream = FenceOpen();
+    check("native fence stream fixture opens", stream != nullptr);
+    if (!stream) continue;
+    const int fd = fileno(stream), before = gesher::fence_epoll_retirements;
+    std::weak_ptr<gesher::NativeFence> lifetime = gesher::LookupNativeFence(fd);
+    close_mode = mode;
+    const int result = host::fclose(stream);
+    check("native fclose preserves CRT result", mode == 0 ? result == 0 : result == EOF && errno == EIO);
+    check("native descriptor identity follows actual CRT closure", lifetime.expired() == (mode != 2));
+    check("native epoll retirement occurs exactly on closure",
+          gesher::fence_epoll_retirements == before + (mode != 2));
+    close_mode = 0;
+    if (mode == 2) host::fclose(stream);
+  }
+  FILE* stream = FenceOpen();
+  check("native reopen fixture opens", stream != nullptr);
+  if (stream) {
+    const int fd = fileno(stream);
+    FILE* reopened = host::freopen("/dev/null", "rb", stream);
+    check("native reopen yields an ordinary stream", reopened != nullptr && !gesher::LookupNativeFence(fd));
+    if (reopened) host::fclose(reopened);
+  }
+  stream = FenceOpen();
+  check("native rejected reopen fixture opens", stream != nullptr);
+  if (stream) {
+    const int fd = fileno(stream);
+    check("early rejected reopen consumes native ownership",
+          host::freopen("unused", "", stream) == nullptr && errno == EINVAL && !gesher::LookupNativeFence(fd));
+  }
+  stream = FenceOpen();
+  check("native stream alias fixture opens", stream != nullptr);
+  if (stream) {
+    const int fd = fileno(stream), alias = ::dup(fd);
+    check("native stream alias duplicates", alias >= 0);
+    if (alias >= 0) gesher::fences[alias] = gesher::LookupNativeFence(fd);
+    host::fclose(stream);
+    if (alias >= 0) {
+      check("native stream alias retains its own identity", gesher::LookupNativeFence(alias) != nullptr);
+      FILE* aliased = ::fdopen(alias, "rb");
+      check("native alias wraps in a stream", aliased != nullptr);
+      if (aliased) host::fclose(aliased);
+    }
+  }
+  check("all native stream identities retired", gesher::fences.empty());
+}
+static FILE* MemfdOpen() {
+  FILE* stream = std::tmpfile();
+  if (stream) gesher::memfds.insert(fileno(stream));
+  return stream;
+}
+static void test_memfd_stream_lifetime() {
+  for (int mode : {0, 1, 2}) {
+    FILE* stream = MemfdOpen();
+    check("memfd stream fixture opens", stream != nullptr);
+    if (!stream) continue;
+    const int fd = fileno(stream);
+    close_mode = mode;
+    const int result = host::fclose(stream);
+    check("memfd fclose preserves CRT result", mode == 0 ? result == 0 : result == EOF && errno == EIO);
+    check("memfd membership follows actual CRT closure", gesher::IsRegisteredMemfd(fd) == (mode == 2));
+    close_mode = 0;
+    if (mode == 2) host::fclose(stream);
+  }
+  FILE* stream = MemfdOpen();
+  check("memfd reopen fixture opens", stream != nullptr);
+  if (stream) {
+    const int fd = fileno(stream);
+    check("null-path reopen retains memfd membership",
+          host::freopen(nullptr, "rb", stream) == stream && gesher::IsRegisteredMemfd(fd));
+    FILE* reopened = host::freopen("/dev/null", "rb", stream);
+    check("memfd reopen clears old membership", reopened != nullptr && !gesher::IsRegisteredMemfd(fd));
+    if (reopened) host::fclose(reopened);
+  }
+  stream = MemfdOpen();
+  check("memfd rejected reopen fixture opens", stream != nullptr);
+  if (stream) {
+    const int fd = fileno(stream);
+    check("early rejected reopen clears memfd membership",
+          host::freopen("unused", "", stream) == nullptr && errno == EINVAL && !gesher::IsRegisteredMemfd(fd));
+  }
+  stream = MemfdOpen();
+  check("memfd stream alias fixture opens", stream != nullptr);
+  if (stream) {
+    const int alias = ::dup(fileno(stream));
+    check("memfd stream alias duplicates", alias >= 0);
+    if (alias >= 0) gesher::memfds.insert(alias);
+    host::fclose(stream);
+    if (alias >= 0) {
+      check("memfd stream alias retains its own membership", gesher::IsRegisteredMemfd(alias));
+      FILE* aliased = ::fdopen(alias, "rb");
+      check("memfd alias wraps in a stream", aliased != nullptr);
+      if (aliased) host::fclose(aliased);
+    }
+  }
+  check("all memfd stream memberships retired", gesher::memfds.empty());
+}
 int main() {
   test_stream_device_contracts();
   test_failed_closes();
+  test_fence_stream_lifetime();
+  test_memfd_stream_lifetime();
   check("all device markers and guards retire", gesher::device_count == 0 && stream_depth == 0 && descriptor_depth == 0);
   std::printf("stream devices production adapters: %d checks, %d failures\n", checks, failures);
   return failures != 0;

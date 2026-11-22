@@ -4,6 +4,35 @@ $ErrorActionPreference = 'Stop'
 . $HelperPath
 $script:Checks = 0
 $script:CopyCalls = 0
+$script:RuntimeReadCalls = 0
+$script:RuntimeReadBytes = 0L
+$script:OriginalReadChunk = (Get-Command Read-GesherRuntimeChunk).ScriptBlock
+function Read-GesherRuntimeChunk {
+    param([IO.Stream] $Stream, [byte[]] $Buffer)
+    $count = & $script:OriginalReadChunk $Stream $Buffer
+    $script:RuntimeReadCalls++
+    $script:RuntimeReadBytes += $count
+    return $count
+}
+# Exercise legal short reads independently of FileStream's usual full reads.
+# This adapter is confined to tests; the launcher needs no compiler or Add-Type.
+if (-not ('GesherRuntimeShortReadStream' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+public sealed class GesherRuntimeShortReadStream : MemoryStream {
+    private readonly int cap;
+    private readonly int failAt;
+    public GesherRuntimeShortReadStream(byte[] data, int cap, int failAt) : base(data, false) {
+        this.cap = cap; this.failAt = failAt;
+    }
+    public override int Read(byte[] data, int offset, int count) {
+        if (failAt >= 0 && Position >= failAt) throw new IOException("Test read failure");
+        return base.Read(data, offset, Math.Min(count, cap));
+    }
+}
+'@
+}
 # Observe real copy attempts as well as Windows' read-sharing behavior. This
 # makes the no-rewrite contract visible on hosts that do not enforce NT sharing.
 function Copy-Item {
@@ -18,6 +47,24 @@ function Assert-RuntimeFile([bool] $Value, [string] $Message) {
 }
 $work = Join-Path ([IO.Path]::GetTempPath()) ('gesher-runtime-files-' + [guid]::NewGuid())
 try {
+    $shortData = [byte[]]::new(137)
+    [Random]::new(944873).NextBytes($shortData)
+    foreach ($cap in @(1, 3, 7, 29, 128)) {
+        $stream = [GesherRuntimeShortReadStream]::new($shortData, $cap, -1)
+        try {
+            $buffer = [byte[]]::new(64)
+            $collected = [Collections.Generic.List[byte]]::new()
+            while (($count = Read-GesherRuntimeChunk $stream $buffer) -gt 0) {
+                for ($i = 0; $i -lt $count; $i++) { $collected.Add($buffer[$i]) }
+            }
+            Assert-RuntimeFile ([BitConverter]::ToString($collected.ToArray()) -ceq [BitConverter]::ToString($shortData)) "Short reads lost data at cap $cap"
+        } finally { $stream.Dispose() }
+    }
+    $stream = [GesherRuntimeShortReadStream]::new($shortData, 7, 14)
+    $failed = $false
+    try { $null = Read-GesherRuntimeChunk $stream ([byte[]]::new(64)) } catch { $failed = $true } finally { $stream.Dispose() }
+    Assert-RuntimeFile $failed 'A chunk read error was swallowed after partial data'
+
     $install = Join-Path $work 'install [fixture]'
     $profile = Join-Path $work 'profile'
     $null = [IO.Directory]::CreateDirectory($install)
@@ -96,6 +143,53 @@ try {
     Sync-GesherRuntimeFile $source $destination $development
     Assert-RuntimeFile ([IO.File]::ReadAllText($destination) -ceq 'dev data') 'Unversioned same-size resource did not refresh'
     Assert-RuntimeFile ([IO.File]::ReadAllText($userData) -ceq 'keep user data') 'Developer synchronization changed app data'
+
+    # Binary resources span full comparison chunks and a short tail. Same-size,
+    # same-time changes anywhere in them must remain visible without a version.
+    $comparisonChunk = 262144
+    $binary = [byte[]]::new(2 * $comparisonChunk + 17)
+    [Random]::new(8472).NextBytes($binary)
+    $binarySource = Join-Path $install 'runtime [binary].dat'
+    $binaryDestination = Join-Path $profile 'system/runtime [binary].dat'
+    [IO.File]::WriteAllBytes($binarySource, $binary)
+    [IO.File]::WriteAllBytes($binaryDestination, $binary)
+    $binaryStamp = [IO.File]::GetLastWriteTimeUtc($binarySource)
+    [IO.File]::SetLastWriteTimeUtc($binaryDestination, $binaryStamp)
+    $copies = $script:CopyCalls
+    $script:RuntimeReadBytes = 0L
+    Sync-GesherRuntimeFile $binarySource $binaryDestination $development
+    Assert-RuntimeFile ($script:CopyCalls -eq $copies) 'Equal binary resource was rewritten'
+    Assert-RuntimeFile ($script:RuntimeReadBytes -eq 2L * $binary.Length) 'Unversioned comparison did not inspect both complete files'
+    foreach ($offset in @(0, 7, 8, 63, 65535, 65536, 262143, 262144, 524287, 524288, 524304)) {
+        $different = [byte[]] $binary.Clone()
+        $different[$offset] = $different[$offset] -bxor 255
+        [IO.File]::WriteAllBytes($binaryDestination, $different)
+        [IO.File]::SetLastWriteTimeUtc($binaryDestination, $binaryStamp)
+        $script:RuntimeReadBytes = 0L
+        Sync-GesherRuntimeFile $binarySource $binaryDestination $development
+        Assert-RuntimeFile ($script:CopyCalls -eq ++$copies) "Missed same-size/time binary change at $offset"
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            $actual = $sha.ComputeHash([IO.File]::ReadAllBytes($binaryDestination))
+            $expected = $sha.ComputeHash($binary)
+            Assert-RuntimeFile ([BitConverter]::ToString($actual) -ceq [BitConverter]::ToString($expected)) "Incomplete binary refresh at $offset"
+        } finally { $sha.Dispose() }
+        if ($offset -eq 0) {
+            Assert-RuntimeFile ($script:RuntimeReadBytes -eq 2L * $comparisonChunk) 'First-chunk mismatch read the rest of the files'
+        }
+    }
+    foreach ($length in @(0, 1, 7, 8, 65535, 65536, 65537, 262143, 262144, 262145)) {
+        $bytes = [byte[]]::new($length)
+        [Random]::new($length).NextBytes($bytes)
+        [IO.File]::WriteAllBytes($binarySource, $bytes)
+        [IO.File]::WriteAllBytes($binaryDestination, $bytes)
+        Assert-RuntimeFile (Test-GesherRuntimeFileEqual $binarySource $binaryDestination) "Equal resource rejected at length $length"
+        $extra = [byte[]]::new($length + 1)
+        [Array]::Copy($bytes, $extra, $length)
+        [IO.File]::WriteAllBytes($binaryDestination, $extra)
+        Assert-RuntimeFile (-not (Test-GesherRuntimeFileEqual $binarySource $binaryDestination)) "Trailing byte ignored at length $length"
+    }
+
     foreach ($invalid in @(
         "Version=0.1.10`n",
         "[Other]`nVersion=0.1.10`n",

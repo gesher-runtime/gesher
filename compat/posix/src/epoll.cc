@@ -29,6 +29,7 @@
 
 #include "event_internal.h"
 #include "internal.h"
+#include "native_fence_internal.h"
 #include "poll_scratch.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
@@ -469,6 +470,7 @@ bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result) 
 }
 
 int EventObjectWriteError(int fd) {
+  if (LookupNativeFence(fd)) return EINVAL;
   Object object;
   if (!Lookup(fd, &object)) return 0;
   if (object.inotify) return EBADF;

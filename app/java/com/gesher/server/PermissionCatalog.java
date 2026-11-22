@@ -89,15 +89,7 @@ final class PermissionCatalog {
                 // A package cannot acquire another app's signature permission by
                 // declaring the same permission name first. Conflicts fail closed.
                 if (owner != null && !pkg.signaturesMatch(owner)) return null;
-                PermissionInfo info = new PermissionInfo(parsed.getBackgroundPermission());
-                info.name = parsed.getName();
-                info.packageName = pkg.packageName;
-                info.protectionLevel = parsed.getProtectionLevel();
-                info.flags = parsed.getFlags();
-                info.group = parsed.getGroup();
-                info.labelRes = parsed.getLabelRes();
-                info.descriptionRes = parsed.getDescriptionRes();
-                found = info;
+                found = declaredPermission(pkg, parsed);
                 owner = pkg;
             }
         }
@@ -119,13 +111,40 @@ final class PermissionCatalog {
     Map<String, PermissionInfo> permissions() {
         load();
         Map<String, PermissionInfo> result = new LinkedHashMap<>(mFramework);
+        Map<String, ApkPackage> owners = new LinkedHashMap<>();
+        java.util.Set<String> conflicts = new java.util.HashSet<>();
         for (ApkPackage pkg : mPm.packages()) {
             for (ParsedPermission permission : pkg.parsed.getPermissions()) {
-                PermissionInfo info = get(permission.getName());
-                if (info != null) result.putIfAbsent(info.name, info);
+                String name = permission.getName();
+                // Match get(): neither a platform definition nor its reserved
+                // namespace may be replaced by an application's declaration.
+                if (name == null || mFramework.containsKey(name)
+                        || name.startsWith("android.permission.") || conflicts.contains(name)) continue;
+                ApkPackage owner = owners.get(name);
+                if (owner != null && !pkg.signaturesMatch(owner)) {
+                    result.remove(name);
+                    conflicts.add(name);
+                    continue;
+                }
+                owners.put(name, pkg);
+                // Same-signer duplicates retain get()'s last declaration, with
+                // the first declaration's position in the catalogue unchanged.
+                result.put(name, declaredPermission(pkg, permission));
             }
         }
         return result;
+    }
+
+    private static PermissionInfo declaredPermission(ApkPackage pkg, ParsedPermission parsed) {
+        PermissionInfo info = new PermissionInfo(parsed.getBackgroundPermission());
+        info.name = parsed.getName();
+        info.packageName = pkg.packageName;
+        info.protectionLevel = parsed.getProtectionLevel();
+        info.flags = parsed.getFlags();
+        info.group = parsed.getGroup();
+        info.labelRes = parsed.getLabelRes();
+        info.descriptionRes = parsed.getDescriptionRes();
+        return info;
     }
 
     Map<String, PermissionGroupInfo> groups() { load(); return new LinkedHashMap<>(mGroups); }

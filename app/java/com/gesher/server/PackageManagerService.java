@@ -199,7 +199,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
             identity.commit();
-            mPackages = map;
+            publishPackages(map);
             enabledStore();
             identity.accept();
         }
@@ -249,7 +249,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         map.put(p.packageName, p);
         Runnable permissions = mPermissions.publishPackage(p, () -> {
-            mPackages = map;
+            publishPackages(map);
             PackageManager.invalidatePackageInfoCache();
         }, publicationLock);
         mPackageEventExecutor.execute(() -> {
@@ -276,7 +276,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage p = map.get(packageName);
         if (p != null) enabledStore().retire(packageName, p.enabledStateOwner());
         map.remove(packageName);
-        mPackages = map;
+        publishPackages(map);
         if (p != null) {
             p.clearComponentStates();
             PackageManager.invalidatePackageInfoCache();
@@ -353,6 +353,15 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** The packages, now. */
     Collection<ApkPackage> packages() {
         return mPackages.values();
+    }
+
+    /** The map is replaced as a whole; package metadata is admitted before publication. */
+    Map<String, ApkPackage> packageSnapshot() { return mPackages; }
+
+    private void publishPackages(Map<String, ApkPackage> packages) {
+        mPackages = packages;
+        // Do not retain a removed generation until the next permission query.
+        mPermissions.invalidatePackageIndex();
     }
 
     public ApkPackage get(String packageName) {

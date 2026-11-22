@@ -10,7 +10,9 @@
 // gesher-base refuses them in its own write paths: write/pwrite (and the
 // vector forms built on them), ftruncate, fallocate, and MAP_SHARED writable
 // mmap/mprotect (mman.cc). A descriptor is known to be a memfd by a registry
-// (memfd_create, Binder receive, dup), so other files pay one atomic load.
+// (memfd_create, Binder receive, dup). A bounded atomic bitmap classifies the
+// common descriptor range, so an ordinary write needs no registry mutex even
+// while unrelated memfds are live. Large descriptor numbers use the registry.
 //
 // F_SEAL_WRITE requires that no writable shared mapping of the file exists.
 // Mappings of other processes cannot be counted here: once any process has
@@ -24,6 +26,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <unordered_set>
@@ -137,6 +140,10 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
 std::mutex g_registry_mutex;
 std::unordered_set<int> g_registry;
 std::atomic<size_t> g_registry_count{0};
+constexpr unsigned kMemfdFastDescriptors = 65536;
+constexpr unsigned kMemfdBitsPerWord = 64;
+std::array<std::atomic<uint64_t>, kMemfdFastDescriptors / kMemfdBitsPerWord> g_memfd_descriptors{};
+static_assert(std::atomic<uint64_t>::is_always_lock_free);
 
 }  // namespace
 
@@ -146,17 +153,40 @@ bool InitMemfdSeals(HANDLE file, bool allow_sealing) {
 }
 
 void RegisterMemfd(int fd) {
+  if (fd < 0) return;
+  if (static_cast<unsigned>(fd) < kMemfdFastDescriptors) {
+    g_memfd_descriptors[fd / kMemfdBitsPerWord].fetch_or(
+        uint64_t{1} << (fd % kMemfdBitsPerWord), std::memory_order_release);
+    return;
+  }
   std::lock_guard<std::mutex> lock(g_registry_mutex);
   if (g_registry.insert(fd).second) g_registry_count.fetch_add(1, std::memory_order_release);
 }
 
 void ForgetMemfd(int fd) {
+  if (fd < 0) return;
+  if (static_cast<unsigned>(fd) < kMemfdFastDescriptors) {
+    auto& word = g_memfd_descriptors[fd / kMemfdBitsPerWord];
+    const uint64_t bit = uint64_t{1} << (fd % kMemfdBitsPerWord);
+    // Ordinary closes must not contend for a writable cache line when their
+    // descriptor has no memfd metadata. Descriptor retirement/reuse already
+    // serializes registrations for this fd; other bits can change concurrently.
+    if ((word.load(std::memory_order_acquire) & bit) != 0) {
+      word.fetch_and(~bit, std::memory_order_release);
+    }
+    return;
+  }
   if (g_registry_count.load(std::memory_order_acquire) == 0) return;
   std::lock_guard<std::mutex> lock(g_registry_mutex);
   if (g_registry.erase(fd) != 0) g_registry_count.fetch_sub(1, std::memory_order_release);
 }
 
 bool IsRegisteredMemfd(int fd) {
+  if (fd < 0) return false;
+  if (static_cast<unsigned>(fd) < kMemfdFastDescriptors) {
+    return (g_memfd_descriptors[fd / kMemfdBitsPerWord].load(std::memory_order_acquire) &
+            (uint64_t{1} << (fd % kMemfdBitsPerWord))) != 0;
+  }
   if (g_registry_count.load(std::memory_order_acquire) == 0) return false;
   std::lock_guard<std::mutex> lock(g_registry_mutex);
   return g_registry.count(fd) != 0;

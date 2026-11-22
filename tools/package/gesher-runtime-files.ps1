@@ -1,7 +1,7 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # Synchronize only runtime-owned files into the Android profile. The installed
 # version invalidates the cache once per upgrade, including equal-size files
-# with identical timestamps. Ordinary launches do not hash large ICU/font files.
+# with identical timestamps. Ordinary launches do not read large ICU/font files.
 
 function New-GesherRuntimeSync {
     param(
@@ -40,18 +40,76 @@ function New-GesherRuntimeSync {
     }
 }
 
-function Get-GesherRuntimeFileHash {
-    param([Parameter(Mandatory = $true)][string] $Path)
-    # Packaged launchers must not depend on Get-FileHash/module availability in
-    # their PowerShell host. Stream large ICU/font resources and allow readers
-    # that already have identical runtime bytes mapped to remain open.
-    $algorithm = [Security.Cryptography.SHA256]::Create()
+function Get-GesherRuntimeByteComparer {
+    # Resolve the platform's byte comparator once per launcher. Reflection.Emit
+    # works in both Windows PowerShell 5.1 and PowerShell 7 without Add-Type's
+    # external compiler or a module import. Buffers remain pinned by the P/Invoke
+    # marshaler for the call; callers bound count by both arrays' valid data.
+    if ($null -eq $script:GesherRuntimeByteComparer) {
+        $name = [Reflection.AssemblyName]::new('Gesher.RuntimeByteComparer')
+        $access = [Reflection.Emit.AssemblyBuilderAccess]::Run
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly($name, $access)
+        } else {
+            $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly($name, $access)
+        }
+        $module = $assembly.DefineDynamicModule('Comparer')
+        $type = $module.DefineType('Gesher.RuntimeByteComparer', [Reflection.TypeAttributes]::Public)
+        $library = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'msvcrt.dll' } else { 'libc' }
+        $method = $type.DefinePInvokeMethod('memcmp', $library,
+            [Reflection.MethodAttributes]::Public -bor [Reflection.MethodAttributes]::Static,
+            [Reflection.CallingConventions]::Standard, [int], [Type[]]@([byte[]], [byte[]], [UIntPtr]),
+            [Runtime.InteropServices.CallingConvention]::Cdecl, [Runtime.InteropServices.CharSet]::Ansi)
+        $method.SetImplementationFlags($method.GetMethodImplementationFlags() -bor [Reflection.MethodImplAttributes]::PreserveSig)
+        $native = $type.CreateType()
+        $script:GesherRuntimeByteComparer = [Delegate]::CreateDelegate(
+            [Func[byte[], byte[], UIntPtr, int]], $native.GetMethod('memcmp'))
+    }
+    return $script:GesherRuntimeByteComparer
+}
+
+function Read-GesherRuntimeChunk {
+    param([IO.Stream] $Stream, [byte[]] $Buffer)
+    $count = 0
+    while ($count -lt $Buffer.Length) {
+        $read = $Stream.Read($Buffer, $count, $Buffer.Length - $count)
+        if ($read -eq 0) { break }
+        $count += $read
+    }
+    return $count
+}
+
+function Test-GesherRuntimeFileEqual {
+    param(
+        [Parameter(Mandatory = $true)][string] $Source,
+        [Parameter(Mandatory = $true)][string] $Destination
+    )
+    # Unversioned builds still compare every byte, even with equal length and
+    # timestamps. An exact streaming comparison avoids two SHA-256 computations
+    # and can stop at the first different chunk. Both handles deny writes on
+    # Windows while comparing, and retain read sharing for mapped runtime files.
+    $left = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     try {
-        $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $right = [IO.File]::Open($Destination, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         try {
-            return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
-        } finally { $stream.Dispose() }
-    } finally { $algorithm.Dispose() }
+            if ($left.Length -ne $right.Length) { return $false }
+            if ($left.Length -eq 0) { return $true }
+            $compare = Get-GesherRuntimeByteComparer
+            # Bound memory to 512 KiB while keeping PowerShell dispatch out of
+            # the per-small-read path for ICU/font resources. Small resources
+            # allocate only their actual size.
+            $bufferLength = [int][Math]::Min($left.Length, 262144)
+            $leftBuffer = [byte[]]::new($bufferLength)
+            $rightBuffer = [byte[]]::new($bufferLength)
+            do {
+                $leftCount = Read-GesherRuntimeChunk $left $leftBuffer
+                $rightCount = Read-GesherRuntimeChunk $right $rightBuffer
+                if ($leftCount -ne $rightCount) { return $false }
+                if ($leftCount -eq 0) { return $true }
+                if ($compare.Invoke($leftBuffer, $rightBuffer, [UIntPtr]::new([uint64] $leftCount)) -ne 0) { return $false }
+            } while ($true)
+        } finally { $right.Dispose() }
+    } finally { $left.Dispose() }
 }
 
 function Sync-GesherRuntimeFile {
@@ -79,8 +137,7 @@ function Sync-GesherRuntimeFile {
             # A new component stamp requires checking it, not rewriting identical
             # bytes that a running ART process can have open without write sharing.
             # Unversioned builds also cannot use metadata as a release identity.
-            $copy = (Get-GesherRuntimeFileHash -Path $sourceInfo.FullName) -cne
-                    (Get-GesherRuntimeFileHash -Path $destinationInfo.FullName)
+            $copy = -not (Test-GesherRuntimeFileEqual -Source $sourceInfo.FullName -Destination $destinationInfo.FullName)
             if (-not $copy -and $sourceInfo.LastWriteTimeUtc -ne $destinationInfo.LastWriteTimeUtc) {
                 # Avoid repeating a timestamp-only comparison on later launches.
                 # An existing reader may deny attribute writes; its bytes are
