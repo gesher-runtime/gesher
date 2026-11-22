@@ -31,6 +31,8 @@ import java.util.zip.CheckedOutputStream;
  * mutations. Every mutation is synced before it succeeds; no timer defers durability.
  * Replacing the whole file checkpoints the journal, so a crash cannot pair a newer
  * snapshot with an older journal. GST1 snapshots are migrated on the first change.
+ * An undecodable file (including a damaged version header) is moved aside before
+ * defaults are used, so a later checkpoint cannot replace it.
  */
 final class SettingsStore {
     private static final String[] TABLES = {"system", "secure", "global"};
@@ -135,7 +137,7 @@ final class SettingsStore {
     }
     private static String readString(DataInputStream in) throws IOException {
         int length = in.readInt();
-        if (length < 0 || length > MAX_STRING_LENGTH) throw new IOException("Invalid setting length");
+        if (length < 0 || length > MAX_STRING_LENGTH) throw new FormatException("Invalid setting length");
         char[] value = new char[length];
         for (int i = 0; i < length; i++) value[i] = in.readChar();
         return new String(value);
@@ -277,18 +279,18 @@ final class SettingsStore {
             DataInputStream in = new DataInputStream(new CheckedInputStream(counted, checksum));
             int magic = in.readInt();
             journal = magic == JOURNAL_MAGIC;
-            if (!journal && magic != MAGIC) throw new IOException("Unknown settings version");
+            if (!journal && magic != MAGIC) throw new FormatException("Unknown settings version");
             long nextId = in.readLong();
-            if (nextId < 0) throw new IOException("Invalid setting generation");
+            if (nextId < 0) throw new FormatException("Invalid setting generation");
             for (String table : TABLES) {
                 Map<String, String> values = new LinkedHashMap<>();
                 Map<String, Long> rowIds = new LinkedHashMap<>();
                 int count = in.readInt();
-                if (count < 0 || count > 1000000) throw new IOException("Invalid row count");
+                if (count < 0 || count > 1000000) throw new FormatException("Invalid row count");
                 for (int i = 0; i < count; i++) {
                     String name = readString(in); long id = in.readLong();
                     if (!validKey(name) || rowIds.containsKey(name) || id < 0 || id >= nextId) {
-                        throw new IOException("Invalid settings row");
+                        throw new FormatException("Invalid settings row");
                     }
                     rowIds.put(name, id); values.put(name, in.readBoolean() ? readString(in) : null);
                 }
@@ -296,14 +298,14 @@ final class SettingsStore {
             }
             if (journal) {
                 int expected = (int) checksum.getValue();
-                if (in.readInt() != expected) throw new IOException("Invalid settings snapshot checksum");
+                if (in.readInt() != expected) throw new FormatException("Invalid settings snapshot checksum");
                 mValidLength = counted.count;
                 // Only the checkpoint is covered by the first checksum. Each suffix
                 // record carries its own checksum, and replay publishes complete rows.
                 nextId = replay(new DataInputStream(counted), counted, tables, ids, nextId);
                 mCheckpointNeeded = false;
             } else if (in.read() != -1) {
-                throw new IOException("Trailing settings data");
+                throw new FormatException("Trailing settings data");
             }
             mTables.clear(); mTables.putAll(tables); mIds.clear(); mIds.putAll(ids); mNextId = nextId;
         } catch (IOException failure) {
@@ -311,6 +313,50 @@ final class SettingsStore {
             // journal/checkpoint must never silently turn acknowledged rows into defaults.
             if (journal) throw new IllegalStateException("Corrupt settings journal", failure);
             SystemServer.log("settings: durable state unavailable: " + failure);
+            if (failure instanceof FormatException || failure instanceof EOFException) {
+                preserveUnreadable(failure);
+            } else {
+                // Open, permission, sharing and device errors say nothing about the
+                // bytes. Keep the file in place and refuse to replace what was unread.
+                if (mFile.exists()) mWriteFailure = failure;
+            }
+        }
+    }
+
+    /** The bytes were read and do not decode as settings, as opposed to an I/O failure. */
+    private static final class FormatException extends IOException {
+        FormatException(String message) { super(message); }
+    }
+
+    /**
+     * An undecodable file (for example a damaged version header) starts from defaults,
+     * but the next checkpoint must not replace bytes that may still hold acknowledged
+     * rows. Move them aside first; if that fails, refuse writes instead of overwriting.
+     */
+    private void preserveUnreadable(IOException failure) {
+        if (!mFile.isFile() || mFile.length() == 0) return; // Nothing stored can be lost.
+        File parent = mFile.getAbsoluteFile().getParentFile();
+        File target = null;
+        try {
+            // Reserve a unique name, then replace only that empty placeholder.
+            target = File.createTempFile(mFile.getName() + ".corrupt-", "", parent);
+            try {
+                Files.move(mFile.toPath(), target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                Files.move(mFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+            SystemServer.log("settings: preserved unreadable state as " + target);
+        } catch (IOException move) {
+            if (mFile.exists()) {
+                if (target != null) target.delete();
+                failure.addSuppressed(move);
+                mWriteFailure = failure;
+                SystemServer.log("settings: could not preserve unreadable state; writes refused: " + move);
+            } else {
+                // The original left its place, so a checkpoint cannot replace it.
+                SystemServer.log("settings: preserving unreadable state reported " + move + "; kept " + target);
+            }
         }
     }
 
