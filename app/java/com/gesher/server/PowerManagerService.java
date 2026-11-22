@@ -77,8 +77,13 @@ final class PowerManagerService extends IPowerManager.Default implements Windows
         return thread;
     });
     private volatile boolean mInteractive = true;
+    private final ActivityManagerService mActivity;
 
-    PowerManagerService() {
+    PowerManagerService() { this(null); }
+
+    PowerManagerService(ActivityManagerService activity) {
+        mActivity = activity;
+        if (activity != null) activity.attachShortcutPower(this::isInteractive);
         // Sleep and resume come from the system server's event window.
         if (WindowsHost.inSystemServer()) WindowsHost.addListener(this);
     }
@@ -93,6 +98,7 @@ final class PowerManagerService extends IPowerManager.Default implements Windows
     private void setInteractive(boolean interactive) {
         if (mInteractive == interactive) return;
         mInteractive = interactive;
+        if (mActivity != null) mActivity.refreshShortcutForeground();
         SystemServer.log("power: Windows " + (interactive ? "resumed: the screen is on"
                 : "goes to sleep: the screen is off"));
         Services.Created c = Services.sLast;

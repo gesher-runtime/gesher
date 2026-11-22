@@ -57,6 +57,11 @@ public final class ActivityManagerService extends IActivityManager.Default {
     private final ContentProviders mProviders;
     private ApplicationSharedMemory mSharedMemory;  // created on the first bind
     private final PendingIntents mPendingIntents;
+    private volatile DesktopShortcutService mShortcuts;
+    private volatile java.util.function.BooleanSupplier mShortcutAwake = () -> false;
+    // Observation history only, guarded by ATM. Never used to answer foreground queries.
+    private android.util.SparseIntArray mShortcutObservedStates;
+    private final ShortcutProcessState.Evaluation mShortcutEvaluation = new ShortcutProcessState.Evaluation();
 
     ActivityManagerService(ActivityTaskManagerService atm, PackageManagerService pm,
             NotificationManagerService notifications) {
@@ -86,6 +91,50 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     CallerIdentity callers() { return mCallers; }
+
+    void attachShortcuts(DesktopShortcutService shortcuts) { mShortcuts = shortcuts; }
+
+    void noteShortcutForeground(java.util.Map<ActivityTaskManagerService.ProcessRecord, Integer> states) {
+        android.util.SparseIntArray observed = states.isEmpty() ? null : new android.util.SparseIntArray(states.size());
+        for (var process : states.keySet()) {
+            observed.put(process.uid, Math.min(observed.get(process.uid, ShortcutProcessState.BACKGROUND), states.get(process)));
+        }
+        DesktopShortcutService shortcuts = mShortcuts;
+        if (shortcuts != null) {
+            for (ActivityTaskManagerService.ProcessRecord process : states.keySet()) {
+                if (mShortcutObservedStates == null || observed.get(process.uid) != mShortcutObservedStates.get(
+                        process.uid, ShortcutProcessState.BACKGROUND)) {
+                    shortcuts.noteForeground(process.packageCode);
+                }
+            }
+        }
+        mShortcutObservedStates = observed;
+    }
+
+    void attachShortcutPower(java.util.function.BooleanSupplier awake) { mShortcutAwake = awake; }
+
+    void refreshShortcutForeground() { mAtm.noteShortcutForeground(null, 0); }
+
+    boolean shortcutState(int uid,
+            java.util.Map<ActivityTaskManagerService.ProcessRecord, Integer> roots,
+            List<ActivityTaskManagerService.ProcessRecord> processes,
+            java.util.function.Predicate<ActivityTaskManagerService.ProcessRecord> current) {
+        // Both controllers publish immutable snapshots; never take their monitors under ATM.
+        ShortcutProcessState.Evaluation work = mShortcutEvaluation.inUse
+                ? new ShortcutProcessState.Evaluation() : mShortcutEvaluation;
+        try {
+            var states = work.evaluate(mPm, roots, processes, current, mShortcutAwake.getAsBoolean(),
+                    mServices.shortcutSnapshot(), mProviders.shortcutSnapshot());
+            noteShortcutForeground(states);
+            for (var process : states.keySet()) if (process.uid == uid) return true;
+            return false;
+        } finally { work.clear(processes.size()); }
+    }
+
+    void flushShortcutQuota() {
+        DesktopShortcutService shortcuts = mShortcuts;
+        if (shortcuts != null) shortcuts.flushQuota();
+    }
 
     SettingsProvider settingsProvider() { return mProviders.settingsProvider(); }
     private java.util.Map<Integer, AppOpsService.UidState> appOpsUidStates() {
@@ -124,6 +173,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         for (ActivityTaskManagerService.ProcessRecord p : mProviders.processDied(app)) {
             mAtm.maybeExit(p);
         }
+        refreshShortcutForeground();
     }
 
     /** The process is told to exit: its providers are not handed out any more. */

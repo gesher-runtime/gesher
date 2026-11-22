@@ -76,12 +76,17 @@ final class ActiveServices {
         final boolean system;
         final BooleanSupplier lifetime;
         final BooleanSupplier acceptance;
+        final ActivityTaskManagerService.ProcessRecord process;
         Sender(String packageName, boolean system, BooleanSupplier lifetime) {
             this(packageName, system, lifetime, lifetime);
         }
         Sender(String packageName, boolean system, BooleanSupplier lifetime, BooleanSupplier acceptance) {
+            this(packageName, system, lifetime, acceptance, null);
+        }
+        Sender(String packageName, boolean system, BooleanSupplier lifetime, BooleanSupplier acceptance,
+                ActivityTaskManagerService.ProcessRecord process) {
             this.packageName = packageName; this.system = system; this.lifetime = lifetime;
-            this.acceptance = acceptance;
+            this.acceptance = acceptance; this.process = process;
         }
     }
 
@@ -193,21 +198,30 @@ final class ActiveServices {
         final IBinder caller;
         final int callerPid;
         final BooleanSupplier lifetime;
+        final ActivityTaskManagerService.ProcessRecord client;
+        final ApkPackage clientCode;
+        final boolean systemClient;
 
         ConnectionRecord(IntentBindRecord binding, IServiceConnection conn, long flags,
-                IApplicationThread caller, BooleanSupplier lifetime) {
+                IApplicationThread caller, BooleanSupplier lifetime,
+                ActivityTaskManagerService.ProcessRecord client) {
             this.binding = binding;
             this.conn = conn;
             this.flags = flags;
             this.caller = caller == null ? null : caller.asBinder();
             this.callerPid = Binder.getCallingPid();
             this.lifetime = lifetime;
+            this.client = client;
+            this.clientCode = client == null ? null : client.packageCode;
+            this.systemClient = caller == null && Binder.getCallingPid() == android.os.Process.myPid()
+                    && Binder.getCallingUid() == android.os.Process.SYSTEM_UID;
         }
     }
 
     // Guarded by this.
     private final Map<ComponentName, ServiceRecord> mServices = new HashMap<>();
     private final Map<IBinder, List<ConnectionRecord>> mConnections = new HashMap<>();
+    private volatile ShortcutProcessState.Snapshot mShortcutSnapshot = ShortcutProcessState.Snapshot.EMPTY;
     private long mBindSeq;
     private final ScheduledExecutorService mRestarts = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "service-restarts");
@@ -242,9 +256,16 @@ final class ActiveServices {
         if (beforeAuthentication != null) beforeAuthentication.run();
         if (mCallers.isSystem()) {
             ApkPackage owner = claimed == null ? null : mPm.get(claimed);
-            if (owner != null) return new Sender(owner.packageName, false,
-                    () -> delegatedLifetime.getAsBoolean() && mPm.get(owner.packageName) == owner
-                            && !mPm.isRemovalPending(owner.packageName));
+            if (owner != null) {
+                BooleanSupplier lifetime = () -> delegatedLifetime.getAsBoolean()
+                        && mPm.get(owner.packageName) == owner && !mPm.isRemovalPending(owner.packageName);
+                // Standalone applications use the local trusted-call path too.
+                // A claimed package alone cannot create a process dependency.
+                boolean actualClient = app != null && app.uid == uid && owner.uid() == uid
+                        && app.packageCode == owner && thread != null && app.thread != null
+                        && thread.asBinder().equals(app.thread.asBinder()) && mAtm.callerProcess(pid) == app;
+                return new Sender(owner.packageName, false, lifetime, lifetime, actualClient ? app : null);
+            }
             if (claimed != null && !"android".equals(claimed)) {
                 throw new SecurityException("Unknown service caller package");
             }
@@ -267,7 +288,7 @@ final class ActiveServices {
         BooleanSupplier acceptance = () -> lifetime.getAsBoolean()
                 && mAtm.callerProcess(pid) == app && !app.exiting;
         if (!acceptance.getAsBoolean()) throw new SecurityException("Service caller retired during authentication");
-        return new Sender(actual, false, lifetime, acceptance);
+        return new Sender(actual, false, lifetime, acceptance, app);
     }
 
     private void enforceAccess(ServiceInfo info, Sender sender) {
@@ -442,7 +463,7 @@ final class ActiveServices {
                 b = new IntentBindRecord(r, key.getIntent());
                 r.bindings.put(key, b);
             }
-            ConnectionRecord c = new ConnectionRecord(b, connection, flags, caller, sender.lifetime);
+            ConnectionRecord c = new ConnectionRecord(b, connection, flags, caller, sender.lifetime, sender.process);
             connectionRecord = c;
             b.connections.add(c);
             mConnections.computeIfAbsent(connection.asBinder(), k -> new ArrayList<>()).add(c);
@@ -450,7 +471,9 @@ final class ActiveServices {
             if (received) published = b.binder;
             // A new client: the idle reaper must not take this as an unused process.
             if (r.app != null) r.app.markActive(SystemClock.uptimeMillis());
+            publishShortcutStateLocked();
         }
+        mAtm.noteShortcutForeground(null, 0);
         SystemServer.log("bindService " + r + " from " + callingPackage + " (flags 0x"
                 + Long.toHexString(flags) + ")");
         long identity = Binder.clearCallingIdentity();
@@ -527,7 +550,9 @@ final class ActiveServices {
                 if (b.connections.isEmpty()) requestUnbindLocked(b);
                 if (!services.contains(b.service)) services.add(b.service);
             }
+            publishShortcutStateLocked();
         }
+        mAtm.noteShortcutForeground(null, 0);
         for (ServiceRecord r : services) SystemServer.log("unbindService " + r);
         for (ServiceRecord r : services) drainBindingCalls(r);
         for (ServiceRecord r : services) maybeBringDown(r);
@@ -598,6 +623,7 @@ final class ActiveServices {
         ServiceRecord r;
         int previous;
         ApkPackage captured;
+        ActivityTaskManagerService.ProcessRecord foregroundVisit;
         synchronized (this) {
             r = byToken(token);
             if (r == null) return;
@@ -639,7 +665,12 @@ final class ActiveServices {
             // use its current eligibility, not the earlier startService visibility.
             if (id == 0 && previous != 0) r.whileInUseAtStart = false;
             r.foregroundChannelId = id == 0 ? null : notification.getChannelId();
+            foregroundVisit = previous == 0 && shortcutForeground(r) ? r.app : null;
+            if ((previous == 0) != (id == 0)) publishShortcutStateLocked();
         }
+        if (foregroundVisit != null) {
+            mAtm.noteShortcutForeground(foregroundVisit, ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE);
+        } else mAtm.noteShortcutForeground(null, 0);
         if (id != 0) {
             // FOREGROUND_SERVICE_TYPE_MANIFEST (startForeground(id, notification)): the
             // manifest's types.
@@ -664,6 +695,36 @@ final class ActiveServices {
             if (r != null) requireServiceOwner(r);
             return r != null && r.foregroundId != 0 ? r.foregroundType : 0;
         }
+    }
+
+    /** A shortcut exemption belongs to the admitted service and live process generation. */
+    private boolean shortcutForeground(ServiceRecord service) {
+        return service.foregroundId != 0 && serviceCurrent(service) && service.app != null
+                && service.app.packageCode == service.owner && service.app.ready
+                && !service.app.dead && !service.app.exiting && !service.app.pidSuperseded;
+    }
+
+    ShortcutProcessState.Snapshot shortcutSnapshot() { return mShortcutSnapshot; }
+
+    /** Publish only owned service/connection metadata; no ATM lock or application callback. */
+    private void publishShortcutStateLocked() {
+        List<ShortcutProcessState.Owner> foreground = new ArrayList<>();
+        List<ShortcutProcessState.Link> links = new ArrayList<>();
+        for (ServiceRecord service : mServices.values()) {
+            if (service.app == null || !serviceCurrent(service)) continue;
+            ShortcutProcessState.Owner owner = new ShortcutProcessState.Owner(service.app, service.owner,
+                    service.info.name, ApkPackage.ComponentKind.SERVICE);
+            if (shortcutForeground(service)) foreground.add(owner);
+            for (IntentBindRecord binding : service.bindings.values()) {
+                for (ConnectionRecord connection : binding.connections) {
+                    if (!connection.systemClient && (connection.client == null || connection.client == service.app)) continue;
+                    links.add(new ShortcutProcessState.Link(connection.client, connection.clientCode, owner,
+                            connection.flags, connection.systemClient, false, connection.lifetime));
+                }
+            }
+        }
+        mShortcutSnapshot = foreground.isEmpty() && links.isEmpty() ? ShortcutProcessState.Snapshot.EMPTY
+                : new ShortcutProcessState.Snapshot(foreground, links);
     }
 
     synchronized void addAppOpsForegroundServices(java.util.Map<Integer, AppOpsService.UidState> states) {
@@ -805,8 +866,9 @@ final class ActiveServices {
             r.startRequested = false;
             r.lastStartIntent = null;
         }
+        boolean changed = false;
         for (IntentBindRecord binding : r.bindings.values()) {
-            binding.connections.removeIf(connection -> {
+            changed |= binding.connections.removeIf(connection -> {
                 if (connection.lifetime.getAsBoolean()) return false;
                 List<ConnectionRecord> owned = mConnections.get(connection.conn.asBinder());
                 if (owned != null) {
@@ -816,6 +878,7 @@ final class ActiveServices {
                 return true;
             });
         }
+        if (changed) publishShortcutStateLocked();
     }
 
     private synchronized boolean workCurrent(ServiceRecord r) {
@@ -837,7 +900,9 @@ final class ActiveServices {
                 if (!workCurrent(r) || r.bringingUp || r.app != null && r.app != app) return;
                 r.app = app;
                 r.bringingUp = true;
+                publishShortcutStateLocked();
             }
+            mAtm.noteShortcutForeground(null, 0);
             boolean release = true;
             try {
                 for (;;) {
@@ -944,9 +1009,11 @@ final class ActiveServices {
                     if (l != null) l.remove(c);
                 }
             }
+            publishShortcutStateLocked();
         }
         // Removing the service also removes its foreground capabilities even if
         // another service or an activity keeps the process alive.
+        mAtm.noteShortcutForeground(null, 0);
         mPm.appOps().requestUidStateRefresh();
         synchronized (this) { clearStartGrants(r, Integer.MAX_VALUE); }
         if (r.foregroundId != 0) mNotifications.cancel(r.info.packageName, null, r.foregroundId);
@@ -1023,6 +1090,7 @@ final class ActiveServices {
             e.getValue().removeIf(c -> c.binding.service.app == app);
             return e.getValue().isEmpty();
         });
+        publishShortcutStateLocked();
     }
 
     /** Explicit force-stop/uninstall also cancels a service waiting for its retry timer. */
@@ -1066,7 +1134,9 @@ final class ActiveServices {
                 }
                 stopped.add(r);
             }
+            publishShortcutStateLocked();
         }
+        mAtm.noteShortcutForeground(null, 0);
         for (ConnectionRecord c : disconnected) connected(c, null, disabled);
         for (ServiceRecord r : stopped) maybeBringDown(r);
     }
@@ -1154,6 +1224,7 @@ final class ActiveServices {
                 }
             }
         }
+        synchronized (this) { publishShortcutStateLocked(); }
         for (ConnectionRecord c : disconnected) connected(c, null);
         for (ServiceRecord r : reconsider) {
             drainBindingCalls(r);

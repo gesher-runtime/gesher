@@ -25,6 +25,14 @@ public final class CallerIdentity {
     public int callerPid() { return Binder.getCallingPid(); }
     public int callerUid() { return Binder.getCallingUid(); }
 
+    void attachShortcuts(DesktopShortcutService shortcuts) {
+        if (mAtm != null) mAtm.attachShortcuts(shortcuts);
+    }
+
+    boolean shortcutForeground(int uid) {
+        return uid == Process.SYSTEM_UID || mAtm != null && mAtm.shortcutForeground(uid);
+    }
+
     public String packageForPid(int pid) {
         return mAtm == null ? null : mAtm.authenticatedPackageForPid(pid);
     }

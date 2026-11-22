@@ -1,31 +1,60 @@
 /* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
 package com.gesher.server;
 
+import android.Manifest;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.pm.IShortcutService;
+import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import com.gesher.app.shell.AppShell;
+import com.gesher.app.locale.SystemLocale;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /** Package-authenticated dynamic shortcuts, persisted with their publisher identity. */
 class DesktopShortcutService extends IShortcutService.Default {
     private static final int MAX_SHORTCUTS = 15;
     private final PackageManagerService mPackages;
     private final CallerIdentity mCallers;
+    private final ShortcutQuota mQuota;
 
     DesktopShortcutService(PackageManagerService packages) { this(packages, new CallerIdentity(packages, null)); }
     DesktopShortcutService(PackageManagerService packages, CallerIdentity callers) {
-        mPackages = packages; mCallers = callers;
-        packages.onPackageRemoval(this::retire);
+        this(packages, callers, packages.hasTransientPackageState() ? null
+                : Path.of(Device.dataDir(), "system", "shortcut-quota.bin"),
+                System::currentTimeMillis, () -> SystemLocale.locales().toLanguageTags());
     }
+    DesktopShortcutService(PackageManagerService packages, CallerIdentity callers, Path quotaFile,
+            LongSupplier clock, Supplier<String> locales) {
+        mPackages = packages; mCallers = callers;
+        mQuota = new ShortcutQuota(packages, quotaFile, clock, locales);
+        packages.onPackageRemoval(this::retire);
+        packages.onPackageEvent(event -> {
+            if (Intent.ACTION_PACKAGE_REMOVED.equals(event.getAction())
+                    && !event.getBooleanExtra(Intent.EXTRA_REPLACING, false)
+                    && event.getData() != null) {
+                String name = event.getData().getSchemeSpecificPart();
+                // A delayed removal event must not erase a newly installed lifetime.
+                if (mPackages.get(name) == null) mQuota.removed(name);
+            }
+        });
+        callers.attachShortcuts(this);
+    }
+    void noteForeground(ApkPackage owner) {
+        if (owner != null && mPackages.get(owner.packageName) == owner
+                && !mPackages.isRemovalPending(owner.packageName)) mQuota.foreground(owner.uid());
+    }
+    boolean flushQuota() { return mQuota.flush(); }
     private synchronized void retire(String pkg) { AppShell.removeAllDynamicShortcuts(pkg); }
     private ApkPackage query(String pkg, int userId) {
         if (userId != 0) throw new IllegalArgumentException("Unknown shortcut user");
@@ -59,19 +88,36 @@ class DesktopShortcutService extends IShortcutService.Default {
         if (intents != null) copy.setIntents(intents);
         return copy;
     }
-    private List<ShortcutInfo> validated(String pkg, ParceledListSlice values) {
-        return validated(pkg, values, false);
-    }
-    private List<ShortcutInfo> validated(String pkg, ParceledListSlice values, boolean forUpdate) {
+    /** Publisher identity and count errors precede throttling, as in ShortcutService. */
+    private List<ShortcutInfo> incoming(String pkg, ParceledListSlice values) {
         Objects.requireNonNull(values, "shortcuts");
         List<?> list = Objects.requireNonNull(values.getList(), "shortcut list");
         if (list.size() > MAX_SHORTCUTS) throw new IllegalArgumentException("Too many dynamic shortcuts");
         List<ShortcutInfo> result = new ArrayList<>();
         for (Object value : list) {
+            Objects.requireNonNull(value, "shortcut");
             if (!(value instanceof ShortcutInfo)) throw new IllegalArgumentException("Invalid shortcut entry");
-            result.add(validated(pkg, (ShortcutInfo)value, forUpdate));
+            ShortcutInfo info = (ShortcutInfo) value;
+            if (!pkg.equals(info.getPackage()) || info.getUserId() != 0) {
+                throw new SecurityException("Shortcut publisher mismatch");
+            }
+            result.add(info);
         }
         return result;
+    }
+    private boolean permission(String permission) {
+        return mCallers.callerUid() == android.os.Process.SYSTEM_UID
+                || mCallers.callerUid() == android.os.Process.ROOT_UID
+                || mPackages.permissions().checkProcessPermission(permission,
+                        mCallers.callerPid(), mCallers.callerUid()) == PackageManager.PERMISSION_GRANTED;
+    }
+    private int quota(ApkPackage owner, boolean take) {
+        boolean unlimited = permission(Manifest.permission.UNLIMITED_SHORTCUTS_API_CALLS);
+        boolean foreground = mCallers.shortcutForeground(owner.uid());
+        if (mPackages.get(owner.packageName) != owner || mPackages.isRemovalPending(owner.packageName)) {
+            throw new SecurityException("Shortcut publisher changed");
+        }
+        return mQuota.access(owner, foreground, unlimited, take);
     }
     private boolean publish(ApkPackage owner, Map<String,ShortcutInfo> snapshot) {
         if (snapshot.size() > MAX_SHORTCUTS) throw new IllegalArgumentException("Too many dynamic shortcuts");
@@ -102,24 +148,41 @@ class DesktopShortcutService extends IShortcutService.Default {
     }
     @Override public boolean hasShareTargets(String caller,String pkg,int userId) { query(caller,userId); return false; }
     @Override public int getMaxShortcutCountPerActivity(String pkg,int userId) { query(pkg,userId); return MAX_SHORTCUTS; }
-    @Override public int getRemainingCallCount(String pkg,int userId) { query(pkg,userId); return Integer.MAX_VALUE; }
-    @Override public long getRateLimitResetTime(String pkg,int userId) { query(pkg,userId); return 0; }
+    @Override public synchronized int getRemainingCallCount(String pkg,int userId) {
+        return quota(query(pkg,userId), false);
+    }
+    @Override public long getRateLimitResetTime(String pkg,int userId) {
+        query(pkg,userId); return mQuota.nextReset();
+    }
     @Override public int getIconMaxDimensions(String pkg,int userId) { query(pkg,userId); return 256; }
     @Override public synchronized boolean setDynamicShortcuts(String pkg,ParceledListSlice values,int userId) {
-        ApkPackage owner=query(pkg,userId); LinkedHashMap<String,ShortcutInfo> next=new LinkedHashMap<>();
-        for (ShortcutInfo info:validated(pkg,values)) next.put(info.getId(),info);
+        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=incoming(pkg,values);
+        if (quota(owner,true) == 0) return false;
+        LinkedHashMap<String,ShortcutInfo> next=new LinkedHashMap<>();
+        for (ShortcutInfo source:incoming) {
+            ShortcutInfo info=validated(pkg,source); next.put(info.getId(),info);
+        }
         return publish(owner,next);
     }
     @Override public synchronized boolean addDynamicShortcuts(String pkg,ParceledListSlice values,int userId) {
-        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=validated(pkg,values);
+        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=incoming(pkg,values);
         LinkedHashMap<String,ShortcutInfo> next=load(owner);
-        for (ShortcutInfo info:incoming) next.put(info.getId(),info);
+        java.util.Set<String> ids=new java.util.HashSet<>(next.keySet());
+        for (ShortcutInfo info:incoming) ids.add(info.getId());
+        if (ids.size()>MAX_SHORTCUTS) throw new IllegalArgumentException("Too many dynamic shortcuts");
+        if (quota(owner,true) == 0) return false;
+        for (ShortcutInfo source:incoming) {
+            ShortcutInfo info=validated(pkg,source); next.put(info.getId(),info);
+        }
         return publish(owner,next);
     }
     @Override public synchronized boolean updateShortcuts(String pkg,ParceledListSlice values,int userId) {
-        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=validated(pkg,values,true);
+        ApkPackage owner=query(pkg,userId); List<ShortcutInfo> incoming=incoming(pkg,values);
         LinkedHashMap<String,ShortcutInfo> next=load(owner);
-        for (ShortcutInfo info:incoming) {
+        if (quota(owner,true) == 0) return false;
+        List<ShortcutInfo> checked=new ArrayList<>(incoming.size());
+        for (ShortcutInfo source:incoming) checked.add(validated(pkg,source,true));
+        for (ShortcutInfo info:checked) {
             ShortcutInfo target=next.get(info.getId());
             if(target!=null) {
                 // The loaded snapshot is detached from stored state. Android's
@@ -162,8 +225,22 @@ class DesktopShortcutService extends IShortcutService.Default {
     @Override public void enableShortcuts(String pkg,List<String> ids,int userId) { enabled(pkg,ids,userId,true); }
     @Override public void reportShortcutUsed(String pkg,String id,int userId) { query(pkg,userId);Objects.requireNonNull(id,"shortcutId"); }
     private static SecurityException administrationDenied() { return new SecurityException("Shortcut administration requires host authority"); }
-    @Override public void resetThrottling() { throw administrationDenied(); }
-    @Override public void onApplicationActive(String pkg,int userId) { throw administrationDenied(); }
+    @Override public synchronized void resetThrottling() {
+        int uid=mCallers.callerUid();
+        if (uid != android.os.Process.SYSTEM_UID && uid != android.os.Process.SHELL_UID
+                && uid != android.os.Process.ROOT_UID) {
+            throw administrationDenied();
+        }
+        mQuota.reset(null);
+    }
+    @Override public void onApplicationActive(String pkg,int userId) {
+        if (!permission(Manifest.permission.RESET_SHORTCUT_MANAGER_THROTTLING)) throw administrationDenied();
+        if (userId != 0) throw new IllegalArgumentException("Unknown shortcut user");
+        Objects.requireNonNull(pkg,"packageName");
+        synchronized (this) { mQuota.reset(pkg); }
+        // The privileged explicit reset is a durability boundary, outside controller locks.
+        mQuota.flush();
+    }
     @Override public byte[] getBackupPayload(int userId) { throw administrationDenied(); }
     @Override public void applyRestore(byte[] payload,int userId) { throw administrationDenied(); }
 }
