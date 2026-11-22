@@ -1,0 +1,705 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// The complete production inotify translation unit and actual disk-write entry
+// run below. Only Windows transport/handles, path conversion and the virtual
+// descriptor registry are adapters. File contents, hard links, replacements and
+// inode identities use the real host filesystem. Native completion callbacks
+// are explicitly controlled; this is not a Windows directory-watcher emulator.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwctype>
+#include <fcntl.h>
+#include <limits>
+#include <map>
+#include <memory>
+#include <new>
+#include <poll.h>
+#include <string>
+#include <sys/inotify.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+static int checked, failed;
+static void route_check(const char* label, bool ok) {
+  ++checked;
+  if (!ok) { ++failed; std::printf("FAIL %s (errno=%d)\n", label, errno); }
+}
+struct WorkCounters {
+  uint64_t allocations = 0, bytes = 0, paths = 0, identities = 0;
+  uint64_t comparisons = 0, issues = 0, wakes = 0;
+};
+static WorkCounters work;
+static bool count_allocations;
+[[gnu::noinline]] void* operator new(size_t bytes) {
+  if (count_allocations) { ++work.allocations; work.bytes += bytes; }
+  if (void* p = std::malloc(bytes ? bytes : 1)) return p;
+  std::abort();
+}
+[[gnu::noinline]] void* operator new[](size_t bytes) { return ::operator new(bytes); }
+[[gnu::noinline]] void operator delete(void* p) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete(void* p, size_t) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete[](void* p) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete[](void* p, size_t) noexcept { std::free(p); }
+
+using DWORD = uint32_t;
+using BOOL = int;
+using ULONG_PTR = uintptr_t;
+using WCHAR = wchar_t;
+using LPVOID = void*;
+using LPDWORD = DWORD*;
+using PTP_CALLBACK_INSTANCE = void*;
+using TP_WAIT_RESULT = DWORD;
+#define WINAPI
+#define CALLBACK
+constexpr BOOL TRUE = 1, FALSE = 0;
+constexpr DWORD FILE_NOTIFY_CHANGE_FILE_NAME = 1, FILE_NOTIFY_CHANGE_DIR_NAME = 2,
+                FILE_NOTIFY_CHANGE_SIZE = 4, FILE_NOTIFY_CHANGE_LAST_WRITE = 8,
+                FILE_NOTIFY_CHANGE_ATTRIBUTES = 16, FILE_NOTIFY_CHANGE_CREATION = 32,
+                FILE_NOTIFY_CHANGE_SECURITY = 64;
+constexpr DWORD FILE_ACTION_ADDED = 1, FILE_ACTION_REMOVED = 2,
+                FILE_ACTION_MODIFIED = 3, FILE_ACTION_RENAMED_OLD_NAME = 4,
+                FILE_ACTION_RENAMED_NEW_NAME = 5;
+constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16, FILE_ATTRIBUTE_NORMAL = 128,
+                INVALID_FILE_ATTRIBUTES = ~DWORD{0}, FILE_FLAG_BACKUP_SEMANTICS = 0x1000000,
+                FILE_FLAG_OPEN_REPARSE_POINT = 0x200000, FILE_FLAG_OVERLAPPED = 0x40000000;
+constexpr DWORD FILE_READ_ATTRIBUTES = 128, FILE_LIST_DIRECTORY = 1, GENERIC_READ = 0x80000000,
+                FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4, OPEN_EXISTING = 3;
+constexpr DWORD FILE_NAME_NORMALIZED = 0, VOLUME_NAME_DOS = 0, FILE_TYPE_DISK = 1;
+constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258, INFINITE = ~DWORD{0}, MAXDWORD = ~DWORD{0};
+constexpr DWORD ERROR_SUCCESS = 0, ERROR_FILE_NOT_FOUND = ENOENT, ERROR_PATH_NOT_FOUND = ENOTDIR,
+                ERROR_DELETE_PENDING = 303, ERROR_SHARING_VIOLATION = EBUSY,
+                ERROR_LOCK_VIOLATION = EDEADLK, ERROR_OPERATION_ABORTED = ECANCELED,
+                ERROR_IO_PENDING = EINPROGRESS, ERROR_ACCESS_DENIED = EACCES,
+                ERROR_HANDLE_EOF = 38, ERROR_BROKEN_PIPE = EPIPE,
+                ERROR_NOACCESS = EFAULT, ERROR_INVALID_USER_BUFFER = 1784;
+constexpr int CSTR_LESS_THAN = 1, CSTR_EQUAL = 2, CSTR_GREATER_THAN = 3;
+struct LARGE_INTEGER { int64_t QuadPart; };
+struct FILETIME { DWORD low, high; };
+struct BY_HANDLE_FILE_INFORMATION {
+  DWORD dwFileAttributes, dwVolumeSerialNumber, nFileIndexHigh, nFileIndexLow;
+};
+struct FILE_STANDARD_INFO { unsigned long NumberOfLinks; bool DeletePending; };
+constexpr int FileStandardInfo = 1;
+struct FILE_NOTIFY_INFORMATION {
+  DWORD NextEntryOffset, Action, FileNameLength;
+  WCHAR FileName[1];
+};
+struct NativeHandle;
+using HANDLE = NativeHandle*;
+const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t{-1});
+struct OVERLAPPED { DWORD Offset, OffsetHigh; HANDLE hEvent; };
+using LPOVERLAPPED = OVERLAPPED*;
+using LPOVERLAPPED_COMPLETION_ROUTINE = void(*)(DWORD, DWORD, OVERLAPPED*);
+struct NativeHandle {
+  enum Kind { file, event, port } kind;
+  int fd = -1;
+  bool signaled = false, canceled = false;
+  DWORD completion_bytes = 0;
+  bool completion_ok = true;
+  int repeat_completion = 0;
+  explicit NativeHandle(Kind type, int descriptor = -1) : kind(type), fd(descriptor) {}
+};
+struct NativeWait {};
+using PTP_WAIT = NativeWait*;
+using WaitCallback = void(*)(PTP_CALLBACK_INSTANCE, void*, PTP_WAIT, TP_WAIT_RESULT);
+static thread_local DWORD last_error;
+static bool zero_identity, fail_identity, fail_path, fail_issue;
+static size_t live_handles, live_waits;
+static std::map<int, HANDLE> native_files;
+static DWORD GetLastError() { return last_error; }
+static void SetLastError(DWORD error) { last_error = error; }
+
+static std::string NativePath(const wchar_t* path) {
+  std::string result;
+  for (; *path; ++path) result.push_back(*path == L'\\' ? '/' : static_cast<char>(*path));
+  return result;
+}
+static HANDLE CreateFileW(const wchar_t* path, DWORD, DWORD, void*, DWORD, DWORD flags, HANDLE) {
+  int options = O_RDONLY | O_CLOEXEC;
+  if ((flags & FILE_FLAG_OPEN_REPARSE_POINT) != 0) options = O_PATH | O_NOFOLLOW | O_CLOEXEC;
+  int fd = ::open(NativePath(path).c_str(), options);
+  if (fd < 0) { last_error = errno; return INVALID_HANDLE_VALUE; }
+  ++live_handles;
+  return new NativeHandle(NativeHandle::file, fd);
+}
+static BOOL CloseHandle(HANDLE handle) {
+  if (!handle || handle == INVALID_HANDLE_VALUE) return FALSE;
+  if (handle->kind == NativeHandle::file) ::close(handle->fd);
+  delete handle; --live_handles; return TRUE;
+}
+static BOOL GetFileInformationByHandle(HANDLE handle, BY_HANDLE_FILE_INFORMATION* out) {
+  ++work.identities;
+  struct stat st{};
+  if (fail_identity || !handle || handle == INVALID_HANDLE_VALUE || handle->kind != NativeHandle::file ||
+      fstat(handle->fd, &st) != 0) { last_error = EIO; return FALSE; }
+  uint64_t id = zero_identity && !S_ISDIR(st.st_mode) ? 0 : static_cast<uint64_t>(st.st_ino);
+  *out = {S_ISDIR(st.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
+          static_cast<DWORD>(st.st_dev), static_cast<DWORD>(id >> 32), static_cast<DWORD>(id)};
+  return TRUE;
+}
+static BOOL GetFileInformationByHandleEx(HANDLE handle, int, void* raw, DWORD) {
+  struct stat st{};
+  if (fstat(handle->fd, &st) != 0) return FALSE;
+  *static_cast<FILE_STANDARD_INFO*>(raw) = {st.st_nlink, st.st_nlink == 0};
+  return TRUE;
+}
+static DWORD GetFileType(HANDLE handle) {
+  return handle && handle != INVALID_HANDLE_VALUE && handle->kind == NativeHandle::file ? FILE_TYPE_DISK : 0;
+}
+static DWORD GetFinalPathNameByHandleW(HANDLE handle, wchar_t* out, DWORD capacity, DWORD) {
+  ++work.paths;
+  if (fail_path) { last_error = EIO; return 0; }
+  char name[64], path[32768];
+  std::snprintf(name, sizeof(name), "/proc/self/fd/%d", handle->fd);
+  ssize_t bytes = ::readlink(name, path, sizeof(path));
+  if (bytes < 0) { last_error = errno; return 0; }
+  if (static_cast<size_t>(bytes) >= capacity) return static_cast<DWORD>(bytes + 1);
+  for (ssize_t i = 0; i < bytes; ++i) out[i] = path[i] == '/' ? L'\\' : static_cast<unsigned char>(path[i]);
+  out[bytes] = 0;
+  return static_cast<DWORD>(bytes);
+}
+static DWORD GetFileAttributesW(const wchar_t* path) {
+  struct stat st{};
+  if (::stat(NativePath(path).c_str(), &st) != 0) return INVALID_FILE_ATTRIBUTES;
+  return S_ISDIR(st.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+}
+static int CompareStringOrdinal(const wchar_t* a, int, const wchar_t* b, int, BOOL ignore_case) {
+  ++work.comparisons;
+  for (;;) {
+    wchar_t x = *a++, y = *b++;
+    if (ignore_case) { x = std::towlower(x); y = std::towlower(y); }
+    if (x != y) return x < y ? CSTR_LESS_THAN : CSTR_GREATER_THAN;
+    if (!x) return CSTR_EQUAL;
+  }
+}
+static HANDLE CreateEventW(void*, BOOL, BOOL initial, void*) {
+  auto* event = new NativeHandle(NativeHandle::event);
+  event->signaled = initial != 0; ++live_handles; return event;
+}
+static BOOL SetEvent(HANDLE handle) { handle->signaled = true; return TRUE; }
+static BOOL ResetEvent(HANDLE handle) { handle->signaled = false; return TRUE; }
+static DWORD WaitForSingleObject(HANDLE handle, DWORD) {
+  return handle && handle->signaled ? WAIT_OBJECT_0 : WAIT_TIMEOUT;
+}
+static PTP_WAIT CreateThreadpoolWait(WaitCallback, void*, void*) { ++live_waits; return new NativeWait; }
+static void SetThreadpoolWait(PTP_WAIT, HANDLE, void*) {}
+static void WaitForThreadpoolWaitCallbacks(PTP_WAIT, BOOL) {}
+static void CloseThreadpoolWait(PTP_WAIT wait) { delete wait; --live_waits; }
+static BOOL CancelIoEx(HANDLE handle, OVERLAPPED*) { handle->canceled = true; return TRUE; }
+static BOOL GetOverlappedResult(HANDLE handle, OVERLAPPED*, DWORD* bytes, BOOL) {
+  *bytes = handle->completion_bytes;
+  if (handle->repeat_completion > 0) --handle->repeat_completion;
+  if (handle->canceled) { last_error = ERROR_OPERATION_ABORTED; return FALSE; }
+  return handle->completion_ok;
+}
+static BOOL ReadDirectoryChangesW(HANDLE handle, void*, DWORD, BOOL, DWORD, DWORD*,
+                                  OVERLAPPED* operation, LPOVERLAPPED_COMPLETION_ROUTINE) {
+  ++work.issues;
+  if (fail_issue) { last_error = EIO; return FALSE; }
+  handle->canceled = false;
+  if (handle->repeat_completion > 0 && operation->hEvent) SetEvent(operation->hEvent);
+  return TRUE;
+}
+static BOOL ReadDirectoryChangesExW(HANDLE handle, void* buffer, DWORD size, BOOL subtree, DWORD filter,
+                                   DWORD* bytes, OVERLAPPED* ov, LPOVERLAPPED_COMPLETION_ROUTINE callback, int) {
+  return ReadDirectoryChangesW(handle, buffer, size, subtree, filter, bytes, ov, callback);
+}
+static void* GetModuleHandleW(const wchar_t*) { return reinterpret_cast<void*>(uintptr_t{1}); }
+static void(*GetProcAddress(void*, const char*))() { return reinterpret_cast<void(*)()>(ReadDirectoryChangesExW); }
+static HANDLE CreateIoCompletionPort(HANDLE, HANDLE existing, ULONG_PTR, DWORD) {
+  if (existing) return existing;
+  ++live_handles; return new NativeHandle(NativeHandle::port);
+}
+static BOOL PostQueuedCompletionStatus(HANDLE, DWORD, ULONG_PTR, OVERLAPPED*) { ++work.wakes; return TRUE; }
+static BOOL GetQueuedCompletionStatus(HANDLE, DWORD*, ULONG_PTR*, OVERLAPPED**, DWORD) {
+  // The fixture admits the registry directly. Starting this native worker would
+  // require an actual IOCP implementation, which this host does not promise.
+  std::fputs("unexpected native IOCP worker execution\n", stderr); std::abort();
+}
+static BOOL WriteFile(HANDLE handle, const void* bytes, DWORD count, DWORD* written, OVERLAPPED*) {
+  ssize_t result = ::write(handle->fd, bytes, count);
+  if (result < 0) { last_error = errno; return FALSE; }
+  *written = static_cast<DWORD>(result); return TRUE;
+}
+static BOOL ReadFile(HANDLE handle, void* bytes, DWORD count, DWORD* read, OVERLAPPED*) {
+  ssize_t result = ::read(handle->fd, bytes, count);
+  if (result < 0) { last_error = errno; return FALSE; }
+  *read = static_cast<DWORD>(result); return TRUE;
+}
+
+namespace gesher {
+struct EventFd { bool nonblocking = true, readable = false; };
+static std::shared_ptr<EventFd> NewReadiness(bool nonblocking) {
+  auto source = std::make_shared<EventFd>(); source->nonblocking = nonblocking; return source;
+}
+static void SetReadable(EventFd& source, bool readable) { source.readable = readable; }
+static void PublishReadable(EventFd& source, bool readable) { source.readable = readable; }
+static bool IsNonBlocking(EventFd& source) { return source.nonblocking; }
+struct Inotify;
+static std::map<int, std::shared_ptr<Inotify>> observer_registry;
+static int next_observer = 100000;
+static std::shared_ptr<Inotify> LookupInotify(int fd) {
+  auto found = observer_registry.find(fd); return found == observer_registry.end() ? nullptr : found->second;
+}
+static int RegisterInotify(std::shared_ptr<Inotify> source, std::shared_ptr<EventFd>) {
+  int fd = next_observer++; observer_registry.emplace(fd, std::move(source)); return fd;
+}
+static HANDLE HandleFromFd(int fd) {
+  auto found = native_files.find(fd); return found == native_files.end() ? INVALID_HANDLE_VALUE : found->second;
+}
+static int ErrnoFromWin32(DWORD error) { return error == ERROR_NOACCESS ? EFAULT : static_cast<int>(error); }
+static int FailWithLastError() { errno = ErrnoFromWin32(GetLastError()); return -1; }
+static std::string Narrow(const wchar_t* input) {
+  std::string result; for (; *input; ++input) result.push_back(static_cast<char>(*input)); return result;
+}
+static bool DiskPath(const char* input, std::wstring* result, int) {
+  if (!input) return errno = EFAULT, false;
+  result->clear();
+  for (; *input; ++input) result->push_back(*input == '/' ? L'\\' : static_cast<unsigned char>(*input));
+  return true;
+}
+void InotifyNoteWrite(HANDLE);
+void InotifyNoteWrite(int);
+}
+
+@INOTIFY_SOURCE@
+
+namespace gesher {
+@TRANSFER_FILE_HANDLE@
+}
+
+static int route_init1(int flags) {
+  if ((flags & ~(IN_NONBLOCK | IN_CLOEXEC)) != 0) return errno = EINVAL, -1;
+  auto source = std::make_shared<gesher::Inotify>();
+  source->ready = gesher::NewReadiness((flags & IN_NONBLOCK) != 0);
+  source->port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 1);
+  {
+    std::lock_guard<std::mutex> lock(gesher::g_live_mutex);
+    gesher::g_live.push_back(source.get()); ++gesher::g_live_count;
+  }
+  auto ready = source->ready;
+  return gesher::RegisterInotify(std::move(source), std::move(ready));
+}
+static int route_open(const char* path, int flags, mode_t mode = 0) {
+  int fd = ::open(path, flags, mode);
+  if (fd >= 0) { native_files.emplace(fd, new NativeHandle(NativeHandle::file, fd)); ++live_handles; }
+  return fd;
+}
+static int route_close(int fd) {
+  if (gesher::observer_registry.erase(fd)) return 0;
+  auto found = native_files.find(fd);
+  if (found == native_files.end()) return errno = EBADF, -1;
+  CloseHandle(found->second); native_files.erase(found); return 0;
+}
+static ssize_t route_write(int fd, const void* data, size_t count) {
+  HANDLE handle = gesher::HandleFromFd(fd);
+  if (handle == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  return gesher::TransferFileHandle(handle, const_cast<void*>(data), static_cast<unsigned>(count), true, false);
+}
+static ssize_t route_read(int fd, void* data, size_t count) {
+  if (auto source = gesher::LookupInotify(fd)) return gesher::ReadInotify(*source, data, static_cast<unsigned>(count));
+  return ::read(fd, data, count);
+}
+static int route_poll(pollfd* descriptors, nfds_t count, int) {
+  int result = 0;
+  for (size_t i = 0; i < count; ++i) {
+    auto source = gesher::LookupInotify(descriptors[i].fd);
+    descriptors[i].revents = source ? (source->ready->readable ? descriptors[i].events & POLLIN : 0) : POLLNVAL;
+    if (descriptors[i].revents) ++result;
+  }
+  return result;
+}
+
+#define inotify_init1 route_init1
+#define open route_open
+#define close route_close
+#define write route_write
+#define read route_read
+#define poll route_poll
+#include "inotify_write_routing_test.inc"
+#undef poll
+#undef read
+#undef write
+#undef close
+#undef open
+#undef inotify_init1
+
+#define HAS_ROUTING_INDEX @HAS_ROUTING_INDEX@
+
+static void CheckRoutingIndex(gesher::Inotify& source) {
+#if HAS_ROUTING_INDEX
+  size_t active = 0, files = 0, directories = 0, unknown = 0;
+  for (const auto& [wd, owned] : source.watches) {
+    const auto& watch = *owned;
+    if (watch.removed) continue;
+    ++active;
+    auto it = source.identities.find({watch.volume, watch.index});
+    route_check("routing identity names the actual active watch", it != source.identities.end() && it->second == wd);
+    if (watch.file.empty()) ++directories;
+    else { ++files; if (watch.index == 0) ++unknown; }
+  }
+  route_check("routing index excludes all retired watches", source.identities.size() == active);
+  route_check("routing file census follows owned watches", source.file_watches == files);
+  route_check("routing directory index follows owned watches", source.directories.size() == directories);
+  route_check("routing fallback index follows unknown identities", source.unidentified_files.size() == unknown);
+#else
+  (void)source;
+#endif
+}
+
+struct RouteRecord { DWORD action; std::wstring name; unsigned long long identity; };
+static void QueueRecords(gesher::Watch& watch, std::initializer_list<RouteRecord> records, int repeat = 1) {
+  size_t used = 0, number = 0;
+  for (const auto& record : records) {
+    const size_t header = watch.extended ? offsetof(gesher::NotifyExtended, name)
+                                         : offsetof(FILE_NOTIFY_INFORMATION, FileName);
+    const size_t size = (header + record.name.size() * sizeof(WCHAR) + 3) & ~size_t{3};
+    if (used + size > gesher::kBufferSize) std::abort();
+    DWORD next = ++number == records.size() ? 0 : static_cast<DWORD>(size);
+    auto* output = reinterpret_cast<unsigned char*>(watch.buffer.data()) + used;
+    if (watch.extended) {
+      gesher::NotifyExtended raw{};
+      raw.next = next; raw.action = record.action; raw.file_id.QuadPart = record.identity;
+      raw.name_length = static_cast<DWORD>(record.name.size() * sizeof(WCHAR));
+      memcpy(output, &raw, header);
+    } else {
+      FILE_NOTIFY_INFORMATION raw{next, record.action, static_cast<DWORD>(record.name.size() * sizeof(WCHAR)), {0}};
+      memcpy(output, &raw, header);
+    }
+    memcpy(output + header, record.name.data(), record.name.size() * sizeof(WCHAR));
+    used += size;
+  }
+  watch.handle->completion_bytes = static_cast<DWORD>(used);
+  watch.handle->completion_ok = true;
+  watch.handle->repeat_completion = repeat;
+  SetEvent(watch.event);
+}
+
+static std::vector<RoutingEvent> InternalRead(int fd) {
+  std::vector<RoutingEvent> events;
+  alignas(inotify_event) char bytes[4096];
+  ssize_t count = route_read(fd, bytes, sizeof(bytes));
+  for (size_t p = 0; count > 0 && p + sizeof(inotify_event) <= static_cast<size_t>(count);) {
+    inotify_event e; memcpy(&e, bytes + p, sizeof(e));
+    if (sizeof(e) + e.len > static_cast<size_t>(count) - p) std::abort();
+    events.push_back({e.wd, e.mask, e.len ? bytes + p + sizeof(e) : ""});
+    p += sizeof(e) + e.len;
+  }
+  return events;
+}
+
+static void RoutingInternalContracts(const std::string& root) {
+  const std::string path = root + "/internal", other = root + "/unwatched", renamed = root + "/renamed";
+  int writer = route_open(path.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600);
+  int unrelated = route_open(other.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600);
+  route_check("routing internal real files", writer >= 0 && unrelated >= 0);
+  int fd = route_init1(IN_NONBLOCK);
+  auto source = gesher::LookupInotify(fd);
+  size_t handles = live_handles, waits = live_waits;
+  fail_issue = true;
+  route_check("routing failed read admission is explicit", inotify_add_watch(fd, path.c_str(), IN_MODIFY) == -1);
+  fail_issue = false;
+  route_check("routing failed admission retains no handles", live_handles == handles && live_waits == waits);
+  route_check("routing failed admission retains no watch", source->watches.empty());
+  CheckRoutingIndex(*source);
+  fail_identity = true;
+  route_check("routing unavailable identity rejects admission", inotify_add_watch(fd, path.c_str(), IN_MODIFY) == -1);
+  fail_identity = false;
+  fail_path = true;
+  route_check("routing unavailable watch path rejects admission", inotify_add_watch(fd, path.c_str(), IN_MODIFY) == -1);
+  fail_path = false;
+  route_check("routing admission errors retain no handles", live_handles == handles && live_waits == waits);
+  int wd = inotify_add_watch(fd, path.c_str(), IN_MODIFY);
+  route_check("routing valid admission after failures", wd > 0);
+  CheckRoutingIndex(*source);
+  fail_path = true;
+  route_check("routing known inode write does not require a name", route_write(writer, "a", 1) == 1 &&
+              RoutingHas(InternalRead(fd), wd, IN_MODIFY));
+  fail_path = false;
+  fail_identity = true;
+  route_check("routing unavailable write identity is not guessed", route_write(writer, "b", 1) == 1 && InternalRead(fd).empty());
+  fail_identity = false;
+  route_check("routing fresh actual identity works", route_write(writer, "c", 1) == 1 &&
+              RoutingHas(InternalRead(fd), wd, IN_MODIFY));
+  source.reset(); route_close(fd);
+
+  // A volume reporting no file ID still follows the preceding path fallback.
+  zero_identity = true;
+  fd = route_init1(IN_NONBLOCK); source = gesher::LookupInotify(fd);
+  wd = inotify_add_watch(fd, path.c_str(), IN_MODIFY);
+  route_check("routing unknown-id watch admission", wd > 0);
+  route_check("routing unknown-id same-name fallback", route_write(writer, "d", 1) == 1 &&
+              RoutingHas(InternalRead(fd), wd, IN_MODIFY));
+  route_check("routing unknown-id distinct name excluded", route_write(unrelated, "e", 1) == 1 && InternalRead(fd).empty());
+  CheckRoutingIndex(*source);
+  route_check("routing unknown-id watch retires", inotify_rm_watch(fd, wd) == 0);
+  CheckRoutingIndex(*source);
+  source.reset(); route_close(fd); zero_identity = false;
+
+  // Native records completed before the local write must be drained first.
+  // Test both extended IDs and the real name+identity fallback for basic data.
+  for (bool extended : {false, true}) {
+    fd = route_init1(IN_NONBLOCK); source = gesher::LookupInotify(fd);
+    wd = inotify_add_watch(fd, path.c_str(), IN_MOVE_SELF | IN_MODIFY);
+    auto& watch = *source->watches.at(wd); watch.extended = extended;
+    route_check("routing native-rename real filesystem change", ::rename(path.c_str(), renamed.c_str()) == 0);
+    QueueRecords(watch, {{FILE_ACTION_RENAMED_OLD_NAME, L"internal", watch.index},
+                         {FILE_ACTION_RENAMED_NEW_NAME, L"renamed", watch.index}});
+    route_check("routing write after queued rename", route_write(writer, "f", 1) == 1);
+    auto events = InternalRead(fd);
+    route_check("routing native rename precedes actual write", events.size() == 2 &&
+                events[0].wd == wd && events[0].mask == IN_MOVE_SELF &&
+                events[1].wd == wd && events[1].mask == IN_MODIFY);
+    route_check("routing actual record drain updates file name", watch.file == L"renamed" && !watch.awaiting_rename);
+    CheckRoutingIndex(*source);
+    source.reset(); route_close(fd);
+    route_check("routing restore native-rename file", ::rename(renamed.c_str(), path.c_str()) == 0);
+  }
+
+  fd = route_init1(IN_NONBLOCK); source = gesher::LookupInotify(fd);
+  wd = inotify_add_watch(fd, path.c_str(), IN_MOVE_SELF | IN_MODIFY | IN_ONESHOT);
+  auto& once = *source->watches.at(wd);
+  QueueRecords(once, {{FILE_ACTION_RENAMED_OLD_NAME, L"internal", once.index}});
+  route_check("routing native oneshot admits underlying write", route_write(writer, "g", 1) == 1);
+  auto events = InternalRead(fd);
+  route_check("routing native oneshot ends before local publication", events.size() == 2 &&
+              events[0].mask == IN_MOVE_SELF && events[1].mask == IN_IGNORED);
+  route_check("routing drained retired watch storage released", source->watches.empty());
+  CheckRoutingIndex(*source);
+  int later = inotify_add_watch(fd, path.c_str(), IN_MODIFY);
+  route_check("routing re-add after native retirement", later > 0 && later != wd);
+  route_check("routing replacement native watch receives write", route_write(writer, "h", 1) == 1 &&
+              RoutingHas(InternalRead(fd), later, IN_MODIFY));
+  source.reset(); route_close(fd);
+
+  fd = route_init1(IN_NONBLOCK); source = gesher::LookupInotify(fd);
+  wd = inotify_add_watch(fd, path.c_str(), IN_MODIFY);
+  auto& bounded = *source->watches.at(wd);
+  QueueRecords(bounded, {{FILE_ACTION_ADDED, L"irrelevant", 0}}, 65);
+  uint64_t before = work.issues;
+  route_check("routing bounded drain write succeeds", route_write(writer, "i", 1) == 1);
+  events = InternalRead(fd);
+  route_check("routing bounded drain reports actual event loss", events.size() == 1 &&
+              events[0].wd == -1 && events[0].mask == IN_Q_OVERFLOW);
+  route_check("routing drain cap remains 64 native reads", work.issues - before == 64);
+  bounded.handle->repeat_completion = 0; ResetEvent(bounded.event);
+  route_check("routing recovers after bounded drain", route_write(writer, "j", 1) == 1 &&
+              RoutingHas(InternalRead(fd), wd, IN_MODIFY));
+  QueueRecords(bounded, {{FILE_ACTION_ADDED, L"irrelevant", 0}});
+  fail_issue = true;
+  route_check("routing rearm failure leaves write result intact", route_write(writer, "k", 1) == 1);
+  fail_issue = false;
+  events = InternalRead(fd);
+  route_check("routing rearm failure retires before local modify", events.size() == 1 &&
+              events[0].wd == wd && events[0].mask == IN_IGNORED);
+  route_check("routing rearm failure releases retired watch", source->watches.empty());
+  CheckRoutingIndex(*source);
+  source.reset(); route_close(fd);
+
+  // Removal retains a pending canceled read; a late completion of that old
+  // watch must not remove the newly admitted watch for the same file identity.
+  fd = route_init1(IN_NONBLOCK); source = gesher::LookupInotify(fd);
+  wd = inotify_add_watch(fd, path.c_str(), IN_MODIFY);
+  route_check("routing remove with pending native read", inotify_rm_watch(fd, wd) == 0);
+  later = inotify_add_watch(fd, path.c_str(), IN_MODIFY);
+  route_check("routing renewed watch while old read pending", later > wd);
+  source->Complete(*source->watches.at(wd), FALSE, 0);
+  source->watches.erase(wd);
+  InternalRead(fd);
+  CheckRoutingIndex(*source);
+  route_check("routing old completion cannot erase successor identity", route_write(writer, "l", 1) == 1 &&
+              RoutingHas(InternalRead(fd), later, IN_MODIFY));
+  source.reset(); route_close(fd);
+
+  // Equal parent ranges and a file identity are merged in the existing watch
+  // descriptor order. One-shot retirement must not invalidate either range.
+  for (bool unknown : {false, true}) for (bool file_first : {false, true}) {
+    zero_identity = unknown;
+    fd = route_init1(IN_NONBLOCK); source = gesher::LookupInotify(fd);
+    int file_watch, parent_watch;
+    auto add_file = [&] { return inotify_add_watch(fd, path.c_str(), IN_MODIFY | IN_ONESHOT); };
+    auto add_parent = [&] { return inotify_add_watch(fd, root.c_str(), IN_MODIFY | IN_ONESHOT); };
+    if (file_first) { file_watch = add_file(); parent_watch = add_parent(); }
+    else { parent_watch = add_parent(); file_watch = add_file(); }
+    route_check("routing mixed ordered admission", file_watch > 0 && parent_watch > 0 && file_watch != parent_watch);
+    CheckRoutingIndex(*source);
+    route_check("routing ordered oneshot write", route_write(writer, "m", 1) == 1);
+    events = InternalRead(fd);
+    const int first = std::min(file_watch, parent_watch), second = std::max(file_watch, parent_watch);
+    route_check("routing ordered file and parent events", events.size() == 4 &&
+                events[0].wd == first && events[0].mask == IN_MODIFY &&
+                events[1].wd == first && events[1].mask == IN_IGNORED &&
+                events[2].wd == second && events[2].mask == IN_MODIFY &&
+                events[3].wd == second && events[3].mask == IN_IGNORED);
+    route_check("routing file and directory preserve name shapes", RoutingHas(events, file_watch, IN_MODIFY) &&
+                RoutingHas(events, parent_watch, IN_MODIFY, "internal"));
+    CheckRoutingIndex(*source);
+    source.reset(); route_close(fd); zero_identity = false;
+  }
+
+  fd = route_init1(IN_NONBLOCK); source = gesher::LookupInotify(fd);
+  wd = inotify_add_watch(fd, path.c_str(), IN_MODIFY);
+  int directory_watch = inotify_add_watch(fd, root.c_str(), IN_MODIFY);
+  route_check("routing replaced mask keeps identity", inotify_add_watch(fd, path.c_str(), IN_ATTRIB) == wd);
+  route_check("routing replaced mask write", route_write(writer, "n", 1) == 1);
+  events = InternalRead(fd);
+  route_check("routing masked file does not hide parent", events.size() == 1 &&
+              RoutingHas(events, directory_watch, IN_MODIFY, "internal"));
+  fail_identity = true;
+  route_check("routing directory names do not require file identity", route_write(writer, "o", 1) == 1 &&
+              RoutingHas(InternalRead(fd), directory_watch, IN_MODIFY, "internal"));
+  fail_identity = false;
+  CheckRoutingIndex(*source);
+  source.reset(); route_close(fd);
+
+  const std::string removed_path = root + "/removed";
+  int removed_file = route_open(removed_path.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  fd = route_init1(IN_NONBLOCK); source = gesher::LookupInotify(fd);
+  wd = inotify_add_watch(fd, removed_path.c_str(), IN_DELETE_SELF | IN_MODIFY);
+  auto& removed_watch = *source->watches.at(wd);
+  route_check("routing actual final link removed", ::unlink(removed_path.c_str()) == 0);
+  QueueRecords(removed_watch, {{FILE_ACTION_REMOVED, L"removed", removed_watch.index}});
+  route_check("routing deleted but open inode write completes", route_write(removed_file, "p", 1) == 1);
+  events = InternalRead(fd);
+  route_check("routing native final unlink retires before publication", events.size() == 2 &&
+              events[0].mask == IN_DELETE_SELF && events[1].mask == IN_IGNORED);
+  route_check("routing final unlink releases native watch", source->watches.empty());
+  CheckRoutingIndex(*source);
+  source.reset(); route_close(fd); route_close(removed_file);
+
+  route_check("routing close internal original", route_close(writer) == 0);
+  route_check("routing close internal unrelated", route_close(unrelated) == 0);
+  route_check("routing unlink internal original", ::unlink(path.c_str()) == 0);
+  route_check("routing unlink internal unrelated", ::unlink(other.c_str()) == 0);
+}
+
+static void PrintWork(const char* operation, size_t watches, size_t calls, int64_t elapsed,
+                      const WorkCounters& count) {
+  std::printf("MEASURE routing %s: watches=%zu calls=%zu allocations=%llu bytes=%llu paths=%llu "
+              "identities=%llu comparisons=%llu issues=%llu wakes=%llu elapsed_ns=%lld\n",
+              operation, watches, calls, static_cast<unsigned long long>(count.allocations),
+              static_cast<unsigned long long>(count.bytes), static_cast<unsigned long long>(count.paths),
+              static_cast<unsigned long long>(count.identities), static_cast<unsigned long long>(count.comparisons),
+              static_cast<unsigned long long>(count.issues), static_cast<unsigned long long>(count.wakes),
+              static_cast<long long>(elapsed));
+}
+
+static void RoutingWork(const std::string& root, bool measure) {
+  const std::vector<size_t> sizes = measure ? std::vector<size_t>{0, 1, 64, 1024} : std::vector<size_t>{0, 64};
+  const size_t calls = measure ? 4096 : 256;
+  const std::string directory = root + "/work";
+  route_check("routing work directory", ::mkdir(directory.c_str(), 0700) == 0);
+  for (size_t size : sizes) {
+    std::vector<std::string> paths;
+    for (size_t i = 0; i <= size; ++i) {
+      paths.push_back(directory + "/file-" + std::to_string(i));
+      int fd = ::open(paths.back().c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+      if (fd < 0) std::abort();
+      ::close(fd);
+    }
+    int miss = route_open(paths.back().c_str(), O_RDWR);
+    int hit = size ? route_open(paths[size - 1].c_str(), O_RDWR) : -1;
+    int fd = route_init1(IN_NONBLOCK);
+    work = {}; count_allocations = true;
+    auto start = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < size; ++i) {
+      if (inotify_add_watch(fd, paths[i].c_str(), IN_MODIFY) <= 0) std::abort();
+    }
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    count_allocations = false;
+    PrintWork("setup", size, size, std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), work);
+    auto run = [&](const char* label, int writer, size_t iterations) {
+      HANDLE handle = gesher::HandleFromFd(writer);
+      work = {}; count_allocations = true;
+      auto from = std::chrono::steady_clock::now();
+      for (size_t i = 0; i < iterations; ++i) gesher::InotifyNoteWrite(handle);
+      auto duration = std::chrono::steady_clock::now() - from;
+      count_allocations = false;
+      PrintWork(label, size, iterations, std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count(), work);
+      return work;
+    };
+    WorkCounters misses = run("unmatched", miss, calls);
+    route_check("routing unmatched work publishes nothing", InternalRead(fd).empty());
+    if (!measure && HAS_ROUTING_INDEX) {
+      route_check("routing unmatched work needs no pathname", misses.paths == 0);
+      route_check("routing unmatched work allocates nothing", misses.allocations == 0 && misses.bytes == 0);
+      route_check("routing file census avoids idle identity query", misses.identities == (size ? calls : 0));
+      route_check("routing file lookup does not scan names", misses.comparisons == 0);
+    }
+    if (size) {
+      run("cold-matched", hit, 1);
+      WorkCounters warm = run("warm-matched", hit, calls);
+      route_check("routing repeated matched work coalesces", InternalRead(fd).size() == 1);
+      if (!measure && HAS_ROUTING_INDEX) {
+        route_check("routing matched work needs no pathname", warm.paths == 0);
+        route_check("routing matched work does not scan names", warm.comparisons == 0);
+      }
+    }
+    route_close(fd); route_close(miss); if (hit >= 0) route_close(hit);
+    for (const auto& path : paths) if (::unlink(path.c_str()) != 0) std::abort();
+  }
+  // Directory watches still need one actual pathname. Only the relevant
+  // parent ranges are visited; unrelated watch counts must not cause a scan.
+  const size_t directories = 64;
+  std::vector<std::string> parents;
+  for (size_t i = 0; i < directories; ++i) {
+    parents.push_back(directory + "/parent-" + std::to_string(i));
+    if (::mkdir(parents.back().c_str(), 0700) != 0) std::abort();
+  }
+  const std::string matched_path = parents.back() + "/child", unmatched_path = directory + "/unmatched";
+  int matched = route_open(matched_path.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  int unmatched = route_open(unmatched_path.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  int fd = route_init1(IN_NONBLOCK);
+  work = {}; count_allocations = true;
+  auto start = std::chrono::steady_clock::now();
+  for (const auto& parent : parents) if (inotify_add_watch(fd, parent.c_str(), IN_MODIFY) <= 0) std::abort();
+  auto elapsed = std::chrono::steady_clock::now() - start;
+  count_allocations = false;
+  PrintWork("directory-setup", directories, directories,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), work);
+  for (bool hit : {false, true}) {
+    HANDLE writer = gesher::HandleFromFd(hit ? matched : unmatched);
+    if (hit) gesher::InotifyNoteWrite(writer);  // retain the ordinary event/writing storage
+    work = {}; count_allocations = true;
+    start = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < calls; ++i) gesher::InotifyNoteWrite(writer);
+    elapsed = std::chrono::steady_clock::now() - start;
+    count_allocations = false;
+    PrintWork(hit ? "directory-matched" : "directory-unmatched", directories, calls,
+              std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), work);
+    route_check("routing directory work observes only the right parent", InternalRead(fd).size() == size_t(hit));
+    if (!measure && HAS_ROUTING_INDEX) {
+      route_check("routing directory work uses one actual pathname", work.paths == calls && work.identities == 0);
+      route_check("routing directory lookup avoids full scan", work.comparisons < calls * directories / 2);
+    }
+  }
+  route_close(fd); route_close(matched); route_close(unmatched);
+  if (::unlink(matched_path.c_str()) != 0 || ::unlink(unmatched_path.c_str()) != 0) std::abort();
+  for (const auto& parent : parents) if (::rmdir(parent.c_str()) != 0) std::abort();
+  route_check("routing work directory retires", ::rmdir(directory.c_str()) == 0);
+}
+
+int main(int argc, char** argv) {
+  const bool measure = argc == 2 && std::strcmp(argv[1], "--measure") == 0;
+  std::printf("LAYOUT inotify routing: instance_bytes=%zu watch_bytes=%zu wchar_bytes=%zu\n",
+              sizeof(gesher::Inotify), sizeof(gesher::Watch), sizeof(wchar_t));
+  char directory[] = "/tmp/gesher-inotify-route-host-XXXXXX";
+  if (!mkdtemp(directory)) return 2;
+  if (!measure) {
+    InotifyWriteRouting(directory);
+    RoutingInternalContracts(directory);
+  }
+  RoutingWork(directory, measure);
+  route_check("routing no live observer registry", gesher::observer_registry.empty() && gesher::g_live.empty() && gesher::g_live_count == 0);
+  route_check("routing all native boundary handles retire", native_files.empty() && live_handles == 0 && live_waits == 0);
+  route_check("routing temporary root retires", rmdir(directory) == 0);
+  std::printf("inotify routing production host: %d checks, %d failures\n", checked, failed);
+  return failed != 0;
+}

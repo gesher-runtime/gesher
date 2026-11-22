@@ -665,6 +665,12 @@ static void Proc(const std::string& dir) {
 
 // --- inotify ---------------------------------------------------------------------
 
+static void route_check(const char* label, bool ok) {
+  if (!ok) printf("  inotify routing: %s\n", label);
+  CHECK(ok);
+}
+#include "../../tests/native/inotify_write_routing_test.inc"
+
 struct Event {
   int wd;
   uint32_t mask;
@@ -1250,6 +1256,8 @@ int main(int argc, char** argv) {
   ThreadNames();
   fprintf(stderr, "-- %s\n", "Inotify");
   Inotify(dir);
+  fprintf(stderr, "-- %s\n", "InotifyWriteRouting");
+  InotifyWriteRouting(dir);
   fprintf(stderr, "-- %s\n", "ReservedNames");
   ReservedNames(dir);
   fprintf(stderr, "-- %s\n", "Processes");

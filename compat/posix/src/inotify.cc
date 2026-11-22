@@ -43,6 +43,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include <gesher/reserved_names.h>
@@ -128,6 +129,14 @@ struct Watch {
   }
 };
 
+using FileIdentity = std::pair<unsigned long long, unsigned long long>;
+
+struct OrdinalLess {
+  bool operator()(const std::wstring& a, const std::wstring& b) const {
+    return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_LESS_THAN;
+  }
+};
+
 void CALLBACK FileReadReady(PTP_CALLBACK_INSTANCE, void* context, PTP_WAIT, TP_WAIT_RESULT) {
   const Watch& w = *static_cast<Watch*>(context);
   // A writer may consume this read before the wake is handled. The
@@ -147,6 +156,12 @@ struct Inotify {
   std::condition_variable changed;
   std::deque<std::string> queue;  // events, in Linux's layout
   std::map<int, std::unique_ptr<Watch>> watches;
+  // Only active watches are indexed, under mutex. File writes are inode
+  // events even when the writing handle used a different hard link.
+  std::map<FileIdentity, int> identities;
+  std::multimap<std::wstring, int, OrdinalLess> directories;
+  std::multimap<std::wstring, int, OrdinalLess> unidentified_files;
+  size_t file_watches = 0;
   int next_wd = 1;
   uint32_t next_cookie = 1;
   HANDLE port = nullptr;
@@ -168,6 +183,32 @@ struct Inotify {
     }
     watches.clear();
     if (port != nullptr) CloseHandle(port);
+  }
+
+  void Index(Watch& w) {
+    identities.emplace(FileIdentity{w.volume, w.index}, w.wd);
+    if (w.file.empty()) directories.emplace(w.dir, w.wd);
+    else {
+      ++file_watches;
+      // A volume without a usable file ID retains the prior name fallback.
+      if (w.index == 0) unidentified_files.emplace(w.dir, w.wd);
+    }
+  }
+
+  void Unindex(Watch& w) {
+    auto identity = identities.find({w.volume, w.index});
+    if (identity != identities.end() && identity->second == w.wd) identities.erase(identity);
+    auto erase = [&](auto& names) {
+      auto [begin, end] = names.equal_range(w.dir);
+      for (auto it = begin; it != end; ++it) {
+        if (it->second == w.wd) { names.erase(it); break; }
+      }
+    };
+    if (w.file.empty()) erase(directories);
+    else {
+      --file_watches;
+      if (w.index == 0) erase(unidentified_files);
+    }
   }
 
   // Queues an event; called with `mutex` held.
@@ -205,6 +246,7 @@ struct Inotify {
     }
     if (!w.removed) {
       w.removed = true;
+      Unindex(w);
       if (w.pending) CancelIoEx(w.handle, &w.ov);
     }
   }
@@ -526,6 +568,7 @@ void Inotify::Run() {
       for (auto& [wd, w] : watches) {
         if (!w->removed) {
           w->removed = true;
+          Unindex(*w);
           if (w->pending) CancelIoEx(w->handle, &w->ov);
         }
       }
@@ -553,13 +596,24 @@ void InotifyNoteWrite(int fd) {
 void InotifyNoteWrite(HANDLE h) {
   if (g_live_count.load(std::memory_order_relaxed) == 0) return;
   if (h == INVALID_HANDLE_VALUE || GetFileType(h) != FILE_TYPE_DISK) return;
-  std::wstring full(32768, L' ');
-  DWORD n = GetFinalPathNameByHandleW(h, full.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  if (n == 0 || n >= 32768) return;
-  full.resize(n);
-  size_t slash = full.find_last_of(L'\\');
-  if (slash == std::wstring::npos) return;
-  std::wstring dir = full.substr(0, slash), name = full.substr(slash + 1);
+  // File watches need only the already pinned handle's identity. Resolve a
+  // pathname only for directory watches or volumes without usable file IDs.
+  std::wstring dir, name;
+  bool queried_path = false, got_path = false;
+  auto path = [&] {
+    if (queried_path) return got_path;
+    queried_path = true;
+    std::wstring full(32768, L' ');
+    DWORD n = GetFinalPathNameByHandleW(h, full.data(), 32768,
+                                        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n == 0 || n >= 32768) return false;
+    full.resize(n);
+    size_t slash = full.find_last_of(L'\\');
+    if (slash == std::wstring::npos) return false;
+    dir = full.substr(0, slash);
+    name = full.substr(slash + 1);
+    return got_path = true;
+  };
   auto same = [](const std::wstring& a, const std::wstring& b) {
     return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
   };
@@ -571,19 +625,43 @@ void InotifyNoteWrite(HANDLE h) {
     bool noted = false;
     {
       std::lock_guard<std::mutex> lock(in->mutex);
-      for (auto it = in->watches.begin(); it != in->watches.end();) {
-        auto current = it++;
+      int file_wd = 0;
+      if (in->file_watches != 0) {
+        if (!queried_info) {
+          got_info = GetFileInformationByHandle(h, &info);
+          queried_info = true;
+        }
+        if (got_info && FileIndex(info) != 0) {
+          auto found = in->identities.find({info.dwVolumeSerialNumber, FileIndex(info)});
+          if (found != in->identities.end()) file_wd = found->second;
+        }
+      }
+      auto directory = in->directories.end(), directory_end = directory;
+      auto unidentified = in->unidentified_files.end(), unidentified_end = unidentified;
+      if ((!in->directories.empty() || !in->unidentified_files.empty()) && path()) {
+        std::tie(directory, directory_end) = in->directories.equal_range(dir);
+        std::tie(unidentified, unidentified_end) = in->unidentified_files.equal_range(dir);
+      }
+      // Equal directory keys retain insertion order, hence increasing watch
+      // descriptors. Merge the inode match with those ranges to preserve the
+      // old descriptor-order publication without allocating per-write scratch.
+      for (;;) {
+        int wd = file_wd;
+        if (directory != directory_end && (wd == 0 || directory->second < wd)) wd = directory->second;
+        if (unidentified != unidentified_end && (wd == 0 || unidentified->second < wd)) wd = unidentified->second;
+        if (wd == 0) break;
+        if (wd == file_wd) file_wd = 0;
+        if (directory != directory_end && directory->second == wd) ++directory;
+        if (unidentified != unidentified_end && unidentified->second == wd) ++unidentified;
+        auto current = in->watches.find(wd);
+        if (current == in->watches.end()) continue;
         Watch& w = *current->second;
-        if (w.removed || !same(w.dir, dir)) continue;
+        if (w.removed) continue;
         if (w.file.empty()) {
           in->EmitFor(w, IN_MODIFY, 0, name);
           if (!w.removed) w.writing.insert(name);
         } else {
           if ((w.mask & (IN_MODIFY | IN_CLOSE_WRITE)) == 0) continue;
-          if (!queried_info) {
-            got_info = GetFileInformationByHandle(h, &info);
-            queried_info = true;
-          }
           if (w.index != 0 ? !got_info || !MatchesFile(w, info) : !same(w.file, name)) continue;
           if (!in->DrainFile(w)) {
             // The producer is outrunning this bounded synchronous drain.
@@ -686,12 +764,12 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   uint32_t events = mask & (IN_ALL_EVENTS | IN_ONESHOT | IN_EXCL_UNLINK);
 
   std::lock_guard<std::mutex> lock(in->mutex);
-  for (auto& [wd, w] : in->watches) {
-    if (!w->removed && w->volume == info.dwVolumeSerialNumber && w->index == index) {
-      if ((mask & IN_MASK_CREATE) != 0) return errno = EEXIST, -1;
-      w->mask = (mask & IN_MASK_ADD) != 0 ? w->mask | events : events;
-      return wd;
-    }
+  auto existing = in->identities.find({info.dwVolumeSerialNumber, index});
+  if (existing != in->identities.end()) {
+    Watch& prior = *in->watches.at(existing->second);
+    if ((mask & IN_MASK_CREATE) != 0) return errno = EEXIST, -1;
+    prior.mask = (mask & IN_MASK_ADD) != 0 ? prior.mask | events : events;
+    return prior.wd;
   }
   w->wd = in->next_wd++;
   w->mask = events;
@@ -731,6 +809,7 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   if (!issued) return gesher::FailWithLastError();
   int wd = w->wd;
   in->watches[wd] = std::move(w);
+  in->Index(*in->watches.at(wd));
   return wd;
 }
 
