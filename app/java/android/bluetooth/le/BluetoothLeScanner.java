@@ -425,23 +425,54 @@ public final class BluetoothLeScanner {
         return ScanCallback.NO_ERROR;
     }
 
+    /**
+     * As Android 16: with BLE off, or for a callback without an active scan, nothing happens
+     * (the module looks the callback up locally and never reaches the service). Stopping an
+     * active scan reaches the service, which enforces BLUETOOTH_SCAN; the callback is
+     * forgotten before that check, as the module removes its wrapper first.
+     */
     public void stopScan(ScanCallback callback) {
-        BluetoothHost.enforceScan(mContext);
-        synchronized (sLock) {
-            sClients.remove(callback);
+        if (!BluetoothHost.on()) {
+            Log.w(TAG, "BLE is not available");
+            return;
         }
+        synchronized (sLock) {
+            if (sClients.remove(callback) == null) {
+                Log.d(TAG, "could not find callback wrapper");
+                return;
+            }
+        }
+        BluetoothHost.enforceScan(mContext);
     }
 
+    /**
+     * As Android 16: with BLE off nothing happens; otherwise the request goes to the service,
+     * which enforces BLUETOOTH_SCAN whether or not the PendingIntent has a scan.
+     */
     public void stopScan(PendingIntent callbackIntent) {
+        if (!BluetoothHost.on()) {
+            Log.w(TAG, "BLE is not available");
+            return;
+        }
         BluetoothHost.enforceScan(mContext);
         synchronized (sLock) {
             sClients.remove(callbackIntent);
         }
     }
 
-    /** Delivers a scan's batched results now. */
+    /**
+     * Delivers a scan's batched results now. As Android 16: nothing with BLE off or for a
+     * callback without an active scan; BLUETOOTH_SCAN is enforced for an active one.
+     */
     public void flushPendingScanResults(ScanCallback callback) {
+        if (!BluetoothHost.on()) {
+            Log.w(TAG, "BLE is not available");
+            return;
+        }
         if (callback == null) throw new IllegalArgumentException("callback cannot be null!");
+        synchronized (sLock) {
+            if (!sClients.containsKey(callback)) return;
+        }
         BluetoothHost.enforceScan(mContext);
         List<ScanResult> results = null;
         Client client;
