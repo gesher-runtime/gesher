@@ -198,6 +198,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         mTransientEnabled = !persistentEnabled;
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
+            if (ContactsProviderSupport.hasBuiltInConflict(p)) {
+                SystemServer.log("package " + p.packageName
+                        + " skipped: claims built-in contacts package or authority");
+                continue;
+            }
             if (map.put(p.packageName, p) != null) throw new IllegalArgumentException("Duplicate installed package");
         }
         try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
@@ -221,8 +226,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         return mEnabledStore;
     }
 
+    private static void checkBuiltInProviderOwner(ApkPackage pkg) {
+        try {
+            ContactsProviderSupport.checkPackageAdmission(pkg);
+        } catch (android.content.pm.PackageParser.PackageParserException conflict) {
+            throw new IllegalArgumentException(conflict.getMessage(), conflict);
+        }
+    }
+
     /** Finish owner I/O before an installer commits its durable package registry. */
     synchronized PackageUids.Admission prepareAdd(ApkPackage p) {
+        checkBuiltInProviderOwner(p);
         PackageUids.Admission identity = PackageUids.prepare(List.of(p), mPackages.values());
         try {
             PackageEnabledStore store = enabledStore();
@@ -411,7 +425,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public boolean isPackageAvailable(String packageName, int userId) {
         if (userId != 0) return false;
-        if ("android".equals(packageName)) return true;
+        if ("android".equals(packageName) || ContactsProviderSupport.PACKAGE.equals(packageName)) return true;
         return get(packageName) != null || synthetic(packageName)
                 || BrowserPackageSupport.isBrowserPackage(packageName);
     }
@@ -425,6 +439,9 @@ public final class PackageManagerService extends IPackageManager.Default {
             info.applicationInfo = platformApplication();
             info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
             return info;
+        }
+        if (ContactsProviderSupport.PACKAGE.equals(packageName)) {
+            return ContactsProviderSupport.packageInfo(flags);
         }
         ApkPackage p = get(packageName);
         if (p != null) {
@@ -467,6 +484,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ApplicationInfo getApplicationInfo(String packageName, long flags, int userId) {
         if (userId != 0) return null;
         if ("android".equals(packageName)) return platformApplication();
+        if (ContactsProviderSupport.PACKAGE.equals(packageName)) return ContactsProviderSupport.applicationInfo();
         ApkPackage p = get(packageName);
         if (p != null) {
             return p.applicationInfo(flags);
@@ -495,6 +513,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public int getTargetSdkVersion(String packageName) {
+        if (ContactsProviderSupport.PACKAGE.equals(packageName)) return android.os.Build.VERSION.SDK_INT;
         ApkPackage p = get(packageName);
         return p == null ? -1 : p.parsed.getTargetSdkVersion();
     }
@@ -674,7 +693,17 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
         if (userId != 0) return null;
         ProviderInfo hosted = hostedProvider(name);
-        if (hosted != null) return hosted;
+        if (hosted != null) {
+            if (ContactsProviderSupport.isSystemAuthority(name)
+                    && !ContactsProviderSupport.matchesProviderFlags(flags)) {
+                return null;
+            }
+            return hosted;
+        }
+        if (mHostedProviders == null && ContentProviders.declaredProvider(this, name) == null) {
+            ProviderInfo builtIn = ContactsProviderSupport.providerForAuthority(name, flags);
+            if (builtIn != null) return builtIn;
+        }
         return provider(name, flags);
     }
 
@@ -695,6 +724,10 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        if (userId != 0 || className == null) return null;
+        if (ContactsProviderSupport.PACKAGE.equals(className.getPackageName())) {
+            return ContactsProviderSupport.providerForComponent(className.getClassName(), flags);
+        }
         if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         if (p == null) return null;
@@ -1145,7 +1178,9 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String[] getPackagesForUid(int uid) {
-        if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
+        if (uid == android.os.Process.SYSTEM_UID) {
+            return new String[] {"android", ContactsProviderSupport.PACKAGE};
+        }
         if (uid == android.os.Process.SHELL_UID) return new String[] {"com.android.shell"};
         List<String> result = new ArrayList<>();
         for (ApkPackage pkg : mPackages.values()) if (pkg.uid() == uid) result.add(pkg.packageName);
@@ -1155,7 +1190,9 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public int getPackageUid(String name, long flags, int userId) {
         if (userId != 0) return -1;
-        if ("android".equals(name)) return android.os.Process.SYSTEM_UID;
+        if ("android".equals(name) || ContactsProviderSupport.PACKAGE.equals(name)) {
+            return android.os.Process.SYSTEM_UID;
+        }
         if ("com.android.shell".equals(name)) return android.os.Process.SHELL_UID;
         ApplicationInfo info = getApplicationInfo(name, flags, userId);
         return info == null ? -1 : info.uid;
@@ -1235,7 +1272,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         // means an unknown package to ApplicationPackageManager, not "no groups",
         // and makes even a query about the caller's own installed app throw.
         if (userId != 0 || isRemovalPending(packageName)) return null;
-        if ("android".equals(packageName)) return new int[0];
+        if ("android".equals(packageName) || ContactsProviderSupport.PACKAGE.equals(packageName)) {
+            return new int[0];
+        }
         ApkPackage pkg = get(packageName);
         if (pkg == null || ((flags & PackageManager.MATCH_SYSTEM_ONLY) != 0 && !pkg.isSystemAddon())) {
             return null;

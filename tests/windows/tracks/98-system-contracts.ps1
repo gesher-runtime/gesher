@@ -115,6 +115,13 @@ try {
     $microgLibsOut
   } @('MicrogAddonNativeLibsTest all passed')
 
+  $callLogOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'CallLogContractTest') 120
+  $callLogCode = $LASTEXITCODE
+  Check 'services: CallLog provider CRUD, strict SQL, phone matching, AppOps, URI grants and admission' {
+    $global:LASTEXITCODE = $callLogCode
+    $callLogOut
+  } @('CallLogContractTest all passed')
+
   # Constructed package metadata uses the existing synthetic-fixture capability.
   $env:GESHER_MICROG_SPOOF = '1'
   $syncContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SyncManagerContractTest') 120

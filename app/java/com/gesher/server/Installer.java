@@ -251,7 +251,9 @@ final class Installer {
         }
         for (Entry e : entries.values()) {
             try {
-                result.add(open(e));
+                ApkPackage installedPackage = open(e);
+                ContactsProviderSupport.checkPackageAdmission(installedPackage);
+                result.add(installedPackage);
             } catch (Exception ex) {
                 SystemServer.log("installed package " + e.packageName + " at " + e.codePath
                         + " could not be loaded: " + ex);
@@ -398,6 +400,7 @@ final class Installer {
         Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
+            ContactsProviderSupport.checkPackageAdmission(parsed);
             return unchanged(apk, recorded.packageName, parsed, recorded, null);
         }
         File tempDir = null;
@@ -424,6 +427,7 @@ final class Installer {
                 source = mainApk;
             }
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
+            ContactsProviderSupport.checkPackageAdmission(parsed);
             String pkg = parsed.packageName;
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
@@ -528,6 +532,7 @@ final class Installer {
             // Verification must apply to the bytes being published, not a mutable
             // download that could change after its initial parse/verification.
             ApkPackage staged = ApkPackage.parseCodeDirectory(code.getPath());
+            ContactsProviderSupport.checkPackageAdmission(staged);
             android.content.pm.Signature[] stagedSigners = staged.verifiedSignatures();
             if (!pkg.equals(staged.packageName) || staged.versionCode() != parsed.versionCode()
                     || !Arrays.equals(newSigners, stagedSigners)

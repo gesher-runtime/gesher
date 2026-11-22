@@ -56,6 +56,7 @@ final class ContentProviders {
     private final ActivityTaskManagerService mAtm;
     private final SettingsProvider mSettings;
     private final DocumentsStorageProvider mDocumentsStorage;
+    private final CallLogProvider mCallLog;
     private final CallerIdentity mCallers;
     private final UriGrants mUriGrants;
 
@@ -176,11 +177,13 @@ final class ContentProviders {
         mUriGrants = new UriGrants(pm, atm, this);
         mSettings = new SettingsProvider(pm, atm);
         mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
+        mCallLog = new CallLogProvider(this, pm, atm, mUriGrants);
         pm.setHostedProviders(this);
     }
 
     UriGrants uriGrants() { return mUriGrants; }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
+    CallLogProvider callLog() { return mCallLog; }
     CallerIdentity callers() { return mCallers; }
 
     SettingsProvider settingsProvider() { return mSettings; }
@@ -332,6 +335,14 @@ final class ContentProviders {
             }
             enforceAccess(actualPackage, registration.info);
             return mDocumentsStorage.holder();
+        }
+        if (ContactsProviderSupport.CALL_LOG_AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration == null || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("CallLog authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mCallLog.holder();
         }
         final ProviderInfo declared;
         final ApkPackage declaredCode;
@@ -529,6 +540,8 @@ final class ContentProviders {
             }
             for (String authority : declared.authority.split(";")) {
                 if (authority.isEmpty() || SettingsProvider.AUTHORITY.equals(authority)
+                        || registeredProvider(authority) != null
+                        || ContactsProviderSupport.isSystemAuthority(authority)
                         || !batch.add(authority)) throw new SecurityException("Invalid published authority");
                 ProviderInfo canonical = declaredProvider(mPm, authority);
                 if (canonical == null || !pkg.packageName.equals(canonical.packageName)
