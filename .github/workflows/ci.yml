@@ -308,6 +308,9 @@ jobs:
           python3 tools/test_boottime_resume.py --sanitize
           python3 tools/test_timerfd_contracts.py --sanitize
           python3 tools/test_input_surface_callbacks.py --sanitize
+          python3 tools/test_codec_input_surfaces.py --sanitize
+          python3 tools/test_persistent_input_jni.py
+          python3 tools/test_recorder_persistent_input.py --sanitize
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
 

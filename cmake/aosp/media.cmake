@@ -127,6 +127,7 @@ set_target_properties(media_muxer_verify PROPERTIES CXX_STANDARD 23)
 add_library(gesher_media_player OBJECT
   ${_media}/jni/java_data_source.cc
   ${_media}/jni/media_codec_jni.cc
+  ${_media}/jni/persistent_input_surface.cc
   ${_media}/jni/media_jni.cc
   ${_media}/jni/media_player_jni.cc
   ${_media}/jni/media_jni_others.cc
@@ -271,5 +272,6 @@ target_include_directories(media_input_surface_callback_test PRIVATE
 # Only the fixture throws a callback exception to check capture cleanup.
 target_compile_options(media_input_surface_callback_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter -fexceptions)
+target_compile_definitions(media_input_surface_callback_test PRIVATE GESHER_PERSISTENT_INPUT_TEST)
 target_link_libraries(media_input_surface_callback_test PRIVATE hostgraphics pthread)
 gesher_graphics_cxx(media_input_surface_callback_test)

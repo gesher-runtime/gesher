@@ -12,6 +12,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <application android:label="@string/app_name">
+        <activity android:name=".PersistentInputActivity" android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <service android:name=".PersistentInputService" android:exported="false"
+            android:process=":persistent-input" />
         <activity
             android:name=".RecordActivity"
             android:exported="true"

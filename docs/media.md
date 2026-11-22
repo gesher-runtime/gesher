@@ -323,6 +323,7 @@ up is not established.
 | AAudio input streams, OpenSL ES audio recorders | `compat/media/ndk/aaudio.cc`, `opensles.cc` |
 | Encoders: H.264 and AAC through Media Foundation's encoder MFTs, Opus through libopus, libavc's H.264 encoder where Media Foundation has none (`GESHER_VIDEO_ENCODERS=soft`) | `compat/media/encode` |
 | MediaCodec encoders (ByteBuffers, Images, createInputSurface), MediaCodecList's encoders; decoders into an ImageReader's Surface | `compat/media/jni/media_codec_jni.cc`; input surfaces: `compat/media/video/input_surface.cc` (built into hwui) |
+| Persistent input Surfaces reused by successive MediaCodec and MediaRecorder consumers, with one active consumer lease | `jni/persistent_input_surface.{h,cc}`, `video/input_surface.{h,cc}` |
 | Container writers: MPEG-4/3GPP, WebM (libwebm's mkvmuxer), Ogg Opus, AAC ADTS; MediaMuxer | `compat/media/mux`, `jni/media_muxer_jni.cc` |
 | MediaRecorder: audio, video from its Surface (Canvas, a Camera2 session) | `compat/media/record`, `jni/media_recorder_jni.cc` |
 
@@ -337,6 +338,18 @@ source evidence and validation boundaries.
 The [recorder contracts](media-recorder-contracts.md) pin lifecycle/error behavior,
 requested codec handling, complete-container size admission, callback ordering
 and the exact boundaries of host and Windows validation.
+
+`MediaCodec.createPersistentInputSurface()` creates a producer whose lifetime is
+independent of a particular encoder. A configured video codec attaches it through
+`setInputSurface`; a recorder stores it before `prepare`, then acquires its
+exclusive consumer lease while preparing. The recorder's `getSurface` is
+unavailable when persistent input was configured. Stop, reset and release quiesce
+the retiring consumer's callbacks while keeping the persistent producer usable
+by its successor. The application owns the final `Surface.release()`.
+Frames before codec start or after input EOS are rejected before I420 allocation
+and conversion. This does not change accepted pixels, timestamps, queue bounds or
+encoder selection. See the [persistent input contract and measurements](research/persistent-input-surface-2026-11-22.md)
+for exact scope, ownership, errors, host evidence and pending Windows acceptance.
 
 ## Status and next steps
 

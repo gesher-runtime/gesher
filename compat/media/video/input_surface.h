@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 
 namespace gesher::media {
 
@@ -28,7 +29,11 @@ class InputSurface {
   virtual void SetCallback(InputFrameCallback cb) = 0;
   // Frames queued so far.
   virtual uint64_t frames() const = 0;
-  // No producer may draw any more. Waits for any callback on another thread;
+  // Whether this is a consumer lease on a separately owned persistent source.
+  virtual bool persistent() const { return false; }
+  // Retire this consumer. An ordinary input also abandons the producer; a
+  // persistent lease leaves it usable by the next consumer. Waits for any
+  // callback on another thread;
   // a callback may abandon its own input and then finish its current invocation.
   // Callback replacement after abandonment cannot reactivate the input.
   virtual void Abandon() = 0;
@@ -36,5 +41,18 @@ class InputSurface {
 
 // A width x height input (hwui's side of the build: input_surface.cc).
 InputSurface* CreateInputSurface(int width, int height);
+
+// A producer owned by MediaCodec.PersistentSurface, independent of an encoder.
+// Attach returns an exclusive consumer lease, or null while another lease is
+// active. Retiring a lease quiesces its callbacks before allowing the next one.
+// A lease retains the producer even if the application's Surface is released.
+class PersistentInputSurface {
+ public:
+  virtual ~PersistentInputSurface() = default;
+  virtual jobject NewJavaSurface(JNIEnv* env) = 0;
+  virtual std::unique_ptr<InputSurface> Attach(int width, int height) = 0;
+};
+
+std::shared_ptr<PersistentInputSurface> CreatePersistentInputSurface();
 
 }  // namespace gesher::media

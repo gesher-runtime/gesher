@@ -119,6 +119,7 @@ struct Slot {
   int size = 0, flags = 0;
 };
 struct FakeInput { int abandonments = 0; void Abandon() { ++abandonments; } };
+using InputSurface = FakeInput;
 class Codec {
  public:
   std::mutex lifecycle_mu_;
@@ -138,6 +139,7 @@ class Codec {
   Slot outputs_[kSlots];
   std::unique_ptr<int> video_enc_, audio_enc_, video_, audio_;
   std::unique_ptr<FakeInput> input_surface_;
+  std::shared_ptr<void> persistent_input_;
   std::deque<int> surface_frames_, csd_, work_, ready_, config_, pending_config_;
   ANativeWindow* window_ = nullptr;
   std::shared_ptr<GlobalRef> reader_;

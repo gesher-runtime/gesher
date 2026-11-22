@@ -201,6 +201,116 @@ void ExceptionUnlocks() {
   Check(!Post(in.producer.get()), "exceptional callback can still be retired");
 }
 
+#ifdef GESHER_PERSISTENT_INPUT_TEST
+struct PersistentInput {
+  std::shared_ptr<gesher::media::PersistentInputSurface> source{
+      gesher::media::CreatePersistentInputSurface()};
+  android::sp<QueueSurface> producer;
+  PersistentInput() {
+    source->NewJavaSurface(nullptr);
+    producer = captured_producer;
+    captured_producer = nullptr;
+    if (!Check(producer != nullptr, "persistent source exposes its producer")) std::_Exit(2);
+  }
+};
+
+void PersistentReuse() {
+  PersistentInput in;
+  Check(Post(in.producer.get()), "unattached persistent producer accepts a frame");
+  Check(in.source->Attach(0, 2) == nullptr, "invalid dimensions cannot consume the lease");
+  auto first = in.source->Attach(2, 2);
+  Check(first != nullptr && first->persistent(), "first consumer holds a persistent lease");
+  Check(in.source->Attach(2, 2) == nullptr, "persistent producer has at most one consumer");
+  int calls = 0;
+  first->SetCallback([&](const uint32_t*, int, int, int64_t) { ++calls; });
+  Check(Post(in.producer.get()) && calls == 1, "first encoder receives its frame");
+  first->Abandon();
+  Check(Post(in.producer.get()) && calls == 1, "detached producer remains usable without callbacks");
+  for (int session = 0; session < 1000; ++session) {
+    const int width = 2 + session % 3, height = 3 + session % 2;
+    auto next = in.source->Attach(width, height);
+    if (!Check(next != nullptr, "successive session acquires the original producer")) std::_Exit(2);
+    next->NewJavaSurface(nullptr);
+    Check(captured_producer.get() == in.producer.get(), "producer identity survives encoder replacement");
+    captured_producer = nullptr;
+    const int before = calls;
+    next->SetCallback([&](const uint32_t* pixels, int w, int h, int64_t timestamp) {
+      ++calls;
+      Check(w == width && h == height && pixels[0] == 0xff123456,
+            "successor receives its configured geometry and real pixels");
+      Check(timestamp == in.producer->Latest()->timestamp_ns, "successor preserves the frame timestamp");
+    });
+    // Repeated close/callback replacement on the first lease must not affect
+    // any later generation, even while that retired object is still alive.
+    first->Abandon();
+    first->SetCallback([](const uint32_t*, int, int, int64_t) {
+      Check(false, "retired lease cannot register a callback on a successor");
+    });
+    Check(Post(in.producer.get()) && calls == before + 1,
+          "stale consumer cannot detach or replace its successor");
+  }
+  Check(first->frames() == 1003, "producer frame count remains continuous across sessions");
+  first.reset();
+  Check(Post(in.producer.get()) && calls == 1001, "last consumer destruction leaves source live");
+  in.source.reset();
+  Check(!Post(in.producer.get()), "last source release abandons the producer");
+}
+
+void PersistentQuiescence() {
+  PersistentInput in;
+  auto lease = in.source->Attach(2, 2);
+  Signal entered, permit_return, retiring, retired;
+  std::atomic<bool> active{false};
+  lease->SetCallback([&](const uint32_t*, int, int, int64_t) {
+    active = true;
+    entered.Set();
+    Require(permit_return, "persistent callback may complete");
+    active = false;
+  });
+  std::thread producer([&] { Check(Post(in.producer.get()), "persistent in-flight frame completes"); });
+  Require(entered, "persistent callback admitted");
+  std::thread consumer([&] {
+    retiring.Set();
+    lease->Abandon();
+    Check(!active, "persistent retirement waits for admitted callback");
+    auto next = in.source->Attach(3, 2);
+    Check(next != nullptr, "next owner attaches after quiescence");
+    retired.Set();
+  });
+  Require(retiring, "persistent retirement started");
+  Check(!retired.Wait(100ms), "new owner cannot overtake old callback shutdown");
+  permit_return.Set();
+  Require(retired, "persistent retirement completes");
+  producer.join(); consumer.join();
+  Check(Post(in.producer.get()), "quiescence preserves persistent producer");
+}
+
+void PersistentReentrantAndReleasedSource() {
+  PersistentInput in;
+  auto lease = in.source->Attach(2, 2);
+  std::unique_ptr<InputSurface> next;
+  auto capture = std::make_shared<int>(19);
+  std::weak_ptr<int> observed = capture;
+  int calls = 0;
+  lease->SetCallback([&, capture](const uint32_t*, int, int, int64_t) {
+    lease->Abandon();
+    next = in.source->Attach(2, 2);
+    Check(next != nullptr, "callback may install successor without owner lock inversion");
+    next->SetCallback([&](const uint32_t*, int, int, int64_t) { ++calls; });
+    lease.reset();
+    Check(!observed.expired() && *capture == 19, "retired invocation retains its captures");
+  });
+  capture.reset();
+  Check(Post(in.producer.get()), "reentrant retirement completes");
+  Check(observed.expired(), "retired invocation releases captures after returning");
+  in.source.reset();
+  Check(Post(in.producer.get()) && calls == 1,
+        "admitted native lease survives application source release");
+  next.reset();
+  Check(!Post(in.producer.get()), "last native lease release retires an otherwise released source");
+}
+#endif
+
 #ifdef GESHER_INPUT_SURFACE_HOST
 void StaleListener() {
   Input in;
@@ -220,6 +330,26 @@ void StaleListener() {
   listener();
   Check(calls == 1, "copied listener safely retains only retired shared state");
 }
+
+#ifdef GESHER_PERSISTENT_INPUT_TEST
+void StalePersistentListener() {
+  PersistentInput in;
+  auto lease = in.source->Attach(2, 2);
+  int old_calls = 0, new_calls = 0;
+  lease->SetCallback([&](const uint32_t*, int, int, int64_t) { ++old_calls; });
+  Check(Post(in.producer.get()), "old generation published a frame");
+  auto old_listener = in.producer->SnapshotListener();
+  lease.reset();
+  auto next = in.source->Attach(2, 2);
+  next->SetCallback([&](const uint32_t*, int, int, int64_t) { ++new_calls; });
+  old_listener();
+  Check(old_calls == 1 && new_calls == 0, "copied old listener cannot deliver a frame to the new owner");
+  Check(Post(in.producer.get()) && new_calls == 1, "new generation receives only its own publication");
+  in.source.reset(); next.reset();
+  old_listener();
+  Check(old_calls == 1 && new_calls == 1, "copied persistent listener safely outlives all owners");
+}
+#endif
 #endif
 }  // namespace
 
@@ -237,8 +367,16 @@ int main() {
   ReplacementWaits();
   ReentrantOperations();
   ExceptionUnlocks();
+#ifdef GESHER_PERSISTENT_INPUT_TEST
+  PersistentReuse();
+  PersistentQuiescence();
+  PersistentReentrantAndReleasedSource();
+#endif
 #ifdef GESHER_INPUT_SURFACE_HOST
   StaleListener();
+#ifdef GESHER_PERSISTENT_INPUT_TEST
+  StalePersistentListener();
+#endif
 #endif
   std::printf("input surface callback contracts: %d checks, %d failures\n",
               checks.load(), failures.load());

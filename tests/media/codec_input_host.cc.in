@@ -1,0 +1,395 @@
+// Exact Codec input-surface methods and pixel conversion. Queue/JNI are declared
+// host boundaries; actual encoder/ART/EGL acceptance is in recordapp on Windows.
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <string>
+#include <thread>
+#include <vector>
+#include "compat/media/video/input_surface.h"
+#include "compat/media/video/video_decoder.h"
+#include "compat/media/surface/queue_surface.h"
+#include <android_runtime/android_view_Surface.h>
+
+thread_local bool count_allocations = false;
+thread_local size_t allocation_bytes = 0, allocations = 0;
+void* operator new(size_t bytes) {
+  if (count_allocations) { allocation_bytes += bytes; ++allocations; }
+  if (void* p = std::malloc(bytes ? bytes : 1)) return p;
+  std::abort();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, size_t) noexcept { std::free(p); }
+void* operator new[](size_t n) { return ::operator new(n); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete[](void* p, size_t) noexcept { std::free(p); }
+
+namespace gesher { int64_t MonotonicNanos() { return 123456789000; } }
+namespace gesher::media {
+@ALLOCATE@
+@CLAMP@
+#define RgbaToI420 ProductionRgbaToI420
+@CONVERT@
+#undef RgbaToI420
+
+std::atomic<uint64_t> conversions{0}, converted_pixels{0};
+std::mutex gate_mu;
+std::condition_variable gate_cv;
+bool gate_armed = false, gate_entered = false, gate_open = false;
+void RgbaToI420(const uint32_t* rgba, int width, int height, VideoFrame* frame) {
+  ++conversions;
+  converted_pixels += static_cast<uint64_t>(frame->width) * frame->height;
+  {
+    std::unique_lock<std::mutex> lock(gate_mu);
+    if (gate_armed) {
+      gate_entered = true; gate_cv.notify_all();
+      if (!gate_cv.wait_for(lock, std::chrono::seconds(5), [] { return gate_open; })) std::_Exit(90);
+      gate_armed = false;
+    }
+  }
+  ProductionRgbaToI420(rgba, width, height, frame);
+}
+
+class Codec {
+ public:
+  struct { bool encoder = true, video = true; } entry_;
+  struct { int width = 4, height = 4; } enc_params_;
+  std::mutex lifecycle_mu_, mu_;
+  std::condition_variable cv_;
+  bool released_ = false, fatal_ = false, configured_ = true, started_ = false;
+  bool surface_eos_ = false, flushed_ = false, flush_requested_ = false;
+  uint64_t execution_generation_ = 1, wait_generation_ = 1;
+  std::unique_ptr<InputSurface> input_surface_;
+  std::shared_ptr<PersistentInputSurface> persistent_input_;
+  std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
+  ~Codec() { if (input_surface_) input_surface_->Abandon(); }
+@CREATE_INPUT@
+@SET_INPUT@
+@ON_FRAME@
+};
+}  // namespace gesher::media
+
+namespace {
+using namespace gesher::media;
+thread_local android::sp<QueueSurface> producer;
+int checks = 0, failures = 0;
+void Check(bool condition, const char* why) {
+  ++checks;
+  if (!condition) { ++failures; std::fprintf(stderr, "FAIL codec input: %s\n", why); }
+}
+
+#if HAS_PERSISTENT_INPUT
+// Only observe the public InputSurface seams: the lease, callback lock and
+// source generation underneath these adapters are the complete production code.
+struct Notice {
+  std::mutex mu;
+  std::condition_variable cv;
+  int entered = 0;
+  bool open = false;
+  void Arrive() {
+    std::lock_guard<std::mutex> lock(mu);
+    ++entered; cv.notify_all();
+  }
+  void Hold() {
+    std::unique_lock<std::mutex> lock(mu);
+    ++entered; cv.notify_all();
+    if (!cv.wait_for(lock, std::chrono::seconds(5), [&] { return open; })) {
+      std::fprintf(stderr, "FAIL codec input: callback/replacement barrier timed out\n");
+      std::_Exit(92);
+    }
+  }
+  void Wait(int count) {
+    std::unique_lock<std::mutex> lock(mu);
+    if (!cv.wait_for(lock, std::chrono::seconds(5), [&] { return entered >= count; })) {
+      std::fprintf(stderr, "FAIL codec input: expected source operation did not complete\n");
+      std::_Exit(93);
+    }
+  }
+  void Open() {
+    std::lock_guard<std::mutex> lock(mu);
+    open = true; cv.notify_all();
+  }
+};
+struct SourceHooks {
+  std::function<void()> attach, install, abandon;
+};
+class ObservedInput final : public InputSurface {
+ public:
+  ObservedInput(std::unique_ptr<InputSurface> input, std::shared_ptr<SourceHooks> hooks)
+      : input_(std::move(input)), hooks_(std::move(hooks)) {}
+  jobject NewJavaSurface(JNIEnv* env) override { return input_->NewJavaSurface(env); }
+  void SetCallback(InputFrameCallback cb) override {
+    if (hooks_->install) hooks_->install();
+    input_->SetCallback(std::move(cb));
+  }
+  uint64_t frames() const override { return input_->frames(); }
+  bool persistent() const override { return input_->persistent(); }
+  void Abandon() override {
+    if (hooks_->abandon) hooks_->abandon();
+    input_->Abandon();
+  }
+ private:
+  std::unique_ptr<InputSurface> input_;
+  std::shared_ptr<SourceHooks> hooks_;
+};
+class ObservedSource final : public PersistentInputSurface {
+ public:
+  std::shared_ptr<PersistentInputSurface> source = CreatePersistentInputSurface();
+  std::shared_ptr<SourceHooks> hooks = std::make_shared<SourceHooks>();
+  jobject NewJavaSurface(JNIEnv* env) override { return source->NewJavaSurface(env); }
+  std::unique_ptr<InputSurface> Attach(int width, int height) override {
+    if (hooks->attach) hooks->attach();
+    auto input = source->Attach(width, height);
+    if (!input) return nullptr;
+    return std::make_unique<ObservedInput>(std::move(input), hooks);
+  }
+};
+void MutexAvailable(std::mutex& mu, const char* reason) {
+  const bool available = mu.try_lock();
+  if (available) mu.unlock();
+  Check(available, reason);
+  // A failing lock-order control must terminate rather than strand both worker
+  // threads in the very cycle this test is checking.
+  if (!available) std::_Exit(94);
+}
+void Post(const android::sp<QueueSurface>& queue) {
+  ANativeWindow_Buffer buffer;
+  if (queue->lock(&buffer, nullptr) != 0) std::_Exit(95);
+  std::fill_n(static_cast<uint32_t*>(buffer.bits), buffer.stride * buffer.height, 0xff00ff00);
+  if (queue->unlockAndPost() != 0) std::_Exit(96);
+}
+
+void States() {
+  auto source = CreatePersistentInputSurface();
+  Codec codec;
+  std::string error;
+  codec.configured_ = false;
+  Check(!codec.SetInputSurface(source, &error), "idle codec rejects persistent input");
+  codec.configured_ = true; codec.released_ = true;
+  Check(!codec.SetInputSurface(source, &error), "released codec rejects persistent input");
+  codec.released_ = false; codec.fatal_ = true;
+  Check(!codec.SetInputSurface(source, &error), "fatal codec rejects persistent input");
+  codec.fatal_ = false; codec.started_ = true;
+  Check(!codec.SetInputSurface(source, &error), "started codec rejects persistent input");
+  codec.started_ = false; codec.entry_.encoder = false;
+  Check(!codec.SetInputSurface(source, &error), "decoder rejects persistent input");
+  codec.entry_.encoder = true; codec.entry_.video = false;
+  Check(!codec.SetInputSurface(source, &error), "audio encoder rejects persistent input");
+  codec.entry_.video = true;
+  Check(codec.SetInputSurface(source, &error), "configured video encoder acquires persistent input");
+  Check(!codec.SetInputSurface(nullptr, &error), "null native source cannot fabricate a same-source success");
+  auto* original = codec.input_surface_.get();
+  Check(codec.SetInputSurface(source, &error) && codec.input_surface_.get() == original,
+        "repeated same-source set preserves the existing consumer lease");
+  Codec competing;
+  Check(!competing.SetInputSurface(source, &error), "another configured codec cannot steal input");
+  codec.input_surface_->Abandon(); codec.input_surface_.reset(); codec.persistent_input_.reset();
+  Check(competing.SetInputSurface(source, &error), "detachment makes source reusable by next codec");
+  Codec ordinary;
+  ordinary.CreateInputSurface(nullptr, &error);
+  Check(ordinary.input_surface_ && !ordinary.input_surface_->persistent(), "ordinary input remains ordinary");
+  Check(!ordinary.SetInputSurface(source, &error), "busy source rejection leaves ordinary input selected");
+  Check(ordinary.input_surface_ && !ordinary.input_surface_->persistent(), "failed replacement preserves the previous producer");
+  competing.input_surface_->Abandon(); competing.input_surface_.reset(); competing.persistent_input_.reset();
+  Check(ordinary.SetInputSurface(source, &error) && ordinary.input_surface_->persistent(),
+        "configured codec can replace its ordinary input with persistent input");
+  auto second = CreatePersistentInputSurface();
+  Check(ordinary.SetInputSurface(second, &error), "configured codec can select a different persistent source");
+  auto reusable = source->Attach(2, 2);
+  Check(reusable != nullptr, "previous persistent source is available after replacement");
+  Check(ordinary.CreateInputSurface(nullptr, &error) != nullptr && !ordinary.input_surface_->persistent(),
+        "configured createInputSurface replaces a persistent input with an ordinary producer");
+  Check(second->Attach(2, 2) != nullptr, "ordinary replacement releases the previous persistent lease");
+}
+
+void ReplacementQuiescence(bool create) {
+  Codec codec;
+  std::string error;
+  auto source = std::make_shared<ObservedSource>();
+  auto replacement = std::make_shared<ObservedSource>();
+  source->NewJavaSurface(nullptr);
+  const auto queue = producer;
+  Check(codec.SetInputSurface(source, &error), "quiescence fixture attaches its actual source");
+  Notice callback, install, abandoning, done;
+  std::atomic<int> callbacks{0};
+  codec.input_surface_->SetCallback([&](const uint32_t*, int, int, int64_t) {
+    callback.Hold();
+    std::lock_guard<std::mutex> lock(codec.mu_);
+    ++callbacks;
+  });
+  source->hooks->abandon = [&] { abandoning.Arrive(); };
+  if (!create) replacement->hooks->install = [&] { install.Hold(); };
+  std::thread publishing([&] { Post(queue); });
+  callback.Wait(1);
+  bool result = false;
+  std::atomic<bool> finished{false};
+  std::thread selecting([&] {
+    result = create ? codec.CreateInputSurface(nullptr, &error) != nullptr
+                    : codec.SetInputSurface(replacement, &error);
+    finished = true; done.Arrive();
+  });
+  if (!create) {
+    install.Wait(1);
+    MutexAvailable(codec.mu_, "new-source callback installation holds no codec mutex");
+    install.Open();
+  }
+  abandoning.Wait(1);
+  MutexAvailable(codec.mu_, "old-source quiescence holds no codec mutex");
+  Check(!finished, "replacement waits for the old admitted callback");
+  callback.Open();
+  done.Wait(1);
+  selecting.join(); publishing.join();
+  Check(result && callbacks == 1, "replacement and admitted old callback both finish");
+  Check(codec.input_surface_ && codec.input_surface_->persistent() != create,
+        "replacement selects the requested persistent or ordinary producer");
+  Check(source->source->Attach(2, 2) != nullptr, "quiesced old producer is reusable immediately");
+  source->hooks->abandon = nullptr;
+  replacement->hooks->install = nullptr;
+}
+
+void ReciprocalReplacement() {
+  Codec a, b;
+  auto source_a = std::make_shared<ObservedSource>();
+  auto source_b = std::make_shared<ObservedSource>();
+  std::string error_a, error_b;
+  source_a->NewJavaSurface(nullptr); const auto queue_a = producer;
+  source_b->NewJavaSurface(nullptr); const auto queue_b = producer;
+  Check(a.SetInputSurface(source_a, &error_a) && b.SetInputSurface(source_b, &error_b),
+        "two codecs attach distinct real sources");
+  Notice callbacks, attempts, completed;
+  std::atomic<int> returned{0};
+  a.input_surface_->SetCallback([&](const uint32_t*, int, int, int64_t) {
+    callbacks.Hold(); std::lock_guard<std::mutex> lock(a.mu_); ++returned;
+  });
+  b.input_surface_->SetCallback([&](const uint32_t*, int, int, int64_t) {
+    callbacks.Hold(); std::lock_guard<std::mutex> lock(b.mu_); ++returned;
+  });
+  source_a->hooks->attach = source_b->hooks->attach = [&] { attempts.Arrive(); };
+  std::thread publishing_a([&] { Post(queue_a); });
+  std::thread publishing_b([&] { Post(queue_b); });
+  callbacks.Wait(2);
+  bool selected_a = true, selected_b = true;
+  std::thread selecting_a([&] { selected_a = a.SetInputSurface(source_b, &error_a); completed.Arrive(); });
+  std::thread selecting_b([&] { selected_b = b.SetInputSurface(source_a, &error_b); completed.Arrive(); });
+  attempts.Wait(2);
+  MutexAvailable(a.mu_, "first reciprocal acquisition holds no codec mutex");
+  MutexAvailable(b.mu_, "second reciprocal acquisition holds no codec mutex");
+  callbacks.Open();
+  completed.Wait(2);
+  selecting_a.join(); selecting_b.join(); publishing_a.join(); publishing_b.join();
+  Check(!selected_a && !selected_b && returned == 2, "both busy swaps fail without deadlocking callbacks");
+  Check(a.persistent_input_ == source_a && b.persistent_input_ == source_b,
+        "failed reciprocal replacement preserves both chosen producers");
+  source_a->hooks->attach = source_b->hooks->attach = nullptr;
+}
+#endif
+
+void PixelsAndQueue() {
+  Codec codec;
+  codec.started_ = true;
+  codec.enc_params_ = {3, 5};
+  const uint32_t pixels[] = {0xff0000ff, 0xff00ff00, 0xffff0000, 0xffffffff};
+  for (int frame = 0; frame < 12; ++frame) codec.OnSurfaceFrame(pixels, 2, 2, 3000000 + frame * 1000);
+  Check(codec.surface_frames_.size() == 8, "active input retains bounded eight newest frames");
+  Check(codec.surface_frames_.front()->time_us == 3004 && codec.surface_frames_.back()->time_us == 3011,
+        "actual source timestamps and queue order are preserved");
+  const auto& frame = *codec.surface_frames_.front();
+  Check(frame.width == 3 && frame.height == 5 && frame.data.size() == 27,
+        "actual allocation has configured odd-size I420 planes");
+  for (int y = 0; y < 5; ++y) for (int x = 0; x < 3; ++x) {
+    const uint32_t c = pixels[(y * 2 / 5) * 2 + x * 2 / 3];
+    const int r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
+    const int expected = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+    Check(frame.y()[y * 3 + x] == expected, "Y plane comes from the supplied scaled pixels");
+  }
+  for (int y = 0; y < 3; ++y) for (int x = 0; x < 2; ++x) {
+    const uint32_t c = pixels[(std::min(y * 2, 4) * 2 / 5) * 2 + std::min(x * 2, 2) * 2 / 3];
+    const int r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
+    Check(frame.u()[y * 2 + x] == (((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128),
+          "U plane comes from supplied chroma samples");
+    Check(frame.v()[y * 2 + x] == (((112 * r - 94 * g - 18 * b + 128) >> 8) + 128),
+          "V plane comes from supplied chroma samples");
+  }
+  codec.OnSurfaceFrame(pixels, 2, 2, 0);
+  Check(codec.surface_frames_.back()->time_us == 123456789, "unspecified timestamp uses monotonic arrival");
+}
+
+void Work() {
+  const uint32_t pixel = 0xff129be3;
+  for (auto size : {std::pair{1280, 720}, std::pair{1920, 1080}, std::pair{3840, 2160}}) {
+    for (bool eos : {false, true}) {
+      Codec codec;
+      codec.enc_params_ = {size.first, size.second};
+      codec.started_ = eos; codec.surface_eos_ = eos;
+      conversions = converted_pixels = 0;
+      allocation_bytes = allocations = 0;
+      count_allocations = true;
+      const auto begin = std::chrono::steady_clock::now();
+      for (int frame = 0; frame < 30; ++frame) codec.OnSurfaceFrame(&pixel, 1, 1, 1000);
+      const auto end = std::chrono::steady_clock::now();
+      count_allocations = false;
+      Check(codec.surface_frames_.empty(), "inactive input never publishes frames");
+      std::printf("codec input work %dx%d %s: frames=30 allocations=%zu bytes=%zu conversions=%llu pixels=%llu elapsed_us=%lld\n",
+          size.first, size.second, eos ? "after-eos" : "before-start", allocations, allocation_bytes,
+          static_cast<unsigned long long>(conversions.load()),
+          static_cast<unsigned long long>(converted_pixels.load()),
+          static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()));
+#if HAS_PERSISTENT_INPUT
+      Check(allocations == 0 && conversions == 0, "inactive input does no frame allocation or conversion");
+#else
+      Check(allocations == 60 && conversions == 30, "baseline work control observes actual discarded allocations");
+#endif
+    }
+  }
+}
+
+void Race(bool flush) {
+  Codec codec;
+  codec.started_ = true;
+  { std::lock_guard<std::mutex> lock(gate_mu); gate_armed = true; gate_entered = gate_open = false; }
+  std::thread callback([&] { const uint32_t pixel = 0xffff0000; codec.OnSurfaceFrame(&pixel, 1, 1, 1000); });
+  {
+    std::unique_lock<std::mutex> lock(gate_mu);
+    if (!gate_cv.wait_for(lock, std::chrono::seconds(5), [] { return gate_entered; })) std::_Exit(91);
+  }
+  {
+    std::lock_guard<std::mutex> lock(codec.mu_);
+    if (flush) ++codec.wait_generation_;
+    else ++codec.execution_generation_;
+    // Model completed flush or a replaced execution while conversion was
+    // outside mu_. The admitted frame must not publish into that successor.
+  }
+  { std::lock_guard<std::mutex> lock(gate_mu); gate_open = true; gate_cv.notify_all(); }
+  callback.join();
+#if HAS_PERSISTENT_INPUT
+  Check(codec.surface_frames_.empty(), "conversion admitted before transition cannot publish into successor");
+#else
+  Check(codec.surface_frames_.size() == 1, "baseline control observes publication after a changed generation");
+#endif
+}
+}  // namespace
+
+namespace android {
+jobject android_view_Surface_createFromSurface(JNIEnv*, const sp<Surface>& surface) {
+  producer = static_cast<QueueSurface*>(surface.get());
+  return reinterpret_cast<jobject>(surface.get());
+}
+}  // namespace android
+
+int main() {
+#if HAS_PERSISTENT_INPUT
+  States();
+  ReplacementQuiescence(false); ReplacementQuiescence(true); ReciprocalReplacement();
+#endif
+  PixelsAndQueue(); Work(); Race(false); Race(true);
+  std::printf("codec input contracts: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}

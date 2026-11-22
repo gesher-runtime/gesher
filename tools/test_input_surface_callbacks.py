@@ -56,6 +56,8 @@ def main() -> int:
             "-DGESHER_INPUT_SURFACE_HOST", "-I" + str(work),
             str(work / "compat/media/video/input_surface.cc"),
             str(ROOT / "tests/media/input_surface_callback_test.cc"), "-o", str(binary)]
+        if b"class PersistentInputSurface" in production("compat/media/video/input_surface.h", args.source_ref):
+            command += ["-DGESHER_PERSISTENT_INPUT_TEST"]
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
                         "-fno-omit-frame-pointer"]

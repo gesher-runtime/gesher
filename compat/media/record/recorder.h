@@ -71,6 +71,8 @@ class Recorder {
   bool InError() const { return error_state_; }
   void EnterError() { error_state_ = true; }
   bool Prepare(std::string* error, bool* invalid_state = nullptr);
+  // Store the source before prepare; prepare takes its exclusive consumer lease.
+  bool SetInputSurface(std::shared_ptr<PersistentInputSurface> source);
   // The input Surface (video source SURFACE), after Prepare.
   InputSurface* input_surface();
   bool Start(std::string* error, bool* invalid_state = nullptr);
@@ -113,6 +115,7 @@ class Recorder {
   std::unique_ptr<VideoEncoder> video_enc_;
   VideoEncoderParams video_params_;
   std::unique_ptr<InputSurface> input_surface_;
+  std::shared_ptr<PersistentInputSurface> persistent_input_;
 
   std::thread audio_thread_, video_thread_;
   std::mutex mu_;

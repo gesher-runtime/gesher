@@ -100,9 +100,17 @@ struct ANativeWindow { int releases = 0; };
 void ANativeWindow_release(ANativeWindow* window) { ++window->releases; }
 struct FakeInput {
   explicit FakeInput(int& count) : abandonments(count) {}
+  ~FakeInput() {
+    if (destroying) {
+      destroying->Set();
+      Require(*destroy, "retired input destruction may finish after observing codec lock ownership");
+    }
+  }
   void Abandon() { ++abandonments; }
   int& abandonments;
+  Signal *destroying = nullptr, *destroy = nullptr;
 };
+using InputSurface = FakeInput;
 struct Slot {
   bool client = false;
   int size = 0, flags = 0;
@@ -172,6 +180,7 @@ class Codec {
   Slot inputs_[kSlots], outputs_[kSlots];
   std::unique_ptr<int> video_enc_, audio_enc_, video_, audio_;
   std::unique_ptr<FakeInput> input_surface_;
+  std::shared_ptr<void> persistent_input_;
   std::deque<int> surface_frames_, csd_, work_, ready_, config_, pending_config_;
   ANativeWindow* window_ = nullptr;
   std::shared_ptr<int> reader_;
@@ -315,12 +324,21 @@ void ReleaseResources() {
 #if STOP_REQUIRES_CONFIGURE
 void StopResources() {
   int abandonments = 0;
+  Signal destroying, destroy;
   Codec codec;
   codec.input_surface_ = std::make_unique<FakeInput>(abandonments);
+  codec.input_surface_->destroying = &destroying;
+  codec.input_surface_->destroy = &destroy;
   codec.pending_bitrate_ = 500'000;
   codec.force_key_ = true;
   Start(codec);
-  codec.Stop();
+  std::thread stopping([&] { codec.Stop(); });
+  Require(destroying, "stop destroys the retired lease");
+  const bool unlocked = codec.mu_.try_lock();
+  if (unlocked) codec.mu_.unlock();
+  Check(unlocked, "retired lease destruction acquires no source locks under the codec mutex");
+  destroy.Set();
+  stopping.join();
   Check(abandonments == 1 && codec.input_surface_ == nullptr,
         "stop disconnects the old input surface");
   Check(!codec.pending_bitrate_ && !codec.force_key_, "stop retires queued encoder controls");

@@ -69,7 +69,7 @@ function LineCheck([string] $Name, [string] $Out, [string[]] $Patterns, [int] $C
   $script:failed++
   if ($Tag -and -not $script:m3Printed[$Tag]) {
     $script:m3Printed[$Tag] = $true
-    ($Out -split "`n" | Where-Object { $_ -match 'RecordTest|GesherMedia|gesher-app|Exception|FATAL| F dalvikvm|JNI DETECTED|\s+at ' } |
+    ($Out -split "`n" | Where-Object { $_ -match 'RecordTest|persistent input:|GesherMedia|gesher-app|Exception|FATAL| F dalvikvm|JNI DETECTED|\s+at ' } |
       Select-Object -First 200) | Out-Host
   }
 }
@@ -263,8 +263,53 @@ if (Test-Path "$Dir/recordapp.apk") {
   RecordChecks 'Gesher device' $devOut $devCode
   $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
   Remove-Item Env:GESHER_CAMERA_TEST, Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_RECORD -ErrorAction SilentlyContinue
+
+  # A real EGL producer keeps the same connection while two AVC codecs and a
+  # recorder take successive exclusive leases. Decode all three actual files.
+  # Use ordinary runtime/soft AVC; no synthetic camera or microphone is involved.
+  $savedPersistentEncoder = [Environment]::GetEnvironmentVariable('GESHER_VIDEO_ENCODERS')
+  $savedPersistentAudio = [Environment]::GetEnvironmentVariable('GESHER_AUDIO_SOURCE')
+  $persistentPass = 'persistent input: PASS same EGL producer across codec-recorder-codec, exclusive owners, reset and release, 12 decoded frames'
+  $persistentFiles = @(
+    'persistent input: persistent-codec-first.mp4: decoded 3 real frames, colors and timestamps verified',
+    'persistent input: persistent-recorder.mp4: decoded 6 real frames, colors and timestamps verified',
+    'persistent input: persistent-codec-last.mp4: decoded 3 real frames, colors and timestamps verified')
+  try {
+    $env:GESHER_VIDEO_ENCODERS = 'soft'
+    Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
+    $persistentOut = RunTimed "$Dir/dalvikvm.exe" @($dvmRec + @('com.gesher.app.Main',
+      '--activity', 'com.gesher.recordapp.PersistentInputActivity', (NoDrive "$Dir/recordapp.apk"))) 150
+    $persistentCode = $LASTEXITCODE
+    LineCheck 'media3: persistent input Surface reuses one actual EGL producer through codec/recorder/codec and decodes every expected pixel' `
+      $persistentOut ($persistentFiles + @($persistentPass, 'persistent input: local EGL producer pid \d+ consumer pid \d+')) `
+      $persistentCode 'persistent-local' @('persistent input: FAILED')
+
+    $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+    $persistentLog = Join-Path $root 'logs/com.gesher.recordapp.log'
+    $persistentOffset = if (Test-Path -LiteralPath $persistentLog) { (Get-Item -LiteralPath $persistentLog).Length } else { 0 }
+    $persistentOut = RunTimed "$Dir/dalvikvm.exe" @($launcherRec + @('launch', (NoDrive "$Dir/recordapp.apk"),
+      '--activity', 'com.gesher.recordapp.PersistentInputActivity', '--ez', 'persistent.remote', 'true', '--headless', '--keep-task')) 180
+    $persistentCode = $LASTEXITCODE
+    if (Test-Path -LiteralPath $persistentLog) {
+      $persistentBytes = [IO.File]::ReadAllBytes($persistentLog)
+      if ($persistentBytes.Length -ge $persistentOffset) {
+        $persistentOut += "`n" + [Text.Encoding]::UTF8.GetString($persistentBytes, [int]$persistentOffset,
+          [int]($persistentBytes.Length - $persistentOffset))
+      } else {
+        $persistentOut += "`npersistent input: FAILED app log was truncated across launch"
+      }
+    }
+    LineCheck 'media3: a separate EGL process keeps the parceled producer alive across all three native consumers' `
+      $persistentOut ($persistentFiles + @($persistentPass, 'persistent input: separate EGL producer pid \d+ consumer pid \d+')) `
+      $persistentCode 'persistent-device' @('persistent input: FAILED')
+  } finally {
+    $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+    [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedPersistentEncoder)
+    [Environment]::SetEnvironmentVariable('GESHER_AUDIO_SOURCE', $savedPersistentAudio)
+  }
 } else {
-  Write-Host 'INFO  media3: recordapp.apk not in the build output; its checks skipped'
+  Write-Host 'FAIL  media3: recordapp.apk missing; persistent Surface public API acceptance is required'
+  $failed++
 }
 Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
 

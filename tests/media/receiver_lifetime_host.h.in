@@ -64,6 +64,13 @@ int RegisterMethods(JNIEnv* env, const char* name, const JNINativeMethod (&metho
 inline void EnsureAppName(JNIEnv*) {}
 inline int LegacyStreamType(JNIEnv*, jobject) { return 3; }
 inline bool MayRecordAudio(JNIEnv*) { return true; }
+// Persistent producer ownership has a separate complete-source JNI fixture.
+// This receiver-only observer must not silently accept that operation.
+class PersistentInputSurface;
+inline std::shared_ptr<PersistentInputSurface> GetPersistentInputSurface(JNIEnv* env, jobject) {
+  jniThrow(env, "java/lang/UnsupportedOperationException", "outside receiver lifetime fixture");
+  return {};
+}
 @GLOBAL_REFS@
 
 struct Gate {
@@ -153,6 +160,7 @@ struct Recorder {
   bool InError() const { return false; }
   void EnterError() {}
   InputSurface* input_surface() { return &surface; }
+  bool SetInputSurface(std::shared_ptr<PersistentInputSurface>) { return false; }
   bool Prepare(std::string*, bool* = nullptr) { recorder_gate.Pass(); return true; }
   bool Start(std::string*, bool* invalid_state = nullptr) {
     if (invalid_state != nullptr) *invalid_state = false;
