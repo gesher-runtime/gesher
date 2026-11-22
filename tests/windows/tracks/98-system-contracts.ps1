@@ -108,6 +108,13 @@ try {
     $providerIndexOut
   } @('ProviderAuthorityIndexTest all passed', 'PROVIDER_WORK packages=1000 queries=32')
 
+  $intentIndexOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'IntentCandidateIndexTest') 120
+  $intentIndexCode = $LASTEXITCODE
+  Check 'services: intent candidates preserve Android matching and package generations' {
+    $global:LASTEXITCODE = $intentIndexCode
+    $intentIndexOut
+  } @('IntentCandidateIndexTest contracts passed', 'INTENT_WORK packages=1000 kind=PROVIDER queries=32')
+
   $microgLibsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'MicrogAddonNativeLibsTest') 90
   $microgLibsCode = $LASTEXITCODE
   Check 'services: microG priv-app native libraries extracted idempotently with stale cleanup' {

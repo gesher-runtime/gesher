@@ -73,6 +73,25 @@ availability check requires the trusted server role and a visible Windows window
 station. A missing backend returns `START_INTENT_NOT_RESOLVED`; failure or closure
 after admission cancels the operation without launching a target.
 
+### The system document picker as a choice
+
+When the chooser's target is an implicit document request (`ACTION_GET_CONTENT`,
+`ACTION_OPEN_DOCUMENT`, `ACTION_CREATE_DOCUMENT`, `ACTION_OPEN_DOCUMENT_TREE` or
+`MediaStore.ACTION_PICK_IMAGES`) that the system picker resolves and accepts, the
+host picker is always listed after the application choices, as DocumentsUI or the
+photo picker is in Android's chooser. It is not only a fallback for an otherwise
+empty chooser. As the only choice it auto-launches unless
+`EXTRA_AUTO_LAUNCH_SINGLE_CHOICE` is false. Choosing it starts the original target
+in the picker under the chooser caller's identity, result recipient, request code
+and task. The chooser's `NEW_TASK`, `NO_USER_ACTION` and `NEW_DOCUMENT` flags carry
+over. A `NEW_TASK` chooser has already returned `RESULT_CANCELED`, so the picker
+then has no result recipient. A target that would not resolve, or whose request is
+invalid, gets no picker entry. The chooser then has fewer choices, rather than
+throwing from `startActivity`. The picker has no Android component to report, so a
+chooser with `EXTRA_CHOSEN_COMPONENT_INTENT_SENDER` or
+`EXTRA_CHOOSER_RESULT_INTENT_SENDER` does not list it. The picker launch runs
+outside the launch, activity-manager and package monitors.
+
 ## Supported scope and unavailable operations
 
 The chooser supports ordinary installed Android activities, initial and alternate

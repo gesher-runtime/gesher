@@ -14,6 +14,9 @@ import tempfile
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--java-home',type=Path,required=True)
 parser.add_argument('--okhttp-source',type=Path,required=True)
+parser.add_argument('--cache-only',action='store_true',help='Run private-cache contracts only')
+parser.add_argument('--cache-workload',action='store_true',help='Run just the network-work gate')
+parser.add_argument('--source-ref',help='Compile the unchanged HTTP module at a prior Git revision')
 parser.add_argument('--mode',action='append',choices=['ordinary', 'global-enabled', 'global-disabled'],
                     help='Run selected provider fixture mode(s), instead of all modes')
 args=parser.parse_args()
@@ -67,9 +70,13 @@ public class Platform {
 for protocol in ['http', 'https']:
  stubs[f'gesher/http/policy/{protocol}/Handler.java'] = f'''package gesher.http.policy.{protocol};
 public final class Handler extends java.net.URLStreamHandler {{
- private final com.android.okhttp.OkUrlFactory factory =
-  new com.android.okhttp.OkUrlFactory(new com.android.okhttp.OkHttpClient());
- protected java.net.URLConnection openConnection(java.net.URL url) {{ return factory.open(url); }}
+ protected java.net.URLConnection openConnection(java.net.URL url) {{
+  com.android.okhttp.OkHttpClient client = new com.android.okhttp.OkHttpClient();
+  java.net.ResponseCache cache = java.net.ResponseCache.getDefault();
+  if(cache!=null)com.android.okhttp.internal.Internal.instance.setCache(client,
+   new com.android.okhttp.internal.huc.CacheAdapter(cache));
+  return new com.android.okhttp.OkUrlFactory(client).open(url);
+ }}
  protected int getDefaultPort() {{ return {80 if protocol == 'http' else 443}; }}
 }}'''
 sources=[]
@@ -78,10 +85,28 @@ for name,content in stubs.items():
 for part in ['okhttp','okhttp-urlconnection','okio/okio']:
  sources+=sorted((aosp/part/'src/main/java').rglob('*.java'))
 sources+=[aosp/'android/src/main/java/com/android/okhttp/internal/Version.java']
-sources+=sorted((root/'app/java/android/net/http').glob('*.java'))
+for name in ['CacheAdapter.java', 'JavaApiConverter.java']:
+ sources+=[aosp/'okhttp-android-support/src/main/java/com/android/okhttp/internal/huc'/name]
+if args.source_ref:
+ names=subprocess.check_output(['git','ls-tree','--name-only',args.source_ref+':app/java/android/net/http'],cwd=root,text=True).splitlines()
+ for name in names:
+  if name.endswith('.java'):
+   target=out/'historical'/name; target.parent.mkdir(parents=True,exist_ok=True)
+   target.write_bytes(subprocess.check_output(['git','show',args.source_ref+':app/java/android/net/http/'+name],cwd=root))
+   sources.append(target)
+else:
+ sources+=sorted((root/'app/java/android/net/http').glob('*.java'))
 sources+=[root/'tests/net/HttpEngineProtocolPolicyTest.java', root/'tests/net/HttpEngineTlsPolicyHostTest.java']
+sources+=[root/'tests/net/HttpEngineCacheTest.java',root/'tests/net/HttpEngineConnectionLifetimeTest.java']
 command=[str(jdk/'javac'),'--release','17','-encoding','UTF-8','-d',str(classes),*map(str,sources)]
 subprocess.run(command,check=True,timeout=60)
+subprocess.run([str(jdk/'java'),'-cp',str(classes),'HttpEngineCacheTest','--host',
+                *(['--workload'] if args.cache_workload else [])],check=True,timeout=90)
+if not args.cache_workload:
+ subprocess.run([str(jdk/'java'),'-cp',str(classes),'HttpEngineConnectionLifetimeTest','--host'],check=True,timeout=90)
+if args.cache_only or args.cache_workload:
+ temporary.cleanup()
+ raise SystemExit(0)
 for mode in args.mode or ['ordinary', 'global-enabled', 'global-disabled']:
  subprocess.run([str(jdk/'java'),'-cp',str(classes),'HttpEngineProtocolPolicyTest','--host',
                  mode],check=True,timeout=35)
