@@ -212,7 +212,9 @@ jobs:
           fetch-depth: 0
       - name: Windows test shard coverage, dependencies and failure controls
         shell: pwsh
-        run: tests/windows/test-test-shards.ps1
+        run: |
+          tests/windows/test-test-shards.ps1
+          tests/windows/test-bitmap-shared-gate.ps1
 
       - name: Wi-Fi specifier native evidence checker contracts
         shell: pwsh
@@ -345,6 +347,7 @@ jobs:
           python3 tools/test_binder_receive_views.py --sanitize
           python3 tools/test_camera_capture_allocations.py --sanitize
           python3 tools/test_layered_bitmap_cache.py --sanitize
+          python3 tools/test_bitmap_shared.py --sanitize
           python3 tools/test_camera_conversion_allocations.py --sanitize
           python3 tools/test_surface_present_allocations.py --sanitize
           python3 tools/test_d3d11_readback.py --sanitize
