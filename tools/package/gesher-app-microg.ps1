@@ -5,6 +5,8 @@ param(
     [string] $CompanionApk,
     [string] $GsfProxyApk,
     [string] $StoreApk,
+    # The microG release the passed APKs are (Setup's own downloads).
+    [string] $Release,
     [switch] $AutoDownload,
     [switch] $InstallStore,
     [switch] $StoreOnly,
@@ -58,7 +60,7 @@ function Install-AuroraStore {
     }
 if ($Disable -and $Remove) { throw (Get-GesherText 'microg_choose') }
 if (($Disable -or $Remove) -and ($GmsCoreApk -or $CompanionApk -or $GsfProxyApk -or
-        $StoreApk -or $AutoDownload -or $InstallStore -or $StoreOnly)) {
+        $Release -or $StoreApk -or $AutoDownload -or $InstallStore -or $StoreOnly)) {
     throw (Get-GesherText 'microg_no_files')
 }
 if ($StoreOnly -or ($InstallStore -and -not $AutoDownload -and -not $GmsCoreApk -and
@@ -81,6 +83,8 @@ if (Test-Path -LiteralPath $ready) {
 }
 if ($Remove) {
     if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker }
+    $releaseFile = Join-Path $ProfileRoot 'microg.release'
+    if (Test-Path -LiteralPath $releaseFile) { Remove-Item -LiteralPath $releaseFile }
     foreach ($package in $packages) {
         # Only known filenames; never recursively remove application/account data.
         foreach ($name in 'base.apk', 'base.apk.new') {
@@ -219,6 +223,19 @@ try {
         Move-Item -LiteralPath (Join-Path $slot 'base.apk.new') -Destination (Join-Path $slot 'base.apk') -Force
     }
     Set-Content -LiteralPath $marker -Value 'official-microg-v1' -Encoding ASCII
+    # The release Setup compares to offer a microG update (gesher.iss
+    # MicrogRelease): the one -AutoDownload fetches when no APK was passed, or
+    # the -Release Setup gives for its own downloads; otherwise unknown.
+    $releaseFile = Join-Path $ProfileRoot 'microg.release'
+    $passed = @('GmsCoreApk', 'CompanionApk', 'GsfProxyApk' |
+        Where-Object { $PSBoundParameters.ContainsKey($_) }).Count
+    $stagedRelease = if ($Release) { $Release }
+        elseif ($AutoDownload -and -not $passed) { 'v0.3.17.252432' }
+    if ($stagedRelease) {
+        Set-Content -LiteralPath $releaseFile -Value $stagedRelease -Encoding ASCII
+    } elseif (Test-Path -LiteralPath $releaseFile) {
+        Remove-Item -LiteralPath $releaseFile
+    }
 
     Initialize-MicrogDefaults $ProfileRoot
 

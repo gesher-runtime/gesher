@@ -14,6 +14,25 @@ Gesher's icon, `tools/package/gesher.ico` (a bridge, drawn by
 Programs' (`UninstallDisplayIcon`), the Start menu entries' and that of an
 `.apk` file Gesher has not installed.
 
+## microG on update
+
+Setup recognizes microG that `gesher-app-microg.ps1` staged in the user's
+profile (`%LOCALAPPDATA%\Gesher\microg.enabled` and GmsCore's
+`system\priv-app\com.google.android.gms\base.apk`). Without it, Setup offers
+the microG installation unchecked. With it, Setup compares
+`%LOCALAPPDATA%\Gesher\microg.release` with the release it downloads
+(`MicrogRelease` in `gesher.iss`): on a match it offers nothing; otherwise,
+including microG staged from APKs the user supplied (no recorded release), it
+offers the update, checked (a silent run keeps `/TASKS`, `/MERGETASKS` and the
+previous choice, and goes on without the optional downloads if they fail).
+`gesher-app-microg.ps1` records the release right after staging: the `-Release`
+Setup passes with its own downloads, or the one `-AutoDownload` fetches when no
+APK is passed; staging other APKs or `-Remove` clears it. The update replaces only the verified APK slots, keeping
+microG's data and accounts.
+
+Setup's finish page does not offer to open the README; the Start menu entry
+does.
+
 ## The `.apk` association
 
 Everything is per user, under `HKCU\Software\Classes`:
