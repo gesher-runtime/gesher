@@ -309,3 +309,57 @@ appended by that launch so a previous pass cannot satisfy it.
 physical capture hardware.** The new Windows acceptance gate remains pending
 the matching full CI run. No complete Windows/Android runtime or hardware pass
 is inferred from the host adapters, compile results or earlier PRs.
+
+## Full-CI fixture and per-job dependency repair
+
+The published feature head `d956bc20c923e8e4c4053a66f495a2f86dd276cc`
+failed its full fork run
+[45066197424](https://github.com/yom-chadash/gesher/actions/runs/45066197424).
+The complete 62-job result is **40 success, 7 failure and 15 skipped**. In
+addition to this build failure, the standalone branch hit the existing canonical
+fork TCP/DNS supplier guards and the three required downstream aggregates.
+The direct [build log](https://github.com/yom-chadash/gesher/actions/runs/45066197424/job/137342798014)
+reports `capture.cc:441`: the existing capture-failure adapter extracts the
+actual `Recorder::AudioLoop` but its declared Recorder test boundary was missing
+the new `std::atomic<bool> has_rolled_over_{false}` member. The same compiler
+error also blocked the separate combined QA run
+[45067016134](https://github.com/yom-chadash/gesher/actions/runs/45067016134/job/137345509078).
+That separate QA run finished with **42 success, 5 failure and 15 skipped**:
+the build failure, the dependency omission below and three failed aggregates.
+
+The repair adds that one field to the test boundary. It leaves the production
+Recorder, source extraction, all capture assertions, compiler flags, timeouts,
+synthetic-input isolation and required Windows execution unchanged. The exact
+pre-repair x86-64 command reproduced the reported undeclared-identifier error.
+Afterward `tools/test_capture_failures.py --compile-only` succeeds with both
+publisher LLVM-MinGW `20261006` targets, `x86_64-w64-mingw32-clang++` and
+`aarch64-w64-mingw32-clang++`. Each command builds the production-capture binary,
+separate explicit-fixture binary and actual WASAPI-boundary binary: six Windows
+executables total. These are compile/link results, not Windows execution or
+verification of the separately selected CI compiler role.
+
+The combined QA [artifact-preflight log](https://github.com/yom-chadash/gesher/actions/runs/45067016134/job/137345508681)
+also exposes a real dependency omission: its callback, codec-input and
+checked-JNI gates passed 5,087, 82 and 1,227 checks before the persistent-recorder
+helper failed to launch `ffmpeg`. The existing FFmpeg installation belongs to
+`build-framework-assets`, a different job on a different runner. An early
+`artifact-preflight` step now explicitly installs the same `ffmpeg` package
+(including `ffprobe`); the separate framework-assets installation remains.
+Neither helper skips decoding, changes its inputs, weakens its deadline nor
+converts a missing executable into success.
+
+For this repair, the unchanged complete production rollover gate passes again:
+**1,617 ASan/UBSan checks**, **15 decoded MP4 files**, **93 matching AAC packets**
+and **30 H.264 frames**. A read-only replay of the actual persistent-recorder
+helper on the already-composed QA tree `8e7aff7ba8fb1ab896e52fa7f8d29e4af7046cb8`
+passes **81 checks** and independently demuxes/decodes both three-frame MP4s.
+That replay exercises the helper which failed for the missing dependency;
+the runtime boundaries remain the explicit host encoder/queue adapters.
+The actual YAML is parsed to verify installation in each consuming job, with
+the QA workflow addition checked in memory without editing the QA branch.
+Every tracked `compat/media` production file remains byte-identical to
+pre-repair local feature head `c21bcbb7`.
+
+These local results repair the observed fixture/dependency failures. The old
+full runs remain failed; no corrected full-CI or Windows/ART/EGL recorder pass
+is claimed until a new run executes the repaired source.

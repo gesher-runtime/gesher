@@ -210,6 +210,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install media contract encoder and decoder tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Windows test shard coverage, dependencies and failure controls
         shell: pwsh
         run: tests/windows/test-test-shards.ps1
