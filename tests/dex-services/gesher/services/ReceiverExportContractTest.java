@@ -36,6 +36,12 @@ import sun.misc.Unsafe;
 /** Android 16 r4 registration contracts through the actual ActivityManager entry point. */
 public final class ReceiverExportContractTest {
     private static final String ACTION = "fixture.receiver.exports.EVENT";
+    // media3 RequirementsWatcher.start() registers these without export flags; on API 24+
+    // its network requirement uses a NetworkCallback and leaves the filter without actions.
+    private static final String[] MEDIA3_SYSTEM_ACTIONS = {
+            "android.net.conn.CONNECTIVITY_CHANGE", Intent.ACTION_POWER_CONNECTED,
+            Intent.ACTION_POWER_DISCONNECTED, "android.os.action.DEVICE_IDLE_MODE_CHANGED",
+            Intent.ACTION_DEVICE_STORAGE_LOW, Intent.ACTION_DEVICE_STORAGE_OK};
     private static int checks;
     private static final Unsafe UNSAFE;
     static {
@@ -147,6 +153,7 @@ public final class ReceiverExportContractTest {
                 // Host lacks framework-res. These definitions are in the pinned Android manifest.
                 ((Set<String>)get(catalog, "mProtectedBroadcasts")).add(Intent.ACTION_BOOT_COMPLETED);
                 ((Set<String>)get(catalog, "mProtectedBroadcasts")).add(Intent.ACTION_BATTERY_CHANGED);
+                ((Set<String>)get(catalog, "mProtectedBroadcasts")).addAll(List.of(MEDIA3_SYSTEM_ACTIONS));
                 PermissionInfo internet = new PermissionInfo();
                 internet.name = "android.permission.INTERNET"; internet.packageName = "android";
                 internet.protectionLevel = PermissionInfo.PROTECTION_NORMAL;
@@ -178,6 +185,18 @@ public final class ReceiverExportContractTest {
             app.call(() -> am.unregisterReceiver(receiver));
             check(registrations() == before, "Unregister leaked a receiver");
         }
+        /** Registers, reads the published export decision, and unregisters. */
+        boolean exported(App app, IntentFilter filter, int flags) throws Exception {
+            Receiver receiver = new Receiver(); int before = registrations();
+            register(app, receiver, filter, flags);
+            check(registrations() == before + 1, "Accepted registration did not enter the real controller");
+            Object list = ((Map<?,?>)get(controller, "mRegistered")).get(receiver.asBinder());
+            List<?> filters = (List<?>)get(list, "filters");
+            boolean result = (Boolean)get(filters.get(filters.size() - 1), "exported");
+            app.call(() -> am.unregisterReceiver(receiver));
+            check(registrations() == before, "Unregister leaked a receiver");
+            return result;
+        }
         void denied(App app, IntentFilter filter, int flags, Class<? extends Throwable> error) throws Exception {
             int before = registrations();
             rejects(error, () -> register(app, new Receiver(), filter, flags));
@@ -197,7 +216,27 @@ public final class ReceiverExportContractTest {
             IntentFilter custom = new IntentFilter(ACTION);
             for (App app : List.of(h.modern, h.latest)) {
                 h.denied(app, custom, 0, SecurityException.class);
-                h.denied(app, new IntentFilter(), 0, SecurityException.class);
+                // Android 16 BroadcastController starts onlyProtectedBroadcasts at true and
+                // only clears it per action: an empty filter needs no explicit flag.
+                check(h.exported(app, new IntentFilter(), 0), "Empty filter was not exported by default");
+                check(!h.exported(app, new IntentFilter(), Context.RECEIVER_NOT_EXPORTED),
+                        "Empty filter ignored RECEIVER_NOT_EXPORTED");
+                h.denied(app, new IntentFilter(), Context.RECEIVER_EXPORTED | Context.RECEIVER_NOT_EXPORTED,
+                        IllegalArgumentException.class);
+                h.denied(app, new IntentFilter(), Context.RECEIVER_NOT_EXPORTED
+                        | Context.RECEIVER_VISIBLE_TO_INSTANT_APPS, IllegalArgumentException.class);
+                // Every media3 RequirementsWatcher filter combination, then all of them at once.
+                IntentFilter media3All = new IntentFilter();
+                for (String[] combination : new String[][]{{MEDIA3_SYSTEM_ACTIONS[0]},
+                        {MEDIA3_SYSTEM_ACTIONS[1], MEDIA3_SYSTEM_ACTIONS[2]}, {MEDIA3_SYSTEM_ACTIONS[3]},
+                        {MEDIA3_SYSTEM_ACTIONS[4], MEDIA3_SYSTEM_ACTIONS[5]}}) {
+                    IntentFilter media3 = new IntentFilter();
+                    for (String action : combination) { media3.addAction(action); media3All.addAction(action); }
+                    check(h.exported(app, media3, 0), "Protected media3 filter was not exported by default");
+                }
+                check(h.exported(app, media3All, 0), "Combined media3 filter was not exported by default");
+                media3All.addAction(ACTION);
+                h.denied(app, media3All, 0, SecurityException.class);
                 h.denied(app, custom, Context.RECEIVER_VISIBLE_TO_INSTANT_APPS, SecurityException.class);
                 h.allowed(app, custom, Context.RECEIVER_EXPORTED);
                 h.allowed(app, custom, Context.RECEIVER_NOT_EXPORTED);
@@ -224,6 +263,8 @@ public final class ReceiverExportContractTest {
             if (!binder) {
                 set(h.catalog, "mFrameworkRead", false);
                 h.denied(h.modern, new IntentFilter(Intent.ACTION_BOOT_COMPLETED), 0, SecurityException.class);
+                // Android consults no catalog for a filter without actions.
+                h.allowed(h.modern, new IntentFilter(), 0);
                 set(h.catalog, "mFrameworkRead", true);
             }
             Receiver hidden = new Receiver(), exported = new Receiver(), legacy = new Receiver();

@@ -753,7 +753,9 @@ final class BroadcastController {
                 && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
             throw new IllegalArgumentException("A non-exported receiver cannot be visible to instant apps");
         }
-        boolean onlyProtected = filter.countActions() != 0;
+        // Android starts from true and clears it for any unprotected action, so a
+        // filter without actions (it matches no broadcast) needs no explicit flag.
+        boolean onlyProtected = true;
         for (int i = 0; onlyProtected && i < filter.countActions(); i++) {
             // A failed catalog denies unknown senders, but cannot prove this exemption.
             onlyProtected = mPm.permissions().isKnownProtectedBroadcast(filter.getAction(i));

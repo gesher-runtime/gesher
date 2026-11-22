@@ -16,11 +16,15 @@ identity before applying the export policy and before allocating receiver state.
 | SDK 34+ UID, non-system action, no explicit export flag | `SecurityException` |
 | SDK 34+ UID, visible-to-instant-apps plus not-exported | `IllegalArgumentException` |
 | Exclusively protected system actions | Explicit export flag is optional |
+| Filter with no actions | Explicit export flag is optional |
 | Null receiver querying sticky broadcasts | Explicit export flag is optional |
 | Legacy UID without not-exported | Exported by default |
 
-A filter mixing protected and ordinary actions is not exempt. A filter with no
-actions also requires an explicit flag for a modern UID. An unreadable framework
+A filter mixing protected and ordinary actions is not exempt. Android starts
+`onlyProtectedBroadcasts` at true and clears it only for an unprotected action, so
+a filter with no actions is exempt, exported unless not-exported is requested, and
+matches no broadcast. media3 `RequirementsWatcher` registers such a filter without
+flags for its default network requirement on API 24+. An unreadable framework
 catalog cannot establish the protected-action exemption. The existing sender
 policy still denies unknown protected actions when catalog loading fails.
 
