@@ -112,6 +112,12 @@ static void CALLBACK InspectHostPrompt(HWND dialog, UINT message, UINT_PTR timer
   HWND accept = GetDlgItem(dialog, prompt_confirmation ? IDYES : IDOK);
   HWND deny = GetDlgItem(dialog, IDCANCEL);
   Check(text != NULL && accept != NULL, "host prompt has readable text and an action");
+  Check(GetWindow(dialog, GW_OWNER) == NULL && (GetWindowLongW(dialog, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0,
+      "unowned host prompt gets its own taskbar button");
+  Check((SendMessageW(dialog, WM_GETICON, ICON_BIG, 0) != 0) == expect_icon,
+      expect_icon ? "gesher.ico is the host prompt's taskbar icon" : "no host prompt icon without gesher.ico (big)");
+  Check((SendMessageW(dialog, WM_GETICON, ICON_SMALL, 0) != 0) == expect_icon,
+      expect_icon ? "gesher.ico is the host prompt's title-bar icon" : "no host prompt icon without gesher.ico (small)");
   Check((deny != NULL) == prompt_confirmation, "only confirmations provide a deny action");
   Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) ==
       (prompt_confirmation ? IDCANCEL : IDOK), "prompt default is safe");
@@ -271,7 +277,7 @@ int main(void) {
       printf("scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", action, allowed);
     }
   }
-  if (fixture_icon) DeleteFileW(icon_path);
+  // The host prompts below share the icon helper; they run with gesher.ico.
   // Account token consent is always default-No; Enter, Escape and close deny.
   for (int locale = 0; locale < 2; ++locale) {
     language = locale ? GESHER_UI_HE : GESHER_UI_EN;
@@ -313,6 +319,7 @@ int main(void) {
   Check(GesherHostPrompt(GesherUiText(language, "brand"), prompt_message,
       GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL),
       "oversized information popup is presented");
+  if (fixture_icon) DeleteFileW(icon_path);
   UnhookWindowsHookEx(hook);
   SetThreadDesktop(original);
   CloseDesktop(desktop);

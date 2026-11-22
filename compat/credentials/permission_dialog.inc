@@ -11,31 +11,10 @@ typedef struct {
   const WCHAR* permissions;
   HFONT heading_font;
   HFONT brand_font;
-  HICON big_icon;
-  HICON small_icon;
   GesherHostTheme theme;
+  GesherHostIcons icons;
   BOOL allowed;
 } PermissionDialogState;
-
-// Gesher's icon for the title bar and taskbar: gesher.ico next to the module
-// holding this code (the installer puts it beside libgesher_account_crypto.so).
-// Without the file the dialog keeps working, just without its own icon.
-static void PermissionIcons(PermissionDialogState* state) {
-  HMODULE module = NULL;
-  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-          (LPCWSTR)(UINT_PTR)&PermissionIcons, &module)) return;
-  WCHAR path[MAX_PATH + 16];
-  DWORD length = GetModuleFileNameW(module, path, MAX_PATH);
-  if (length == 0 || length >= MAX_PATH) return;
-  WCHAR* name = path;
-  for (WCHAR* at = path; *at; ++at) if (*at == L'\\' || *at == L'/') name = at + 1;
-  const WCHAR file[] = L"gesher.ico";
-  for (SIZE_T i = 0; i < sizeof(file) / sizeof(file[0]); ++i) name[i] = file[i];
-  state->big_icon = (HICON)LoadImageW(NULL, path, IMAGE_ICON,
-      GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_LOADFROMFILE);
-  state->small_icon = (HICON)LoadImageW(NULL, path, IMAGE_ICON,
-      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE);
-}
 
 static HWND PermissionControl(HWND dialog, DWORD extra, const WCHAR* klass,
         const WCHAR* text, DWORD style, int id, int x, int y, int width, int height) {
@@ -87,8 +66,7 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
     GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
     GesherHostSetFont(brand, &state->brand_font, 110, FW_BOLD);
     SendMessageW(dialog, DM_SETDEFID, IDCANCEL, 0);
-    if (state->big_icon) SendMessageW(dialog, WM_SETICON, ICON_BIG, (LPARAM)state->big_icon);
-    if (state->small_icon) SendMessageW(dialog, WM_SETICON, ICON_SMALL, (LPARAM)state->small_icon);
+    GesherHostSetIcons(dialog, &state->icons);
     // Request foreground once; never keep the consent window permanently topmost.
     if (!SetForegroundWindow(dialog)) {
       FLASHWINFO flash = {sizeof(flash), dialog, FLASHW_TRAY, 3, 0};
@@ -129,7 +107,6 @@ static BOOL PermissionDialog(enum GesherUiLanguage language, const WCHAR* packag
   state.permissions = permissions;
   union { DWORD alignment; WORD words[128]; } buffer = {0};
   DLGTEMPLATE* dialog = (DLGTEMPLATE*)buffer.words;
-  // DS_MODALFRAME hides only the default icon, not one set with WM_SETICON.
   dialog->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER | DS_SETFONT;
   dialog->dwExtendedStyle = GesherUiRtl(language) ? WS_EX_RTLREADING : 0;
   dialog->cx = 250;
@@ -146,10 +123,8 @@ static BOOL PermissionDialog(enum GesherUiLanguage language, const WCHAR* packag
   *at++ = 9;
   for (SIZE_T i = 0; i < sizeof(font) / sizeof(font[0]); ++i) *at++ = font[i];
   // Failure, Esc, closing and the default button all deny. Only Allow changes state.
-  PermissionIcons(&state);
+  GesherHostLoadIcons(&state.icons);
   DialogBoxIndirectParamW(GetModuleHandleW(NULL), dialog, NULL, PermissionDialogProc, (LPARAM)&state);
-  // WM_SETICON does not take ownership; the window is gone now.
-  if (state.big_icon) DestroyIcon(state.big_icon);
-  if (state.small_icon) DestroyIcon(state.small_icon);
+  GesherHostFreeIcons(&state.icons);
   return state.allowed;
 }
