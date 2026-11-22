@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.FileUtils;
 import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -44,12 +45,13 @@ final class DocumentPicker {
         if (intent == null || intent.getComponent() != null || intent.getPackage() != null) return false;
         String action = intent.getAction();
         return Intent.ACTION_OPEN_DOCUMENT.equals(action) || Intent.ACTION_CREATE_DOCUMENT.equals(action)
-                || Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action) || Intent.ACTION_GET_CONTENT.equals(action);
+                || Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action) || Intent.ACTION_GET_CONTENT.equals(action)
+                || MediaStore.ACTION_PICK_IMAGES.equals(action);
     }
 
     static final class Request {
-        final int mode, targetSdk;
-        final boolean multiple, getContent, localOnly;
+        final int mode, targetSdk, maxItems;
+        final boolean multiple, getContent, pickImages, localOnly;
         final String title, suggestedName, initialDirectory, filter, extension;
         final String mimeType;
         final String[] mimeTypes;
@@ -59,25 +61,51 @@ final class DocumentPicker {
             Intent intent = new Intent(original);
             String action = intent.getAction();
             this.targetSdk = targetSdk;
+            pickImages = MediaStore.ACTION_PICK_IMAGES.equals(action);
             mode = Intent.ACTION_OPEN_DOCUMENT_TREE.equals(action) ? TREE
                     : Intent.ACTION_CREATE_DOCUMENT.equals(action) ? CREATE : OPEN;
             getContent = Intent.ACTION_GET_CONTENT.equals(action);
-            multiple = mode == OPEN && intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
-            localOnly = intent.getBooleanExtra(Intent.EXTRA_LOCAL_ONLY, false);
-            mimeType = resolvedType != null ? resolvedType : intent.getType();
-            if (mode != TREE && !validMime(mimeType)) throw new IllegalArgumentException("Missing or invalid MIME type");
-            if (mode == CREATE && (mimeType.indexOf('*') >= 0
-                    || DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType))) {
-                throw new IllegalArgumentException("CREATE_DOCUMENT requires a concrete file MIME type");
+            if (pickImages) {
+                if (intent.hasExtra(MediaStore.EXTRA_PICK_IMAGES_MAX)) {
+                    int limit = intent.getIntExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, -1);
+                    if (limit < 1 || limit > MediaStore.getPickImagesMaxLimit()) {
+                        throw new IllegalArgumentException("Invalid EXTRA_PICK_IMAGES_MAX limit");
+                    }
+                    multiple = limit > 1;
+                    maxItems = limit;
+                } else {
+                    multiple = intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
+                    maxItems = multiple ? MediaStore.getPickImagesMaxLimit() : 1;
+                }
+            } else {
+                multiple = mode == OPEN && intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
+                maxItems = multiple ? 0 : 1;
             }
+            localOnly = intent.getBooleanExtra(Intent.EXTRA_LOCAL_ONLY, false);
+            String explicitType = resolvedType != null ? resolvedType : intent.getType();
             String[] extras = mode == OPEN ? intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES) : null;
-            mimeTypes = mode == TREE ? new String[0] : extras != null && extras.length != 0
-                    ? extras.clone() : new String[]{mimeType};
+            if (pickImages && explicitType == null) {
+                mimeType = "*/*";
+                mimeTypes = extras != null && extras.length != 0
+                        ? extras.clone() : new String[]{"image/*", "video/*"};
+            } else {
+                mimeType = explicitType;
+                if (mode != TREE && !validMime(mimeType)) {
+                    throw new IllegalArgumentException("Missing or invalid MIME type");
+                }
+                if (mode == CREATE && (mimeType.indexOf('*') >= 0
+                        || DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType))) {
+                    throw new IllegalArgumentException("CREATE_DOCUMENT requires a concrete file MIME type");
+                }
+                mimeTypes = mode == TREE ? new String[0] : extras != null && extras.length != 0
+                        ? extras.clone() : new String[]{mimeType};
+            }
             for (String type : mimeTypes) if (!validMime(type)) throw new IllegalArgumentException("Invalid MIME filter");
-            title = mode == CREATE ? "Create document" : mode == TREE ? "Select folder" : "Open document";
+            title = pickImages ? "Select media"
+                    : mode == CREATE ? "Create document" : mode == TREE ? "Select folder" : "Open document";
             String suggested = mode == CREATE ? intent.getStringExtra(Intent.EXTRA_TITLE) : null;
             suggestedName = suggested == null ? "" : FileUtils.buildValidFatFilename(suggested);
-            extension = mode == CREATE ? libcore.content.type.MimeMap.getDefault()
+            extension = mode == CREATE ? DocumentsStorageProvider.mimeMap()
                     .guessExtensionFromMimeType(mimeType) : null;
             initialDirectory = initialDirectory(intent.getParcelableExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.class));
             filter = buildFilter(mimeTypes);
@@ -98,7 +126,7 @@ final class DocumentPicker {
     private static String buildFilter(String[] mimeTypes) {
         for (String type : mimeTypes) if ("*/*".equals(type)) return "*";
         Set<String> extensions = new java.util.TreeSet<>();
-        libcore.content.type.MimeMap map = libcore.content.type.MimeMap.getDefault();
+        libcore.content.type.MimeMap map = DocumentsStorageProvider.mimeMap();
         for (String extension : map.extensions()) {
             if (!extension.matches("[A-Za-z0-9][A-Za-z0-9_.+\\-]*")) continue;
             String actual = map.guessMimeTypeFromExtension(extension);
@@ -168,7 +196,8 @@ final class DocumentPicker {
     static Result select(Request request, String[] selected, DocumentsStorageProvider provider,
             Backend backend) throws IOException {
         if (selected == null || selected.length == 0) return null;
-        if (!request.multiple && selected.length != 1) {
+        if ((!request.multiple && selected.length != 1)
+                || (request.maxItems > 0 && selected.length > request.maxItems)) {
             throw new IOException("Selection count does not match the Android request");
         }
         File created = null;
@@ -219,7 +248,11 @@ final class DocumentPicker {
                 mimeTypes.add(DocumentsStorageProvider.mimeType(file));
             }
             int flags = Intent.FLAG_GRANT_READ_URI_PERMISSION;
-            if (!request.getContent) flags |= Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+            if (request.pickImages) {
+                flags |= Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+            } else if (!request.getContent) {
+                flags |= Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+            }
             if (request.mode == TREE) flags |= Intent.FLAG_GRANT_PREFIX_URI_PERMISSION;
             Intent data = new Intent().addFlags(flags);
             if (uris.size() == 1) data.setDataAndType(uris.get(0), mimeTypes.iterator().next());

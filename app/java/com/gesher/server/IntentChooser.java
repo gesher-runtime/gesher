@@ -84,6 +84,7 @@ final class IntentChooser {
     final List<Option> options = new ArrayList<>();
     final String title;
     final IntentSender callback;
+    final Intent documentTarget;
     final boolean autoLaunch;
     final boolean unsupported;
     private final android.content.ContentResolver resolver;
@@ -106,6 +107,9 @@ final class IntentChooser {
             throw new IllegalArgumentException("Invalid chosen component IntentSender");
         }
         callback = (IntentSender) sender;
+        documentTarget = target.getSelector() == null && DocumentPicker.handles(target)
+                && callback == null && !requested(chooser, "android.intent.extra.CHOOSER_RESULT_INTENT_SENDER")
+                ? snapshot(target) : null;
         // These extras change the application's flow. Until their contracts are implemented,
         // fail the request rather than silently skipping refinement or custom actions.
         unsupported = requested(chooser, Intent.EXTRA_CHOOSER_REFINEMENT_INTENT_SENDER)

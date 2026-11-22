@@ -12,6 +12,7 @@ import android.permission.PermissionCheckerManager;
 import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
 import android.provider.DocumentsProvider;
+import android.provider.MediaStore;
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedActivityImpl;
@@ -765,6 +766,139 @@ public final class SafDocumentsContractTest {
         }
     }
 
+    static void pickImagesAndChooser(File dir) throws Exception {
+        File photo = new File(dir, "pick-photo.jpg");
+        File photo2 = new File(dir, "pick-photo-2.png");
+        File video = new File(dir, "pick-video.mp4");
+        File text = new File(dir, "pick-note.txt");
+        Files.writeString(photo.toPath(), "jpeg-bytes");
+        Files.writeString(photo2.toPath(), "png-bytes");
+        Files.writeString(video.toPath(), "mp4-bytes");
+        Files.writeString(text.toPath(), "plain-text");
+
+        // Single ACTION_PICK_IMAGES with omitted type defaults to image/* + video/* and persistable read-only grants.
+        Harness pickSingle = new Harness(new File(dir, "pick-single.xml"));
+        Object singleOrigin = pickSingle.activity("Origin", "RESUMED");
+        Dialog singleDialog = new Dialog(); singleDialog.install(pickSingle);
+        check(pickSingle.start(new Intent(MediaStore.ACTION_PICK_IMAGES), singleOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES starts without explicit MIME type");
+        ResultInfo singleResult = finishSelection(pickSingle, singleDialog, photo.getPath());
+        check((boolean)get(singleDialog.request, "pickImages")
+                && !(boolean)get(singleDialog.request, "multiple")
+                && (int)get(singleDialog.request, "maxItems") == 1
+                && "Select media".equals(get(singleDialog.request, "title"))
+                && Arrays.equals((String[])get(singleDialog.request, "mimeTypes"), new String[]{"image/*", "video/*"}),
+                "ACTION_PICK_IMAGES sets media defaults and single-pick bounds");
+        check(singleResult.mResultCode == Activity.RESULT_OK && singleResult.mData.getData().equals(document(photo)),
+                "ACTION_PICK_IMAGES returns selected media URI");
+        check((singleResult.mData.getFlags() & (READ | WRITE | PERSIST | PREFIX)) == (READ | PERSIST)
+                && pickSingle.grants.canAccess(pickSingle.client, document(photo), READ, 0)
+                && !pickSingle.grants.canAccess(pickSingle.client, document(photo), WRITE, 0),
+                "ACTION_PICK_IMAGES grants read-only persistable URI permission");
+        as(UID, PID, () -> pickSingle.ugm.takePersistableUriPermission(document(photo), READ, null, 0));
+        rejects(SecurityException.class, () -> as(UID, PID,
+                () -> pickSingle.ugm.takePersistableUriPermission(document(photo), WRITE, null, 0)));
+        pickSingle.grants.flush();
+
+        // ACTION_PICK_IMAGES rejects non-media MIME files when defaulting to image/* + video/*.
+        Harness rejectNonMedia = new Harness(new File(dir, "pick-nonmedia.xml"));
+        Object nonMediaOrigin = rejectNonMedia.activity("Origin", "RESUMED");
+        Dialog nonMediaDialog = new Dialog(); nonMediaDialog.install(rejectNonMedia);
+        check(rejectNonMedia.start(new Intent(MediaStore.ACTION_PICK_IMAGES), nonMediaOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES starts for non-media rejection check");
+        ResultInfo nonMediaResult = finishSelection(rejectNonMedia, nonMediaDialog, text.getPath());
+        check(nonMediaResult.mResultCode == Activity.RESULT_CANCELED && nonMediaResult.mData == null
+                && !rejectNonMedia.grants.canAccess(rejectNonMedia.client, document(text), READ, 0),
+                "ACTION_PICK_IMAGES rejects text/plain selection");
+        rejectNonMedia.grants.flush();
+
+        // EXTRA_PICK_IMAGES_MAX enforces upper bound on selection count.
+        Harness pickMax = new Harness(new File(dir, "pick-max.xml"));
+        Object maxOrigin = pickMax.activity("Origin", "RESUMED");
+        Dialog maxDialog = new Dialog(); maxDialog.install(pickMax);
+        check(pickMax.start(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 2), maxOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES accepts EXTRA_PICK_IMAGES_MAX=2");
+        ResultInfo maxOk = finishSelection(pickMax, maxDialog, photo.getPath(), video.getPath());
+        check((boolean)get(maxDialog.request, "multiple") && (int)get(maxDialog.request, "maxItems") == 2
+                && maxOk.mResultCode == Activity.RESULT_OK && maxOk.mData.getClipData().getItemCount() == 2,
+                "ACTION_PICK_IMAGES multi-select returns up to EXTRA_PICK_IMAGES_MAX items");
+
+        pickMax.grants.flush();
+
+        Harness pickOverMax = new Harness(new File(dir, "pick-over-max.xml"));
+        Object overMaxOrigin = pickOverMax.activity("Origin", "RESUMED");
+        Dialog overMaxDialog = new Dialog(); overMaxDialog.install(pickOverMax);
+        check(pickOverMax.start(new Intent(MediaStore.ACTION_PICK_IMAGES)
+                .putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 2), overMaxOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES starts for over-limit check");
+        ResultInfo overMax = finishSelection(pickOverMax, overMaxDialog, photo.getPath(), photo2.getPath(), video.getPath());
+        check(overMax.mResultCode == Activity.RESULT_CANCELED && overMax.mData == null,
+                "ACTION_PICK_IMAGES rejects selection exceeding EXTRA_PICK_IMAGES_MAX");
+        for (int badLimit : new int[]{0, -1, MediaStore.getPickImagesMaxLimit() + 1}) {
+            rejects(IllegalArgumentException.class, () -> pickOverMax.start(
+                    new Intent(MediaStore.ACTION_PICK_IMAGES).putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, badLimit), overMaxOrigin));
+        }
+        pickOverMax.grants.flush();
+
+        // EXTRA_ALLOW_MULTIPLE works for ACTION_PICK_IMAGES as well.
+        Harness pickAllowMulti = new Harness(new File(dir, "pick-allow-multi.xml"));
+        Object allowOrigin = pickAllowMulti.activity("Origin", "RESUMED");
+        Dialog allowDialog = new Dialog(); allowDialog.install(pickAllowMulti);
+        check(pickAllowMulti.start(new Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*")
+                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), allowOrigin) == ActivityManager.START_SUCCESS,
+                "ACTION_PICK_IMAGES honors EXTRA_ALLOW_MULTIPLE");
+        ResultInfo allowRes = finishSelection(pickAllowMulti, allowDialog, photo.getPath(), photo2.getPath());
+        check((int)get(allowDialog.request, "maxItems") == MediaStore.getPickImagesMaxLimit()
+                && allowRes.mResultCode == Activity.RESULT_OK && allowRes.mData.getClipData().getItemCount() == 2,
+                "EXTRA_ALLOW_MULTIPLE caps at MediaStore.getPickImagesMaxLimit()");
+        pickAllowMulti.grants.flush();
+
+        // Unresolvable ACTION_CHOOSER wrapping ACTION_GET_CONTENT delegates to DocumentPicker (Muse fallback upload path).
+        Harness chooserGet = new Harness(new File(dir, "chooser-get.xml"));
+        Object chooserOrigin = chooserGet.activity("Origin", "RESUMED");
+        Dialog chooserDialog = new Dialog(); chooserDialog.install(chooserGet);
+        Intent getContent = new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+        Intent wrappedGet = Intent.createChooser(getContent, "Choose photo");
+        check(chooserGet.start(wrappedGet, chooserOrigin) == ActivityManager.START_SUCCESS,
+                "Unresolvable ACTION_CHOOSER wrapping ACTION_GET_CONTENT delegates to DocumentPicker");
+        ResultInfo chooserGetRes = finishSelection(chooserGet, chooserDialog, photo.getPath());
+        check((boolean)get(chooserDialog.request, "getContent")
+                && chooserGetRes.mResultCode == Activity.RESULT_OK
+                && chooserGetRes.mData.getData().equals(document(photo))
+                && (chooserGetRes.mData.getFlags() & (READ | WRITE | PERSIST)) == READ,
+                "Delegated ACTION_CHOOSER GET_CONTENT returns read-only selected URI");
+        chooserGet.grants.flush();
+
+        // Unresolvable ACTION_CHOOSER wrapping ACTION_PICK_IMAGES also delegates cleanly.
+        Harness chooserPick = new Harness(new File(dir, "chooser-pick.xml"));
+        Object chooserPickOrigin = chooserPick.activity("Origin", "RESUMED");
+        Dialog chooserPickDialog = new Dialog(); chooserPickDialog.install(chooserPick);
+        Intent wrappedPick = Intent.createChooser(new Intent(MediaStore.ACTION_PICK_IMAGES).setType("video/*"), "Choose video");
+        check(chooserPick.start(wrappedPick, chooserPickOrigin) == ActivityManager.START_SUCCESS,
+                "Unresolvable ACTION_CHOOSER wrapping ACTION_PICK_IMAGES delegates to DocumentPicker");
+        ResultInfo chooserPickRes = finishSelection(chooserPick, chooserPickDialog, video.getPath());
+        check((boolean)get(chooserPickDialog.request, "pickImages")
+                && chooserPickRes.mResultCode == Activity.RESULT_OK
+                && chooserPickRes.mData.getData().equals(document(video)),
+                "Delegated ACTION_CHOOSER PICK_IMAGES returns selected video URI");
+        chooserPick.grants.flush();
+
+        // ACTION_CHOOSER with chosen callback or unsupported extra must not silently bypass chooser rejection.
+        IntentSender callbackSender = new IntentSender(new IIntentSender.Default());
+        Intent withCallback = Intent.createChooser(getContent, "With callback", callbackSender);
+        check(chooserGet.start(withCallback, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_CHOOSER with callback does not bypass into DocumentPicker");
+        Intent withChosenCallback = Intent.createChooser(getContent, "With chosen callback")
+                .putExtra(Intent.EXTRA_CHOSEN_COMPONENT_INTENT_SENDER, callbackSender);
+        check(chooserGet.start(withChosenCallback, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_CHOOSER with EXTRA_CHOSEN_COMPONENT_INTENT_SENDER does not bypass into DocumentPicker");
+        Intent withRefinement = Intent.createChooser(getContent, "With refinement")
+                .putExtra(Intent.EXTRA_CHOOSER_REFINEMENT_INTENT_SENDER, new Intent());
+        check(chooserGet.start(withRefinement, chooserOrigin) == ActivityManager.START_INTENT_NOT_RESOLVED,
+                "ACTION_CHOOSER with unsupported extra does not bypass into DocumentPicker");
+    }
+
     static void lifecycle(File dir) throws Exception {
         Harness h = new Harness(new File(dir, "covered.xml"));
         Object origin = h.activity("Origin", "PAUSED"), top = h.activity("Top", "RESUMED");
@@ -1086,7 +1220,7 @@ public final class SafDocumentsContractTest {
     private static void contractsWithServiceContext(boolean descriptors) throws Exception {
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
-        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
+        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
             if(nativeFiles){
                 check(nativeIncoming.get()>nativeOtherIncoming.get()&&nativeOtherIncoming.get()>0,
                         "SAF exercised actual incoming Binder transactions from both ordinary peers");

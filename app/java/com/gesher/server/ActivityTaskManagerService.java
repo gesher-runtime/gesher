@@ -801,7 +801,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
-    private int chooseIntent(Intent incoming, String verifiedCaller, ProcessRecord process,
+    private int chooseIntent(IApplicationThread caller, String originalName, Intent incoming,
+            String verifiedCaller, ProcessRecord process,
             boolean internalCreator, java.util.function.BooleanSupplier delegated,
             java.util.function.BooleanSupplier publication, IBinder resultTo, String resultWho,
             int requestCode, int launchTaskId, boolean shareIdentity, ActivityRecord[] started,
@@ -816,7 +817,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (creatorInfo == null) return ActivityManager.START_CANCELED;
         IntentChooser request = new IntentChooser(mPm, verifiedCaller, incoming,
                 mAm == null ? null : mAm.mimeResolver(creatorInfo, process));
-        if (request.unsupported || request.options.isEmpty()) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        if (request.unsupported) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        if (request.options.isEmpty()) {
+            if (request.documentTarget != null && request.callback == null) {
+                Intent documentIntent = new Intent(request.documentTarget);
+                int forwardFlags = incoming.getFlags()
+                        & (Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION
+                                | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+                if (forwardFlags != 0) documentIntent.addFlags(forwardFlags);
+                synchronized (mLaunchLock) {
+                    return startDocumentPicker(caller, originalName, documentIntent, null,
+                            resultTo, resultWho, requestCode, launchTaskId, requiredTask);
+                }
+            }
+            return ActivityManager.START_INTENT_NOT_RESOLVED;
+        }
         IntentChooser.Dialog dialog = mIntentChooserDialog;
         // Check the actual JNI backend before accepting a chooser that needs UI.
         if (!request.autoLaunch && (dialog == null || !dialog.available())) {
@@ -2342,8 +2357,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             return chooseAccount(caller, callingPackage, intent, resultToToken, resultWho, requestCode);
         }
         if (IntentChooser.handles(intent)) {
-            return chooseIntent(intent, verifiedCaller, originalProcess, internalCreator,
-                    delegated, publication, resultToToken, resultWho, requestCode,
+            return chooseIntent(caller, originalName, intent, verifiedCaller, originalProcess,
+                    internalCreator, delegated, publication, resultToToken, resultWho, requestCode,
                     launchTaskId, shareIdentity, started, requiredTask);
         }
         // Starts from apps resolve implicit intents to filters with CATEGORY_DEFAULT, as
