@@ -57,6 +57,7 @@ final class ContentProviders {
     private final SettingsProvider mSettings;
     private final DocumentsStorageProvider mDocumentsStorage;
     private final CallLogProvider mCallLog;
+    private final ContactsProvider mContacts;
     private final CallerIdentity mCallers;
     private final UriGrants mUriGrants;
 
@@ -178,6 +179,7 @@ final class ContentProviders {
         mSettings = new SettingsProvider(pm, atm);
         mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
         mCallLog = new CallLogProvider(this, mUriGrants);
+        mContacts = new ContactsProvider(this, pm, atm, mUriGrants);
         pm.setHostedProviders(this);
     }
 
@@ -185,6 +187,7 @@ final class ContentProviders {
     UriGrants uriGrants() { return mUriGrants; }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
     CallLogProvider callLog() { return mCallLog; }
+    ContactsProvider contacts() { return mContacts; }
     CallerIdentity callers() { return mCallers; }
 
     SettingsProvider settingsProvider() { return mSettings; }
@@ -336,6 +339,14 @@ final class ContentProviders {
             }
             enforceAccess(actualPackage, registration.info);
             return mDocumentsStorage.holder();
+        }
+        if (ContactsProviderSupport.CONTACTS_AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration == null || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Contacts authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mContacts.holder();
         }
         if (ContactsProviderSupport.CALL_LOG_AUTHORITY.equals(name)) {
             RegisteredProvider registration = registeredProvider(name);

@@ -28,9 +28,13 @@ import java.util.List;
  */
 final class ContactsProviderSupport {
     static final String PACKAGE = "android";
+    static final String CONTACTS_AUTHORITY = "com.android.contacts";
     static final String CALL_LOG_AUTHORITY = "call_log";
+    static final String CONTACTS_CLASS = "com.android.providers.contacts.ContactsProvider2";
     static final String CALL_LOG_CLASS = "com.android.providers.contacts.CallLogProvider";
 
+    static final String READ_CONTACTS = "android.permission.READ_CONTACTS";
+    static final String WRITE_CONTACTS = "android.permission.WRITE_CONTACTS";
     static final String READ_CALL_LOG = "android.permission.READ_CALL_LOG";
     static final String WRITE_CALL_LOG = "android.permission.WRITE_CALL_LOG";
 
@@ -41,7 +45,11 @@ final class ContactsProviderSupport {
     }
 
     static boolean isSystemAuthority(String authority) {
-        return CALL_LOG_AUTHORITY.equals(authority);
+        return CALL_LOG_AUTHORITY.equals(authority) || CONTACTS_AUTHORITY.equals(authority);
+    }
+
+    static ProviderInfo contactsProviderInfo() {
+        return providerInfo(CONTACTS_CLASS, CONTACTS_AUTHORITY, READ_CONTACTS, WRITE_CONTACTS);
     }
 
     static ProviderInfo callLogProviderInfo() {
@@ -79,12 +87,14 @@ final class ContactsProviderSupport {
 
     static ProviderInfo providerForAuthority(String authority, long flags) {
         if (!matchesProviderFlags(flags)) return null;
+        if (CONTACTS_AUTHORITY.equals(authority)) return contactsProviderInfo();
         if (CALL_LOG_AUTHORITY.equals(authority)) return callLogProviderInfo();
         return null;
     }
 
     static ProviderInfo providerForComponent(String className, long flags) {
         if (!matchesProviderFlags(flags)) return null;
+        if (CONTACTS_CLASS.equals(className)) return contactsProviderInfo();
         if (CALL_LOG_CLASS.equals(className)) return callLogProviderInfo();
         return null;
     }
