@@ -23,6 +23,7 @@ import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.os.IBinder;
 import android.os.ServiceSpecificException;
+import com.gesher.app.shell.AppShell;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -396,13 +397,19 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             // removal. Neither a manifest claim nor a flag grants DELETE_PACKAGES,
             // and even a privileged caller cannot bypass this fresh default-No dialog.
             if (!mUninstallConsent.allow(owner, name, target.versionCode())) return;
+            Properties shortcut;
+            Properties protocols;
             synchronized (mInstaller) {
                 if (!removalCallerCurrent(owner, ownerCode, pid, system, process) || mPm.get(name) != target
                         || !mInstaller.ordinaryInstalled(target)) {
                     throw new SecurityException("Removal caller or target changed");
                 }
+                shortcut = AppShell.shortcutOf(name);
+                protocols = AppShell.urlProtocolsOf(name);
                 if (!mInstaller.uninstall(name)) throw new IllegalStateException("Package was not removed");
             }
+            AppShell.unregisterQuietly(name, shortcut);
+            AppShell.unregisterUrlProtocolsQuietly(name, protocols);
             status = PackageInstaller.STATUS_SUCCESS; legacy = 1; message = "Removed";
         } catch (SecurityException changed) {
             status = PackageInstaller.STATUS_FAILURE_BLOCKED; legacy = -1;
@@ -762,16 +769,20 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 if (!mConsent.allow(owner, pkg, version)) return;
                 // Resolve inherited paths and publish under the same lock used by
                 // ordinary installs and uninstall. An approval cannot follow a newer code generation.
+                String[] installed;
                 synchronized (mInstaller) {
                     if (!ownerCurrent() || mPm.get(pkg) != targetCode) throw new SecurityException("Package code changed");
                     if (inheritsExisting()) {
                         installedSplits.materialize(canonical, canonicalNames, stagedSplits.keySet(), removals);
                     }
-                    String[] installed = mInstaller.install(new File(canonical, "base.apk").getPath(),
+                    installed = mInstaller.install(new File(canonical, "base.apk").getPath(),
                             new InstallSessionMetadata(canonical), PackageInstallSource.fromSession(
                                     hasApplicationInitiator ? ownerCode : null, packageSource));
                     if (!pkg.equals(installed[0]) || mPm.get(pkg) == null) throw new IllegalStateException("Not published");
                 }
+                boolean changed = !"unchanged".equals(installed[1]);
+                AppShell.registerQuietly(installed[0], installed[2], changed);
+                AppShell.registerUrlProtocolsQuietly(installed[0], installed[2], changed);
                 status = PackageInstaller.STATUS_SUCCESS; message = "Installed";
             } catch (SecurityException e) {
                 status = PackageInstaller.STATUS_FAILURE_BLOCKED; message = "Package identity or consent changed";
