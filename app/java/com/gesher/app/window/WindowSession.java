@@ -1464,15 +1464,18 @@ public final class WindowSession extends IWindowSession.Stub {
             return w.attrs.token != null ? mWindows.get(w.attrs.token) : null;
         }
         if (type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
-            if (!overActivity) return null;
+            // A floating theme alone does not make a task root a popup. Only a live
+            // Activity in the same known task can own it; a finishing splash (or an
+            // unrelated active task) must not own the replacement Activity's HWND.
+            if (!overActivity || w.taskId < 0) return null;
             AppWindow below = null;
             for (int i = 0; i < mWindows.size(); i++) {
                 AppWindow v = mWindows.valueAt(i);
                 if (v != w && v.shown && v.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
-                        && (w.taskId < 0 || v.taskId == w.taskId)
+                        && v.taskId == w.taskId
                         && (below == null || v.seq > below.seq)) {
                     android.app.Activity a = activity(v.attrs.token);
-                    if (a != null && (a.isFinishing() || a.isDestroyed())) continue;
+                    if (a == null || a.isFinishing() || a.isDestroyed()) continue;
                     below = v;
                 }
             }
@@ -1778,6 +1781,8 @@ public final class WindowSession extends IWindowSession.Stub {
                     break;
                 }
             }
+            // This is already a top-level window, even when its Activity's theme
+            // is floating. It uses the same app placement policy as other roots.
             if (at == null && mOneWindow) {
                 for (int i = 0; i < mWindows.size(); i++) {
                     AppWindow v = mWindows.valueAt(i);
@@ -1853,12 +1858,6 @@ public final class WindowSession extends IWindowSession.Stub {
         NativeWindow owner = w.parent != null
                 ? (w.parent.nativeWindow != null ? w.parent.nativeWindow : root.nativeWindow)
                 : null;
-        if (owner == null) {
-            AppWindow active = activeRoot();
-            if (active != null && active != w && active.nativeWindow != null) {
-                owner = active.nativeWindow;
-            }
-        }
         Rect in = w.attrs.surfaceInsets;
         NativeWindow nw = NativeWindow.createPopup(title(w), width + in.left + in.right,
                 height + in.top + in.bottom, owner);
@@ -1899,13 +1898,7 @@ public final class WindowSession extends IWindowSession.Stub {
     private void place(AppWindow w) {
         if (w.nativeWindow == null || w.frame.isEmpty()) return;
         AppWindow root = root(w);
-        NativeWindow anchor = root != w && root.nativeWindow != null ? root.nativeWindow : null;
-        if (anchor == null) {
-            AppWindow active = activeRoot();
-            if (active != null && active != w && active.nativeWindow != null) {
-                anchor = active.nativeWindow;
-            }
-        }
+        NativeWindow anchor = root != w ? root.nativeWindow : null;
         Rect r = surfaceRect(w);
         if (w.placed.equals(r)) return;
         w.nativeWindow.setPopupBounds(anchor, r.left, r.top, r.width(), r.height());
@@ -2575,14 +2568,6 @@ public final class WindowSession extends IWindowSession.Stub {
         AppWindow w;
         synchronized (mWindows) {
             w = mWindows.remove(clientToken);
-            if (w != null) {
-                for (int i = 0; i < mWindows.size(); i++) {
-                    AppWindow child = mWindows.valueAt(i);
-                    if (child.parent == w) {
-                        child.parent = w.parent;
-                    }
-                }
-            }
         }
         if (w != null) {
             w.identity.retire(w.handler);
