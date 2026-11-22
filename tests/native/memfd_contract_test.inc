@@ -134,6 +134,11 @@ static void test_memfd_seals(memfd_create_fn create) {
   check("fallocate inside the size is allowed", fallocate(fd, 0, 0, page) == 0);
   errno = 0;
   check("F_SEAL_GROW refuses fallocate past the end", fallocate(fd, 0, 0, page * 2) == -1 && errno == EPERM);
+  check("enable append on the shared file description", fcntl(fd, F_SETFL, O_APPEND) == 0);
+  errno = 0;
+  check("F_SEAL_GROW checks append's actual end, not pwrite's offset",
+        pwrite(fd, buf, 1, 0) == -1 && errno == EPERM);
+  check("restore ordinary file status", fcntl(fd, F_SETFL, 0) == 0);
 
   char* writable = (char*)mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   check("a writable shared mapping before the write seal", writable != MAP_FAILED);
@@ -166,6 +171,15 @@ static void test_memfd_seals(memfd_create_fn create) {
         dup_fd >= 0 && (fcntl(dup_fd, F_GET_SEALS) & F_SEAL_FUTURE_WRITE) != 0 &&
             write(dup_fd, buf, 1) == -1 && errno == EPERM);
   if (dup_fd >= 0) close(dup_fd);
+  FILE* stream = fdopen(dup(fd), "w");
+  check("sealed memfd can still be wrapped as a stream", stream != NULL);
+  if (stream != NULL) {
+    check("unbuffered stream setup", setvbuf(stream, NULL, _IONBF, 0) == 0);
+    errno = 0;
+    check("the stream write path obeys the same write seal",
+          fputc('x', stream) == EOF && errno == EPERM && ferror(stream));
+    fclose(stream);
+  }
   check("F_SEAL_SEAL", fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL) == 0);
   errno = 0;
   check("F_SEAL_SEAL refuses further seals", fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EPERM);

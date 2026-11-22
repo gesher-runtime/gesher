@@ -360,6 +360,10 @@
       "en": "Install Google Play services support (microG)",
       "he": "התקנת תמיכה בשירותי Google Play (microG)"
     },
+    "setup_microg_update": {
+      "en": "Update Google Play services support (microG) to version 0.3.17",
+      "he": "עדכון התמיכה בשירותי Google Play (microG) לגרסה 0.3.17"
+    },
     "setup_aurora": {
       "en": "Install App Store (Aurora Store)",
       "he": "התקנת חנות אפליקציות (Aurora Store)"
