@@ -36,7 +36,7 @@ struct WasapiSinkParams {
   bool low_latency = true;              // Query IAudioClient3 for low-latency engine period
   uint32_t target_latency_ms = 10;      // Fallback buffer period
   std::u16string app_name;
-  int stream_group = 0;                 // Android stream volume group (0 = Media)
+  int stream_group = -1;                // -1 = mix all Android stream volume groups; 0..kNumGroups-1 = single group
 };
 
 // Formats helper functions supporting WAVEFORMATEX and WAVEFORMATEXTENSIBLE
@@ -156,6 +156,11 @@ class WasapiAudioSink : public Sink {
 
   float volume_left_ = 1.0f;
   float volume_right_ = 1.0f;
+
+  // Scratch buffers owned by Engine's single Run() thread during Tick().
+  std::vector<float> group_mix_buf_;
+  std::vector<float> sum_mix_buf_;
+  std::vector<int16_t> pcm_mix_buf_;
 };
 
 // Factory functions

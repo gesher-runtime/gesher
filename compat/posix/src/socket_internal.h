@@ -18,6 +18,10 @@
 #include <string>
 #include <vector>
 
+namespace gesher {
+struct NetlinkState;
+}  // namespace gesher
+
 namespace gesher::ws {
 
 using Socket = uintptr_t;
@@ -69,6 +73,8 @@ enum class ConnectState { kInitial, kConnecting, kConnected, kFailed };
 enum class Provider { kOther, kNativeIpv4Tcp, kNativeIpv4Udp };
 struct ConnectOperation;
 struct SocketDescription {
+  std::shared_ptr<gesher::NetlinkState> netlink;
+  bool (*netlink_readable)(gesher::NetlinkState&) = nullptr;  // non-null only for AF_NETLINK descriptors
   std::atomic<ConnectState> state{ConnectState::kInitial};
   Provider provider = Provider::kOther;  // exact base-provider identity before publication
   bool native_nonblocking_datagram = false;  // immutable after ownership registration
@@ -363,6 +369,8 @@ uint64_t AdvanceStream(uint16_t port, bool sent, uint64_t bytes);
 // Takes ownership of `state.socket`: returns its new fd, or -1 with errno set
 // (the socket is then closed).
 int RegisterSocket(const SocketFd& state);
+// Registers an in-process AF_NETLINK descriptor backed by `netlink`.
+int RegisterNetlinkSocket(bool nonblocking, int sock_type);
 // False if fd is not a socket.
 bool LookupSocket(int fd, SocketFd* state);
 

@@ -442,28 +442,6 @@ char* inet_ntoa(struct in_addr in) {
 
 namespace {
 
-// Windows' interface names ("ethernet_32769", the names its own
-// if_indextoname gives); one that does not fit IFNAMSIZ becomes "if<index>",
-// the same way in every function here.
-bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces) {
-  if (!ws::ListInterfaces(interfaces)) return false;
-  for (ws::Interface& iface : *interfaces) {
-    if (iface.name.size() >= IFNAMSIZ) iface.name = "if" + std::to_string(iface.index);
-  }
-  return true;
-}
-
-unsigned ToIfFlags(unsigned flags) {
-  unsigned result = 0;
-  if (flags & ws::kIfUp) result |= IFF_UP;
-  if (flags & ws::kIfRunning) result |= IFF_RUNNING;
-  if (flags & ws::kIfLoopback) result |= IFF_LOOPBACK;
-  if (flags & ws::kIfBroadcast) result |= IFF_BROADCAST;
-  if (flags & ws::kIfMulticast) result |= IFF_MULTICAST;
-  if (flags & ws::kIfPointToPoint) result |= IFF_POINTOPOINT;
-  return result;
-}
-
 // One allocation per entry, freed by freeifaddrs.
 struct IfAddrsBlock {
   ifaddrs ifa;
@@ -606,6 +584,25 @@ int getifaddrs(struct ifaddrs** ifap) {
 }  // extern "C"
 
 namespace gesher::sock {
+
+bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces) {
+  if (!ws::ListInterfaces(interfaces)) return false;
+  for (ws::Interface& iface : *interfaces) {
+    if (iface.name.size() >= IFNAMSIZ) iface.name = "if" + std::to_string(iface.index);
+  }
+  return true;
+}
+
+unsigned ToIfFlags(unsigned flags) {
+  unsigned result = 0;
+  if (flags & ws::kIfUp) result |= IFF_UP;
+  if (flags & ws::kIfRunning) result |= IFF_RUNNING;
+  if (flags & ws::kIfLoopback) result |= IFF_LOOPBACK;
+  if (flags & ws::kIfBroadcast) result |= IFF_BROADCAST;
+  if (flags & ws::kIfMulticast) result |= IFF_MULTICAST;
+  if (flags & ws::kIfPointToPoint) result |= IFF_POINTOPOINT;
+  return result;
+}
 
 bool InterfaceIoctl(unsigned long request, void* arg, int* result) {
   if (request != SIOCGIFFLAGS && request != SIOCGIFMTU) return false;

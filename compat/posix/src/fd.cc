@@ -25,6 +25,7 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "netlink_internal.h"
 #include "poll_scratch.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
@@ -144,6 +145,23 @@ int RegisterSocket(const SocketFd& state) {
     }
     registered.description->native_nonblocking_datagram = datagram != 0;
   }
+  Insert(fd, registered);
+  return fd;
+}
+
+int RegisterNetlinkSocket(bool nonblocking, int sock_type) {
+  auto netlink = CreateNetlinkState(sock_type);
+  if (!netlink) return errno = ENOMEM, -1;
+  record_locks::DescriptorGuard descriptor_guard;
+  int fd = ReserveFd();
+  if (fd < 0) return -1;
+  SocketFd registered;
+  registered.socket = ws::kInvalidSocket;
+  registered.initial_nonblocking = nonblocking;
+  registered.description = std::make_shared<ws::SocketDescription>();
+  registered.description->nonblocking.store(nonblocking);
+  registered.description->netlink = std::move(netlink);
+  registered.description->netlink_readable = &gesher::NetlinkReadable;
   Insert(fd, registered);
   return fd;
 }

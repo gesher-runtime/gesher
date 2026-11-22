@@ -279,7 +279,7 @@ bool WasapiAudioSink::InitAudioClient(std::string* error) {
     return false;
   }
 
-  GUID session = SessionGuidForGroup(params_.stream_group);
+  GUID session = SessionGuidForGroup(params_.stream_group >= 0 ? params_.stream_group : 0);
   DWORD stream_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_NOPERSIST;
 
   // Try IAudioClient3 for ultra low latency shared mode if requested
@@ -519,21 +519,56 @@ size_t WasapiAudioSink::GetOpenSLQueueDepth() const {
 
 bool WasapiAudioSink::Tick(Mixer* mixer) {
   if (mixer == nullptr) return false;
-  if (!mixer->GroupWanted(params_.stream_group)) return true;
 
   // Mix a period's worth of frames from the mixer into our ring buffer
-  uint32_t frames_to_mix = period_frames_ > 0 ? period_frames_ : (rate_ / 100);
-  std::vector<float> mix_buf(frames_to_mix * channels_, 0.0f);
-  if (mixer->MixGroup(params_.stream_group, mix_buf.data(), frames_to_mix)) {
-    if (params_.format == WasapiSampleFormat::kFloat32) {
-      WriteBytes(mix_buf.data(), mix_buf.size() * sizeof(float), false);
-    } else {
-      std::vector<int16_t> pcm(mix_buf.size());
-      for (size_t i = 0; i < mix_buf.size(); i++) {
-        pcm[i] = static_cast<int16_t>(std::clamp(static_cast<int>(mix_buf[i] * 32767.0f), -32768, 32767));
-      }
-      WriteBytes(pcm.data(), pcm.size() * sizeof(int16_t), false);
+  const uint32_t frames_to_mix = period_frames_ > 0 ? period_frames_ : (rate_ / 100);
+  const size_t sample_count = static_cast<size_t>(frames_to_mix) * channels_;
+
+  if (params_.stream_group >= 0 && params_.stream_group < kNumGroups) {
+    if (!mixer->GroupWanted(params_.stream_group)) return true;
+    sum_mix_buf_.assign(sample_count, 0.0f);
+    if (!mixer->MixGroup(params_.stream_group, sum_mix_buf_.data(), frames_to_mix)) {
+      return true;
     }
+  } else {
+    bool any_wanted = false;
+    for (int g = 0; g < kNumGroups; ++g) {
+      if (mixer->GroupWanted(g)) {
+        any_wanted = true;
+        break;
+      }
+    }
+    if (!any_wanted) return true;
+
+    sum_mix_buf_.assign(sample_count, 0.0f);
+    group_mix_buf_.resize(sample_count);
+    bool any_played = false;
+    for (int g = 0; g < kNumGroups; ++g) {
+      if (!mixer->GroupWanted(g)) continue;
+      // Mix muted groups as well so blocking AudioTrack/AAudio writers still drain.
+      if (!mixer->MixGroup(g, group_mix_buf_.data(), frames_to_mix)) continue;
+      any_played = true;
+      const float gain = StreamGain(StreamOfGroup(g));
+      if (gain == 0.0f) continue;
+      for (size_t i = 0; i < sample_count; ++i) {
+        sum_mix_buf_[i] += group_mix_buf_[i] * gain;
+      }
+    }
+    if (!any_played) return true;
+    for (size_t i = 0; i < sample_count; ++i) {
+      sum_mix_buf_[i] = std::clamp(sum_mix_buf_[i], -1.0f, 1.0f);
+    }
+  }
+
+  if (params_.format == WasapiSampleFormat::kFloat32) {
+    WriteBytes(sum_mix_buf_.data(), sample_count * sizeof(float), false);
+  } else {
+    pcm_mix_buf_.resize(sample_count);
+    for (size_t i = 0; i < sample_count; ++i) {
+      pcm_mix_buf_[i] =
+          static_cast<int16_t>(std::clamp(static_cast<int>(sum_mix_buf_[i] * 32767.0f), -32768, 32767));
+    }
+    WriteBytes(pcm_mix_buf_.data(), sample_count * sizeof(int16_t), false);
   }
   return true;
 }
@@ -544,6 +579,10 @@ void WasapiAudioSink::OnVolumesChanged() {
 
 void WasapiAudioSink::ApplyVolume() {
   if (simple_volume_ == nullptr) return;
+  if (params_.stream_group < 0 || params_.stream_group >= kNumGroups) {
+    // Multi-group sinks apply per-stream Android gains in software during Tick().
+    return;
+  }
   int stream = StreamOfGroup(params_.stream_group);
   int max = GetStreamMaxVolume(stream);
   float level = max > 0 ? static_cast<float>(GetStreamVolume(stream)) / static_cast<float>(max) : 1.0f;

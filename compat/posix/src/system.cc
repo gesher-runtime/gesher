@@ -35,6 +35,7 @@
 #include "event_internal.h"
 #include "internal.h"
 #include "linux_socket.h"
+#include "netlink_internal.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_duplicate.h"
 #include "socket_internal.h"
@@ -336,6 +337,10 @@ int ioctl(int fd, unsigned long request, ...) {
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
     if (request == FIONREAD) {
+      if (state.description->netlink) {
+        *argp = gesher::NetlinkAvailable(*state.description->netlink);
+        return 0;
+      }
       if (gesher::ws::Available(state.socket, argp) != 0) return -1;
       // An AF_UNIX datagram pair's payload, without its framing (ADR 0088).
       if (state.description->unix_datagram_pair.load()) *argp = gesher::ws::UnixDatagramPayload(*argp);
@@ -349,7 +354,8 @@ int ioctl(int fd, unsigned long request, ...) {
       if (!gesher::LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
       std::lock_guard<std::mutex> lock(state.description->status_mutex);
       const bool on = *argp != 0;
-      if (!state.description->native_nonblocking_datagram &&
+      if (!state.description->netlink &&
+          !state.description->native_nonblocking_datagram &&
           gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
       state.description->nonblocking.store(on);
       return 0;
@@ -424,7 +430,8 @@ int fcntl(int fd, int cmd, ...) {
           std::lock_guard<std::mutex> lock(state.description->status_mutex);
           const bool on = (arg & O_NONBLOCK) != 0;
           if (on != state.description->nonblocking.load()) {
-            if (!state.description->native_nonblocking_datagram &&
+            if (!state.description->netlink &&
+                !state.description->native_nonblocking_datagram &&
                 gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
             state.description->nonblocking.store(on);
           }

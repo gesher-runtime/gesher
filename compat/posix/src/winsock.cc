@@ -21,6 +21,7 @@
 #include <new>
 
 #include "internal.h"
+#include "netlink_internal.h"
 #include "socket_internal.h"
 #include "socket_user_copy.h"
 
@@ -447,6 +448,19 @@ int BindInterface(Socket s, uint32_t ifindex) {
 }
 
 int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool retain_failure) {
+  if (description && description->netlink) {
+    {
+      std::lock_guard<std::mutex> lock(description->error_mutex);
+      description->native_closing = true;
+    }
+    gesher::NetlinkClose(*description->netlink);
+    {
+      std::lock_guard<std::mutex> lock(description->error_mutex);
+      description->native_closed = true;
+      description->native_closing = false;
+    }
+    return 0;
+  }
   if (!description) return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
   {
     std::lock_guard<std::mutex> lock(description->error_mutex);
@@ -1206,6 +1220,10 @@ bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
                     const RightsToken* rights) {
+  if (description && description->netlink) {
+    if (rights != nullptr && rights->count != 0) return errno = EOPNOTSUPP, -1;
+    return gesher::NetlinkSend(*description->netlink, buffers, count, 0, nullptr, 0);
+  }
   if (description->unix_datagram_pair.load()) {
     return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);
   }
@@ -1225,6 +1243,12 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
                     int* result_flags, UnixCredentials* credentials, RightsToken* rights,
                     std::vector<int>* stream_rights) {
+  if (description && description->netlink) {
+    if (rights != nullptr) *rights = {};
+    if (credentials != nullptr) *credentials = {};
+    return gesher::NetlinkRecv(*description->netlink, buffers, count, 0, nullptr, nullptr,
+                               description->nonblocking.load() || dont_wait, result_flags);
+  }
   if (description->unix_datagram_pair.load()) {
     return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
                             credentials, rights);
@@ -1478,6 +1502,8 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   closed.assign(count, false);
   bool has_lifecycle_hup = false;
   bool has_owned_pending = false;
+  bool has_netlink = false;
+  bool has_netlink_ready = false;
   for (size_t i = 0; i < count; ++i) {
     if (entries[i].description) {
       RefreshConnect(entries[i].description);
@@ -1485,6 +1511,23 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
       owned_pending[i] = entries[i].description->connect_operation != nullptr;
       closed[i] = entries[i].description->native_closed || entries[i].description->native_closing;
       has_owned_pending |= owned_pending[i];
+    }
+    if (entries[i].description && entries[i].description->netlink) {
+      has_netlink = true;
+      fds[i].fd = INVALID_SOCKET;
+      SHORT nl_rev = 0;
+      if (closed[i]) {
+        nl_rev = POLLNVAL;
+      } else {
+        if ((entries[i].events & kPollIn) != 0 && entries[i].description->netlink_readable != nullptr &&
+            entries[i].description->netlink_readable(*entries[i].description->netlink)) {
+          nl_rev |= POLLRDNORM;
+        }
+        if ((entries[i].events & kPollOut) != 0) nl_rev |= POLLWRNORM;
+      }
+      fds[i].revents = nl_rev;
+      if (nl_rev != 0) has_netlink_ready = true;
+      continue;
     }
     fds[i].fd = static_cast<SOCKET>(entries[i].socket);
     // Winsock rejects its POLLPRI, but supports POLLRDBAND for TCP OOB.
@@ -1532,7 +1575,12 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   }
   // Band-only WSAPoll never wakes for failed ConnectEx. Sample its owned
   // completion on the same bounded slices already used for mixed poll sources.
-  const int wait = has_lifecycle_hup ? 0 : has_owned_pending && (timeout_ms < 0 || timeout_ms > 10) ? 10 : timeout_ms;
+  const int wait = (has_lifecycle_hup || has_netlink_ready)
+                       ? 0
+                       : (has_owned_pending || (has_netlink && wake == kInvalidSocket)) &&
+                                 (timeout_ms < 0 || timeout_ms > 10)
+                             ? 10
+                             : timeout_ms;
   // An owned pending connection has no usable connected context yet. Its
   // completion is the readiness source; a native write wake could precede
   // context publication and otherwise spin or expose a premature success.
@@ -1543,7 +1591,11 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   active.reserve(count + (wake != kInvalidSocket ? 1 : 0));
   active_index.reserve(count);
   for (size_t i = 0; i < count; ++i) {
-    if (!owned_pending[i] && !closed[i]) { active.push_back(fds[i]); active_index.push_back(i); }
+    if (!owned_pending[i] && !closed[i] &&
+        !(entries[i].description && entries[i].description->netlink)) {
+      active.push_back(fds[i]);
+      active_index.push_back(i);
+    }
   }
   if (!active.empty() || wake != kInvalidSocket) {
     if (observer) observer(true, 0, 0, context);  // finalized real native inputs; no locks
@@ -1599,7 +1651,20 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   bool suppressed_datagram_read = false;
   for (size_t i = 0; i < count; ++i) {
     SHORT r = fds[i].revents;
-    if (entries[i].description) {
+    if (entries[i].description && entries[i].description->netlink) {
+      auto& description = *entries[i].description;
+      std::lock_guard<std::mutex> lock(description.error_mutex);
+      if (description.native_closed || description.native_closing) {
+        r = POLLNVAL;
+      } else {
+        r = 0;
+        if ((entries[i].events & kPollIn) != 0 && description.netlink_readable != nullptr &&
+            description.netlink_readable(*description.netlink)) {
+          r |= POLLRDNORM;
+        }
+        if ((entries[i].events & kPollOut) != 0) r |= POLLWRNORM;
+      }
+    } else if (entries[i].description) {
       RefreshConnect(entries[i].description);
       auto& description = *entries[i].description;
       std::lock_guard<std::mutex> lock(description.error_mutex);
