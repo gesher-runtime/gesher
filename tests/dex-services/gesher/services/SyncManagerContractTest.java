@@ -246,9 +246,13 @@ public final class SyncManagerContractTest {
             am = (IActivityManager) UNSAFE.allocateInstance(amType);
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Unsafe skips these normal defaults used by real controller transitions.
+            set(am, "mShortcutEvaluation", make(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+            set(am, "mShortcutAwake", (java.util.function.BooleanSupplier) () -> false);
             // Service teardown clears start-grant owners through AMS. Keep the
             // actual UriGrants registry while isolating unrelated settings startup.
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
             set(providers, "mUriGrants", make(type("UriGrants"), new Class<?>[]{pmType, atmType}, pm, atm));
             set(am, "mProviders", providers);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);

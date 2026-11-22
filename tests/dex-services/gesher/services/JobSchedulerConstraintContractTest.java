@@ -238,6 +238,9 @@ public final class JobSchedulerConstraintContractTest {
             Class<?> callersType = type("CallerIdentity");
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Unsafe skips these normal defaults used by real controller transitions.
+            set(am, "mShortcutEvaluation", make(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+            set(am, "mShortcutAwake", (java.util.function.BooleanSupplier) () -> false);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions);
             invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
@@ -258,6 +261,10 @@ public final class JobSchedulerConstraintContractTest {
             Object notifications = make(notifType, new Class<?>[]{pmType, amType, java.util.function.ToIntBiFunction.class},
                     pm, am, (java.util.function.ToIntBiFunction<Object, Boolean>) (n, u) -> 0);
             set(am, "mServices", make(type("ActiveServices"), new Class<?>[]{atmType, pmType, notifType}, atm, pm, notifications));
+            // This fixture has no provider connections; preserve the normal empty topology.
+            Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
+            set(am, "mProviders", providers);
             invoke(atm, "setActivityManager", new Class<?>[]{amType}, am);
 
             Class<?> processType = type("ActivityTaskManagerService$ProcessRecord");

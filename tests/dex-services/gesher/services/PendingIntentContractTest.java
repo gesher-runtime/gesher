@@ -157,6 +157,9 @@ public final class PendingIntentContractTest {
             am = (IActivityManager)UNSAFE.allocateInstance(amType);
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Unsafe skips these normal defaults used by real controller transitions.
+            set(am, "mShortcutEvaluation", make(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+            set(am, "mShortcutAwake", (java.util.function.BooleanSupplier) () -> false);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions); invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
             // Synthetic framework manifest metadata; preserve the real protected
@@ -167,6 +170,7 @@ public final class PendingIntentContractTest {
             set(am, "mServices", make(type("ActiveServices"), new Class<?>[]{atmType, pmType,
                     type("NotificationManagerService")}, atm, pm, null));
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
             for (String map : new String[]{"mPublished", "mPublishedBy", "mPublishedCode", "mClients", "mConnections", "mInstalling"}) set(providers, map, new LinkedHashMap<>());
             set(providers, "mRequests", new java.util.HashSet<>());
             set(am, "mProviders", providers);

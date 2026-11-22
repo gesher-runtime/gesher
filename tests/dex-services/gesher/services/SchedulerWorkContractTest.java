@@ -177,9 +177,13 @@ public final class SchedulerWorkContractTest {
             am = (IActivityManager) UNSAFE.allocateInstance(amType);
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Unsafe skips these normal defaults used by real controller transitions.
+            set(am, "mShortcutEvaluation", make(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+            set(am, "mShortcutAwake", (java.util.function.BooleanSupplier) () -> false);
             // Empty provider metadata lets the real post-broadcast process retirement
             // run without initializing unrelated settings/locale services on the host.
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
             set(providers, "mClients", new HashMap<>());
             set(providers, "mPublished", new HashMap<>());
             set(providers, "mPublishedBy", new HashMap<>());
