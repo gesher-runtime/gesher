@@ -43,26 +43,32 @@ def generate(component: str, ref: str | None) -> str:
     else:
         source = (ROOT / SOURCE).read_text()
     has_release = "  void Release() {" in source
+    definitions = {"HAS_RELEASE": has_release}
     if component == "receiver":
         replacements = {
             "GET_CODEC": method(source, "CodecOwner GetCodec(" if "CodecOwner GetCodec(" in source else "Codec* GetCodec("),
             "SETUP": method(source, "void JNICALL MC_setup("),
             "RELEASE": method(source, "void JNICALL MC_release("),
         }
+        definitions["HAS_OPTIONAL_LOOKUP"] = "throw_if_null" in replacements["GET_CODEC"]
     else:
         markers = {
             "DESTRUCTOR": "  ~Codec()",
             "START": "  bool Start(std::string* error)",
-            "STOP": "  void Stop()",
+            "STOP": "  void Stop(",
             "RESET": "  void Reset()",
-            "FLUSH": "  void Flush()",
-            "DEQUEUE_INPUT": "  int DequeueInput(int64_t timeout_us)",
-            "DEQUEUE_OUTPUT": "  int DequeueOutput(JNIEnv* env, jobject info, int64_t timeout_us)",
+            "FLUSH": "  void Flush(",
+            "DEQUEUE_INPUT": "  int DequeueInput(int64_t timeout_us",
+            "DEQUEUE_OUTPUT": "  int DequeueOutput(JNIEnv* env, jobject info, int64_t timeout_us",
             "STOP_WORKER": "  void StopWorker()",
         }
         replacements = {name: method(source, marker) for name, marker in markers.items()}
         replacements["RELEASE"] = method(source, "  void Release()") if has_release else ""
         replacements["STOP_LOCKED"] = method(source, "  void StopLocked()") if has_release else ""
+        definitions["STOP_REQUIRES_CONFIGURE"] = ref is None or any(
+            "configured_ = false;" in replacements[name] for name in ("STOP", "STOP_LOCKED"))
+        replacements["RETIRE_SURFACE"] = method(source, "  void RetireSurfaceFailure(") if "  void RetireSurfaceFailure(" in source else ""
+        replacements["POST_FATAL"] = method(source, "  void PostFatalErrorLocked(") if "  void PostFatalErrorLocked(" in source else ""
     template = (ROOT / ("tests/media/codec_" + component + "_host.cc.in")).read_text()
     for name, body in replacements.items():
         marker = "@" + name + "@"
@@ -71,7 +77,8 @@ def generate(component: str, ref: str | None) -> str:
         template = template.replace(marker, body)
     digest = hashlib.sha256(source.encode()).hexdigest()
     print(component + " production SHA256 " + digest, flush=True)
-    return "#define HAS_RELEASE " + str(int(has_release)) + "\n" + template
+    definitions["HAS_FATAL_RETIREMENT"] = "  void RetireSurfaceFailure(" in source
+    return "".join(f"#define {key} {int(value)}\n" for key, value in definitions.items()) + template
 
 
 def main() -> int:

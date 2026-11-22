@@ -36,6 +36,7 @@ import java.util.function.ToIntBiFunction;
 
 /** Actual notification policy/storage/listener tests; the injected sink never shows Windows UI. */
 public final class NotificationSecurityTest {
+    private static FixtureServiceContext.Scope serviceContexts;
     private static void require(boolean value, String message) {
         if (!value) throw new AssertionError(message);
     }
@@ -117,7 +118,6 @@ public final class NotificationSecurityTest {
         Class<?> amType = Class.forName("com.gesher.server.ActivityManagerService");
         Class<?> store = Class.forName("com.gesher.server.NotificationStore");
         Class<?> services = Class.forName("com.gesher.server.Services");
-        Class<?> created = Class.forName("com.gesher.server.Services$Created");
         Field last = field(services, "sLast");
         Object prior = last.get(null);
         try {
@@ -127,7 +127,7 @@ public final class NotificationSecurityTest {
             Object atm = construct(atmType, new Class<?>[]{pmType}, pm);
             Object before = service(notifications, pmType, pm, shown);
             Object am = construct(amType, new Class<?>[]{atmType, pmType, notifications}, atm, pm, before);
-            last.set(null, construct(created, new Class<?>[]{pmType, atmType, amType}, pm, atm, am));
+            last.set(null, serviceContexts.runtime(pm, atm, am));
             Method get = amType.getMethod("getIntentSender", int.class, String.class, IBinder.class,
                     String.class, int.class, Intent[].class, String[].class, int.class, Bundle.class, int.class);
             Intent content = new Intent(action).setPackage(pkg).putExtra("marker", "saved-content");
@@ -156,8 +156,7 @@ public final class NotificationSecurityTest {
             Object reopened = service(notifications, pmType, reopenedPm, shown);
             Object reopenedAm = construct(amType, new Class<?>[]{atmType, pmType, notifications},
                     reopenedAtm, reopenedPm, reopened);
-            last.set(null, construct(created, new Class<?>[]{pmType, atmType, amType},
-                    reopenedPm, reopenedAtm, reopenedAm));
+            last.set(null, serviceContexts.runtime(reopenedPm, reopenedAtm, reopenedAm));
             Object pending = field(amType, "mPendingIntents").get(reopenedAm);
             require(((List<?>)field(pending.getClass(), "mRecords").get(pending)).isEmpty(),
                     "Restart retained original in-memory PendingIntent capabilities");
@@ -205,6 +204,14 @@ public final class NotificationSecurityTest {
     }
 
     public static void main(String[] args) throws Exception {
+        FixtureServiceContext.Scope previous = serviceContexts;
+        try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
+            serviceContexts = owned;
+            runWithServiceContext(args);
+        } finally { serviceContexts = previous; }
+    }
+
+    private static void runWithServiceContext(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
         File data = new File(System.getenv("ANDROID_DATA"));
         data.mkdirs();
@@ -301,12 +308,8 @@ public final class NotificationSecurityTest {
         Class<?> services=Class.forName("com.gesher.server.Services");
         java.lang.reflect.Field last=services.getDeclaredField("sLast"); last.setAccessible(true);
         Object prior=last.get(null);
-        Class<?> created=Class.forName("com.gesher.server.Services$Created");
-        Constructor<?> createdConstructor=created.getDeclaredConstructor(pmType,
-                Class.forName("com.gesher.server.ActivityTaskManagerService"),
-                Class.forName("com.gesher.server.ActivityManagerService"));
-        createdConstructor.setAccessible(true);
-        last.set(null,createdConstructor.newInstance(pm,null,null));
+        // This storage identity check deliberately has no activation or process context.
+        last.set(null,serviceContexts.metadataOnly(pm));
         try {
             Class<?> store=Class.forName("com.gesher.server.NotificationStore");
             Method save=method(store,"save",Class.forName("com.gesher.server.ActivityManagerService"),

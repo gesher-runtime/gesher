@@ -89,7 +89,9 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   PrintWindow reads nothing back from a window never shown). The window's
   title is the Activity's label; it carries the process's AppUserModelID
   (`SHGetPropertyStoreForWindow`, from `$GESHER_APP_USER_MODEL_ID`) and the
-  package's Start menu icon (`WM_SETICON`, `<data>/gesher-shell`). Closing it
+  package's Start menu icon (`WM_SETICON`, `<data>/gesher-shell`; also written,
+  without a shortcut, for a package with no launcher activity or a staged microG
+  addon, docs/installer.md). Closing it
   (`WM_CLOSE`) calls `Activity.finish()`: on the device the system server
   destroys the activity and ends the process; `remove` closes the window.
   Closing always closes the app: if the window's thread has not taken the
@@ -196,8 +198,8 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   `build` job builds them too (ccache key `runtime`). ci.yml runs
   graphics.yml as its `graphics` job; the test and package jobs download
   artifact `graphics` into `dist`. framework.yml builds `graphics-tests.dex`
-  (`tests/dex-graphics/build.sh`, against framework.jar's classes, with
-  gesher-app's sources on javac's source path) into artifact `framework`.
+  (`tests/dex-graphics/build.sh`, against framework.jar and the complete
+  `gesher-app-classes.jar` from the same build) into artifact `framework`.
   `tests/windows/tracks/30-graphics.ps1` runs the probes and the dex tests
   (`GraphicsDex`: framework.jar and gesher-app.jar on the boot class path,
   a time limit, fault tracing).
@@ -336,11 +338,14 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   parent. No vsync (`debug.choreographer.vsync=false`: frames timed by
   messages).
 - **Surface natives missing on the host**: core/jni's host
-  `android_view_Surface.cpp` has no `nativeCreateFromSurfaceControl`,
-  `nativeGetFromSurfaceControl`, `nativeGetFromBlastBufferQueue`,
-  `nativeReadFromParcel`/`nativeWriteToParcel` (`#ifdef __ANDROID__`).
-  `Surface.copyFrom(SurfaceControl)` and the BLAST paths that call them
-  throw UnsatisfiedLinkError.
+  `android_view_Surface.cpp` has no `nativeCreateFromSurfaceControl` or
+  `nativeGetFromSurfaceControl` (`#ifdef __ANDROID__`): `Surface.copyFrom(SurfaceControl)`
+  throws UnsatisfiedLinkError. Gesher supplies the others it leaves out:
+  `nativeCreateFromSurfaceTexture` and `nativeGetFromBlastBufferQueue`
+  (`compat/media/surface/surface_jni.cc`), and `nativeReadFromParcel`/`nativeWriteToParcel`
+  (`compat/framework/surface_parcel.cc`, "Surfaces in Parcels" below). Only a QueueSurface
+  (a SurfaceView's, SurfaceTexture's or ImageReader's) travels; a window's Surface is
+  written as no surface and reads as an invalid one.
 - **CPU drawing only**: hwui's CPU pipeline (Skia raster); hwui's GL
   pipeline over ANGLE is not wired up.
 - **System fonts** come from the fonts track (docs/fonts.md: fonts.xml in
@@ -524,16 +529,82 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   position, size, scrolling and clipping follow the view tree. `setZOrderOnTop`: the
   frame is drawn by a drawable in the root view's overlay, over every view (patch 0300,
   `GesherOverlay`).
-- **EGL/GLES into it** (SDL, games): an ANativeWindow without an HWND gets a hidden
-  helper window for ANGLE's swap chain; before each eglSwapBuffers the frame is read
-  back and posted to the ANativeWindow, paced at 60 Hz (`compat/bionic/egl_child_surface.cc`).
+- **EGL/GLES into it** (SDL, games, Firefox's compositor in its GPU process): an
+  ANativeWindow without an HWND gets a hidden helper window for ANGLE's window surface;
+  at each eglSwapBuffers the frame is read back and posted to the ANativeWindow, paced
+  at 60 Hz on a high-resolution waitable timer (`compat/bionic/egl_child_surface.cc`).
+  The helper is never shown, so its swap chain is not presented: ANGLE's swap is made
+  only when the window's size changed (where ANGLE resizes the surface), with swap
+  interval 0 (eglSwapInterval with such a surface current keeps 0). Presenting it with
+  the default interval waited for the vertical blank in every swap (18 to 21 ms on
+  average, up to 35); with `std::this_thread::sleep_for` the 16.7 ms pacing waits
+  overslept by 8 to 18 ms (scheduler ticks). Firefox's compositor showing a 60 fps
+  video went from 28 to 54 frames a second. While frames come, the GPU is kept from
+  sleeping between them (`compat/bionic/gpu_keepalive.h`, also for SurfaceControl
+  composition): on an Intel UHD Graphics 770 the read-back of a frame drawn after the
+  GPU sat idle for more than about 30 ms waited about half a second, up to once a
+  second (a plain Direct3D 11 program without Gesher does the same), so a 25 fps
+  video froze for half a second 5 to 24 times a minute; with it, not once in 105 s
+  (docs/media.md, "Firefox video").
 - **TextureView / SurfaceTexture**: the media track's TextureLayer and SurfaceTexture
   natives; TextureView.lockCanvas now draws into the SurfaceTexture's producer.
+- **SurfaceTexture in OpenGL ES** (`compat/media/surface/surface_texture_gl.{h,cc}`):
+  what an app samples as `GL_TEXTURE_EXTERNAL_OES` (Firefox's compositor shows a video
+  decoder's frames this way; GLSurfaceView camera previews, ExoPlayer's GL effects).
+  On a device the SurfaceTexture's EGLConsumer binds each latched buffer to the app's
+  texture as an EGLImage. Here a frame is RGBA pixels (its QueueSurface's), so
+  `updateTexImage` makes a Direct3D 11 texture of ANGLE's device from the newest frame
+  (`CreateTexture2D` with the pixels as initial data, a free-threaded device call that
+  does not touch ANGLE's device context), an EGLImage of it
+  (`EGL_ANGLE_image_d3d11_texture`) and binds it with `glEGLImageTargetTexture2DOES`;
+  the image and texture belong to the app's texture from then on and go when it is
+  bound to the next frame or deleted, so nothing of Gesher's is left in the app's
+  context (a SurfaceTexture is often released on a thread without it). AOSP's state
+  machine is kept: a SurfaceTexture made with a texture name is attached to the context
+  current at its first `updateTexImage`; `detachFromGLContext` deletes the texture and
+  works with no context current before any use (Firefox detaches a new SurfaceTexture
+  on a binder thread); `attachToGLContext` shows the latched frame in the new texture;
+  `updateTexImage` with no or another context current throws IllegalStateException,
+  after `release()` RuntimeException; with no new frame it binds the texture and keeps
+  the latched frame; `releaseTexImage` drops the frame (a 1x1 black image, time stamp
+  0); the transform matrix is the identity until a frame is latched, then the vertical
+  flip of a buffer without crop; `getTimestamp` is the latched frame's. One upload per
+  latched frame. Tested by `tests/dex-graphics/gesher/SurfaceTextureGlTest.java`
+  (31-angle.ps1, WARP) and GlBindingsTest's SurfaceTexture frames.
 - **Cameras**: Camera2 and the legacy Camera write RGBA into any surface with a native
   window, so SurfaceViews and TextureViews get frames; the legacy `setPreviewTexture`
   now goes through a Surface over the SurfaceTexture (LegacyCamera).
 - **Bitmap parcels** (`compat/hwui/surfaces/bitmap_parcel.cc`) and **YuvImage**
   (`compat/hwui/surfaces/yuv_image.cc`), registered after hwui's tables.
+- **Surfaces in Parcels** (`compat/framework/surface_parcel.cc`, the QueueSurface side in
+  `compat/media/surface/surface_parcel_bridge.h`): on a device a parceled Surface is its
+  IGraphicBufferProducer. Here a QueueSurface's parcel is a producer endpoint, a binder in
+  the consumer's process, and the consumer's size. Read in another process (Chromium's
+  GPU process given the browser's SurfaceView), it is a forwarding QueueSurface: each
+  frame queued goes to the endpoint in a memfd the producer reuses (one per producer,
+  grown when a frame is larger), with its size, time stamp and the memfd's id (new for
+  each memfd, unique across processes), in a synchronous transaction; the endpoint
+  keeps the memfds of its last two producers mapped while frames keep coming in them
+  (mapping and unmapping a 1280x720 frame's memfd for each frame cost 1 to 3 ms in page
+  faults, against 0.2 to 0.7 ms to post it from a mapping kept) and queues the frame to
+  the consumer's QueueSurface
+  (`QueueSurface::PostFrame`, which leaves the consumer's own producer state alone) and
+  answers with the consumer's current size, which becomes the producer's default size
+  (libgui takes it from each queueBuffer's output the same way). Once the consumer is gone
+  (released, abandoned, its process dead) the answer says so and the producer is
+  abandoned: its next lock or dequeue fails (`lockCanvas` throws IllegalArgumentException),
+  as on an abandoned BufferQueue. Read in the consumer's own process, the parcel is the
+  consumer's Surface itself; read into a Surface that already forwards to the same
+  endpoint, that Surface stays (as the same IGraphicBufferProducer does); otherwise the
+  Java Surface's previous native surface is released. The producer side goes with its
+  Surface (its memfd closed); received descriptors belong to the Parcel. Unlike a device,
+  the producer learns of a new consumer size, and of a consumer that is gone, with the
+  frame it queues after the change (a device's next dequeue sees both), a frame lost to a
+  consumer that is gone does not fail its queueBuffer, and Surfaces read from parcels of
+  one consumer may all produce at once (a BufferQueue takes one connected producer).
+  Tested by `tests/dex-services/gesher/services/SurfaceParcelTest.java` (services track:
+  one process, and two processes over binderd: pixels, time stamps, sizes, release,
+  abandonment and memfd counts).
 
 Status and next steps (2026-10-26):
 
@@ -569,6 +640,30 @@ LegacyCamera.java (setPreviewTexture frames), app/gesher-camera CaptureActivity 
 tests/windows/tracks/58-devices.ps1 (thumbnail expected), tests/e2e/apps.json (TIC-80
 display, diagnoseLog, click), .github/workflows/ci.yml (surfaces job + artifact),
 framework.yml (surfaceapp), compat/hwui/graphics_runtime.cc, cmake/aosp/hwui.cmake.
+
+### NDK hardware buffers and SurfaceControl (ADR 0089)
+
+[ADR 0089](decisions/0089-hardware-buffers-and-surface-control.md); the
+pieces are listed in [native-libs.md](native-libs.md) ("Graphics").
+
+- `AHardwareBuffer_*` are memfd-backed buffers; their GPU form is a texture of
+  the process's GPU thread (a Direct3D 11 device of its own beside ANGLE's),
+  shared with ANGLE's device, where each
+  `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` makes an EGLImage of it
+  (`EGL_ANGLE_image_d3d11_texture`). CPU locks read the texture back when the
+  GPU may have drawn; unlocks after writing upload.
+- `ASurfaceControl_*`: each window an ASurfaceControl tree hangs from (a
+  SurfaceView's surface, the forwarding Surface Chromium's GPU process holds,
+  a Gesher window) is composed on the GPU thread after every applied
+  transaction (buffers, colors, crop, position, scale, transforms, z order,
+  visibility, plane alpha) and the frame is posted to that window as its
+  producer would. This is how Chromium's display compositor
+  (`GLSurfaceEGLSurfaceControl`) reaches the browser's SurfaceView: one
+  read-back per frame (a staging copy), then the forwarding of
+  surface_parcel.cc.
+- `EGL_ANDROID_native_fence_sync` fences wait for their GPU work when made
+  (ANGLE's Direct3D 11 display has no EGL fences); input receivers on layers
+  are refused (no embedded input windows).
 ### Open problems and dead ends
 
 - AOSP android-16 no longer builds libhwui or layoutlib_jni for Windows

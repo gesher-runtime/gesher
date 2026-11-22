@@ -97,7 +97,7 @@ final class GeolocationShim {
     /** Requests waiting for the app's answer, by origin. */
     private final Map<String, List<Runnable>> mAsking = new HashMap<>();
     private final Map<Integer, LocationListener> mWatches = new HashMap<>();
-    private final List<CancellationSignal> mGets = new ArrayList<>();
+    private final List<CurrentRequest> mGets = new ArrayList<>();
     /** Bumped when the page goes: answers for the old page are dropped. */
     private int mGeneration;
 
@@ -115,8 +115,8 @@ final class GeolocationShim {
             if (lm != null) lm.removeUpdates(l);
         }
         mWatches.clear();
-        for (CancellationSignal s : mGets) s.cancel();
-        mGets.clear();
+        // Retire before canceling: a backend may complete synchronously on cancel.
+        for (CurrentRequest request : new ArrayList<>(mGets)) request.finish(true);
     }
 
     /** A request from the page (the WebView's Looper). */
@@ -208,25 +208,8 @@ final class GeolocationShim {
         });
     }
 
-    /**
-     * The app asks for a location permission in its manifest (Gesher grants what an app
-     * requests, as LocationManagerService checks it), or holds one.
-     */
+    /** A declaration is not a grant; origin consent cannot replace app permission. */
     private static boolean hasLocationPermission(android.content.Context context) {
-        try {
-            String[] requested = context.getPackageManager().getPackageInfo(
-                    context.getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
-            if (requested != null) {
-                for (String p : requested) {
-                    if (android.Manifest.permission.ACCESS_FINE_LOCATION.equals(p)
-                            || android.Manifest.permission.ACCESS_COARSE_LOCATION.equals(p)) {
-                        return true;
-                    }
-                }
-            }
-        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
-            // ask the context below
-        }
         return context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED
                 || context.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -273,13 +256,13 @@ final class GeolocationShim {
                 return;
             }
         }
-        CancellationSignal signal = new CancellationSignal();
-        mGets.add(signal);
-        AtomicBoolean done = new AtomicBoolean();
+        CurrentRequest request = new CurrentRequest(id, generation);
+        mGets.add(request);
         try {
-            lm.getCurrentLocation(p, signal, mProvider.context().getMainExecutor(), loc -> {
-                if (!done.compareAndSet(false, true) || generation != mGeneration) return;
-                mGets.remove(signal);
+            // All request state belongs to the WebView's Looper, which need not
+            // be the application's main Looper.
+            lm.getCurrentLocation(p, request.signal, task -> mProvider.uiHandler().post(task), loc -> {
+                if (!request.finish(false) || generation != mGeneration) return;
                 if (loc != null) {
                     position(id, loc);
                 } else {
@@ -287,16 +270,38 @@ final class GeolocationShim {
                 }
             });
         } catch (SecurityException e) {
-            error(id, PERMISSION_DENIED, String.valueOf(e.getMessage()));
+            if (request.finish(true) && generation == mGeneration) {
+                error(id, PERMISSION_DENIED, String.valueOf(e.getMessage()));
+            }
             return;
+        } catch (RuntimeException | Error e) {
+            request.finish(true);
+            throw e;
         }
-        if (timeout >= 0) {
-            mProvider.uiHandler().postDelayed(() -> {
-                if (!done.compareAndSet(false, true) || generation != mGeneration) return;
-                signal.cancel();
-                mGets.remove(signal);
-                error(id, TIMEOUT, "Timeout expired");
-            }, timeout);
+        if (timeout >= 0 && !request.done) {
+            if (!mProvider.uiHandler().postDelayed(request, timeout)) request.finish(true);
+        }
+    }
+
+    /** A one-shot location and its timeout share one terminal lifetime on the UI Looper. */
+    private final class CurrentRequest implements Runnable {
+        final int id, generation;
+        final CancellationSignal signal = new CancellationSignal();
+        boolean done;
+
+        CurrentRequest(int id, int generation) { this.id = id; this.generation = generation; }
+
+        boolean finish(boolean cancel) {
+            if (done) return false;
+            done = true;
+            mProvider.uiHandler().removeCallbacks(this);
+            mGets.remove(this);
+            if (cancel) signal.cancel();
+            return true;
+        }
+
+        @Override public void run() {
+            if (finish(true) && generation == mGeneration) error(id, TIMEOUT, "Timeout expired");
         }
     }
 

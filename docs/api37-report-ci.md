@@ -1,11 +1,12 @@
 # Automatic tests for the A07 report tools
 
-The normal `ci` workflow runs `api37-report-tests` on Ubuntu 24.04, Windows 2022
-and Windows 2025. The job is a required dependency of `ci-required`. It checks
+The normal `ci` workflow runs these tests on Ubuntu 24.04 in `api37-report-tests`
+and on Windows 2022 and Windows 2025 as steps of `windows-host-contracts`. Both
+jobs are required dependencies of `ci-required`. It checks
 the offline SDK, NDK and selected-source report tools; it does not execute the
 Android runtime or establish API37 compatibility.
 
-The job installs Python 3.12 and Temurin JDK21.0.13. Git is the independent source
+Each job installs Python 3.12 and Temurin JDK21.0.13. Git is the independent source
 tree/archive oracle. The Linux profile also requires ordinary x86 ELF32/ELF64
 C/C++ linking and GNU `readelf`. The selected ELF fixtures are compiled and read
 as data; their code is never loaded or executed.

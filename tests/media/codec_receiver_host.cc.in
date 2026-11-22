@@ -110,8 +110,10 @@ void AdmittedOwner() {
   Check(Codec::retired == retired + 1, "release retires work before the admitted call returns");
   Check(Codec::destroyed == destroyed && Codec::live == 1,
         "admitted call retains its receiver through retirement");
+#if HAS_OPTIONAL_LOOKUP
   Check(GetCodec(&env, &object, false) == nullptr && env.exceptions == 0,
         "optional lookup after release returns no receiver");
+#endif
   Check(GetCodec(&env, &object) == nullptr && env.exceptions == 1,
         "ordinary lookup after release throws once");
   MC_release(&env, &object);

@@ -1,0 +1,56 @@
+[
+  {
+    "name": "NotificationManagerService.java",
+    "path": "services/core/java/com/android/server/notification/NotificationManagerService.java",
+    "url": "https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/services/core/java/com/android/server/notification/NotificationManagerService.java?format=TEXT",
+    "commit": "45034f0663f960d9ee5fb0a101a4732b71f6e2f4",
+    "bytes": 730526,
+    "sha256": "4ce08ca7110d8be0ffdfaad9263a6ac1e5d4c4c2726f74fdbabc4d73941d0e36",
+    "git_blob": "1b2042fc8532cc861fde583c579a1d27558b6f79"
+  },
+  {
+    "name": "PreferencesHelper.java",
+    "path": "services/core/java/com/android/server/notification/PreferencesHelper.java",
+    "url": "https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/services/core/java/com/android/server/notification/PreferencesHelper.java?format=TEXT",
+    "commit": "45034f0663f960d9ee5fb0a101a4732b71f6e2f4",
+    "bytes": 153360,
+    "sha256": "9557644819f477627bae4410e42fbbd9a7503621675891df08060531c2436bbf",
+    "git_blob": "db6a47bd2b3b07e5b6aa32403e833f2b0021ccbe"
+  },
+  {
+    "name": "NotificationManager.java",
+    "path": "core/java/android/app/NotificationManager.java",
+    "url": "https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/core/java/android/app/NotificationManager.java?format=TEXT",
+    "commit": "45034f0663f960d9ee5fb0a101a4732b71f6e2f4",
+    "bytes": 151344,
+    "sha256": "b90f42f09f271e0890816df6c5331bdcfbfec13cdf8682ce85e89227de07a0dd",
+    "git_blob": "c6f93e295db0b5073d86d445400ad039b64c46ef"
+  },
+  {
+    "name": "INotificationManager.aidl",
+    "path": "core/java/android/app/INotificationManager.aidl",
+    "url": "https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/core/java/android/app/INotificationManager.aidl?format=TEXT",
+    "commit": "45034f0663f960d9ee5fb0a101a4732b71f6e2f4",
+    "bytes": 16443,
+    "sha256": "6a46e6ac3b81a0a4dff73c49f1f05293bf1dbdc5ab6fc5fc6bde6e298d7933cd",
+    "git_blob": "6ddba90a2e9df8ff2064f46747bc3572beacf44c"
+  },
+  {
+    "name": "PreferencesHelperTest.java",
+    "path": "services/tests/uiservicestests/src/com/android/server/notification/PreferencesHelperTest.java",
+    "url": "https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/services/tests/uiservicestests/src/com/android/server/notification/PreferencesHelperTest.java?format=TEXT",
+    "commit": "45034f0663f960d9ee5fb0a101a4732b71f6e2f4",
+    "bytes": 347131,
+    "sha256": "172e29cada6da711b1b59183a79652f8a6de436331e31871fda2d1e34146c035",
+    "git_blob": "bcbd297621f6a14d9b1673eceddd22ceef3d1243"
+  },
+  {
+    "name": "NotificationManagerServiceTest.java",
+    "path": "services/tests/uiservicestests/src/com/android/server/notification/NotificationManagerServiceTest.java",
+    "url": "https://android.googlesource.com/platform/frameworks/base/+/45034f0663f960d9ee5fb0a101a4732b71f6e2f4/services/tests/uiservicestests/src/com/android/server/notification/NotificationManagerServiceTest.java?format=TEXT",
+    "commit": "45034f0663f960d9ee5fb0a101a4732b71f6e2f4",
+    "bytes": 1011216,
+    "sha256": "87c52573804525228dcdd3cc2ebcfad39b46b4214a0e1720a126e59f76523c26",
+    "git_blob": "7dc0921db410436a4ee07c562cb9bb09416124db"
+  }
+]

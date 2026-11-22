@@ -2,12 +2,14 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 """Exercise exact WebView document publication/answering and measure owned-body copies.
 
-Copies production loadDataWithBaseURL, answerRequest, blocked, readAll, headers,
-navigation, and pending-data state. Native host/JNI and file-resource loading are
-declared boundaries; file/byte streams, concurrency and Java allocations are real.
+Copies production loadDataWithBaseURL, onResourceRequest, claimData, answerRequest, blocked, readAll, headers,
+navigation, onEvent, onNavigationStarting, pending-data state and ApiNavigations. Native
+host/JNI (a model of webview_host.cc's navigation events), the UI thread and file-resource
+loading are declared boundaries; file/byte streams, concurrency and Java allocations are
+real.
 --framework-classes runs real Android WebResourceResponse/Base64 implementations;
 otherwise small declared Android adapters keep this host preflight standalone.
-Only the pending-data claim boundary is instrumented to force concurrent changes.
+Only the pending-data read boundary is instrumented to force concurrent changes.
 """
 from __future__ import annotations
 
@@ -79,16 +81,28 @@ def main() -> None:
     pieces = [method(production, marker) for marker in (
         'public void loadDataWithBaseURL(String baseUrl, String data, String mimeType,',
         'private void navigate(String webView2Url, String headers)',
+        'private void navigate(String webView2Url, String headers, PendingData data)',
+        'public void onEvent(int type, long id, int arg, String a, String b, String c, byte[] bytes)',
+        'public boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect',
+        'public void onResourceRequest(long id, String url, String method, String headers,',
         'private void answerRequest(long id, String url, String method, String headers, int context,',
         'private boolean blocked(String url, int context)',
         'private static byte[] readAll(InputStream in)',
         'private static Map<String, String> parseHeaders(String headers)',
     )]
+    # Helpers newer than an old-source control's production code.
+    pieces += [method(production, marker) for marker in (
+        'private static long number(String decimal)',
+        'private PendingData claimData(String url, int context, boolean mainFrame)',
+    ) if marker in production]
     if 'private static final class PendingData' in production:
-        field = 'private final AtomicReference<PendingData> mPendingData = new AtomicReference<>();'
-        if production.count(field) != 1:
-            raise ValueError('pending document state changed')
-        pieces += [method(production, 'private static final class PendingData'), field]
+        fields = ['private final AtomicReference<PendingData> mPendingData = new AtomicReference<>();',
+                  'private final ApiNavigations mApiNavigations = new ApiNavigations();',
+                  'private boolean mStartingApi;']
+        for field in fields:
+            if production.count(field) != 1:
+                raise ValueError('pending document state changed: ' + field)
+        pieces += [method(production, 'private static final class PendingData'), *fields]
         inspections = {
             '@BODY@': 'PendingData value = mPendingData.get(); return value == null ? null : value.body;',
             '@MIME@': 'PendingData value = mPendingData.get(); return value == null ? null : value.mime;',
@@ -106,10 +120,10 @@ def main() -> None:
     exact = '\n'.join(pieces)
     print('WebView response production SHA256 ' + hashlib.sha256(exact.encode()).hexdigest(), flush=True)
     if atomic:
-        boundary = 'mPendingData.compareAndSet(data, null)'
+        boundary = 'PendingData data = mPendingData.get();'
         if exact.count(boundary) != 1:
-            raise ValueError('atomic pending-document claim boundary changed')
-        exact = exact.replace(boundary, 'fixtureClaim(mPendingData, data, null)')
+            raise ValueError('pending-document read boundary changed')
+        exact = exact.replace(boundary, 'PendingData data = fixtureRead(mPendingData);')
     else:
         boundary = 'mData = null;'
         if exact.count(boundary) != 1:
@@ -123,6 +137,15 @@ def main() -> None:
     ))
     template = (ROOT / 'tests/java-performance/WebViewOwnedResponsesHost.java.in').read_text(encoding='utf-8')
     generated = template.replace('@PRODUCTION@', exact).replace('@URL_MAPPINGS@', mappings)
+    # The native callback is a declared boundary in this Java test. Preserve its
+    # old matching behavior for old-source controls; the actual C++ helper has
+    # its own executable regression tests.
+    native = read('compat/webview/webview_host.cc')
+    native_match = ('ApiNavigations.document(url).equals(ApiNavigations.document(mainDocument))'
+                    if 'SameDocumentUrl(' in native else 'url.equals(mainDocument)')
+    generated = generated.replace('@NATIVE_DOCUMENT_MATCH@', native_match)
+    generated = generated.replace('@STARTING_HANDED@',
+        ', handed' if 'boolean redirect, long handed)' in production else '')
     for marker, value in inspections.items():
         generated = generated.replace(marker, value)
     if re.search(r'@[A-Z_]+@', generated):
@@ -131,7 +154,9 @@ def main() -> None:
         work = Path(temporary)
         source = work / 'WebViewOwnedResponsesHost.java'
         source.write_text(generated, encoding='utf-8')
-        sources = [str(source)]
+        navigations = work / 'ApiNavigations.java'
+        navigations.write_text(read('app/java/com/gesher/app/webview/ApiNavigations.java'), encoding='utf-8')
+        sources = [str(source), str(navigations)]
         classpath = [str(work)]
         if args.framework_classes:
             classpath.append(str(args.framework_classes.resolve()))

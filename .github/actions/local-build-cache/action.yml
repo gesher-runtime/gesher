@@ -52,8 +52,11 @@ runs:
         path: ${{ inputs.path }}
         key: ${{ inputs.key }}
         restore-keys: ${{ inputs.restore-keys }}
+    # Hosted runners share the repository's Actions cache quota: only main
+    # saves there (branches restore main's entries). Self-hosted local
+    # snapshots above are per runner and unaffected.
     - name: Hosted save
-      if: runner.environment != 'self-hosted' && inputs.phase == 'save'
+      if: runner.environment != 'self-hosted' && inputs.phase == 'save' && github.ref == 'refs/heads/main'
       uses: actions/cache/save@v4
       with:
         path: ${{ inputs.path }}

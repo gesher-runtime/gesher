@@ -1,0 +1,353 @@
+{
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "app_manifest": {
+    "source_id": "fresh discovery candidate app",
+    "role": "boot",
+    "name": "gesher-app.jar",
+    "sha256": "5524e082cc424dd342491c61c5316d1d84953b02228ee049eae114a34c8cc758",
+    "archive_bytes": 1423448,
+    "entries": 1,
+    "uncompressed_bytes": 3432824,
+    "class_definitions": 2478,
+    "selected_members": 1,
+    "versions": {
+      "dex_039": 1
+    },
+    "encoded_member_definitions": 30816
+  },
+  "app_dex_class_count": 2478,
+  "services_dex_class_count": 1720,
+  "sdk_types": 8,
+  "sdk_declarations": 41,
+  "declarations": {
+    "android.net.wifi.p2p.WifiP2pDiscoveryConfig": [
+      {
+        "kind": "field",
+        "name": "CREATOR",
+        "descriptor": "Landroid/os/Parcelable$Creator;",
+        "sdk_flags": 25,
+        "dex_flags": 25
+      },
+      {
+        "kind": "method",
+        "name": "describeContents",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getFrequencyMhz",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getScanType",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "toString",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "writeToParcel",
+        "descriptor": "(Landroid/os/Parcel;I)V",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      }
+    ],
+    "android.net.wifi.p2p.WifiP2pDiscoveryConfig$Builder": [
+      {
+        "kind": "method",
+        "name": "<init>",
+        "descriptor": "(I)V",
+        "sdk_flags": 1,
+        "dex_flags": 65537
+      },
+      {
+        "kind": "method",
+        "name": "build",
+        "descriptor": "()Landroid/net/wifi/p2p/WifiP2pDiscoveryConfig;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "setFrequencyMhz",
+        "descriptor": "(I)Landroid/net/wifi/p2p/WifiP2pDiscoveryConfig$Builder;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      }
+    ],
+    "android.net.wifi.p2p.WifiP2pUsdBasedLocalServiceAdvertisementConfig": [
+      {
+        "kind": "field",
+        "name": "CREATOR",
+        "descriptor": "Landroid/os/Parcelable$Creator;",
+        "sdk_flags": 25,
+        "dex_flags": 25
+      },
+      {
+        "kind": "method",
+        "name": "describeContents",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getFrequencyMhz",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "toString",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "writeToParcel",
+        "descriptor": "(Landroid/os/Parcel;I)V",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      }
+    ],
+    "android.net.wifi.p2p.WifiP2pUsdBasedLocalServiceAdvertisementConfig$Builder": [
+      {
+        "kind": "method",
+        "name": "<init>",
+        "descriptor": "()V",
+        "sdk_flags": 1,
+        "dex_flags": 65537
+      },
+      {
+        "kind": "method",
+        "name": "build",
+        "descriptor": "()Landroid/net/wifi/p2p/WifiP2pUsdBasedLocalServiceAdvertisementConfig;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "setFrequencyMhz",
+        "descriptor": "(I)Landroid/net/wifi/p2p/WifiP2pUsdBasedLocalServiceAdvertisementConfig$Builder;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      }
+    ],
+    "android.net.wifi.p2p.WifiP2pUsdBasedServiceDiscoveryConfig": [
+      {
+        "kind": "field",
+        "name": "CREATOR",
+        "descriptor": "Landroid/os/Parcelable$Creator;",
+        "sdk_flags": 25,
+        "dex_flags": 25
+      },
+      {
+        "kind": "method",
+        "name": "describeContents",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getBand",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getFrequenciesMhz",
+        "descriptor": "()[I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "toString",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "writeToParcel",
+        "descriptor": "(Landroid/os/Parcel;I)V",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      }
+    ],
+    "android.net.wifi.p2p.WifiP2pUsdBasedServiceDiscoveryConfig$Builder": [
+      {
+        "kind": "method",
+        "name": "<init>",
+        "descriptor": "()V",
+        "sdk_flags": 1,
+        "dex_flags": 65537
+      },
+      {
+        "kind": "method",
+        "name": "build",
+        "descriptor": "()Landroid/net/wifi/p2p/WifiP2pUsdBasedServiceDiscoveryConfig;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "setBand",
+        "descriptor": "(I)Landroid/net/wifi/p2p/WifiP2pUsdBasedServiceDiscoveryConfig$Builder;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "setFrequenciesMhz",
+        "descriptor": "([I)Landroid/net/wifi/p2p/WifiP2pUsdBasedServiceDiscoveryConfig$Builder;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      }
+    ],
+    "android.net.wifi.p2p.WifiP2pDirInfo": [
+      {
+        "kind": "field",
+        "name": "CREATOR",
+        "descriptor": "Landroid/os/Parcelable$Creator;",
+        "sdk_flags": 25,
+        "dex_flags": 25
+      },
+      {
+        "kind": "method",
+        "name": "<init>",
+        "descriptor": "(Landroid/net/MacAddress;[B[B)V",
+        "sdk_flags": 1,
+        "dex_flags": 65537
+      },
+      {
+        "kind": "method",
+        "name": "describeContents",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getDirTag",
+        "descriptor": "()[B",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getMacAddress",
+        "descriptor": "()Landroid/net/MacAddress;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getNonce",
+        "descriptor": "()[B",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "toString",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "writeToParcel",
+        "descriptor": "(Landroid/os/Parcel;I)V",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      }
+    ],
+    "android.net.wifi.p2p.nsd.WifiP2pUsdBasedServiceResponse": [
+      {
+        "kind": "field",
+        "name": "CREATOR",
+        "descriptor": "Landroid/os/Parcelable$Creator;",
+        "sdk_flags": 25,
+        "dex_flags": 25
+      },
+      {
+        "kind": "method",
+        "name": "describeContents",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getServiceProtocolType",
+        "descriptor": "()I",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "getServiceSpecificInfo",
+        "descriptor": "()[B",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "toString",
+        "descriptor": "()Ljava/lang/String;",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      },
+      {
+        "kind": "method",
+        "name": "writeToParcel",
+        "descriptor": "(Landroid/os/Parcel;I)V",
+        "sdk_flags": 1,
+        "dex_flags": 1
+      }
+    ]
+  },
+  "new_sdklevel_definition_in_app": false,
+  "manager_definition_in_app": false,
+  "new_value_or_helper_definitions_in_services": false,
+  "existing_dependencies": [
+    "android.net.wifi.OuiKeyedData",
+    "android.net.wifi.util.PersistableBundleUtils",
+    "android.net.MacAddress"
+  ],
+  "artifacts": {
+    "app/gesher-app.jar": {
+      "sha256": "5524e082cc424dd342491c61c5316d1d84953b02228ee049eae114a34c8cc758",
+      "bytes": 1423448
+    },
+    "app/gesher-app-classes.jar": {
+      "sha256": "e06cf52258e160d54a5bc61cfc52b0bf969b219be03a1c1ffdb2bceda71cf3db",
+      "bytes": 2682887
+    },
+    "services/services-tests.dex": {
+      "sha256": "32810036e5f6ab246ffca618633ffe50581a3105afb0f96197ea21f5eb69aa7a",
+      "bytes": 1823752
+    }
+  },
+  "source_hashes_sha256": "f87c065e65b5bbc1716037aadd4e06a630508bb60c5b45fd487a5af12530e700",
+  "scope": "Fresh full app/services against retained genuine framework/core inputs; not a fresh Windows distribution or native execution",
+  "app_build": "Original full build; all app inputs and output bytes verified unchanged after caller-only signature correction",
+  "services_build": "Full services rebuild after final caller signature correction"
+}

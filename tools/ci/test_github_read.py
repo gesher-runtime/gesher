@@ -15,6 +15,7 @@ from unittest.mock import call, patch
 from artifact_candidates import main as select_batch_artifacts, read_artifacts
 from github_read import GitHubReadError, get_json, main
 from github_jobs import get_jobs
+from github_read import GitHubTransientError
 
 
 ENDPOINT = 'repos/gesher-runtime/gesher/actions/runs/42444051868/attempts/1/jobs?per_page=100'
@@ -60,6 +61,15 @@ class GitHubReadTest(unittest.TestCase):
                                  [call(COMMAND, capture_output=True, timeout=60)] * 2)
                 self.sleep.assert_called_once_with(1)
 
+    def test_bare_gh_http_status_from_windows_retries_exact_get(self):
+        value = {'jobs': [], 'total_count': 0}
+        self.run.side_effect = [response(code=1, stderr='gh: HTTP 503\r\n'),
+                                response(value)]
+        self.assertEqual(get_json(ENDPOINT), value)
+        self.assertEqual(self.run.call_args_list,
+                         [call(COMMAND, capture_output=True, timeout=60)] * 2)
+        self.sleep.assert_called_once_with(1)
+
     def test_observed_http2_cancel_with_or_without_get_prefix_recovers(self):
         for prefix in ('', 'Get "https://api.github.com/' + ENDPOINT + '": ', 'gh: '):
             with self.subTest(prefix=prefix):
@@ -101,8 +111,26 @@ class GitHubReadTest(unittest.TestCase):
         self.assertEqual(self.run.call_count, 4)
         self.assertEqual(self.sleep.call_args_list, [call(1), call(2), call(4)])
 
+    def test_transient_failure_without_retry_raises_at_once_for_a_caller_fallback(self):
+        for stderr in ('gh: Server Error (HTTP 502)', 'gh: Server Error (HTTP 504)', DIAL_TIMEOUT):
+            with self.subTest(stderr=stderr):
+                self.run.reset_mock(); self.sleep.reset_mock()
+                self.run.side_effect = [response(code=1, stderr=stderr)]
+                with self.assertRaises(GitHubTransientError):
+                    get_json(ENDPOINT, retry_transient=False)
+                self.run.assert_called_once()
+                self.sleep.assert_not_called()
+
+    def test_permanent_failure_without_retry_is_not_a_transient_fallback(self):
+        self.run.side_effect = [response(code=1, stderr='gh: rejected (HTTP 404)')]
+        with self.assertRaises(GitHubReadError) as caught:
+            get_json(ENDPOINT, retry_transient=False)
+        self.assertNotIsInstance(caught.exception, GitHubTransientError)
+
     def test_permanent_and_unobserved_errors_fail_without_retry(self):
-        errors = [f'gh: rejected (HTTP {status})' for status in (400, 401, 403, 404, 408, 429, 500, 501)]
+        permanent = (400, 401, 403, 404, 408, 429, 500, 501)
+        errors = [f'gh: rejected (HTTP {status})' for status in permanent]
+        errors += [f'gh: HTTP {status}\r\n' for status in permanent]
         errors += ['connection reset by peer', 'context deadline exceeded',
                    'HTTP/2 INTERNAL_ERROR', 'CANCEL',
                    'stream error: stream ID 1; INTERNAL_ERROR; received from peer',
@@ -111,6 +139,9 @@ class GitHubReadTest(unittest.TestCase):
                    'stream error: stream ID 1; CANCEL; unexpected trailing message',
                    'gh: rejected (HTTP 403)\nstream error: stream ID 1; CANCEL; received from peer',
                    'gh: rejected (HTTP 401)\ngh: Server Error (HTTP 502)',
+                   'gh: HTTP 403\r\ngh: Server Error (HTTP 503)',
+                   'diagnostic text mentioning gh: HTTP 503',
+                   'gh: HTTP 503 in a diagnostic message',
                    'i/o timeout', 'net/http: TLS handshake timeout',
                    DIAL_TIMEOUT.replace('dial tcp', 'read tcp'),
                    DIAL_TIMEOUT.replace(':443:', ':80:'),
@@ -214,8 +245,10 @@ class ReceiptIntegrationTest(unittest.TestCase):
             'created_at': '2026-11-08T03:50:35Z', 'workflow_run': {'id': 7,
                 'head_sha': self.head, 'repository_id': 8, 'head_repository_id': 8}}]}
         self.endpoints = [f'repos/{self.repo}/actions/runs/7',
-            f'repos/{self.repo}/actions/runs/7/attempts/2/jobs?per_page=50&page=1',
+            f'repos/{self.repo}/actions/runs/7/attempts/2/jobs?per_page=100&page=1',
             f'repos/{self.repo}/actions/runs/7/artifacts?per_page=100&page=1&name=windows-x64']
+        self.paged = f'repos/{self.repo}/actions/runs/7/attempts/2/jobs?per_page=50&page=1'
+        self.unavailable = response(code=1, stderr='gh: Server Error (HTTP 502)')
         self.commands = []
         self.downloads = []
         self.enterContext(contextlib.redirect_stdout(io.StringIO()))
@@ -241,15 +274,49 @@ class ReceiptIntegrationTest(unittest.TestCase):
     def _receipt(self):
         runpy.run_path(str(ROOT / 'tools/ci/artifact_receipt.py'), run_name='__main__')
 
+    def test_rerun_selects_only_artifact_in_verified_producer_window(self):
+        current = self.inventory['artifacts'][0]
+        self.inventory['artifacts'].insert(0, dict(current, id=11, created_at='2026-11-08T02:50:35Z'))
+        self.inventory['total_count'] = 2
+        self.responses = [response(self.run_value), response(self.jobs), response(self.inventory)]
+        self._receipt()
+        self.assertEqual(self.downloads[0][3], '10')
+
+    def test_duplicate_current_attempt_artifacts_remain_ambiguous(self):
+        self.inventory['artifacts'].append(dict(self.inventory['artifacts'][0], id=11))
+        self.inventory['total_count'] = 2
+        self.responses = [response(self.run_value), response(self.jobs), response(self.inventory)]
+        with self.assertRaisesRegex(RuntimeError, 'Artifact missing or ambiguous'):
+            self._receipt()
+        self.assertEqual(self.downloads, [])
+
+    def test_old_attempt_alone_cannot_supply_artifact(self):
+        self.inventory['artifacts'][0]['created_at'] = '2026-11-08T02:50:35Z'
+        self.responses = [response(self.run_value), response(self.jobs), response(self.inventory)]
+        with self.assertRaisesRegex(RuntimeError, 'Artifact missing or ambiguous'):
+            self._receipt()
+        self.assertEqual(self.downloads, [])
+
     def test_actual_receipt_recovers_and_preserves_paths_and_verified_download(self):
         timeout = DIAL_TIMEOUT.replace(ENDPOINT, self.endpoints[1])
+        # A transient 100-row failure is not retried: it falls back to 50-row
+        # pages, which keep the bounded transient retries.
         self.responses = [response(self.run_value), response(code=1, stderr=timeout),
                           response(code=1, stderr='gh: Server Error (HTTP 502)'),
                           response(self.jobs), response(self.inventory)]
         self._receipt()
         self.assertEqual([command[-1] for command in self.commands],
-                         [self.endpoints[0], *([self.endpoints[1]] * 3), self.endpoints[2]])
-        self.assertEqual(self.sleep.call_args_list, [call(1), call(2)])
+                         [self.endpoints[0], self.endpoints[1], self.paged, self.paged, self.endpoints[2]])
+        self.assertEqual(self.sleep.call_args_list, [call(1)])
+
+    def test_single_hundred_row_page_finds_producer_with_one_jobs_request(self):
+        jobs = {'total_count': 51, 'jobs': [dict(self.jobs['jobs'][0], id=i, name=f'other{i}')
+                                         for i in range(100, 150)] + copy.deepcopy(self.jobs['jobs'])}
+        self.responses = [response(self.run_value), response(jobs), response(self.inventory)]
+        self._receipt()
+        self.assertEqual([c[-1] for c in self.commands], self.endpoints)
+        self.assertEqual(len(self.downloads), 1)
+        self.sleep.assert_not_called()
         self.assertEqual(self.downloads, [[sys.executable, 'tools/surface/download-verified-artifact.py',
             '--id', '10', '--digest', 'sha256:' + 'c' * 64, '--destination', 'supplier']])
 
@@ -257,17 +324,18 @@ class ReceiptIntegrationTest(unittest.TestCase):
         first = {'total_count': 51, 'jobs': [dict(self.jobs['jobs'][0], id=i, name=f'other{i}')
                                           for i in range(100, 150)]}
         second = {'total_count': 51, 'jobs': copy.deepcopy(self.jobs['jobs'])}
-        self.responses = [response(self.run_value), response(first), response(second), response(self.inventory)]
+        self.responses = [response(self.run_value), self.unavailable, response(first), response(second),
+                          response(self.inventory)]
         self._receipt()
         self.assertEqual([c[-1] for c in self.commands], [self.endpoints[0], self.endpoints[1],
-            self.endpoints[1].replace('page=1', 'page=2'), self.endpoints[2]])
+            self.paged, self.paged.replace('page=1', 'page=2'), self.endpoints[2]])
         self.assertEqual(len(self.downloads), 1)
 
     def test_second_page_wrong_source_cannot_consume_artifact(self):
         first = {'total_count': 51, 'jobs': [dict(self.jobs['jobs'][0], id=i, name=f'other{i}')
                                           for i in range(100, 150)]}
         second = {'total_count': 51, 'jobs': [dict(self.jobs['jobs'][0], head_sha='d' * 40)]}
-        self.responses = [response(self.run_value), response(first), response(second)]
+        self.responses = [response(self.run_value), self.unavailable, response(first), response(second)]
         with self.assertRaisesRegex(RuntimeError, 'Producer source/attempt/conclusion mismatch'):
             self._receipt()
         self.assertEqual(self.downloads, [])
@@ -417,6 +485,7 @@ class ReceiptIntegrationTest(unittest.TestCase):
 
 
 JOBS_ENDPOINT = 'repos/gesher-runtime/gesher/actions/runs/7/attempts/2/jobs'
+TRANSIENT = GitHubTransientError('502')
 
 
 def inventory(count, start=1, size=None):
@@ -429,22 +498,50 @@ def inventory(count, start=1, size=None):
 class JobsTest(unittest.TestCase):
     def test_complete_two_page_inventory_preserves_every_job_field(self):
         first, second = inventory(73), inventory(73, 51, 23)
-        with patch('github_jobs.get_json', side_effect=[first, second]) as read, \
+        with patch('github_jobs.get_json', side_effect=[TRANSIENT, first, second]) as read, \
                 patch('github_jobs.time.sleep') as sleep:
             result = get_jobs(JOBS_ENDPOINT)
         self.assertEqual(result, {'total_count': 73, 'jobs': first['jobs'] + second['jobs']})
         self.assertEqual([c.args[0] for c in read.call_args_list],
-            [JOBS_ENDPOINT + '?per_page=50&page=1', JOBS_ENDPOINT + '?per_page=50&page=2'])
+            [JOBS_ENDPOINT + '?per_page=100&page=1', JOBS_ENDPOINT + '?per_page=50&page=1',
+             JOBS_ENDPOINT + '?per_page=50&page=2'])
         sleep.assert_not_called()
+
+    def test_one_hundred_row_page_is_a_complete_inventory_in_one_request(self):
+        for count in (0, 1, 50, 51, 73, 100):
+            with self.subTest(count=count):
+                single = inventory(count, size=count)
+                with patch('github_jobs.get_json', side_effect=[single]) as read:
+                    self.assertEqual(get_jobs(JOBS_ENDPOINT), single)
+                self.assertEqual(read.call_args_list,
+                    [call(JOBS_ENDPOINT + '?per_page=100&page=1', retry_transient=False)])
+
+    def test_one_hundred_row_page_fails_closed_without_fallback(self):
+        duplicate = inventory(73, size=73); duplicate['jobs'][1]['id'] = 1
+        malformed = inventory(73, size=73); malformed['jobs'][5]['id'] = True
+        negative = inventory(73, size=73); negative['jobs'][5]['id'] = -6
+        nonobject = inventory(73, size=73); nonobject['jobs'][5] = None
+        for page in (inventory(101, size=100), inventory(73, size=72), inventory(73, size=101),
+                     inventory(1, size=2), duplicate, malformed, negative, nonobject,
+                     {'total_count': 0}, None):
+            with self.subTest(page=page):
+                with patch('github_jobs.get_json', side_effect=[copy.deepcopy(page)]) as read:
+                    with self.assertRaises(GitHubReadError): get_jobs(JOBS_ENDPOINT)
+                self.assertEqual(read.call_count, 1)
+
+    def test_only_transient_failures_fall_back_to_fifty_row_pages(self):
+        with patch('github_jobs.get_json', side_effect=[GitHubReadError('quota')]) as read:
+            with self.assertRaisesRegex(GitHubReadError, 'quota'): get_jobs(JOBS_ENDPOINT)
+        self.assertEqual(read.call_count, 1)
 
     def test_boundaries(self):
         for count in (0, 1, 50, 51, 100):
             with self.subTest(count=count):
                 pages = [inventory(count)]
                 if count > 50: pages.append(inventory(count, 51, count - 50))
-                with patch('github_jobs.get_json', side_effect=pages) as read:
+                with patch('github_jobs.get_json', side_effect=[TRANSIENT, *pages]) as read:
                     self.assertEqual(len(get_jobs(JOBS_ENDPOINT)['jobs']), count)
-                self.assertEqual(read.call_count, len(pages))
+                self.assertEqual(read.call_count, 1 + len(pages))
 
     def test_fail_closed_for_truncation_change_overlap_and_malformed_metadata(self):
         malformed = inventory(1); malformed['jobs'][0]['id'] = True
@@ -459,18 +556,18 @@ class JobsTest(unittest.TestCase):
         ]
         for pages in cases:
             with self.subTest(pages=pages):
-                with patch('github_jobs.get_json', side_effect=copy.deepcopy(pages)):
+                with patch('github_jobs.get_json', side_effect=[TRANSIENT, *copy.deepcopy(pages)]):
                     with self.assertRaises(GitHubReadError): get_jobs(JOBS_ENDPOINT)
 
     def test_transport_error_never_returns_first_page_as_complete(self):
-        with patch('github_jobs.get_json', side_effect=[inventory(73), GitHubReadError('502')]):
+        with patch('github_jobs.get_json', side_effect=[TRANSIENT, inventory(73), GitHubReadError('502')]):
             with self.assertRaises(GitHubReadError): get_jobs(JOBS_ENDPOINT)
 
     def test_expanding_inventory_restarts_with_a_complete_fresh_snapshot(self):
         old, fresh, second = inventory(73), inventory(74), inventory(74, 51, 24)
         old['jobs'][0]['name'] = 'old-generation'
         fresh['jobs'][0]['name'] = 'fresh-generation'
-        pages = [old, second, fresh, second]
+        pages = [TRANSIENT, old, second, fresh, second]
         with patch('github_jobs.get_json', side_effect=pages) as read, \
                 patch('github_jobs.time.sleep') as sleep:
             result = get_jobs(JOBS_ENDPOINT)
@@ -478,16 +575,17 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(result['jobs'], fresh['jobs'] + second['jobs'])
         self.assertEqual([j['id'] for j in result['jobs']], list(range(1, 75)))
         self.assertEqual([c.args[0] for c in read.call_args_list],
+            [JOBS_ENDPOINT + '?per_page=100&page=1'] +
             [JOBS_ENDPOINT + '?per_page=50&page=1', JOBS_ENDPOINT + '?per_page=50&page=2'] * 2)
         sleep.assert_called_once_with(1)
 
     def test_permanently_changing_inventory_has_a_bounded_failure(self):
-        pages = [inventory(73), inventory(74, 51, 24)] * 3
+        pages = [TRANSIENT] + [inventory(73), inventory(74, 51, 24)] * 3
         with patch('github_jobs.get_json', side_effect=pages) as read, \
                 patch('github_jobs.time.sleep') as sleep:
             with self.assertRaisesRegex(GitHubReadError, 'changed between pages'):
                 get_jobs(JOBS_ENDPOINT)
-        self.assertEqual(read.call_count, 6)
+        self.assertEqual(read.call_count, 7)
         self.assertEqual([c.args for c in sleep.call_args_list], [(1,), (2,)])
 
 

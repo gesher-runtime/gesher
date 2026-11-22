@@ -41,7 +41,9 @@ import javax.microedition.khronos.opengles.GL10;
  *       chain), one frame swapped and read back from what Windows composed;
  *   <li>window surfaces on a Surface over a SurfaceTexture (what a SurfaceView's
  *       surface is) with EGL10, and on the SurfaceTexture itself with EGL10 and EGL14:
- *       the swapped frame reaches the SurfaceTexture (onFrameAvailable).
+ *       the swapped frame reaches the SurfaceTexture (onFrameAvailable), and updateTexImage
+ *       in a context it is attached to latches it into an external texture
+ *       (SurfaceTextureGlTest has the rest of that contract).
  * </ul>
  */
 public final class GlBindingsTest {
@@ -389,7 +391,9 @@ public final class GlBindingsTest {
     thread.quitSafely();
   }
 
-  // One frame through a window surface on a new SurfaceTexture: it must arrive.
+  // One frame through a window surface on a new SurfaceTexture: it must arrive, and
+  // updateTexImage (which needs a current context, as on Android) latches it into an
+  // external texture that samples its color.
   private static void frames(String what, Handler handler, WindowSurfaceMaker maker)
       throws Exception {
     SurfaceTexture texture = new SurfaceTexture(false);
@@ -403,11 +407,72 @@ public final class GlBindingsTest {
       GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
       maker.swapAndDestroy();
       boolean arrived = frame.await(5, TimeUnit.SECONDS);
-      texture.updateTexImage();
-      check(arrived && texture.getTimestamp() != 0,
-          what + ": eglSwapBuffers posts the frame to it (onFrameAvailable)");
+      int color = latch(texture);
+      check(arrived && texture.getTimestamp() != 0 && color == Color.MAGENTA,
+          what + ": eglSwapBuffers posts the frame to it (onFrameAvailable; updateTexImage "
+              + "latches it, " + hex(color) + ")");
     }
     texture.release();
+  }
+
+  private static final String EXTERNAL_VERTEX =
+      "attribute vec2 aPos;\n"
+      + "attribute vec2 aUv;\n"
+      + "uniform mat4 uTx;\n"
+      + "varying vec2 vUv;\n"
+      + "void main() { gl_Position = vec4(aPos, 0.0, 1.0); vUv = (uTx * vec4(aUv, 0.0, 1.0)).xy; }\n";
+  private static final String EXTERNAL_FRAGMENT =
+      "#extension GL_OES_EGL_image_external : require\n"
+      + "precision mediump float;\n"
+      + "varying vec2 vUv;\n"
+      + "uniform samplerExternalOES uTex;\n"
+      + "void main() { gl_FragColor = texture2D(uTex, vUv); }\n";
+
+  // The detached SurfaceTexture attached to a texture of a new ES 2 context on a pbuffer, its
+  // newest frame latched and drawn there: the color at the middle; it is detached again.
+  private static int latch(SurfaceTexture texture) {
+    android.opengl.EGLDisplay d = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
+    android.opengl.EGLConfig[] configs = new android.opengl.EGLConfig[1];
+    int[] count = new int[1];
+    EGL14.eglChooseConfig(d, new int[] {EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+        EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8,
+        EGL14.EGL_ALPHA_SIZE, 8, EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT, EGL14.EGL_NONE},
+        0, configs, 0, 1, count, 0);
+    if (count[0] != 1) {
+      return 0;
+    }
+    android.opengl.EGLContext c = EGL14.eglCreateContext(d, configs[0], EGL14.EGL_NO_CONTEXT,
+        new int[] {EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE}, 0);
+    android.opengl.EGLSurface s = EGL14.eglCreatePbufferSurface(d, configs[0],
+        new int[] {EGL14.EGL_WIDTH, 8, EGL14.EGL_HEIGHT, 8, EGL14.EGL_NONE}, 0);
+    if (!EGL14.eglMakeCurrent(d, s, s, c)) {
+      return 0;
+    }
+    int[] tex = new int[1];
+    GLES20.glGenTextures(1, tex, 0);
+    texture.attachToGLContext(tex[0]);
+    texture.updateTexImage();
+    float[] m = new float[16];
+    texture.getTransformMatrix(m);
+    int program = GLES20.glCreateProgram();
+    GLES20.glAttachShader(program, shader(GLES20.GL_VERTEX_SHADER, EXTERNAL_VERTEX));
+    GLES20.glAttachShader(program, shader(GLES20.GL_FRAGMENT_SHADER, EXTERNAL_FRAGMENT));
+    GLES20.glLinkProgram(program);
+    GLES20.glViewport(0, 0, 8, 8);
+    GLES20.glUseProgram(program);
+    GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uTx"), 1, false, m, 0);
+    GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uTex"), 0);
+    quad(program, -1f, 1f);
+    ByteBuffer pixel = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder());
+    GLES20.glReadPixels(4, 4, 1, 1, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixel);
+    int color = Color.argb(pixel.get(3) & 0xff, pixel.get(0) & 0xff, pixel.get(1) & 0xff,
+        pixel.get(2) & 0xff);
+    GLES20.glDeleteProgram(program);
+    texture.detachFromGLContext();  // deletes the texture, as on Android
+    EGL14.eglMakeCurrent(d, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
+    EGL14.eglDestroySurface(d, s);
+    EGL14.eglDestroyContext(d, c);
+    return color;
   }
 
   // --- helpers ------------------------------------------------------------------------------

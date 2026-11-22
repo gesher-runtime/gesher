@@ -8,6 +8,7 @@
 #define EGL_NO_PLATFORM_SPECIFIC_TYPES 1
 #include "egl_child_surface.h"
 #include "egl_readback_layout.h"
+#include "gpu_keepalive.h"
 
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
@@ -20,7 +21,9 @@
 #endif
 
 #include <gesher/egl_angle.h>
+#include <gesher/perf_trace.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -55,6 +58,7 @@ struct Angle {
   void(GL_APIENTRY* bind_framebuffer)(GLenum, GLuint);
   void(GL_APIENTRY* bind_buffer)(GLenum, GLuint);
   void(GL_APIENTRY* read_pixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
+  EGLBoolean(EGLAPIENTRY* swap_interval)(EGLDisplay, EGLint);
 };
 
 const Angle* GetAngle() {
@@ -71,10 +75,11 @@ const Angle* GetAngle() {
     a->bind_framebuffer = Proc<decltype(a->bind_framebuffer)>("glBindFramebuffer");
     a->bind_buffer = Proc<decltype(a->bind_buffer)>("glBindBuffer");
     a->read_pixels = Proc<decltype(a->read_pixels)>("glReadPixels");
+    a->swap_interval = Proc<decltype(a->swap_interval)>("eglSwapInterval");
     if (a->get_current_surface == nullptr || a->get_current_context == nullptr ||
         a->query_surface == nullptr || a->query_context == nullptr || a->get_integerv == nullptr ||
         a->get_string == nullptr || a->pixel_storei == nullptr || a->bind_framebuffer == nullptr ||
-        a->bind_buffer == nullptr || a->read_pixels == nullptr) {
+        a->bind_buffer == nullptr || a->read_pixels == nullptr || a->swap_interval == nullptr) {
       std::fprintf(stderr, "gesher EGL: child surfaces: ANGLE lacks a function they need\n");
       std::fflush(stderr);
       delete a;
@@ -153,6 +158,7 @@ struct Child {
   int helper_width = 0, helper_height = 0;
   std::chrono::steady_clock::time_point last_post{};
   EGLContext last_context = EGL_NO_CONTEXT;
+  bool interval_zero = false;  // ANGLE's swap interval set to 0 for it
   bool reverse_rows = false;
   bool bgra_read = false;
   bool es2_pack_buffer = false;
@@ -170,6 +176,34 @@ std::unordered_map<HWND, std::thread*>& Threads() {
 std::unordered_map<EGLSurface, std::shared_ptr<Child>>& Children() {
   static auto* map = new std::unordered_map<EGLSurface, std::shared_ptr<Child>>();
   return *map;
+}
+
+// Waits until `t` on a high-resolution waitable timer. sleep_for waits whole
+// scheduler ticks (15.6 ms unless something raised the timer resolution), so
+// a swap paced to 16.7 ms took up to 32: frames came out at irregular
+// intervals, about 30 a second, and a video's frames were shown unevenly.
+void WaitUntil(std::chrono::steady_clock::time_point t) {
+  struct Timer {
+    HANDLE handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                           TIMER_ALL_ACCESS);
+    ~Timer() {
+      if (handle != nullptr) CloseHandle(handle);
+    }
+  };
+  thread_local Timer timer;
+  const auto now = std::chrono::steady_clock::now();
+  if (t <= now) return;
+  if (timer.handle != nullptr) {
+    LARGE_INTEGER due;
+    // Relative, in 100 ns units.
+    due.QuadPart = -std::max<LONGLONG>(
+        1, std::chrono::duration_cast<std::chrono::nanoseconds>(t - now).count() / 100);
+    if (SetWaitableTimer(timer.handle, &due, 0, nullptr, nullptr, FALSE) &&
+        WaitForSingleObject(timer.handle, INFINITE) == WAIT_OBJECT_0) {
+      return;
+    }
+  }
+  std::this_thread::sleep_until(t);
 }
 
 void WindowSize(ANativeWindow* window, int* w, int* h) {
@@ -275,31 +309,41 @@ bool ChildSurfaceDestroyed(EGLSurface surface) {
   return true;
 }
 
-void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
+bool ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
   std::shared_ptr<Child> c;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     auto it = Children().find(surface);
-    if (it == Children().end()) return;
+    if (it == Children().end()) return true;
     c = it->second;
   }
   const Angle* gl = GetAngle();
-  if (gl == nullptr || gl->get_current_surface(EGL_DRAW) != surface) return;
+  if (gl == nullptr || gl->get_current_surface(EGL_DRAW) != surface) return true;
+  // No vertical blank to wait for (ChildSurfaceSwapInterval); ANGLE applies it
+  // from this swap on.
+  if (!c->interval_zero) {
+    gl->swap_interval(display, 0);
+    c->interval_zero = true;
+  }
 
   // The window's size now (setFixedSize, a resized view): the helper follows,
   // and ANGLE resizes its swap chain at this swap.
   int ww, wh;
   WindowSize(c->window, &ww, &wh);
+  bool resized = false;
   if (ww != c->helper_width || wh != c->helper_height) {
     c->helper_width = ww;
     c->helper_height = wh;
     SetWindowPos(c->helper, nullptr, 0, 0, ww, wh,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    resized = true;
   }
 
   EGLint w = 0, h = 0;
   gl->query_surface(display, surface, EGL_WIDTH, &w);
   gl->query_surface(display, surface, EGL_HEIGHT, &h);
+  static gesher::perf::Site post_site("EGL child surface: read back and post a frame");
+  const int64_t post_start = gesher::perf::Now();
   if (w > 0 && h > 0) {
     // Check the consumer before issuing a synchronous GPU readback.
     ANativeWindow_Buffer b = {};
@@ -371,6 +415,8 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
         if (alignment != 4) gl->pixel_storei(GL_PACK_ALIGNMENT, 4);
         if (c->reverse_rows && reverse_order != desired_reverse)
           gl->pixel_storei(GL_PACK_REVERSE_ROW_ORDER_ANGLE, desired_reverse);
+        static gesher::perf::Site read_site("EGL child surface: glReadPixels of a frame");
+        const int64_t read_start = gesher::perf::Now();
         if (direct) {
           const GLenum format = plan.direct == DirectReadFormat::kBgra ? GL_BGRA_EXT : GL_RGBA;
           gl->read_pixels(0, plan.source_y, plan.width, plan.height,
@@ -380,6 +426,7 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
           gl->read_pixels(0, plan.source_y, plan.width, plan.height, GL_RGBA,
                           GL_UNSIGNED_BYTE, c->pixels.data());
         }
+        read_site.Add(gesher::perf::Now() - read_start);
         if (c->reverse_rows && reverse_order != desired_reverse)
           gl->pixel_storei(GL_PACK_REVERSE_ROW_ORDER_ANGLE, reverse_order);
         if (alignment != 4) gl->pixel_storei(GL_PACK_ALIGNMENT, alignment);
@@ -393,14 +440,48 @@ void ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
         if (framebuffer != 0) gl->bind_framebuffer(fb_target, static_cast<GLuint>(framebuffer));
         if (!direct) CopyChildReadback(c->pixels.data(), b.bits, plan);
       }
+      static gesher::perf::Site unlock_site("EGL child surface: unlockAndPost a frame");
+      const int64_t unlock_start = gesher::perf::Now();
       ANativeWindow_unlockAndPost(c->window);
+      unlock_site.Add(gesher::perf::Now() - unlock_start);
+      // The next frame's read-back must not find the GPU asleep (gpu_keepalive.h).
+      GpuKeepAliveAfterFrame(display);
     }
   }
+  post_site.Add(gesher::perf::Now() - post_start);
   // Paced as a 60 Hz display would (the hidden swap chain is not).
+  static gesher::perf::Site pace_site("EGL child surface: 60 Hz pacing wait (count: ms late)");
   auto now = std::chrono::steady_clock::now();
   auto next = c->last_post + std::chrono::microseconds(16667);
-  if (now < next) std::this_thread::sleep_for(next - now);
+  const int64_t pace_start = gesher::perf::Now();
+  if (now < next) WaitUntil(next);
   c->last_post = std::chrono::steady_clock::now();
+  if (now < next) {
+    const auto late = std::chrono::duration_cast<std::chrono::milliseconds>(c->last_post - next);
+    pace_site.Add(gesher::perf::Now() - pace_start, late.count() > 0 ? late.count() : 0);
+  }
+  // The frame is posted. Presenting the helper's swap chain shows nothing (the
+  // helper is never shown) and waited for the vertical blank in every swap.
+  // ANGLE's swap is still needed when the size changed: that is where it
+  // resizes the surface.
+  return resized;
+}
+
+bool ChildSurfaceSwapInterval(EGLDisplay display, EGLBoolean* result) {
+  const Angle* gl = GetAngle();
+  if (gl == nullptr) return false;
+  const EGLSurface surface = gl->get_current_surface(EGL_DRAW);
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = Children().find(surface);
+    if (it == Children().end()) return false;
+    it->second->interval_zero = true;
+  }
+  // ANGLE checks the display and the current context and surface as for any
+  // interval (an interval is clamped, never an error); 0 leaves its swap chain
+  // as it is.
+  *result = gl->swap_interval(display, 0);
+  return true;
 }
 
 }  // namespace gesher::bionic::gl

@@ -42,8 +42,7 @@ public final class CallerIdentity {
         if (isSystem()) return "android";
         String name = packageForPid(callerPid());
         ApkPackage pkg = name == null ? null : mPm.get(name);
-        if (pkg == null || mPm.isRemovalPending(name)
-                || (GmsSignatureSpoofing.isEnabled() && pkg.uid() != callerUid())) {
+        if (pkg == null || mPm.isRemovalPending(name) || pkg.uid() != callerUid()) {
             throw new SecurityException("Unrecognized application Binder identity");
         }
         return name;
@@ -53,9 +52,32 @@ public final class CallerIdentity {
         if (isSystem()) return claimedPackage;
         String actual = callerPackage();
         if (!actual.equals(claimedPackage)) {
-            throw new SecurityException("Caller cannot act for another package");
+            ApkPackage claimed = mPm.get(claimedPackage);
+            ApkPackage actualPkg = mPm.get(actual);
+            if (claimed == null || actualPkg == null || claimed.uid() != actualPkg.uid()) {
+                throw new SecurityException("Caller cannot act for another package");
+            }
         }
         return actual;
+    }
+
+    /** Authenticate the attached installation, rather than adopting a name's replacement. */
+    public ApkPackage requireCurrentPackage(String claimedPackage) {
+        if (isSystem()) return mPm.get(claimedPackage);
+        String actual = requirePackage(claimedPackage);
+        ApkPackage code = mAtm == null ? null
+                : mAtm.authenticatedPackageCodeForPid(callerPid(), callerUid());
+        if (code == null || !actual.equals(code.packageName)) {
+            throw new SecurityException("Caller belongs to retired package code");
+        }
+        if (actual.equals(claimedPackage)) return code;
+        // A shared-UID caller can name an admitted peer. Retain that peer's
+        // installation, rather than combining its name with the caller's code.
+        ApkPackage claimed = mPm.get(claimedPackage);
+        if (claimed == null || claimed.uid() != code.uid() || mPm.isRemovalPending(claimedPackage)) {
+            throw new SecurityException("Claimed package no longer belongs to the caller's UID");
+        }
+        return claimed;
     }
 
     public void requireSystemOrPackage(String ownerPackage) {

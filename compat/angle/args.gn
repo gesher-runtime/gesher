@@ -31,3 +31,14 @@ angle_has_histograms = false
 angle_has_rapidjson = false
 angle_has_frame_capture = false
 angle_build_vulkan_system_info = false
+
+# Android's EGL lets each thread keep a context of its own current and use it
+# while other threads use theirs (Chromium's GPU process: the GPU main thread
+# and the display compositor's thread, ADR 0089). ANGLE's Direct3D 11 backend
+# has one device context and one state cache per display, which by default
+# only eglMakeCurrent resets, and a per-context mutex that does not serialize
+# contexts of different share groups. With this option every GL call takes
+# the global EGL mutex and, when the calling context is not the one that made
+# the previous call, marks all of its state dirty first, so each context's
+# state is applied before it draws.
+angle_force_context_check_every_call = true

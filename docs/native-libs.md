@@ -36,9 +36,14 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     0036), code and read-only data mapped with their final protection (shared
     with the file and every process that loads it, not charged to commit),
     writable data copy-on-write, `.bss` anonymous zero pages. Pages that a
-    text relocation or the `%fs` rewrite patches are made writable
-    (copy-on-write) one at a time and become private; `mprotect` sets each
-    segment's final protection after relocation. A segment whose file offset
+    text relocation patches are made writable (copy-on-write) one at a time;
+    an executable segment the `%fs` rewrite patches is made writable
+    (copy-on-write) as a whole, once, since each `mprotect` queries the
+    mapping (`VirtualQuery`) at a cost that grows with the run of unchanged
+    pages after it (page by page, libxul.so's 18k patched pages took 4-15 s;
+    as a whole its rewrite takes about a second). Either way only the patched
+    pages become private; `mprotect` sets each segment's final protection
+    after relocation. A segment whose file offset
     and address are not congruent modulo the page size, an object loaded from
     memory, segments sharing a page, or mmap without placeholders fall back to
     copying the contents into anonymous memory;
@@ -100,15 +105,34 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   ([0008](decisions/0008-linux-abi.md)). `InstallBionicShim()` registers it
   with the loader.
   - `shim.cc`: memory (CRT malloc; over-aligned blocks from
-    `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them),
+    `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them;
+    `mallinfo` walks that heap and fills the fields bionic's jemalloc fills:
+    mapped, allocated, free),
     strings, FORTIFY `__*_chk`, ctype, `long`-returning functions widened to
     64 bits (`strtol`, `lseek`, `sysconf`, `lround`...), `__errno` (the CRT's
     errno, which gesher-base keeps in Linux numbering), time (`clock_gettime`
     with Linux clock ids and a 64-bit `tv_nsec`), fd-level files, `stat`
     (gesher-base's Linux-layout struct with widened `tv_nsec`), `mmap`, libm,
     `qsort`/`bsearch` with a System V comparator, libdl over the loader
-    (`dlopen`, `dlsym`, `dladdr`, `dl_iterate_phdr`), `__cxa_atexit`/
-    `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`.
+    (`dlopen`, `dlsym`, `dladdr`, `dl_iterate_phdr`; as on bionic, which
+    gives `soinfo::get_realpath()`, `dladdr`'s `dli_fname` and
+    `dl_iterate_phdr`'s `dlpi_name` are the absolute path of the file the
+    object was loaded from: Gecko's `FFVPXRuntimeLinker` takes
+    `dladdr(&malloc)` (libmozglue.so's), puts `libmozavcodec.so` in place of
+    the file name and loads that, so with only the soname Firefox had no
+    FFmpeg decoders at all: no Vorbis, Opus, FLAC or MP3, `Error no decoder
+    found for audio/vorbis`), `__cxa_atexit`/
+    `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`. The environment
+    is the CRT's (`environ` is its `_environ`); gesher-base's `setenv`/
+    `unsetenv`, which `putenv` uses too, keep every string they replace or
+    remove, as bionic does: before a change the CRT gets a copy of the
+    variable's string to free, and the original stays valid, so what
+    `getenv` returned and what `environ` pointed at keep their bytes.
+    mozglue reads `environ` through its own `getenv` and keeps
+    `MOZ_ANDROID_LIBDIR`'s value in a static while GeckoLoader `putenv`s it
+    again (the freed bytes became the next allocation: `dlopen failed:
+    cannot open cko_mozglue_GeckoLoader_loadNSSLibsNative/libxul.so`).
+    Setting the value a variable already has changes nothing.
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
     the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
     `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,
@@ -240,7 +264,17 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     thunk to ANGLE's `libEGL.dll`/`libGLESv2.dll` (loaded from the
     executable's directory on first use; a function ANGLE lacks aborts naming
     itself), so an app's `libEGL.so`/`libGLESv1_CM.so`/`libGLESv2.so`/
-    `libGLESv3.so` imports and `eglGetProcAddress` all resolve.
+    `libGLESv3.so` imports and `eglGetProcAddress` all resolve. The
+    extensions ANGLE adds to `GL_EXTENSIONS` beyond those headers
+    (`GL_ANGLE_*`, `GL_CHROMIUM_*`) get thunks too, from ANGLE's own
+    `gl2ext_angle.h` at the DLLs' commit (`compat/bionic/third_party/angle`):
+    a client calls the functions of an extension it sees advertised
+    (WebRender calls `glProvokingVertexANGLE` for `GL_ANGLE_provoking_vertex`;
+    Firefox's GPU process panicked, "gles function was not loaded", while
+    `eglGetProcAddress` returned null for it). `gl_extension_procs_test.so`
+    checks every advertised extension's entry points; only
+    `glBlobCacheCallbacksANGLE` (`GL_ANGLE_blob_cache`), which takes callbacks,
+    is not provided.
     `EGL_DEFAULT_DISPLAY` is ANGLE's Direct3D 11 display on the hardware
     adapter, else WARP (`GESHER_EGL_DEVICE=warp` forces WARP; the choice is
     printed as `gesher EGL: default display: ...`). `eglCreateWindowSurface`
@@ -254,6 +288,26 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     `egl_gles.cc` subclasses the HWND so `WM_PAINT` only validates (the
     swap chain presents), and restores it with the last surface. Nothing in
     `compat/hwui/window` changed.
+  - **AHardwareBuffer, ASurfaceControl and their EGL half**
+    ([0089](decisions/0089-hardware-buffers-and-surface-control.md)):
+    `hardware_buffer.cc` (`AHardwareBuffer_*`: buffers are memfds shared with
+    `send`/`recvHandleFromUnixSocket`; `isSupported` answers what is served:
+    RGBA8/RGBX8/RGB8/RGB565/RGBA16F/RGBA1010102/R8/BLOB, one layer, CPU and
+    GPU/composer usage), `gpu_interop.cc` (the process's GPU thread: a
+    Direct3D 11 device of its own beside ANGLE's, which keeps each buffer's
+    texture, shared with ANGLE's device, and composes; it makes no ANGLE
+    context current),
+    `egl_native_buffer.cc` (`eglGetNativeClientBufferANDROID`, EGLImages of
+    buffers, `EGL_ANDROID_native_fence_sync`; the three extensions are added
+    to the default display's `EGL_EXTENSIONS`), `surface_control.cc`
+    (`ASurfaceControl_*`/`ASurfaceTransaction_*`/`ASurfaceTransactionStats_*`:
+    each window's layer tree is composed on the GPU thread into the window,
+    callbacks on a thread of their own) and, with the JNI bridge,
+    `ASurfaceControl_fromJava` (libandroid.cc) and `input_receiver.cc`
+    (`AInputTransferToken_*`; `AInputReceiver_create*` return null: Gesher's
+    window manager grants no input channels to layers). Checked by
+    `tests/native/surface_control_test.c` through
+    `surface_control_host_test.exe`.
 
 - **NativeActivity** ([0032](decisions/0032-native-libs-native-activity.md),
   `compat/bionic/native_activity.cmake`: the OBJECT library
@@ -392,8 +446,10 @@ see "After that" for what is left._
   variable handshake, `pthread_once`, keys and their destructors at thread
   exit, a recursive mutex (and `trylock` from another thread gives `EBUSY`),
   `pthread_cond_timedwait` timing out, `dlsym(RTLD_DEFAULT)`/`dlerror`,
-  `dl_iterate_phdr` finding the library's own `PT_LOAD`, `dladdr`, and
-  `__android_log_print`.
+  `dl_iterate_phdr` finding the library's own `PT_LOAD`, `dladdr` (its
+  `dli_fname` the absolute path of the library's file, the same as
+  `dl_iterate_phdr`'s `dlpi_name`, and a path built from its directory
+  opening the same library), and `__android_log_print`.
 - **Step 3 — `%fs` by load-time rewrite** (ADR 0014's revised decision).
   `compat/elf/x86_decode.cc` (length decoder), `compat/elf/fs_rewrite.cc`
   (rewrite, stubs, vectored handler for `int3` sites and diagnostics),
@@ -634,9 +690,11 @@ see "After that" for what is left._
 - **libandroid stand-ins**: sensors (none), tracing (off), OBB mounting
   (unsupported; scanning works), AChoreographer's vsync (a 60 Hz clock, not
   the display's). Not provided at all (they bind to the aborting stubs):
-  `ASurfaceControl_*`/`ASurfaceTexture_*`, `AHardwareBuffer_*`,
-  `AThermal_*`, `APerformanceHint_*`, `ASharedMemory_dupFromJava`,
-  `android_getaddrinfofornetwork` & co.
+  `ASurfaceTexture_*`, `AHardwareBuffer_fromHardwareBuffer`/`toHardwareBuffer`
+  (Java HardwareBuffer has no natives), `ASurfaceTransaction_fromJava`,
+  `ASurfaceTransaction_setLuts`, `AThermal_*`, `APerformanceHint_*`,
+  `ASharedMemory_dupFromJava`, `android_getaddrinfofornetwork` & co.
+  AInputReceivers are refused (null): no input channels for layers.
 - **NativeActivity** (0032): `onConfigurationChanged`, `onLowMemory` and
   `onSaveInstanceState` are dispatched but nothing in CI triggers them;
   `showSoftInput`/`hideSoftInput` reach InputMethodManager, which shows no
@@ -653,9 +711,20 @@ see "After that" for what is left._
   `EGL_BAD_NATIVE_WINDOW`; pixmap surfaces are passed through to ANGLE and
   fail. An ES 2 context is ANGLE's ES 3.0 (backward compatible, as Android
   drivers may do). GLES 1 (`libGLESv1_CM.so`) resolves but is untested.
-  `AChoreographer`, `ASurfaceControl`, `AHardwareBuffer`, `ASurfaceTexture`
-  are not provided. `eglDestroySurface` of a surface that is still current
-  releases the window at once (Android defers it).
+  `ASurfaceTexture` is not provided. `eglDestroySurface` of a surface that is
+  still current releases the window at once (Android defers it).
+- **AHardwareBuffer and ASurfaceControl limits** (ADR 0089): a native fence
+  made without an fd waits for its context's commands when it is made
+  (glFinish) and its fd is a signaled `/dev/null` descriptor without
+  `sync_file` ioctls; GPU writes to a buffer reach another process's mapping
+  only after the writing process reads the buffer back (a CPU lock there, or
+  when it sends the buffer); a window's layers and frames the app posts to
+  the same window directly replace each other; damage regions, data spaces,
+  HDR metadata, frame rates and frame timelines are accepted without effect;
+  the stats have no present fences (-1) and previous release fences of -1;
+  YUV, multi-layer, protected and video-encoder buffers are not served;
+  layers under an `ASurfaceControl_fromJava` layer are not shown (Gesher's
+  Java SurfaceControls are stand-ins).
 - **The test APK** is built against the public SDK's `android.jar`
   (platform 36 r2), not Gesher's framework classes; its native code is API 26
   (emulated TLS) and its `libc++_shared.so` is the NDK's.
@@ -679,8 +748,9 @@ see "After that" for what is left._
 
 ### After that (not started)
 
-- The remaining shim gaps as real apps need them; `ASurfaceControl`,
-  `AHardwareBuffer`, `ASurfaceTexture`; RGB_565 windows.
+- The remaining shim gaps as real apps need them; `ASurfaceTexture`; Java
+  HardwareBuffer's natives (and `AHardwareBuffer_fromHardwareBuffer`); YUV
+  hardware buffers (AImageReader); RGB_565 windows.
 - Faults in loaded code as `SIGSEGV`/`SIGBUS` to the `.so`'s own handlers
   (crash reporters), chained with ART's fault handling; asynchronous delivery
   to a running thread (suspend, redirect to a handler trampoline, resume).
