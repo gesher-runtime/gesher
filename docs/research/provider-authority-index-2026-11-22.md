@@ -79,7 +79,19 @@ initialization and controlled Binder identity; these are not ART/Binder-transpor
 APK installation, hardware or Android-reference runs. Fixture publications isolate
 the in-memory package generation and do not exercise installer disk transactions.
 
-The host fixture is in framework CI and its Android fixture is in the existing
-Windows 2022/2025 system-contract track. Windows execution must be checked at the
-submitted PR head. #249 also centralizes package publication for a permission
-index; integrating both changes must retain both invalidations in `publishPackages`.
+The existing `test_package_enabled_lifecycle.py` full-run entry point invokes the
+host fixture with its real framework dependencies. The pinned framework recipe
+already runs that candidate-head script, so this gate does not depend on modifying
+the immutable workflow recipe. Its Android fixture is in the existing Windows
+2022/2025 system-contract track. Windows execution must be checked at the
+submitted PR head.
+
+An isolated source union with #249 at
+`9fd33fc27716f1e40a56861c9dd5056d382278b9` passes the full app Java/DEX build,
+this provider fixture and #249's permission performance fixture (40 checks).
+The one merge conflict is in package publication: retain `packageSnapshot()`,
+`mProviderAuthorityIndex = null` and `mPermissions.invalidatePackageIndex()`.
+Both suites exercise package replacement and retirement through that shared
+publication helper. The provider fixture attaches the real permission-policy
+owner so this integration exercises both invalidations. This local union is
+integration evidence; #249 remains a separate change and is not included here.

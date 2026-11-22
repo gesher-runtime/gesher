@@ -105,6 +105,12 @@ public final class ProviderAuthorityIndexTest {
         PackageManagerService result = (PackageManagerService)unsafe().allocateInstance(PackageManagerService.class);
         field(PackageManagerService.class, "mPackages").set(result, packages);
         field(PackageManagerService.class, "mRemoving").set(result, Map.of());
+        // Publication may retire other package-generation indices as well. Keep
+        // the real policy owner attached even though this fixture does no grants.
+        var policy = Class.forName("com.gesher.server.PermissionPolicy")
+                .getDeclaredConstructor(PackageManagerService.class);
+        policy.setAccessible(true);
+        field(PackageManagerService.class, "mPermissions").set(result, policy.newInstance(result));
         return result;
     }
     private static void publish(PackageManagerService pm, Map<String, ApkPackage> packages) throws Exception {
