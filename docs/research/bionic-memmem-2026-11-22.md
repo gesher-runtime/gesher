@@ -50,3 +50,19 @@ python3 tools/test_memmem_performance.py --measure \
 ```
 
 Windows compilation/execution, Android-reference runs, representative native application workloads, and the complete #56/#178 acceptance and soak criteria remain open. No app capabilities, permissions, inputs, workflows or public results are substituted.
+
+## CI source-preservation qualification
+
+The first published CI attempt reached the exact-source gate before native
+compilation and rejected the changed `shim.cc` whole-file digest. The follow-up
+keeps the existing OFD manifest and its pinned digest unchanged. It pins the new
+search helper independently, requires exactly the reviewed include and complete
+`Memmem` wrapper, reverses only those substitutions in memory, and checks the
+original whole-file digest. Every unrelated shim byte remains protected.
+
+`python3 tools/net-tcp-priority/test-selected-policy.py --selftest` passes with
+all 20 negative controls, including five new controls for unrelated shim edits,
+changed search arguments, missing/duplicate includes, and helper changes. The
+existing supplier, socket, ownership, fixture, deadline, DAG and runtime gates
+are unchanged. This source qualification establishes no native runtime approval
+or Windows execution result.
