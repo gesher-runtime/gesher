@@ -1,6 +1,7 @@
 // The actual outer poll, EpollWaiter, nested epoll readiness, Epoll state and
 // delivery methods. Win32 events use Linux eventfds; sockets use Linux poll.
 // Descriptor registration and topology edits are explicit fixture boundaries.
+// File snapshots own real Linux duplicates; pipe readiness uses real Linux poll.
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -28,6 +29,8 @@
 #include "poll_scratch.h"
 #include "socket_internal.h"
 @HAS_SCRATCH@
+
+namespace { void check(const char* text, bool passed); }
 
 namespace allocation {
 thread_local bool enabled = false;
@@ -150,6 +153,59 @@ static std::mutex registry_mutex;
 static std::map<int, std::shared_ptr<EventFd>> events;
 static std::map<int, SocketFd> sockets;
 static std::map<int, std::shared_ptr<Epoll>> epolls;
+// The complete OFD/Windows pipe backends run in their own corpora. Here the
+// declared boundary retains an actual native descriptor across slot reuse.
+namespace record_locks {
+static std::recursive_mutex descriptors;
+static thread_local unsigned depth;
+static thread_local void (*after_guard)(void*);
+static thread_local void* guard_context;
+struct DescriptorGuard {
+  std::unique_lock<std::recursive_mutex> lock{descriptors};
+  DescriptorGuard() { ++depth; }
+  ~DescriptorGuard() {
+    --depth;
+    lock.unlock();
+    if (depth == 0 && after_guard) {
+      auto callback = after_guard;
+      after_guard = nullptr;
+      callback(guard_context);
+    }
+  }
+};
+}
+static thread_local unsigned live_snapshots, captured_snapshots, pipe_samples;
+static thread_local int capture_error, pipe_error;
+struct DescriptorSnapshot {
+  int fd;
+  explicit DescriptorSnapshot(int owned) : fd(owned) { ++live_snapshots; }
+  ~DescriptorSnapshot() {
+    const int saved = errno;
+    if (fd >= 0) ::close(fd);
+    --live_snapshots;
+    errno = saved;
+  }
+};
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
+  check("pipe capture holds the descriptor guard", record_locks::depth == 1);
+  if (capture_error) { errno = capture_error; capture_error = 0; return {}; }
+  auto snapshot = std::make_shared<DescriptorSnapshot>(-1);
+  snapshot->fd = ::fcntl(fd, F_DUPFD_CLOEXEC, 0);
+  if (snapshot->fd < 0) return {};
+  ++captured_snapshots;
+  return snapshot;
+}
+static int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* ready) {
+  check("pipe readiness releases the descriptor guard", record_locks::depth == 0);
+  ++pipe_samples;
+  *ready = 0;
+  if (pipe_error) { errno = pipe_error; pipe_error = 0; return -1; }
+  pollfd native{snapshot->fd, events, 0};
+  if (::poll(&native, 1, 0) < 0) return -1;
+  *ready = native.revents;
+  return 0;
+}
 static std::shared_ptr<EventFd> LookupEventFd(int fd) {
   std::lock_guard<std::mutex> lock(registry_mutex);
   auto it = events.find(fd); return it == events.end() ? nullptr : it->second;
@@ -295,6 +351,46 @@ bool waiters_empty(EpollState& ep) {
 }
 int run_poll(pollfd* fds, size_t count, int timeout = 0) {
   return gesher::PollFds(fds, count, timeout, nullptr, nullptr);
+}
+void pipe_snapshot_lifetime() {
+  int original[2], replacement[2];
+  if (::pipe(original) < 0 || ::pipe(replacement) < 0) std::abort();
+  pollfd fd{original[0], POLLIN, 0};
+  check("empty real pipe is not ready", run_poll(&fd, 1) == 0 && fd.revents == 0);
+  const char byte = 'x';
+  check("pipe lifetime fixture writes original data", ::write(original[1], &byte, 1) == 1);
+  struct Reuse { int source, destination; bool replaced = false; } reuse{replacement[0], original[0]};
+  gesher::record_locks::guard_context = &reuse;
+  gesher::record_locks::after_guard = [](void* context) {
+    auto& reuse = *static_cast<Reuse*>(context);
+    reuse.replaced = ::dup2(reuse.source, reuse.destination) == reuse.destination;
+  };
+  const unsigned captured = gesher::captured_snapshots;
+  check("pipe sample keeps the captured object after its original slot is reused",
+        run_poll(&fd, 1) == 1 && fd.revents == POLLIN);
+  gesher::record_locks::after_guard = nullptr;
+  check("pipe capture precedes actual descriptor replacement", reuse.replaced &&
+        gesher::captured_snapshots == captured + 1);
+  pollfd current{original[0], POLLIN, 0};
+  check("reused descriptor names the distinct empty pipe", ::poll(&current, 1, 0) == 0);
+  check("completed pipe sample releases its retained descriptor", gesher::live_snapshots == 0);
+
+  const unsigned sampled = gesher::pipe_samples;
+  gesher::capture_error = EMFILE;
+  check("snapshot failure propagates without sampling or false readiness",
+        run_poll(&fd, 1) == -1 && errno == EMFILE && fd.revents == 0 &&
+        gesher::pipe_samples == sampled && gesher::live_snapshots == 0);
+  gesher::capture_error = 0;
+  gesher::pipe_error = EOPNOTSUPP;
+  check("pipe backend error propagates and releases its captured owner",
+        run_poll(&fd, 1) == -1 && errno == EOPNOTSUPP && fd.revents == 0 &&
+        gesher::live_snapshots == 0);
+  gesher::pipe_error = 0;
+  ::close(replacement[1]);
+  check("closed real pipe reports hangup", run_poll(&fd, 1) == 1 && fd.revents == POLLHUP);
+  ::close(original[0]); ::close(original[1]); ::close(replacement[0]);
+  check("pipe fixture leaves no snapshot or descriptor guard",
+        gesher::live_snapshots == 0 && gesher::record_locks::depth == 0);
 }
 void check_empty_cache() {
 #ifdef HAS_POLL_SCRATCH
@@ -574,6 +670,7 @@ void measurements() {
 int main(int argc, char** argv) {
   measure = argc == 2 && std::strcmp(argv[1], "measure") == 0;
   basic_and_lifetime();
+  pipe_snapshot_lifetime();
   reentry_and_reuse();
   nested_epolls();
   epoll_mutation_and_errors();

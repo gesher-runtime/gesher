@@ -17,6 +17,7 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/clocks.h>
+#include <gesher/environment.h>
 
 #include <windows.h>
 // bcrypt.h needs windows.h first.
@@ -543,11 +544,9 @@ int* BIONIC_SYSV Errno() { return &errno; }
   std::abort();
 }
 [[noreturn]] void BIONIC_SYSV Exit(int code) {
-  ExitIfVforkChild(code);  // a vfork/fork child that exits without exec
   std::exit(code);
 }
 [[noreturn]] void BIONIC_SYSV UnderscoreExit(int code) {
-  ExitIfVforkChild(code);
   std::fflush(stdout);
   std::fflush(stderr);
   ExitProcess(static_cast<UINT>(code));
@@ -567,15 +566,14 @@ void BIONIC_SYSV SetAbortMessage(const char* msg) {
   std::fprintf(stderr, "gesher bionic: abort message: %s\n", msg ? msg : "");
 }
 
-// The environment is the CRT's (environ is its _environ). gesher-base's
-// setenv/unsetenv keep every string they replace or remove, as bionic does
-// (compat/posix/src/unistd.cc), so what getenv returns and what environ points
-// at stay valid: mozglue reads environ through its own getenv.
-char* BIONIC_SYSV Getenv(const char* name) { return name != nullptr ? std::getenv(name) : nullptr; }
+// Host and guest calls share a POSIX table. Owned strings survive replacement;
+// putenv keeps caller storage, which must never be handed to UCRT for freeing.
+char* BIONIC_SYSV Getenv(const char* name) { return gesher::GetEnvironment(name); }
 int BIONIC_SYSV Setenv(const char* name, const char* value, int overwrite) {
   return ::setenv(name, value, overwrite);
 }
 int BIONIC_SYSV Unsetenv(const char* name) { return ::unsetenv(name); }
+int BIONIC_SYSV Putenv(char* assignment) { return gesher::PutEnvironment(assignment); }
 
 int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Gettid() { return static_cast<int>(GetCurrentThreadId()); }
@@ -1342,6 +1340,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("getenv", Getenv);
   ENTRY("setenv", Setenv);
   ENTRY("unsetenv", Unsetenv);
+  ENTRY("putenv", Putenv);
   ENTRY("getpid", Getpid);
   ENTRY("gettid", Gettid);
   ENTRY("getpagesize", Getpagesize);
