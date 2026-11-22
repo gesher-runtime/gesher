@@ -21,7 +21,7 @@ function seed(w, contexts) {
     url: `https://api.github.com/repos/o/r/statuses/${HEAD}`});
 }
 const retries = w => w.did('app-dispatch').map(([, args]) => args.client_payload.release_retry)
-  .filter(retry => retry !== undefined);
+  .filter(retry => retry >= 1);
 function noRelease(w) {
   assert.equal(w.nativeMerges.length, 0);
   assert.equal(w.did('nativeMerge').length, 0);
@@ -155,7 +155,7 @@ for (const mode of [{name: 'legacy', enabled: false, contexts: [app.STATUS]},
     const w = setup(mode.contexts, {appQaStatus: mode.enabled,
       nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
     let reads = 0;
-    w.hooks.nativeState = () => { if (++reads === RELEASE_STATE.attempts * 2 + 1) delete w.nativeStateOverride; };
+    w.hooks.nativeState = () => { if (++reads === RELEASE_STATE.attempts * (1 + RELEASE_RETRY.pollFactor) + 1) delete w.nativeStateOverride; };
     await w.ciDone();
     assert.equal(w.pr.state, 'closed');
     assert.equal(w.nativeMerges.length, 1);
@@ -171,7 +171,8 @@ for (const mode of [{name: 'legacy', enabled: false, contexts: [app.STATUS]},
     assert.equal(w.pr.state, 'open');
     noRelease(w);
     assert.equal(retries(w).length, RELEASE_RETRY.max);
-    assert.equal(w.did('nativeState').length, RELEASE_STATE.attempts * (RELEASE_RETRY.max + 1));
+    assert.equal(w.did('nativeState').length,
+      RELEASE_STATE.attempts * (1 + RELEASE_RETRY.max * RELEASE_RETRY.pollFactor));
     assert.ok(w.warnings.some(s => s.includes('BLOCKED') && s.includes('queued release retries')));
   });
 }
@@ -198,7 +199,7 @@ test('a failed retry dispatch is logged without revoking the green gate', async 
   assert.ok(w.warnings.some(s => s.includes('release retry could not be queued')));
 });
 
-for (const retry of [0, -1, '1', 1.5, 9]) {
+for (const retry of [null, -1, '1', 1.5, 9]) {
   test(`an invalid release retry count cannot perform writes: ${JSON.stringify(retry)}`, async () => {
     for (const enabled of [false, true]) {
       const w = setup(undefined, {appQaStatus: enabled});
@@ -209,6 +210,46 @@ for (const retry of [0, -1, '1', 1.5, 9]) {
     }
   });
 }
+
+test('BEHIND needs a branch update and queues no retry', async () => {
+  const w = setup([app.STATUS], {appQaStatus: false, nativeStateOverride: {mergeStateStatus: 'BEHIND'}});
+  await w.ciDone();
+  assert.equal(w.pr.state, 'open');
+  noRelease(w);
+  assert.deepEqual(retries(w), []);
+  assert.ok(w.warnings.some(s => s.includes('BEHIND') && s.includes('branch must be updated')));
+});
+
+for (const mode of [{name: 'legacy', enabled: false, contexts: [app.STATUS]},
+  {name: 'App required', enabled: true, contexts: [app.APP_STATUS]}]) {
+  test(`${mode.name}: a recovery run makes one release attempt without starting a retry chain`, async () => {
+    const w = setup(mode.contexts, {appQaStatus: mode.enabled,
+      nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+    await w.ciDone();
+    const before = retries(w).length;
+    const reads = w.did('nativeState').length;
+    await w.sweep();
+    noRelease(w);
+    assert.equal(retries(w).length, before, 'no new chain from the schedule');
+    assert.equal(w.did('nativeState').length - reads, RELEASE_STATE.attempts);
+  });
+}
+
+test('a new label starts a retry chain', async () => {
+  const w = setup([app.STATUS], {appQaStatus: false, nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+  await w.labeled();
+  assert.deepEqual(w.dispatches.map(d => d.client_payload.release_retry), [1]);
+});
+
+test('without the App no retry is queued and the log says so', async () => {
+  const w = setup([app.STATUS], {appQaStatus: false, nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+  w.prGithub = undefined;
+  w.repositoryId = 1; w.envRepositoryId = 1;
+  await w.ciDone();
+  noRelease(w);
+  assert.equal(w.dispatches.length, 0);
+  assert.ok(w.warnings.some(s => s.includes('no App token to queue a release retry')));
+});
 
 test('legacy mode still ignores ordinary queued reconciliations', async () => {
   const w = setup([app.STATUS], {appQaStatus: false});

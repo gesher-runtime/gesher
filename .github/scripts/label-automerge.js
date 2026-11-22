@@ -72,9 +72,9 @@ async function nativeReleaseState(github, pr) {
 // the gate first and reads the same stale state. Re-read a bounded number of
 // times before deferring. Required evidence is still rechecked after this read.
 const RELEASE_STATE = {attempts: 7, delayMs: 5000};
-async function settledReleaseState(github, pr) {
+async function settledReleaseState(github, pr, attempts = RELEASE_STATE.attempts) {
   let read = await nativeReleaseState(github, pr);
-  for (let attempt = 1; read.mode === 'blocked' && attempt < RELEASE_STATE.attempts; attempt++) {
+  for (let attempt = 1; read.mode === 'blocked' && attempt < attempts; attempt++) {
     await new Promise(resolve => setTimeout(resolve, RELEASE_STATE.delayMs));
     read = await nativeReleaseState(github, pr);
   }
@@ -87,16 +87,33 @@ async function settledReleaseState(github, pr) {
 // strand the PR until someone merged it by hand. Queue a bounded number of
 // fresh reconciliations for the same exact head instead. Each one rechecks
 // every approval and CI condition and never arms native waiting.
-const RELEASE_RETRY = {max: 8};
-async function deferRelease(prGithub, owner, repo, pr, state, attempt, core) {
+// A chain starts only from CI completion or a new label, so recovery runs,
+// reviews and manual runs cannot multiply chains for a PR that stays blocked.
+// A retry rewrites the gate before reading the state again, so it polls for
+// twice as long as the first pass. BEHIND needs a branch update, not a retry.
+const RELEASE_RETRY = {max: 8, pollFactor: 2};
+async function deferRelease(retryGithub, owner, repo, pr, state, attempt, core) {
   const where = '#' + pr.number + ': GitHub reports ' + state + ' for a green exact-head gate';
+  if (attempt === null) {
+    core.info(where + '; release deferred to the next PR event or recovery run');
+    return;
+  }
+  if (state === 'BEHIND') {
+    core.warning(where + '; the branch must be updated before release; no retry queued');
+    return;
+  }
   if (attempt >= RELEASE_RETRY.max) {
     core.warning(where + ' after ' + attempt + ' queued release retries; ' +
       'waiting for the next PR event or recovery run');
     return;
   }
+  // Dispatches made with GITHUB_TOKEN do not start workflows.
+  if (!retryGithub) {
+    core.warning(where + '; no App token to queue a release retry');
+    return;
+  }
   try {
-    await prGithub.rest.repos.createDispatchEvent({owner, repo, event_type: RECONCILE_EVENT,
+    await retryGithub.rest.repos.createDispatchEvent({owner, repo, event_type: RECONCILE_EVENT,
       client_payload: {pull_request_number: pr.number, head_sha: pr.head.sha, release_retry: attempt + 1}});
     core.info(where + '; queued release retry ' + (attempt + 1) + '/' + RELEASE_RETRY.max);
   } catch (error) {
@@ -240,8 +257,10 @@ async function unlabeledAndSettled(github, statusReader, owner, repo, number, he
   return !values.some(s => [STATUS, qaStatuses.APP_STATUS].includes(s.context) && s.state === 'success');
 }
 
+// retry.attempt is null for triggers that never start a release retry chain,
+// 0 for a chain's first pass and 1..max for a queued retry.
 async function reconcile(github, prGithub, owner, repo, number, core, mergeGithub, publisher, expectedHead,
-    releaseRetry = 0) {
+    retry = {attempt: null, github: null}) {
   const {data: pr} = await github.rest.pulls.get({owner, repo, pull_number: number});
   if (pr.state !== 'open' || (expectedHead && pr.head.sha !== expectedHead)) return;
   let nativeOff = false;
@@ -299,7 +318,8 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
         await statuses.set(pr.head.sha, false);
         return await cancel(github, owner, repo, pr, mergeGithub);
       }
-      const native = await settledReleaseState(github, pr);
+      const native = await settledReleaseState(github, pr, retry.attempt >= 1 ?
+        RELEASE_STATE.attempts * RELEASE_RETRY.pollFactor : RELEASE_STATE.attempts);
       const finalEvent = await p.labelEvent(github, owner, repo, number);
       const finalEvidence = await ciEvidence(github, owner, repo, pr);
       if (finalEvidence.failed) {
@@ -314,7 +334,7 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
       }
       await statuses.verifySuccess(pr.head.sha, receipt);
       if (native.mode === 'blocked')
-        return await deferRelease(prGithub, owner, repo, pr, native.state, releaseRetry, core);
+        return await deferRelease(retry.github, owner, repo, pr, native.state, retry.attempt, core);
       // This policy-enforced, exact-head mutation is the only release point.
       // An error never falls back to native waiting or another merge API.
       await release(mergeGithub, pr);
@@ -345,15 +365,19 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     required ??= qaStatuses.appRequiredByRuleset(github, owner, repo);
   const statuses = qaStatuses({github: actionsGithub, readGithub: github, appGithub: prGithub, owner, repo,
     enabled: appQaStatus, appId, installationId: appInstallationId, appRequired, core});
+  // Only the App can queue a retry: GITHUB_TOKEN dispatches start no workflow.
+  const appGithub = prGithub ?? null;
+  const chain = attempt => ({attempt, github: appGithub});
   prGithub ??= github;
   // A bulk/fork event has no single PR concurrency key. It only enqueues work;
   // the dispatched job joins that PR's queue before any approval/status/native
   // mutation. The already-granted App contents:write permission is sufficient.
-  const enqueue = async pr => {
+  const enqueue = async (pr, startsChain = false) => {
     if (pr.state !== 'open' || !Number.isSafeInteger(pr.number) ||
         pr.number <= 0 || !p.SHA.test(pr.head.sha)) return;
     await prGithub.rest.repos.createDispatchEvent({owner, repo, event_type: RECONCILE_EVENT,
-      client_payload: {pull_request_number: pr.number, head_sha: pr.head.sha}});
+      client_payload: {pull_request_number: pr.number, head_sha: pr.head.sha,
+        ...(startsChain ? {release_retry: 0} : {})}});
   };
   if (context.eventName === 'repository_dispatch') {
     const {pull_request_number: number, head_sha: head, release_retry: retry} = payload.client_payload ?? {};
@@ -361,10 +385,10 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     const retrying = retry !== undefined;
     if (payload.action !== RECONCILE_EVENT || (!appQaStatus && !retrying)) return;
     if (!Number.isSafeInteger(number) || number <= 0 || !p.SHA.test(head) ||
-        (retrying && (!Number.isSafeInteger(retry) || retry < 1 || retry > RELEASE_RETRY.max)))
+        (retrying && (!Number.isSafeInteger(retry) || retry < 0 || retry > RELEASE_RETRY.max)))
       throw new Error('Invalid queued PR reconciliation');
     return reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses, head,
-      retrying ? retry : 0);
+      chain(retrying ? retry : null));
   }
   if (context.eventName === 'workflow_run') {
     const run = payload.workflow_run;
@@ -384,8 +408,9 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
       if (appQaStatus && pr.number !== run.pull_requests?.[0]?.number) {
         const {data: current} = await github.rest.pulls.get({owner, repo, pull_number: pr.number});
         if (current.head.sha === run.head_sha && current.head.repo?.id === run.head_repository.id)
-          await enqueue(current);
-      } else await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses);
+          await enqueue(current, true);
+      } else await reconcile(github, prGithub, owner, repo, pr.number, core, mergeGithub, statuses,
+        undefined, chain(0));
     }
     return;
   }
@@ -482,7 +507,8 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
       }
     }
   }
-  await reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses);
+  await reconcile(github, prGithub, owner, repo, number, core, mergeGithub, statuses, undefined,
+    chain(context.eventName === 'pull_request_target' && payload.action === 'labeled' ? 0 : null));
 };
 module.exports.approved = approved;
 module.exports.RELEASE_STATE = RELEASE_STATE;
