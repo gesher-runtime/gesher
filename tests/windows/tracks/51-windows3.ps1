@@ -235,13 +235,24 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
     $folder = Join-Path $env:RUNNER_TEMP "clipboard-foreground-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $folder | Out-Null
     $receiptPath = Join-Path $folder 'window.json'; $stopPath = Join-Path $folder 'stop'
+    $stdoutPath = Join-Path $folder 'helper.out.log'; $stderrPath = Join-Path $folder 'helper.err.log'
     $foreignWindow = [IntPtr]::Zero
     try {
-      $foreign = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-File',
-        "`"$PSScriptRoot/../clipboard/ForeignForeground.ps1`"", '-Receipt', "`"$receiptPath`"", '-Stop', "`"$stopPath`"") -PassThru -WindowStyle Hidden
+      # Use the harness's PowerShell host instead of cold-starting the legacy
+      # Windows PowerShell/.NET Framework compiler for this first-use helper.
+      # Keep its existing STA apartment and own process; prompts must fail rather
+      # than remain invisible behind -WindowStyle Hidden.
+      $foregroundShell = (Get-Process -Id $PID).Path
+      $foreign = Start-Process -FilePath $foregroundShell -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-File',
+        "`"$PSScriptRoot/../clipboard/ForeignForeground.ps1`"", '-Receipt', "`"$receiptPath`"", '-Stop', "`"$stopPath`"") `
+        -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+      [void]$foreign.Handle  # Retain the exact process even if startup exits early.
       $deadline = (Get-Date).AddSeconds(15)
       while (-not (Test-Path $receiptPath) -and -not $foreign.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
-      if (-not (Test-Path $receiptPath)) { throw 'owned foreground window did not start' }
+      if (-not (Test-Path $receiptPath)) {
+        $state = if ($foreign.HasExited) { "exited $($foreign.ExitCode)" } else { 'startup timed out' }
+        throw "owned foreground window did not start ($state; host $foregroundShell)"
+      }
       $receipt = Get-Content $receiptPath -Raw | ConvertFrom-Json
       $foreignWindow = [IntPtr][long]$receipt.hwnd
       if ($foreign.HasExited -or $receipt.pid -ne $foreign.Id -or $receipt.created -le 0 -or
@@ -268,11 +279,22 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
     finally {
       [IO.File]::WriteAllText($stopPath, 'stop')
       if ($foreign) {
-        if (-not $foreign.WaitForExit(10000)) { $foreign.Kill(); $out += 'owned foreground helper did not retire'; [void]$foreign.WaitForExit(5000) }
-        elseif ($foreign.ExitCode -ne 0) { $out += "owned foreground helper exited $($foreign.ExitCode)" }
-        $foreign.Dispose()
+        try {
+          if (-not $foreign.WaitForExit(10000)) {
+            $out += 'owned foreground helper did not retire'
+            $foreign.Kill($true)
+            if (-not $foreign.WaitForExit(5000)) { $out += 'owned foreground helper could not be terminated' }
+          } elseif ($foreign.ExitCode -ne 0) { $out += "owned foreground helper exited $($foreign.ExitCode)" }
+        } catch { $out += "owned foreground helper cleanup: $_" }
+        finally { $foreign.Dispose() }
       }
       if ($foreignWindow -ne [IntPtr]::Zero -and [GesherWin32]::IsWindow($foreignWindow)) { $out += 'owned foreground HWND leaked after helper retirement' }
+      foreach ($log in @($stdoutPath, $stderrPath)) {
+        if (Test-Path -LiteralPath $log) {
+          Write-Host "CLIPBOARD_FOREGROUND_HELPER_LOG $log"
+          Get-Content -LiteralPath $log | Out-Host
+        }
+      }
     }
   }
   $out += @(W3Order $ReadLog $mark @('MainActivity onPause', 'MainActivity onStop') 'moved to the back')

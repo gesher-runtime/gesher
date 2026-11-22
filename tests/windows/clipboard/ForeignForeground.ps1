@@ -1,5 +1,6 @@
 param([Parameter(Mandatory)][string]$Receipt, [Parameter(Mandatory)][string]$Stop)
 $ErrorActionPreference = 'Stop'
+Write-Host "CLIPBOARD_FOREGROUND_HELPER pid=$PID host=$($PSVersionTable.PSVersion) apartment=$([Threading.Thread]::CurrentThread.GetApartmentState()) stage=compile"
 Add-Type -TypeDefinition @'
 using System;
 using System.IO;
@@ -30,6 +31,8 @@ public static class ClipboardForegroundWindow {
   [DllImport("user32.dll")] static extern IntPtr DispatchMessageW(ref Message message);
   static readonly WindowProc Procedure = DefWindowProcW;
   public static void Run(string receipt, string stop) {
+    // A delayed startup may finish after its owner has already asked it to stop.
+    if (File.Exists(stop)) return;
     IntPtr instance = GetModuleHandleW(null), window = IntPtr.Zero;
     string name = "GesherClipboardForeground" + GetCurrentProcessId();
     WindowClass cls = new WindowClass(); cls.Name = name; cls.Instance = instance; cls.Procedure = Procedure;
@@ -44,6 +47,7 @@ public static class ClipboardForegroundWindow {
       ulong generation = ((ulong)created.High << 32) | created.Low;
       string json = "{\"pid\":" + GetCurrentProcessId() + ",\"created\":" + generation + ",\"hwnd\":" + window.ToInt64() + "}";
       File.WriteAllText(receipt + ".new", json); File.Move(receipt + ".new", receipt);
+      Console.WriteLine("CLIPBOARD_FOREGROUND_HELPER stage=ready " + json);
       DateTime deadline = DateTime.UtcNow.AddMinutes(3);
       while (!File.Exists(stop) && IsWindow(window) && DateTime.UtcNow < deadline) {
         Message message;
@@ -57,4 +61,6 @@ public static class ClipboardForegroundWindow {
   }
 }
 '@
+Write-Host 'CLIPBOARD_FOREGROUND_HELPER stage=compiled'
 [ClipboardForegroundWindow]::Run($Receipt, $Stop)
+Write-Host 'CLIPBOARD_FOREGROUND_HELPER stage=retired'
