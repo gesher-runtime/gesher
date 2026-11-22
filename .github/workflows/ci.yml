@@ -229,6 +229,9 @@ jobs:
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
           python3 -m unittest discover -s tools/ci -p test_producer_context.py
+          python3 -m unittest discover -s tools/ci -p test_binder_modes.py
+          python3 -m unittest discover -s tools/ci -p test_native2_producer_context.py
+          python3 -m unittest discover -s tools/ci -p test_component_producer.py
           python3 -m unittest discover -s tools/ci -p test_wait_for_job.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
@@ -2369,7 +2372,7 @@ jobs:
         run: python3 tools/net-tcp-priority/manifest.py
       - uses: actions/upload-artifact@v4
         with:
-          name: tcp-coherent-${{ matrix.supplier }}-${{ github.sha }}-a${{ github.run_attempt }}
+          name: tcp-coherent-selected-minimum
           path: tcp-fixture/
           if-no-files-found: error
           retention-days: 14
@@ -2411,7 +2414,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/ci/artifact_receipt.py --name native3-locks-host --producer build --destination ci-suppliers/native3_host
-          python3 tools/ci/artifact_receipt.py --name "tcp-coherent-selected-minimum-${{ github.sha }}-a${{ github.run_attempt }}" --producer "compile-selected-minimum" --destination ci-suppliers/tcp_selected
+          python3 tools/ci/component_producer.py stage tcp-selected-correlation
       - name: Correlate selected host supplier between full build and TCP component
         run: python3 tools/toolchain/coherent_supplier_correlation.py
   windows:

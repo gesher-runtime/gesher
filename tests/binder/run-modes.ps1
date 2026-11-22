@@ -14,19 +14,8 @@ $RuntimeRoot = (Resolve-Path -LiteralPath $RuntimeRoot).Path
 if ((Get-Content "$Dir/binder-sg-runtime-source.txt" -Raw).Trim() -cne $Source) {
     throw 'SG current host/broker runtime source identity mismatch'
 }
-$manifest = Get-Content "$Fixtures/source.json" -Raw | ConvertFrom-Json
-if ($manifest.source -cne $Source -or $manifest.run -cne $env:GITHUB_RUN_ID -or
-    $manifest.attempt -cne $env:GITHUB_RUN_ATTEMPT -or @($manifest.files.PSObject.Properties).Count -ne 11) {
-    throw 'SG actual JNI/ELF/dex/APK producer identity mismatch'
-}
-foreach ($entry in $manifest.files.PSObject.Properties) {
-    $path = [IO.Path]::GetFullPath((Join-Path $Fixtures $entry.Name))
-    if (-not $path.StartsWith($Fixtures + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
-        (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $entry.Value) {
-        throw "SG consumed fixture hash mismatch: $($entry.Name)"
-    }
-    Write-Host "ACTUAL_SG_FIXTURE member=$($entry.Name) sha256=$($entry.Value) source=$Source run=$($manifest.run)"
-}
+python "$PSScriptRoot/../../tools/binder/modes_manifest.py" verify --fixtures $Fixtures --source $Source
+if ($LASTEXITCODE -ne 0) { throw 'SG actual JNI/ELF/dex/APK producer or payload verification failed' }
 function NoDrive([string]$Path) { ($Path -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 $runRoot = Join-Path $env:RUNNER_TEMP ('gesher-sg-modes-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($runRoot)

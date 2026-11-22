@@ -1,7 +1,6 @@
 """Current-run identity for actual UDP ABI binaries and the Linux result supplier."""
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -9,6 +8,8 @@ import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "net-dns"))
 from payload_shared import authenticated_archive, source_inventory
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci'))
+import producer_context
 
 ROLES = {
     'x86_64/net_udp_trunc': 'bionic-x86_64-actual-udp',
@@ -39,13 +40,7 @@ def digest(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 def identity():
-    if os.environ.get('GITHUB_ACTIONS') != 'true':
-        raise RuntimeError('CI only')
-    fields = {'source': 'GITHUB_SHA', 'run': 'GITHUB_RUN_ID', 'attempt': 'GITHUB_RUN_ATTEMPT',
-              'repository': 'GITHUB_REPOSITORY', 'repository_id': 'GITHUB_REPOSITORY_ID'}
-    result = {k: os.environ[v] for k, v in fields.items()}
-    if subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != result['source']:
-        raise RuntimeError('Checkout source mismatch')
+    result = producer_context.current_context()
     result['fixture_sha256'] = digest(Path('tests/native2/net_udp_trunc.cpp'))
     result['fault_fixture_sha256'] = digest(Path('tests/native2/net_udp_fault_observer.c'))
     result['sources'] = source_inventory()
@@ -72,7 +67,11 @@ if mode == 'compile':
     (root / 'net-udp/compilers.json').write_text(json.dumps(records, sort_keys=True) + '\n')
     sys.exit(0)
 rows = {name: {'role': role, 'sha256': digest(root / name)} for name, role in ROLES.items()}
-expected = {'schema': 1, **identity(), 'producer': 'native2 / native2', 'members': rows}
+info = identity()
+if mode == 'verify':
+    consumer = {key: info[key] for key in producer_context.CONTEXT_KEYS}
+    info.update(producer_context.authenticate(manifest, consumer, 'native2-udp'))
+expected = {'schema': 1, **info, 'role': 'native2-udp', 'producer': 'native2 / native2', 'members': rows}
 if mode == 'create':
     manifest.write_text(json.dumps(expected, indent=2) + '\n', encoding='utf-8')
 elif mode == 'verify':
@@ -98,7 +97,7 @@ if len(fault_rows) != 176 or not all(row.startswith('UDPFAULT ') for row in faul
     raise RuntimeError('Missing actual Linux fault/metadata rows')
 
 records = read(root / 'net-udp/compilers.json')
-if records['context'] != identity() or records['archive']['publisher_sha1'] != '090e8083a715fdb1a3e402d0763c388abb03fb4e' or records['archive']['size'] != 663987688 or not re.fullmatch('[0-9a-f]{64}', records['archive']['sha256']):
+if records['context'] != info or records['archive']['publisher_sha1'] != '090e8083a715fdb1a3e402d0763c388abb03fb4e' or records['archive']['size'] != 663987688 or not re.fullmatch('[0-9a-f]{64}', records['archive']['sha256']):
     raise RuntimeError('UDP authenticated compiler identity differs')
 if set(records['guests']) != {'x86_64', 'arm64-v8a'}:
     raise RuntimeError('UDP actual compiler ABI roles differ')

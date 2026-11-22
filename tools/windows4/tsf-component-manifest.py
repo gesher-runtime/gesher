@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 
 assert os.environ.get('GITHUB_ACTIONS') == 'true'
 def sha(path):
@@ -39,5 +40,9 @@ sources = {p: sha(p) for p in files if p and Path(p).is_file()}
 outputs = {p.name: sha(p) for p in Path('fixture').iterdir() if p.is_file()}
 assert len(outputs) == 4
 manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], source=os.environ['GITHUB_SHA'], compiler=dict(configured=matches[0], resolved=str(compiler), sha256=sha(compiler), metadata_sha256=sha(records[0]), version=version, commands=commands), sources=sources, outputs=outputs)
+if os.environ.get('GITHUB_WORKFLOW') == 'ci':
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci'))
+    from producer_context import current_context
+    manifest.update(current_context(), role='tsf-format')
 Path('fixture/provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print('TSF_CONFIGURED_COMPILER', json.dumps(manifest['compiler']))

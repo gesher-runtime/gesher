@@ -99,7 +99,7 @@ def select_supplier(value, inventory, name, job, *, total_count_max=100):
 def download(item, destination):
     subprocess.run([sys.executable, 'tools/surface/download-verified-artifact.py',
                     '--id', str(item['id']), '--digest', item['digest'],
-                    '--destination', str(destination)], check=True)
+                    '--destination', str(destination)], check=True, stdout=sys.stdout)
 
 
 def receipt(value, item, job):
@@ -235,6 +235,7 @@ def batch(args):
     print(f'CI_ARTIFACT_BATCH version=1 count={len(specs)} manifest_sha256={hashlib.sha256(committed).hexdigest()} '
           f'source={value["head"]} checkout={value["checkout"]} run={value["run_id"]} '
           f'attempt={value["attempt"]} destination={destination / "artifacts"}', flush=True)
+    return current
 
 
 def main(argv=None):

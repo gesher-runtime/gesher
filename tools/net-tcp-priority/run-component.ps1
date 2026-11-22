@@ -27,23 +27,35 @@ $sourceJson = python tools/ci/source_identity.py
 if ($LASTEXITCODE -ne 0) { throw 'Invalid CI source identity' }
 $ciSource = $sourceJson | ConvertFrom-Json
 . (Join-Path $PSScriptRoot '../ci/receipt-diagnostics.ps1')
-$jobsRaw = python tools/ci/github_jobs.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs"
-if ($LASTEXITCODE -ne 0) { throw 'Cannot read producer jobs' }
-$jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -CEQ $expectedProducer)
-Write-Host ('TCP_COHERENT_PRODUCER_INVENTORY ' + ([ordered]@{ expected_producer=$expectedProducer; selection=$selection; total_count=($jobsRaw | ConvertFrom-Json).total_count; received_count=@(($jobsRaw | ConvertFrom-Json).jobs).Count; selected_count=$jobs.Count; names=@(($jobsRaw | ConvertFrom-Json).jobs | ForEach-Object name) } | ConvertTo-Json -Depth 8 -Compress))
-Write-CiProducerIdentity -Producer $expectedProducer -Rows $jobs -SourceIdentity $ciSource
-if ($jobs.Count -ne 1 -or $jobs[0].conclusion -cne 'success' -or "$($jobs[0].run_id)" -cne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $jobs[0].head_sha -cne $ciSource.api_head_sha) { throw 'Producer mismatch' }
-$raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
-if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact inventory' }
-$rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -CEQ "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT")
-Write-CiArtifactInventory -Name "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT" -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0] -SourceIdentity $ciSource
-if ($rows.Count -ne 1) { throw 'Artifact not unique' }
-$a = $rows[0]
-if ($a.id -le 0 -or $a.size_in_bytes -le 0 -or $a.expired -or $a.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or "$($a.workflow_run.id)" -cne $env:GITHUB_RUN_ID -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $ciSource.head_repository_id -or $a.workflow_run.head_sha -cne $ciSource.api_head_sha -or [datetime]$a.created_at -lt [datetime]$jobs[0].started_at -or [datetime]$a.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact source/run/attempt provenance mismatch' }
-python tools/native3-locks/artifact/download-verified-artifact.py --id "$($a.id)" --digest $a.digest --destination tcp-fixture
-if ($LASTEXITCODE -ne 0) { throw 'Raw archive digest or extraction failed' }
+$producerAttempt = $env:GITHUB_RUN_ATTEMPT
+if ($env:GITHUB_WORKFLOW -ceq 'ci') {
+  python tools/toolchain/coherent_tcp_context.py
+  if ($LASTEXITCODE -ne 0) { throw 'Canonical TCP consumer context rejected' }
+  $proofJson = python tools/ci/component_producer.py stage tcp-selected-minimum
+  if ($LASTEXITCODE -ne 0) { throw 'Canonical TCP supplier archive or producer authentication failed' }
+  $proof = $proofJson | ConvertFrom-Json
+  $producerAttempt = $proof.producer_context.attempt
+  $jobs = @($proof.producer)
+  $a = $proof.artifact
+} else {
+  $jobsRaw = python tools/ci/github_jobs.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs"
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot read producer jobs' }
+  $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -CEQ $expectedProducer)
+  Write-Host ('TCP_COHERENT_PRODUCER_INVENTORY ' + ([ordered]@{ expected_producer=$expectedProducer; selection=$selection; total_count=($jobsRaw | ConvertFrom-Json).total_count; received_count=@(($jobsRaw | ConvertFrom-Json).jobs).Count; selected_count=$jobs.Count; names=@(($jobsRaw | ConvertFrom-Json).jobs | ForEach-Object name) } | ConvertTo-Json -Depth 8 -Compress))
+  Write-CiProducerIdentity -Producer $expectedProducer -Rows $jobs -SourceIdentity $ciSource
+  if ($jobs.Count -ne 1 -or $jobs[0].conclusion -cne 'success' -or "$($jobs[0].run_id)" -cne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $jobs[0].head_sha -cne $ciSource.api_head_sha) { throw 'Producer mismatch' }
+  $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact inventory' }
+  $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -CEQ "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT")
+  Write-CiArtifactInventory -Name "tcp-coherent-$selection-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT" -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0] -SourceIdentity $ciSource
+  if ($rows.Count -ne 1) { throw 'Artifact not unique' }
+  $a = $rows[0]
+  if ($a.id -le 0 -or $a.size_in_bytes -le 0 -or $a.expired -or $a.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or "$($a.workflow_run.id)" -cne $env:GITHUB_RUN_ID -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $ciSource.head_repository_id -or $a.workflow_run.head_sha -cne $ciSource.api_head_sha -or [datetime]$a.created_at -lt [datetime]$jobs[0].started_at -or [datetime]$a.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact source/run/attempt provenance mismatch' }
+  python tools/native3-locks/artifact/download-verified-artifact.py --id "$($a.id)" --digest $a.digest --destination tcp-fixture
+  if ($LASTEXITCODE -ne 0) { throw 'Raw archive digest or extraction failed' }
+}
 $m = Get-Content -LiteralPath tcp-fixture/provenance.json -Raw | ConvertFrom-Json
-if ($m.repository -cne $env:GITHUB_REPOSITORY -or "$($m.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or $m.source -cne $env:GITHUB_SHA -or "$($m.run)" -cne $env:GITHUB_RUN_ID -or "$($m.attempt)" -cne $env:GITHUB_RUN_ATTEMPT -or $m.producer_job -cne 'compile' -or $m.supplier_selection -cne $selection -or $m.scope -cne 'noninline-only') { throw 'Manifest identity mismatch' }
+if ($m.repository -cne $env:GITHUB_REPOSITORY -or "$($m.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or $m.source -cne $env:GITHUB_SHA -or "$($m.run)" -cne $env:GITHUB_RUN_ID -or "$($m.attempt)" -cne $producerAttempt -or $m.producer_job -cne 'compile' -or $m.supplier_selection -cne $selection -or $m.scope -cne 'noninline-only') { throw 'Manifest identity mismatch' }
 if ($m.owned_connect_scope -cne 'AF_INET-base-chain1-e70f1aa0-ab8b-11cf-8ca3-00805f48a192-TCP') { throw 'Owned connection provider scope mismatch' }
 $roles = @{'gesher-exec.exe'='host-bionic-loader'; 'net_tcp_priority_probe.exe'='host-posix-contract'; 'gesher_arm64.dll'='matching-arm64-translator'; 'tcp-priority-x86_64'='ndk-x86_64-contract'; 'tcp-priority-arm64-v8a'='ndk-arm64-contract'}
 $roles['net_udp_guarded_probe.exe']='host-posix-guarded-udp'
@@ -117,7 +129,7 @@ if ($selection -ceq 'selected-minimum') {
 }
 if ($s.role -cne $expectedSupplierRole -or $s.supplier_selection -cne $selection -or $s.rebuilt_from_reference_source -cne ($selection -ceq 'selected-minimum') -or $s.producer_job -cne 'compile' -or
     $s.context.GITHUB_SHA -cne $env:GITHUB_SHA -or $s.context.GITHUB_RUN_ID -cne $env:GITHUB_RUN_ID -or
-    $s.context.GITHUB_RUN_ATTEMPT -cne $env:GITHUB_RUN_ATTEMPT -or $s.context.GITHUB_REPOSITORY -cne $env:GITHUB_REPOSITORY -or
+    $s.context.GITHUB_RUN_ATTEMPT -cne $producerAttempt -or $s.context.GITHUB_REPOSITORY -cne $env:GITHUB_REPOSITORY -or
     $s.context.GITHUB_REPOSITORY_ID -cne $env:GITHUB_REPOSITORY_ID -or $s.upstream -cne 'a3d93999ef0521681d45e445c39964a7af0f593f' -or
     $null -ne $s.patch_sha256) { throw 'Private supplier source/context mismatch' }
 if ($s.compiler_archive.sha256 -cne '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4' -or $s.compiler_archive.bytes -le 0 -or
@@ -220,7 +232,7 @@ foreach ($name in $referenceNames) {
       $reference.rows -ne $expectedRows -or $reference.sha256 -cne $m.outputs.$name.sha256 -or
       $reference.driver_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $reference.driver -or -not $reference.version) { throw 'Actual Linux guarded reference binding differs' }
 }
-Write-Host "TCP_PRIORITY_RECEIPT source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT producer=$($jobs[0].id) artifact=$($a.id) digest=$($a.digest) scope=noninline-only"
+Write-Host "TCP_PRIORITY_RECEIPT source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$producerAttempt consumer_attempt=$env:GITHUB_RUN_ATTEMPT producer=$($jobs[0].id) artifact=$($a.id) digest=$($a.digest) scope=noninline-only"
 Write-Host ($m.compilers | ConvertTo-Json -Depth 8 -Compress)
 & ./tools/windows4/test-tsf-job-supervisor.ps1
 if (-not ('TsfJobSupervisor' -as [type])) { Add-Type -Path tools/windows4/TsfJobSupervisor.cs }

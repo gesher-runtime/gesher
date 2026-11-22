@@ -52,21 +52,4 @@ PY
 done
 # Verify payload identity in CI rather than assuming the packaging command
 # selected the same library. The manifest also pins every consumed test file.
-python3 - "$out" <<'PY'
-from pathlib import Path
-import hashlib,json,os,subprocess,sys,zipfile
-root=Path(sys.argv[1])
-for abi in ('x86_64','arm64-v8a'):
-    for role in ('server','client'):
-        with zipfile.ZipFile(root/f'binder-sg-{role}-{abi}.apk') as apk:
-            for name in ('libbindersg.so','libc++_shared.so'):
-                assert apk.read(f'lib/{abi}/{name}') == (root/abi/name).read_bytes()
-            assert apk.read('classes.dex') == (root/'binder-sg.dex').read_bytes()
-files={str(p.relative_to(root)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest()
-       for p in sorted(root.rglob('*')) if p.is_file() and p.name != 'source.json'}
-source={'source':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
-        'run':os.environ.get('GITHUB_RUN_ID'), 'attempt':os.environ.get('GITHUB_RUN_ATTEMPT'),
-        'files':files}
-(root/'source.json').write_text(json.dumps(source,indent=2),encoding='utf-8')
-print('SG mode fixtures built with exact APK/native-library/dex identity; runtime still pending')
-PY
+python3 "$source_dir/../../tools/binder/modes_manifest.py" seal --fixtures "$out"

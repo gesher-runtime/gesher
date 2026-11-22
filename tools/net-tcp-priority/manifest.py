@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from import_policy import allowed, controls
 
 assert os.environ.get('GITHUB_ACTIONS') == 'true'
@@ -184,6 +185,11 @@ for abi,machine in (('x86_64',62),('arm64-v8a',183)):
 outputs = {p.name: dict(role=roles[p.name], sha256=sha(p)) for p in Path('tcp-fixture').iterdir()}
 assert set(outputs) == set(roles)
 manifest = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'], source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], producer_job='compile', supplier_selection=selection, scope='noninline-only', owned_connect_scope='AF_INET-base-chain1-e70f1aa0-ab8b-11cf-8ca3-00805f48a192-TCP', ndk_archive=ndk_source, supplier=supplier, guarded_linux=guarded_linux, import_policy_sha256=sha('tools/net-tcp-priority/import-policy.json'), imports=imports, private_connect_observer=private_observer, compilers=compilers, sources=sources, outputs=outputs)
+if os.environ.get('GITHUB_WORKFLOW') == 'ci':
+    assert selection == 'selected-minimum'
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci'))
+    from producer_context import current_context
+    manifest.update(current_context(), role='tcp-selected-minimum')
 Path('tcp-fixture/provenance.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print('TCP_PRIORITY_PRODUCER', json.dumps({k: manifest[k] for k in ('source', 'run', 'attempt', 'scope')}))
 for role, details in compilers.items():

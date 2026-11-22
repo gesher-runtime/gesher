@@ -140,22 +140,32 @@ def check_selected(supplier, context):
     assert len(factory)==1 and factory[0]['argv']==expected_factory and factory[0]['cwd']==workspace.rsplit('/',1)[0]
 
 
-def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--manifest',type=Path,required=True);args=parser.parse_args()
+def verify_manifest(path):
     context={k:os.environ[k] for k in CONTEXT}
     assert os.environ.get('GITHUB_ACTIONS')=='true'
     if os.environ.get('GITHUB_WORKFLOW') == 'ci':
         sys.path.insert(0,str(ROOT/'tools/toolchain'))
         import coherent_tcp_context as coherent
+        # Keep caller authorization attached to the actual consumer attempt.
         coherent.context(os.environ,'windows')
+        sys.path.insert(0,str(ROOT/'tools/ci'))
+        import component_producer
+        manifest, producer = component_producer.verify('tcp-selected-minimum', path=path)
+        context = component_producer.supplier_context(producer)
     else:
         assert os.environ['GITHUB_REF']=='refs/heads/wip/tcp-minimum-selection'
         assert os.environ['GITHUB_WORKFLOW']=='net-tcp-selected-component'
-    manifest=json.loads(args.manifest.read_text())
+        manifest=json.loads(path.read_text())
     assert manifest['repository']==context['GITHUB_REPOSITORY'] and str(manifest['repository_id'])==context['GITHUB_REPOSITORY_ID']
     assert manifest['source']==context['GITHUB_SHA'] and str(manifest['run'])==context['GITHUB_RUN_ID'] and str(manifest['attempt'])==context['GITHUB_RUN_ATTEMPT']
     assert manifest['supplier_selection']=='selected-minimum' and manifest['producer_job']=='compile'
     check_selected(manifest['supplier'],context)
+    return context
+
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--manifest',type=Path,required=True);args=parser.parse_args()
+    verify_manifest(args.manifest)
     print('Verified selected original-profile supplier: twelve exact sources/two patches,480allfields,601typedSDK,unchanged publicABI,aliases,actual DLL source object; product adoption not inferred')
 
 

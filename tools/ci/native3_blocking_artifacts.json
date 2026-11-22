@@ -1,0 +1,7 @@
+[
+  {
+    "name": "native3-locks-blocking",
+    "producer": "union-native-blocking / compile",
+    "destination": "fixture"
+  }
+]

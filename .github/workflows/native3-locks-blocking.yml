@@ -103,7 +103,7 @@ jobs:
       - name: Record exact source, syscall reference and executable bytes
         shell: python
         run: |
-          import hashlib, json, os, subprocess
+          import hashlib, json, os, subprocess, sys
           from pathlib import Path
           def digest(path):
               return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -115,10 +115,14 @@ jobs:
                           run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                           source=os.environ['GITHUB_SHA'], toolchain_sha256=os.environ['LLVM_MINGW_SHA256'],
                           files=files, outputs=outputs)
+          if os.environ.get('GITHUB_WORKFLOW') == 'ci':
+              sys.path.insert(0, str(Path('tools/ci').resolve()))
+              from producer_context import current_context
+              metadata.update(current_context(), role='native3-blocking')
           Path('fixture/provenance.json').write_text(json.dumps(metadata, indent=2) + '\n')
       - uses: actions/upload-artifact@v4
         with:
-          name: native3-locks-blocking-${{ github.sha }}-a${{ github.run_attempt }}
+          name: ${{ github.workflow == 'ci' && 'native3-locks-blocking' || format('native3-locks-blocking-{0}-a{1}', github.sha, github.run_attempt) }}
           path: fixture
           if-no-files-found: error
           retention-days: 14
@@ -146,32 +150,42 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Invalid CI source identity' }
           $ciSource = $sourceJson | ConvertFrom-Json
           if ((git rev-parse HEAD) -cne $ciSource.checkout_sha -or $LASTEXITCODE -ne 0) { throw 'Checkout source mismatch' }
-          $jobsRaw = python tools/ci/github_jobs.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs"
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual producer' }
-          $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'union-native-blocking / compile')
-          Write-CiProducerIdentity -Producer 'union-native-blocking / compile' -Rows $jobs -SourceIdentity $ciSource
-          if ($jobs.Count -ne 1 -or $jobs[0].conclusion -ne 'success' -or
-              "$($jobs[0].run_id)" -ne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
-              $jobs[0].head_sha -ne $ciSource.api_head_sha) { throw 'Producer source/run/attempt mismatch' }
-          $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact' }
-          $expected = "native3-locks-blocking-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
-          $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -eq $expected)
-          Write-CiArtifactInventory -Name $expected -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0] -SourceIdentity $ciSource
-          if ($rows.Count -ne 1) { throw 'Artifact is not unique' }
-          $artifact = $rows[0]
-          if ($artifact.id -le 0 -or $artifact.size_in_bytes -le 0 -or $artifact.expired -or
-              $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or "$($artifact.workflow_run.id)" -ne $env:GITHUB_RUN_ID -or
-              "$($artifact.workflow_run.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
-              "$($artifact.workflow_run.head_repository_id)" -ne $ciSource.head_repository_id -or
-              $artifact.workflow_run.head_sha -ne $ciSource.api_head_sha) { throw 'Artifact source/repository mismatch' }
-          if ([datetime]$artifact.created_at -lt [datetime]$jobs[0].started_at -or
-              [datetime]$artifact.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact did not originate in this producer attempt' }
-          python tools/native3-locks/artifact/download-verified-artifact.py --id "$($artifact.id)" --digest $artifact.digest --destination command-fixture
-          if ($LASTEXITCODE -ne 0) { throw 'Actual raw archive verification/extraction failed' }
+          $producerAttempt = $env:GITHUB_RUN_ATTEMPT
+          if ($env:GITHUB_WORKFLOW -ceq 'ci') {
+            $proofJson = python tools/ci/component_producer.py stage native3-blocking
+            if ($LASTEXITCODE -ne 0) { throw 'Native blocking supplier archive or producer authentication failed' }
+            $proof = $proofJson | ConvertFrom-Json
+            $producerAttempt = $proof.producer_context.attempt
+            $jobs = @($proof.producer)
+            $artifact = $proof.artifact
+          } else {
+            $jobsRaw = python tools/ci/github_jobs.py "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual producer' }
+            $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'union-native-blocking / compile')
+            Write-CiProducerIdentity -Producer 'union-native-blocking / compile' -Rows $jobs -SourceIdentity $ciSource
+            if ($jobs.Count -ne 1 -or $jobs[0].conclusion -ne 'success' -or
+                "$($jobs[0].run_id)" -ne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
+                $jobs[0].head_sha -ne $ciSource.api_head_sha) { throw 'Producer source/run/attempt mismatch' }
+            $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact' }
+            $expected = "native3-locks-blocking-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
+            $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -eq $expected)
+            Write-CiArtifactInventory -Name $expected -Inventory ($raw | ConvertFrom-Json) -Rows $rows -Producer $jobs[0] -SourceIdentity $ciSource
+            if ($rows.Count -ne 1) { throw 'Artifact is not unique' }
+            $artifact = $rows[0]
+            if ($artifact.id -le 0 -or $artifact.size_in_bytes -le 0 -or $artifact.expired -or
+                $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or "$($artifact.workflow_run.id)" -ne $env:GITHUB_RUN_ID -or
+                "$($artifact.workflow_run.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+                "$($artifact.workflow_run.head_repository_id)" -ne $ciSource.head_repository_id -or
+                $artifact.workflow_run.head_sha -ne $ciSource.api_head_sha) { throw 'Artifact source/repository mismatch' }
+            if ([datetime]$artifact.created_at -lt [datetime]$jobs[0].started_at -or
+                [datetime]$artifact.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact did not originate in this producer attempt' }
+            python tools/native3-locks/artifact/download-verified-artifact.py --id "$($artifact.id)" --digest $artifact.digest --destination command-fixture
+            if ($LASTEXITCODE -ne 0) { throw 'Actual raw archive verification/extraction failed' }
+          }
           $manifest = Get-Content -LiteralPath command-fixture/provenance.json -Raw | ConvertFrom-Json
           if ($manifest.repository -ne $env:GITHUB_REPOSITORY -or "$($manifest.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
-              "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
+              "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $producerAttempt -or
               $manifest.source -ne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -ne $env:LLVM_MINGW_SHA256) { throw 'Manifest producer mismatch' }
           $expectedOutputs = @('linux-reference.json', 'native3_lock_command_worker.exe', 'native3_lock_duplicate_test.exe', 'binderd.exe', 'native3_lock_command_worker.imports.txt', 'native3_lock_duplicate_test.imports.txt', 'binderd.imports.txt', 'native3_lock_blocking_worker.exe', 'native3_lock_blocking_worker.imports.txt', 'blocking-linux.json', 'production-symbols.txt', 'fixture-symbols.txt')
           $expectedOutputs += @('filesystem_metadata_host_test.exe', 'filesystem_metadata_host_test.imports.txt')
@@ -182,9 +196,9 @@ jobs:
           }
           foreach ($file in $manifest.outputs.PSObject.Properties) {
             if ((Get-FileHash -LiteralPath (Join-Path command-fixture $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) { throw "Producer output mismatch: $($file.Name)" }
-            Write-Host "ACTUAL_COMMAND_OUTPUT name=$($file.Name) sha256=$($file.Value) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
+            Write-Host "ACTUAL_COMMAND_OUTPUT name=$($file.Name) sha256=$($file.Value) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$producerAttempt consumer_attempt=$env:GITHUB_RUN_ATTEMPT"
           }
-          Write-Host "VERIFIED_COMMAND_PRODUCER source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT artifact=$($artifact.id) digest=$($artifact.digest) exe=$($manifest.outputs.'native3_lock_command_worker.exe') reference=$($manifest.outputs.'linux-reference.json')"
+          Write-Host "VERIFIED_COMMAND_PRODUCER source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$producerAttempt consumer_attempt=$env:GITHUB_RUN_ATTEMPT artifact=$($artifact.id) digest=$($artifact.digest) exe=$($manifest.outputs.'native3_lock_command_worker.exe') reference=$($manifest.outputs.'linux-reference.json')"
       - name: Actual Windows filesystem metadata before the full runtime build
         shell: pwsh
         run: |

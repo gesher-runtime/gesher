@@ -268,7 +268,7 @@ class ReceiptIntegrationTest(unittest.TestCase):
             return self.responses.pop(0)
         self.downloads.append(command)
         self.assertEqual(command[:2], [sys.executable, 'tools/surface/download-verified-artifact.py'])
-        self.assertEqual(kwargs, {'check': True})
+        self.assertEqual(kwargs, {'check': True, 'stdout': sys.stdout})
         return subprocess.CompletedProcess(command, 0)
 
     def _receipt(self):

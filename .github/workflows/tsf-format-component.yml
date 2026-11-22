@@ -61,7 +61,7 @@ jobs:
           python3 tools/windows4/tsf-component-manifest.py
       - uses: actions/upload-artifact@v4
         with:
-          name: tsf-format-${{ github.sha }}-a${{ github.run_attempt }}
+          name: ${{ github.workflow == 'ci' && 'tsf-format' || format('tsf-format-{0}-a{1}', github.sha, github.run_attempt) }}
           path: fixture/
           if-no-files-found: error
           retention-days: 14
