@@ -172,7 +172,8 @@ $recordChecks = @(
      P = @("${t}recorder camera close: onClosed exactly once before callback thread quit true, callback thread stopped true") },
   @{ Name = 'MediaCodec output into an ImageReader''s Surface: YUV pixels and default or explicit timestamps'
      P = @("${t}imagereader: decoder rendered 60 frames into the reader's surface; images 40\+ \(35 320x240 3 planes\), colors \[red, lime, blue, white\]",
-           "${t}imagereader timestamps: pass") }
+           "${t}imagereader timestamps: pass",
+           "${t}imagereader retained image: pass") }
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
