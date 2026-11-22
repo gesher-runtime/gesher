@@ -708,7 +708,10 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
       auto* description = DescriptionAt(buffer, off);
       uint64_t shared = description
           ? DuplicateRemoteHandle(proc->pid, target_proc->pid, description->shared_handle) : 0;
-      if (!description || (description->kind != wire::kSocketFileDescription && shared == 0)) {
+      // Sockets and completed native fences are typed handles without an OFD.
+      const bool typed = description && (description->kind == wire::kSocketFileDescription ||
+                                         description->kind == wire::kNativeFenceFileDescription);
+      if (!description || (!typed && shared == 0)) {
         CloseRemoteHandle(target_proc->pid, dup);
         return BR_FAILED_REPLY;
       }
@@ -1718,6 +1721,8 @@ void ServeRights(HANDLE pipe, In in) {
             handle == 0 || handle > UINTPTR_MAX || shared_handle > UINTPTR_MAX ||
             (kind == wire::kSocketFileDescription
               ? shared_handle != 0 || (metadata & 1) == 0
+              : kind == wire::kNativeFenceFileDescription
+              ? shared_handle != 0 || metadata != wire::kCompletedNativeFenceMetadata
               : kind > 2 || shared_handle == 0 || metadata != 0)) {
           status = -EINVAL;
           break;

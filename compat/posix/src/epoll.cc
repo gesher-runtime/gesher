@@ -29,6 +29,7 @@
 
 #include "event_internal.h"
 #include "internal.h"
+#include "native_fence_internal.h"
 #include "poll_scratch.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
@@ -469,6 +470,7 @@ bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result) 
 }
 
 int EventObjectWriteError(int fd) {
+  if (LookupNativeFence(fd)) return EINVAL;
   Object object;
   if (!Lookup(fd, &object)) return 0;
   if (object.inotify) return EBADF;
@@ -476,6 +478,9 @@ int EventObjectWriteError(int fd) {
 }
 
 bool ForgetEventObject(int fd) {
+  // Completed native fences are NUL-backed virtual objects as well. Every
+  // close, dup2 replacement and CRT stream retirement reaches this point.
+  ForgetNativeFence(fd);
   if (object_count.load(std::memory_order_acquire) == 0) return false;
   Object old;  // released after the lock
   std::lock_guard<std::mutex> lock(objects_mutex);

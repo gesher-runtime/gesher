@@ -57,6 +57,12 @@ struct FileDescription {
 // Socket handles carry their existing ADR 0088 metadata in the FD object,
 // not an OFD mapping. Keep this distinct from the unshareable-resource kind.
 constexpr uint32_t kSocketFileDescription = 4;
+// A completed Android native fence travels as its read-only Gesher completion
+// event, not an OFD mapping: no shared handle, and the FD object's pad_flags
+// (or a rights entry's metadata) is exactly kCompletedNativeFenceMetadata.
+// The receiver revalidates the event itself before adopting it.
+constexpr uint32_t kNativeFenceFileDescription = 5;
+constexpr uint32_t kCompletedNativeFenceMetadata = 0x4;
 // One transaction cannot install more than the receiver's UCRT descriptor
 // ceiling. Bound metadata and native pin allocations before capturing handles.
 constexpr uint32_t kMaxFileDescriptions = 8192;
