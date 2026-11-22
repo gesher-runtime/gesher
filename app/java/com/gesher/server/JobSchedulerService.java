@@ -711,7 +711,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         start();
         Run stop = null;
         Job job;
-        List<Job> stale = new ArrayList<>();
+        List<Job> stale = null;
         try {
             synchronized (this) {
                 if (capturedOwner == null || mPm.get(pkg) != capturedOwner || mPm.isRemovalPending(pkg)) {
@@ -720,11 +720,17 @@ final class JobSchedulerService extends IJobScheduler.Default
                 // Records with this key whose owner code changed can never run or be
                 // found again; this schedule supersedes them, so they must not keep
                 // holding a reservation alongside the replacement.
+                Job old = null;
                 for (Job j : mJobs) {
-                    if (j.same(pkg, namespace, info.getId()) && !current(j)) stale.add(j);
+                    if (!j.same(pkg, namespace, info.getId())) continue;
+                    if (current(j)) {
+                        if (old == null) old = j;
+                    } else {
+                        if (stale == null) stale = new ArrayList<>();
+                        stale.add(j);
+                    }
                 }
-                removeJobsLocked(stale);
-                Job old = find(pkg, namespace, info.getId());
+                if (stale != null) removeJobsLocked(stale);
                 if (work != null && old != null && old.info.equals(info)) {
                     // enqueue onto the same job: its work queue grows.
                     job = old;
@@ -755,7 +761,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             }
         } finally {
             // Delivered outside the monitor like cancel(), also when admission fails.
-            if (!stale.isEmpty()) cancelled(stale, "superseded");
+            if (stale != null) cancelled(stale, "superseded");
         }
         if (stop != null) stopRun(stop, JobParameters.STOP_REASON_CANCELLED_BY_APP,
                 JobParameters.INTERNAL_STOP_REASON_CANCELED, "rescheduled");

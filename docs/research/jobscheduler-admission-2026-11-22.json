@@ -64,5 +64,69 @@
     "end-to-end schedule throughput including the new required rejection exceptions",
     "full AOSP build and complete platform compatibility source catalog",
     "expedited/app-standby execution quota or persisted JobWorkItem implementation"
-  ]
+  ],
+  "stale_selection_follow_up": {
+    "parent_ref": "7a99c69033d84cac31d8e0ac205b8383f553911f",
+    "parent_tree": "9abde0bef1b79fb00db9721e22885df1adac4a11",
+    "parent_scheduler_sha256": "1f99a61c5f75d8448153db1c7d7f584b83d72092bf1969eec41d1c6822253545",
+    "scope": "Correction to PR284; combine stale-owner and current-owner selection while preserving external runtime/fixture repair, no new roadmap leaf.",
+    "sources_sha256": {
+      "app/java/com/gesher/server/JobSchedulerService.java": "6ebb68f23ba68753984f0cc2c5a5d98304bc28b7df8b0c56dde24965d6aae42e",
+      "tests/dex-services/gesher/services/JobSchedulerAdmissionTest.java": "4ef6d020eb018ec8082a61ba11f6c8c92c20df28f5b438e3d0181448464d1b88",
+      "tests/dex-services/gesher/services/JobSchedulerConstraintContractTest.java": "a62676d76312e5c2c02c094ca28761ac51db4e07a1358e5d9e927fde9685a328",
+      "tests/scheduler/SchedulerWorkHost.java": "2969496af4bcc886c1bd95198a8ebb96729173c5c5fe806ffa0d812f5a3a94c1",
+      "tools/test_scheduler_work_contracts.py": "2f9e88383b970fe09d6ab9842b4a3ba75eb9c87ccbc08d1fe7d6d7442b4eac0e"
+    },
+    "actual_production_work": {
+      "submissions": 10000,
+      "before_submission_registry_visits": 2997048,
+      "after_submission_registry_visits": 1498524,
+      "submission_work_reduction_percent": 50,
+      "accepted_both": 151,
+      "rejected_both": 9849,
+      "retained_jobs_both": 151,
+      "schedule_passes": 32,
+      "schedule_registry_visits_both": 9664,
+      "pending_queries": 32,
+      "pending_registry_visits_both": 4832
+    },
+    "validation": {
+      "candidate_admission_checks": 252,
+      "current_parent_admission_checks": 244,
+      "negative_control_ref": "7a99c69033d84cac31d8e0ac205b8383f553911f",
+      "negative_control_exit": 1,
+      "negative_control_message": "Submission traversed the registry more than once: 2997048",
+      "full_app_java_dex": true,
+      "full_services_java_dex": true,
+      "default_scheduler_helper_exit": 0,
+      "candidate_default_constraint_checks": 402,
+      "candidate_default_scheduler_work_checks": 155
+    },
+    "additional_contracts": [
+      "Same-info enqueue keeps the first current owner while removing a later stale duplicate through real registry accounting.",
+      "Obsolete executing owner receives stopJob outside the scheduler monitor.",
+      "Held obsolete stop retires through actual timeout; successor reservation and record remain.",
+      "Exactly one actual registry traversal per submission is enforced."
+    ],
+    "retained_semantics": [
+      "All stale matching records are collected before monitored removal.",
+      "Cancellation occurs outside the monitor even when new admission throws.",
+      "Existing persistence/installed-owner guards and fail-before-mutation accounting validation are unchanged."
+    ],
+    "evidence_sha256": {
+      "pr284-current-admission.log": "04d03e185415111e7e6a8bce1f4c4b0a2a09b2c4a09e932f25237eef62c72651",
+      "admission-scan-probe/before.log": "ac211dd65d61fac50a917cafcbcdaadbe519024b2412aff7d8197076b66a65ca",
+      "admission-scan-probe/after.log": "68c869b8c3198f434c53b4bce25b1600c49b2f191736118164927a9f7d5a7451",
+      "pr284-scan-candidate-admission.log": "c3524fddf07a6a08d9d603d04a3bbbbc09dcb836d7b6e7dce5d1cb50eb686bb3",
+      "pr284-scan-before-negative.log": "d3b96c0abcf1c260af0a7dfd5aad0c94efccefb313b92eee1fc67a4abc070839",
+      "pr284-scan-app-build.log": "501cfbafa9722171ba3f5de9d8d6b39b4fde472c67a4b4327b39abe4d7a24af2",
+      "pr284-scan-services-build.log": "3aba8884d04ea0020799476c0ae81861000cccb470ff4c92f14fe87a46e1f4cb",
+      "pr284-scan-all.log": "55d5f800acb5735af705d45c50d50cb80102c374bc4713ba1befcb58845fdebc"
+    },
+    "limits": [
+      "Counts measure submission registry visits, not CPU time or heap bytes.",
+      "Constructed package/process metadata and native Binder identity/Parcel-size host adapters remain explicit.",
+      "Real Windows/ART follow-up execution and true Parcel serialization are not claimed by these local replays."
+    ]
+  }
 }

@@ -135,6 +135,45 @@ connectivity-demand checks with a maximum of one controlled native waiter.
 Its host persistence boundary remains explicitly false. This is local source
 composition evidence, not a claim that remote PR CI or Windows execution passed.
 
+
+## Follow-up: one registry pass when retiring stale owners
+
+The subsequently published `7a99c69033d84cac31d8e0ac205b8383f553911f`
+fixes test-fixture accounting and retires obsolete same-key records before
+admission. Its cancellation remains outside the scheduler monitor, including
+when the replacement is rejected. This follow-up preserves those fixes and
+combines its stale-record traversal with current-owner selection. It retains
+the first current record in registry order, continues through later stale
+records, and allocates a cancellation list only when a stale match exists.
+The fail-before-mutation accounting guard, cancellation, persistence and
+installed-owner validation are unchanged.
+
+The exact published revision performs a stale scan and then a separate `find()`
+scan. In the same 10,000-submission overload workload, instrumented actual
+production performs **2,997,048 submission registry visits**. The combined
+selection performs **1,498,524 visits**, a **50% reduction** for that workload.
+Both versions admit 151 jobs, reject 9,849, retain 151 records, visit 9,664
+records over 32 scheduler passes and 4,832 over 32 pending queries. This is a
+submission-work correction to this PR, not another roadmap leaf or a whole-call
+latency/RSS claim. The ordinary admission path also avoids constructing the
+otherwise empty stale list; no byte-allocation saving is inferred from the
+iteration count.
+
+The maintained fixture now checks the one-pass submission bound. Running the
+same final fixture against exact source `7a99c690` is an expected negative
+control: it reaches the work gate after the behavior cases and fails with
+`Submission traversed the registry more than once: 2997048`. The candidate
+passes 252 admission contracts. Added cases retain the current enqueue owner
+while removing a later stale duplicate, check that an obsolete executing job's
+`stopJob` is delivered outside the scheduler monitor, and retire its held stop
+through the actual timeout path without removing or decrementing its successor.
+The existing default scheduler gate and full app/services Java/DEX builds are
+also repeated for the final source. Host metadata, identity and Parcel-size
+boundaries remain unchanged; a Windows/ART run of this follow-up has not yet
+been claimed. The original report's source hashes and original validation
+counts above are historical; the separate `stale_selection_follow_up` section
+of the JSON record binds this follow-up's exact sources and receipts.
+
 ## Reproduction
 
 Use the pinned framework/core dependencies, a JDK17+ and apksig8.13.0. Build the

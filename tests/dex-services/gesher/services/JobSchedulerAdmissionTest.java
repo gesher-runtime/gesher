@@ -253,8 +253,53 @@ public final class JobSchedulerAdmissionTest {
             check(Integer.valueOf(1).equals(((Map<?, ?>) get(h.scheduler, "mJobsPerUid")).get(UID)),
                     "Replacement of a stale record was counted twice");
             accounting(h);
+            // An old registry can contain a stale duplicate after its current
+            // owner. Selection must keep scanning after finding that owner.
+            synchronized (h.scheduler) {
+                call(h.scheduler, "addJobLocked", new Class<?>[]{h.jobType}, stale);
+            }
+            JobWorkItem work = new JobWorkItem(new Intent("current-owner"));
+            try (var identity = new Identity(PID + 5, UID)) {
+                jobs.enqueue("superseded", info(updated, 1), work);
+            }
+            check(find(h, updated, "superseded", 1) == replacement && records(h).size() == 1
+                    && !records(h).contains(stale) && work.getWorkId() == 1,
+                    "Enqueue lost its current owner or retained a later stale duplicate");
+            accounting(h);
             try (var identity = new Identity(PID + 5, UID)) { jobs.cancelAll(); }
             check(records(h).isEmpty() && ((Map<?, ?>) get(h.scheduler, "mJobsPerUid")).isEmpty(), "Superseded records leaked quota");
+        }
+    }
+
+    private static void supersededRun() throws Exception {
+        try (var h = new JobSchedulerConstraintContractTest.Harness()) {
+            IJobScheduler jobs = jobs(h);
+            var service = new JobSchedulerConstraintContractTest.TestService() {
+                @Override public void stopJob(android.app.job.JobParameters params) {
+                    check(!Thread.holdsLock(h.scheduler), "Stale cancellation called the app under the scheduler monitor");
+                    super.stopJob(params);
+                }
+            };
+            service.acknowledgeImmediately = false;
+            JobSchedulerConstraintContractTest.TestRunHandle run;
+            try (var identity = new Identity(PID, UID)) {
+                jobs.schedule(NAMESPACE, info(91));
+                run = h.start(91, service);
+            }
+            owner(h, PACKAGE, UID, PID + 6, (byte) 43);
+            try (var identity = new Identity(PID + 6, UID)) {
+                jobs.schedule(NAMESPACE, info(91));
+                Object replacement = find(h, PACKAGE, NAMESPACE, 91);
+                check(service.stops == 1 && replacement != run.job && records(h).size() == 1,
+                        "Stale executing owner was not stopped independently of its replacement");
+                h.timeout(run.run, 3); // Production STOPPING timeout retires the held old callback.
+                check((Boolean) get(run.run, "done") && h.runningCount() == 0
+                        && find(h, PACKAGE, NAMESPACE, 91) == replacement,
+                        "Late stale-run retirement affected its replacement");
+                accounting(h);
+                jobs.cancelAll();
+                accounting(h);
+            }
         }
     }
 
@@ -432,6 +477,10 @@ public final class JobSchedulerAdmissionTest {
                 }
             }
             check(accepted == expectedJobs && measured.size() == expectedJobs, "Unexpected retained job count: " + accepted);
+            long submissionVisits = measured.visits;
+            long expectedVisits = expectedJobs * (expectedJobs - 1L) / 2
+                    + (10_000L - expectedJobs) * expectedJobs;
+            check(submissionVisits == expectedVisits, "Submission traversed the registry more than once: " + submissionVisits);
             measured.visits = 0;
             for (int i = 0; i < 32; i++) call(h.scheduler, "schedulePass", new Class<?>[]{boolean.class}, false);
             long schedulerVisits = measured.visits;
@@ -442,13 +491,14 @@ public final class JobSchedulerAdmissionTest {
             check(schedulerVisits == expectedJobs * 64L && queryVisits == expectedJobs * 32L,
                     "Measured registry iterations changed unexpectedly");
             System.out.println("JOB_ADMISSION_WORK submissions=10000 accepted=" + accepted + " rejected=" + rejected
-                    + " retained_jobs=" + measured.size() + " scheduler_passes=32 scheduler_registry_visits=" + schedulerVisits
+                    + " retained_jobs=" + measured.size() + " submission_registry_visits=" + submissionVisits
+                    + " scheduler_passes=32 scheduler_registry_visits=" + schedulerVisits
                     + " pending_queries=32 pending_registry_visits=" + queryVisits);
             jobs.cancelAll(); check(measured.isEmpty(), "Measurement retained scheduled work");
         }
     }
     public static void contracts(boolean realParcel) throws Exception {
-        boundary(); identities(); superseded(); retirements(); concurrent();
+        boundary(); identities(); superseded(); supersededRun(); retirements(); concurrent();
         if (realParcel) persistence();
         measure(151);
         System.out.println("JobSchedulerAdmissionTest all passed: " + checks + " checks; persisted_parcel=" + realParcel);
