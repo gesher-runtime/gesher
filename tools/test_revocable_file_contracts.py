@@ -31,6 +31,7 @@ def main():
     base = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
     boundary, rest = base.split("@OFD_DECLARATIONS@", 1)
     boundary = boundary.replace("@PE_EXPORTS_HEADER@", str(ROOT / "compat/elf/exec/pe_exports.h"))
+    boundary = boundary.replace("@ENVIRONMENT_ENCODING_HEADER@", str(ROOT / "compat/posix/include/gesher/environment_utf16.h"))
     boundary = boundary.replace("CloseHandle(", "HostCloseHandle(")
     boundary = boundary.replace("CreateFileMappingW(", "HostCreateFileMappingW(")
     # The inherited pipe fixture now supplies these Win32 boundaries too.
