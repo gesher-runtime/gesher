@@ -28,7 +28,7 @@
     "compat/posix/src/procfs.cc": "99ad8c2f6ec523f42dc030fa1010f693743bfa60ee025236e99f3429654120d9",
     "compat/elf/exec/exec_spawn.cc": "2e3f679fc8aa181614436f0b5c22aa48dc40e153b2094f56c5ff94c773cadde2",
     "compat/libcore/process.cc": "24dfb56149ca4c8bd694bb019c5f1f7c5ddfe3341256d8cd652ee89163e60d8b",
-    "compat/bionic/stdio_bionic.cc": "25412c6a0219f674fe98b588f739032427382d832040349bd4d16bb42252e3dd",
+    "compat/bionic/stdio_bionic.cc": "9fedaef9b3bd5e658a74daa7199dff6d99711bcf1c5aca9204cdb5dd1e8e1777",
     "compat/posix/src/internal.h": "dcfa9633e153c14a59101c152348900e7bfd6a22545006fcdbeffc49bd3c3fad",
     "compat/elf/exec/gesher_shell.cc": "3a0a1a45ef0ad4e7fe43cbc45e8194221379033f02e97de43c4e103e6992d6cf",
     "compat/elf/exec/shell_execute.inc": "08f1f451b15ab64a7dfe28a0c6743e899aa4bea093261001ebd28957be815d0c",
