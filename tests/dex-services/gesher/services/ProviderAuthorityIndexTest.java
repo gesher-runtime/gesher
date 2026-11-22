@@ -207,7 +207,7 @@ public final class ProviderAuthorityIndexTest {
         require(pm.resolveContentProvider("aware", PackageManager.MATCH_DIRECT_BOOT_UNAWARE, 0) == null
                 && pm.resolveContentProvider("aware", PackageManager.MATCH_DIRECT_BOOT_AWARE, 0) != null,
                 "Direct-boot flags were cached");
-        conflict(pm, "same");
+        sameAuthority(pm, duplicates);
 
         // Thousands of distinct misses must not grow a result/negative-result cache.
         Object index = field(PackageManagerService.class, "mProviderAuthorityIndex").get(pm);
@@ -223,6 +223,101 @@ public final class ProviderAuthorityIndexTest {
         } catch (UnsupportedOperationException expected) { checks++; }
         concurrency(first, replacement);
         System.out.println("ProviderAuthorityIndexTest all passed: " + checks + " checks");
+    }
+
+    private static ProviderInfo component(PackageManagerService pm, ApkPackage pkg, String name, long flags) {
+        return pm.getProviderInfo(new android.content.ComponentName(pkg.packageName,
+                pkg.packageName + "." + name), flags, 0);
+    }
+
+    /**
+     * ComponentResolver.addProvidersLocked: within one package the first declaration of an
+     * authority keeps it and a later one is skipped, by manifest order and regardless of
+     * enabled state; INSTALL_FAILED_CONFLICTING_PROVIDER still separates packages.
+     */
+    private static void sameAuthority(PackageManagerService pm, ApkPackage duplicates) throws Exception {
+        ProviderInfo same = declared(pm, "same");
+        require(same != null && same.name.equals(duplicates.packageName + ".One")
+                        && "same".equals(same.authority), "Same-package duplicate authority did not keep its first provider");
+        require(pm.resolveContentProvider("same", 0, 0).name.equals(same.name),
+                "PackageManager authority lookup disagrees with registration");
+        ProviderInfo skipped = component(pm, duplicates, "Two", 0);
+        require(skipped != null && skipped.authority == null,
+                "Skipped duplicate kept a registered authority");
+        Method componentState = method(ApkPackage.class, "setComponentEnabledState", String.class, int.class);
+        invoke(componentState, duplicates, duplicates.packageName + ".One", PackageManager.COMPONENT_ENABLED_STATE_DISABLED);
+        require(declared(pm, "same") == null, "Disabled first provider handed its authority to a later declaration");
+        invoke(componentState, duplicates, duplicates.packageName + ".One", PackageManager.COMPONENT_ENABLED_STATE_DEFAULT);
+
+        PackageImpl parsed = manifest("fixture.authority.multi");
+        provider(parsed, "First", "x;y", true, false);
+        provider(parsed, "Second", "y;z;z", true, false);
+        provider(parsed, "Third", "x", true, false);
+        provider(parsed, "Fourth", "w;x", true, false);
+        ApkPackage multi = apk(parsed, 12351);
+        publish(pm, map(multi));
+        require(declared(pm, "x").name.equals(multi.packageName + ".First")
+                        && declared(pm, "y").name.equals(multi.packageName + ".First"),
+                "First multi-authority declaration lost an authority");
+        ProviderInfo second = declared(pm, "z");
+        require(second != null && second.name.equals(multi.packageName + ".Second") && "z".equals(second.authority),
+                "Partially skipped provider did not keep exactly its free authorities");
+        require(component(pm, multi, "Third", 0).authority == null, "Fully skipped provider kept an authority");
+        require("w".equals(declared(pm, "w").authority) && declared(pm, "w").name.equals(multi.packageName + ".Fourth"),
+                "Free authority of a partially skipped provider was not registered");
+        require("x;y".equals(component(pm, multi, "First", 0).authority), "First provider authority list changed");
+
+        ApkPackage other = apk("fixture.authority.other", "z", 12352, false);
+        publish(pm, map(multi, other));
+        conflict(pm, "z");
+        require(declared(pm, "x").packageName.equals(multi.packageName), "Unrelated authority became ambiguous");
+
+        ApkPackage otherDisabledOwner = apk("fixture.authority.otherdisabled", "x", 12357, false);
+        invoke(componentState, multi, multi.packageName + ".First", PackageManager.COMPONENT_ENABLED_STATE_DISABLED);
+        publish(pm, map(multi, otherDisabledOwner));
+        conflict(pm, "x");
+
+        // Registration happens over both boot states, whatever boot state a query asks for.
+        PackageImpl boot = manifest("fixture.authority.boot");
+        provider(boot, "Unaware", "d", true, false);
+        provider(boot, "Aware", "d;e", true, true);
+        ApkPackage bootPkg = apk(boot, 12354);
+        publish(pm, map(bootPkg));
+        android.content.pm.PackageInfo aware = pm.getPackageInfo(bootPkg.packageName,
+                PackageManager.GET_PROVIDERS | PackageManager.MATCH_DIRECT_BOOT_AWARE, 0);
+        require(aware.providers != null && aware.providers.length == 1
+                        && aware.providers[0].name.equals(bootPkg.packageName + ".Aware")
+                        && "e".equals(aware.providers[0].authority),
+                "Direct-boot-aware query re-registered an authority an unaware declaration owns");
+        android.content.pm.PackageInfo unaware = pm.getPackageInfo(bootPkg.packageName,
+                PackageManager.GET_PROVIDERS | PackageManager.MATCH_DIRECT_BOOT_UNAWARE, 0);
+        require(unaware.providers != null && unaware.providers.length == 1 && "d".equals(unaware.providers[0].authority),
+                "Direct-boot-unaware query lost the registered declaration");
+        android.content.pm.PackageInfo both = pm.getPackageInfo(bootPkg.packageName, PackageManager.GET_PROVIDERS, 0);
+        require(both.providers != null && both.providers.length == 2 && "d".equals(both.providers[0].authority)
+                        && "e".equals(both.providers[1].authority), "Default boot-state query disagrees with registration");
+        require(pm.resolveContentProvider("d", PackageManager.MATCH_DIRECT_BOOT_AWARE, 0) == null
+                        && pm.resolveContentProvider("e", PackageManager.MATCH_DIRECT_BOOT_AWARE, 0) != null,
+                "Direct-boot authority lookup disagrees with registration");
+        PackageImpl repeated = manifest("fixture.authority.repeated");
+        provider(repeated, "First", "original", true, false);
+        provider(repeated, "First", "other", true, false);
+        provider(repeated, "Second", "other", true, false);
+        ApkPackage repeatedPkg = apk(repeated, 12355);
+        publish(pm, map(repeatedPkg));
+        ProviderInfo otherOwner = declared(pm, "other");
+        require(otherOwner != null && otherOwner.name.equals(repeatedPkg.packageName + ".Second"),
+                "An ignored declaration of the same class claimed another provider's authority");
+
+        PackageImpl syncable = manifest("fixture.authority.syncable");
+        provider(syncable, "First", "shared", true, false);
+        provider(syncable, "Second", "shared;alias", true, false).setSyncable(true);
+        ApkPackage syncablePkg = apk(syncable, 12356);
+        publish(pm, map(syncablePkg));
+        conflict(pm, "shared");
+
+        publish(pm, map(duplicates));
+        require(declared(pm, "same").name.equals(same.name), "Republished package changed its registered provider");
     }
 
     private static void concurrency(ApkPackage first, ApkPackage replacement) throws Exception {

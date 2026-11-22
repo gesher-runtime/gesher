@@ -191,18 +191,27 @@ final class ContentProviders {
         return false;
     }
 
-    /** Ambiguous declarations never select an attacker simply because it installed first. */
+    /**
+     * Ambiguous declarations never select an attacker simply because it installed first.
+     * ApkPackage handles ordinary collisions within the same manifest. Reject any
+     * remaining ambiguity here, including names declared by multiple packages.
+     */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
         synchronized (pm) {
             ProviderInfo found = null;
+            boolean packageClaimsAuthority = false;
             for (ApkPackage pkg : pm.providerPackages(authority)) {
                 if (pm.isRemovalPending(pkg.packageName)) continue;
+                // Package ownership is checked before filtering disabled components.
+                if (packageClaimsAuthority) {
+                    throw new SecurityException("Conflicting content provider authority");
+                }
+                packageClaimsAuthority = true;
                 for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
                         | PackageManager.GET_URI_PERMISSION_PATTERNS
                         | PackageManager.GET_SHARED_LIBRARY_FILES)) {
                     if (!hasAuthority(info, authority)) continue;
-                    if (found != null && (!found.packageName.equals(info.packageName)
-                            || !found.name.equals(info.name))) {
+                    if (found != null) {
                         throw new SecurityException("Conflicting content provider authority");
                     }
                     found = info;
@@ -279,6 +288,10 @@ final class ContentProviders {
         String processName = mAtm.componentProcess(ai.packageName, ai.processName);
         for (ProviderInfo info : declaredProviders(p, PackageManager.GET_META_DATA
                 | PackageManager.GET_SHARED_LIBRARY_FILES)) {
+            // ComponentResolver.queryProviders (generateApplicationProvidersLocked's
+            // source) skips a provider whose every authority an earlier declaration
+            // of the package registered: it is neither instantiated nor published.
+            if (info.authority == null) continue;
             if (processName.equals(mAtm.componentProcess(info.packageName, info.processName))) {
                 result.add(info);
             }

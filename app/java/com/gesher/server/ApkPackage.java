@@ -46,6 +46,7 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -737,13 +738,23 @@ public final class ApkPackage {
         // Include manifest-disabled declarations before applying installed overrides.
         // A provider query also needs both boot states: choose its registered first
         // component before either boot-state or enabled-state filtering.
-        PackageInfo pi = PackageInfoCommonUtils.generate(parsed,
-                flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0),
-                0 /* userId */);
+        long generated = flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0);
+        PackageInfo pi = PackageInfoCommonUtils.generate(parsed, generated, 0 /* userId */);
         installed(pi.applicationInfo, state, flags);
         pi.activities = installedComponents(pi.activities, pi.applicationInfo, flags, state);
         pi.receivers = installedComponents(pi.receivers, pi.applicationInfo, flags, state);
         pi.services = installedComponents(pi.services, pi.applicationInfo, flags, state);
+        if ((flags & PackageManager.GET_PROVIDERS) != 0 && (generated & DIRECT_BOOT) != DIRECT_BOOT) {
+            // Other component lists still use the caller's original boot flags.
+            ProviderInfo[] allProviders = PackageInfoCommonUtils.generate(parsed,
+                    (generated | DIRECT_BOOT) & ~(PackageManager.GET_ACTIVITIES | PackageManager.GET_RECEIVERS
+                            | PackageManager.GET_SERVICES | PackageManager.GET_PERMISSIONS
+                            | PackageManager.GET_CONFIGURATIONS), 0 /* userId */).providers;
+            registerAuthorities(allProviders);
+            pi.providers = filterProviderBootState(allProviders, generated);
+        } else {
+            registerAuthorities(pi.providers);
+        }
         if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
         pi.firstInstallTime = mInstallTime;
@@ -977,6 +988,56 @@ public final class ApkPackage {
         List<ProviderInfo> result = new ArrayList<>();
         if (pi.providers != null) Collections.addAll(result, pi.providers);
         return result;
+    }
+
+    /**
+     * ComponentResolver.addProvidersLocked registers a package's providers in manifest
+     * order: each authority belongs to the first declaration that names it, a later one
+     * keeps only the authorities still free ("Skipping provider name ..."), and one left
+     * with none has a null authority, so queryContentProviders never binds it. Done
+     * before enabled and direct-boot filtering, as registration happens at scan time.
+     * Authorities shared with another package are not resolved here: ContentProviders
+     * rejects that ambiguity instead of picking an owner by install order. Use the
+     * same first-declaration-per-class rule as the provider queries and index.
+     */
+    private static void registerAuthorities(ProviderInfo[] providers) {
+        if (providers == null) return;
+        Map<String, Boolean> registered = new HashMap<>();
+        Set<String> components = new HashSet<>();
+        Map<ProviderInfo, String> narrowed = new HashMap<>();
+        for (ProviderInfo info : providers) {
+            if (!components.add(info.name) || info.authority == null) continue;
+            String[] authorities = info.authority.split(";");
+            boolean splitSyncable = info.isSyncable && authorities.length > 1;
+            StringBuilder kept = null;
+            boolean skipped = false;
+            for (String authority : authorities) {
+                Boolean ownerSplitSyncable = registered.putIfAbsent(authority, splitSyncable);
+                if (ownerSplitSyncable != null) {
+                    // Android uses different records for a syncable provider's class
+                    // and its secondary authorities. Preserve conflict handling until
+                    // Gesher can represent those records separately.
+                    if (splitSyncable || ownerSplitSyncable) return;
+                    skipped = true;
+                    continue;
+                }
+                if (kept == null) kept = new StringBuilder(authority);
+                else kept.append(';').append(authority);
+            }
+            if (skipped) narrowed.put(info, kept == null ? null : kept.toString());
+        }
+        narrowed.forEach((info, authority) -> info.authority = authority);
+    }
+
+    private static ProviderInfo[] filterProviderBootState(ProviderInfo[] providers, long flags) {
+        if (providers == null) return null;
+        int count = 0;
+        for (ProviderInfo info : providers) {
+            long state = info.directBootAware ? PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    : PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+            if ((flags & state) != 0) providers[count++] = info;
+        }
+        return count == 0 ? null : count == providers.length ? providers : Arrays.copyOf(providers, count);
     }
 
     private static ProviderInfo[] registeredProviders(ProviderInfo[] providers, long flags) {
