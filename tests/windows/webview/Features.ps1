@@ -134,10 +134,43 @@ function FeaturesCheck {
   if (-not (Test-Path "$Dir/webapp.apk")) {
     Write-Host "FAIL  gesher-app: $name (webapp.apk is missing)"; $script:failed++; return
   }
+  # Both phases share one real admitted profile. The negative precedes the
+  # explicit operator grant; manifest declarations alone must not open a prompt.
+  $profile = Join-Path $env:RUNNER_TEMP "features-profile-$([Guid]::NewGuid().ToString('N'))"
+  New-Item -ItemType Directory -Path $profile | Out-Null
+  $savedEnvironment = @{}
+  foreach ($key in @('ANDROID_DATA', 'GESHER_LOGS', 'GESHER_UID', 'GESHER_BINDER_UID', 'GESHER_BINDER', 'GESHER_STANDALONE_RESTARTED')) {
+    $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
+  }
+  try {
+    foreach ($key in @('GESHER_UID', 'GESHER_BINDER_UID', 'GESHER_BINDER', 'GESHER_STANDALONE_RESTARTED')) { [Environment]::SetEnvironmentVariable($key, $null) }
+    $env:ANDROID_DATA = NoDrive $profile
+    $env:GESHER_LOGS = NoDrive (Join-Path $profile 'logs')
+    $negative = RunTimed "$Dir/dalvikvm.exe" (@($dvmWebView) + @('com.gesher.app.Main', '--window',
+      '--activity', 'com.gesher.webapp.GeolocationPermissionActivity', (NoDrive "$Dir/webapp.apk"))) 300
+    if ($LASTEXITCODE -ne 0 -or $negative -notmatch 'GeolocationPermission denied before origin prompt uid ([0-9]+) pid ([0-9]+)') {
+      throw "Actual ungranted WebView prerequisite failed: $negative"
+    }
+    $negativeUid = [int]$Matches[1]
+    Write-Host $negative
+    $env:GESHER_UID = '1000'; $env:GESHER_BINDER_UID = '1000'
+    $grants = RunTimed "$Dir/dalvikvm.exe" (@($dvmWebView) + @('-cp', (NoDrive "$Dir/services-tests.dex"),
+      'gesher.services.FixturePermissionSetup', (NoDrive "$Dir/webapp.apk"),
+      'android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION')) 90
+    if ($LASTEXITCODE -ne 0 -or -not $grants.Contains('FixturePermissionSetup persisted grants verified') -or
+        $grants -notmatch 'FixturePermissionSetup UID ([0-9]+) package com\.gesher\.webapp') {
+      throw "Actual WebView operator grant failed: $grants"
+    }
+    $featuresUid = [int]$Matches[1]
+    if ($featuresUid -lt 10000 -or $featuresUid -gt 19999 -or $featuresUid -ne $negativeUid) { throw 'WebView grant changed the admitted application identity' }
+    Write-Host $grants
+  } finally {
+    foreach ($entry in $savedEnvironment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) }
+  }
   $ports = ([GesherWebTestServer]::Start()) -split ' '
   $pick = Join-Path $env:RUNNER_TEMP 'gesher-pick.txt'
   [IO.File]::WriteAllText($pick, 'hello from Windows')
-  $data = Join-Path $env:RUNNER_TEMP "features-data-$(Get-Random)"
+  $data = Join-Path $profile 'data/com.gesher.webapp'
   $log = Join-Path $env:RUNNER_TEMP "features-$(Get-Random).log"
   $cmdArgs = @($dvmWebView) + @('com.gesher.app.Main', '--window', '--display', '400x800@160',
     '--data-dir', (NoDrive $data), '--activity', 'com.gesher.webapp.FeaturesActivity', (NoDrive "$Dir/webapp.apk"))
@@ -147,6 +180,9 @@ function FeaturesCheck {
   $psi.Environment['GESHER_WINDOW_DEBUG'] = '1'
   $psi.Environment['GESHER_WEBAPP_SERVER'] = "$($ports[0]) $($ports[1])"
   $psi.Environment['GESHER_WEBVIEW_ARGS'] = '--use-fake-device-for-media-stream'
+  $psi.Environment['ANDROID_DATA'] = NoDrive $profile
+  $psi.Environment['GESHER_LOGS'] = NoDrive (Join-Path $profile 'logs')
+  foreach ($key in @('GESHER_UID', 'GESHER_BINDER_UID', 'GESHER_BINDER', 'GESHER_STANDALONE_RESTARTED')) { [void]$psi.Environment.Remove($key) }
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   $problems = @()
@@ -271,6 +307,9 @@ function FeaturesCheck {
     'Features canGoBackOrForward(-2): true',
     'Features done')
   foreach ($want in $expect) { if (-not "$text".Contains($want)) { $problems += "missing '$want'" } }
+  if ($text -notmatch "Features app location permission uid $featuresUid pid [0-9]+ fine 0 coarse 0") {
+    $problems += 'the application did not observe the granted permissions under its canonical UID'
+  }
   $patterns = @(
     'Features page: geolocation: (position|error [123])',
     'Features onCreateWindow: dialog false, user gesture (true|false)',

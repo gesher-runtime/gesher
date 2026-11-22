@@ -170,8 +170,8 @@ Any HTTP response proves negotiation, so the check does not require a published
 release and tolerates API rate-limit responses. Certificate validation remains
 enabled for this real request.
 
-The early `update-contracts` CI matrix runs Windows PowerShell 5.1 on Windows
-2022 and 2025. The existing package checks also verify that the installed updater
+The early `windows-host-contracts` CI matrix runs these checks in Windows
+PowerShell 5.1 on Windows 2022 and 2025. The existing package checks also verify that the installed updater
 and version metadata are present. The real installer upgrade test preserves app
 data and update settings while an unrelated process holds the old Explorer shell
 extension open. Existing full Windows/framework/E2E and source/artifact identity

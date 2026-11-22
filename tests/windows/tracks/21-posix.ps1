@@ -101,6 +101,12 @@ if (Test-Path $artGtests) {
 
 if ($PosixGtestsOnly) { return }
 
+# Actual gesher_posix queue/capability qualification. Full Android thread and
+# frame observations also run and retain their unresolved failures as evidence.
+& "$PSScriptRoot/../realtime-signals-contracts.ps1" -Dir $Dir -HostOnly `
+  -EvidenceDirectory (Join-Path $Dir 'realtime-signals-evidence/host')
+if ($LASTEXITCODE -ne 0) { $failed++ }
+
 # --- gesher-base ------------------------------------------------------------------
 # Paths (other drives, long and non-ASCII names, rename, links, fopen), /proc,
 # /etc/timezone, inotify and the process model (probes/posix/posix_probe.cc).

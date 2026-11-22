@@ -47,8 +47,9 @@ bool InTranslatorCode(const void* start, size_t size);
 void* GuestSymbol(const char* name);
 
 // Called once by gesher_arm64_init: resolves the host functions guest_libc
-// wraps and registers the shim's va_list functions.
-void InitGuestLibc();
+// wraps and registers the shim's va_list functions. False, after a
+// diagnostic, when guest code it requires cannot be bound or emitted.
+bool InitGuestLibc();
 
 // The calling guest thread's actual FPCR, including changes made by MSR.
 // Host callbacks run outside Jit::Run; setters take effect before resuming.

@@ -98,6 +98,11 @@ public final class WindowsHost {
         t.start();
     }
 
+    /** Releases a service's event subscription; the shared event thread belongs to the server. */
+    public static void removeListener(Listener listener) {
+        sListeners.remove(listener);
+    }
+
     /**
      * Whether this process is a system server (SystemServer sets GESHER_BINDER_UID to the
      * system uid before it creates the services), not an app's own (--single-process).
@@ -113,6 +118,20 @@ public final class WindowsHost {
     }
 
     // --- clipboard ----------------------------------------------------------------------
+
+    /** Native foreground PID and creation FILETIME, or null when no stable owner is known. */
+    public static long[] foregroundProcess() {
+        if (!available()) return null;
+        try { return nativeForegroundProcess(); }
+        catch (UnsatisfiedLinkError unavailable) { return null; }
+    }
+
+    /** Windows session lock state: 0 unlocked, 1 locked, -1 unknown. */
+    public static int sessionLockState() {
+        if (!available()) return -1;
+        try { return nativeSessionLockState(); }
+        catch (UnsatisfiedLinkError unavailable) { return -1; }
+    }
 
     public static String clipboardText() {
         return available() ? nativeClipboardText() : null;
@@ -154,8 +173,34 @@ public final class WindowsHost {
         try {
             return nativeSetClipboardRich(text, html, imageBytes);
         } catch (Throwable t) {
-            return setClipboard(text, html);
+            return false;
         }
+    }
+
+    /** Exact private publication and complete native buffers bind this one write's sequence.
+     * Zero means unavailable or raced completion; a later sequence always invalidates the receipt. */
+    static int setClipboardSequence(String text, String html, byte[] image) {
+        if (!available()) return 0;
+        try {
+            return image == null ? nativeSetClipboardSequence(text, html)
+                    : nativeSetClipboardRichSequence(text, html, image);
+        } catch (UnsatisfiedLinkError unavailable) { return 0; }
+    }
+
+    static int clearClipboardSequence() {
+        if (!available()) return 0;
+        try { return nativeClearClipboardSequence(); }
+        catch (UnsatisfiedLinkError unavailable) { return 0; }
+    }
+
+    static boolean retainClipboardPublisher() {
+        if (!available()) return false;
+        try { return nativeRetainClipboardPublisher(); }
+        catch (UnsatisfiedLinkError unavailable) { return false; }
+    }
+
+    static void releaseClipboardPublisher() {
+        nativeReleaseClipboardPublisher();
     }
 
     public static int clipboardSequence() {
@@ -254,6 +299,10 @@ public final class WindowsHost {
 
     public static int removeToast(String appId, String tag, String group) {
         return available() ? nativeRemoveToast(appId, tag, group) : 0x80004001;
+    }
+
+    public static int removeToastIfLaunch(String appId, String tag, String group, String launch) {
+        return available() ? nativeRemoveToastIfLaunch(appId, tag, group, launch) : 0x80004001;
     }
 
     public static int clearToasts(String appId) {
@@ -364,6 +413,42 @@ public final class WindowsHost {
         }
     }
 
+    /** Cancellable open/save/tree dialogs. A failed backend is an error, not a URI. */
+    static String[] pickDocuments(int mode, String title, String suggestedName,
+            String initialDirectory, String filter, String extension, boolean multiple,
+            boolean localOnly, int ownerPid, java.util.function.BooleanSupplier active) throws java.io.IOException {
+        if (!available()) throw new java.io.IOException("Windows document picker unavailable");
+        try {
+            return nativePickDocuments(mode, title, suggestedName, initialDirectory, filter,
+                    extension, multiple, localOnly, ownerPid, active);
+        } catch (UnsatisfiedLinkError unavailable) {
+            throw new java.io.IOException("Windows document picker unavailable", unavailable);
+        }
+    }
+
+    private static native String[] nativePickDocuments(int mode, String title, String suggestedName,
+            String initialDirectory, String filter, String extension, boolean multiple,
+            boolean localOnly, int ownerPid, java.util.function.BooleanSupplier active) throws java.io.IOException;
+
+    /** Query the resolved Windows handle and volume, never infer locality from a path prefix. */
+    static boolean isLocalDocument(String windowsPath) throws java.io.IOException {
+        if (!available()) throw new java.io.IOException("Windows document locality check unavailable");
+        try { return nativeIsLocalDocument(windowsPath); }
+        catch (UnsatisfiedLinkError unavailable) {
+            throw new java.io.IOException("Windows document locality check unavailable", unavailable);
+        }
+    }
+
+    private static native boolean nativeIsLocalDocument(String windowsPath);
+
+    /** AppsUseLightTheme: 0 dark, 1 light, -1 missing/unreadable; never launches a process. */
+    public static int appsUseLightTheme() {
+        if (!available()) return -1;
+        try { return nativeAppsUseLightTheme(); }
+        catch (UnsatisfiedLinkError unavailable) { return -1; }
+    }
+
+    private static native int nativeAppsUseLightTheme();
     private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();
@@ -374,7 +459,14 @@ public final class WindowsHost {
     private static native boolean nativeSetClipboard(String text, String html);
     private static native boolean nativeSetClipboardRich(String text, String html,
             byte[] imageBytes);
+    private static native int nativeSetClipboardSequence(String text, String html);
+    private static native int nativeSetClipboardRichSequence(String text, String html, byte[] image);
+    private static native int nativeClearClipboardSequence();
+    private static native boolean nativeRetainClipboardPublisher();
+    private static native void nativeReleaseClipboardPublisher();
     private static native int nativeClipboardSequence();
+    private static native long[] nativeForegroundProcess();
+    private static native int nativeSessionLockState();
     private static native int nativeAlarmWait(long utcMillis, boolean wakeup, int timeoutMs);
     private static native void nativeAlarmKick();
     private static native int[] nativePowerStatus();
@@ -388,6 +480,7 @@ public final class WindowsHost {
     private static native int nativeShowToast(String appId, String tag, String group,
             String xml, boolean suppressPopup, boolean high);
     private static native int nativeRemoveToast(String appId, String tag, String group);
+    private static native int nativeRemoveToastIfLaunch(String appId, String tag, String group, String launch);
     private static native int nativeClearToasts(String appId);
     private static native int nativeShowNotificationBridge(String appId, String tag,
             String group, String title, String text, String iconPath, int id);

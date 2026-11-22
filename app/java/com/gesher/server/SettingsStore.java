@@ -39,6 +39,13 @@ final class SettingsStore {
 
     long id(String table, String name) { return mIds.get(table).get(name); }
 
+    void addDefault(String table, String name, String value) {
+        Map<String, String> values = mTables.get(table);
+        if (values.containsKey(name)) return;
+        values.put(name, value);
+        mIds.get(table).put(name, mNextId++);
+    }
+
     static boolean validKey(String name) {
         if (name == null || name.isEmpty()) return false;
         for (int i = 0; i < name.length(); i++) {
@@ -49,6 +56,10 @@ final class SettingsStore {
     }
 
     boolean put(String table, String name, String value, boolean existingOnly) {
+        return put(table, name, value, existingOnly, false);
+    }
+
+    boolean put(String table, String name, String value, boolean existingOnly, boolean newGeneration) {
         if (!validKey(name)) return false;
         if (name.length() > MAX_STRING_LENGTH || value != null && value.length() > MAX_STRING_LENGTH) {
             throw new IllegalArgumentException("Setting name or value exceeds " + MAX_STRING_LENGTH);
@@ -58,11 +69,12 @@ final class SettingsStore {
         boolean existed = values.containsKey(name);
         if (existingOnly && !existed) return false;
         String old = values.get(name);
-        if (existed && Objects.equals(old, value)) return false;
+        if (existed && Objects.equals(old, value) && !newGeneration) return false;
         Long oldId = mIds.get(table).get(name);
         long nextId = mNextId;
         values.put(name, value);
-        // Android SettingsState versions the row on a changed value.
+        // Android SettingsState versions the row on a changed value. A reused
+        // checker subtype ID also needs a new row generation for the new provider.
         mIds.get(table).put(name, mNextId++);
         try { persist(); }
         catch (RuntimeException failure) {

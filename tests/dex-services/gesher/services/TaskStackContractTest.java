@@ -18,6 +18,8 @@ import android.app.servertransaction.LaunchActivityItem;
 import android.app.servertransaction.NewIntentItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
+import android.app.usage.IUsageStatsManager;
+import android.app.usage.UsageEvents;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
@@ -40,11 +42,14 @@ import com.gesher.server.StandIn;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 import sun.misc.Unsafe;
 
 /**
@@ -88,6 +93,13 @@ public final class TaskStackContractTest {
     }
     private static Object get(Object target, String name) throws Exception {
         return field(target.getClass(), name).get(target);
+    }
+    private static int grantCount(Object grants) throws Exception {
+        int count = 0;
+        for (Object table : ((java.util.Map<?, ?>)get(grants, "mGrants")).values()) {
+            count += ((java.util.Map<?, ?>)table).size();
+        }
+        return count;
     }
     private static void set(Object target, String name, Object value) throws Exception {
         field(target.getClass(), name).set(target, value);
@@ -546,7 +558,35 @@ public final class TaskStackContractTest {
                 && h.thread.items(PauseActivityItem.class, middle) == 1
                 && h.thread.items(ResumeActivityItem.class, middle) == 0,
                 "Newly visible history should be created paused beneath the translucent top");
-        h.acknowledge("activityPaused", middle);
+        Path directory = Files.createTempDirectory("task-usage");
+        Path file = directory.resolve("activity-usage.bin");
+        AutoCloseable usageHistory = null;
+        try {
+            Method callers = h.am.getClass().getDeclaredMethod("callers");
+            callers.setAccessible(true);
+            Class<?> usageType = type("DesktopUsageStatsService");
+            IUsageStatsManager usage = (IUsageStatsManager) make(usageType,
+                    new Class<?>[]{h.packages.getClass(), callers.getReturnType(), Path.class,
+                            LongSupplier.class},
+                    h.packages, callers.invoke(h.am), file, (LongSupplier) () -> 100L);
+            usageHistory = (AutoCloseable) get(usage, "mHistory");
+            Method setUsage = h.tasks.getClass().getDeclaredMethod("setUsageStats", usageType);
+            setUsage.setAccessible(true);
+            setUsage.invoke(h.tasks, usage);
+            h.asApp(() -> {
+                h.api.getActivityClientController().activityPaused((IBinder)get(middle, "token"));
+                UsageEvents events = usage.queryEventsForPackage(100, 101, PKG);
+                UsageEvents.Event event = new UsageEvents.Event();
+                check(events.getNextEvent(event) && event.getEventType() == UsageEvents.Event.ACTIVITY_PAUSED
+                        && (PKG + ".Middle").equals(event.getClassName()) && !events.hasNextEvent(),
+                        "Pause-only launch did not record one real PAUSED event");
+            });
+        } finally {
+            set(h.tasks, "mUsageStats", null);
+            if (usageHistory != null) usageHistory.close();
+            Files.deleteIfExists(file);
+            Files.delete(directory);
+        }
         h.finish(top);
         check(h.thread.launches(middle) == 1 && h.thread.items(ResumeActivityItem.class, middle) == 1,
                 "Back recreated/resumed a visible parent more than once");
@@ -870,7 +910,7 @@ public final class TaskStackContractTest {
         h.acknowledge("activityResumed", middle);
         Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
         Object grants = service.invoke(h.tasks);
-        List<?> owned = (List<?>)get(grants, "mGrants");
+        java.util.Map<?, ?> owned = (java.util.Map<?, ?>)get(grants, "mOwned");
         h.asApp(() -> {
             IAppTask task = appTask(h.api.getAppTasks(PKG).get(0));
             rejects(SecurityException.class, () -> task.startActivity(new Binder(), PKG, null,
@@ -885,17 +925,20 @@ public final class TaskStackContractTest {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                             | Intent.FLAG_GRANT_READ_URI_PERMISSION);
             rejects(SecurityException.class, () -> task.startActivity(h.thread.asBinder(), PKG, null, invalidUri, null, null));
-            check(task.getTaskInfo().numActivities == 2 && h.records().get(1) == middle && owned.size() == 1,
+            check(task.getTaskInfo().numActivities == 2 && h.records().get(1) == middle
+                            && grantCount(grants) == 1 && owned.size() == 1
+                            && owned.containsKey(get(middle, "token")),
                     "Rejected AppTask request changed history, order or grants");
             task.startActivity(h.thread.asBinder(), PKG, null, launch("Root").setData(uri).addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                             | Intent.FLAG_GRANT_READ_URI_PERMISSION), null, null);
-            check(owned.size() == 2 && get(owned.get(1), "ownerToken") == get(root, "token"),
+            check(grantCount(grants) == 1 && owned.size() == 2
+                            && owned.containsKey(get(root, "token")) && owned.containsKey(get(middle, "token")),
                     "AppTask reorder did not assign the grant to its reused activity");
             h.acknowledge("activityPaused", middle);
             h.acknowledge("activityResumed", root);
             h.finish(root); h.acknowledge("activityDestroyed", root);
-            check(owned.size() == 1 && get(owned.get(0), "ownerToken") == get(middle, "token"),
+            check(grantCount(grants) == 1 && owned.size() == 1 && owned.containsKey(get(middle, "token")),
                     "AppTask reused owner leaked its grant or revoked another activity's grant");
         });
     }
@@ -1186,8 +1229,8 @@ public final class TaskStackContractTest {
                 && h.thread.launches(middle) == 0, "URI reorder broke lazy history or duplicated record");
         check((Boolean)access.invoke(grants, h.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, 0),
                 "Reused activity did not receive its requested URI grant");
-        List<?> owned = (List<?>)get(grants, "mGrants");
-        check(owned.size() == 1 && get(owned.get(0), "ownerToken") == get(root, "token"),
+        check(grantCount(grants) == 1
+                && ((java.util.Map<?, ?>)get(grants, "mOwned")).containsKey(get(root, "token")),
                 "URI grant is not owned by the reordered destination token");
         Intent denied = launch("Middle").setData(uri).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                 | Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -1199,7 +1242,7 @@ public final class TaskStackContractTest {
         } catch (java.lang.reflect.InvocationTargetException failure) {
             check(failure.getCause() instanceof SecurityException, "Wrong invalid-URI launch outcome");
         }
-        check(h.records().size() == 2 && h.records().get(1) == root && owned.size() == 1,
+        check(h.records().size() == 2 && h.records().get(1) == root && grantCount(grants) == 1,
                 "Invalid URI changed task order or existing grants");
         h.acknowledge("activityResumed", root); h.finish(root); h.acknowledge("activityDestroyed", root);
         check(!(Boolean)access.invoke(grants, h.owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, 0),
@@ -1224,11 +1267,11 @@ public final class TaskStackContractTest {
             Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
             Object grants = service.invoke(h.tasks);
             if (!failedStart) {
-                check(((List<?>)get(grants, "mGrants")).size() == 1, "Missing pending-history owner grant");
+                check(grantCount(grants) == 1, "Missing pending-history owner grant");
                 Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
                 stop.setAccessible(true); stop.invoke(h.tasks, target);
             }
-            check(((List<?>)get(grants, "mGrants")).isEmpty(),
+            check(grantCount(grants) == 0,
                     "Abandoned activity leaked owner grant after " + (failedStart ? "start failure" : "force stop"));
             check(h.records().isEmpty(), "Abandoned activity history remained after cleanup");
         }
@@ -1245,16 +1288,16 @@ public final class TaskStackContractTest {
             if (restore) set(root, "savedState", new Bundle());
             Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
             Object grants = service.invoke(h.tasks);
-            check(((List<?>)get(grants, "mGrants")).size() == 1, "Missing activity grant before process death");
+            check(grantCount(grants) == 1, "Missing activity grant before process death");
             Method died = h.tasks.getClass().getDeclaredMethod("processDied", h.process.getClass());
             died.setAccessible(true); died.invoke(h.tasks, h.process);
             check(h.records().contains(root) == restore, "Process death retained/discarded wrong activity record");
-            check(((List<?>)get(grants, "mGrants")).isEmpty() != restore,
+            check((grantCount(grants) == 0) != restore,
                     "URI owner lifetime followed process rather than retained activity record");
             if (restore) {
                 Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
                 stop.setAccessible(true); stop.invoke(h.tasks, PKG);
-                check(((List<?>)get(grants, "mGrants")).isEmpty(), "Force-stopped restorable record leaked grant");
+                check(grantCount(grants) == 0, "Force-stopped restorable record leaked grant");
             }
         }
     }
@@ -1263,21 +1306,24 @@ public final class TaskStackContractTest {
         Harness h = new Harness();
         Method service = h.tasks.getClass().getDeclaredMethod("uriGrants"); service.setAccessible(true);
         Object grants = service.invoke(h.tasks);
-        Method grant = grants.getClass().getDeclaredMethod("grant", String.class, android.net.Uri.class, int.class, int.class);
-        grant.setAccessible(true);
+        Method prepare = grants.getClass().getDeclaredMethod("prepareIntent", int.class, String.class, Intent.class);
+        Method publish = grants.getClass().getDeclaredMethod("publishChecked", IBinder.class, List.class);
+        prepare.setAccessible(true); publish.setAccessible(true);
         String second = PKG + ".second", third = PKG + ".third";
-        grant.invoke(grants, PKG, android.net.Uri.parse("content://" + second + ".grants/incoming"),
-                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
-        grant.invoke(grants, second, android.net.Uri.parse("content://" + PKG + ".grants/outgoing"),
-                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
-        grant.invoke(grants, third, android.net.Uri.parse("content://" + second + ".grants/unrelated"),
-                Intent.FLAG_GRANT_READ_URI_PERMISSION, 0);
-        List<?> owned = (List<?>)get(grants, "mGrants");
-        check(owned.size() == 3, "Transient force-stop fixture did not publish three real grants");
+        // Global grants use the actual provider UID's validated preparation; the
+        // Android system UID cannot directly delegate an unrelated provider URI.
+        for (String[] item : new String[][]{{second, PKG, "incoming"},
+                {PKG, second, "outgoing"}, {second, third, "unrelated"}}) {
+            ApkPackage source = ((com.gesher.server.PackageManagerService)h.packages).get(item[0]);
+            Intent intent = new Intent().setData(android.net.Uri.parse("content://" + item[0]
+                    + ".grants/" + item[2])).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            publish.invoke(grants, null, prepare.invoke(grants, source.uid(), item[1], intent));
+        }
+        check(grantCount(grants) == 3, "Transient force-stop fixture did not publish three real grants");
         ((List<?>)get(h.tasks, "mProcesses")).clear(); // Already dead package still needs URI cleanup.
         Method stop = h.tasks.getClass().getDeclaredMethod("forceStopPackage", String.class);
         stop.setAccessible(true); stop.invoke(h.tasks, PKG);
-        check(owned.size() == 1 && get(owned.get(0), "ownerToken") == null,
+        check(grantCount(grants) == 1 && ((java.util.Map<?, ?>)get(grants, "mOwned")).isEmpty(),
                 "Force stop leaked incoming/outgoing ownerless URI grants or removed unrelated grants");
     }
 

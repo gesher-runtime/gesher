@@ -24,6 +24,11 @@ Check 'services: app and channel notification settings open Windows controls; un
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.NotificationSettingsIntentTest
 } @('NotificationSettingsIntentTest all passed')
 
+Check 'services: chooser and intent sharing contracts (ACTION_CHOOSER)' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.ChooserContractTest
+} @('ChooserContractTest all passed:')
+
 # Android Settings screens (ADR 0087): an app's "App info" opens the Control Center on it,
 # device screens a fixed Windows Settings page (both openers replaced: nothing opens), and
 # the stand-in answers that were wrong (component states, storage stats, memory info).

@@ -48,10 +48,18 @@ void* gesher_egl_create_window_surface(void* display, void* config, struct ANati
 /* eglDestroySurface, giving back what gesher_egl_create_window_surface took. */
 unsigned gesher_egl_destroy_surface(void* display, void* surface);
 
+/* eglSwapInterval: with a window surface on an ANativeWindow without an HWND
+ * current, its hidden swap chain keeps interval 0 (egl_child_surface.cc paces
+ * its frames); otherwise ANGLE's eglSwapInterval. */
+unsigned gesher_egl_swap_interval(void* display, int32_t interval);
+
 /* Called before ANGLE's eglSwapBuffers(WithDamage) of `surface`: a window
  * surface on an ANativeWindow without an HWND (a SurfaceView's or a
- * SurfaceTexture's) posts its frame to that window (egl_child_surface.cc). */
-void gesher_egl_before_swap(void* display, void* surface);
+ * SurfaceTexture's) posts its frame to that window (egl_child_surface.cc).
+ * Whether ANGLE's swap is still to be made: 0 for such a surface whose size
+ * did not change (its hidden swap chain is not presented; the swap is done),
+ * 1 otherwise. */
+unsigned gesher_egl_before_swap(void* display, void* surface);
 
 /* The HWND of a window surface made by gesher_egl_create_window_surface, or
  * null. */

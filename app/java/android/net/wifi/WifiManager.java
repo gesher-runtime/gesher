@@ -5,14 +5,17 @@
 package android.net.wifi;
 
 import android.content.Context;
-import android.content.Intent;
 import android.net.DhcpInfo;
-import com.gesher.net.WindowsWifi;
+import android.os.RemoteException;
+import android.os.ServiceManager;
+import com.gesher.net.IWindowsWifi;
+import com.gesher.net.WifiAccess;
 import java.util.List;
 
 /**
  * Android API 36 compatibility backed by Windows' Wi-Fi status, scan cache, and
- * IPv4 configuration via {@link WindowsWifi}. Radio configuration mutations remain unsupported.
+ * IPv4 configuration through the authenticated system Wi-Fi service.
+ * Radio configuration mutations remain unsupported.
  */
 public class WifiManager {
     public static final int WIFI_STATE_DISABLING = 0;
@@ -38,38 +41,84 @@ public class WifiManager {
     private final Context mContext;
 
     WifiManager(Context context) {
-        mContext = context;
+        mContext = WifiAccess.context(context);
     }
 
+    private static IWindowsWifi service() {
+        return IWindowsWifi.Stub.asInterface(ServiceManager.getService(IWindowsWifi.NAME));
+    }
+
+    private String packageName() { return mContext.getOpPackageName(); }
+
     public int getWifiState() {
-        return WindowsWifi.isWifiEnabled() ? WIFI_STATE_ENABLED : WIFI_STATE_DISABLED;
+        WifiAccess.enforceAccess(mContext);
+        IWindowsWifi service = service();
+        try {
+            return service != null ? service.getWifiState(packageName()) : WIFI_STATE_UNKNOWN;
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
     public int getWifiApState() { return WIFI_AP_STATE_DISABLED; }
-    public boolean isWifiEnabled() { return WindowsWifi.isWifiEnabled(); }
+    public boolean isWifiEnabled() { return getWifiState() == WIFI_STATE_ENABLED; }
     public boolean isWpa3SaeSupported() { return false; }
-    public WifiInfo getConnectionInfo() { return WindowsWifi.connectionInfo(); }
-    public DhcpInfo getDhcpInfo() { return WindowsWifi.dhcpInfo(); }
-    public List<WifiConfiguration> getConfiguredNetworks() { return WindowsWifi.configuredNetworks(); }
-    public List<ScanResult> getScanResults() { return WindowsWifi.scanResults(); }
-    public boolean startScan() {
-        if (mContext == null) return WindowsWifi.startScan(null);
-        return WindowsWifi.startScan(updated -> {
-            try {
-                mContext.sendBroadcast(
-                        new Intent(SCAN_RESULTS_AVAILABLE_ACTION)
-                                .putExtra(EXTRA_RESULTS_UPDATED, updated));
-            } catch (RuntimeException ignored) {
-            }
-        });
+    public WifiInfo getConnectionInfo() {
+        WifiAccess.enforceAccess(mContext);
+        IWindowsWifi service = service();
+        try {
+            return service != null ? service.getConnectionInfo(packageName(), mContext.getAttributionTag())
+                    : new WifiInfo();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
-    public boolean setWifiEnabled(boolean enabled) { return false; }
-    public boolean enableNetwork(int networkId, boolean disableOthers) { return false; }
-    public boolean disableNetwork(int netId) { return false; }
-    public boolean disconnect() { return false; }
-    public boolean reconnect() { return false; }
-    public int addNetwork(WifiConfiguration config) { return -1; }
-    public boolean removeNetwork(int netId) { return false; }
-    public boolean saveConfiguration() { return false; }
+    public DhcpInfo getDhcpInfo() {
+        WifiAccess.enforceAccess(mContext);
+        IWindowsWifi service = service();
+        try {
+            return service != null ? service.getDhcpInfo(packageName()) : new DhcpInfo();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+    public List<WifiConfiguration> getConfiguredNetworks() {
+        WifiAccess.enforceAccess(mContext);
+        IWindowsWifi service = service();
+        try {
+            return service != null ? service.getConfiguredNetworks(packageName(), mContext.getAttributionTag())
+                    : List.of();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+    public List<ScanResult> getScanResults() {
+        WifiAccess.enforceAccess(mContext);
+        // The service checks location and AppOps using the authenticated caller.
+        IWindowsWifi service = service();
+        try {
+            return service != null ? service.getScanResults(packageName(), mContext.getAttributionTag())
+                    : List.of();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+    public boolean startScan() {
+        WifiAccess.enforceChange(mContext);
+        IWindowsWifi service = service();
+        try {
+            return service != null && service.startScan(packageName(), mContext.getAttributionTag());
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+    public boolean setWifiEnabled(boolean enabled) { WifiAccess.enforceChange(mContext); return false; }
+    public boolean enableNetwork(int networkId, boolean disableOthers) { WifiAccess.enforceChange(mContext); return false; }
+    public boolean disableNetwork(int netId) { WifiAccess.enforceChange(mContext); return false; }
+    public boolean disconnect() { WifiAccess.enforceChange(mContext); return false; }
+    public boolean reconnect() { WifiAccess.enforceChange(mContext); return false; }
+    public int addNetwork(WifiConfiguration config) { WifiAccess.enforceChange(mContext); return -1; }
+    public boolean removeNetwork(int netId) { WifiAccess.enforceChange(mContext); return false; }
+    public boolean saveConfiguration() { WifiAccess.enforceChange(mContext); return false; }
 
     /** The API 36 legacy RSSI mapping, independent of hardware availability. */
     public static int calculateSignalLevel(int rssi, int numLevels) {

@@ -19,6 +19,7 @@ public final class Camera2CaptureDispatchHost {
     private final Device mDevice = new Device();
     private final Callbacks mCallbacks = new Callbacks();
     private WindowsCamera.Capture mCapture;
+    private Size mCaptureFor;
 
     private Frame next(CaptureTiming timing) { return frames.poll(); }
     private void fail(Frame f, int error) { event("fail:" + f.frameNumber + ":" + error); }
@@ -58,6 +59,10 @@ public final class Camera2CaptureDispatchHost {
         final int width, height;
         Size(int width, int height) { this.width = width; this.height = height; }
         int getWidth() { return width; } int getHeight() { return height; }
+        @Override public boolean equals(Object o) {
+            return o instanceof Size && ((Size) o).width == width && ((Size) o).height == height;
+        }
+        @Override public int hashCode() { return width * 31 + height; }
     }
     private static final class Device { final String id = "device", name = "fake"; }
     private static final class Request {
@@ -90,7 +95,10 @@ public final class Camera2CaptureDispatchHost {
     private static final class ICameraDeviceCallbacks {
         static final int ERROR_CAMERA_DEVICE = 4, ERROR_CAMERA_BUFFER = 5;
     }
-    private static final class SystemClock { static long elapsedRealtimeNanos() { return 1234567; } }
+    private static final class SystemClock {
+        static long elapsedRealtimeNanos() { return 1234567; }
+        static long elapsedRealtime() { return 0; }
+    }
     private static final class CameraService {
         static final int HAL_BLOB = 33;
         static void log(String message) {}
@@ -105,6 +113,7 @@ public final class Camera2CaptureDispatchHost {
                 output[0] = 42;
                 return 0;
             }
+            void close() { event("close:" + width + "x" + height); }
         }
         static Capture open(String device, int width, int height) throws OpenException {
             opens++; openWidth = width; openHeight = height;
@@ -183,6 +192,26 @@ public final class Camera2CaptureDispatchHost {
         f = fixture(); f.enqueue(0); f.enqueue(1); f.mCallbacks.throwOnce = true; f.captureFrames();
         events("open:1280x720", "read:1382400", "started:0", "read:1382400", "started:1",
                 "deliver:10:raw", "jpeg:320x240:81", "deliver:2:3", "result:1");
+
+        // endConfigure's open: at the largest configured size, before any request;
+        // kept for the same size, reopened for another; frames then need no open.
+        f = fixture(); f.openForConfiguration();
+        check(opens == 1 && openWidth == 1280 && openHeight == 720, "configuration opens at the largest stream");
+        f.openForConfiguration();
+        check(opens == 1, "the same configuration keeps the open device");
+        f.mStreams.remove(1); f.openForConfiguration();
+        check(opens == 2 && openWidth == 640 && openHeight == 480, "another size reopens the device");
+        f.enqueue(0); f.captureFrames();
+        events("open:1280x720", "close:1280x720", "open:640x480", "read:460800", "started:0",
+                "deliver:10:raw", "jpeg:320x240:81", "deliver:2:3", "result:0");
+
+        // A configuration-time failure is not reported there; the first request retries
+        // the open (and reports its failure as before, checked above).
+        f = fixture(); openFails = true; f.openForConfiguration();
+        check(opens == 1 && f.mCapture == null, "failed configuration open leaves no device");
+        f.enqueue(0); f.captureFrames();
+        events("open:1280x720", "open:1280x720", "read:1382400", "started:0", "deliver:10:raw",
+                "jpeg:320x240:81", "deliver:2:3", "result:0");
 
         f = fixture(); f.mStreams.clear(); f.enqueue(0); f.captureFrames();
         check(openWidth == 640 && openHeight == 480, "empty configuration preserves default capture dimensions");
