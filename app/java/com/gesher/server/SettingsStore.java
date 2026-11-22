@@ -327,6 +327,12 @@ final class SettingsStore {
                         | (in.readUnsignedByte() << 8) | in.readUnsignedByte();
                 int complement = in.readInt();
                 if (complement != ~length || length < 16 || length > MAX_RECORD_LENGTH) {
+                    // A power loss before sync may leave the extended file region
+                    // zero-filled. An all-zero suffix was never acknowledged.
+                    if (length == 0 && complement == 0 && zeroSuffix(in)) {
+                        mTornTail = true;
+                        return nextId;
+                    }
                     throw new IOException("Invalid settings record length");
                 }
                 payload = new byte[length];
@@ -366,6 +372,14 @@ final class SettingsStore {
                 throw new IOException("Settings journal exceeds checkpoint bounds");
             }
         }
+    }
+
+    private static boolean zeroSuffix(InputStream in) throws IOException {
+        byte[] buffer = new byte[8192];
+        for (int read; (read = in.read(buffer)) >= 0; ) {
+            for (int i = 0; i < read; i++) if (buffer[i] != 0) return false;
+        }
+        return true;
     }
 
     /** Counts decoded bytes, not buffered read-ahead, to locate the last complete record. */

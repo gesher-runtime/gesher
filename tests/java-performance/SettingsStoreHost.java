@@ -262,6 +262,24 @@ public final class SettingsStoreHost {
         try { new SettingsStore(file.toFile(), empty()); throw new AssertionError("Accepted corrupted framing as a torn tail"); }
         catch (IllegalStateException expected) { checks++; }
         check(Arrays.equals(enlarged, Files.readAllBytes(file)), "Invalid framing cannot trigger truncation or publication");
+        // Power loss before sync: the extended region may read back zero-filled.
+        for (int size = before.length + 1; size <= complete.length + 64; size++) {
+            byte[] zeroed = Arrays.copyOf(before, size);
+            Files.write(file, zeroed);
+            Map<String, Map<String, String>> loaded = empty();
+            SettingsStore recovered = new SettingsStore(file.toFile(), loaded);
+            check("second".equals(loaded.get("global").get("committed"))
+                    && !loaded.get("global").containsKey("pending"), "Zero-filled unsynced tail preserves acknowledged rows");
+            recovered.put("secure", "after-zero", "recovered", false);
+            Map<String, Map<String, String>> after = empty(); new SettingsStore(file.toFile(), after);
+            check(after.equals(loaded), "Zero-filled tail is truncated before the next durable append");
+        }
+        byte[] zeroThenData = Arrays.copyOf(before, complete.length + 16);
+        zeroThenData[zeroThenData.length - 1] = 1;
+        Files.write(file, zeroThenData);
+        try { new SettingsStore(file.toFile(), empty()); throw new AssertionError("Accepted non-zero data after zero framing"); }
+        catch (IllegalStateException expected) { checks++; }
+        check(Arrays.equals(zeroThenData, Files.readAllBytes(file)), "Zero framing followed by data is not treated as torn");
         Files.write(file, complete);
         Map<String, Map<String, String>> restored = empty();
         SettingsStore valid = new SettingsStore(file.toFile(), restored);
