@@ -60,9 +60,30 @@ static void WithoutRegistryMutex(std::mutex& registry, Prepare prepare, Read rea
   writer.unlock(); worker.join(); REQUIRE(finished);
 }
 
+// The stdio output owner keeps each FILE's orientation (fwide semantics);
+// production closes retire it together with the metadata record.
+namespace gesher::stdio {
+std::mutex orientation_mutex;
+std::unordered_map<FILE*, int> orientations;
+int Orient(FILE* stream, int mode, bool) {
+  std::lock_guard<std::mutex> lock(orientation_mutex);
+  auto found = orientations.find(stream);
+  int current = found == orientations.end() ? 0 : found->second;
+  if (current == 0 && mode != 0) orientations[stream] = current = mode > 0 ? 1 : -1;
+  return current;
+}
+void Close(FILE* stream) {
+  std::lock_guard<std::mutex> lock(orientation_mutex);
+  orientations.erase(stream);
+}
+}  // namespace gesher::stdio
+
 namespace streams {
 constexpr int kENOMEM = ENOMEM;
 @STDIO@
+
+// Close/reopen of a FILE token: the owner and the metadata registry retire it.
+void CloseStream(FILE* stream) { gesher::stdio::Close(stream); ResetStream(stream); }
 
 // Token contents are never dereferenced by metadata. An external mutex
 // supplies unlocked-stdio's FILE ownership in the concurrent test below.
@@ -88,9 +109,9 @@ void Test() {
   });
   inserter.join();
   REQUIRE(State(stream) == original && original->conversion_error);
-  for (size_t i = 1; i < 1024; ++i) ResetStream(Token(i));
+  for (size_t i = 1; i < 1024; ++i) CloseStream(Token(i));
   REQUIRE(State(stream) == original);
-  ResetStream(stream);
+  CloseStream(stream);
   REQUIRE(State(stream, false) == nullptr && Orient(stream, 0) == 0);
 
   std::mutex owner;
@@ -113,12 +134,12 @@ void Test() {
       std::lock_guard<std::mutex> lock(owner);
       auto* state = State(stream);
       state->conversion_error = true; state->pushback = 42; state->input_state[3] = 0xff;
-      ResetStream(stream);  // Close/reopen and reuse exactly the same FILE token.
+      CloseStream(stream);  // Close/reopen and reuse exactly the same FILE token.
       REQUIRE(State(stream)->orientation == 0);
     }
     phase.arrive_and_wait();
   }
-  cached_reader.join(); ResetStream(stream);
+  cached_reader.join(); CloseStream(stream);
 
   // Cached pointers own no FILE or registry lock at thread exit/cancellation.
   std::barrier cancelled_ready(2);
@@ -128,15 +149,15 @@ void Test() {
   });
   cancelled_ready.arrive_and_wait();
   REQUIRE(pthread_cancel(cancelled.native_handle()) == 0); cancelled.join();
-  REQUIRE(Orient(stream, 0) == -1); ResetStream(stream); REQUIRE(Orient(stream, 1) == 1);
+  REQUIRE(Orient(stream, 0) == -1); CloseStream(stream); REQUIRE(Orient(stream, 1) == 1);
 
   // Force epoch exhaustion instead of waiting 2^64 closes. Zero permanently
   // disables this bucket's cache and cannot revive an old cached pointer.
   auto& bucket = StreamBucket(stream);
   bucket.generation.store(UINT64_MAX); REQUIRE(State(stream)->orientation == 1);
-  ResetStream(stream);
+  CloseStream(stream);
   REQUIRE(bucket.generation.load() == 0 && Orient(stream, 0) == 0);
-  REQUIRE(Orient(stream, -1) == -1); ResetStream(stream);
+  REQUIRE(Orient(stream, -1) == -1); CloseStream(stream);
   REQUIRE(bucket.generation.load() == 0 && Orient(stream, 0) == 0);
   std::puts("PASS stdio: 100000 warm lookups without registry mutex/allocation; rehash, 2000 cross-thread retire/reuse cycles, cancellation, epoch exhaustion");
 }
@@ -234,7 +255,14 @@ bool ReadValue(HANDLE file, uint32_t* value) {
   if (found == files.end() || !found->second.memfd) return false;
   *value = found->second.seals; return true;
 }
-int64_t _telli64(int) { return 0; }
+constexpr int FILE_CURRENT = 1;
+constexpr unsigned long kErrorIo = 1117;
+unsigned long GetLastError() { return kErrorIo; }
+int ErrnoFromWin32(unsigned long error) { return error == kErrorIo ? EIO : EINVAL; }
+bool SetFilePointerEx(HANDLE file, LARGE_INTEGER, LARGE_INTEGER* position, int method) {
+  if (files.find(file) == files.end() || method != FILE_CURRENT) return false;
+  position->QuadPart = 0; return true;
+}
 bool GetFileSizeEx(HANDLE file, LARGE_INTEGER* size) {
   auto found = files.find(file); if (found == files.end()) return false;
   size->QuadPart = found->second.size; return true;

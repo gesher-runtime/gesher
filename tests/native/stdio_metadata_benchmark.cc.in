@@ -20,6 +20,12 @@ static FILE* F(void* f) { return static_cast<FILE*>(f); }
 static int _fileno(FILE* f) { return fileno(f); }
 static int _getc_nolock(FILE* f) { return getc_unlocked(f); }
 static bool gesher_is_device_fd(int) { return false; }
+// The stdio output owner boundary (orientation and the unlocked byte read)
+// maps to the glibc FILE that backs these streams.
+namespace gesher::stdio {
+static int Orient(FILE* f, int mode, bool) { return fwide(f, mode); }
+static int Get(FILE* f, bool) { return getc_unlocked(f); }
+}
 static size_t ReadStream(void* p, size_t s, size_t n, FILE* f) { return fread_unlocked(p, s, n, f); }
 struct StreamLock {
   FILE* f;

@@ -35,7 +35,7 @@ def main():
         '@TRAMPOLINES@': section(arm64, 'struct Trampoline {', '// --- va_list host functions'),
         '@MEMFD_REGISTRY@': section(memfd, 'std::mutex g_registry_mutex;', '}  // namespace'),
         '@MEMFD_FUNCTIONS@': section(memfd, 'void RegisterMemfd(int fd)', 'int GetMemfdSeals('),
-        '@MEMFD_WRITE@': section(memfd, 'int MemfdWriteError(', 'int MemfdResizeError('),
+        '@MEMFD_WRITE@': section(memfd, 'int MemfdWriteHandleError(', 'int MemfdResizeHandleError('),
     }
     template = (ROOT / 'tests/native/metadata_hot_paths_host.cc.in').read_text()
     for marker, value in pieces.items():

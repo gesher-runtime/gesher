@@ -138,6 +138,10 @@ produced:
 | Four threads, independent 4 MiB streams | 85.292 ms | 55.895 ms |
 
 These observations reduce this isolated metadata cost by about 36% and 34%.
+Main later moved stream orientation and the unlocked byte read into the
+shared stdio owner (`gesher::stdio`). The benchmark maps that boundary to the
+backing glibc FILE (`fwide`, `getc_unlocked`); the table above predates that
+integration and is not a measurement of the owner itself.
 They neither establish a Windows speedup nor restore every cost relative to
 the earlier-week implementation, which lacked some required stream semantics.
 No noisy wall-clock threshold is added to CI.
