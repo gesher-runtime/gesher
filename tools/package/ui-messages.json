@@ -480,6 +480,10 @@
       "en": "Launch",
       "he": "הפעל"
     },
+    "cp_btn_app_info": {
+      "en": "Details",
+      "he": "פרטים"
+    },
     "cp_separate_windows": {
       "en": "Separate windows",
       "he": "חלונות נפרדים"
@@ -529,12 +533,52 @@
       "he": "עודכן לאחרונה: {0}"
     },
     "cp_app_info_detail": {
-      "en": "An app asked to open this application's settings. Here you can launch or uninstall it.",
-      "he": "יישום ביקש לפתוח את ההגדרות של היישום הזה. כאן אפשר להפעיל אותו או להסיר אותו."
+      "en": "An app asked to open this application's settings. Here you can uninstall it, or allow or deny its special access.",
+      "he": "יישום ביקש לפתוח את ההגדרות של היישום הזה. כאן אפשר להסיר אותו, או לאשר או לשלול את הגישה המיוחדת שלו."
     },
     "cp_app_info_close": {
       "en": "Close",
       "he": "סגירה"
+    },
+    "cp_app_info_detail_list": {
+      "en": "Here you can uninstall this application, or allow or deny its special access.",
+      "he": "כאן אפשר להסיר את היישום הזה, או לאשר או לשלול את הגישה המיוחדת שלו."
+    },
+    "cp_access_title": {
+      "en": "Special app access (Android's Settings asks you to decide these):",
+      "he": "גישה מיוחדת של היישום (בהגדרות של אנדרואיד מחליטים עליה כאן):"
+    },
+    "cp_access_all_files": {
+      "en": "All files access",
+      "he": "גישה לכל הקבצים"
+    },
+    "cp_access_overlay": {
+      "en": "Display over other apps",
+      "he": "הצגה מעל יישומים אחרים"
+    },
+    "cp_access_install": {
+      "en": "Install unknown apps",
+      "he": "התקנת יישומים לא מוכרים"
+    },
+    "cp_access_write_settings": {
+      "en": "Modify system settings",
+      "he": "שינוי הגדרות המערכת"
+    },
+    "cp_access_usage": {
+      "en": "Usage access",
+      "he": "גישה לנתוני שימוש"
+    },
+    "cp_access_media": {
+      "en": "Media management",
+      "he": "ניהול מדיה"
+    },
+    "cp_access_unavailable": {
+      "en": "Gesher could not read this application's special access. If the Gesher device is stopped, start it and open the details again.",
+      "he": "גשר לא הצליח לקרוא את הגישה המיוחדת של היישום הזה. אם סביבת גשר כבויה, יש להפעיל אותה ולפתוח שוב את הפרטים."
+    },
+    "cp_access_failed": {
+      "en": "Could not change \"{0}\".",
+      "he": "לא ניתן היה לשנות את \"{0}\"."
     },
     "cp_uninstall_failed": {
       "en": "Failed to uninstall {0}.",

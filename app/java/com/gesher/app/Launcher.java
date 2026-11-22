@@ -66,6 +66,13 @@ import java.util.Properties;
  *     windows PACKAGE separate|shared
  *                       Whether the app's tasks are windows of their own, or share one
  *                       window (the default; ADR 0088), from the app's next start.
+ *     special-access PACKAGE [OP allow|deny]
+ *                       (run by the Control Center) the installed app's special access
+ *                       switches (All files access, Display over other apps...: the app-ops
+ *                       Android's Settings shows for an app requesting them), one
+ *                       "special-access TAB op TAB allowed|denied" line each; with OP, the
+ *                       user's choice for that switch (com.gesher.server.SpecialAccess);
+ *                       exits 3 without starting a device that is not running
  *     proxy [[PACKAGE] host:port|direct|windows]
  *                       Gesher's own proxy, over Windows' settings: for every app, or for
  *                       one package (windows: Windows' settings for it); no argument
@@ -244,6 +251,7 @@ public final class Launcher {
                 ensureDevice(true);
                 return SpellCheckerCommands.run(rest);
             case "windows": return windows(rest);
+            case "special-access": return specialAccess(rest);
             case "view": {
                 if (rest.size() != 2) return usage();
                 return view(rest.get(0), rest.get(1));
@@ -345,11 +353,48 @@ public final class Launcher {
         return 0;
     }
 
+    /**
+     * {@code special-access PACKAGE [OP allow|deny]}: the app's special access switches, or
+     * the user's choice for one (the Control Center's App info). One line per switch on
+     * standard output: {@code special-access}, the op's public name and {@code allowed} or
+     * {@code denied}, separated by tabs. The device checks the package and the op.
+     */
+    private static int specialAccess(List<String> args) throws Exception {
+        if (args.size() != 1 && args.size() != 3) return usage();
+        String pkg = args.get(0);
+        boolean allow = false;
+        if (args.size() == 3) {
+            switch (args.get(2)) {
+                case "allow": allow = true; break;
+                case "deny": allow = false; break;
+                default: return usage();
+            }
+        }
+        // The Control Center asks while it shows an app's details: it never waits for a
+        // device to start (an app's request means the device is running).
+        if (ensureDevice(false) == null) {
+            log(text("no_device"));
+            return 3;
+        }
+        String[] rows;
+        try {
+            rows = args.size() == 1 ? gesher().specialAccess(pkg)
+                    : new String[] {gesher().setSpecialAccess(pkg, args.get(1), allow)};
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            log(e.getMessage());
+            return 1;
+        }
+        for (String row : rows) System.out.println("special-access\t" + row);
+        System.out.flush();
+        return 0;
+    }
+
     private static int usage() {
         System.err.println(text("usage") + "gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
                 + " true|false]... [--proxy host:port|direct|windows]"
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
-                + " | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
+                + " | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared"
+                + " | special-access PACKAGE [OP allow|deny] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
                 + " | shutdown | apk-icon APK | spell-checker list|use COMPONENT|automatic|enable|disable|language ID");
         return 2;
     }

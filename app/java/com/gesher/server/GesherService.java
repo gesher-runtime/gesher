@@ -37,6 +37,10 @@ public final class GesherService extends Binder {
     /** A host launch with an exact, retained process-generation exit receipt. */
     static final int START_ACTIVITY = IBinder.FIRST_CALL_TRANSACTION + 8;
     static final int START_SHORTCUT = IBinder.FIRST_CALL_TRANSACTION + 9;
+    /** An installed app's special access switches (SpecialAccess): the Control Center's App info. */
+    static final int SPECIAL_ACCESS = IBinder.FIRST_CALL_TRANSACTION + 10;
+    /** The user turned a special access switch of an installed app on or off. */
+    static final int SET_SPECIAL_ACCESS = IBinder.FIRST_CALL_TRANSACTION + 11;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -90,6 +94,14 @@ public final class GesherService extends Binder {
         default LaunchResult startShortcutAndWait(String pkg, String key) throws Exception {
             throw new UnsupportedOperationException("Publisher-bound shortcut launch unavailable");
         }
+        /** The app's special access switches: rows of "op-name TAB allowed|denied". */
+        default String[] specialAccess(String packageName) {
+            throw new UnsupportedOperationException("Special access unavailable");
+        }
+        /** Turns one switch on or off as the user chose; answers its row afterwards. */
+        default String setSpecialAccess(String packageName, String opName, boolean allowed) {
+            throw new UnsupportedOperationException("Special access unavailable");
+        }
         /** A call came: the device is not idle. */
         void touch();
         /** A click on a toast of {@code appId} with the toast's {@code arguments}. */
@@ -109,7 +121,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > START_SHORTCUT) {
+        if (code < INSTALL || code > SET_SPECIAL_ACCESS) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -180,6 +192,23 @@ public final class GesherService extends Binder {
                     LaunchResult result = mDevice.startShortcutAndWait(pkg, key);
                     reply.writeNoException(); reply.writeTypedObject(result.result, 0);
                     reply.writeInt(result.taskId); reply.writeStrongBinder(result.exitReceipt);
+                    return true;
+                }
+                case SPECIAL_ACCESS: {
+                    String pkg = data.readString();
+                    data.enforceNoDataAvail();
+                    String[] rows = mDevice.specialAccess(pkg);
+                    reply.writeNoException();
+                    reply.writeStringArray(rows);
+                    return true;
+                }
+                case SET_SPECIAL_ACCESS: {
+                    String pkg = data.readString(), op = data.readString();
+                    boolean allowed = data.readBoolean();
+                    data.enforceNoDataAvail();
+                    String row = mDevice.setSpecialAccess(pkg, op, allowed);
+                    reply.writeNoException();
+                    reply.writeString(row);
                     return true;
                 }
                 default:
@@ -305,6 +334,35 @@ public final class GesherService extends Binder {
                 data.writeString(arguments);
                 mBinder.transact(TOAST_ACTIVATED, data, reply, 0);
                 reply.readException();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** The installed app's special access switches: rows of "op-name TAB allowed|denied". */
+        public String[] specialAccess(String packageName) throws RemoteException {
+            Parcel reply = call(SPECIAL_ACCESS, java.util.Objects.requireNonNull(packageName));
+            try {
+                return reply.createStringArray();
+            } finally {
+                reply.recycle();
+            }
+        }
+
+        /** Turns one special access switch on or off, as the user chose; answers its row. */
+        public String setSpecialAccess(String packageName, String opName, boolean allowed)
+                throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(packageName);
+                data.writeString(opName);
+                data.writeBoolean(allowed);
+                mBinder.transact(SET_SPECIAL_ACCESS, data, reply, 0);
+                reply.readException();
+                return reply.readString();
             } finally {
                 data.recycle();
                 reply.recycle();

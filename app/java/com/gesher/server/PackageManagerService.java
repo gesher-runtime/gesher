@@ -1392,12 +1392,23 @@ public final class PackageManagerService extends IPackageManager.Default {
             return true;
         }
         ApkPackage pkg = get(packageName);
-        // Android exposes this capability only to installers targeting O or later.
-        // Gesher permits the request; PackageInstallerService still asks the host
-        // for fresh consent on every commit, regardless of this query's result.
-        return pkg != null && pkg.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.O
-                && pkg.parsed.getRequestedPermissions()
-                .contains(android.Manifest.permission.REQUEST_INSTALL_PACKAGES);
+        // Android exposes this capability only to installers targeting O or later that
+        // request REQUEST_INSTALL_PACKAGES. As in AOSP (canRequestPackageInstallsInternal,
+        // ExternalSourcesPolicy) an INSTALL_PACKAGES holder may; any other app only once
+        // the user allowed "Install unknown apps" (OP_REQUEST_INSTALL_PACKAGES MODE_ALLOWED),
+        // which Gesher's Control Center offers (SpecialAccess). PackageInstallerService
+        // still asks the host for fresh consent on every commit, whatever this answers.
+        if (pkg == null || pkg.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O
+                || !pkg.parsed.getRequestedPermissions()
+                        .contains(android.Manifest.permission.REQUEST_INSTALL_PACKAGES)) {
+            return false;
+        }
+        if (mPermissions.checkPermission(packageName, android.Manifest.permission.INSTALL_PACKAGES)
+                == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }
+        return appOps().checkRawMode(android.app.AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
+                pkg.uid(), packageName) == android.app.AppOpsManager.MODE_ALLOWED;
     }
 
     @Override

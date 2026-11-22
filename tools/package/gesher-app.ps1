@@ -32,6 +32,9 @@
 #   gesher-app windows com.example separate  each task of the app in a window of its own
 #                                      (`shared`: one window for the app, the default;
 #                                      from its next start; ADR 0088)
+#   gesher-app special-access com.example  (the Control Center runs it) the app's special
+#                                      access switches; `special-access com.example OP
+#                                      allow|deny`: the user's choice for one
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
 #   gesher-app cameras                 list Windows cameras and their frame sizes
@@ -93,7 +96,7 @@ $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'windows', 'sync-shortcuts', 'cameras', 'spell-checker'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'windows', 'special-access', 'sync-shortcuts', 'cameras', 'spell-checker'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--detach | --wait | --single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared'

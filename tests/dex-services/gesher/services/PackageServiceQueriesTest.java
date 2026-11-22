@@ -109,15 +109,13 @@ public final class PackageServiceQueriesTest {
         PackageManagerService.addMicrophoneFeature(mic, true);
         require(mic.containsKey(PackageManager.FEATURE_MICROPHONE),
                 "Microphone omitted with an input device");
-        require(service.canRequestPackageInstalls("fixture.one", 0),
-                "Package declaring REQUEST_INSTALL_PACKAGES could not request installs");
+        // A requesting O+ installer then needs the user's Install unknown apps decision
+        // (OP_REQUEST_INSTALL_PACKAGES): SpecialAccessTest covers it with real AppOps policy.
         PackageImpl installer = (PackageImpl) packages.get("fixture.one").parsed;
         installer.setTargetSdkVersion(android.os.Build.VERSION_CODES.O - 1);
         require(!service.canRequestPackageInstalls("fixture.one", 0),
                 "Installer targeting pre-O Android acquired the O-only capability");
         installer.setTargetSdkVersion(android.os.Build.VERSION_CODES.O);
-        require(service.canRequestPackageInstalls("fixture.one", 0),
-                "Installer targeting Android O lost the capability at its API boundary");
         require(!service.canRequestPackageInstalls("fixture.two", 0)
                         && !service.canRequestPackageInstalls("fixture.absent", 0)
                         && !service.canRequestPackageInstalls(null, 0)

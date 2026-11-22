@@ -81,3 +81,18 @@ answered by `IFoo.Default` (null, 0, false, nothing done) and one missing servic
 - `IInputManager.setPointerIcon` (cursor shapes) and
   `IActivityManager.getHistoricalProcessExitReasons` still answer Default and remain in
   the stand-in log: they need Windows cursor mapping and an exit-history store.
+
+## Addendum: special app access switches (issues #310, #312)
+
+The per-app permission screens reached the app's details, but the details had no switch,
+so an app asking for All files access (File Manager X) or another special access re-checked
+on resume, found it denied and asked again, forever. The details now show Android
+Settings' switches for the special accesses the app's manifest requests: All files access,
+Display over other apps, Install unknown apps, Modify system settings, Usage access and
+Media management (`SpecialAccess`; docs/services.md "Special app access"). They write the
+app-op modes AOSP Settings writes, through `AppOpsService`, only on the user's click, over
+a `gesher` service transaction restricted to the host shell. Every switch starts off.
+`canRequestPackageInstalls` now follows `OP_REQUEST_INSTALL_PACKAGES` as AOSP does (it
+answered true for every requesting app before); installs still need the per-commit host
+consent. StorageStatsService still treats a declared PACKAGE_USAGE_STATS as usage access
+(item 5 above); making it follow the new Usage access switch is left for a separate change.

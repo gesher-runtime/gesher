@@ -411,6 +411,13 @@ Check 'services: AppOps defaults, authority, attributed delivery, foreground lif
   $appOpsOut
 } @('AppOpsContractTest all passed: 489 checks; binder=true')
 
+$specialAccessOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SpecialAccessTest') 90
+$specialAccessCode = $LASTEXITCODE
+Check 'services: special app access switches write, persist and notify real AppOps; apps cannot grant themselves' {
+  $global:LASTEXITCODE = $specialAccessCode
+  $specialAccessOut
+} @('SpecialAccessTest all passed:')
+
 $uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'PackageUidIsolationContractTest' +
   (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures/v2only.apk'))) 90

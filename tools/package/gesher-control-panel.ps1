@@ -393,6 +393,7 @@ function Get-InstalledApps {
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                             <CheckBox Content="$(Get-GesherText 'cp_separate_windows')" ToolTip="$(Get-GesherText 'cp_separate_windows_tip')" IsChecked="{Binding SeparateWindows, Mode=OneWay}" Tag="{Binding Package}" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                             <Button Content="$(Get-GesherText 'cp_btn_launch')" Tag="{Binding Package}" Margin="0,0,8,0"/>
+                                            <Button Content="$(Get-GesherText 'cp_btn_app_info')" Tag="{Binding Package}" Margin="0,0,8,0"/>
                                             <Button Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_uninstall')" Tag="{Binding Package}"/>
                                         </StackPanel>
                                     </Grid>
@@ -722,7 +723,83 @@ function Get-AppInstallTimes([string] $pkg) {
     return $null
 }
 
-function Show-AppInfoDialog([string] $pkg) {
+# Android Settings' special app access switches the App info shows (SpecialAccess.java):
+# the app-op's public name and its label. The device lists only those the app requests.
+$script:SpecialAccessLabels = [ordered]@{
+    'android:manage_external_storage' = 'cp_access_all_files'
+    'android:system_alert_window' = 'cp_access_overlay'
+    'android:request_install_packages' = 'cp_access_install'
+    'android:write_settings' = 'cp_access_write_settings'
+    'android:get_usage_stats' = 'cp_access_usage'
+    'android:manage_media' = 'cp_access_media'
+}
+$script:SpecialAccessTimeoutMs = 120000
+
+# The device's answer (gesher-app special-access): "special-access<TAB>op<TAB>allowed|denied"
+# lines among the launcher's other output. Unknown switches are left out.
+function ConvertFrom-SpecialAccessOutput([string[]] $lines) {
+    $switches = [Collections.Generic.List[object]]::new()
+    foreach ($line in $lines) {
+        if ($line -cmatch '^special-access\t(android:[a-z_]+)\t(allowed|denied)\s*$' -and
+                @($script:SpecialAccessLabels.Keys) -ccontains $Matches[1]) {
+            $switches.Add([PSCustomObject]@{ Op = $Matches[1]; Allowed = ($Matches[2] -eq 'allowed') })
+        }
+    }
+    return $switches.ToArray()
+}
+
+# Runs gesher-app special-access in its own process (the script ends with exit), hidden;
+# the device authenticates it as the host shell. Returns its exit code and output lines.
+function Invoke-PanelSpecialAccess([string[]] $arguments) {
+    $appScript = Join-Path $here 'gesher-app.ps1'
+    $info = [System.Diagnostics.ProcessStartInfo]::new(
+        (Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'))
+    # Every argument was checked against a fixed pattern: no quoting is needed.
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $appScript + '" special-access ' + ($arguments -join ' ')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($script:SpecialAccessTimeoutMs)) {
+            try { $process.Kill() } catch { }
+            return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
+        }
+        $process.WaitForExit()
+        $null = $errors.Result
+        return [PSCustomObject]@{ ExitCode = $process.ExitCode; Lines = @($output.Result -split "`r?`n") }
+    } finally { $process.Dispose() }
+}
+
+function Test-PanelPackageName([string] $pkg) {
+    return $pkg -cmatch '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$' -and $pkg.Length -le 255
+}
+
+# The app's special access switches, or $null when the device could not answer.
+function Get-AppSpecialAccess([string] $pkg) {
+    if (-not (Test-PanelPackageName $pkg)) { return $null }
+    $result = Invoke-PanelSpecialAccess @($pkg)
+    if ($result.ExitCode -ne 0) { return $null }
+    # One array, possibly empty (an app requesting none), never $null.
+    return ,@(ConvertFrom-SpecialAccessOutput $result.Lines)
+}
+
+# The user turned a switch on or off: the switch's state afterwards, or $null on failure.
+function Set-AppSpecialAccess([string] $pkg, [string] $op, [bool] $allow) {
+    # The ordered table's lookup ignores case; the device's op names do not.
+    if (-not (Test-PanelPackageName $pkg) -or @($script:SpecialAccessLabels.Keys) -cnotcontains $op) { return $null }
+    $result = Invoke-PanelSpecialAccess @($pkg, $op, $(if ($allow) { 'allow' } else { 'deny' }))
+    if ($result.ExitCode -ne 0) { return $null }
+    $switch = @(ConvertFrom-SpecialAccessOutput $result.Lines) | Where-Object { $_.Op -eq $op } | Select-Object -First 1
+    if (-not $switch) { return $null }
+    return [bool]$switch.Allowed
+}
+
+# FromList: the user opened it from the app list, rather than an app from Settings' screens.
+function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
     $item = $appsList.ItemsSource | Where-Object { $_.Package -eq $pkg } | Select-Object -First 1
     if (-not $item) {
         Refresh-Dashboard
@@ -737,15 +814,24 @@ function Show-AppInfoDialog([string] $pkg) {
         if ($times[1] -and $times[1] -ne $times[0]) { $lines += Get-GesherText 'cp_app_info_updated' @($times[1]) }
     }
     $message = if ($lines.Count -gt 0) { $lines -join "`n" } else { $label }
+    # The switches come from the device, which an app's request means is running; from the
+    # app list, a stopped device is not started for them (the dialog says so).
+    [System.Windows.Input.Mouse]::OverrideCursor = [System.Windows.Input.Cursors]::Wait
+    try { $switches = Get-AppSpecialAccess $pkg }
+    catch { $switches = $null }
+    finally { [System.Windows.Input.Mouse]::OverrideCursor = $null }
     $uninstall = Show-ModernConfirmDialog `
         -Title $label `
         -SubTitle $pkg `
         -Message $message `
-        -Detail (Get-GesherText 'cp_app_info_detail') `
+        -Detail (Get-GesherText $(if ($FromList) { 'cp_app_info_detail_list' } else { 'cp_app_info_detail' })) `
         -ConfirmText (Get-GesherText 'cp_btn_uninstall') `
         -CancelText (Get-GesherText 'cp_app_info_close') `
         -IconImage $item.IconImage `
-        -CancelIsDefault
+        -CancelIsDefault `
+        -Switches $switches `
+        -SwitchesUnavailable:($null -eq $switches) `
+        -OnSwitch { param($op, $allow) Set-AppSpecialAccess $pkg $op $allow }
     if ($uninstall) { & $script:OnAppUninstall $pkg }
 }
 
@@ -1028,7 +1114,12 @@ function Show-ModernConfirmDialog {
         [string] $SubTitle = $null,
         # Enter closes instead of confirming: for a dialog another app raised (App info),
         # where the user may be typing elsewhere when it takes the focus.
-        [switch] $CancelIsDefault
+        [switch] $CancelIsDefault,
+        # App info's special access switches (Op, Allowed) and what turning one runs:
+        # it answers the switch's state afterwards, or $null when it failed.
+        $Switches = $null,
+        [switch] $SwitchesUnavailable,
+        [scriptblock] $OnSwitch = $null
     )
 
     $badgeBg = if ($IsDanger) { '#FEE4E2' } elseif ($IsWarning) { '#FEF0C7' } else { '#F2F4F7' }
@@ -1124,6 +1215,11 @@ function Show-ModernConfirmDialog {
             <StackPanel Grid.Row="1">
                 <TextBlock Name="DialogMessage" FontSize="13" FontWeight="SemiBold" Foreground="#344054" TextWrapping="Wrap" Margin="0,0,0,6"/>
                 <TextBlock Name="DialogDetail" FontSize="12" Foreground="#667085" TextWrapping="Wrap" Visibility="Collapsed"/>
+                <StackPanel Name="SwitchPanel" Margin="0,12,0,0" Visibility="Collapsed">
+                    <TextBlock Name="SwitchTitle" FontSize="12" FontWeight="SemiBold" Foreground="#344054" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                    <StackPanel Name="SwitchList"/>
+                    <TextBlock Name="SwitchError" FontSize="12" Foreground="#D92D20" TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed"/>
+                </StackPanel>
             </StackPanel>
 
             <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
@@ -1154,6 +1250,46 @@ function Show-ModernConfirmDialog {
     }
     $dialog.Owner = $window
     if ($window.Icon) { $dialog.Icon = $window.Icon }
+
+    $switchItems = @($Switches | Where-Object { $_ })
+    if ($switchItems.Count -gt 0 -or $SwitchesUnavailable) {
+        $dialog.FindName('SwitchPanel').Visibility = 'Visible'
+        $switchError = $dialog.FindName('SwitchError')
+        if ($SwitchesUnavailable) {
+            $switchError.Text = Get-GesherText 'cp_access_unavailable'
+            $switchError.Visibility = 'Visible'
+        } else {
+            $dialog.FindName('SwitchTitle').Text = Get-GesherText 'cp_access_title'
+            $switchList = $dialog.FindName('SwitchList')
+            foreach ($item in $switchItems) {
+                $box = [System.Windows.Controls.CheckBox]::new()
+                $box.Content = Get-GesherText $script:SpecialAccessLabels[[string]$item.Op]
+                $box.Tag = [string]$item.Op
+                $box.IsChecked = [bool]$item.Allowed
+                $box.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
+                $box.FontSize = 13
+                $box.Add_Click({
+                    param($sender, $e)
+                    $wanted = [bool]$sender.IsChecked
+                    $switchError.Visibility = 'Collapsed'
+                    $state = $null
+                    [System.Windows.Input.Mouse]::OverrideCursor = [System.Windows.Input.Cursors]::Wait
+                    try { if ($OnSwitch) { $state = & $OnSwitch ([string]$sender.Tag) $wanted } }
+                    catch { $state = $null }
+                    finally { [System.Windows.Input.Mouse]::OverrideCursor = $null }
+                    if ($null -eq $state) {
+                        $sender.IsChecked = -not $wanted
+                        $switchError.Text = Get-GesherText 'cp_access_failed' @([string]$sender.Content)
+                        $switchError.Visibility = 'Visible'
+                    } else {
+                        # What the device answers: an app holding the permission stays on.
+                        $sender.IsChecked = [bool]$state
+                    }
+                })
+                [void]$switchList.Children.Add($box)
+            }
+        }
+    }
 
     $btnConfirm = $dialog.FindName('BtnConfirm')
     $iconContainer = $dialog.FindName('IconContainer')
@@ -1828,6 +1964,14 @@ $script:OnAppLaunch = {
     Start-Process -FilePath (Join-Path $here 'gesher-launch.exe') -ArgumentList 'launch', $pkg -WindowStyle Hidden
 }
 
+# The app's details (uninstall, special access), as an app's Settings screen opens them.
+$script:OnAppDetails = {
+    param($pkg)
+    if ($script:IsBusy -or $script:ShowingAppInfo) { return }
+    $script:ShowingAppInfo = $true
+    try { Show-AppInfoDialog $pkg -FromList } finally { $script:ShowingAppInfo = $false }
+}
+
 $script:OnAppUninstall = {
     param($pkg)
     if ($script:IsBusy) { return }
@@ -1855,6 +1999,8 @@ $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windo
         $pkg = [string]$btn.Tag
         if ($btn.Content -eq (Get-GesherText 'cp_btn_launch')) {
             & $script:OnAppLaunch $pkg
+        } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_app_info')) {
+            & $script:OnAppDetails $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_uninstall')) {
             & $script:OnAppUninstall $pkg
         }

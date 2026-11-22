@@ -142,6 +142,7 @@ jobs:
           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
           tests/windows/shell/ControlPanelActionChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
@@ -1045,6 +1046,7 @@ jobs:
           tests/windows/shell/MicrogDefaultsChecks.ps1
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1

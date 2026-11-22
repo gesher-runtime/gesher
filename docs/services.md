@@ -426,6 +426,27 @@ intents nothing resolves (`SettingsIntents`):
 - Anything else, an app that is not installed, and explicit components stay unresolved
   (`ActivityNotFoundException`). A `startActivityForResult` gets RESULT_CANCELED at once.
 
+**Special app access.** The app's details in the Control Center show Android Settings'
+special access switches for the ones the app's manifest requests (`SpecialAccess`): All
+files access (`OP_MANAGE_EXTERNAL_STORAGE`), Display over other apps
+(`OP_SYSTEM_ALERT_WINDOW`), Install unknown apps (`OP_REQUEST_INSTALL_PACKAGES`), Modify
+system settings (`OP_WRITE_SETTINGS`), Usage access (`OP_GET_USAGE_STATS`) and Media
+management (`OP_MANAGE_MEDIA`). A switch writes the app-op as AOSP Settings does (on:
+MODE_ALLOWED; off: MODE_ERRORED, or MODE_IGNORED for usage access; UID mode for all files
+and media, package mode for the others) through `AppOpsService`: persisted with the
+package's signing identity, app-op watchers notified, and read by the app's own check
+(`Environment.isExternalStorageManager`, `Settings.canDrawOverlays`,
+`Settings.System.canWrite`, `PackageManager.canRequestPackageInstalls`, usage stats,
+`MediaStore.canManageMedia`). Every switch starts off (each op's default; the appop
+permissions themselves are never granted). The Control Center reads and writes them with
+`gesher-app special-access PACKAGE [OP allow|deny]`, a `gesher` service transaction that
+only the host shell may call (an attached app is refused), and the device checks the
+package, the op and the manifest request again. An app re-checks when it resumes; the
+`startActivityForResult` above has already been answered. Exact alarms (always allowed
+here) and full-screen intents (`canUseFullScreenIntent` is not implemented) have no switch.
+Gesher does not otherwise confine files or overlay windows by these ops: the switch
+records the user's decision, and the app's checks report it.
+
 `storagestats` (StorageStatsService) measures apps' code, data and cache directories and
 the shared view's media on the host files. Component enabled states, memory info, the SIM
 state and provider intent queries answer as Android (ADR 0087). Tests:
