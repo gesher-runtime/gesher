@@ -2,8 +2,15 @@
 public final class SchedulerWorkHost {
     public static void main(String[] args) throws Exception {
         System.load(args[0]);
-        if (!args[1].equals("constraints")) {
+        if (args[1].equals("admission-work")) {
+            gesher.services.JobSchedulerAdmissionTest.measure(Integer.parseInt(args[2]));
+            return;
+        }
+        if (!args[1].equals("constraints") && !args[1].equals("admission")) {
             gesher.services.SchedulerWorkContractTest.contracts(args[1], false);
+        }
+        if (args[1].equals("all") || args[1].equals("admission")) {
+            gesher.services.JobSchedulerAdmissionTest.contracts(false);
         }
         if (args[1].equals("all") || args[1].equals("constraints")) {
             gesher.services.JobSchedulerConstraintContractTest.contracts();

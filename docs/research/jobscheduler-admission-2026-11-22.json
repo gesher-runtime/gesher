@@ -1,0 +1,68 @@
+{
+  "scope": "#56 F30/T12 scheduled-job admission overload/resource leaf",
+  "date": "2026-11-22",
+  "baseline_ref": "324dc7e41ea13ceedc3d52db3c8f7c2f3590e452",
+  "baseline_scheduler_sha256": "913e733dab2111b1232ba09b4275331f561df21b1525844c5cc84971ec93ae39",
+  "candidate_sources_sha256": {
+    "app/java/com/gesher/server/JobSchedulerService.java": "6ca467f3c1df730dae230ff00e6f178043969cee5233d6b243e4a53b8941ebb7",
+    "tests/dex-services/gesher/services/JobSchedulerAdmissionTest.java": "289f32380eb326e30d61af436405474f5f2e8026067adf98cc342dcb4acac7fb",
+    "tests/dex-services/gesher/services/JobSchedulerConstraintContractTest.java": "a62676d76312e5c2c02c094ca28761ac51db4e07a1358e5d9e927fde9685a328",
+    "tests/scheduler/SchedulerWorkHost.java": "2969496af4bcc886c1bd95198a8ebb96729173c5c5fe806ffa0d812f5a3a94c1",
+    "tools/test_scheduler_work_contracts.py": "2f9e88383b970fe09d6ab9842b4a3ba75eb9c87ccbc08d1fe7d6d7442b4eac0e",
+    "tools/test_connectivity_callback_contracts.py": "cc5000264d209e62a606f6b86556e56e9dc0d0ec61671cac51d4484ed8757189"
+  },
+  "measurement": {
+    "submissions": 10000,
+    "scheduler_passes": 32,
+    "pending_queries": 32,
+    "baseline": {
+      "accepted": 10000,
+      "rejected": 0,
+      "retained_jobs": 10000,
+      "scheduler_registry_visits": 640000,
+      "pending_registry_visits": 320000
+    },
+    "candidate": {
+      "accepted": 151,
+      "rejected": 9849,
+      "retained_jobs": 151,
+      "scheduler_registry_visits": 9664,
+      "pending_registry_visits": 4832
+    },
+    "reduction_fraction": 0.9849,
+    "instrumentation": "ArrayList iterator wrapper around the actual mJobs registry; production schedule, schedulePass(false) and pending-query methods execute unchanged. Host native identity/allocation/write-size Parcel boundaries and constructed package/process metadata are explicit."
+  },
+  "validation": {
+    "admission_contract_checks": 238,
+    "shared_constraint_harness_checks": 401,
+    "scheduler_work_checks": 155,
+    "connectivity_callback_checks": 80,
+    "connectivity_snapshot_checks": 9,
+    "baseline_negative_control": "Over-limit job was admitted (expected failure)",
+    "app_java_dex": "passed against actual Android framework classes and libcore",
+    "services_java_dex": "passed",
+    "pinned_ci_binding": "8b316aebf09ab46d5407e955bf86ed748a1e739f framework.yml invokes candidate tools/test_scheduler_work_contracts.py with default all",
+    "local_compatibility_sources": "Pinned android-16.0.0_r4 apex/jobscheduler/framework/java archive (23 Java files); CompatChangesGen emitted16 changes. Initial missing-source table failure was corrected without weakening tests."
+  },
+  "composition": {
+    "pr": 271,
+    "pr_head": "a083bc97a66b7544ed2fa0719ba6241215d8f6cc",
+    "local_commit": "0f55c625e901a7a0bb19e4f87a6195ea98ea2bee",
+    "tree": "e517ad409bb9493f401d804e358339e8ce6d37f2",
+    "admission_contract_checks": 238,
+    "shared_constraint_harness_checks": 401,
+    "scheduler_work_checks": 155,
+    "connectivity_callback_checks": 80,
+    "connectivity_snapshot_checks": 9,
+    "connectivity_demand_checks": 74,
+    "max_native_waiters": 1,
+    "app_and_services_java_dex": "passed"
+  },
+  "not_measured": [
+    "Windows/ART runtime (real-Parcel GJB2/GJB3 restore assertions are required in target entrypoint but not executed on this host)",
+    "physical CPU, RSS, application startup, battery, frame time",
+    "end-to-end schedule throughput including the new required rejection exceptions",
+    "full AOSP build and complete platform compatibility source catalog",
+    "expedited/app-standby execution quota or persisted JobWorkItem implementation"
+  ]
+}
