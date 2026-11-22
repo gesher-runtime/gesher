@@ -79,6 +79,7 @@ jobs:
           python3 .github/scripts/test_automerge_workflows.py
           python3 tools/ci/test_release_workflows.py
           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
+          python3 -m unittest discover -s tools/ci -p test_prune_caches.py
   # Short Windows host contracts share one runner per OS: separate jobs each
   # paid for a runner, checkout and queue slot to run a minute of checks.
   # Every check step runs even after an earlier one fails, so one failure
@@ -2269,8 +2270,8 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: tcp-ndk-archive
-          key: tcp-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
+          path: dns-ndk.zip
+          key: combined-ndk-r27c-090e8083a715fdb1a3e402d0763c388abb03fb4e
       - name: Authenticate publisher NDK archive and freshly extract on every use
         run: python3 tools/net-tcp-priority/prepare-ndk.py
       - name: Prepare exact unmodified canonical or intentionally selected two-patch original-profile candidate
