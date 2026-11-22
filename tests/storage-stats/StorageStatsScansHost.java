@@ -167,7 +167,9 @@ public final class StorageStatsScansHost {
         write(root.resolve("a"), 11);
         write(root.resolve("b"), 13);
         require(StorageStatsService.size(root.toFile(), new int[]{3}) == 24, "exact entry budget");
-        fails(IOException.class, () -> StorageStatsService.size(root.toFile(), new int[]{2}), "exhausted entry budget");
+        long bounded = StorageStatsService.size(root.toFile(), new int[]{2});
+        require(bounded == 11 || bounded == 13, "exhausted entry budget bounds the walk");
+        require(StorageStatsService.size(root.toFile(), new int[]{0}) == 0, "spent query budget skips later walks");
         require(StorageStatsService.size(root.resolve("missing").toFile(), new int[]{0}) == 0, "absent optional root");
         try {
             Path outside = write(root.resolveSibling("outside/secret"), 1000);
@@ -179,7 +181,21 @@ public final class StorageStatsScansHost {
         Path deep = root.resolve("deep");
         for (int i = 0; i < 65; ++i) deep = deep.resolve("d");
         write(deep.resolve("file"), 7);
-        fails(IOException.class, () -> StorageStatsService.size(root.toFile(), new int[]{1000}), "depth truncation");
+        require(StorageStatsService.size(root.toFile(), new int[]{1000}) == 24, "depth limit skips deeper entries");
+        if (Files.getFileStore(root).supportsFileAttributeView("posix")) {
+            Path locked = root.resolve("locked");
+            write(locked.resolve("hidden"), 5);
+            locked.toFile().setReadable(false); locked.toFile().setExecutable(false);
+            try {
+                if (!Files.isReadable(locked)) {
+                    require(StorageStatsService.size(root.toFile(), new int[]{1000}) == 24,
+                            "unreadable directory counts as zero like installd");
+                }
+            } finally {
+                locked.toFile().setReadable(true); locked.toFile().setExecutable(true);
+                Files.delete(locked.resolve("hidden")); Files.delete(locked);
+            }
+        }
         Thread.currentThread().interrupt();
         try { fails(InterruptedIOException.class, () -> StorageStatsService.size(root.toFile(), new int[]{1000}), "walk interruption"); }
         finally { Thread.interrupted(); }

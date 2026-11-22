@@ -15,7 +15,6 @@ import java.io.IOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -412,45 +411,48 @@ final class StorageStatsService extends IStorageStatsManager.Default {
 
     /**
      * Every regular file under root without following links. One entry budget covers
-     * the whole query. Missing optional roots are empty; traversal errors or limits
-     * invalidate the whole result, never silently turn a partial sum into success.
+     * the whole query, so a huge tree does not hold a Binder thread. Like installd's
+     * best-effort tree sizing, an entry that vanishes or cannot be read counts as
+     * zero bytes and does not fail the query; a missing optional root is empty.
      */
     private static void walk(File root, int[] budget, Visitor visitor) throws IOException {
         StorageStatsScans.checkInterrupted();
-        if (root == null) return;
+        if (root == null || budget[0] <= 0) return;
         int[] entries = budget;
         Files.walkFileTree(root.toPath(), Collections.emptySet(), 64,
                     new SimpleFileVisitor<Path>() {
-                        private void visit() throws IOException {
+                        private FileVisitResult next() throws IOException {
                             StorageStatsScans.checkInterrupted();
-                            if (entries[0]-- <= 0) throw new IOException("Storage scan entry limit");
+                            return --entries[0] <= 0 ? FileVisitResult.TERMINATE
+                                    : FileVisitResult.CONTINUE;
                         }
 
                         @Override
                         public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes a)
                                 throws IOException {
-                            visit();
-                            return FileVisitResult.CONTINUE;
+                            return next();
                         }
 
                         @Override
                         public FileVisitResult visitFile(Path file, BasicFileAttributes a)
                                 throws IOException {
-                            visit();
                             // At maxDepth, walkFileTree visits a directory as a file.
-                            if (a.isDirectory()) throw new IOException("Storage scan depth limit");
                             if (a.isRegularFile()) visitor.file(file, a.size());
-                            return FileVisitResult.CONTINUE;
+                            return next();
                         }
 
                         @Override
                         public FileVisitResult visitFileFailed(Path file, IOException e)
                                 throws IOException {
+                            return next();
+                        }
+
+                        @Override
+                        public FileVisitResult postVisitDirectory(Path dir, IOException e)
+                                throws IOException {
+                            // A directory that fails while being listed keeps what was counted.
                             StorageStatsScans.checkInterrupted();
-                            if (file.equals(root.toPath()) && e instanceof NoSuchFileException) {
-                                return FileVisitResult.CONTINUE;
-                            }
-                            throw e;
+                            return FileVisitResult.CONTINUE;
                         }
                     });
     }

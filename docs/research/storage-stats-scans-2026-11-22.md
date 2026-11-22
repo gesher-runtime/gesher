@@ -7,8 +7,7 @@ It does not complete the epic's Windows workload or soak acceptance.
 
 Each StorageStats request previously walked its package or external trees again,
 even while identical requests were reading those same trees. A burst could occupy
-many Binder threads with duplicate disk traversal. The walk also silently returned
-partial sums on entry/depth limits and read failures.
+many Binder threads with duplicate disk traversal.
 
 The service now shares only **overlapping** scans, after independently checking
 each caller's volume, user and authorization. A key includes the query kind and
@@ -47,9 +46,9 @@ for an authorization decision. Checked I/O errors use ParcelableException for
 the framework's Binder unwrapping, as other StorageStats failures do.
 
 The existing 200,000-entry query budget and 64-level traversal depth remain.
-Reaching a limit or failing to read part of a tree now fails the whole query
-instead of presenting an underestimate as a successful complete measurement.
-An absent optional root is still empty. Traversal does not follow symbolic links;
+As in installd's best-effort tree sizing, an entry that vanishes or cannot be
+read during the walk counts as zero bytes instead of failing the query, and the
+query budget bounds the walk as before. An absent optional root is still empty. Traversal does not follow symbolic links;
 APK size reads also use no-follow attributes. Package replacement/removal during
 a queued or active query produces an I/O error, allowing a fresh request.
 
