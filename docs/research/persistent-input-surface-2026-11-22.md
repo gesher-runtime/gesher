@@ -287,3 +287,29 @@ canonical DNS-context prerequisite, both Windows skipped-shard aggregates and
 `ci-required`. Their diagnostic fixes are tracked in #281/#285. This local clock
 repair is not a complete remote CI or Windows persistent-input execution pass;
 the published-head workflow must run again on the corrected source.
+
+## Decoder dependency in the consuming CI job
+
+The subsequent combined QA [run 45067016134](https://github.com/yom-chadash/gesher/actions/runs/45067016134/job/137345508681)
+got beyond the corrected clock boundary and passed **5,087 callback checks**,
+**82 codec-input checks** and **1,227 checked-JNI checks**. The next actual
+`test_recorder_persistent_input.py --sanitize` invocation then failed to launch
+`ffmpeg`. This was a required-tool omission, not a decode success or a reason
+to skip the independent decoder.
+
+The workflow's existing `ffmpeg` installation belongs to the separate
+`build-framework-assets` job. Each job has its own runner, so it cannot supply
+the `artifact-preflight` Recorder helper. An explicit early prerequisite now
+installs `ffmpeg` (including `ffprobe`) in `artifact-preflight` itself. The
+framework-assets installation remains unchanged. Parsed workflow validation
+requires the new installation to precede the persistent helper in its own job;
+no source, fixture, assertion, compiler option, timeout or required gate changes.
+
+The same helper was replayed read-only with the tools available on the existing
+combined QA tree `8e7aff7ba8fb1ab896e52fa7f8d29e4af7046cb8`: **81 checks pass**,
+and both actual production MP4s independently demux/decode with three frames
+each. The controlled host encoder and queue remain declared boundaries. This
+replay is evidence for the formerly missing-tool path on that composed tree,
+not an execution of Windows/ART/EGL/Binder or this standalone PR's full CI.
+The failed QA run remains failed; repaired-source full runtime acceptance is
+still required.
