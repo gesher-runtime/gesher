@@ -38,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <string>
 #include <thread>
@@ -422,7 +423,56 @@ struct Slot {
   int64_t time_us = 0;
   int flags = 0;
   std::shared_ptr<VideoFrame> frame;  // video outputs
+  std::unique_ptr<uint8_t[]> deferred_mem;  // CPU access after removing a Surface
 };
+
+// CPU output exposes the visible part as tightly packed I420. Surface output
+// keeps the decoded frame instead: neither getOutputBuffer nor getOutputImage
+// exposes its bytes, and releaseOutputBuffer renders the owned frame directly.
+void CopyOutputFramePixels(const VideoFrame& f, uint8_t* d) {
+  const int w = f.visible_width(), h = f.visible_height();
+  const int cw = (w + 1) / 2, ch = (h + 1) / 2;
+  for (int y = 0; y < h; y++) {
+    memcpy(d + static_cast<size_t>(y) * w,
+           f.y() + static_cast<size_t>(f.crop_top + y) * f.stride_y + f.crop_left, static_cast<size_t>(w));
+  }
+  uint8_t* du = d + static_cast<size_t>(w) * h;
+  uint8_t* dv = du + static_cast<size_t>(cw) * ch;
+  for (int y = 0; y < ch; y++) {
+    const size_t row = static_cast<size_t>(f.crop_top / 2 + y) * f.stride_uv + f.crop_left / 2;
+    memcpy(du + static_cast<size_t>(y) * cw, f.u() + row, static_cast<size_t>(cw));
+    memcpy(dv + static_cast<size_t>(y) * cw, f.v() + row, static_cast<size_t>(cw));
+  }
+}
+
+size_t OutputFrameBytes(const VideoFrame& f) {
+  const int w = f.visible_width(), h = f.visible_height();
+  return static_cast<size_t>(w) * h
+      + 2 * static_cast<size_t>((w + 1) / 2) * ((h + 1) / 2);
+}
+
+void CopyOutputFrameToBuffer(Slot& slot) {
+  const VideoFrame& f = *slot.frame;
+  const size_t size = OutputFrameBytes(f);
+  if (slot.mem.size() < size) slot.mem.assign(size, 0);
+  CopyOutputFramePixels(f, slot.mem.data());
+}
+
+uint8_t* CpuOutputBytes(JNIEnv* env, Slot& slot) {
+  if (!slot.mem.empty()) return slot.mem.data();
+  if (slot.frame == nullptr) return nullptr;
+  if (slot.deferred_mem == nullptr) {
+    // This JNI target is built without C++ exceptions. Unlike the worker's
+    // existing vector allocation, a lazy accessor must report Java OOM.
+    slot.deferred_mem.reset(new (std::nothrow) uint8_t[OutputFrameBytes(*slot.frame)]);
+    if (slot.deferred_mem == nullptr) {
+      jniThrow(env, "java/lang/OutOfMemoryError", "MediaCodec output frame");
+      return nullptr;
+    }
+    CopyOutputFramePixels(*slot.frame, slot.deferred_mem.get());
+  }
+  return slot.deferred_mem.get();
+}
 
 class Codec {
  public:
@@ -924,8 +974,12 @@ class Codec {
     if (!CheckInitializedLocked(env)) return nullptr;
     if (index < 0 || index >= kSlots || has_surface()) return nullptr;
     Slot& s = outputs_[index];
-    if (s.mem.empty()) return nullptr;
-    jobject b = NewByteBuffer(env, s.mem.data(), s.mem.size(), true);
+    // A Surface can be removed while an output is held. Materialize that
+    // frame only if a CPU accessor subsequently needs it.
+    uint8_t* data = CpuOutputBytes(env, s);
+    if (data == nullptr) return nullptr;
+    const size_t capacity = s.mem.empty() ? OutputFrameBytes(*s.frame) : s.mem.size();
+    jobject b = NewByteBuffer(env, data, capacity, true);
     if (b != nullptr) SetRange(env, b, 0, s.size);
     return b;
   }
@@ -967,11 +1021,13 @@ class Codec {
       } else {
         if (has_surface() || entry_.encoder) return nullptr;
         Slot& s = outputs_[index];
-        if (s.mem.empty() || s.size == 0) return nullptr;
+        if (s.size == 0) return nullptr;
+        uint8_t* data = CpuOutputBytes(env, s);
+        if (data == nullptr) return nullptr;
         w = out_width_;
         h = out_height_;
         t = s.time_us;
-        buffer = NewByteBuffer(env, s.mem.data(), static_cast<size_t>(s.size), true);
+        buffer = NewByteBuffer(env, data, static_cast<size_t>(s.size), true);
       }
     }
     if (buffer == nullptr) return nullptr;
@@ -1329,25 +1385,19 @@ class Codec {
     Slot& s = outputs_[i];
     const int cw = (w + 1) / 2, ch = (h + 1) / 2;
     const size_t size = static_cast<size_t>(w) * h + 2 * static_cast<size_t>(cw) * ch;
-    if (s.mem.size() < size) s.mem.assign(size, 0);
-    // The visible part, tightly packed I420.
-    uint8_t* d = s.mem.data();
-    for (int y = 0; y < h; y++) {
-      memcpy(d + static_cast<size_t>(y) * w,
-             f->y() + static_cast<size_t>(f->crop_top + y) * f->stride_y + f->crop_left, static_cast<size_t>(w));
-    }
-    uint8_t* du = d + static_cast<size_t>(w) * h;
-    uint8_t* dv = du + static_cast<size_t>(cw) * ch;
-    for (int y = 0; y < ch; y++) {
-      size_t row = static_cast<size_t>(f->crop_top / 2 + y) * f->stride_uv + f->crop_left / 2;
-      memcpy(du + static_cast<size_t>(y) * cw, f->u() + row, static_cast<size_t>(cw));
-      memcpy(dv + static_cast<size_t>(y) * cw, f->v() + row, static_cast<size_t>(cw));
-    }
     s.size = static_cast<int>(size);
     s.offset = 0;
     s.time_us = f->time_us;
     s.flags = 0;
     s.frame = std::move(f);
+    s.deferred_mem.reset();
+    if (has_surface()) {
+      // A reused slot may still own CPU storage from an earlier output mode.
+      // Only free slots reach here, so no valid client buffer is invalidated.
+      std::vector<uint8_t>().swap(s.mem);
+    } else {
+      CopyOutputFrameToBuffer(s);
+    }
     Publish(i);
     return true;
   }
@@ -1403,6 +1453,7 @@ class Codec {
     s.time_us = time_us;
     s.flags = kFlagEndOfStream;
     s.frame.reset();
+    s.deferred_mem.reset();
     Publish(i);
   }
 
