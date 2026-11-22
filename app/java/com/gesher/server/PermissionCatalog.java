@@ -113,6 +113,9 @@ final class PermissionCatalog {
     // private and only copies leave this class.
     private volatile Declarations mDeclarations;
 
+    /** Do not retain a removed generation's declarations until the next query. */
+    void invalidateDeclarations() { mDeclarations = null; }
+
     private Declarations declarations() {
         Map<String, ApkPackage> packages = mPm.packageSnapshot();
         Declarations current = mDeclarations;

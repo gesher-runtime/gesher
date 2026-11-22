@@ -300,6 +300,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     synchronized void invalidatePackageIndex() {
         mIndexedPackages = null;
         mUidMembers = Map.of();
+        mCatalog.invalidateDeclarations();
     }
 
     private synchronized List<ApkPackage> uidMembers(int uid) {

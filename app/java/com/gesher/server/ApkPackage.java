@@ -679,8 +679,9 @@ public final class ApkPackage {
     synchronized boolean hasVerifiedMicrogSigner() {
         if (mVerifiedMicrogSigner == null) {
             // verifiedSignerSha256() first performs full content verification, then
-            // caches only on this ApkPackage. Do not reopen its path for a second
-            // independent signer result, or share trust with another APK generation.
+            // caches only on this ApkPackage. Do not derive a second, independent
+            // signer result or share trust with another APK generation. Only the
+            // v1 legacy GSF branch reads the file again, for its exact whole-file pin.
             mVerifiedMicrogSigner = GmsSignatureSpoofing.MICROG_CERT_SHA256.equals(verifiedSignerSha256())
                     && (mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V2
                         || mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3
