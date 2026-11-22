@@ -574,6 +574,14 @@ int BIONIC_SYSV Setenv(const char* name, const char* value, int overwrite) {
   return ::setenv(name, value, overwrite);
 }
 int BIONIC_SYSV Unsetenv(const char* name) { return ::unsetenv(name); }
+// putenv goes through the same retaining setenv/unsetenv (a name without '='
+// removes it), so earlier getenv results and environ entries stay valid.
+int BIONIC_SYSV Putenv(char* assignment) {
+  if (assignment == nullptr) return errno = EINVAL, -1;
+  const char* eq = std::strchr(assignment, '=');
+  if (eq == nullptr) return Unsetenv(assignment);
+  return Setenv(std::string(assignment, eq - assignment).c_str(), eq + 1, 1);
+}
 
 int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Gettid() { return static_cast<int>(GetCurrentThreadId()); }
@@ -1340,6 +1348,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("getenv", Getenv);
   ENTRY("setenv", Setenv);
   ENTRY("unsetenv", Unsetenv);
+  ENTRY("putenv", Putenv);
   ENTRY("getpid", Getpid);
   ENTRY("gettid", Gettid);
   ENTRY("getpagesize", Getpagesize);

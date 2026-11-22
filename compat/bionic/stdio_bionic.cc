@@ -671,7 +671,17 @@ int BIONIC_SYSV Fgetpos(void* f, int64_t* pos) {
   *pos = p;
   return 0;
 }
-int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return static_cast<int>(gesher::stdio::Seek(F(f), *pos, SEEK_SET)); }
+// A successful fseek, fsetpos or rewind discards ungetwc pushback, as in bionic.
+// The wide pushback lives in host stream state, outside the byte buffer.
+int SeekDiscardingPushback(FILE* stream, int64_t off, int whence) {
+  StreamLock lock(stream);
+  const int result = static_cast<int>(gesher::stdio::Seek(stream, off, whence));
+  if (result == 0) {
+    if (auto* state = State(stream, false)) state->pushback = kWeof;
+  }
+  return result;
+}
+int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return SeekDiscardingPushback(F(f), *pos, SEEK_SET); }
 
 // getline/getdelim: *line grows with the CRT's realloc, which the .so's
 // free (the shim's) accepts.
@@ -949,7 +959,7 @@ void BIONIC_SYSV Clearerr(void* f) {
   ClearerrUnlocked(f);
 }
 int BIONIC_SYSV Fileno(void* f) { return _fileno(F(f)); }
-int BIONIC_SYSV Fseek(void* f, int64_t off, int whence) { return static_cast<int>(gesher::stdio::Seek(F(f), off, whence)); }
+int BIONIC_SYSV Fseek(void* f, int64_t off, int whence) { return SeekDiscardingPushback(F(f), off, whence); }
 int64_t BIONIC_SYSV Ftell(void* f) { return gesher::stdio::Tell(F(f)); }
 int BIONIC_SYSV Getw(void* f) {
   int word;
@@ -961,7 +971,7 @@ int BIONIC_SYSV Putw(int word, void* f) {
 void BIONIC_SYSV Rewind(void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
-  gesher::stdio::Seek(stream, 0, SEEK_SET);
+  SeekDiscardingPushback(stream, 0, SEEK_SET);
   // Like Android's rewind, clear stream errors even if seeking failed.
   ClearerrUnlocked(f);
 }
