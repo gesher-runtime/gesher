@@ -10,8 +10,8 @@ assert os.environ.get('GITHUB_ACTIONS') == 'true'
 url = 'https://dl.google.com/android/repository/android-ndk-r27c-linux.zip'
 # Publisher: https://github.com/android/ndk/wiki/Home/24fe2d7ee3591346e0e8ae615977a15c0a4fba40
 expected_sha1, expected_size = '090e8083a715fdb1a3e402d0763c388abb03fb4e', 663987688
-# Shares native2's publisher-archive cache entry (same path and key), so one copy is kept.
-archive = Path('dns-ndk.zip')
+archive = Path('tcp-ndk-archive/android-ndk-r27c-linux.zip')
+archive.parent.mkdir(exist_ok=True)
 if not archive.exists():
     with urllib.request.urlopen(url, timeout=120) as response, archive.open('wb') as out:
         while chunk := response.read(1024 * 1024):
