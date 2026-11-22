@@ -119,11 +119,22 @@ void RetainUntilComplete(const std::shared_ptr<NativeFence>& fence) {
   }
 }
 
-int Register(const std::shared_ptr<NativeFence>& fence) {
+int Register(const std::shared_ptr<NativeFence>& fence, bool close_on_exec = true) {
   record_locks::DescriptorGuard guard;
   int fd = ReserveFd();
   if (fd < 0) return -1;
   if (static_cast<size_t>(fd) >= kDescriptorCapacity) { _close(fd); return errno = EMFILE, -1; }
+  // ReserveFd is noninheritable by default. SCM_RIGHTS chooses descriptor
+  // flags at the receiver, independently of the sender's flag. Apply that
+  // choice inside the same transaction, before publishing the fence owner.
+  // The descriptor remains kUnshareable for process launch: inheriting only
+  // its NUL reservation cannot preserve the native completion capability.
+  if (!close_on_exec &&
+      !SetHandleInformation(HandleFromFd(fd), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+    const int error = ErrnoFromWin32(GetLastError());
+    CloseUnpublishedDuplicate(fd);
+    return errno = error, -1;
+  }
   std::lock_guard<std::mutex> lock(Fences().mutex);
   Fences().slots[fd] = fence;
   Mark(fd, true);
@@ -283,7 +294,7 @@ bool TransferNativeFence(int fd, uintptr_t* handle, uint64_t* metadata,
   return true;
 }
 
-int AdoptNativeFence(HANDLE owned, uint64_t metadata) {
+int AdoptNativeFence(HANDLE owned, uint64_t metadata, bool close_on_exec) {
   auto result = MakeFence();
   if (!result) { CloseHandle(owned); return -1; }
   if (metadata == kTransferredCompletedFence) {
@@ -295,7 +306,7 @@ int AdoptNativeFence(HANDLE owned, uint64_t metadata) {
     return errno = EINVAL, -1;
   }
   result->metadata = metadata;
-  return Register(result);
+  return Register(result, close_on_exec);
 }
 
 short PollNativeFence(const std::shared_ptr<NativeFence>& fence, short events, HANDLE* wake) {

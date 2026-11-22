@@ -90,7 +90,7 @@ add_executable(egl_fence_test ${CMAKE_SOURCE_DIR}/tests/native/egl_fence_test.cc
 target_include_directories(egl_fence_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}
   ${CMAKE_SOURCE_DIR}/compat/posix/src ${_gl_include})
 target_link_libraries(egl_fence_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
-  gesher_window_surface graphics_native_headers user32 gdi32 d3d11)
+  gesher_window_surface gesher_exec_spawn graphics_native_headers user32 gdi32 d3d11)
 target_compile_options(egl_fence_test PRIVATE -Wall -Wextra -Werror)
 
 # A GL test library's gesher_selftest() with the same EGL/GLES

@@ -12,6 +12,8 @@ void ForgetNativeFence(int fd);
 void DupNativeFence(int from, int to);
 bool TransferNativeFence(int fd, uintptr_t* handle, uint64_t* metadata,
                          std::shared_ptr<NativeFence>* retained = nullptr);
-int AdoptNativeFence(HANDLE owned, uint64_t metadata);
+// Consumes owned on every outcome. Binder keeps the default; SCM_RIGHTS
+// supplies the receiving message's MSG_CMSG_CLOEXEC choice explicitly.
+int AdoptNativeFence(HANDLE owned, uint64_t metadata, bool close_on_exec = true);
 short PollNativeFence(const std::shared_ptr<NativeFence>& fence, short events, HANDLE* wake);
 }  // namespace gesher

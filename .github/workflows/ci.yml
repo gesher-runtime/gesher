@@ -323,7 +323,9 @@ jobs:
           python3 tools/test_native_metadata_hot_paths.py --thread-sanitize
 
       - name: EGL fence asynchronous creation and ownership contracts
-        run: python3 tools/test_egl_fence_contracts.py --sanitize
+        run: |
+          python3 tools/test_egl_fence_contracts.py --sanitize
+          python3 tools/test_native_fence_receive.py --sanitize
 
       - name: Freopen contracts against the pinned glibc reference
         run: bash tools/ci/test-freopen-reference.sh

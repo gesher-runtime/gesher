@@ -182,7 +182,7 @@ bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt, bool close_o
     } else if (fence) {
       // Adoption consumes the handle and admits only an immutable, signaled,
       // read-only Gesher completion event (native_fence.cc).
-      fds->push_back(AdoptNativeFence(h, metadata));
+      fds->push_back(AdoptNativeFence(h, metadata, close_on_exec));
     } else {
       // Adoption consumes both handles, including on a failed/retired group.
       fds->push_back(AdoptFileDescription(h, shared, static_cast<DescriptorKind>(kind), close_on_exec));

@@ -1,0 +1,73 @@
+diff --git a/compat/posix/src/native_fence.cc b/compat/posix/src/native_fence.cc
+index c3acfbf3b1..b2d9f18c29 100644
+--- a/compat/posix/src/native_fence.cc
++++ b/compat/posix/src/native_fence.cc
+@@ -119,11 +119,22 @@ void RetainUntilComplete(const std::shared_ptr<NativeFence>& fence) {
+   }
+ }
+ 
+-int Register(const std::shared_ptr<NativeFence>& fence) {
++int Register(const std::shared_ptr<NativeFence>& fence, bool close_on_exec = true) {
+   record_locks::DescriptorGuard guard;
+   int fd = ReserveFd();
+   if (fd < 0) return -1;
+   if (static_cast<size_t>(fd) >= kDescriptorCapacity) { _close(fd); return errno = EMFILE, -1; }
++  // ReserveFd is noninheritable by default. SCM_RIGHTS chooses descriptor
++  // flags at the receiver, independently of the sender's flag. Apply that
++  // choice inside the same transaction, before publishing the fence owner.
++  // The descriptor remains kUnshareable for process launch: inheriting only
++  // its NUL reservation cannot preserve the native completion capability.
++  if (!close_on_exec &&
++      !SetHandleInformation(HandleFromFd(fd), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
++    const int error = ErrnoFromWin32(GetLastError());
++    CloseUnpublishedDuplicate(fd);
++    return errno = error, -1;
++  }
+   std::lock_guard<std::mutex> lock(Fences().mutex);
+   Fences().slots[fd] = fence;
+   Mark(fd, true);
+@@ -283,7 +294,7 @@ bool TransferNativeFence(int fd, uintptr_t* handle, uint64_t* metadata,
+   return true;
+ }
+ 
+-int AdoptNativeFence(HANDLE owned, uint64_t metadata) {
++int AdoptNativeFence(HANDLE owned, uint64_t metadata, bool close_on_exec) {
+   auto result = MakeFence();
+   if (!result) { CloseHandle(owned); return -1; }
+   if (metadata == kTransferredCompletedFence) {
+@@ -295,7 +306,7 @@ int AdoptNativeFence(HANDLE owned, uint64_t metadata) {
+     return errno = EINVAL, -1;
+   }
+   result->metadata = metadata;
+-  return Register(result);
++  return Register(result, close_on_exec);
+ }
+ 
+ short PollNativeFence(const std::shared_ptr<NativeFence>& fence, short events, HANDLE* wake) {
+diff --git a/compat/posix/src/native_fence_internal.h b/compat/posix/src/native_fence_internal.h
+index 5aa0ef3e30..5d25ce71fb 100644
+--- a/compat/posix/src/native_fence_internal.h
++++ b/compat/posix/src/native_fence_internal.h
+@@ -12,6 +12,8 @@ void ForgetNativeFence(int fd);
+ void DupNativeFence(int from, int to);
+ bool TransferNativeFence(int fd, uintptr_t* handle, uint64_t* metadata,
+                          std::shared_ptr<NativeFence>* retained = nullptr);
+-int AdoptNativeFence(HANDLE owned, uint64_t metadata);
++// Consumes owned on every outcome. Binder keeps the default; SCM_RIGHTS
++// supplies the receiving message's MSG_CMSG_CLOEXEC choice explicitly.
++int AdoptNativeFence(HANDLE owned, uint64_t metadata, bool close_on_exec = true);
+ short PollNativeFence(const std::shared_ptr<NativeFence>& fence, short events, HANDLE* wake);
+ }  // namespace gesher
+diff --git a/compat/posix/src/unix_rights.cc b/compat/posix/src/unix_rights.cc
+index a6ccdf7772..9adb8023e5 100644
+--- a/compat/posix/src/unix_rights.cc
++++ b/compat/posix/src/unix_rights.cc
+@@ -182,7 +182,7 @@ bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt, bool close_o
+     } else if (fence) {
+       // Adoption consumes the handle and admits only an immutable, signaled,
+       // read-only Gesher completion event (native_fence.cc).
+-      fds->push_back(AdoptNativeFence(h, metadata));
++      fds->push_back(AdoptNativeFence(h, metadata, close_on_exec));
+     } else {
+       // Adoption consumes both handles, including on a failed/retired group.
+       fds->push_back(AdoptFileDescription(h, shared, static_cast<DescriptorKind>(kind), close_on_exec));

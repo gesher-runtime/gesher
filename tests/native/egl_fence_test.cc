@@ -9,6 +9,7 @@
 #include "abi_types.h"
 #include "native_fence_internal.h"
 #include "internal.h"
+#include "exec_spawn.h"
 #include <gesher/egl_angle.h>
 #include <gesher/native_fence.h>
 
@@ -19,7 +20,10 @@
 #include <poll.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <cstdio>
@@ -28,6 +32,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 namespace {
@@ -336,6 +341,8 @@ int Child(int argc, char** argv) {
   HANDLE proceed = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(argv[5], nullptr, 0)));
   int fd = gesher::AdoptNativeFence(owned, metadata);
   Check(fd >= 0, "child adopts the transferred native fence object");
+  Check(fd >= 0 && fcntl(fd, F_GETFD) == FD_CLOEXEC,
+        "direct adoption keeps the same noninheritable default as Binder");
   pollfd record{fd, POLLIN, 0};
   if (fd >= 0) Check(poll(&record, 1, 0) == 1, "only completed native fences are exposed across processes");
   SetEvent(ready); CloseHandle(ready);
@@ -403,11 +410,223 @@ void Transfer(EGLDisplay display) {
   CloseHandle(ready);
   CloseHandle(proceed);
 }
+
+ssize_t SendRights(int socket, const std::array<int, 2>& descriptors) {
+  alignas(cmsghdr) char control[CMSG_SPACE(sizeof(descriptors))]{};
+  char byte = 'F';
+  iovec data{&byte, 1};
+  msghdr message{};
+  message.msg_iov = &data; message.msg_iovlen = 1;
+  message.msg_control = control; message.msg_controllen = sizeof(control);
+  auto* rights = CMSG_FIRSTHDR(&message);
+  rights->cmsg_level = SOL_SOCKET; rights->cmsg_type = SCM_RIGHTS;
+  rights->cmsg_len = CMSG_LEN(sizeof(descriptors));
+  std::memcpy(CMSG_DATA(rights), descriptors.data(), sizeof(descriptors));
+  return sendmsg(socket, &message, 0);
+}
+
+std::vector<int> ReceiveRights(int socket, bool close_on_exec) {
+  alignas(cmsghdr) char control[CMSG_SPACE(2 * sizeof(int))]{};
+  char byte = 0;
+  iovec data{&byte, 1};
+  msghdr message{};
+  message.msg_iov = &data; message.msg_iovlen = 1;
+  message.msg_control = control; message.msg_controllen = sizeof(control);
+  pollfd ready{socket, POLLIN, 0};
+  if (poll(&ready, 1, 5000) != 1) {
+    Check(false, "SCM_RIGHTS data arrives before the deadline");
+    return {};
+  }
+  ssize_t count = recvmsg(socket, &message, close_on_exec ? MSG_CMSG_CLOEXEC : 0);
+  Check(count == 1 && byte == 'F' && !(message.msg_flags & MSG_CTRUNC),
+        "SCM_RIGHTS preserves its data and complete mixed descriptor batch");
+  std::vector<int> result;
+  for (auto* rights = CMSG_FIRSTHDR(&message); rights; rights = CMSG_NXTHDR(&message, rights)) {
+    if (rights->cmsg_level != SOL_SOCKET || rights->cmsg_type != SCM_RIGHTS) continue;
+    Check(rights->cmsg_len >= CMSG_LEN(0) && rights->cmsg_len <= sizeof(control),
+          "received SCM_RIGHTS has a bounded valid header");
+    if (rights->cmsg_len < CMSG_LEN(0) || rights->cmsg_len > sizeof(control)) break;
+    size_t size = (rights->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+    const auto* values = reinterpret_cast<const int*>(CMSG_DATA(rights));
+    result.insert(result.end(), values, values + size);
+  }
+  return result;
+}
+
+void DescriptorOperations(int fd) {
+  auto original = gesher::LookupNativeFence(fd);
+  Check(original != nullptr, "descriptor operations begin with the received completion capability");
+  for (bool close_on_exec : {false, true}) {
+    Check(fcntl(fd, F_SETFD, close_on_exec ? FD_CLOEXEC : 0) == 0 &&
+              fcntl(fd, F_GETFD) == (close_on_exec ? FD_CLOEXEC : 0) &&
+              gesher::LookupNativeFence(fd) == original,
+          "F_SETFD changes only descriptor flags and retains the native fence");
+    std::vector<std::pair<int, gesher::DescriptorSnapshotPtr>> selected;
+    Check(gesher::CaptureDescriptors(&selected, false) == 0,
+          "startup captures inheritable descriptors under the table lock");
+    bool included = std::any_of(selected.begin(), selected.end(),
+                               [fd](const auto& entry) { return entry.first == fd; });
+    Check(included == !close_on_exec, "startup selection obeys the receiver descriptor flag");
+  }
+  for (int operation : {0, F_DUPFD, F_DUPFD_CLOEXEC}) {
+    int copy = operation ? fcntl(fd, operation, 0) : dup(fd);
+    Check(copy >= 0 && gesher::LookupNativeFence(copy) == original &&
+              fcntl(copy, F_GETFD) == (operation == F_DUPFD_CLOEXEC ? FD_CLOEXEC : 0),
+          "dup and F_DUPFD variants retain the fence with independent Linux descriptor flags");
+    if (copy >= 0) close(copy);
+  }
+  for (bool close_on_exec : {false, true}) {
+    int target = open("NUL", O_RDWR);
+    Check(target >= 0, "dup2/dup3 reserve a real replaceable descriptor");
+    if (target < 0) continue;
+    int result = close_on_exec ? dup3(fd, target, O_CLOEXEC) : dup2(fd, target);
+    Check(result == target && gesher::LookupNativeFence(target) == original &&
+              fcntl(target, F_GETFD) == (close_on_exec ? FD_CLOEXEC : 0),
+          "dup2/dup3 replace the old owner and preserve the native fence");
+    close(target);
+    Check(!gesher::LookupNativeFence(target), "closing an alias retires its fence membership");
+  }
+  errno = 0;
+  Check(dup3(fd, fd, O_CLOEXEC) == -1 && errno == EINVAL &&
+            gesher::LookupNativeFence(fd) == original,
+        "invalid dup3 self-replacement retains the original completion owner");
+  errno = 0;
+  Check(fcntl(fd, F_DUPFD, -1) == -1 && errno == EINVAL &&
+            gesher::LookupNativeFence(fd) == original,
+        "invalid duplication floor leaves the native fence unchanged");
+  int unchanged = open("NUL", O_RDWR);
+  Check(unchanged >= 0, "invalid-duplication control owns an ordinary target");
+  if (unchanged >= 0) {
+    int flags = fcntl(unchanged, F_GETFD);
+    errno = 0;
+    Check(dup3(fd, unchanged, O_NONBLOCK) == -1 && errno == EINVAL &&
+              !gesher::LookupNativeFence(unchanged) && fcntl(unchanged, F_GETFD) == flags,
+          "unsupported dup3 flags preserve the previous target and do not install a fence");
+    close(unchanged);
+  }
+  Check(fcntl(fd, F_SETFD, 0) == 0, "inheritance-limit control selects a non-CLOEXEC fence");
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  Check(snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable,
+        "native completion remains explicitly unshareable by the generic startup format");
+  if (!snapshot) return;
+  gesher::NativeFileDescriptionExport exported;
+  errno = 0;
+  Check(exported.Prepare(snapshot) == -1 && errno == EOPNOTSUPP,
+        "native raw-file export rejects the NUL reservation instead of losing its capability");
+  std::array<wchar_t, 32768> path{};
+  DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  Check(length > 0 && length < path.size(), "startup control resolves its actual executable");
+  if (!length || length >= path.size()) return;
+  gesher::exec::Launch launch{path.data(), L"", "exe"};
+  gesher::exec::AppendQuoted(&launch.command_line, launch.application);
+  launch.command_line += L" --unexpected-fence-inherit";
+  PROCESS_INFORMATION child{};
+  DWORD error = gesher::exec::SpawnWithFds(launch, nullptr, L"",
+      {{37, snapshot->handle, snapshot}}, &child);
+  Check(error == ERROR_NOT_SUPPORTED && !child.hProcess && !child.hThread,
+        "startup rejects unsupported fence inheritance with ERROR_NOT_SUPPORTED before creating a child");
+  if (child.hProcess) {
+    TerminateProcess(child.hProcess, 1); WaitForSingleObject(child.hProcess, 1000);
+    CloseHandle(child.hProcess);
+  }
+  if (child.hThread) CloseHandle(child.hThread);
+  Check(gesher::LookupNativeFence(fd) == original,
+        "failed native export and launch leave the original fence usable");
+}
+
+void MalformedAdoption(int fd) {
+  uintptr_t value = 0;
+  uint64_t metadata = 0;
+  std::shared_ptr<gesher::NativeFence> retained;
+  Check(gesher::TransferNativeFence(fd, &value, &metadata, &retained) && metadata == 4,
+        "the valid completed fence keeps its existing typed transport metadata");
+  if (!retained) return;
+  for (bool close_on_exec : {false, true}) {
+    HANDLE wrong_metadata = nullptr;
+    Check(DuplicateHandle(GetCurrentProcess(), reinterpret_cast<HANDLE>(value), GetCurrentProcess(),
+                          &wrong_metadata, 0, FALSE, DUPLICATE_SAME_ACCESS) != FALSE,
+          "malformed-payload control duplicates the real completed event");
+    if (wrong_metadata) {
+      errno = 0;
+      Check(gesher::AdoptNativeFence(wrong_metadata, metadata + 1, close_on_exec) == -1 && errno == EINVAL,
+            "incorrect completed-fence metadata is rejected in both flag modes");
+      DWORD flags = 0;
+      Check(!GetHandleInformation(wrong_metadata, &flags) && GetLastError() == ERROR_INVALID_HANDLE,
+            "rejected metadata consumes the incoming handle exactly once");
+    }
+    HANDLE ordinary = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                  nullptr, OPEN_EXISTING, 0, nullptr);
+    Check(ordinary != INVALID_HANDLE_VALUE, "wrong-object control opens a real ordinary handle");
+    if (ordinary != INVALID_HANDLE_VALUE) {
+      errno = 0;
+      Check(gesher::AdoptNativeFence(ordinary, metadata, close_on_exec) == -1 && errno == EINVAL,
+            "an ordinary handle cannot masquerade as a native completion event");
+      DWORD flags = 0;
+      Check(!GetHandleInformation(ordinary, &flags) && GetLastError() == ERROR_INVALID_HANDLE,
+            "rejected handle type consumes its incoming native ownership");
+    }
+  }
+}
+
+void RightsTransfers(EGLDisplay display) {
+  const int before = failures.load();
+  for (int type : {SOCK_STREAM, SOCK_DGRAM}) for (bool sender_cloexec : {false, true})
+      for (bool receiver_cloexec : {false, true}) {
+    int sockets[2]{-1, -1}, pipefd[2]{-1, -1};
+    Check(socketpair(AF_UNIX, type, 0, sockets) == 0, "real SCM stream/datagram socketpair is created");
+    if (sockets[0] < 0) continue;
+    int error = EGL_SUCCESS;
+    Clear(0, 1);
+    auto completion = gesher::bionic::gpu::CreateCurrentFence(display, &error);
+    int fence = completion ? gesher::ExportNativeFence(completion) : -1;
+    Check(fence >= 0 && fcntl(fence, F_GETFD) == FD_CLOEXEC,
+          "new native fence exports retain their existing CLOEXEC default");
+    Check(pipe(pipefd) == 0, "mixed SCM batch includes a real ordinary pipe");
+    if (fence < 0 || pipefd[0] < 0) {
+      if (fence >= 0) close(fence);
+      for (int owned : {pipefd[0], pipefd[1], sockets[0], sockets[1]}) if (owned >= 0) close(owned);
+      continue;
+    }
+    Check(fcntl(fence, F_SETFD, sender_cloexec ? FD_CLOEXEC : 0) == 0 &&
+              fcntl(pipefd[0], F_SETFD, sender_cloexec ? FD_CLOEXEC : 0) == 0,
+          "sender descriptors have the deliberately selected independent flags");
+    bool sent = SendRights(sockets[0], {fence, pipefd[0]}) == 1;
+    Check(sent, "real broker accepts the native-fence and ordinary-file batch");
+    close(fence); close(pipefd[0]); completion.reset();
+    Check(!gesher::LookupNativeFence(fence), "sender close retires its local fence before the receiver adopts it");
+    Check(write(pipefd[1], "P", 1) == 1, "ordinary pipe data is written after sender descriptors close");
+    close(pipefd[1]);
+    auto received = sent ? ReceiveRights(sockets[1], receiver_cloexec) : std::vector<int>{};
+    Check(received.size() == 2, "real SCM receive returns both independently owned descriptors");
+    if (received.size() == 2) {
+      for (int owned : received)
+        Check(fcntl(owned, F_GETFD) == (receiver_cloexec ? FD_CLOEXEC : 0),
+              "MSG_CMSG_CLOEXEC alone selects both fence and ordinary receiver flags");
+      pollfd ready{received[0], POLLIN, 0};
+      Check(gesher::LookupNativeFence(received[0]) && poll(&ready, 1, 5000) == 1 && (ready.revents & POLLIN),
+            "real received native completion survives all sender references closing");
+      char byte = 0;
+      Check(read(received[1], &byte, 1) == 1 && byte == 'P' && read(received[1], &byte, 1) == 0,
+            "mixed ordinary pipe retains its contents and EOF after sender closure");
+      if (type == SOCK_STREAM && !sender_cloexec && !receiver_cloexec) {
+        MalformedAdoption(received[0]);
+        DescriptorOperations(received[0]);
+      }
+    }
+    for (int owned : received) {
+      Check(close(owned) == 0 && !gesher::LookupNativeFence(owned),
+            "SCM receiver close retires every descriptor and fence membership");
+    }
+    close(sockets[0]); close(sockets[1]);
+  }
+  Check(failures.load() == before, "SCM native-fence receiver flags and ownership passed");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   if (argc > 1 && std::strcmp(argv[1], "--child") == 0) return Child(argc, argv);
+  if (argc > 1 && std::strcmp(argv[1], "--unexpected-fence-inherit") == 0) return 42;
   gesher::bionic::gl::RegisterNativeBufferEgl(Add);
   create_sync = reinterpret_cast<Create>(entries.at("eglCreateSyncKHR"));
   destroy_sync = reinterpret_cast<Destroy>(entries.at("eglDestroySyncKHR"));
@@ -426,6 +645,7 @@ int main(int argc, char** argv) {
   PendingEgl(display, context);
   Validation(display, context);
   Transfer(display);
+  RightsTransfers(display);
   std::printf("egl_fence_test %s\n", failures.load() ? "FAILED" : "all passed");
   return failures.load() ? 1 : 0;
 }
