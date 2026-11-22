@@ -142,7 +142,7 @@ function Resolve-GesherAsciiPath {
         $leafParent = [IO.Path]::GetDirectoryName($probe)
         if ($leafName -and $leafParent -and $leafParent -ne $probe) {
             $trailing.Add($leafName)
-            $probe = if ($leafParent.Length -gt 3) { $leafParent.TrimEnd('') } else { $leafParent }
+            $probe = if ($leafParent.Length -gt 3) { $leafParent.TrimEnd('\') } else { $leafParent }
         }
         while ($probe -and (([IO.Path]::GetFileName($probe) -notmatch '[^\x00-\x7F]') -or -not ([IO.Directory]::Exists($probe) -or [IO.File]::Exists($probe)))) {
             $leaf = [IO.Path]::GetFileName($probe)
