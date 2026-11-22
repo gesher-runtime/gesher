@@ -89,7 +89,9 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   PrintWindow reads nothing back from a window never shown). The window's
   title is the Activity's label; it carries the process's AppUserModelID
   (`SHGetPropertyStoreForWindow`, from `$GESHER_APP_USER_MODEL_ID`) and the
-  package's Start menu icon (`WM_SETICON`, `<data>/gesher-shell`). Closing it
+  package's Start menu icon (`WM_SETICON`, `<data>/gesher-shell`; also written,
+  without a shortcut, for a package with no launcher activity or a staged microG
+  addon, docs/installer.md). Closing it
   (`WM_CLOSE`) calls `Activity.finish()`: on the device the system server
   destroys the activity and ends the process; `remove` closes the window.
   Closing always closes the app: if the window's thread has not taken the

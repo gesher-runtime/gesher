@@ -87,6 +87,15 @@ if ($Remove) {
             $file = Join-Path $ProfileRoot "system/priv-app/$package/$name"
             if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
         }
+        # The window icon com.gesher.app.shell.AppShell wrote for the staged addon, and its
+        # folder once empty (an installed update's shortcut record is gesher-app's).
+        $shell = Join-Path $ProfileRoot "data/data/$package/gesher-shell"
+        $icon = Join-Path $shell 'icon.ico'
+        if (-not (Test-Path -LiteralPath (Join-Path $shell 'shortcut.properties')) -and
+                (Test-Path -LiteralPath $icon -PathType Leaf)) {
+            Remove-Item -LiteralPath $icon
+            if (-not @(Get-ChildItem -LiteralPath $shell -Force).Count) { Remove-Item -LiteralPath $shell }
+        }
         # Libraries startup extracted from these APKs; only regular .so files in
         # plain (non-reparse) directories, and those directories only once empty.
         $libRoot = Join-Path $ProfileRoot "system/priv-app/$package/lib"

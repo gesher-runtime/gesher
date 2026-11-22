@@ -150,6 +150,13 @@ menu shortcut, as a launcher lists it
   empty. A failure never fails the install or the launch. `GESHER_SHORTCUTS=0`
   turns shortcuts off; runs from a build folder without `gesher-app.cmd` make
   none.
+- **Window icon without a shortcut**: the app's windows take the shortcut's
+  `icon.ico`. A package with no launcher activity, and a staged microG addon
+  (its verified `system\priv-app\<package>` slot, which `gesher-app-microg.ps1`
+  manages rather than `gesher-app install`), gets only that `icon.ico`, from the
+  application icon, as Android shows a task's application icon; no shortcut.
+  It is written again when the APK is newer; `gesher-app uninstall`, or
+  `gesher-app-microg.ps1 -Remove` for an addon, removes it.
 - **`gesher-app launch PACKAGE`** starts an installed package by name (the
   shortcut's command; the device starts if it is not running). `gesher-app
   launch APK` is `gesher-app APK`.
