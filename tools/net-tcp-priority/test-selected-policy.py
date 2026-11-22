@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '0a973dd71dc59f1dc15d1ad22f58dd10517f0b6df3f8a2ad395371cb4b18d058'
+OFD_QUALIFICATION_SHA256 = 'f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
 # Valid pipes can now fail a control operation explicitly. These two exact
 # non-socket dispatch substitutions are the only PollFdsImpl changes allowed;
 # normalize them before comparing every byte of the original native poll core.
@@ -333,7 +333,7 @@ def preceding_ofd_sources():
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='9e34e1aff2979e14b5541ba8cebdd6fe4d81b3a5d4cc925b69f18e2863da9c05'
+REVIEWED_PATCH_SHA256='5fe00fbb94e27fe5d5b5fe29e035b28f4ab3c3a2ac7fe0318ba3918e325d2433'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH

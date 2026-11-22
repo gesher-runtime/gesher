@@ -310,8 +310,12 @@ void Validation(EGLDisplay display, Context& context) {
 
   HANDLE ordinary = CreateEventW(nullptr, TRUE, TRUE, nullptr), read_only = nullptr;
   DuplicateHandle(GetCurrentProcess(), ordinary, GetCurrentProcess(), &read_only, SYNCHRONIZE | 1, FALSE, 0);
-  Check(gesher::AdoptTransferred(read_only, gesher::kTransferredCompletedFence) == -1,
+  Check(gesher::AdoptNativeFence(read_only, gesher::kTransferredCompletedFence) == -1,
         "transfer metadata cannot turn an unrelated event into a completed native fence");
+  HANDLE untyped = nullptr;
+  DuplicateHandle(GetCurrentProcess(), ordinary, GetCurrentProcess(), &untyped, SYNCHRONIZE | 1, FALSE, 0);
+  Check(gesher::AdoptNativeFence(untyped, 0) == -1,
+        "a native fence adoption requires its exact completed transport type");
   CloseHandle(ordinary);
 
   // Actual Windows waits forbid duplicate HANDLEs; duplicate POSIX eventfds
@@ -330,7 +334,7 @@ int Child(int argc, char** argv) {
   uint64_t metadata = std::strtoull(argv[3], nullptr, 0);
   HANDLE ready = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(argv[4], nullptr, 0)));
   HANDLE proceed = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(argv[5], nullptr, 0)));
-  int fd = gesher::AdoptTransferred(owned, metadata);
+  int fd = gesher::AdoptNativeFence(owned, metadata);
   Check(fd >= 0, "child adopts the transferred native fence object");
   pollfd record{fd, POLLIN, 0};
   if (fd >= 0) Check(poll(&record, 1, 0) == 1, "only completed native fences are exposed across processes");
@@ -352,7 +356,7 @@ void Transfer(EGLDisplay display) {
   uintptr_t value = 0;
   uint64_t metadata = 0;
   std::shared_ptr<gesher::NativeFence> retained;
-  bool described = fd >= 0 && gesher::DescribeForTransfer(fd, &value, &metadata, &retained);
+  bool described = fd >= 0 && gesher::TransferNativeFence(fd, &value, &metadata, &retained);
   Check(described, "native fd exports tagged handle metadata");
   if (!described) { if (fd >= 0) close(fd); return; }
   HANDLE handle = nullptr;

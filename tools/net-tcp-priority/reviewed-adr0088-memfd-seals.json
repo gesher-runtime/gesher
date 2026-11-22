@@ -3,13 +3,6 @@
  "hunks": {
   "compat/posix/src/fd.cc": [
    [
-    18,
-    [],
-    [
-     "#include <algorithm>\n"
-    ]
-   ],
-   [
     27,
     [],
     [
@@ -24,7 +17,7 @@
     ]
    ],
    [
-    266,
+    267,
     [],
     [
      "    int result;\n"
