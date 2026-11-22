@@ -27,6 +27,11 @@ Set-Location -LiteralPath $here
 function NoDrive([string] $p) {
   return ConvertTo-GesherAndroidPath -Path $p
 }
+# The user's own dex path keeps its long form: only Gesher's roots take
+# 8.3 short paths, so file names and extensions stay as given (docs/installer.md).
+function UserPath([string] $p) {
+  return ConvertTo-GesherAndroidPath -Path $p -KeepLongPath
+}
 
 # The directories Android's runtime expects.
 foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
@@ -50,5 +55,5 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$here/tzdata"
 $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.
 & (Join-Path $here 'dalvikvm.exe') "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$here/framework/boot.art")" `
-  -Xint '-Xusejit:false' -cp (NoDrive $dexFull) $Class @ProgramArgs
+  -Xint '-Xusejit:false' -cp (UserPath $dexFull) $Class @ProgramArgs
 exit $LASTEXITCODE

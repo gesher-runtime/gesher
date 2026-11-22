@@ -134,6 +134,16 @@ function Resolve-GesherAsciiPath {
         $hadTrailingSep = ($native.Length -gt 3 -and $native.EndsWith('\'))
         $probe = if ($native.Length -gt 3) { $native.TrimEnd('\') } else { $native }
         $trailing = [System.Collections.Generic.List[string]]::new()
+        # The leaf keeps its long name: an 8.3 alias truncates and upper-cases
+        # extensions (.xapk -> .XAP), and callers key behaviour on file names.
+        # Only the ancestors are shortened; a non-ASCII leaf leaves the whole
+        # path long (see the check at the end).
+        $leafName = [IO.Path]::GetFileName($probe)
+        $leafParent = [IO.Path]::GetDirectoryName($probe)
+        if ($leafName -and $leafParent -and $leafParent -ne $probe) {
+            $trailing.Add($leafName)
+            $probe = if ($leafParent.Length -gt 3) { $leafParent.TrimEnd('') } else { $leafParent }
+        }
         while ($probe -and (([IO.Path]::GetFileName($probe) -notmatch '[^\x00-\x7F]') -or -not ([IO.Directory]::Exists($probe) -or [IO.File]::Exists($probe)))) {
             $leaf = [IO.Path]::GetFileName($probe)
             $parent = [IO.Path]::GetDirectoryName($probe)
@@ -173,10 +183,13 @@ function Resolve-GesherAsciiPath {
 function ConvertTo-GesherAndroidPath {
     param(
         [Parameter(Mandatory = $false)][AllowEmptyString()][string] $Path,
-        [Parameter(Mandatory = $false)][AllowEmptyString()][string] $BaseDrive = ''
+        [Parameter(Mandatory = $false)][AllowEmptyString()][string] $BaseDrive = '',
+        # User-supplied paths (an APK, a dex, other arguments) are passed as
+        # given: only Gesher's own roots are rewritten to 8.3 short paths.
+        [switch] $KeepLongPath
     )
     if ([string]::IsNullOrEmpty($Path)) { return $Path }
-    $resolved = Resolve-GesherAsciiPath -Path $Path
+    $resolved = if ($KeepLongPath) { $Path } else { Resolve-GesherAsciiPath -Path $Path }
     $posix = $resolved.Replace('\', '/')
     if ($posix -match '^([A-Za-z]):(.*)$') {
         $drive = $Matches[1]

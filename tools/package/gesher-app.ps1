@@ -176,6 +176,11 @@ Set-Location -LiteralPath $here
 function NoDrive([string] $p) {
   return ConvertTo-GesherAndroidPath -Path $p
 }
+# The user's own APK path keeps its long form: only Gesher's roots take
+# 8.3 short paths, so file names and extensions stay as given (docs/installer.md).
+function UserPath([string] $p) {
+  return ConvertTo-GesherAndroidPath -Path $p -KeepLongPath
+}
 
 foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
   New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null
@@ -278,19 +283,19 @@ try {
   # The device's commands, and launching through it (com.gesher.app.Launcher).
   if ($commands -contains $command) {
     $launcherArgs = @($command)
-    if ($apkFull) { $launcherArgs += NoDrive $apkFull }
+    if ($apkFull) { $launcherArgs += UserPath $apkFull }
     & $dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments @launcherArgs @rest
     exit $LASTEXITCODE
   }
   if ($rest -notcontains '--single-process' -and $rest -notcontains '--system-server') {
-    & $dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch (NoDrive $apkFull) @rest
+    & $dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch (UserPath $apkFull) @rest
     exit $LASTEXITCODE
   }
 
   # Single process: the app alone, with stand-in services in its own process.
   $DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
   if ($DriverArgs -notcontains '--system-server') {
-    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
+    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
     exit $LASTEXITCODE
   }
 
@@ -309,7 +314,7 @@ try {
     $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
       -RedirectStandardOutput "$logs/run-servicemanager.out" -RedirectStandardError "$logs/run-servicemanager.log"
     $started += Start-Process $dalvikvm -PassThru -NoNewWindow `
-      -ArgumentList ($dvm + 'com.gesher.server.SystemServer', (NoDrive $apkFull)) `
+      -ArgumentList ($dvm + 'com.gesher.server.SystemServer', (UserPath $apkFull)) `
       -RedirectStandardOutput "$logs/run-system_server.out" -RedirectStandardError "$logs/run-system_server.log"
     # The app process gets no service manager if it starts before servicemanager is the
     # context manager: wait until the system server has registered its services (90 s).
@@ -319,7 +324,7 @@ try {
       if ($text.Contains('with servicemanager')) { break }
       Start-Sleep -Milliseconds 100
     }
-    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
+    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
     $code = $LASTEXITCODE
     if ($code -ne 0) { Write-Host ('gesher-app: ' + (Get-GesherText 'server_logs' @($logs))) }
   } finally {
