@@ -62,11 +62,24 @@ $null = NetDex 'sockets, DNS, NIO, HTTP and crypto on this machine' @('local')
 # Conscrypt and the network security config read.
 $files = @(Get-ChildItem $cacerts -ErrorAction SilentlyContinue | Where-Object Name -match '^[0-9a-f]{8}\.\d+$')
 $bundled = @(Get-ChildItem "$Dir/cacerts" -ErrorAction SilentlyContinue).Count
-if ($bundled -gt 100 -and $files.Count -ge $bundled -and (Test-Path (Join-Path $cacerts '.gesher-cacerts'))) {
+# Only certificates in it (Conscrypt reads every file as one): the manifest is next to it.
+$others = @(Get-ChildItem $cacerts -Force -ErrorAction SilentlyContinue | Where-Object Name -notmatch '^[0-9a-f]{8}\.\d+$')
+if ($bundled -gt 100 -and $files.Count -ge $bundled -and $others.Count -eq 0 -and
+    (Test-Path -LiteralPath (Join-Path (Split-Path $cacerts) '.gesher-cacerts'))) {
   Write-Host "PASS  net: the system CA certificates in `$ANDROID_ROOT/etc/security/cacerts: $($files.Count) ($bundled Android's, the rest from Windows' stores)"
 } else {
-  Write-Host "FAIL  net: the system CA certificates in `$ANDROID_ROOT/etc/security/cacerts: $($files.Count) files, $bundled bundled"
+  Write-Host "FAIL  net: the system CA certificates in `$ANDROID_ROOT/etc/security/cacerts: $($files.Count) files, $($others.Count) others, $bundled bundled"
   $failed++
+}
+# The same layout in a directory of its own, upgrading what earlier versions left in it.
+if (Test-Path "$Dir/trust_store_layout_test.exe") {
+  $layout = (& "$Dir/trust_store_layout_test.exe" 2>&1 | Out-String)
+  if ($LASTEXITCODE -eq 0 -and $layout -match 'trust store layout: all passed') {
+    Write-Host "PASS  net: the system CA directory holds only certificates ($($layout.Trim()))"
+  } else {
+    Write-Host "FAIL  net: the system CA directory layout`n$layout"
+    $failed++
+  }
 }
 
 # TCP and UDP echo servers that are not Java: .NET's, on another thread of this script.
