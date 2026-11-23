@@ -27,6 +27,12 @@ bool Check(bool result, const char* description) {
 }
 
 int ReadGuest(const wchar_t* path, const wchar_t* persistent) {
+  wchar_t temp[MAX_PATH], file_name[MAX_PATH];
+  const DWORD temp_length = GetTempPathW(MAX_PATH, temp);
+  if (!Check(temp_length > 0 && temp_length < MAX_PATH &&
+             GetTempFileNameW(temp, L"gst", 0, file_name) != 0 &&
+             DeleteFileW(file_name), "guest temp file under redirected LOCALAPPDATA")) return 1;
+
   bool ok = Check(props::ReadOnlyAreaPath().empty(), "guest cannot prepare an area");
   std::string value;
   uint32_t serial = 0;
@@ -91,6 +97,8 @@ int RunBroker(const std::wstring& root) {
   std::wstring log = root + L"\\guest.log";
   auto command = L"\"" + guest + L"\" --guest \"" + path + L"\" \"" + persistent + L"\"";
   const gesher::zygote::AppContainerSpec spec{U16(profile), U16(profile), {}};
+  if (!Check(SetEnvironmentVariableW(L"LOCALAPPDATA", root.c_str()),
+             "redirect only the runtime's Local AppData environment")) return 1;
   int pid = gesher::zygote::SpawnInAppContainer(U16(command), {}, {}, U16(log), spec);
   if (!Check(pid > 0, "start real contained guest")) return 1;
 
