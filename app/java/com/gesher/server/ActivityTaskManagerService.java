@@ -239,19 +239,36 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         private final ProcessRecord process;
         private final String resultWho;
         private final int requestCode;
+        private boolean resultDelivered;
         private Runnable releaseCover;
         private boolean completed;
 
-        InstallConfirmationVisit(IBinder sourceToken, int callerPid, String resultWho, int requestCode) {
+        InstallConfirmationVisit(IBinder sourceToken, ProcessRecord expectedProcess,
+                String resultWho, int requestCode) {
             synchronized (ActivityTaskManagerService.this) {
                 ActivityRecord record = sourceToken == null ? null : forToken(sourceToken);
                 ProcessRecord app = record == null ? null : record.app;
-                boolean attached = app != null && app == processByPid(callerPid);
+                boolean attached = app != null && app == expectedProcess
+                        && processByPid(app.pid) == app && !app.exiting && !app.dead
+                        && mActivities.contains(record) && !record.finishing
+                        && record.state != State.DESTROYED;
                 this.source = attached ? record : null;
                 this.process = attached ? app : null;
             }
             this.resultWho = resultWho;
             this.requestCode = requestCode;
+        }
+
+        void detachResult() {
+            deliver(false);
+        }
+
+        private void deliver(boolean confirmed) {
+            if (resultDelivered || source == null || requestCode < 0) return;
+            resultDelivered = true;
+            deliverResult(source, resultWho, requestCode,
+                    confirmed ? android.app.Activity.RESULT_OK : android.app.Activity.RESULT_CANCELED,
+                    null, process);
         }
 
         void cover(Intent intent) {
@@ -263,11 +280,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (completed) return;
                 completed = true;
                 try {
-                    if (source != null && requestCode >= 0) {
-                        deliverResult(source, resultWho, requestCode,
-                                confirmed ? android.app.Activity.RESULT_OK : android.app.Activity.RESULT_CANCELED,
-                                null, process);
-                    }
+                    deliver(confirmed);
                 } finally {
                     if (releaseCover != null) releaseCover.run();
                 }
@@ -538,6 +551,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
     private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
+    private final ThreadLocal<ProcessRecord> mVerifiedIntentSenderSource = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedPublication = new ThreadLocal<>();
     private Runnable mBeforeActivityPublication; // Server-local retirement race fixture.
@@ -1579,12 +1593,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             Intent intent = intents[intents.length - 1];
             intent.setFlags((intent.getFlags() & ~mask) | (flagsValues & mask));
             Bundle launchOptions = activityOptions(mergedOptions, shareIdentity);
-            if (intents.length > 1) {
-                return withVerifiedCreator(creator, creatorLive, callerLive,
-                        () -> startActivities(null, creator, null, intents, types, resultTo, launchOptions, 0));
+            ProcessRecord previous = mVerifiedIntentSenderSource.get();
+            mVerifiedIntentSenderSource.set(source == null ? null : process);
+            try {
+                if (intents.length > 1) {
+                    return withVerifiedCreator(creator, creatorLive, callerLive,
+                            () -> startActivities(null, creator, null, intents, types, resultTo, launchOptions, 0));
+                }
+                return startActivityForVerifiedCreator(creator, intent, types[0],
+                        creatorLive, resultTo, resultWho, requestCode, launchOptions, callerLive);
+            } finally {
+                if (previous == null) mVerifiedIntentSenderSource.remove();
+                else mVerifiedIntentSenderSource.set(previous);
             }
-            return startActivityForVerifiedCreator(creator, intent, types[0],
-                    creatorLive, resultTo, resultWho, requestCode, launchOptions, callerLive);
         });
     }
 
@@ -2914,13 +2935,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         if (PackageInstallerService.isConfirmationIntent(intent)) {
-            if (internalCreator && (delegated == null || !delegated.getAsBoolean())) {
+            boolean systemCreator = internalCreator && "android".equals(originalName)
+                    && originalCallerCode == null;
+            if (internalCreator && (delegated == null || !delegated.getAsBoolean()
+                    || originalCallerCode == null && !systemCreator)) {
                 return ActivityManager.START_CANCELED;
             }
+            ProcessRecord source = internalCreator ? mVerifiedIntentSenderSource.get() : originalProcess;
             boolean newTask = (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
-            return mPm.packageInstallerService().openConfirmation(intent, resultToToken,
-                    originalPid, resultWho, newTask ? -1 : requestCode,
-                    internalCreator ? originalCallerCode : null);
+            var visit = new InstallConfirmationVisit(resultToToken, source, resultWho, requestCode);
+            return mPm.packageInstallerService().openConfirmation(intent, visit, newTask,
+                    internalCreator ? originalCallerCode : null, systemCreator);
         }
         if (intent != null && PackageManager.ACTION_REQUEST_PERMISSIONS.equals(intent.getAction())) {
             return requestPermissions(caller, callingPackage, intent, resultToToken,

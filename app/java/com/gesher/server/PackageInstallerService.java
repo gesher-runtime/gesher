@@ -206,15 +206,15 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         return info;
     }
 
-    int openConfirmation(Intent intent, IBinder origin, int callerPid, String resultWho, int requestCode,
-            ApkPackage verifiedCreator) {
+    int openConfirmation(Intent intent, ActivityTaskManagerService.InstallConfirmationVisit visit,
+            boolean newTask, ApkPackage verifiedCreator, boolean verifiedSystemCreator) {
         int sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1);
         Bundle extras = intent.getExtras();
         IBinder token = extras == null ? null : extras.getBinder(CONFIRMATION_TOKEN);
         Session session;
         synchronized (mSessions) { session = mSessions.get(sessionId); }
         if (session == null || token == null) return ActivityManager.START_INTENT_NOT_RESOLVED;
-        return session.openConfirmation(intent, token, origin, callerPid, resultWho, requestCode, verifiedCreator);
+        return session.openConfirmation(intent, token, visit, newTask, verifiedCreator, verifiedSystemCreator);
     }
 
     boolean hasSourceConfirmation(ApkPackage source) {
@@ -964,13 +964,14 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             }
         }
 
-        private int openConfirmation(Intent intent, IBinder token, IBinder origin, int callerPid,
-                String resultWho, int requestCode, ApkPackage verifiedCreator) {
+        private int openConfirmation(Intent intent, IBinder token,
+                ActivityTaskManagerService.InstallConfirmationVisit visit, boolean newTask,
+                ApkPackage verifiedCreator, boolean verifiedSystemCreator) {
             // A verified Activity PendingIntent acts as its installed creator, not the
             // process that triggered it. A direct start authenticates its Binder caller.
-            boolean ownsAction = verifiedCreator == null ? owner.equals(caller()) : ownerCode == verifiedCreator;
+            boolean ownsAction = verifiedSystemCreator ? "android".equals(owner)
+                    : verifiedCreator != null ? ownerCode == verifiedCreator : owner.equals(caller());
             if (!ownsAction) throw new SecurityException("Foreign install confirmation");
-            var visit = mAtm.new InstallConfirmationVisit(origin, callerPid, resultWho, requestCode);
             Confirmation pending;
             synchronized (this) {
                 pending = confirmation;
@@ -984,6 +985,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             }
             boolean open = false;
             try {
+                if (newTask) visit.detachResult();
                 int mode = installSourceMode();
                 if (mode == AppOpsManager.MODE_ALLOWED) {
                     pending.visit.cover(intent);
