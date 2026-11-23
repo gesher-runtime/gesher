@@ -16,6 +16,36 @@ import time
 from peer_scope import bind_windows_multicast
 
 
+class CommandReader:
+    """Observe replaced control files without blocking the network loop.
+
+    Windows can deny an open briefly while the Java peer replaces the old
+    command. Retry that access error for at most one second, without an ack or
+    a mode change. Missing/empty observations never extend an active deadline.
+    """
+    def __init__(self, path):
+        self.path = path
+        self.retry_deadline = None
+        self.retry_error = None
+
+    def read(self):
+        if self.retry_deadline is not None and time.monotonic() >= self.retry_deadline:
+            raise self.retry_error
+        try:
+            command = self.path.read_text(encoding='utf-8').strip()
+        except FileNotFoundError:
+            return ''  # The first command or its replacement is not visible yet.
+        except PermissionError as error:
+            if self.retry_deadline is None:
+                self.retry_deadline = time.monotonic() + 1.0
+                self.retry_error = error
+            return ''
+        if command:
+            self.retry_deadline = None
+            self.retry_error = None
+        return command
+
+
 def name(labels):
     out = bytearray()
     for label in labels:
@@ -105,10 +135,10 @@ def run_peer(args, service, sock):
     mode = 'silent'
     next_send = 0
     started = time.monotonic()
+    commands = CommandReader(args.control / 'command')
     (args.control / 'ready').write_text('ready', encoding='utf-8')
     while time.monotonic() - started < 150:
-        command_file = args.control / 'command'
-        command = command_file.read_text(encoding='utf-8').strip() if command_file.exists() else ''
+        command = commands.read()
         if command and command != current:
             current = command
             serial, mode = command.split(' ', 1)
