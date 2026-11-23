@@ -48,7 +48,7 @@ Check 'network: HTTP/2 full duplex, direct buffers, flush and gRPC trailers' {
   $http2Out
 } @('Http2DeviceSmoke passed:')
 
-$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'large', 'cancel', 'disabled')
+$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'large', 'cancel', 'disabled', 'sessions')
 foreach ($http2ContractMode in $http2ContractModes) {
   $http2ContractOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + $http2ContractMode) 45
   $http2ContractCode = $LASTEXITCODE
@@ -57,6 +57,13 @@ foreach ($http2ContractMode in $http2ContractModes) {
     $http2ContractOut
   } @('Http2DeviceSmoke passed:')
 }
+
+$http2CreditOut = FixesRun ($dvmFixes + 'Http2CreditContracts') 45
+$http2CreditCode = $LASTEXITCODE
+Check 'network: HTTP/2 returns discarded receive credit exactly once' {
+  if ($http2CreditCode -ne 0) { throw "HTTP/2 receive credit failed: $http2CreditOut" }
+  $http2CreditOut
+} @('Http2CreditContracts: 55 checks, 0 failures; in-memory only, max DATA 1025 bytes')
 
 $http2GzipOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + 'gzip') 45
 $http2GzipCode = $LASTEXITCODE
@@ -410,6 +417,21 @@ Check 'services: AppOps defaults, authority, attributed delivery, foreground lif
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
 } @('AppOpsContractTest all passed: 489 checks; binder=true')
+
+# Real UID grant decisions and the production AudioRecord/MediaRecorder JNI errors.
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
+$audioAdmissionData = Join-Path $root 'audio-recording-admission'
+New-Item -ItemType Directory -Force $audioAdmissionData | Out-Null
+$audioAdmissionOut = Invoke-FixtureProcess "$Dir/dalvikvm.exe" ($dvmFixes +
+  'gesher.services.ServiceFixtureRunner' + 'AudioRecordingPermissionTest') 90 @{
+    ANDROID_DATA = (NoDrive $audioAdmissionData)
+    GESHER_UID = '12772'; GESHER_BINDER_UID = '12772'; GESHER_MICROG_SPOOF = '1'
+  }
+$audioAdmissionCode = $LASTEXITCODE
+Check 'services: live UID microphone grants, revocation and native public admission errors' {
+  $global:LASTEXITCODE = $audioAdmissionCode
+  $audioAdmissionOut
+} @('AudioRecordingPermissionTest all passed:', 'checks; binder=true; production-jni=false')
 
 $uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'PackageUidIsolationContractTest' +

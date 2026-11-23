@@ -126,6 +126,22 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/test-process-reader-handles.ps1
+      - name: Build native clipboard foreground actor before timed startup
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 tests\windows\clipboard\foreground_helper.cc /Fe:clipboard_foreground.exe user32.lib
+      - name: Native foreground HWND ownership, failure and parent-death cleanup
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: tests/windows/clipboard/ForeignForegroundChecks.ps1 -Executable ./clipboard_foreground.exe
+      - name: Preserve native foreground fixture evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clipboard-foreground-${{ matrix.os }}
+          path: ${{ runner.temp }}/clipboard-foreground-contract-*/**
+          if-no-files-found: warn
       - name: Storage scan coalescing, bounded admission and real filesystem contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -211,9 +227,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install media contract encoder and decoder tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Windows test shard coverage, dependencies and failure controls
         shell: pwsh
-        run: tests/windows/test-test-shards.ps1
+        run: |
+          tests/windows/test-test-shards.ps1
+          tests/windows/test-bitmap-shared-gate.ps1
 
       - name: Wi-Fi specifier native evidence checker contracts
         shell: pwsh
@@ -286,6 +309,7 @@ jobs:
           python3 tools/test_pthread_attribute_contracts.py --sanitize
           python3 tools/test_bionic_wait_contracts.py --sanitize
           python3 tools/test_libcore_process_logging.py --sanitize
+          python3 tools/test_structured_logging.py --sanitize
           python3 tools/test_debug_memory_contracts.py --sanitize
           python3 tools/test_bionic_dns_contracts.py --sanitize
           python3 tools/test_ordinary_os_contracts.py --sanitize
@@ -338,6 +362,9 @@ jobs:
       - name: MediaPlayer PCM priming and playback lifecycle contracts
         run: python3 tools/test_media_player_priming.py --sanitize
 
+      - name: JNI GetEnv rejects unbridged interfaces before host allocation
+        run: python3 tools/test_jni_getenv_boundary.py --sanitize
+
       - name: JNI and mixer allocation bounds and surface image-cache lifetime
         run: |
           python3 tools/test_symbol_lookup_allocations.py
@@ -347,6 +374,7 @@ jobs:
           python3 tools/test_binder_receive_views.py --sanitize
           python3 tools/test_camera_capture_allocations.py --sanitize
           python3 tools/test_layered_bitmap_cache.py --sanitize
+          python3 tools/test_bitmap_shared.py --sanitize
           python3 tools/test_camera_conversion_allocations.py --sanitize
           python3 tools/test_surface_present_allocations.py --sanitize
           python3 tools/test_d3d11_readback.py --sanitize
@@ -445,6 +473,7 @@ jobs:
           python3 tools/test_webstorage_origin_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
+          python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
           python3 tools/test_uia_snapshot_contracts.py --sanitize
           python3 tools/test_running_tasks_contracts.py
 
@@ -520,6 +549,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
           python3 tools/test_media_recorder_lifecycle.py
+          python3 tools/test_media_recorder_rollover.py --sanitize
+          python3 tools/test_mp4_rollover_work.py
           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
 
       - name: libcore System.nanoTime shares Android awake-time domain
@@ -633,6 +664,9 @@ jobs:
           python3 tools/test_layered_bitmap_cache.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/layered_bitmap_cache_test.exe
+          python3 tools/test_structured_logging.py --compile-only \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/structured_logging_test.exe
           python3 tools/test_native_poll_allocations.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/native_poll_allocations_test.exe
@@ -892,7 +926,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@972c2b42b40c4ac799e147f5e352d07ba615d0fb
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@06d175a84affff8914c00151269b0aa2f7f4032a
     with:
       local-runner: false
 
@@ -1914,6 +1948,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/layered_bitmap_cache_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/structured_logging_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/native_poll_allocations_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/toast_history_identity_test.exe
@@ -2103,6 +2139,8 @@ jobs:
             dist/realtime-signals-evidence/**/*.json
             ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
             ${{ runner.temp }}/gesher-root/logs/system_server.log
+            ${{ runner.temp }}/clipboard-foreground-*/*.log
+            ${{ runner.temp }}/clipboard-foreground-*/*.json
           if-no-files-found: error
 
   test:

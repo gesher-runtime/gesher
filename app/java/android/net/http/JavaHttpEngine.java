@@ -18,6 +18,7 @@ final class JavaHttpEngine extends HttpEngine {
     private static final URL HTTPS_BASE = transportBase("https://localhost/");
     final String agent;
     final boolean http2Enabled;
+    final Http2SessionPool http2Sessions = new Http2SessionPool();
     private final EngineHttpCache cache;
     final ExecutorService io = Executors.newCachedThreadPool(r -> {
         Thread thread = new Thread(r, "Gesher-HttpEngine"); thread.setDaemon(true); return thread;
@@ -99,7 +100,7 @@ final class JavaHttpEngine extends HttpEngine {
     @Override public synchronized void shutdown() {
         if (!active.isEmpty()) throw new IllegalStateException("Cannot shut down an engine with active requests");
         if (closed) return;
-        closed=true; io.shutdown(); cache.close();
+        closed=true; http2Sessions.close(); io.shutdown(); cache.close();
     }
     synchronized void register(Object request) { checkOpen(); active.add(request); }
     synchronized void release(Object request) { active.remove(request); }
