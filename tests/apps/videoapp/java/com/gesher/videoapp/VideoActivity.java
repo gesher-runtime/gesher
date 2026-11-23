@@ -78,6 +78,7 @@ public class VideoActivity extends Activity {
                 if (!surfacesOnly) {
                     retriever();
                     retrieverIndexedFrames();
+                    retrieverFilteredPixels();
                     player();
                     videoView();
                     // The software decoders (and WebM's audio) through MediaPlayer and
@@ -707,6 +708,103 @@ public class VideoActivity extends Activity {
         } finally {
             retriever.release();
         }
+    }
+
+    static void bitmapPixels(Bitmap actual, Bitmap expected, boolean mutable, String label) {
+        if (actual == null || actual.getWidth() != expected.getWidth()
+                || actual.getHeight() != expected.getHeight()
+                || actual.getConfig() != expected.getConfig()
+                || actual.hasAlpha() != expected.hasAlpha()
+                || actual.isPremultiplied() != expected.isPremultiplied()
+                || actual.getDensity() != expected.getDensity()
+                || !actual.getColorSpace().equals(expected.getColorSpace())
+                || actual.isMutable() != mutable) {
+            throw new AssertionError(label + ": Bitmap dimensions/config/alpha/density/mutability");
+        }
+        int width = actual.getWidth(), height = actual.getHeight();
+        int[] a = new int[width * height], b = new int[a.length];
+        actual.getPixels(a, 0, width, 0, 0, width, height);
+        expected.getPixels(b, 0, width, 0, 0, width, height);
+        boolean rgb565 = actual.getConfig() == Bitmap.Config.RGB_565;
+        for (int i = 0; i < a.length; i++) {
+            if ((a[i] >>> 24) != 255) throw new AssertionError(label + ": alpha at " + i);
+            for (int channel = 0; channel < 3; channel++) {
+                int av = (a[i] >>> (channel * 8)) & 255, bv = (b[i] >>> (channel * 8)) & 255;
+                if (rgb565) {
+                    int quantization = channel == 1 ? 2 : 3;
+                    av >>>= quantization;
+                    bv >>>= quantization;
+                }
+                if (Math.abs(av - bv) > 1) {
+                    throw new AssertionError(label + ": filtered pixel " + i + " channel " + channel
+                            + " expected " + bv + " actual " + av);
+                }
+            }
+        }
+    }
+
+    void retrieverAsset(MediaMetadataRetriever retriever, String name) throws Exception {
+        try (AssetFileDescriptor fd = getAssets().openFd(name)) {
+            retriever.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+        }
+    }
+
+    void retrieverFilteredPixels() throws Exception {
+        String[] names = {"retriever_pattern.mp4", "retriever_pattern_90.mp4",
+                "retriever_pattern_180.mp4", "retriever_pattern_270.mp4", "retriever_pattern_sar.mp4"};
+        int[] rotations = {0, 90, 180, 270, 0};
+        int cases = 0;
+        for (Bitmap.Config preferred : new Bitmap.Config[]{Bitmap.Config.ARGB_8888,
+                Bitmap.Config.RGB_565, Bitmap.Config.ALPHA_8}) {
+            MediaMetadataRetriever.BitmapParams params = new MediaMetadataRetriever.BitmapParams();
+            params.setPreferredConfig(preferred);
+            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+            Bitmap base = null;
+            try {
+                retrieverAsset(retriever, names[0]);
+                base = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST, params);
+                Bitmap.Config wanted = preferred == Bitmap.Config.RGB_565
+                        ? Bitmap.Config.RGB_565 : Bitmap.Config.ARGB_8888;
+                if (base == null || base.getConfig() != wanted || params.getActualConfig() != wanted
+                        || base.getWidth() != 320 || base.getHeight() != 192 || base.isMutable()) {
+                    throw new AssertionError("unscaled retriever Bitmap config or storage");
+                }
+                for (int asset = 0; asset < names.length; asset++) {
+                    retrieverAsset(retriever, names[asset]);
+                    int reported = Integer.parseInt(retriever.extractMetadata(
+                            MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
+                    if (reported != rotations[asset]) throw new AssertionError("fixture rotation " + names[asset]);
+                    android.graphics.Matrix rotate = new android.graphics.Matrix();
+                    rotate.postRotate(rotations[asset]);
+                    Bitmap oriented = Bitmap.createBitmap(base, 0, 0, base.getWidth(), base.getHeight(), rotate, false);
+                    int displayWidth = asset == 4 ? 480 : oriented.getWidth();
+                    int displayHeight = oriented.getHeight();
+                    Bitmap fullReference = Bitmap.createScaledBitmap(oriented, displayWidth, displayHeight, true);
+                    Bitmap full = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST, params);
+                    bitmapPixels(full, fullReference, asset == 4, names[asset] + " full");
+                    float factor = Math.min(123.0f / displayWidth, 89.0f / displayHeight);
+                    int width = Math.round(displayWidth * factor), height = Math.round(displayHeight * factor);
+                    // Use the oriented coded pixels directly, avoiding a second
+                    // filter through the SAR-expanded full frame.
+                    Bitmap reference = Bitmap.createScaledBitmap(oriented, width, height, true);
+                    Bitmap actual = retriever.getScaledFrameAtTime(0,
+                            MediaMetadataRetriever.OPTION_CLOSEST, 123, 89, params);
+                    bitmapPixels(actual, reference, true, names[asset] + " scaled");
+                    if (params.getActualConfig() != wanted) throw new AssertionError("actual BitmapParams config");
+                    cases++;
+                    full.recycle();
+                    actual.recycle();
+                    reference.recycle();
+                    if (fullReference != oriented && fullReference != base) fullReference.recycle();
+                    if (oriented != base) oriented.recycle();
+                }
+            } finally {
+                if (base != null) base.recycle();
+                retriever.release();
+            }
+        }
+        say("retriever filtered pixels: " + cases
+                + " rotated/aspect/config cases, every pixel, density, alpha and mutability passed");
     }
 
     static String describe(android.graphics.Bitmap b) {

@@ -1,0 +1,141 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+// Declared Android boundaries for the exact production geometry methods.
+// The runner splits FILE sections into javac units. These adapters supply view
+// state, callbacks and visible rectangles; they do not perform the production
+// sibling traversal, shape packing, placement comparison or scratch ownership.
+
+// FILE: android/graphics/Rect.java
+package android.graphics;
+public class Rect {
+    public int left, top, right, bottom;
+    public Rect() {}
+    public Rect(int l, int t, int r, int b) { set(l, t, r, b); }
+    public void set(int l, int t, int r, int b) { left=l; top=t; right=r; bottom=b; }
+    public void set(Rect r) { set(r.left, r.top, r.right, r.bottom); }
+    public void setEmpty() { set(0, 0, 0, 0); }
+    public boolean isEmpty() { return left >= right || top >= bottom; }
+    public int width() { return right-left; }
+    public int height() { return bottom-top; }
+    public void offset(int x, int y) { left+=x; right+=x; top+=y; bottom+=y; }
+    public boolean intersect(Rect r) {
+        if (!intersects(this, r)) return false;
+        set(Math.max(left,r.left), Math.max(top,r.top), Math.min(right,r.right), Math.min(bottom,r.bottom));
+        return true;
+    }
+    public static boolean intersects(Rect a, Rect b) {
+        return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    }
+    public String toShortString() { return left+","+top+"-"+right+","+bottom; }
+}
+
+// FILE: android/graphics/RectF.java
+package android.graphics;
+public class RectF { public float left, top, right, bottom; }
+
+// FILE: android/graphics/Path.java
+package android.graphics;
+public class Path {
+    public float[] points;
+    public boolean failApproximation;
+    public int approximations;
+    public Path(float... points) { this.points=points; }
+    public float[] approximate(float error) {
+        if (error != 0.5f) throw new AssertionError("changed approximation tolerance");
+        ++approximations;
+        if (failApproximation) throw new UnsatisfiedLinkError("fixture native path unavailable");
+        return points.clone(); // Android's allocating API boundary, deliberately not cached.
+    }
+    public void computeBounds(RectF r, boolean exact) {
+        r.left=r.top=Float.POSITIVE_INFINITY;
+        r.right=r.bottom=Float.NEGATIVE_INFINITY;
+        for (int i=0; i+2<points.length; i+=3) {
+            r.left=Math.min(r.left,points[i+1]); r.top=Math.min(r.top,points[i+2]);
+            r.right=Math.max(r.right,points[i+1]); r.bottom=Math.max(r.bottom,points[i+2]);
+        }
+    }
+}
+
+// FILE: android/graphics/Outline.java
+package android.graphics;
+public final class Outline {
+    public static final int MODE_EMPTY=0, MODE_ROUND_RECT=1, MODE_PATH=2;
+    public int mMode;
+    public Path mPath;
+    public final Rect mRect=new Rect();
+    public float mRadius;
+    public void setEmpty() { mMode=MODE_EMPTY; mRect.setEmpty(); mRadius=-1; }
+    public boolean isEmpty() { return mMode==MODE_EMPTY; }
+    public boolean getRect(Rect r) { if (mMode!=MODE_ROUND_RECT) return false; r.set(mRect); return true; }
+    public float getRadius() { return mRadius; }
+    public void setRoundRect(int l, int t, int r, int b, float radius) {
+        mMode=MODE_ROUND_RECT; mRect.set(l,t,r,b); mRadius=radius;
+    }
+    public void setRect(int l, int t, int r, int b) { setRoundRect(l,t,r,b,0); }
+    public void setPath(Path path) { mMode=MODE_PATH; mPath=path; }
+}
+
+// FILE: android/graphics/drawable/Drawable.java
+package android.graphics.drawable;
+import android.graphics.Rect;
+public class Drawable {
+    private final Rect bounds=new Rect();
+    public Rect getBounds() { return bounds; }
+    public void setBounds(int l,int t,int r,int b) { bounds.set(l,t,r,b); }
+}
+
+// FILE: android/view/ViewParent.java
+package android.view;
+public interface ViewParent {}
+
+// FILE: android/view/ViewOutlineProvider.java
+package android.view;
+import android.graphics.Outline;
+public abstract class ViewOutlineProvider { public abstract void getOutline(View view, Outline outline); }
+
+// FILE: android/view/View.java
+package android.view;
+import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
+public class View implements ViewParent {
+    public static final int VISIBLE=0, INVISIBLE=4, GONE=8;
+    public int x, y, width=100, height=100, visibility=VISIBLE, windowVisibility=VISIBLE;
+    public float alpha=1, z;
+    public long hwnd=1;
+    public boolean shown=true, clipToOutline, visible=true;
+    public final Rect visibleRect=new Rect(0,0,100,100);
+    public ViewParent parent;
+    public ViewOutlineProvider outline;
+    public Drawable background;
+    public int locations, visibleReads, outlineReads;
+    public RuntimeException locationFailure;
+    public void getLocationInWindow(int[] out) {
+        ++locations;
+        if (locationFailure != null) throw locationFailure;
+        out[0]=x; out[1]=y;
+    }
+    public boolean getGlobalVisibleRect(Rect out) { ++visibleReads; out.set(visibleRect); return visible; }
+    public int getWidth() { return width; }
+    public int getHeight() { return height; }
+    public boolean isShown() { return shown; }
+    public int getWindowVisibility() { return windowVisibility; }
+    public int getVisibility() { return visibility; }
+    public float getAlpha() { return alpha; }
+    public float getZ() { return z; }
+    public ViewParent getParent() { return parent; }
+    public boolean getClipToOutline() { return clipToOutline; }
+    public Drawable getBackground() { return background; }
+    public ViewOutlineProvider getOutlineProvider() { ++outlineReads; return outline; }
+}
+
+// FILE: android/view/ViewGroup.java
+package android.view;
+import java.util.ArrayList;
+public class ViewGroup extends View {
+    public final ArrayList<View> children=new ArrayList<>();
+    public int childrenReads;
+    public void add(View child) { children.add(child); child.parent=this; }
+    public void remove(View child) { children.remove(child); child.parent=null; }
+    public int getChildCount() { ++childrenReads; return children.size(); }
+    public View getChildAt(int i) { return children.get(i); }
+    public int indexOfChild(View child) { return children.indexOf(child); }
+}
