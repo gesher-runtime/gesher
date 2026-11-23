@@ -306,6 +306,7 @@ struct Container {
   std::vector<SID_AND_ATTRIBUTES> capabilities;
   SECURITY_CAPABILITIES security{};
   std::u16string folder;
+  std::u16string local_app_data;
 };
 
 std::wstring Wide(const std::u16string& s) {
@@ -331,7 +332,19 @@ DWORD PrepareContainer(const AppContainerSpec& spec, Container* out) {
   error = appcontainer::FolderPath(out->sid.value, &folder);
   if (error != ERROR_SUCCESS) return error;
   out->folder = U(folder.c_str(), folder.size());
+  std::wstring local_app_data;
+  error = appcontainer::LocalAppDataPath(&local_app_data);
+  if (error != ERROR_SUCCESS) return error;
+  out->local_app_data = U(local_app_data.c_str(), local_app_data.size());
   return ERROR_SUCCESS;
+}
+
+std::vector<std::u16string> ContainerEnvironment(const Container& container) {
+  // GetTempPathW inside an AppContainer derives the path from LOCALAPPDATA
+  // even when TEMP and TMP are set. The host may isolate its device with a
+  // different LOCALAPPDATA, but the OS still owns the real package profile.
+  const auto temp = container.folder + u"\\Temp";
+  return {u"TEMP=" + temp, u"TMP=" + temp, u"LOCALAPPDATA=" + container.local_app_data};
 }
 
 int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> set,
@@ -370,9 +383,8 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
   if (sandbox != nullptr) {
     DWORD error = PrepareContainer(*sandbox, &container);
     if (error != ERROR_SUCCESS) return -static_cast<int>(error);
-    // Temporary files in the container's own folder: the user's %TEMP% is closed to it.
-    set.push_back(u"TEMP=" + container.folder);
-    set.push_back(u"TMP=" + container.folder);
+    auto temporary = ContainerEnvironment(container);
+    set.insert(set.end(), temporary.begin(), temporary.end());
   }
   const DWORD attribute_count = 1 + (sandbox != nullptr) + (lifetime_job != nullptr);
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, TRUE};
@@ -1309,7 +1321,7 @@ uint32_t RunPinnedContainedStandalone(const std::u16string& command, const AppCo
     failure = PreparePinnedSource(pin, &source);
     if (failure != ERROR_SUCCESS) return failure;
   }
-  auto environment = EnvironmentBlock({u"TEMP=" + sandbox.folder, u"TMP=" + sandbox.folder},
+  auto environment = EnvironmentBlock(ContainerEnvironment(sandbox),
       {u"GESHER_UID", u"GESHER_BINDER_UID", u"GESHER_BINDER", u"TMPDIR"});
   return Supervise(command, std::move(environment), exit_code, &sandbox, uid,
                    pin == 0 ? nullptr : &source);
@@ -1382,7 +1394,7 @@ uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& 
     std::lock_guard<std::mutex> lock(g_bootstrap_lock);
     streams = std::move(Authority().stdio);
   }
-  auto environment = EnvironmentBlock({u"TEMP=" + sandbox.folder, u"TMP=" + sandbox.folder},
+  auto environment = EnvironmentBlock(ContainerEnvironment(sandbox),
       {u"GESHER_BINDER_UID", u"GESHER_UID", u"TMPDIR"});
   return Supervise(command, std::move(environment), exit_code, &sandbox, uid, &input,
                    &bootstrap, streams[0] ? &streams : nullptr);

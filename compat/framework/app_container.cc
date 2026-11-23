@@ -58,35 +58,6 @@ HRESULT ContainerFolder(PCWSTR sid, PWSTR* path) {
   return fn ? fn(sid, path) : kMissing;
 }
 
-// Profile creation uses the actual Windows Local AppData known folder, while
-// GetAppContainerFolderPath may expand an overridden LOCALAPPDATA. Translate
-// only that prefix; the AppContainer directory suffix comes from Windows.
-void NormalizeContainerFolder(std::wstring* folder) {
-  DWORD size = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
-  if (!size) return;
-  std::wstring environment(size, L'\0');
-  DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", environment.data(), size);
-  if (!length || length >= size) return;
-  environment.resize(length);
-  std::replace(environment.begin(), environment.end(), L'/', L'\\');
-  while (!environment.empty() && environment.back() == L'\\') environment.pop_back();
-  if (environment.empty() || folder->size() <= environment.size() ||
-      (*folder)[environment.size()] != L'\\' ||
-      CompareStringOrdinal(folder->data(), static_cast<int>(environment.size()),
-                           environment.data(), static_cast<int>(environment.size()),
-                           TRUE) != CSTR_EQUAL) return;
-
-  using KnownFolderFn = HRESULT(WINAPI*)(const GUID*, DWORD, HANDLE, PWSTR*);
-  static const auto get = Resolve<KnownFolderFn>(L"shell32.dll", "SHGetKnownFolderPath");
-  static constexpr GUID kLocalAppData{0xf1b32785, 0x6fba, 0x4fcf,
-                                      {0x9d, 0x55, 0x7b, 0x8e, 0x7f, 0x15, 0x70, 0x91}};
-  PWSTR local = nullptr;
-  if (get && SUCCEEDED(get(&kLocalAppData, 0, nullptr, &local)) && local) {
-    folder->replace(0, environment.size(), local);
-  }
-  CoTaskMemFree(local);
-}
-
 BOOL CapabilitySids(LPCWSTR name, PSID** groups, DWORD* group_count, PSID** sids,
                     DWORD* sid_count) {
   static const auto fn =
@@ -209,7 +180,20 @@ DWORD FolderPath(PSID container, std::wstring* path) {
   if (FAILED(hr)) return HRESULT_CODE(hr) != 0 ? HRESULT_CODE(hr) : ERROR_GEN_FAILURE;
   *path = folder;
   CoTaskMemFree(folder);
-  NormalizeContainerFolder(path);
+  return ERROR_SUCCESS;
+}
+
+DWORD LocalAppDataPath(std::wstring* path) {
+  using KnownFolderFn = HRESULT(WINAPI*)(const GUID*, DWORD, HANDLE, PWSTR*);
+  static const auto get = Resolve<KnownFolderFn>(L"shell32.dll", "SHGetKnownFolderPath");
+  static constexpr GUID kLocalAppData{0xf1b32785, 0x6fba, 0x4fcf,
+                                      {0x9d, 0x55, 0x7b, 0x8e, 0x7f, 0x15, 0x70, 0x91}};
+  PWSTR local = nullptr;
+  const HRESULT status = get ? get(&kLocalAppData, 0, nullptr, &local) : kMissing;
+  if (FAILED(status)) return HRESULT_CODE(status);
+  if (!local) return ERROR_PATH_NOT_FOUND;
+  *path = local;
+  CoTaskMemFree(local);
   return ERROR_SUCCESS;
 }
 
