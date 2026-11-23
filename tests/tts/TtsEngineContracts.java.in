@@ -1,0 +1,739 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+// Host contracts for Gesher's text-to-speech engine (app/gesher-tts, docs/tts.md).
+// The production engine sources (WindowsTtsService, VoiceCatalog, WavPcm, SpeechBackend,
+// WindowsSpeechBackend, CheckVoiceDataActivity) and com.gesher.server.WindowsSpeech are
+// inserted unchanged apart from their package, imports and public class visibility.
+// Everything else is a boundary stand-in with android-16.0.0_r4's constant values:
+// TextToSpeechService's synthesis callbacks follow PlaybackSynthesisCallback's and
+// FileSynthesisCallback's state rules (frameworks/base core/java/android/speech/tts),
+// so the client-visible dispatch (onBeginSynthesis, onRangeStart, onAudioAvailable,
+// onSuccess/onError/onStop) is what an app's UtteranceProgressListener receives.
+// FakeBackend is an isolated test double: production uses Windows' voices only.
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public final class TtsEngineContracts {
+    private static int failures, checks;
+
+    static void check(boolean condition, String description) {
+        checks++;
+        System.out.println((condition ? "PASS " : "FAIL ") + description);
+        if (!condition) failures++;
+    }
+
+    // --- the isolated backend --------------------------------------------------------
+
+    static final class Scripted {
+        int status = SpeechBackend.DONE;
+        byte[] wav;
+        long[] words = new long[0];
+        CountDownLatch hold;  // await blocks until counted down or canceled
+    }
+
+    static final class FakeBackend implements SpeechBackend {
+        List<BackendVoice> voices = new ArrayList<>();
+        final Deque<Scripted> scripts = new ArrayDeque<>();
+        StartFailure startFailure;
+        final List<String> starts = new ArrayList<>();
+        final AtomicInteger cancels = new AtomicInteger(), releases = new AtomicInteger();
+        volatile CountDownLatch awaiting = new CountDownLatch(1);
+        double lastRate, lastPitch;
+        String lastVoiceId, lastText;
+        boolean lastWords;
+
+        public List<BackendVoice> voices() { return voices; }
+
+        public Synthesis start(String text, String voiceId, double rate, double pitch, boolean words)
+                throws StartFailure {
+            if (startFailure != null) throw startFailure;
+            starts.add(voiceId);
+            lastText = text; lastVoiceId = voiceId; lastRate = rate; lastPitch = pitch; lastWords = words;
+            Scripted s = scripts.isEmpty() ? new Scripted() : scripts.poll();
+            return new Synthesis() {
+                volatile boolean canceled;
+                public int await(long timeoutMs) {
+                    awaiting.countDown();
+                    if (s.hold != null) {
+                        try { s.hold.await(10, TimeUnit.SECONDS); }
+                        catch (InterruptedException e) { return FAILED; }
+                    }
+                    return canceled ? CANCELED : s.status;
+                }
+                public byte[] audio() { return s.wav; }
+                public long[] words() { return s.words; }
+                public void cancel() {
+                    cancels.incrementAndGet();
+                    canceled = true;
+                    if (s.hold != null) s.hold.countDown();
+                }
+                public void release() { releases.incrementAndGet(); }
+            };
+        }
+    }
+
+    static SpeechBackend.BackendVoice voice(String id, String name, String lang, boolean female,
+            boolean isDefault) {
+        return new SpeechBackend.BackendVoice(id, name, lang, female, isDefault);
+    }
+
+    static List<SpeechBackend.BackendVoice> windowsVoices() {
+        return new ArrayList<>(List.of(
+                voice("TOKEN\\MSTTS_V110_heIL_Asaf", "Microsoft Asaf", "he-IL", false, false),
+                voice("TOKEN\\MSTTS_V110_enUS_DavidM", "Microsoft David", "en-US", false, false),
+                voice("TOKEN\\MSTTS_V110_enUS_ZiraM", "Microsoft Zira", "en-US", true, true),
+                voice("TOKEN\\MSTTS_V110_enGB_HazelM", "Microsoft Hazel", "en-GB", true, false),
+                voice("TOKEN\\MSTTS_V110_frFR_JulieM", "Microsoft Julie", "fr-FR", true, false)));
+    }
+
+    // --- WAV streams as Windows writes them -------------------------------------------
+
+    static byte[] wav(int format, int channels, int rate, int bits, byte[] data, boolean extensible,
+            boolean listChunk) {
+        ByteBuffer b = ByteBuffer.allocate(200 + data.length).order(ByteOrder.LITTLE_ENDIAN);
+        b.put("RIFF".getBytes()).putInt(0).put("WAVE".getBytes());
+        b.put("fmt ".getBytes()).putInt(extensible ? 40 : 16);
+        b.putShort((short) (extensible ? 0xFFFE : format)).putShort((short) channels).putInt(rate)
+                .putInt(rate * channels * bits / 8).putShort((short) (channels * bits / 8))
+                .putShort((short) bits);
+        if (extensible) {
+            b.putShort((short) 22).putShort((short) bits).putInt(channels == 1 ? 4 : 3);
+            b.putShort((short) format).put(new byte[14]);  // SubFormat GUID
+        }
+        if (listChunk) b.put("LIST".getBytes()).putInt(5).put("INFOx".getBytes()).put((byte) 0);
+        b.put("data".getBytes()).putInt(data.length).put(data);
+        byte[] out = Arrays.copyOf(b.array(), b.position());
+        ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN).putInt(4, out.length - 8);
+        return out;
+    }
+
+    static byte[] pcm(int bytes) {
+        byte[] d = new byte[bytes];
+        for (int i = 0; i < bytes; i++) d[i] = (byte) (i * 31 + 7);
+        return d;
+    }
+
+    // --- TextToSpeechService's callbacks ------------------------------------------------
+
+    static final List<String> events = new ArrayList<>();
+
+    /** PlaybackSynthesisCallback's rules; the dispatcher's calls are recorded. */
+    static class PlaybackCallback implements SynthesisCallback {
+        final Object lock = new Object();
+        int status = TextToSpeech.SUCCESS;
+        boolean started, done;
+        final ByteArrayOutputStream audio = new ByteArrayOutputStream();
+        int sampleRate, encoding, channels;
+        final List<String> calls = new ArrayList<>();
+        int maxBuffer() { return 8192; }  // MIN_AUDIO_BUFFER_SIZE
+        void dispatch(String e) { synchronized (events) { events.add(e); } }
+        public int getMaxBufferSize() { return maxBuffer(); }
+        /** The framework's stop(): stopImpl calls it before the engine's onStop. */
+        void stop() {
+            synchronized (lock) {
+                if (done) return;
+                if (status == TextToSpeech.STOPPED) return;
+                status = TextToSpeech.STOPPED;
+            }
+            dispatch("onStop");  // with or without a started item, the client hears onStop
+        }
+        public int start(int rate, int enc, int ch) {
+            calls.add("start");
+            dispatch("onBeginSynthesis(" + rate + "," + enc + "," + ch + ")");
+            synchronized (lock) {
+                if (ch < 1 || ch > 2) { status = TextToSpeech.ERROR_OUTPUT; return TextToSpeech.ERROR; }
+                if (status == TextToSpeech.STOPPED) return TextToSpeech.STOPPED;
+                if (status != TextToSpeech.SUCCESS) return TextToSpeech.ERROR;
+                if (started) return TextToSpeech.ERROR;
+                started = true;
+                sampleRate = rate; encoding = enc; channels = ch;
+            }
+            return TextToSpeech.SUCCESS;
+        }
+        public int audioAvailable(byte[] buffer, int offset, int length) {
+            calls.add("audio");
+            if (length > getMaxBufferSize() || length <= 0) {
+                throw new IllegalArgumentException("buffer is too large or of zero length");
+            }
+            synchronized (lock) {
+                if (!started) { status = TextToSpeech.ERROR_OUTPUT; return TextToSpeech.ERROR; }
+                if (status == TextToSpeech.STOPPED) return TextToSpeech.STOPPED;
+                if (status != TextToSpeech.SUCCESS) return TextToSpeech.ERROR;
+            }
+            audio.write(buffer, offset, length);
+            dispatch("onAudioAvailable(" + length + ")");
+            afterAudio();
+            return TextToSpeech.SUCCESS;
+        }
+        void afterAudio() {}
+        public int done() {
+            calls.add("done");
+            synchronized (lock) {
+                if (done) return TextToSpeech.ERROR;
+                if (status == TextToSpeech.STOPPED) return TextToSpeech.STOPPED;
+                done = true;
+            }
+            dispatch(status == TextToSpeech.SUCCESS ? "onSuccess" : "onError(" + status + ")");
+            return started ? TextToSpeech.SUCCESS : TextToSpeech.ERROR;
+        }
+        public void error() { error(TextToSpeech.ERROR_SYNTHESIS); }
+        public void error(int code) {
+            calls.add("error(" + code + ")");
+            synchronized (lock) { if (!done) status = code; }
+        }
+        public boolean hasStarted() { return started; }
+        public boolean hasFinished() { return done; }
+        public void rangeStart(int marker, int start, int end) {
+            calls.add("range");
+            if (!started) { dispatch("rangeStart-before-start"); return; }  // AOSP: "mItem is null"
+            dispatch("onRangeStart(" + marker + "," + start + "," + end + ")");
+        }
+    }
+
+    /** FileSynthesisCallback: a 44-byte header written at done() from start()'s format. */
+    static final class FileCallback extends PlaybackCallback {
+        byte[] file;
+        @Override public int done() {
+            calls.add("done");
+            synchronized (lock) {
+                if (done) return TextToSpeech.ERROR;
+                if (status == TextToSpeech.STOPPED) return TextToSpeech.STOPPED;
+                if (status != TextToSpeech.SUCCESS) {
+                    dispatch("onError(" + status + ")");
+                    return TextToSpeech.ERROR;
+                }
+                if (!started) return TextToSpeech.ERROR;  // "File not open": no dispatch at all
+                done = true;
+            }
+            byte[] data = audio.toByteArray();
+            int bytesPerSample = encoding == AudioFormat.ENCODING_PCM_8BIT ? 1
+                    : encoding == AudioFormat.ENCODING_PCM_FLOAT ? 4 : 2;
+            ByteBuffer h = ByteBuffer.allocate(44 + data.length).order(ByteOrder.LITTLE_ENDIAN);
+            h.put("RIFF".getBytes()).putInt(data.length + 36).put("WAVE".getBytes());
+            h.put("fmt ".getBytes()).putInt(16).putShort((short) 1).putShort((short) channels)
+                    .putInt(sampleRate).putInt(sampleRate * bytesPerSample * channels)
+                    .putShort((short) (bytesPerSample * channels)).putShort((short) (bytesPerSample * 8));
+            h.put("data".getBytes()).putInt(data.length).put(data);
+            file = h.array();
+            dispatch("onSuccess");
+            return TextToSpeech.SUCCESS;
+        }
+    }
+
+    static SynthesisRequest request(String text, String lang, String country, String voiceName,
+            int rate, int pitch) {
+        SynthesisRequest r = new SynthesisRequest(text, new Bundle());
+        r.setLanguage(lang, country, "");
+        r.setVoiceName(voiceName);
+        r.setSpeechRate(rate);
+        r.setPitch(pitch);
+        return r;
+    }
+
+    static WindowsTtsService service(FakeBackend backend) {
+        return new WindowsTtsService(backend);
+    }
+
+    static List<String> run(WindowsTtsService s, SynthesisRequest r, PlaybackCallback cb) {
+        synchronized (events) { events.clear(); }
+        s.onSynthesizeText(r, cb);
+        synchronized (events) { return new ArrayList<>(events); }
+    }
+
+    static boolean audioChunksValid(List<String> ev, int max, int frame) {
+        for (String e : ev) {
+            if (!e.startsWith("onAudioAvailable(")) continue;
+            int n = Integer.parseInt(e.substring(17, e.length() - 1));
+            if (n <= 0 || n > max || n % frame != 0) return false;
+        }
+        return true;
+    }
+
+    // --- contracts ---------------------------------------------------------------------
+
+    static void languages() {
+        FakeBackend b = new FakeBackend();
+        b.voices = windowsVoices();
+        WindowsTtsService s = service(b);
+        check(s.onIsLanguageAvailable("heb", "ISR", "") == TextToSpeech.LANG_COUNTRY_AVAILABLE,
+                "Hebrew (Israel) is LANG_COUNTRY_AVAILABLE with a he-IL Windows voice");
+        check(s.onIsLanguageAvailable("heb", "", "") == TextToSpeech.LANG_AVAILABLE,
+                "Hebrew without a country is LANG_AVAILABLE");
+        check(s.onIsLanguageAvailable("iw", "IL", "") == TextToSpeech.LANG_COUNTRY_AVAILABLE
+                && s.onIsLanguageAvailable("he", "ISR", null) == TextToSpeech.LANG_COUNTRY_AVAILABLE,
+                "legacy and 2-letter codes (iw, he, IL) name the same language");
+        check(s.onIsLanguageAvailable("eng", "AUS", "") == TextToSpeech.LANG_AVAILABLE,
+                "English (Australia) without an en-AU voice is LANG_AVAILABLE, not the country");
+        check(s.onIsLanguageAvailable("eng", "USA", "POSIX") == TextToSpeech.LANG_COUNTRY_AVAILABLE,
+                "a variant is never claimed (Windows voices have none)");
+        check(s.onIsLanguageAvailable("deu", "DEU", "") == TextToSpeech.LANG_NOT_SUPPORTED
+                && s.onIsLanguageAvailable("", "", "") == TextToSpeech.LANG_NOT_SUPPORTED
+                && s.onIsLanguageAvailable(null, null, null) == TextToSpeech.LANG_NOT_SUPPORTED,
+                "a language without a Windows voice is LANG_NOT_SUPPORTED");
+        check(s.onLoadLanguage("heb", "ISR", "") == TextToSpeech.LANG_COUNTRY_AVAILABLE
+                && Arrays.equals(s.onGetLanguage(), new String[] {"heb", "ISR", ""}),
+                "onLoadLanguage answers as onIsLanguageAvailable and onGetLanguage reports it");
+        String[] before = s.onGetLanguage();
+        check(s.onLoadLanguage("deu", "DEU", "") == TextToSpeech.LANG_NOT_SUPPORTED
+                && Arrays.equals(s.onGetLanguage(), before),
+                "loading an unsupported language changes nothing");
+        check(s.onGetFeaturesForLanguage("heb", "ISR", "")
+                        .equals(Set.of(TextToSpeech.Engine.KEY_FEATURE_EMBEDDED_SYNTHESIS))
+                && s.onGetFeaturesForLanguage("deu", "", "").isEmpty(),
+                "features: embedded synthesis only, and none for unsupported languages (no networkTts)");
+
+        List<Voice> voices = s.onGetVoices();
+        Set<String> names = new HashSet<>();
+        boolean described = voices.size() == 5;
+        for (Voice v : voices) {
+            names.add(v.getName());
+            described &= !v.isNetworkConnectionRequired() && v.getQuality() == Voice.QUALITY_NORMAL
+                    && v.getFeatures().equals(Set.of(TextToSpeech.Engine.KEY_FEATURE_EMBEDDED_SYNTHESIS));
+        }
+        check(described && names.size() == 5, "onGetVoices: one local voice per Windows voice, no more");
+        check(names.containsAll(List.of("he-IL-x-asaf", "en-US-x-david", "en-US-x-zira",
+                "en-GB-x-hazel", "fr-FR-x-julie")), "voice names: language tag and Windows name " + names);
+        Voice asaf = null;
+        for (Voice v : voices) if (v.getName().equals("he-IL-x-asaf")) asaf = v;
+        check(asaf != null && asaf.getLocale().getISO3Language().equals("heb")
+                && asaf.getLocale().getCountry().equals("IL"), "a voice's locale is its Windows language");
+
+        FakeBackend shuffled = new FakeBackend();
+        shuffled.voices = windowsVoices();
+        Collections.reverse(shuffled.voices);
+        List<String> again = new ArrayList<>();
+        for (Voice v : service(shuffled).onGetVoices()) again.add(v.getName());
+        List<String> first = new ArrayList<>();
+        for (Voice v : voices) first.add(v.getName());
+        check(again.equals(first), "voice names and order do not depend on Windows' enumeration order");
+
+        check("en-US-x-zira".equals(s.onGetDefaultVoiceNameFor("eng", "USA", "")),
+                "the default en-US voice is Windows' default voice");
+        check("en-US-x-zira".equals(s.onGetDefaultVoiceNameFor("eng", "", "")),
+                "a language-only default prefers Windows' default voice");
+        check("en-GB-x-hazel".equals(s.onGetDefaultVoiceNameFor("eng", "GBR", "")),
+                "a country with its own voice gets that voice");
+        check("he-IL-x-asaf".equals(s.onGetDefaultVoiceNameFor("heb", "ISR", "")),
+                "Hebrew's default voice is Asaf");
+        check(s.onGetDefaultVoiceNameFor("deu", "DEU", "") == null,
+                "no default voice for a language Windows cannot speak");
+        check(s.onIsValidVoiceName("he-IL-x-asaf") == TextToSpeech.SUCCESS
+                && s.onIsValidVoiceName("he-IL") == TextToSpeech.ERROR
+                && s.onIsValidVoiceName("de-DE-x-hedda") == TextToSpeech.ERROR
+                && s.onIsValidVoiceName(null) == TextToSpeech.ERROR,
+                "only the engine's own voice names are valid");
+        check(s.onLoadVoice("fr-FR-x-julie") == TextToSpeech.SUCCESS
+                && Arrays.equals(s.onGetLanguage(), new String[] {"fra", "FRA", ""})
+                && s.onLoadVoice("xx-x-none") == TextToSpeech.ERROR, "onLoadVoice");
+
+        FakeBackend twins = new FakeBackend();
+        twins.voices = new ArrayList<>(List.of(voice("a", "Microsoft David", "en-US", false, false),
+                voice("b", "Microsoft David", "en-US", false, false),
+                voice("c", "", "en-US", false, false),
+                voice("d", "Microsoft Nobody", "", false, false)));
+        List<String> twinNames = new ArrayList<>();
+        for (Voice v : service(twins).onGetVoices()) twinNames.add(v.getName());
+        check(twinNames.equals(List.of("en-US-x-voice", "en-US-x-david", "en-US-x-david2")),
+                "same-named voices get distinct names, a voice without a language is not offered "
+                        + twinNames);
+
+        FakeBackend none = new FakeBackend();
+        WindowsTtsService empty = service(none);
+        check(empty.onGetVoices().isEmpty()
+                && empty.onIsLanguageAvailable("eng", "USA", "") == TextToSpeech.LANG_NOT_SUPPORTED
+                && empty.onGetDefaultVoiceNameFor("eng", "USA", "") == null,
+                "without Windows voices the engine offers nothing");
+        List<String> ev = run(empty, request("hi", "eng", "USA", null, 100, 100), new PlaybackCallback());
+        check(ev.equals(List.of("onError(" + TextToSpeech.ERROR_INVALID_REQUEST + ")"))
+                && none.starts.isEmpty(),
+                "speaking without a voice for the language: onError(ERROR_INVALID_REQUEST), no audio");
+    }
+
+    static void playback() {
+        FakeBackend b = new FakeBackend();
+        b.voices = windowsVoices();
+        WindowsTtsService s = service(b);
+        byte[] data = pcm(20_000);  // 10000 frames, 16-bit mono
+        Scripted sc = new Scripted();
+        sc.wav = wav(1, 1, 22050, 16, data, false, true);
+        b.scripts.add(sc);
+        PlaybackCallback cb = new PlaybackCallback();
+        List<String> ev = run(s, request("שלום", "heb", "ISR", "he-IL-x-asaf", 100, 100), cb);
+        check(b.lastVoiceId.equals("TOKEN\\MSTTS_V110_heIL_Asaf") && b.lastText.equals("שלום"),
+                "the requested voice and text reach Windows");
+        check(ev.get(0).equals("onBeginSynthesis(22050," + AudioFormat.ENCODING_PCM_16BIT + ",1)"),
+                "start(sampleRate, ENCODING_PCM_16BIT, channels) from Windows' own format " + ev.get(0));
+        check(ev.get(ev.size() - 1).equals("onSuccess") && Arrays.equals(cb.audio.toByteArray(), data),
+                "the PCM reaches the callback unchanged, then done() (onDone)");
+        check(audioChunksValid(ev, 8192, 2), "audioAvailable chunks fit getMaxBufferSize in whole frames");
+        check(cb.calls.get(0).equals("start") && cb.calls.get(cb.calls.size() - 1).equals("done"),
+                "callback order: start, audioAvailable..., done");
+        check(b.releases.get() == 1, "the Windows synthesis is released");
+
+        // Request language without a voice name: the locale's default voice.
+        b.scripts.add(sc);
+        run(s, request("hello", "eng", "GBR", null, 100, 100), new PlaybackCallback());
+        check(b.lastVoiceId.equals("TOKEN\\MSTTS_V110_enGB_HazelM"), "no voice name: the locale's voice");
+        b.scripts.add(sc);
+        run(s, request("hello", "eng", "USA", "en-US-x-gone", 100, 100), new PlaybackCallback());
+        check(b.lastVoiceId.equals("TOKEN\\MSTTS_V110_enUS_ZiraM"),
+                "an unknown voice name falls back to the request's locale");
+
+        // Rate and pitch: Android percent -> Windows factors, within Windows' ranges.
+        int[][] cases = {{100, 100}, {250, 50}, {10, 300}, {1000, 0}};
+        double[][] expect = {{1.0, 1.0}, {2.5, 0.5}, {0.5, 2.0}, {6.0, 0.0}};
+        boolean mapped = true;
+        for (int i = 0; i < cases.length; i++) {
+            b.scripts.add(sc);
+            run(s, request("x", "eng", "USA", null, cases[i][0], cases[i][1]), new PlaybackCallback());
+            mapped &= b.lastRate == expect[i][0] && b.lastPitch == expect[i][1];
+        }
+        check(mapped, "rate/pitch 100 -> 1.0; 250 -> 2.5; 50 -> 0.5; clamped to 0.5..6.0 and 0..2");
+        check(b.lastWords, "word boundaries are requested from Windows");
+
+        // Other PCM layouts SynthesisCallback takes are passed through; others are refused.
+        Object[][] formats = {
+            {wav(1, 2, 48000, 16, pcm(9600), true, false), "onBeginSynthesis(48000," + AudioFormat.ENCODING_PCM_16BIT + ",2)"},
+            {wav(3, 1, 16000, 32, pcm(8000), false, false), "onBeginSynthesis(16000," + AudioFormat.ENCODING_PCM_FLOAT + ",1)"},
+            {wav(1, 1, 8000, 8, pcm(801), false, false), "onBeginSynthesis(8000," + AudioFormat.ENCODING_PCM_8BIT + ",1)"},
+        };
+        boolean passed = true;
+        for (Object[] f : formats) {
+            Scripted x = new Scripted();
+            x.wav = (byte[]) f[0];
+            b.scripts.add(x);
+            List<String> e = run(s, request("x", "eng", "USA", null, 100, 100), new PlaybackCallback());
+            passed &= e.get(0).equals(f[1]) && e.get(e.size() - 1).equals("onSuccess");
+        }
+        check(passed, "extensible 16-bit stereo, float and 8-bit PCM are handed over as they are");
+        byte[][] bad = {wav(1, 1, 22050, 24, pcm(300), false, false), wav(1, 3, 22050, 16, pcm(600), false, false),
+            "RIFF0000WAVEjunk".getBytes(), new byte[0], wav(2, 1, 22050, 4, pcm(100), false, false)};
+        boolean refused = true;
+        for (byte[] w : bad) {
+            Scripted x = new Scripted();
+            x.wav = w;
+            b.scripts.add(x);
+            PlaybackCallback c = new PlaybackCallback();
+            List<String> e = run(s, request("x", "eng", "USA", null, 100, 100), c);
+            refused &= e.equals(List.of("onError(" + TextToSpeech.ERROR_SYNTHESIS + ")")) && !c.started;
+        }
+        check(refused, "24-bit, 3-channel, ADPCM or broken streams: onError(ERROR_SYNTHESIS), no audio");
+        Scripted odd = new Scripted();
+        odd.wav = wav(1, 1, 22050, 16, pcm(1001), false, false);
+        b.scripts.add(odd);
+        PlaybackCallback oc = new PlaybackCallback();
+        run(s, request("x", "eng", "USA", null, 100, 100), oc);
+        check(oc.audio.size() == 1000, "a trailing partial frame is not played");
+    }
+
+    static void words() {
+        FakeBackend b = new FakeBackend();
+        b.voices = windowsVoices();
+        WindowsTtsService s = service(b);
+        Scripted sc = new Scripted();
+        sc.wav = wav(1, 1, 16000, 16, pcm(2 * 16000), false, false);  // 1 s
+        // "hello world": Windows' cues are [first, last] inclusive, start in 100 ns ticks.
+        sc.words = new long[] {0, 0, 4, 6_000_000, 6, 10, 9_000_000, 20, 25, 1_000_000, 3, 2};
+        b.scripts.add(sc);
+        List<String> ev = run(s, request("hello world", "eng", "USA", null, 100, 100), new PlaybackCallback());
+        int begin = ev.indexOf("onBeginSynthesis(16000," + AudioFormat.ENCODING_PCM_16BIT + ",1)");
+        int hello = ev.indexOf("onRangeStart(0,0,5)");
+        int world = ev.indexOf("onRangeStart(9600,6,11)");
+        check(begin == 0 && hello > begin && world > hello,
+                "onRangeStart(frame, start, end exclusive) for each word, after start " + ev);
+        int audioBefore = 0;
+        for (int i = 0; i < world; i++) if (ev.get(i).startsWith("onAudioAvailable")) audioBefore += 8192;
+        check(audioBefore <= 9600 * 2 && audioBefore + 8192 > 9600 * 2,
+                "a word's range comes just before the audio containing its frame");
+        check(!ev.contains("rangeStart-before-start") && ev.stream().filter(e -> e.startsWith("onRangeStart")).count() == 2,
+                "words outside the text or reversed are dropped");
+        check(ev.get(ev.size() - 1).equals("onSuccess"), "then onDone");
+    }
+
+    static void stopAndErrors() throws Exception {
+        FakeBackend b = new FakeBackend();
+        b.voices = windowsVoices();
+        WindowsTtsService s = service(b);
+        s.onStop();  // nothing running: harmless
+        check(b.cancels.get() == 0, "onStop without a synthesis touches nothing");
+
+        // Stop while Windows renders: the framework stops the callback, then onStop.
+        Scripted held = new Scripted();
+        held.wav = wav(1, 1, 22050, 16, pcm(4000), false, false);
+        held.hold = new CountDownLatch(1);
+        b.scripts.add(held);
+        PlaybackCallback cb = new PlaybackCallback();
+        synchronized (events) { events.clear(); }
+        b.awaiting = new CountDownLatch(1);
+        Thread synth = new Thread(() -> s.onSynthesizeText(request("long", "eng", "USA", null, 100, 100), cb));
+        synth.start();
+        check(b.awaiting.await(5, TimeUnit.SECONDS), "synthesis is waiting on Windows");
+        cb.stop();
+        s.onStop();
+        synth.join(5000);
+        List<String> ev;
+        synchronized (events) { ev = new ArrayList<>(events); }
+        check(!synth.isAlive() && b.cancels.get() == 1, "onStop cancels the Windows synthesis");
+        check(ev.equals(List.of("onStop")) && cb.calls.isEmpty() && b.releases.get() == 1,
+                "stopped mid-utterance: the client hears onStop only, no audio " + ev);
+
+        // Stop while audio is being handed over.
+        Scripted longAudio = new Scripted();
+        longAudio.wav = wav(1, 1, 22050, 16, pcm(8192 * 5), false, false);
+        b.scripts.add(longAudio);
+        PlaybackCallback stopping = new PlaybackCallback() {
+            int n;
+            @Override void afterAudio() { if (++n == 2) stop(); }
+        };
+        ev = run(s, request("long", "eng", "USA", null, 100, 100), stopping);
+        long chunks = ev.stream().filter(e -> e.startsWith("onAudioAvailable")).count();
+        check(chunks == 2 && ev.get(ev.size() - 1).equals("onStop") && !ev.contains("onSuccess"),
+                "stopped during playback: no more audio, onStop and no onDone " + ev);
+        check(stopping.calls.get(stopping.calls.size() - 1).equals("done")
+                && Collections.frequency(stopping.calls, "audio") == 3,
+                "the engine stops at the first STOPPED and still calls done()");
+
+        // Windows failures: error(code) then done(): one onError.
+        b.startFailure = new SpeechBackend.StartFailure(SpeechBackend.REASON_WINDOWS, "E_FAIL");
+        ev = run(s, request("x", "eng", "USA", null, 100, 100), new PlaybackCallback());
+        check(ev.equals(List.of("onError(" + TextToSpeech.ERROR_SYNTHESIS + ")")),
+                "Windows refusing to start: onError(ERROR_SYNTHESIS)");
+        b.startFailure = new SpeechBackend.StartFailure(SpeechBackend.REASON_PROSODY_UNSUPPORTED, "old Windows");
+        ev = run(s, request("x", "eng", "USA", null, 200, 100), new PlaybackCallback());
+        check(ev.equals(List.of("onError(" + TextToSpeech.ERROR_INVALID_REQUEST + ")")),
+                "a rate Windows cannot apply: onError(ERROR_INVALID_REQUEST), never ignored");
+        b.startFailure = new SpeechBackend.StartFailure(SpeechBackend.REASON_NO_SUCH_VOICE, "removed");
+        List<SpeechBackend.BackendVoice> fewer = windowsVoices();
+        fewer.remove(0);
+        b.voices = fewer;
+        ev = run(s, request("x", "heb", "ISR", "he-IL-x-asaf", 100, 100), new PlaybackCallback());
+        check(ev.equals(List.of("onError(" + TextToSpeech.ERROR_SYNTHESIS + ")"))
+                && s.onIsLanguageAvailable("heb", "ISR", "") == TextToSpeech.LANG_NOT_SUPPORTED,
+                "a voice removed from Windows: onError, and the engine stops offering it");
+        b.startFailure = null;
+        Scripted failed = new Scripted();
+        failed.status = SpeechBackend.FAILED;
+        b.scripts.add(failed);
+        PlaybackCallback fc = new PlaybackCallback();
+        ev = run(s, request("x", "eng", "USA", null, 100, 100), fc);
+        check(ev.equals(List.of("onError(" + TextToSpeech.ERROR_SYNTHESIS + ")"))
+                && fc.calls.equals(List.of("error(" + TextToSpeech.ERROR_SYNTHESIS + ")", "done")),
+                "a failed rendering: error(ERROR_SYNTHESIS) then done(), no audio");
+    }
+
+    static void synthesizeToFile() {
+        FakeBackend b = new FakeBackend();
+        b.voices = windowsVoices();
+        WindowsTtsService s = service(b);
+        byte[] data = pcm(30_002);
+        Scripted sc = new Scripted();
+        sc.wav = wav(1, 1, 22050, 16, data, false, true);
+        b.scripts.add(sc);
+        FileCallback fc = new FileCallback();
+        List<String> ev = run(s, request("shalom", "heb", "ISR", null, 100, 100), fc);
+        check(ev.get(ev.size() - 1).equals("onSuccess") && fc.file != null, "synthesizeToFile completes");
+        ByteBuffer h = ByteBuffer.wrap(fc.file).order(ByteOrder.LITTLE_ENDIAN);
+        boolean header = new String(fc.file, 0, 4).equals("RIFF") && h.getInt(4) == fc.file.length - 8
+                && new String(fc.file, 8, 8).equals("WAVEfmt ") && h.getInt(16) == 16
+                && h.getShort(20) == 1 && h.getShort(22) == 1 && h.getInt(24) == 22050
+                && h.getInt(28) == 44100 && h.getShort(32) == 2 && h.getShort(34) == 16
+                && new String(fc.file, 36, 4).equals("data") && h.getInt(40) == 30_002;
+        check(header, "the file's WAV header carries Windows' rate, channels and 16-bit PCM");
+        WavPcm back = WavPcm.parse(fc.file);
+        check(back.sampleRate == 22050 && back.channels == 1 && back.dataLength == 30_002
+                && Arrays.equals(Arrays.copyOfRange(fc.file, back.dataOffset, back.dataOffset + back.dataLength), data),
+                "the file holds exactly Windows' samples");
+
+        Scripted failed = new Scripted();
+        failed.status = SpeechBackend.FAILED;
+        b.scripts.add(failed);
+        FileCallback ff = new FileCallback();
+        ev = run(s, request("x", "eng", "USA", null, 100, 100), ff);
+        check(ev.equals(List.of("onError(" + TextToSpeech.ERROR_SYNTHESIS + ")")) && ff.file == null,
+                "a failed file synthesis reports onError and writes no file");
+    }
+
+    static void checkData() {
+        VoiceCatalog c = VoiceCatalog.of(windowsVoices());
+        check(c.availableVoices(null).equals(List.of("eng-GBR", "eng-USA", "fra-FRA", "heb-ISR")),
+                "CHECK_TTS_DATA lists each installed language-country once (ISO3) " + c.availableVoices(null));
+        check(c.availableVoices(List.of("heb-ISR", "deu-DEU")).equals(List.of("heb-ISR"))
+                && c.availableVoices(List.of("en")).equals(List.of("eng-GBR", "eng-USA"))
+                && c.availableVoices(List.of("he_IL")).equals(List.of("heb-ISR")),
+                "EXTRA_CHECK_VOICE_DATA_FOR narrows the answer to the languages asked about");
+        ArrayList<String> none = c.availableVoices(List.of("deu-DEU"));
+        check(none.isEmpty() && CheckVoiceDataActivity.resultCode(none) == TextToSpeech.Engine.CHECK_VOICE_DATA_FAIL
+                && CheckVoiceDataActivity.resultCode(c.availableVoices(null)) == TextToSpeech.Engine.CHECK_VOICE_DATA_PASS,
+                "PASS with voices, FAIL without");
+        Intent data = CheckVoiceDataActivity.result(c.availableVoices(null));
+        check(data.getStringArrayListExtra(TextToSpeech.Engine.EXTRA_AVAILABLE_VOICES).size() == 4
+                && data.getStringArrayListExtra(TextToSpeech.Engine.EXTRA_UNAVAILABLE_VOICES).isEmpty(),
+                "available voices in the result; nothing claimed installable");
+    }
+
+    static void windowsBridge() {
+        List<WindowsSpeech.Voice> v = WindowsSpeech.voicesOf(new String[] {
+            "id1", "Microsoft Asaf", "he-IL", "0", "0", "id2", "Microsoft Zira", "en-US", "1", "1",
+            "", "No Id", "en-US", "0", "0", "id4", "No language", "", "0", "0"});
+        check(v.size() == 2 && v.get(0).language.equals("he-IL") && !v.get(0).female
+                && v.get(1).female && v.get(1).isDefault, "the natives' voice records are read field by field");
+        check(WindowsSpeech.voicesOf(new String[] {"a", "b"}).isEmpty() && WindowsSpeech.voicesOf(null).isEmpty(),
+                "a malformed record array is no voices");
+        check(new WindowsSpeechBackend().voices().isEmpty(),
+                "without Windows' natives the production backend has no voices (none invented)");
+        boolean refused;
+        try {
+            WindowsSpeech.start("x", "id", 1.0, 1.0, true);
+            refused = false;
+        } catch (WindowsSpeech.SpeechException e) {
+            refused = e.reason == WindowsSpeech.REASON_WINDOWS;
+        }
+        check(refused, "without Windows' natives a synthesis fails to start");
+        boolean range;
+        try {
+            WindowsSpeech.start("x", "id", 7.0, 1.0, true);
+            range = false;
+        } catch (IllegalArgumentException e) {
+            range = true;
+        } catch (WindowsSpeech.SpeechException e) {
+            range = false;
+        }
+        check(range, "values outside Windows' ranges are refused before Windows");
+    }
+
+    public static void main(String[] args) throws Exception {
+        languages();
+        playback();
+        words();
+        stopAndErrors();
+        synthesizeToFile();
+        checkData();
+        windowsBridge();
+        System.out.println(checks + " checks, " + failures + " failures");
+        if (failures != 0) System.exit(1);
+    }
+}
+
+// --- android-16.0.0_r4 boundary stand-ins --------------------------------------------
+
+final class AudioFormat {
+    static final int ENCODING_PCM_16BIT = 2;
+    static final int ENCODING_PCM_8BIT = 3;
+    static final int ENCODING_PCM_FLOAT = 4;
+}
+
+final class TextToSpeech {
+    static final int SUCCESS = 0, ERROR = -1, STOPPED = -2;
+    static final int ERROR_SYNTHESIS = -3, ERROR_SERVICE = -4, ERROR_OUTPUT = -5,
+            ERROR_NETWORK = -6, ERROR_NETWORK_TIMEOUT = -7, ERROR_INVALID_REQUEST = -8,
+            ERROR_NOT_INSTALLED_YET = -9;
+    static final int LANG_COUNTRY_VAR_AVAILABLE = 2, LANG_COUNTRY_AVAILABLE = 1, LANG_AVAILABLE = 0,
+            LANG_MISSING_DATA = -1, LANG_NOT_SUPPORTED = -2;
+
+    static final class Engine {
+        static final int DEFAULT_RATE = 100, DEFAULT_PITCH = 100;
+        static final int CHECK_VOICE_DATA_PASS = 1, CHECK_VOICE_DATA_FAIL = 0;
+        static final String EXTRA_AVAILABLE_VOICES = "availableVoices";
+        static final String EXTRA_UNAVAILABLE_VOICES = "unavailableVoices";
+        static final String EXTRA_CHECK_VOICE_DATA_FOR = "checkVoiceDataFor";
+        static final String KEY_FEATURE_NETWORK_SYNTHESIS = "networkTts";
+        static final String KEY_FEATURE_EMBEDDED_SYNTHESIS = "embeddedTts";
+    }
+}
+
+final class Voice {
+    static final int QUALITY_NORMAL = 300, LATENCY_NORMAL = 300;
+    private final String name;
+    private final Locale locale;
+    private final int quality, latency;
+    private final boolean network;
+    private final Set<String> features;
+    Voice(String name, Locale locale, int quality, int latency, boolean network, Set<String> features) {
+        this.name = name; this.locale = locale; this.quality = quality; this.latency = latency;
+        this.network = network; this.features = features;
+    }
+    String getName() { return name; }
+    Locale getLocale() { return locale; }
+    int getQuality() { return quality; }
+    int getLatency() { return latency; }
+    boolean isNetworkConnectionRequired() { return network; }
+    Set<String> getFeatures() { return features; }
+}
+
+final class Bundle {
+}
+
+final class SynthesisRequest {
+    private final CharSequence text;
+    private String voiceName, language = "", country = "", variant = "";
+    private int rate = 100, pitch = 100;
+    SynthesisRequest(CharSequence text, Bundle params) { this.text = text; }
+    String getText() { return text.toString(); }
+    CharSequence getCharSequenceText() { return text; }
+    String getVoiceName() { return voiceName; }
+    String getLanguage() { return language; }
+    String getCountry() { return country; }
+    String getVariant() { return variant; }
+    int getSpeechRate() { return rate; }
+    int getPitch() { return pitch; }
+    void setLanguage(String l, String c, String v) { language = l; country = c; variant = v; }
+    void setVoiceName(String v) { voiceName = v; }
+    void setSpeechRate(int r) { rate = r; }
+    void setPitch(int p) { pitch = p; }
+}
+
+interface SynthesisCallback {
+    int getMaxBufferSize();
+    int start(int sampleRateInHz, int audioFormat, int channelCount);
+    int audioAvailable(byte[] buffer, int offset, int length);
+    int done();
+    void error();
+    void error(int errorCode);
+    boolean hasStarted();
+    boolean hasFinished();
+    default void rangeStart(int markerInFrames, int start, int end) {}
+}
+
+abstract class Service {
+}
+
+abstract class TextToSpeechService extends Service {
+    protected abstract int onIsLanguageAvailable(String lang, String country, String variant);
+    protected abstract String[] onGetLanguage();
+    protected abstract int onLoadLanguage(String lang, String country, String variant);
+    protected abstract void onStop();
+    protected abstract void onSynthesizeText(SynthesisRequest request, SynthesisCallback callback);
+    protected Set<String> onGetFeaturesForLanguage(String lang, String country, String variant) {
+        return new HashSet<String>();
+    }
+    public List<Voice> onGetVoices() { throw new AssertionError("AOSP's locale scan must be overridden"); }
+    public String onGetDefaultVoiceNameFor(String lang, String country, String variant) {
+        throw new AssertionError("must be overridden");
+    }
+    public int onLoadVoice(String voiceName) { throw new AssertionError("must be overridden"); }
+    public int onIsValidVoiceName(String voiceName) { throw new AssertionError("must be overridden"); }
+}
+
+final class Log {
+    static int w(String tag, String msg) { System.out.println("  log " + tag + ": " + msg); return 0; }
+}
+
+final class Intent {
+    private final Map<String, ArrayList<String>> lists = new HashMap<>();
+    ArrayList<String> getStringArrayListExtra(String name) { return lists.get(name); }
+    Intent putStringArrayListExtra(String name, ArrayList<String> value) { lists.put(name, value); return this; }
+}
+
+abstract class Activity {
+    private Intent intent = new Intent();
+    protected void onCreate(Bundle savedInstanceState) {}
+    Intent getIntent() { return intent; }
+    void setResult(int code, Intent data) {}
+    void finish() {}
+}
+
+// PRODUCTION_SOURCES
