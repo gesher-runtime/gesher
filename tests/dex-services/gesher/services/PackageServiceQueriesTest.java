@@ -58,6 +58,14 @@ public final class PackageServiceQueriesTest {
     }
 
     public static void main(String[] args) throws Exception {
+        // Hosted package identities now use the real FileChannel admission lock.
+        // Raw ART entries need the same native bootstrap as system_server before
+        // touching PackageManagerService or the hosted providers' static state.
+        System.loadLibrary("android_runtime");
+        contracts();
+    }
+
+    public static void contracts() throws Exception {
         Field singleton = Unsafe.class.getDeclaredField("theUnsafe");
         singleton.setAccessible(true);
         Unsafe unsafe = (Unsafe) singleton.get(null);
@@ -90,8 +98,8 @@ public final class PackageServiceQueriesTest {
                         && service.hasSystemFeature(PackageManager.FEATURE_LOCATION_NETWORK, 0)
                         && !service.hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS, 0),
                 "Location features do not match the network-only provider");
-        // FEATURE_MICROPHONE follows the audio input exactly; without the runtime
-        // natives (this process) there is no input to report.
+        // FEATURE_MICROPHONE follows the available audio input exactly, including
+        // a host replay where those runtime natives are unavailable.
         boolean input;
         try {
             android.util.IntArray inputs = new android.util.IntArray();
