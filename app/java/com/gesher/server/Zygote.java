@@ -5,6 +5,10 @@
 package com.gesher.server;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.UUID;
 
@@ -49,8 +53,12 @@ public final class Zygote {
     static native int nativeGrantPropertyAreaRead(String container);
     static native int nativeDeleteAppContainer(String container);
     private static native int nativeRestartWithUid(int uid);
-    static native int nativeRunContainedStandalone(String command, String container, String display,
-            String[] capabilities, String windowsCodePath, int uid);
+    private static native long nativePinStandaloneInput(String windowsPath);
+    private static native void nativeReleaseStandaloneInput(long pin);
+    private static native int nativeReadStandaloneInput(long pin, long offset, byte[] target)
+            throws IOException;
+    private static native int nativeRunContainedStandalone(String command, String container,
+            String display, String[] capabilities, long pin, int uid);
     static native long nativeStartTime(int pid);
     static native long nativeChildStartTime(int pid);
     static native int nativeExitCode(int pid);
@@ -68,6 +76,43 @@ public final class Zygote {
 
     /** STILL_ACTIVE, the exit code of a process that runs. */
     public static final int STILL_ACTIVE = 259;
+
+    /** Host-only read lease held before examining or starting this source file. */
+    static final class StandaloneInput implements AutoCloseable {
+        final String path;
+        private long pin;
+
+        StandaloneInput(String path) {
+            this.path = new File(path).getAbsolutePath();
+            pin = nativePinStandaloneInput(windowsPath(this.path));
+        }
+
+        void copyForVerification(Path target) throws IOException {
+            if (pin == 0) throw new IllegalStateException("Standalone code lease is closed");
+            byte[] bytes = new byte[128 * 1024];
+            try (var out = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE)) {
+                long offset = 0;
+                for (;;) {
+                    int size = nativeReadStandaloneInput(pin, offset, bytes);
+                    if (size == 0) break;
+                    out.write(bytes, 0, size);
+                    offset += size;
+                }
+            }
+        }
+
+        int run(String command, String container, String display,
+                String[] capabilities, int uid) {
+            if (pin == 0) throw new IllegalStateException("Standalone code lease is closed");
+            return nativeRunContainedStandalone(command, container, display, capabilities, pin, uid);
+        }
+
+        @Override public void close() {
+            nativeReleaseStandaloneInput(pin);
+            pin = 0;
+        }
+    }
 
     /**
      * Re-enters the current standalone command with immutable UID/Binder identity.

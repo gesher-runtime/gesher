@@ -693,6 +693,34 @@ struct StandaloneInput {
   peer::OwnedHandle name;
 };
 
+struct PinnedProgram {
+  peer::OwnedHandle file;
+  std::wstring path;
+};
+
+std::mutex g_standalone_sources_lock;
+std::map<uint64_t, PinnedProgram> g_standalone_sources;
+uint64_t g_next_standalone_source = 1;
+
+bool StandaloneSupervisor() {
+  process_identity::Process self;
+  return process_identity::ReadLiveProcess(GetCurrentProcess(), &self) &&
+         self.principal.container.size == 0 && !self.principal.restricted &&
+         self.principal.integrity >= SECURITY_MANDATORY_MEDIUM_RID;
+}
+
+DWORD RetainStandaloneSource(uint64_t pin, StandaloneInput* source, std::wstring* path) {
+  std::lock_guard<std::mutex> lock(g_standalone_sources_lock);
+  const auto found = g_standalone_sources.find(pin);
+  if (found == g_standalone_sources.end()) return ERROR_INVALID_HANDLE;
+  HANDLE inherited = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), found->second.file.get(), GetCurrentProcess(),
+                       &inherited, 0, TRUE, DUPLICATE_SAME_ACCESS)) return GetLastError();
+  source->file.reset(inherited);
+  *path = found->second.path;
+  return ERROR_SUCCESS;
+}
+
 void WaitWithStandaloneInput(HANDLE process, StandaloneInput& code) {
   code.child_requests.reset();
   while (WaitForSingleObject(process, 8) == WAIT_TIMEOUT) {
@@ -902,24 +930,73 @@ uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
 
 uint32_t RunContainedStandalone(const std::u16string& command, const AppContainerSpec& spec,
                                const std::u16string& code, uint32_t uid, uint32_t* exit_code) {
-  process_identity::Process self;
-  if (uid < 10000 || uid > 19999 || exit_code == nullptr ||
-      !process_identity::ReadLiveProcess(GetCurrentProcess(), &self) ||
-      self.principal.container.size != 0 || self.principal.restricted ||
-      self.principal.integrity < SECURITY_MANDATORY_MEDIUM_RID) return ERROR_ACCESS_DENIED;
+  uint64_t pin = 0;
+  if (!code.empty()) {
+    const DWORD opened = PinStandaloneInput(code, &pin);
+    if (opened != ERROR_SUCCESS) return opened;
+  }
+  const DWORD result = RunPinnedContainedStandalone(command, spec, pin, uid, exit_code);
+  ReleaseStandaloneInput(pin);
+  return result;
+}
+
+uint32_t PinStandaloneInput(const std::u16string& code, uint64_t* result) {
+  if (code.empty() || result == nullptr || !StandaloneSupervisor()) return ERROR_ACCESS_DENIED;
+  using Name = binder_bootstrap::StandaloneName;
+  std::wstring path(Name::kMaxPath, L'\0');
+  const DWORD length = GetFullPathNameW(W(code), Name::kMaxPath, path.data(), nullptr);
+  if (length == 0 || length >= Name::kMaxPath) return ERROR_INVALID_NAME;
+  path.resize(length);
+  peer::OwnedHandle source(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+  if (source.get() == INVALID_HANDLE_VALUE) return GetLastError();
+  BY_HANDLE_FILE_INFORMATION file{};
+  if (GetFileType(source.get()) != FILE_TYPE_DISK ||
+      !GetFileInformationByHandle(source.get(), &file) ||
+      (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return ERROR_ACCESS_DENIED;
+  std::lock_guard<std::mutex> lock(g_standalone_sources_lock);
+  if (g_next_standalone_source == 0) return ERROR_TOO_MANY_OPEN_FILES;
+  *result = g_next_standalone_source++;
+  g_standalone_sources.emplace(*result, PinnedProgram{std::move(source), std::move(path)});
+  return ERROR_SUCCESS;
+}
+
+void ReleaseStandaloneInput(uint64_t pin) {
+  std::lock_guard<std::mutex> lock(g_standalone_sources_lock);
+  g_standalone_sources.erase(pin);
+}
+
+uint32_t ReadStandaloneInput(uint64_t pin, int64_t offset, void* bytes,
+                             uint32_t capacity, uint32_t* copied) {
+  if (offset < 0 || bytes == nullptr || copied == nullptr || capacity == 0) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  std::lock_guard<std::mutex> lock(g_standalone_sources_lock);
+  const auto found = g_standalone_sources.find(pin);
+  if (found == g_standalone_sources.end()) return ERROR_INVALID_HANDLE;
+  HANDLE file = found->second.file.get();
+  LARGE_INTEGER position{};
+  position.QuadPart = offset;
+  DWORD got = 0;
+  if (!SetFilePointerEx(file, position, nullptr, FILE_BEGIN) ||
+      !ReadFile(file, bytes, capacity, &got, nullptr)) return GetLastError();
+  *copied = got;
+  return ERROR_SUCCESS;
+}
+
+uint32_t RunPinnedContainedStandalone(const std::u16string& command, const AppContainerSpec& spec,
+                                       uint64_t pin, uint32_t uid, uint32_t* exit_code) {
+  if (uid < 10000 || uid > 19999 || exit_code == nullptr || !StandaloneSupervisor()) {
+    return ERROR_ACCESS_DENIED;
+  }
   Container sandbox;
   DWORD failure = PrepareContainer(spec, &sandbox);
   if (failure != ERROR_SUCCESS) return failure;
   StandaloneInput source;
-  if (!code.empty()) {
-    SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
-    source.file.reset(CreateFileW(W(code), GENERIC_READ, FILE_SHARE_READ, &inherit,
-                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-    if (source.file.get() == INVALID_HANDLE_VALUE) return GetLastError();
-    BY_HANDLE_FILE_INFORMATION file{};
-    if (GetFileType(source.file.get()) != FILE_TYPE_DISK ||
-        !GetFileInformationByHandle(source.file.get(), &file) ||
-        (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return ERROR_ACCESS_DENIED;
+  if (pin != 0) {
+    std::wstring path;
+    failure = RetainStandaloneSource(pin, &source, &path);
+    if (failure != ERROR_SUCCESS) return failure;
     if (!launch::PrivatePipe(&source.requests, &source.child_requests)) return ERROR_ACCESS_DENIED;
     DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
     if (!SetNamedPipeHandleState(source.requests.get(), &mode, nullptr, nullptr) ||
@@ -931,19 +1008,18 @@ uint32_t RunContainedStandalone(const std::u16string& command, const AppContaine
     if (!name) return GetLastError();
     auto* record = static_cast<Name*>(MapViewOfFile(name.get(), FILE_MAP_WRITE, 0, 0, sizeof(Name)));
     if (record == nullptr) return GetLastError();
-    const DWORD length = GetFullPathNameW(W(code), Name::kMaxPath, record->path, nullptr);
-    record->length = length;
+    record->length = static_cast<uint32_t>(path.size());
+    std::memcpy(record->path, path.c_str(), (path.size() + 1) * sizeof(wchar_t));
     UnmapViewOfFile(record);
     HANDLE read_only = nullptr;
-    if (length == 0 || length >= Name::kMaxPath ||
-        !DuplicateHandle(GetCurrentProcess(), name.get(), GetCurrentProcess(),
+    if (!DuplicateHandle(GetCurrentProcess(), name.get(), GetCurrentProcess(),
                          &read_only, FILE_MAP_READ, TRUE, 0)) return ERROR_ACCESS_DENIED;
     source.name.reset(read_only);
   }
   auto environment = EnvironmentBlock({u"TEMP=" + sandbox.folder, u"TMP=" + sandbox.folder},
       {u"GESHER_UID", u"GESHER_BINDER_UID", u"GESHER_BINDER", u"TMPDIR"});
   return Supervise(command, std::move(environment), exit_code, &sandbox, uid,
-                   code.empty() ? nullptr : &source);
+                   pin == 0 ? nullptr : &source);
 }
 
 int64_t StartTime(int pid) {

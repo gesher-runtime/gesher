@@ -196,6 +196,10 @@ public final class ApkPackage {
     }
 
     private ApkPackage(String apkPath, ParsedPackage parsed) throws IOException {
+        this(apkPath, parsed, apkPath);
+    }
+
+    private ApkPackage(String apkPath, ParsedPackage parsed, String inspectedCode) throws IOException {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
@@ -207,7 +211,7 @@ public final class ApkPackage {
         parsed.setUid(-1);
         // Resolve the newly parsed APK, including before an install replaces the old one.
         sharedLibraries = SharedLibraryRegistry.resolve(parsed);
-        mHasCode = parsed.isDeclaredHavingCode() && hasDex(apkPath);
+        mHasCode = parsed.isDeclaredHavingCode() && hasDex(inspectedCode);
         for (ParsedActivity a : parsed.getActivities()) {
             for (ParsedIntentInfo info : a.getIntents()) {
                 IntentFilter filter = info.getIntentFilter();
@@ -248,6 +252,19 @@ public final class ApkPackage {
     /** Parses one APK; unrelated files beside an external APK are never part of it. */
     public static ApkPackage parse(String apkPath) throws Exception {
         return parse(apkPath, new File(apkPath));
+    }
+
+    /** Verify the same read lease the contained launcher will hand to the APK VM. */
+    static ApkPackage parseStandaloneInput(Zygote.StandaloneInput source) throws Exception {
+        var scratch = Files.createTempDirectory("gesher-apk-admission-");
+        var snapshot = scratch.resolve("base.apk");
+        try {
+            source.copyForVerification(snapshot);
+            return parse(source.path, snapshot.toFile(), snapshot.toString(), true);
+        } finally {
+            Files.deleteIfExists(snapshot);
+            Files.deleteIfExists(scratch);
+        }
     }
 
     /**
@@ -313,17 +330,29 @@ public final class ApkPackage {
     }
 
     private static ApkPackage parse(String apkPath, File parseRoot) throws Exception {
+        return parse(apkPath, parseRoot, apkPath, false);
+    }
+
+    private static ApkPackage parse(String apkPath, File parseRoot, String inspectedCode,
+            boolean pinnedStandalone) throws Exception {
         ParsedPackage pkg;
         try (PackageParser2 parser = new PackageParser2(null /* separateProcesses */,
                 null /* displayMetrics: the defaults */, null /* cacher */,
                 new ParserCallback())) {
             pkg = parser.parsePackage(parseRoot, 0 /* flags */, false /* useCaches */);
         }
-        SigningDetails signing = signingDetails(apkPath);
+        if (pinnedStandalone) {
+            // PackageParser2 uses the snapshot only for inspection. Keep both
+            // framework-visible code paths on the originally requested APK.
+            pkg.setPath(apkPath).setBaseApkPath(apkPath);
+        }
+        SigningDetails signing = signingDetails(inspectedCode);
         if (signing != null) {
             pkg.setSigningDetails(signing);
         }
-        ApkPackage appPkg = new ApkPackage(apkPath, pkg);
+        ApkPackage appPkg = pinnedStandalone ? new ApkPackage(apkPath, pkg, inspectedCode)
+                : new ApkPackage(apkPath, pkg);
+        if (pinnedStandalone) appPkg.rememberVerifiedIdentity(inspectedCode);
         if (pkg.getSigningDetails() == null || pkg.getSigningDetails() == SigningDetails.UNKNOWN) {
             Signature[] verified = appPkg.verifiedSignatures();
             if (verified != null) {
@@ -507,16 +536,18 @@ public final class ApkPackage {
 
     /** Current APK signers after full content verification, never the spoofed identity. */
     public synchronized Signature[] verifiedSignatures() {
-        if (!mSigningIdentityChecked) {
-            mSigningIdentityChecked = true;
-            VerifiedIdentity identity = verifyIdentity(apkPath);
-            if (identity != null) {
-                mVerifiedSignatures = identity.signatures;
-                mVerifiedLineage = identity.lineage;
-                mVerifiedSignatureSchemeVersion = identity.signatureSchemeVersion;
-            }
-        }
+        if (!mSigningIdentityChecked) rememberVerifiedIdentity(apkPath);
         return mVerifiedSignatures == null ? null : mVerifiedSignatures.clone();
+    }
+
+    private void rememberVerifiedIdentity(String inspectedCode) {
+        mSigningIdentityChecked = true;
+        VerifiedIdentity identity = verifyIdentity(inspectedCode);
+        if (identity != null) {
+            mVerifiedSignatures = identity.signatures;
+            mVerifiedLineage = identity.lineage;
+            mVerifiedSignatureSchemeVersion = identity.signatureSchemeVersion;
+        }
     }
 
     /** Matches a SHA-256 certificate digest against the verified APK identity. */

@@ -280,14 +280,54 @@ static jint Zygote_restartWithUid(JNIEnv* env, jclass, jint uid) {
     return static_cast<jint>(code);
 }
 
+static jlong Zygote_pinStandaloneInput(JNIEnv* env, jclass, jstring code) {
+    uint64_t pin = 0;
+    const uint32_t failure = gesher::zygote::PinStandaloneInput(ZygoteString(env, code), &pin);
+    if (failure != 0) {
+        char message[128];
+        std::snprintf(message, sizeof(message), "Cannot pin standalone code: Win32 error %u", failure);
+        jniThrowException(env, "java/lang/IllegalStateException", message);
+    }
+    return static_cast<jlong>(pin);
+}
+
+static void Zygote_releaseStandaloneInput(JNIEnv*, jclass, jlong pin) {
+    if (pin > 0) gesher::zygote::ReleaseStandaloneInput(static_cast<uint64_t>(pin));
+}
+
+static jint Zygote_readStandaloneInput(JNIEnv* env, jclass, jlong pin, jlong offset,
+                                       jbyteArray target) {
+    const jsize requested = target == nullptr ? 0 : env->GetArrayLength(target);
+    if (pin <= 0 || offset < 0 || requested <= 0 || requested > 128 * 1024) {
+        jniThrowException(env, "java/lang/IllegalArgumentException", "Invalid pinned code read");
+        return 0;
+    }
+    std::vector<jbyte> bytes(static_cast<size_t>(requested));
+    uint32_t copied = 0;
+    const uint32_t failure = gesher::zygote::ReadStandaloneInput(
+        static_cast<uint64_t>(pin), offset, bytes.data(), static_cast<uint32_t>(requested), &copied);
+    if (failure != 0) {
+        char message[128];
+        std::snprintf(message, sizeof(message), "Cannot read pinned code: Win32 error %u", failure);
+        jniThrowException(env, "java/io/IOException", message);
+        return 0;
+    }
+    if (copied != 0) env->SetByteArrayRegion(target, 0, static_cast<jsize>(copied), bytes.data());
+    return static_cast<jint>(copied);
+}
+
 static jint Zygote_runContainedStandalone(JNIEnv* env, jclass, jstring command, jstring name,
                                            jstring display, jobjectArray capabilities,
-                                           jstring code, jint uid) {
+                                           jlong pin, jint uid) {
     gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),
                                         ZygoteStrings(env, capabilities)};
     uint32_t exit = 0;
-    const uint32_t failure = gesher::zygote::RunContainedStandalone(ZygoteString(env, command), spec,
-        ZygoteString(env, code), static_cast<uint32_t>(uid), &exit);
+    if (pin <= 0) {
+        jniThrowException(env, "java/lang/IllegalStateException", "Contained code is not pinned");
+        return 0;
+    }
+    const uint32_t failure = gesher::zygote::RunPinnedContainedStandalone(
+        ZygoteString(env, command), spec, static_cast<uint64_t>(pin), static_cast<uint32_t>(uid), &exit);
     if (failure != 0) {
         char message[128];
         std::snprintf(message, sizeof(message), "Contained program launch failed: Win32 error %lu",
@@ -381,8 +421,11 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeGrantPropertyAreaRead", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_grantPropertyAreaRead)},
     {"nativeDeleteAppContainer", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_deleteAppContainer)},
     {"nativeRestartWithUid", "(I)I", GESHER_JNI(Zygote_restartWithUid)},
+    {"nativePinStandaloneInput", "(Ljava/lang/String;)J", GESHER_JNI(Zygote_pinStandaloneInput)},
+    {"nativeReleaseStandaloneInput", "(J)V", GESHER_JNI(Zygote_releaseStandaloneInput)},
+    {"nativeReadStandaloneInput", "(JJ[B)I", GESHER_JNI(Zygote_readStandaloneInput)},
     {"nativeRunContainedStandalone",
-     "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;I)I",
+     "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;JI)I",
      GESHER_JNI(Zygote_runContainedStandalone)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
     {"nativeChildStartTime", "(I)J", GESHER_JNI(Zygote_childStartTime)},

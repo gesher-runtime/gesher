@@ -40,9 +40,8 @@ public final class ContainedDex {
                 "-Xint", "-Xusejit:false", "-cp", dex.getPath()));
         command.addAll(Arrays.asList(args).subList(3, args.length));
         String line = String.join(" ", command.stream().map(Zygote::quote).toList());
-        try {
-            return Zygote.nativeRunContainedStandalone(line, profile, "Gesher standalone DEX",
-                    capabilities, Zygote.windowsPath(dex.getPath()),
+        try (Zygote.StandaloneInput code = new Zygote.StandaloneInput(dex.getPath())) {
+            return code.run(line, profile, "Gesher standalone DEX", capabilities,
                     android.os.Process.FIRST_APPLICATION_UID);
         } finally {
             int result = Zygote.nativeDeleteAppContainer(profile);
