@@ -122,17 +122,41 @@ them.
   ANGLE's GL back end loads `eglCreateSyncKHR`/`eglWaitSyncKHR` only when the
   system names them (it advertises native fences whenever
   `eglDupNativeFenceFDANDROID` resolves, and called a null `eglCreateSyncKHR`).
-  ANGLE's Direct3D 11 display has no EGL fence syncs, so a fence sync
-  (`EGL_SYNC_FENCE_KHR`, or `EGL_SYNC_NATIVE_FENCE_ANDROID` without an fd)
-  waits for the current context's commands to finish (`glFinish`) when it is
-  made and is signaled from then on; a native one holds a signaled fd: a
-  `/dev/null` descriptor, which polls readable and crosses processes as a
-  handle-backed fd (ADR 0088), but has no `sync_file` ioctls (merging or signal
-  times report failure, which Chromium handles as "no information"). So no
-  fence signals before the GPU work before it is done. A fence made from an fd
-  is waited for by polling it; `eglWaitSyncKHR` waits on the CPU before later
-  commands are issued. Reusable syncs stay ANGLE's. The cost is CPU/GPU
-  overlap: making a fence blocks until the GPU has caught up.
+  ANGLE's Direct3D 11 display has no EGL fence syncs. **Revised 2026-11-22:**
+  both local fence types now use a real DXGI completion event. A private host
+  dispatch in the pinned ANGLE build calls `IDXGIDevice2::EnqueueSetEvent`
+  under ANGLE's existing submission mutex. This queues completion and flushes
+  prior rendering without a CPU wait. `eglCreateSyncKHR` can return while the
+  GPU is busy; client waits, native export and event retirement run outside
+  that mutex. A thread-pool wait retains each pending event/device until the
+  GPU completes or reports device removal, even if the app destroys its sync.
+
+  Local server waits require no additional GPU dependency: ANGLE's one
+  immediate queue already orders subsequent commands after the local fence.
+  Queuing an **external pending** D3D11 fence onto that shared queue would
+  also block unrelated EGL contexts, contrary to `EGL_KHR_wait_sync`; that
+  approach is intentionally not used. Native fd export remains synchronous:
+  `eglDupNativeFenceFDANDROID` waits for genuine completion, then exposes a
+  typed immutable native event with read-only Windows access. This preserves
+  portability across processes/adapters and makes imported server waits
+  immediately satisfied. Creation itself does not allocate a POSIX fd or wait
+  for export. The native-fd attribute is not queryable (extension issue 3).
+
+  Native descriptors have explicit identity, dup/close bookkeeping, and tagged
+  Binder/SCM_RIGHTS transfer; ordinary readable files or pipes are rejected as
+  EGL fence inputs. Transfer snapshots retain their HANDLE until the broker
+  acknowledges its duplicate. The event is not a `/dev/null` stand-in: its
+  one-way signaled state records the actual preceding GPU completion. Native
+  `sync_file` merge/timestamp ioctls remain unsupported. Reusable syncs stay
+  ANGLE's. Native export still costs CPU/GPU overlap; this change removes the
+  earlier wait at creation and the wait while holding the global GL mutex.
+
+  An older installed ANGLE SDK without the private dispatch retains the
+  previous synchronous `glFinish` compatibility route. Current packages must
+  contain the new ABI; `egl_fence_test` checks it rather than silently skipping.
+  Contract references: [native fences](https://registry.khronos.org/EGL/extensions/ANDROID/EGL_ANDROID_native_fence_sync.txt),
+  [server waits](https://registry.khronos.org/EGL/extensions/KHR/EGL_KHR_wait_sync.txt),
+  [DXGI completion](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgidevice2-enqueuesetevent).
 
 ### 4. ASurfaceControl is a layer tree composed into its window
 
@@ -222,7 +246,8 @@ do safely anyway) and a full state resync when the calling context changes.
   forwarded to the browser's SurfaceView. That is one GPU read-back and the
   existing forwarding copies per frame, the same order of cost as the EGL
   child surfaces of ADR 0056.
-- Native fences cost CPU/GPU overlap (section 3).
+- Exporting a native fence fd still costs CPU/GPU overlap (section 3), but
+  local sync creation and other contexts' CPU submission can continue.
 - GL calls of all contexts in a process are serialized, and switching between
   contexts resyncs their whole state (section 6).
 - The window's own buffers and its layers are not composed together: frames

@@ -89,7 +89,9 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   PrintWindow reads nothing back from a window never shown). The window's
   title is the Activity's label; it carries the process's AppUserModelID
   (`SHGetPropertyStoreForWindow`, from `$GESHER_APP_USER_MODEL_ID`) and the
-  package's Start menu icon (`WM_SETICON`, `<data>/gesher-shell`). Closing it
+  package's Start menu icon (`WM_SETICON`, `<data>/gesher-shell`; also written,
+  without a shortcut, for a package with no launcher activity or a staged microG
+  addon, docs/installer.md). Closing it
   (`WM_CLOSE`) calls `Activity.finish()`: on the device the system server
   destroys the activity and ends the process; `remove` closes the window.
   Closing always closes the app: if the window's thread has not taken the
@@ -574,6 +576,21 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   now goes through a Surface over the SurfaceTexture (LegacyCamera).
 - **Bitmap parcels** (`compat/hwui/surfaces/bitmap_parcel.cc`) and **YuvImage**
   (`compat/hwui/surfaces/yuv_image.cc`), registered after hwui's tables.
+  `Bitmap.asShared()` uses real sealed memfd-backed storage through the pinned
+  hwui allocator. Shared Parcel recipients retain independent mapped native
+  Bitmaps; forwarding an immutable mapped Bitmap duplicates its descriptor
+  without copying its pixels. Mutable sources still produce independent
+  snapshots, and a Parcel which forbids descriptors uses inline bytes. The
+  recipient outlives both the sender and the Parcel. Actual storage/JNI host
+  tests and source-based work measurements are documented in
+  [the shared Bitmap report](research/shared-bitmap-2026-11-22.md). Track 52
+  requires a public SDK app to preserve all pixels through a separate Binder
+  process after both sending Bitmaps are recycled; that Windows/ART/Skia
+  acceptance is not inferred from the host tests.
+  Seals live in an extended attribute of the `%TEMP%` file, so where `%TEMP%`
+  is on a volume without extended attributes (ReFS, including Dev Drive)
+  `memfd_create(MFD_ALLOW_SEALING)` fails with `EOPNOTSUPP` and `asShared()`
+  fails instead of returning unsealed storage.
 - **Surfaces in Parcels** (`compat/framework/surface_parcel.cc`, the QueueSurface side in
   `compat/media/surface/surface_parcel_bridge.h`): on a device a parceled Surface is its
   IGraphicBufferProducer. Here a QueueSurface's parcel is a producer endpoint, a binder in

@@ -12,6 +12,7 @@ typedef struct {
   HFONT heading_font;
   HFONT brand_font;
   GesherHostTheme theme;
+  GesherHostIcons icons;
   BOOL allowed;
 } PermissionDialogState;
 
@@ -65,6 +66,7 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
     GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
     GesherHostSetFont(brand, &state->brand_font, 110, FW_BOLD);
     SendMessageW(dialog, DM_SETDEFID, IDCANCEL, 0);
+    GesherHostSetIcons(dialog, &state->icons);
     // Request foreground once; never keep the consent window permanently topmost.
     if (!SetForegroundWindow(dialog)) {
       FLASHWINFO flash = {sizeof(flash), dialog, FLASHW_TRAY, 3, 0};
@@ -121,6 +123,8 @@ static BOOL PermissionDialog(enum GesherUiLanguage language, const WCHAR* packag
   *at++ = 9;
   for (SIZE_T i = 0; i < sizeof(font) / sizeof(font[0]); ++i) *at++ = font[i];
   // Failure, Esc, closing and the default button all deny. Only Allow changes state.
+  GesherHostLoadIcons(&state.icons);
   DialogBoxIndirectParamW(GetModuleHandleW(NULL), dialog, NULL, PermissionDialogProc, (LPARAM)&state);
+  GesherHostFreeIcons(&state.icons);
   return state.allowed;
 }

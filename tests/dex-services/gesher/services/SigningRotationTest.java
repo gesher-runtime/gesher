@@ -10,6 +10,7 @@ import java.io.RandomAccessFile;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.HexFormat;
 
 /** Full-verifier rotation trust: data retention, independent AUTH retention and rollback. */
 public final class SigningRotationTest {
@@ -31,6 +32,8 @@ public final class SigningRotationTest {
         Method strict = apk.getMethod("signaturesMatch", apk);
         Method current = apk.getMethod("verifiedSignerSha256");
         Method auth = apk.getMethod("verifiedAuthSignerSha256");
+        Method hasCertificate = apk.getDeclaredMethod("hasVerifiedSigningCertificate", byte[].class);
+        hasCertificate.setAccessible(true);
         Object old = parse.invoke(null, new File(args[0], "v2only.apk").getPath());
         Object rotated = parse.invoke(null, new File(args[0], "rotated.apk").getPath());
         require((Boolean) update.invoke(rotated, old), "Verified forward rotation could not retain installed data");
@@ -39,6 +42,14 @@ public final class SigningRotationTest {
         require(!current.invoke(rotated).equals(current.invoke(old)), "Current fingerprint silently became an ancestor");
         require(auth.invoke(rotated).equals(current.invoke(old)), "AUTH-retained ancestor identity was lost");
         require(current.invoke(old).equals(auth.invoke(old)), "Unrotated signer AUTH identity changed");
+        byte[] ancestorCertificate = HexFormat.of().parseHex((String) current.invoke(old));
+        byte[] currentCertificate = HexFormat.of().parseHex((String) current.invoke(rotated));
+        require((Boolean) hasCertificate.invoke(rotated, ancestorCertificate),
+                "Verified single-signer history omitted the ancestor certificate");
+        require((Boolean) hasCertificate.invoke(rotated, currentCertificate),
+                "Verified certificate lookup omitted the current signer");
+        require(!(Boolean) hasCertificate.invoke(old, currentCertificate),
+                "An unrotated predecessor incorrectly matched the successor key");
         System.out.println("SigningRotationTest: real forward lineage accepted, rollback denied, current-key matching strict");
 
         Object capabilityOld = parse.invoke(null, new File(args[1], "old.apk").getPath());
@@ -64,6 +75,8 @@ public final class SigningRotationTest {
         Object unverified = parse.invoke(null, changed.getPath());
         require(!(Boolean) update.invoke(unverified, old), "Copied rotation block authorized changed APK contents");
         require(auth.invoke(unverified) == null, "Unverified rotation proof supplied an AUTH identity");
+        require(!(Boolean) hasCertificate.invoke(unverified, ancestorCertificate),
+                "Tampered APK trusted a historical signing certificate");
         System.out.println("SigningRotationTest: content-modified APK cannot use copied lineage capabilities");
         System.out.println("SigningRotationTest all passed");
     }

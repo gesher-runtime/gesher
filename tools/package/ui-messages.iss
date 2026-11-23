@@ -6,20 +6,24 @@ en.setup_apk=Android app (Gesher)
 en.setup_bundle=Android app bundle (Gesher)
 en.setup_run=Run with Gesher
 en.setup_microg=Install Google Play services support (microG)
+en.setup_microg_update=Update Google Play services support (microG) to version 0.3.17
 en.setup_aurora=Install App Store (Aurora Store)
 en.setup_control_panel=Gesher Control Center
 en.setup_installing_webview2=Installing Microsoft Edge WebView2...
 en.setup_configuring_microg=Setting up Google Play services and applications...
+en.setup_download_skipped=Setup could not download these components and will continue without them:%n%n%1%nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).
 he.setup_webview=התקנת Microsoft Edge WebView2 (נדרש להצגת תוכן אינטרנט ביישומי Android)
 he.setup_readme=גשר — מידע והוראות
 he.setup_apk=יישום Android (גשר)
 he.setup_bundle=חבילת יישום Android (גשר)
 he.setup_run=הפעלה באמצעות גשר
 he.setup_microg=התקנת תמיכה בשירותי Google Play (microG)
+he.setup_microg_update=עדכון התמיכה בשירותי Google Play (microG) לגרסה 0.3.17
 he.setup_aurora=התקנת חנות אפליקציות (Aurora Store)
 he.setup_control_panel=לוח הבקרה של גשר
 he.setup_installing_webview2=מתקין את Microsoft Edge WebView2...
 he.setup_configuring_microg=מגדיר שירותי Google Play ויישומים...
+he.setup_download_skipped=לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:%n%n%1%nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר).
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userprograms}\Gesher Apps"

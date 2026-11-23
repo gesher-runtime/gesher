@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "internal.h"
+#include "revocable_internal.h"
 
 extern "C" int gesher_is_socket(int fd);
 
@@ -148,13 +149,16 @@ int lstat(const char* path, struct stat* buf) { return StatPath(path, buf, false
 
 int fstat(int fd, struct stat* buf) {
   if (buf == nullptr) return errno = EFAULT, -1;
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   if (gesher_is_socket(fd)) {
     Clear(buf);
     buf->st_mode = S_IFSOCK | 0777;
     return 0;
   }
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  const HANDLE h = snapshot->handle;
   switch (GetFileType(h)) {
     case FILE_TYPE_DISK:
       return FromHandle(h, buf);
