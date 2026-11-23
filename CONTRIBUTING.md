@@ -37,6 +37,8 @@ Examples:
 | Replace a camera capture with a file picker or feed a saved image as live camera input so an application accepts it as a fresh capture, including for cheque deposits. | Outside scope. Preserve the requested capture workflow and use an actual camera backend. |
 | Report successful autofocus, sensor readings or other capabilities that the backend does not implement, to satisfy an application's checks. | Outside scope. Implement the capability faithfully or use the Android-defined unavailable/unsupported behavior. |
 | Add package-name exceptions that change application semantics so tests pass while ordinary applications receive different behavior. | Outside scope. Test fixtures must exercise the relevant production behavior. |
+| Report a camera's sensor orientation relative to the active Gesher display rotation, because Windows delivers frames upright for the desktop monitor and Gesher does not rotate preview buffers. | Within scope as a maintainer-approved desktop presentation adaptation. Camera frames, capture workflow and capabilities stay real. |
+| Expose a stationary default accelerometer (gravity only) when Windows has no physical accelerometer, comparable to the Android Emulator's default virtual sensors. | Within scope as a maintainer-approved desktop default when a physical sensor always takes precedence, the sensor is named as Gesher's, it is documented and it can be disabled (`GESHER_SENSOR_FALLBACK=0`). No other synthetic sensor or reading is covered. |
 
 Desktop presentation and input may differ where Windows requires it; the
 Android-visible contract and the application's choices must still be preserved.
@@ -47,7 +49,8 @@ image and returning it as a fresh capture replaces that operation.
 Mock devices and synthetic inputs may be used in explicit, isolated tests. They
 must not silently become production defaults or be presented as real hardware
 behavior. Synthetic inputs must not replace real inputs in ordinary application
-use.
+use. The only production defaults exempted from this are the two
+maintainer-approved adaptations listed in the table above.
 
 Discuss materially unclear application-visible contracts or non-runtime
 project-scope questions in an issue or PR, and link the relevant discussion.

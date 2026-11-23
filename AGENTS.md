@@ -22,6 +22,12 @@ asks for a general code review without repeating the policy.
 - Selecting a real camera or explicitly configuring its physical mounting is
   legitimate when it describes reality. It does not by itself establish a
   higher hardware level, additional capabilities or different sensor geometry.
+- Two adaptations are maintainer-approved and are not scope violations (see the
+  CONTRIBUTING.md examples): camera sensor orientation reported relative to the
+  active display rotation, and a stationary default accelerometer exposed only
+  when Windows has no physical accelerometer (Gesher-named, documented,
+  disabled by `GESHER_SENSOR_FALLBACK=0`). Review their implementation for
+  correctness; do not extend them to other sensors, readings or capabilities.
 - Preserve Android lifecycle, permission, error and capability contracts. Discuss
   materially unclear application-visible contracts or non-runtime scope questions,
   but do not treat
