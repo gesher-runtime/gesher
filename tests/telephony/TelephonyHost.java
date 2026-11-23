@@ -302,6 +302,14 @@ public final class TelephonyHost {
                     "getPhoneNumber(int)'s null-service exception" + who);
         }
         callers.current = STATE;
+        throwsType(IllegalStateException.class, () -> { t.phone.requestCellInfoUpdate(1, null, STATE.name, null);
+                return null; }, "requestCellInfoUpdate's null-service exception from target S");
+        throwsType(IllegalStateException.class, () -> { t.phone.requestCellInfoUpdateWithWorkSource(1, null,
+                STATE.name, null, null); return null; }, "and with a work source");
+        callers.current = LEGACY;
+        t.phone.requestCellInfoUpdate(1, null, LEGACY.name, null);
+        check(true, "requestCellInfoUpdate returns silently below target S");
+        callers.current = STATE;
         equal(t.subscriptions.getActiveSubInfoCountMax(), 0, "No modem slots");
         equal(t.subscriptions.getDefaultSubId(), SubscriptionManager.INVALID_SUBSCRIPTION_ID, "No default");
         equal(t.subscriptions.getActiveSubIdList(true).length, 0, "No active IDs");

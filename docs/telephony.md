@@ -114,8 +114,11 @@ Mobile data is the WWAN IP interface, which `ConnectivityService` already report
   throw AOSP's `UnsupportedOperationException("Sms is not supported")`.
 - Carrier configuration, carrier identification (`UNKNOWN_CARRIER_ID`), carrier
   privileges (`CARRIER_PRIVILEGE_STATUS_NO_ACCESS`), eUICC, IMS, cell info
-  (`getAllCellInfo` empty), network scans, IMEISV, `isDataEnabled` (Default false), data
-  activity and `TelephonyDisplayInfo` are not backed by the modem.
+  (`getAllCellInfo` null), network scans, IMEISV, `isDataEnabled` (Default false), data
+  activity and `TelephonyDisplayInfo` are not backed by the modem. Without a modem,
+  `requestCellInfoUpdate` follows the manager's null-service path (`IllegalStateException`
+  from target S, a silent return before); with a modem the request is never answered, an
+  open gap until cell info has an implementation or Android's error answer.
 - One modem only; a second WWAN interface is ignored.
 - Telephony broadcasts (`ACTION_SIM_CARD_STATE_CHANGED`, service-state and
   default-subscription broadcasts) are not sent.

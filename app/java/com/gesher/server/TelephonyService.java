@@ -7,7 +7,9 @@ import android.os.Binder;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.WorkSource;
 import android.sysprop.TelephonyProperties;
+import android.telephony.ICellInfoCallback;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 import android.telephony.SubscriptionInfo;
@@ -655,6 +657,31 @@ public final class TelephonyService {
             Caller c = mRules.caller(callingPackage, callingFeatureId);
             mRules.readPhoneNumber(c, "getLine1NumberForDisplay");
             return null;
+        }
+
+        /**
+         * Without a modem, TelephonyManager.requestCellInfoUpdate's null-service path: from
+         * target S (NULL_TELEPHONY_THROW_NO_CB) IllegalStateException, before that a silent
+         * return. The Default implementation would accept the request and never call back.
+         */
+        @Override
+        public void requestCellInfoUpdate(int subId, ICellInfoCallback cb, String callingPackage,
+                String callingFeatureId) {
+            noPhoneCellInfoUpdate(callingPackage, callingFeatureId);
+        }
+
+        @Override
+        public void requestCellInfoUpdateWithWorkSource(int subId, ICellInfoCallback cb,
+                String callingPackage, String callingFeatureId, WorkSource workSource) {
+            noPhoneCellInfoUpdate(callingPackage, callingFeatureId);
+        }
+
+        private void noPhoneCellInfoUpdate(String callingPackage, String callingFeatureId) {
+            // With a modem the request stays unanswered: cell info is not implemented
+            // (docs/telephony.md).
+            if (mCellular.present()) return;
+            Caller c = mRules.caller(callingPackage, callingFeatureId);
+            if (c.targetSdk() > Build.VERSION_CODES.R) throw new IllegalStateException("Telephony is null");
         }
 
         /** No carrier identification database: Android's UNKNOWN_CARRIER_ID. */
