@@ -22,6 +22,7 @@ import com.android.internal.os.ApplicationSharedMemory;
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.gesher.app.Main;
+import com.gesher.app.input.WindowInput;
 import com.gesher.app.window.NativeWindow;
 import com.gesher.app.window.WindowSession;
 import com.gesher.server.ApkPackage;
@@ -197,14 +198,26 @@ public final class AlertWindowContractTest {
                 } catch (IllegalArgumentException expected) {
                     checks++;
                 }
+                Class<?>[] nativeEvent = {IBinder.class, int.class, int.class, int.class};
+                call(session, "onWindowEvent", nativeEvent, child.asBinder(), WindowInput.EVENT_FOCUS, 1, 0);
+                call(session, "onWindowEvent", nativeEvent, child.asBinder(), WindowInput.EVENT_CHAR, 0xd800, 0);
+                return null;
+            });
+            on(handler, () -> {
+                Object window = nativeState(session, child);
+                check(!(boolean)get(window, "focused") && (char)get(window, "highSurrogate") == 0,
+                        "Queued native focus and character input cannot reach a revoked child");
                 return null;
             });
             ops.setMode(OP, uid, APP, AppOpsManager.MODE_ALLOWED);
             awaitVisibility(handler, session, parent, child, true);
             on(handler, () -> {
+                Object operation = get(nativeState(session, parent), "alertOperation");
                 session.remove(child.asBinder());
                 session.remove(parent.asBinder());
                 check(!ops.isOperationActive(OP, uid, APP), "Removing the window retires its active AppOp");
+                call(operation, "refresh", new Class<?>[0]);
+                check(!ops.isOperationActive(OP, uid, APP), "Late refresh cannot restart the removed operation");
                 ((PackageImpl)pkg.parsed).setTargetSdkVersion(22);
                 return null;
             });

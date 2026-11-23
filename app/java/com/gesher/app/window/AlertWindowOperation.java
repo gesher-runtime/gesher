@@ -19,6 +19,7 @@ final class AlertWindowOperation implements AutoCloseable {
     private final IAppOpsService mOps;
     private final AlertWindowPolicy.Owner mOwner;
     private volatile boolean mVisible;
+    private boolean mClosed;
 
     AlertWindowOperation(IAppOpsService ops, AlertWindowPolicy.Owner owner) {
         mOps = ops;
@@ -30,7 +31,8 @@ final class AlertWindowOperation implements AutoCloseable {
     }
 
     /** On the window's Looper. Reconcile current policy rather than trust an event's age. */
-    void refresh() {
+    synchronized void refresh() {
+        if (mClosed) return;
         try {
             int mode = mVisible
                     ? mOps.checkOperation(OP, mOwner.uid(), mOwner.packageName())
@@ -43,10 +45,15 @@ final class AlertWindowOperation implements AutoCloseable {
         } catch (RemoteException | SecurityException unavailable) {
             // A lost policy authority cannot leave an overlay visible.
         }
-        close();
+        stop();
     }
 
-    @Override public void close() {
+    @Override public synchronized void close() {
+        mClosed = true;
+        stop();
+    }
+
+    private void stop() {
         if (!mVisible) return;
         mVisible = false;
         try {

@@ -850,6 +850,7 @@ public final class WindowSession extends IWindowSession.Stub {
                 break;
             case WindowInput.EVENT_FOCUS:
                 w.handler.post(() -> {
+                    if (a != 0 && (!present(key, w) || !alertVisible(w))) return;
                     if (w.focused != (a != 0)) {
                         w.focused = a != 0;
                         w.identity.focus(w.focused, w.handler);
@@ -1267,7 +1268,7 @@ public final class WindowSession extends IWindowSession.Stub {
         synchronized (mWindows) {
             w = mWindows.get(key);
         }
-        if (w == null) return;
+        if (w == null || !alertVisible(w)) return;
         String text;
         if (Character.isHighSurrogate(c)) {
             w.highSurrogate = c;
@@ -2279,14 +2280,14 @@ public final class WindowSession extends IWindowSession.Stub {
      * as clicking an app window behind its dialog does on Windows.
      */
     private void onActivated(AppWindow w) {
-        if (!shownOnDesktop(w)) return;
+        if (!present(w.client.asBinder(), w) || !alertVisible(w) || !shownOnDesktop(w)) return;
         AppWindow root = root(w);
         AppWindow keys = null;
         synchronized (mWindows) {
             List<AppWindow> group = new ArrayList<>();
             for (int i = 0; i < mWindows.size(); i++) {
                 AppWindow v = mWindows.valueAt(i);
-                if (v.nativeWindow != null && v.shown && root(v) == root) group.add(v);
+                if (v.nativeWindow != null && v.shown && root(v) == root && alertVisible(v)) group.add(v);
             }
             group.sort(WindowSession::compareStack);
             for (AppWindow v : group) {
@@ -2294,7 +2295,9 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             if (!w.popup) mActiveRoot = w;
         }
-        if (keys != null && keys != w && keys.nativeWindow != null) keys.nativeWindow.activate();
+        if (keys != null && keys != w && keys.nativeWindow != null && alertVisible(keys)) {
+            keys.nativeWindow.activate();
+        }
         // The user activated a task's window: the task comes to the front (resumed), as a
         // click on a freeform task does on Android's desktop.
         if (root.taskId >= 0 && !root.minimized
@@ -2570,6 +2573,11 @@ public final class WindowSession extends IWindowSession.Stub {
         if (window(w.client) != w || w.nativeWindow == null) return;
         if (!alertVisible(w)) {
             if (w.shown) hideWindow(w);
+            w.highSurrogate = 0;
+            if (w.focused) {
+                w.focused = false;
+                w.identity.focus(false, w.handler);
+            }
             if (Boolean.TRUE.equals(w.sessionFocus)) {
                 w.sessionFocus = false;
                 w.identity.focus(false, w.handler);
@@ -2925,7 +2933,7 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             if (target == null) target = activeRoot();
         }
-        if (target == null) return;
+        if (target == null || !alertVisible(target)) return;
 
         ClipData data = null;
         ClipDescription desc = null;
@@ -2953,6 +2961,10 @@ public final class WindowSession extends IWindowSession.Stub {
         final AppWindow w = target;
         final android.view.DragEvent dragEvent = event;
         Runnable dispatch = () -> {
+            if (!present(w.client.asBinder(), w) || !alertVisible(w)) {
+                dragEvent.recycle();
+                return;
+            }
             ViewRootImpl root = viewRoot(w);
             if (root != null) {
                 try {
