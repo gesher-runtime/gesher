@@ -90,6 +90,13 @@ Check 'arm64: an arm64-v8a libc/pthread .so runs its checks through the shim' {
 } @('libc_test: all passed', 'sleep contracts: complete', 'arm64_elf_test all passed',
     'Bionic realtime range contracts: all passed')
 
+# bionic's libstdc++.so from a translated guest (tests/native/libstdcxx_test.cc):
+# dlopen/dlsym of every export, operator new/delete crossing malloc/free, and
+# the static-local guard protocol with threads racing on one guard.
+Check 'arm64: bionic libstdc++.so (new/delete, __cxa_guard_*) through the shim' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/libstdcxx_test_arm64.so"))
+} @('libstdcxx: all passed', 'arm64_elf_test all passed')
+
 # The guest-ABI checks (tests/native/arm64_abi_test.c): ELF TLS through
 # TLSDESC in several threads, the stack protector, setjmp/longjmp, struct stat
 # and epoll_event layouts, arm64 syscall numbers, AT_HWCAP, C11 atomics,

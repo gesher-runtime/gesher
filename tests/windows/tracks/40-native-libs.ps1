@@ -148,6 +148,20 @@ Check 'native libs: getenv results and environ entries outlive later setenv/pute
 } @('the first result keeps its bytes after putenv', 'the first environ entry keeps its bytes after a new value',
     'environment_lifetime: all passed', 'elf_load_test all passed')
 
+# bionic's libstdc++.so (tests/native/libstdcxx_test.cc): dlopen("libstdc++.so")
+# and dlsym of exactly its exports, operator new/delete crossing malloc/free,
+# the static-local guard protocol with threads racing on one guard (abort and
+# retry included) and compiler-generated guards bound through DT_NEEDED.
+Check 'native libs: bionic libstdc++.so (new/delete, __cxa_guard_*, __cxa_pure_virtual) from a .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libstdcxx_test.so")
+} @('ok   libstdcxx: waiters announced themselves','libstdcxx: all passed', 'elf_load_test all passed')
+
+# An app library with its own libc++_shared.so keeps libc++'s operator new and
+# guards for its relocations and dlsym(RTLD_DEFAULT); libstdc++.so stays the platform's.
+Check "native libs: an app's libc++_shared.so keeps its definitions next to libstdc++.so" {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libstdcxx-order/libstdcxx_order_test.so") (NoDrive "$Dir/libstdcxx-order")
+} @('libstdcxx_order: all passed', 'elf_load_test all passed')
+
 # The NDK's MediaDrm/MediaCrypto with no DRM plugin: no scheme is supported and
 # no object is created, as Android answers for an unsupported scheme.
 Check 'native libs: MediaDrm/MediaCrypto report no crypto scheme from a .so' {
