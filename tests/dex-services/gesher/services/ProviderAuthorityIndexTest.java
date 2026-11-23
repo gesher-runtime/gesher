@@ -312,9 +312,30 @@ public final class ProviderAuthorityIndexTest {
         PackageImpl syncable = manifest("fixture.authority.syncable");
         provider(syncable, "First", "shared", true, false);
         provider(syncable, "Second", "shared;alias", true, false).setSyncable(true);
+        provider(syncable, "Third", "own;more", true, false).setSyncable(true);
+        provider(syncable, "Fourth", "fourth;more", true, false).setSyncable(true);
+        provider(syncable, "Fifth", "shared;own", true, false).setSyncable(true);
         ApkPackage syncablePkg = apk(syncable, 12356);
         publish(pm, map(syncablePkg));
-        conflict(pm, "shared");
+        // ComponentResolver: a skipped first authority leaves the free ones to the
+        // copy registered for the later authorities, whose isSyncable is false.
+        ProviderInfo shared = declared(pm, "shared");
+        require(shared != null && shared.name.equals(syncablePkg.packageName + ".First"),
+                "Syncable multi-authority provider took an authority registered earlier");
+        ProviderInfo alias = declared(pm, "alias");
+        require(alias != null && alias.name.equals(syncablePkg.packageName + ".Second")
+                        && "alias".equals(alias.authority) && !alias.isSyncable,
+                "Free authority of a syncable provider with a skipped first authority");
+        ProviderInfo own = declared(pm, "own");
+        require(own != null && own.name.equals(syncablePkg.packageName + ".Third")
+                        && "own;more".equals(own.authority) && own.isSyncable,
+                "Syncable provider that registered its first authority changed");
+        ProviderInfo fourth = declared(pm, "fourth");
+        require(fourth != null && "fourth".equals(fourth.authority) && fourth.isSyncable,
+                "Syncable provider keeping its first authority lost its syncable state");
+        ProviderInfo fifth = component(pm, syncablePkg, "Fifth", 0);
+        require(fifth != null && fifth.authority == null && fifth.isSyncable,
+                "Fully skipped syncable provider kept an authority");
 
         publish(pm, map(duplicates));
         require(declared(pm, "same").name.equals(same.name), "Republished package changed its registered provider");

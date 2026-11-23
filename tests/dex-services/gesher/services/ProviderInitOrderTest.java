@@ -326,7 +326,10 @@ public final class ProviderInitOrderTest {
         addProvider(parsed, "Primary", PKG, 0, true).setAuthority(authority);
         // A higher initOrder would install the later declaration first if it were bound.
         addProvider(parsed, "Secondary", PKG, 50, true).setAuthority(authority);
-        addProvider(parsed, "Partial", PKG, 10, true).setAuthority(authority + ";" + PKG + ".partial");
+        // Syncable: Android registers its free authority on a non-syncable copy.
+        ParsedProviderImpl partial = addProvider(parsed, "Partial", PKG, 10, true);
+        partial.setAuthority(authority + ";" + PKG + ".partial");
+        partial.setSyncable(true);
         addProvider(parsed, "Independent", PKG, 5, true);
         ApkPackage pkg = packageFor(parsed);
         PackageManagerService pm = (PackageManagerService) construct(PackageManagerService.class,
@@ -366,6 +369,8 @@ public final class ProviderInitOrderTest {
         require(authority.equals(primary.authority), "First declaration lost its authority");
         require((PKG + ".partial").equals(named(bound, "Partial").authority),
                 "Partially skipped provider was bound with an authority it does not own");
+        require(!named(bound, "Partial").isSyncable,
+                "Syncable provider's later authority kept the first authority's syncable state");
         ProviderInfo secondary = pm.getProviderInfo(new ComponentName(PKG, PKG + ".Secondary"), 0, 0);
         require(secondary != null && secondary.authority == null,
                 "Skipped declaration is not a registered component without an authority");

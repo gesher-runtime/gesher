@@ -46,7 +46,6 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -999,34 +998,37 @@ public final class ApkPackage {
      * Authorities shared with another package are not resolved here: ContentProviders
      * rejects that ambiguity instead of picking an owner by install order. Use the
      * same first-declaration-per-class rule as the provider queries and index.
+     *
+     * <p>A syncable provider with several authorities: Android registers its first
+     * authority on the class record and its later ones on a copy whose isSyncable is
+     * false, as only the first authority may be syncable. Gesher keeps one record per
+     * class, which owns every authority it registered. When the first authority was
+     * skipped, the free ones are exactly the copy's, so the record takes the copy's
+     * non-syncable state; otherwise it keeps the class record's syncable state.
      */
     private static void registerAuthorities(ProviderInfo[] providers) {
         if (providers == null) return;
-        Map<String, Boolean> registered = new HashMap<>();
+        Set<String> registered = new HashSet<>();
         Set<String> components = new HashSet<>();
-        Map<ProviderInfo, String> narrowed = new HashMap<>();
         for (ProviderInfo info : providers) {
             if (!components.add(info.name) || info.authority == null) continue;
             String[] authorities = info.authority.split(";");
-            boolean splitSyncable = info.isSyncable && authorities.length > 1;
             StringBuilder kept = null;
             boolean skipped = false;
-            for (String authority : authorities) {
-                Boolean ownerSplitSyncable = registered.putIfAbsent(authority, splitSyncable);
-                if (ownerSplitSyncable != null) {
-                    // Android uses different records for a syncable provider's class
-                    // and its secondary authorities. Preserve conflict handling until
-                    // Gesher can represent those records separately.
-                    if (splitSyncable || ownerSplitSyncable) return;
+            boolean firstSkipped = false;
+            for (int i = 0; i < authorities.length; i++) {
+                if (!registered.add(authorities[i])) {
                     skipped = true;
+                    if (i == 0) firstSkipped = true;
                     continue;
                 }
-                if (kept == null) kept = new StringBuilder(authority);
-                else kept.append(';').append(authority);
+                if (kept == null) kept = new StringBuilder(authorities[i]);
+                else kept.append(';').append(authorities[i]);
             }
-            if (skipped) narrowed.put(info, kept == null ? null : kept.toString());
+            if (!skipped) continue;
+            info.authority = kept == null ? null : kept.toString();
+            if (firstSkipped && kept != null && info.isSyncable) info.isSyncable = false;
         }
-        narrowed.forEach((info, authority) -> info.authority = authority);
     }
 
     private static ProviderInfo[] filterProviderBootState(ProviderInfo[] providers, long flags) {
