@@ -115,6 +115,8 @@ class AvcDecoder : public VideoDecoder {
       if (err == IVD_RES_CHANGED) {
         FlushInternal(out);
         Reset();
+        // Reset drops old reordered timestamps; this access unit is retried.
+        times_[marker] = time_us;
         continue;
       }
       if (IS_IVD_FATAL_ERROR(o.u4_error_code)) {
