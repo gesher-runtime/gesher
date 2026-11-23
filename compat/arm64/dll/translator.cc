@@ -96,16 +96,6 @@ std::vector<CodeRegion> g_regions;
 // Each classifier and Jit independently observes pending-load retirement.
 std::atomic<uint64_t> g_code_generation{1};
 
-// Called outside Jit::Run on every dispatch, also after a nested host call.
-// Pooled Envs retain their generations and invalidate on their next dispatch.
-void RefreshCodeCache(A64::Jit* jit, uint64_t* seen) {
-  const uint64_t generation = g_code_generation.load(std::memory_order_acquire);
-  if (*seen != generation) {
-    jit->ClearCache();
-    *seen = generation;
-  }
-}
-
 // --- guest instruction cache maintenance -----------------------------------
 // A guest that writes instructions (an inline hook a packer places on a
 // function, a JIT's code) makes them visible to execution as on ARM: with
@@ -116,36 +106,128 @@ void RefreshCodeCache(A64::Jit* jit, uint64_t* seen) {
 // (the halt check of a linked block included), so a thread spinning in guest
 // code drops the copies promptly; a Jit that is not running (an outer Jit
 // paused under a host call, a pooled Env's) drops them when it next runs.
-struct LiveJit {
-  A64::Jit* jit;
-  std::atomic<uint32_t>* posted;  // ranges posted since its last dispatch
-};
-std::mutex g_live_jits_mutex;
-std::vector<LiveJit> g_live_jits;
-// A Jit that does not run for a while (a pooled Env's) accumulates posted
-// ranges in its invalidation set: beyond this many it clears its whole cache.
-constexpr uint32_t kMaxPostedRanges = 256;
+//
+// Only a Jit that has translated code from the range gets it: each Jit keeps
+// the guest pages it read code from (a superset of what its cache holds), so
+// a range no translation came from neither halts a running Jit (a Run exit
+// and a reset return stack buffer) nor accumulates in a paused one. A page is
+// recorded under the Jit's mutex before its code is read, and an invalidation
+// checks the record under the same mutex after the guest wrote the code:
+// either the invalidation sees the page, or the translation reads the new
+// code.
+class JitCode {
+ public:
+  explicit JitCode(A64::Jit* jit) : jit_(jit) {}
+  A64::Jit* jit() const { return jit_; }
 
-void RegisterJit(A64::Jit* jit, std::atomic<uint32_t>* posted) {
-  std::lock_guard<std::mutex> lock(g_live_jits_mutex);
-  g_live_jits.push_back({jit, posted});
+  // The owning thread, inside Run (MemoryReadCode), before it reads code at
+  // `page`. The last page recorded needs no lock: Clear() resets it.
+  void MarkTranslated(uintptr_t page) {
+    if (page == last_page_) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    InsertPage(page);
+    last_page_ = page;
+  }
+
+  // The owning thread, outside Run: the whole cache goes (and the pages with
+  // it) before the Jit next translates anything.
+  void Clear() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      pages_.clear();
+    }
+    last_page_ = kNoPage;
+    posted_.store(0, std::memory_order_relaxed);
+    jit_->ClearCache();
+  }
+
+  // The owning thread, before Run: Run applies the ranges posted so far.
+  void Dispatched() { posted_.store(0, std::memory_order_relaxed); }
+
+  // Any thread. Line-precise while few ranges wait for the Jit's next
+  // dispatch; then page-granular, so a paused Jit's pending set (dynarmic
+  // coalesces it) stays bounded by the pages it translated, instead of
+  // growing with every range or costing it its whole cache.
+  void Invalidate(uintptr_t start, uintptr_t end) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!Overlaps(start, end)) return;
+    if (posted_.fetch_add(1, std::memory_order_relaxed) >= kMaxPreciseRanges) {
+      start &= ~uintptr_t{0xFFF};
+      end = end > UINTPTR_MAX - 0xFFF ? UINTPTR_MAX & ~uintptr_t{0xFFF}
+                                      : (end + 0xFFF) & ~uintptr_t{0xFFF};
+    }
+    jit_->InvalidateCacheRange(start, end - start);
+  }
+
+ private:
+  static constexpr uintptr_t kNoPage = 1;  // not page-aligned
+  static constexpr uint32_t kMaxPreciseRanges = 256;
+
+  // pages_: disjoint, coalesced [start, end) page ranges.
+  void InsertPage(uintptr_t page) {
+    const uintptr_t end = page + 0x1000;
+    auto next = pages_.upper_bound(page);
+    if (next != pages_.begin()) {
+      auto prev = std::prev(next);
+      if (prev->second > page) return;  // already there
+      if (prev->second == page) {
+        prev->second = end;
+        if (next != pages_.end() && next->first == end) {
+          prev->second = next->second;
+          pages_.erase(next);
+        }
+        return;
+      }
+    }
+    if (next != pages_.end() && next->first == end) {
+      const uintptr_t next_end = next->second;
+      pages_.erase(next);
+      pages_.emplace(page, next_end);
+      return;
+    }
+    pages_.emplace(page, end);
+  }
+
+  bool Overlaps(uintptr_t start, uintptr_t end) const {
+    auto it = pages_.lower_bound(end);  // the first range starting at or past end
+    if (it == pages_.begin()) return false;
+    return std::prev(it)->second > start;
+  }
+
+  A64::Jit* const jit_;
+  std::mutex mutex_;
+  std::map<uintptr_t, uintptr_t> pages_;
+  uintptr_t last_page_ = kNoPage;
+  std::atomic<uint32_t> posted_{0};  // ranges posted since its last dispatch
+};
+
+std::mutex g_live_jits_mutex;
+std::vector<JitCode*> g_live_jits;
+
+// Called outside Jit::Run on every dispatch, also after a nested host call.
+// Pooled Envs retain their generations and invalidate on their next dispatch.
+void RefreshCodeCache(JitCode* code, uint64_t* seen) {
+  const uint64_t generation = g_code_generation.load(std::memory_order_acquire);
+  if (*seen != generation) {
+    code->Clear();
+    *seen = generation;
+  }
 }
 
-void UnregisterJit(A64::Jit* jit) {
+void RegisterJit(JitCode* code) {
   std::lock_guard<std::mutex> lock(g_live_jits_mutex);
-  std::erase_if(g_live_jits, [jit](const LiveJit& j) { return j.jit == jit; });
+  g_live_jits.push_back(code);
+}
+
+void UnregisterJit(JitCode* code) {
+  std::lock_guard<std::mutex> lock(g_live_jits_mutex);
+  std::erase(g_live_jits, code);
 }
 
 void InvalidateEveryJit(uintptr_t start, uintptr_t end) {
   if (end <= start) return;
   std::lock_guard<std::mutex> lock(g_live_jits_mutex);
-  for (const LiveJit& j : g_live_jits) {
-    if (j.posted->fetch_add(1, std::memory_order_relaxed) < kMaxPostedRanges) {
-      j.jit->InvalidateCacheRange(start, end - start);
-    } else {
-      j.jit->ClearCache();
-    }
-  }
+  for (JitCode* code : g_live_jits) code->Invalidate(start, end);
 }
 
 // --- guest page protection ---------------------------------------------------
@@ -747,7 +829,8 @@ class Env final : public A64::UserCallbacks {
   }
 
   ~Env() override {
-    for (auto& jit : jits_) UnregisterJit(jit.get());
+    for (auto& code : code_) UnregisterJit(code.get());
+    code_.clear();
     jits_.clear();
     for (size_t id : ids_) ReleaseProcessorId(id);
     VirtualFree(tls_block_, 0, MEM_RELEASE);
@@ -882,8 +965,8 @@ class Env final : public A64::UserCallbacks {
       conf.code_cache_size = (jits_.empty() ? 32 : 8) * 1024 * 1024;
       jits_.push_back(std::make_unique<A64::Jit>(conf));
       code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
-      posted_.push_back(std::make_unique<std::atomic<uint32_t>>(0));
-      RegisterJit(jits_.back().get(), posted_.back().get());
+      code_.push_back(std::make_unique<JitCode>(jits_.back().get()));
+      RegisterJit(code_.back().get());
     }
     return jits_[depth].get();
   }
@@ -909,6 +992,8 @@ class Env final : public A64::UserCallbacks {
 
   std::optional<std::uint32_t> MemoryReadCode(uint64_t a) override {
     if (!InGuestCode(a)) return std::nullopt;
+    // Before the read: an invalidation of this page from now on reaches the Jit.
+    code_[depth_ - 1]->MarkTranslated(static_cast<uintptr_t>(a) & ~uintptr_t{0xFFF});
     uint32_t v;
     std::memcpy(&v, reinterpret_cast<void*>(a), 4);
     return v;
@@ -1230,9 +1315,9 @@ class Env final : public A64::UserCallbacks {
     for (;;) {
       // A host call can abort a nested load while this outer Jit is paused.
       // Nested Jit creation may grow the vector: keep no reference across Run.
-      RefreshCodeCache(jit, &code_generations_[depth_ - 1]);
+      RefreshCodeCache(code_[depth_ - 1].get(), &code_generations_[depth_ - 1]);
       // Run drops the ranges posted so far before it dispatches.
-      posted_[depth_ - 1]->store(0, std::memory_order_relaxed);
+      code_[depth_ - 1]->Dispatched();
       pending_call_ = {};
       jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2);
       int saved_running = t_guest_running;
@@ -1362,8 +1447,8 @@ class Env final : public A64::UserCallbacks {
 
   std::vector<std::unique_ptr<A64::Jit>> jits_;
   std::vector<uint64_t> code_generations_;  // one generation for each jits_ entry
-  // jits_[i]'s count of ranges posted to it since its last dispatch.
-  std::vector<std::unique_ptr<std::atomic<uint32_t>>> posted_;
+  // jits_[i]'s translated pages and the ranges posted to it (registered).
+  std::vector<std::unique_ptr<JitCode>> code_;
   uint64_t icache_line_ = 64;
   uintptr_t icache_start_ = 0, icache_end_ = 0;  // pending IC IVAU lines; end 0: none
   PendingHostCall pending_call_;

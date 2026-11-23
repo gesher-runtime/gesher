@@ -89,9 +89,13 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   before a line that does not extend it, a WFE/YIELD hint or the thread's
   next host call or syscall. A Jit running guest code on another thread halts
   at its next block boundary and drops the range, as `IC IVAU` is broadcast
-  on ARM: a thread spinning in guest code sees the rewrite (a Jit that does
-  not run for a while clears its whole cache after 256 ranges instead of
-  accumulating them). `IC IALLU`/`IC IALLUIS` are EL1-only and UNDEFINED at
+  on ARM: a thread spinning in guest code sees the rewrite. Only a Jit that
+  translated code from the range's pages gets it (each Jit records the pages
+  it read code from), so a JIT's flushes of new code neither stop other
+  threads' Jits nor build up in a paused one (an outer Jit under a blocking
+  host call, a pooled Env's), which keeps its cache; past 256 ranges waiting
+  for its next dispatch they go to it rounded to whole pages.
+  `IC IALLU`/`IC IALLUIS` are EL1-only and UNDEFINED at
   EL0: SIGILL. As a conservative choice (Linux does not guarantee it for a
   page that already ran), an `mprotect` that makes pages executable drops the
   translations of those that were writable or not executable before (an
