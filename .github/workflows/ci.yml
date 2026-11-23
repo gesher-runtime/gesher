@@ -147,6 +147,7 @@ jobs:
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
+          tests/windows/shell/NativeStderrChecks.ps1
       - name: Production modal dialogs on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         timeout-minutes: 2
@@ -372,6 +373,7 @@ jobs:
           "$RUNNER_TEMP/event-loop-reference"
           python3 tools/test_audio_state_contracts.py --sanitize
           python3 tools/test_surface_geometry_contracts.py --sanitize
+          python3 tools/test_video_scaling_contracts.py --sanitize
           python3 tools/test_native_window_dispatch.py --sanitize
 
       - name: Physical keys, sensor flushes, directory walks and futex contracts
@@ -1053,6 +1055,7 @@ jobs:
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
+          tests/windows/shell/NativeStderrChecks.ps1
 
       - name: Production modal dialogs on Windows PowerShell 5.1
         timeout-minutes: 2

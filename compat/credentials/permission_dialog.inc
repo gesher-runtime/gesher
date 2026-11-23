@@ -1,7 +1,9 @@
 /* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
 /* Included by account_crypto.c. Uses ordinary accessible Windows controls. */
+#include "../windows/host_dialog_theme.h"
 
-enum { PERMISSION_PACKAGE = 1101, PERMISSION_DETAILS = 1102, PERMISSION_BRAND = 1103 };
+enum { PERMISSION_PACKAGE = 1101, PERMISSION_DETAILS = 1102, PERMISSION_BRAND = 1103,
+       PERMISSION_HEADING = 1104 };
 
 typedef struct {
   enum GesherUiLanguage language;
@@ -9,6 +11,7 @@ typedef struct {
   const WCHAR* permissions;
   HFONT heading_font;
   HFONT brand_font;
+  GesherHostTheme theme;
   BOOL allowed;
 } PermissionDialogState;
 
@@ -25,14 +28,6 @@ static HWND PermissionControl(HWND dialog, DWORD extra, const WCHAR* klass,
   return control;
 }
 
-static HFONT PermissionFont(HWND dialog, int scale, LONG weight) {
-  LOGFONTW font;
-  if (GetObjectW((HFONT)SendMessageW(dialog, WM_GETFONT, 0, 0), sizeof(font), &font) == 0) return NULL;
-  font.lfHeight = MulDiv(font.lfHeight, scale, 100);
-  font.lfWeight = weight;
-  return CreateFontIndirectW(&font);
-}
-
 static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
   PermissionDialogState* state = (PermissionDialogState*)GetWindowLongPtrW(dialog, DWLP_USER);
   if (message == WM_INITDIALOG) {
@@ -40,36 +35,35 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
     SetLastError(0);
     LONG_PTR previous = SetWindowLongPtrW(dialog, DWLP_USER, (LONG_PTR)state);
     if (previous == 0 && GetLastError() != 0) { EndDialog(dialog, IDCANCEL); return FALSE; }
+    GesherHostThemeInit(&state->theme, dialog);
     BOOL rtl = GesherUiRtl(state->language);
     DWORD reading = rtl ? WS_EX_RTLREADING : 0;
     DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
     HWND brand = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "brand"),
         alignment, PERMISSION_BRAND, 16, 10, 218, 14);
     HWND heading = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_heading"),
-        alignment, -1, 16, 28, 218, 24);
+        alignment, PERMISSION_HEADING, 16, 28, 218, 24);
     HWND app = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_app"),
         alignment, -1, 16, 58, 218, 14);
     // The authenticated package ID has its own LTR control, without bidi isolates.
     HWND package = PermissionControl(dialog, WS_EX_LTRREADING, L"EDIT", state->package_name,
-        ES_READONLY | ES_AUTOHSCROLL | ES_LEFT | WS_TABSTOP, PERMISSION_PACKAGE, 16, 74, 218, 18);
+        ES_READONLY | ES_AUTOHSCROLL | ES_LEFT | WS_BORDER | WS_TABSTOP, PERMISSION_PACKAGE, 16, 74, 218, 18);
     HWND requested = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "permission_requested"),
         alignment, -1, 16, 100, 218, 16);
     // Long requests stay readable and selectable instead of overflowing the screen.
     HWND details = PermissionControl(dialog, reading, L"EDIT", state->permissions,
-        ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+        ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER | WS_TABSTOP
         | (rtl ? ES_RIGHT : ES_LEFT), PERMISSION_DETAILS, 16, 118, 218, 36);
     HWND deny = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_deny"),
-        BS_DEFPUSHBUTTON | WS_TABSTOP, IDCANCEL, 76, 166, 76, 22);
+        BS_OWNERDRAW | WS_TABSTOP, IDCANCEL, 76, 166, 76, 22);
     HWND allow = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_allow"),
-        BS_PUSHBUTTON | WS_TABSTOP, IDYES, 160, 166, 74, 22);
+        BS_OWNERDRAW | WS_TABSTOP, IDYES, 160, 166, 74, 22);
     if (!brand || !heading || !app || !package || !requested || !details || !deny || !allow) {
       EndDialog(dialog, IDCANCEL);
       return FALSE;
     }
-    state->heading_font = PermissionFont(dialog, 145, FW_SEMIBOLD);
-    state->brand_font = PermissionFont(dialog, 110, FW_BOLD);
-    if (state->heading_font) SendMessageW(heading, WM_SETFONT, (WPARAM)state->heading_font, FALSE);
-    if (state->brand_font) SendMessageW(brand, WM_SETFONT, (WPARAM)state->brand_font, FALSE);
+    GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
+    GesherHostSetFont(brand, &state->brand_font, 110, FW_BOLD);
     SendMessageW(dialog, DM_SETDEFID, IDCANCEL, 0);
     // Request foreground once; never keep the consent window permanently topmost.
     if (!SetForegroundWindow(dialog)) {
@@ -79,14 +73,12 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
     SetFocus(deny);
     return FALSE;
   }
-  if (message == WM_CTLCOLORDLG) return (INT_PTR)GetSysColorBrush(COLOR_WINDOW);
-  if (message == WM_CTLCOLORSTATIC) {
-    HDC dc = (HDC)wparam;
-    SetBkColor(dc, GetSysColor(COLOR_WINDOW));
-    SetTextColor(dc, GetSysColor(GetDlgCtrlID((HWND)lparam) == PERMISSION_BRAND ? COLOR_HOTLIGHT : COLOR_WINDOWTEXT));
-    return (INT_PTR)GetSysColorBrush(COLOR_WINDOW);
-  }
   if (state == NULL) return FALSE;
+  if (message == GESHER_HOST_REFONT) {
+    GesherHostSetFont(GetDlgItem(dialog, PERMISSION_HEADING), &state->heading_font, 145, FW_SEMIBOLD);
+    GesherHostSetFont(GetDlgItem(dialog, PERMISSION_BRAND), &state->brand_font, 110, FW_BOLD);
+    return TRUE;
+  }
   if (message == WM_CLOSE) { EndDialog(dialog, IDCANCEL); return TRUE; }
   if (message == WM_COMMAND) {
     int command = LOWORD(wparam);
@@ -99,10 +91,11 @@ static INT_PTR CALLBACK PermissionDialogProc(HWND dialog, UINT message, WPARAM w
   if (message == WM_DESTROY) {
     if (state->heading_font) DeleteObject(state->heading_font);
     if (state->brand_font) DeleteObject(state->brand_font);
+    GesherHostThemeDispose(&state->theme);
     SetWindowLongPtrW(dialog, DWLP_USER, 0);
     return TRUE;
   }
-  return FALSE;
+  return GesherHostThemeEvent(dialog, &state->theme, message, wparam, lparam, PERMISSION_BRAND);
 }
 
 static BOOL PermissionDialog(enum GesherUiLanguage language, const WCHAR* package_name, const WCHAR* permissions) {
