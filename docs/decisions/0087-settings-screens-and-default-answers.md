@@ -96,30 +96,28 @@ a `gesher` service transaction restricted to the host shell. Every switch starts
 answered true for every requesting app before); installs still need the per-commit host
 consent. An INSTALL_PACKAGES holder is always allowed, so its switch is shown fixed on.
 
-Item 4 changes for these screens: a `startActivityForResult` on an app's details is no longer
-answered at once. Each such request gets a token (`SettingsResults`) in a file of its own,
-`data/system/control-panel-results/<token>` holding the package, and the Control Center
-reports the tokens of the package it showed (`gesher-app settings-closed`) when the details
-close; only then does the app get its result, so a store re-checking in `onActivityResult`
-sees the user's decision. A request from a foreground activity also pauses the task's
-covered activity, including ordinary `startActivity` without a result, so that the
-activity can recheck access in `onResume` after the details close. The result follows AOSP Settings (as known: packages/apps/Settings
-is not in the local AOSP checkout): ExternalSourcesDetails sets a result only when the user
-turns the switch during the visit, RESULT_OK if the last turn was on and RESULT_CANCELED if
-off, so an app already allowed that is closed without a turn gets RESULT_CANCELED; the other
-details screens set no result (RESULT_CANCELED). A turn marks every waiting Install unknown
-apps request of that package (the device does not know which one the details answer; requests
-for one package share the open details). The request file stays one package name,
-so a Control Center of an older Gesher still shows the details (it reports nothing; the result
-then comes at the timeout). The Control Center records the package it shows
-(`data/system/control-panel-showing`, written before it takes the request) so a new request
-never replaces that package's tokens, and a device start clears both. A request that one for another app replaces before the Control
-Center showed it is answered at once; one for the same app joins the open details. A request
-whose details never report is answered after 15 minutes, at most 32 wait, and an activity
-that finished or died meanwhile gets nothing. Windows' pages and the Control Center's own
-views still answer RESULT_CANCELED at once. `canRequestPackageInstalls` now refuses a caller
-that does not own the package (SecurityException, as AOSP), since its answer reveals the
-user's decision.
+Item 4 changes for per-app details. The system creates an opaque visit token for a
+request from an activity and pauses the covered activity when the Control Center launch
+succeeds. On close, it restores the eligible activity or its replacement process. This
+lets an ordinary `startActivity` caller recheck special access in `onResume`. A result
+requested with `startActivityForResult` is delivered before resume to its original live
+recipient. Failed starts leave the requesting activity in its existing lifecycle state.
+
+The host acknowledges a visible visit with its process ID and Windows start time. It
+reports the tokens it is displaying with each switch turn and serializes the close
+notification after outstanding changes finish. The Install unknown apps screen answers
+RESULT_OK only after the user turned its switch on during that visit. A later turn off,
+closing without a turn, or another screen answers RESULT_CANCELED. The result is independent
+of whether the same package has another visit waiting to be displayed. If the Control
+Center exits, the device cancels that exact host's pending visits. Unshown visits time out
+after 15 minutes or cancel when replaced. At capacity, new requests are refused so a
+visible visit can continue until the user closes it. The Windows settings pages and
+Control Center's main view still answer RESULT_CANCELED at once.
+
+The request file remains a package name. Each token is stored separately while it is
+pending discovery by the host. The shown-package marker protects the current dialog's
+tokens as the panel takes new requests. The device removes unreconciled marker and token
+files at device start.
 
 Item 5 changes too: StorageStatsService decides usage access as AOSP's checkStatsPermission
 does, from `OP_GET_USAGE_STATS` (MODE_ALLOWED allows, MODE_DEFAULT falls back to holding

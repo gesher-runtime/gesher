@@ -255,7 +255,8 @@ public final class Launcher {
                 return SpellCheckerCommands.run(rest);
             case "windows": return windows(rest);
             case "special-access": return specialAccess(rest);
-            case "settings-closed": return settingsClosed(rest);
+            case "settings-closed": return settingsClosed(rest, false);
+            case "settings-shown": return settingsClosed(rest, true);
             case "view": {
                 if (rest.size() != 2) return usage();
                 return view(rest.get(0), rest.get(1));
@@ -364,8 +365,8 @@ public final class Launcher {
      * {@code denied}, separated by tabs. The device checks the package and the op.
      */
     private static int specialAccess(List<String> args) throws Exception {
-        if (args.size() != 1 && args.size() != 3) return usage();
-        if (args.size() == 3 && !"allow".equals(args.get(2)) && !"deny".equals(args.get(2))) {
+        if (args.size() != 1 && args.size() != 3 && args.size() < 6) return usage();
+        if (args.size() >= 3 && !"allow".equals(args.get(2)) && !"deny".equals(args.get(2))) {
             return usage();
         }
         // The Control Center asks while it shows an app's details: it never waits for a
@@ -385,9 +386,12 @@ public final class Launcher {
             java.io.PrintStream out) throws Exception {
         String[] rows;
         try {
+            boolean visit = args.size() >= 6;
             rows = args.size() == 1 ? gesher.specialAccess(args.get(0))
                     : new String[] {gesher.setSpecialAccess(args.get(0), args.get(1),
-                            "allow".equals(args.get(2)))};
+                            "allow".equals(args.get(2)), visit ? Integer.parseInt(args.get(3)) : 0,
+                            visit ? Long.parseLong(args.get(4)) : 0,
+                            visit ? args.subList(5, args.size()).toArray(new String[0]) : new String[0])};
         } catch (UnsupportedOperationException e) {
             log(e.getMessage());
             return 4;
@@ -405,8 +409,19 @@ public final class Launcher {
      * for these Settings requests closed, so the apps that asked get their results
      * (com.gesher.server.SettingsResults). Never starts a device.
      */
-    private static int settingsClosed(List<String> tokens) throws Exception {
-        if (tokens.isEmpty()) return usage();
+    private static int settingsClosed(List<String> args, boolean shown) throws Exception {
+        if (args.isEmpty()) return usage();
+        boolean visit = shown || !args.get(0).matches("[0-9a-f]{32}");
+        if (visit && args.size() < 3) return usage();
+        int pid;
+        long startedAt;
+        try {
+            pid = visit ? Integer.parseInt(args.get(0)) : 0;
+            startedAt = visit ? Long.parseLong(args.get(1)) : 0;
+        } catch (NumberFormatException malformed) {
+            return usage();
+        }
+        List<String> tokens = visit ? args.subList(2, args.size()) : args;
         for (String token : tokens) {
             if (!token.matches("[0-9a-f]{32}")) return usage();
         }
@@ -418,8 +433,10 @@ public final class Launcher {
             // The device takes at most 32 tokens a call (SettingsResults.MAX_PENDING).
             GesherService.Client gesher = gesher();
             for (int from = 0; from < tokens.size(); from += 32) {
-                gesher.settingsScreensClosed(tokens.subList(from, Math.min(tokens.size(), from + 32))
-                        .toArray(new String[0]));
+                String[] batch = tokens.subList(from, Math.min(tokens.size(), from + 32))
+                        .toArray(new String[0]);
+                if (visit) gesher.reportSettingsVisit(shown, pid, startedAt, batch);
+                else gesher.settingsScreensClosed(batch);
             }
         } catch (UnsupportedOperationException e) {
             log(e.getMessage());

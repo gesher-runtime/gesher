@@ -43,6 +43,8 @@ public final class GesherService extends Binder {
     static final int SET_SPECIAL_ACCESS = IBinder.FIRST_CALL_TRANSACTION + 11;
     /** The Control Center closed the app details shown for these Settings requests. */
     static final int SETTINGS_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 12;
+    static final int SETTINGS_SHOWN = IBinder.FIRST_CALL_TRANSACTION + 13;
+    static final int SETTINGS_VISIT_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 14;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -104,9 +106,21 @@ public final class GesherService extends Binder {
         default String setSpecialAccess(String packageName, String opName, boolean allowed) {
             throw new UnsupportedOperationException("Special access unavailable");
         }
+        /** Records a switch turn made while the corresponding Settings visits were visible. */
+        default String setSpecialAccess(String packageName, String opName, boolean allowed,
+                int panelPid, long panelStartedAt, String[] tokens) {
+            return setSpecialAccess(packageName, opName, allowed);
+        }
+        /** The Control Center displayed these requests in this exact Windows process. */
+        default int settingsScreensShown(int pid, long startedAt, String[] tokens) {
+            throw new UnsupportedOperationException("Settings visits unavailable");
+        }
         /** The Control Center closed these requests' details (SettingsResults tokens). */
         default int settingsScreensClosed(String[] tokens) {
             throw new UnsupportedOperationException("Settings results unavailable");
+        }
+        default int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
+            return settingsScreensClosed(tokens);
         }
         /** A call came: the device is not idle. */
         void touch();
@@ -127,7 +141,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > SETTINGS_CLOSED) {
+        if (code < INSTALL || code > SETTINGS_VISIT_CLOSED) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -211,26 +225,35 @@ public final class GesherService extends Binder {
                 case SET_SPECIAL_ACCESS: {
                     String pkg = data.readString(), op = data.readString();
                     boolean allowed = data.readBoolean();
-                    data.enforceNoDataAvail();
-                    String row = mDevice.setSpecialAccess(pkg, op, allowed);
+                    String row;
+                    if (data.dataAvail() == 0) {
+                        row = mDevice.setSpecialAccess(pkg, op, allowed);
+                    } else {
+                        int pid = data.readInt();
+                        long startedAt = data.readLong();
+                        String[] tokens = readSettingsTokens(data);
+                        row = mDevice.setSpecialAccess(pkg, op, allowed, pid, startedAt, tokens);
+                    }
                     reply.writeNoException();
                     reply.writeString(row);
                     return true;
                 }
                 case SETTINGS_CLOSED: {
-                    String[] tokens = data.createStringArray();
-                    data.enforceNoDataAvail();
-                    if (tokens == null || tokens.length > SettingsResults.MAX_PENDING) {
-                        throw new IllegalArgumentException("Invalid settings result tokens");
-                    }
-                    for (String token : tokens) {
-                        if (!SettingsResults.validToken(token)) {
-                            throw new IllegalArgumentException("Invalid settings result token");
-                        }
-                    }
+                    String[] tokens = readSettingsTokens(data);
                     int answered = mDevice.settingsScreensClosed(tokens);
                     reply.writeNoException();
                     reply.writeInt(answered);
+                    return true;
+                }
+                case SETTINGS_SHOWN:
+                case SETTINGS_VISIT_CLOSED: {
+                    int pid = data.readInt();
+                    long startedAt = data.readLong();
+                    String[] tokens = readSettingsTokens(data);
+                    int count = code == SETTINGS_SHOWN ? mDevice.settingsScreensShown(pid, startedAt, tokens)
+                            : mDevice.settingsScreensClosed(pid, startedAt, tokens);
+                    reply.writeNoException();
+                    reply.writeInt(count);
                     return true;
                 }
                 default:
@@ -243,6 +266,20 @@ public final class GesherService extends Binder {
                     : new IllegalStateException(e.toString(), e));
             return true;
         }
+    }
+
+    private static String[] readSettingsTokens(Parcel data) {
+        String[] tokens = data.createStringArray();
+        data.enforceNoDataAvail();
+        if (tokens == null || tokens.length > SettingsResults.MAX_PENDING) {
+            throw new IllegalArgumentException("Invalid settings visit tokens");
+        }
+        for (String token : tokens) {
+            if (!SettingsResults.validToken(token)) {
+                throw new IllegalArgumentException("Invalid settings visit token");
+            }
+        }
+        return tokens;
     }
 
     /** The launcher's side. */
@@ -386,6 +423,25 @@ public final class GesherService extends Binder {
             }
         }
 
+        public int reportSettingsVisit(boolean shown, int pid, long startedAt, String[] tokens)
+                throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeInt(pid);
+                data.writeLong(startedAt);
+                data.writeStringArray(tokens);
+                int code = shown ? SETTINGS_SHOWN : SETTINGS_VISIT_CLOSED;
+                if (!mBinder.transact(code, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                return reply.readInt();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
         /** Reports the requests whose app details the Control Center closed. */
         public int settingsScreensClosed(String[] tokens) throws RemoteException {
             Parcel data = Parcel.obtain();
@@ -405,6 +461,11 @@ public final class GesherService extends Binder {
         /** Turns one special access switch on or off, as the user chose; answers its row. */
         public String setSpecialAccess(String packageName, String opName, boolean allowed)
                 throws RemoteException {
+            return setSpecialAccess(packageName, opName, allowed, 0, 0, new String[0]);
+        }
+
+        public String setSpecialAccess(String packageName, String opName, boolean allowed,
+                int pid, long startedAt, String[] tokens) throws RemoteException {
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
@@ -412,6 +473,11 @@ public final class GesherService extends Binder {
                 data.writeString(packageName);
                 data.writeString(opName);
                 data.writeBoolean(allowed);
+                if (tokens.length > 0) {
+                    data.writeInt(pid);
+                    data.writeLong(startedAt);
+                    data.writeStringArray(tokens);
+                }
                 if (!mBinder.transact(SET_SPECIAL_ACCESS, data, reply, 0)) throw olderDevice();
                 reply.readException();
                 String row = reply.readString();

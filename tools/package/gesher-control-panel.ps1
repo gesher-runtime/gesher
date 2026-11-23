@@ -1104,12 +1104,13 @@ function ConvertFrom-SpecialAccessOutput([string[]] $lines) {
 # Runs gesher-app special-access in its own process (the script ends with exit), hidden;
 # the device authenticates it as the host shell. Returns its exit code and output lines.
 # Runs in a background runspace for the dialog (Start-PanelSpecialAccess): never on the UI thread.
-function Invoke-PanelSpecialAccess([string[]] $arguments) {
+function Invoke-PanelSpecialAccess([string[]] $arguments,
+        [ValidateSet('special-access', 'settings-shown', 'settings-closed')] [string] $command = 'special-access') {
     $appScript = Join-Path $here 'gesher-app.ps1'
     $system = [Environment]::GetFolderPath('System')
     $info = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'))
     # Every argument was checked against a fixed pattern: no quoting is needed.
-    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $appScript + '" special-access ' + ($arguments -join ' ')
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $appScript + '" ' + $command + ' ' + ($arguments -join ' ')
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
@@ -1137,13 +1138,13 @@ function Invoke-PanelSpecialAccess([string[]] $arguments) {
 
 # Starts Invoke-PanelSpecialAccess in a background runspace; poll it with
 # Test-PanelSpecialAccessDone and take its answer with Receive-PanelSpecialAccess.
-function Start-PanelSpecialAccess([string[]] $arguments) {
+function Start-PanelSpecialAccess([string[]] $arguments, [string] $command = 'special-access') {
     $powerShell = [PowerShell]::Create()
     try {
-        $body = "param(`$here, `$timeout, `$arguments)`n`$script:SpecialAccessTimeoutMs = `$timeout`n" +
+        $body = "param(`$here, `$timeout, `$arguments, `$command)`n`$script:SpecialAccessTimeoutMs = `$timeout`n" +
             "function Invoke-PanelSpecialAccess {`n$((Get-Command Invoke-PanelSpecialAccess).Definition)`n}`n" +
-            "Invoke-PanelSpecialAccess `$arguments"
-        $null = $powerShell.AddScript($body).AddArgument($here).AddArgument($script:SpecialAccessTimeoutMs).AddArgument([string[]]$arguments)
+            "Invoke-PanelSpecialAccess `$arguments `$command"
+        $null = $powerShell.AddScript($body).AddArgument($here).AddArgument($script:SpecialAccessTimeoutMs).AddArgument([string[]]$arguments).AddArgument($command)
         return [PSCustomObject]@{ PowerShell = $powerShell; Handle = $powerShell.BeginInvoke() }
     } catch {
         $powerShell.Dispose()
@@ -1185,6 +1186,7 @@ function Clear-PanelSpecialAccessWorkers {
             [void]$script:OrphanSpecialAccessWorkers.Remove($worker)
         }
     }
+    if ($script:PanelVisitReports -and $script:PanelVisitReports.Count) { Update-PanelVisitReports }
 }
 
 function Test-PanelPackageName([string] $pkg) {
@@ -1222,17 +1224,50 @@ function Set-AppSpecialAccess([string] $pkg, [string] $op, [bool] $allow) {
     return Read-SetSpecialAccessResult (Invoke-PanelSpecialAccess @($pkg, $op, $(if ($allow) { 'allow' } else { 'deny' }))) $op
 }
 
-# The app details shown for Settings requests closed: the apps that asked get their results
-# (SettingsResults.java). Fire and forget: nothing waits on the UI thread.
-function Send-PanelSettingsClosed([string[]] $tokens) {
-    $tokens = @($tokens | Where-Object { $_ -cmatch '^[0-9a-f]{32}$' } | Select-Object -Unique)
-    if ($tokens.Count -eq 0) { return }
-    $info = [System.Diagnostics.ProcessStartInfo]::new(
-        (Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'))
-    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $here 'gesher-app.ps1') + '" settings-closed ' + ($tokens -join ' ')
-    $info.UseShellExecute = $false
-    $info.CreateNoWindow = $true
-    try { ([System.Diagnostics.Process]::Start($info)).Dispose() } catch { }
+# A visit belongs to one exact Control Center process, even if Windows reuses its PID.
+function Get-PanelVisitIdentity {
+    $process = [Diagnostics.Process]::GetCurrentProcess()
+    try { return "$($process.Id)", "$($process.StartTime.ToFileTimeUtc())" }
+    finally { $process.Dispose() }
+}
+
+function Send-PanelSettingsShown([string[]] $tokens) {
+    if (-not $tokens.Count) { return }
+    $script:PanelVisitReports.Enqueue(@{
+        Command = 'settings-shown'; Arguments = @(Get-PanelVisitIdentity) + $tokens
+        Mutations = @(); Worker = $null; RetryAfter = [DateTime]::MinValue
+    })
+}
+
+function Send-PanelSettingsClosed([string[]] $tokens, [object[]] $mutations = @()) {
+    if (-not $tokens.Count) { return }
+    $script:PanelVisitReports.Enqueue(@{
+        Command = 'settings-closed'; Arguments = @(Get-PanelVisitIdentity) + $tokens
+        Mutations = $mutations; Worker = $null; RetryAfter = [DateTime]::MinValue
+    })
+}
+
+# Keep reports ordered and retry transport failures while the host is alive. A
+# visit's close is sent only after every settings write from that dialog returned.
+function Update-PanelVisitReports {
+    $report = $script:PanelVisitReports.Peek()
+    if ($report.Worker) {
+        if (-not (Test-PanelSpecialAccessDone $report.Worker)) { return }
+        $result = Receive-PanelSpecialAccess $report.Worker
+        $report.Worker = $null
+        # An absent device has no waiting request. An older server has no shown API.
+        if ($result.ExitCode -in 0, 3, 4) {
+            $null = $script:PanelVisitReports.Dequeue()
+            return
+        }
+        Write-PanelLog "$($report.Command): delivery failed ($($result.ExitCode))"
+        $report.RetryAfter = [DateTime]::UtcNow.AddSeconds(1)
+    }
+    if ($report.RetryAfter -gt [DateTime]::UtcNow) { return }
+    foreach ($mutation in $report.Mutations) {
+        if (-not (Test-PanelSpecialAccessDone $mutation)) { return }
+    }
+    $report.Worker = Start-PanelSpecialAccess $report.Arguments $report.Command
 }
 
 # A request from the system server: one package name. $null for anything else.
@@ -1274,9 +1309,14 @@ function Set-PanelShowing([string] $pkg) {
 
 # Adds result tokens to the details shown, once each.
 function Add-PanelShowingTokens([string[]] $tokens) {
+    $added = [Collections.Generic.List[string]]::new()
     foreach ($token in $tokens) {
-        if ($token -and -not $script:ShowingTokens.Contains($token)) { $script:ShowingTokens.Add($token) }
+        if ($token -and -not $script:ShowingTokens.Contains($token)) {
+            $script:ShowingTokens.Add($token)
+            $added.Add($token)
+        }
     }
+    if ($script:SettingsVisitVisible) { Send-PanelSettingsShown $added.ToArray() }
 }
 
 # FromList: the user opened it from the app list, rather than an app from Settings' screens.
@@ -1316,6 +1356,9 @@ function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
 $script:ShowingAppInfo = $false
 $script:ShowingPackage = $null
 $script:ShowingTokens = [Collections.Generic.List[string]]::new()
+$script:SettingsVisitVisible = $false
+$script:SettingsVisitMutations = @()
+$script:PanelVisitReports = [Collections.Generic.Queue[hashtable]]::new()
 function Invoke-PanelRequest {
     # Another start signalled: come to the front even while busy or showing a dialog.
     $raise = $false
@@ -1375,8 +1418,10 @@ function Invoke-PanelRequest {
             $script:ShowingTokens.Clear()
             $script:ShowingPackage = $null
             $script:ShowingAppInfo = $false
+            $script:SettingsVisitVisible = $false
             Set-PanelShowing $null
-            if ($tokens.Count) { try { Send-PanelSettingsClosed $tokens } catch { } }
+            if ($tokens.Count) { Send-PanelSettingsClosed $tokens $script:SettingsVisitMutations }
+            $script:SettingsVisitMutations = @()
         }
     }
 }
@@ -1818,7 +1863,12 @@ function Show-ModernConfirmDialog {
                                 if ($accessState.Pending.ContainsKey($op)) { $sender.IsChecked = -not $wanted; return }
                                 $sender.IsEnabled = $false
                                 try {
-                                    $worker = Start-PanelSpecialAccess @($SpecialAccessPackage, $op, $(if ($wanted) { 'allow' } else { 'deny' }))
+                                    $arguments = @($SpecialAccessPackage, $op, $(if ($wanted) { 'allow' } else { 'deny' }))
+                                    if ($op -ceq 'android:request_install_packages' -and $script:SettingsVisitVisible -and $script:ShowingTokens.Count) {
+                                        $arguments += @(Get-PanelVisitIdentity)
+                                        $arguments += @($script:ShowingTokens | Select-Object -Last 32)
+                                    }
+                                    $worker = Start-PanelSpecialAccess $arguments
                                     $accessState.Pending[$op] = @{ Worker = $worker; Box = $sender; Wanted = $wanted }
                                 } catch {
                                     $sender.IsEnabled = $true
@@ -1860,13 +1910,19 @@ function Show-ModernConfirmDialog {
             $accessState.Closed = $true
             # Answers still running are disposed by the live timer once they finish.
             if ($accessState.Query) { $script:OrphanSpecialAccessWorkers.Add($accessState.Query); $accessState.Query = $null }
-            foreach ($change in @($accessState.Pending.Values)) { $script:OrphanSpecialAccessWorkers.Add($change.Worker) }
+            $mutations = @($accessState.Pending.Values | ForEach-Object { $_.Worker })
+            if ($script:SettingsVisitVisible) { $script:SettingsVisitMutations = $mutations }
+            foreach ($mutation in $mutations) { $script:OrphanSpecialAccessWorkers.Add($mutation) }
             $accessState.Pending.Clear()
         })
         # Nothing runs before the dialog is shown: an error before ShowDialog leaves no
         # timer or background query behind.
         $dialog.Add_Loaded({
             if ($accessState.Closed) { return }
+            if ($script:ShowingPackage -ceq $SpecialAccessPackage) {
+                $script:SettingsVisitVisible = $true
+                Send-PanelSettingsShown $script:ShowingTokens.ToArray()
+            }
             try { $accessState.Query = Start-PanelSpecialAccess @($SpecialAccessPackage) }
             catch {
                 Write-PanelLog "special access: $($_.Exception.Message)"

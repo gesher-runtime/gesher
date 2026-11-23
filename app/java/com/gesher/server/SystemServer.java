@@ -538,17 +538,34 @@ public final class SystemServer {
 
         @Override
         public String setSpecialAccess(String packageName, String opName, boolean allowed) {
+            return setSpecialAccess(packageName, opName, allowed, 0, 0, new String[0]);
+        }
+
+        @Override
+        public String setSpecialAccess(String packageName, String opName, boolean allowed,
+                int panelPid, long panelStartedAt, String[] tokens) {
             SpecialAccess.Entry entry = SpecialAccess.set(mServices.pm, packageName, opName, allowed);
-            // A screen waiting for its result answers the user's last turn (SettingsResults).
-            mServices.atm.specialAccessToggled(packageName, opName, allowed);
-            log("special access: " + packageName + " " + entry.row().replace('\t', ' ')
+            mServices.atm.specialAccessToggled(packageName, opName, entry.allowed(), panelPid,
+                    panelStartedAt, tokens);
+            String row = entry.row();
+            log("special access: " + packageName + " " + row.replace('	', ' ')
                     + " (the user's choice in the Control Center)");
-            return entry.row();
+            return row;
+        }
+
+        @Override
+        public int settingsScreensShown(int pid, long startedAt, String[] tokens) {
+            return mServices.atm.settingsScreensShown(pid, startedAt, tokens);
         }
 
         @Override
         public int settingsScreensClosed(String[] tokens) {
             return mServices.atm.settingsScreensClosed(tokens);
+        }
+
+        @Override
+        public int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
+            return mServices.atm.settingsScreensClosed(pid, startedAt, tokens);
         }
 
         @Override

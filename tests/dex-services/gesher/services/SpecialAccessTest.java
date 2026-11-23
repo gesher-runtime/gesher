@@ -130,6 +130,24 @@ public final class SpecialAccessTest {
                 Manifest.permission.REQUEST_INSTALL_PACKAGES, Manifest.permission.WRITE_SETTINGS,
                 Manifest.permission.PACKAGE_USAGE_STATS, Manifest.permission.MANAGE_MEDIA};
         ApkPackage app = pkg(APP, APP_UID, (byte)17, requested);
+        var parsed = (com.android.internal.pm.parsing.pkg.PackageImpl)
+                com.android.internal.pm.parsing.pkg.PackageImpl.forTesting(APP, app.apkPath);
+        parsed.setEnabled(true);
+        parsed.setTargetSdkVersion(36);
+        var activity = new com.android.internal.pm.pkg.component.ParsedActivityImpl();
+        activity.setPackageName(APP);
+        activity.setName(APP + ".Store");
+        activity.setEnabled(true);
+        activity.setProcessName(APP);
+        parsed.addActivity(activity);
+        for (String permission : requested) {
+            parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                    permission, 0, java.util.Set.of()));
+        }
+        parsed.addAttribution(new com.android.internal.pm.pkg.component.ParsedAttributionImpl(
+                "clipboard", 1, List.of()));
+        parsed.hideAsFinal();
+        set(app, "parsed", parsed);
         ApkPackage plain = pkg(PLAIN, PLAIN_UID, (byte)18);
         // An installer signed like the platform holds INSTALL_PACKAGES (signature|privileged).
         ApkPackage platform = pkg("android", android.os.Process.SYSTEM_UID, (byte)42);
@@ -163,10 +181,14 @@ public final class SpecialAccessTest {
             }
             set(catalog, "mLoaded", true);
         }
+        List<String> transactions = new java.util.ArrayList<>();
         // The app is an attached process, so its Binder identity is authenticated as the app.
         as(APP_UID, APP_PID, () -> {
             IApplicationThread thread = new IApplicationThread.Default() {
                 final Binder token = new Binder(); @Override public IBinder asBinder() { return token; }
+                @Override public void scheduleTransaction(android.app.servertransaction.ClientTransaction t) {
+                    for (var item : t.getTransactionItems()) transactions.add(item.getClass().getSimpleName());
+                }
             };
             Object process = make(type("ActivityTaskManagerService$ProcessRecord"),
                     new Class<?>[]{atm.getClass(), int.class, IApplicationThread.class}, atm, APP_PID, thread);
@@ -482,7 +504,11 @@ public final class SpecialAccessTest {
             List<String> requests = new java.util.ArrayList<>();
             java.util.function.Consumer<String>[] lastReplaced = new java.util.function.Consumer[1];
             forResult.set(null, opener((pkg, token, told) -> { lastReplaced[0] = told; return requests.add(pkg + "\t" + token); }));
-            Method toggled = atm.getClass().getMethod("specialAccessToggled", String.class, String.class, boolean.class);
+            Method toggled = atm.getClass().getMethod("specialAccessToggled", String.class, String.class,
+                    boolean.class, int.class, long.class, String[].class);
+            Method hostClosed = atm.getClass().getMethod("settingsScreensClosed", int.class, long.class, String[].class);
+            int panelPid = android.os.Process.myPid();
+            long panelBirth = com.gesher.server.Zygote.startTime(panelPid);
             Intent unknownSources = new Intent("android.settings.MANAGE_UNKNOWN_APP_SOURCES", android.net.Uri.parse("package:" + APP));
             Object[] status = new Object[1];
             try {
@@ -496,8 +522,9 @@ public final class SpecialAccessTest {
                 // The user turns Install unknown apps on, then closes the details (the device
                 // tells the waiting screens of the turn, as PersistentDevice does).
                 setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
-                toggled.invoke(atm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
-                check(atm.getClass().getMethod("settingsScreensClosed", String[].class).invoke(atm, (Object)new String[]{token}).equals(1),
+                toggled.invoke(atm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true, panelPid,
+                        panelBirth, new String[]{token});
+                check(hostClosed.invoke(atm, panelPid, panelBirth, new String[]{token}).equals(1),
                         "The close report is accepted");
                 check(results.size() == 1 && (Integer)get(results.get(0), "mResultCode") == android.app.Activity.RESULT_OK
                         && (Integer)get(results.get(0), "mRequestCode") == 7, "Install unknown apps turned on answers RESULT_OK");
@@ -549,6 +576,79 @@ public final class SpecialAccessTest {
                 check(requests.size() == before && plainOpens.equals(List.of(APP))
                         && (Integer)call(pendingResults, "pendingCount") == 0 && results.size() == 5,
                         "A foreign result token neither waits nor receives a result");
+
+                results.clear();
+                for (int requestCode : new int[] {-1, 19}) {
+                    transactions.clear();
+                    set(caller, "state", Enum.valueOf(stateType, "RESUMED"));
+                    int visit = requests.size();
+                    as(APP_UID, APP_PID, () -> status[0] = start.invoke(atm, appThread,
+                            unknownSources, null, APP, callerToken, "who", requestCode, null));
+                    check(Integer.valueOf(android.app.ActivityManager.START_SUCCESS).equals(status[0])
+                            && requests.size() == visit + 1 && transactions.contains("PauseActivityItem"),
+                            "Production start pauses its Activity and opens a tracked Settings visit");
+                    check("PAUSING".equals(get(caller, "state").toString())
+                            && (Integer)get(caller, "nativeUiCount") == 1, "The caller is covered during visit");
+                    ClipboardFixture.call(atm, "activityPaused", new Class<?>[]{recordType}, caller);
+                    check(!transactions.contains("ResumeActivityItem"),
+                            "Pause acknowledgment does not resume while Settings is open");
+                    String visitToken = requests.get(visit).substring(APP.length() + 1);
+                    setAccess(pm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true);
+                    toggled.invoke(atm, APP, AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES, true,
+                            panelPid, panelBirth, new String[]{visitToken});
+                    hostClosed.invoke(atm, panelPid, panelBirth, new String[]{visitToken});
+                    check((Integer)get(caller, "nativeUiCount") == 0
+                            && transactions.contains("ResumeActivityItem"),
+                            "Closing Settings resumes its covered Activity");
+                    int resultAt = transactions.indexOf("ActivityResultItem");
+                    check(requestCode < 0 ? resultAt < 0 : resultAt >= 0
+                            && resultAt < transactions.indexOf("ResumeActivityItem"),
+                            "Only a requested result is delivered, before the resume transaction");
+                }
+
+                transactions.clear();
+                set(caller, "state", Enum.valueOf(stateType, "RESUMED"));
+                forResult.set(null, opener((pkg, ignored, told) -> false));
+                as(APP_UID, APP_PID, () -> status[0] = start.invoke(atm, appThread, unknownSources,
+                        null, APP, callerToken, null, -1, null));
+                check(Integer.valueOf(android.app.ActivityManager.START_INTENT_NOT_RESOLVED).equals(status[0])
+                        && "RESUMED".equals(get(caller, "state").toString())
+                        && !transactions.contains("PauseActivityItem"),
+                        "Rejected host open leaves the foreground Activity resumed");
+
+                forResult.set(null, opener((pkg, nextToken, told) -> requests.add(pkg + "	" + nextToken)));
+                int restartVisit = requests.size();
+                as(APP_UID, APP_PID, () -> status[0] = start.invoke(atm, appThread, unknownSources,
+                        null, APP, callerToken, "who", 21, null));
+                ClipboardFixture.call(atm, "activityPaused", new Class<?>[]{recordType}, caller);
+                set(caller, "savedState", new android.os.Bundle());
+                ((List<Object>)get(process, "activities")).add(caller);
+                ClipboardFixture.call(atm, "processDied", new Class<?>[]{process.getClass()}, process);
+                check(get(caller, "app") == null && "STOPPED".equals(get(caller, "state").toString()),
+                        "A covered task may retain its ActivityRecord after process death");
+                var replacementTransactions = new java.util.ArrayList<String>();
+                IApplicationThread replacementThread = new IApplicationThread.Default() {
+                    final Binder token = new Binder(); @Override public IBinder asBinder() { return token; }
+                    @Override public void scheduleTransaction(android.app.servertransaction.ClientTransaction t) {
+                        for (var item : t.getTransactionItems()) replacementTransactions.add(item.getClass().getSimpleName());
+                    }
+                };
+                Object replacement = make(process.getClass(),
+                        new Class<?>[]{atm.getClass(), int.class, IApplicationThread.class},
+                        atm, APP_PID + 1, replacementThread);
+                set(replacement, "packageName", APP);
+                set(replacement, "packageCode", app);
+                set(replacement, "ready", true);
+                ((List<Object>)get(atm, "mProcesses")).add(replacement);
+                set(caller, "app", replacement);
+                String restartToken = requests.get(restartVisit).substring(APP.length() + 1);
+                hostClosed.invoke(atm, panelPid, panelBirth, new String[]{restartToken});
+                check((Integer)get(caller, "nativeUiCount") == 0
+                        && replacementTransactions.contains("ResumeActivityItem"),
+                        "The close releases cover for the eligible replacement process");
+                check(!replacementTransactions.contains("ActivityResultItem"),
+                        "The replacement process does not receive the retired request's result");
+                ((List<Object>)get(atm, "mProcesses")).remove(replacement);
             } finally {
                 forResult.set(null, previousForResult);
                 openPlain.set(null, previousOpen);

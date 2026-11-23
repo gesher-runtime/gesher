@@ -190,7 +190,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             covered.resumeAfterNativeUi = true;
             updateIdle();
         }
-        Runnable release = () -> finishSettingsCover(covered, process);
+        Runnable release = () -> finishSettingsCover(covered);
         try {
             if (pauseNow) pause(covered, false,
                     (intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
@@ -202,37 +202,61 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
-    private void finishSettingsCover(ActivityRecord covered, ProcessRecord process) {
+    private void finishSettingsCover(ActivityRecord covered) {
         synchronized (mLaunchLock) {
-            boolean resumeCovered = false;
+            boolean resumeCovered = false, restartTask = false;
+            AppTaskRecord task = null;
             synchronized (this) {
                 if (--covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
                         && covered.state != State.PAUSING) {
                     covered.resumeAfterNativeUi = false;
-                    resumeCovered = covered.app == process && processByPid(process.pid) == process
-                            && !process.exiting && !process.dead && !process.pidSuperseded
-                            && !covered.finishing && covered.state != State.DESTROYED
+                    if (!covered.finishing && covered.state != State.DESTROYED
                             && mActivities.contains(covered) && activityEnabled(covered)
-                            && topOf(covered.taskId) == covered && !mHiddenTasks.contains(covered.taskId);
+                            && topOf(covered.taskId) == covered && !mHiddenTasks.contains(covered.taskId)) {
+                        ProcessRecord current = covered.app;
+                        resumeCovered = current != null && processByPid(current.pid) == current
+                                && !current.exiting && !current.dead && !current.pidSuperseded;
+                        // The cover belongs to the retained ActivityRecord. If it is still in
+                        // front, removing the cover can also restart it after process death.
+                        task = mAppTasks.get(covered.taskId);
+                        restartTask = current == null && task != null && !mTaskOrder.isEmpty()
+                                && mTaskOrder.get(mTaskOrder.size() - 1) == covered.taskId;
+                    }
                 }
                 updateIdle();
                 notifyAll();
             }
-            if (resumeCovered) { realStartActivity(covered); resume(covered); }
+            if (restartTask) moveTaskToFront(covered.taskId, task);
+            else if (resumeCovered) { realStartActivity(covered); resume(covered); }
             updateTopResumed();
         }
+    }
+
+    /** A dialog is now visible in this exact Control Center host process. */
+    public int settingsScreensShown(int pid, long startedAt, String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.shown(new SettingsResults.Panel(pid, startedAt), tokens);
     }
 
     /** The Control Center closed the app details it showed for these requests. */
     public int settingsScreensClosed(String[] tokens) {
         SettingsResults results = mSettingsResults;
-        return results == null ? 0 : results.closed(tokens);
+        return results == null ? 0 : results.closed(null, tokens);
+    }
+
+    public int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.closed(new SettingsResults.Panel(pid, startedAt), tokens);
     }
 
     /** The user turned a special access switch in the Control Center (SpecialAccess). */
-    public void specialAccessToggled(String packageName, String opName, boolean allowed) {
+    public void specialAccessToggled(String packageName, String opName, boolean allowed,
+            int panelPid, long panelStartedAt, String[] tokens) {
         SettingsResults results = mSettingsResults;
-        if (results != null) results.toggled(packageName, opName, allowed);
+        if (results != null && tokens.length > 0) {
+            results.toggled(new SettingsResults.Panel(panelPid, panelStartedAt), tokens,
+                    packageName, opName, allowed);
+        }
     }
 
     /** STARTED: made visible again without being resumed (StartActivityItem). */
@@ -2945,6 +2969,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                     requestCode, action, settings.packageName)
                             : null;
                     String token = pending == null ? null : settingsResults().register(pending);
+                    if (pending != null && token == null) return ActivityManager.START_CANCELED;
                     // Waiting requests of other apps this one replaces before they were
                     // shown are answered now: their details will not open.
                     java.util.function.Consumer<String> replaced = old -> {

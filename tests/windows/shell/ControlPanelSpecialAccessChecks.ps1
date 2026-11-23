@@ -23,7 +23,8 @@ foreach ($name in 'ConvertFrom-SpecialAccessOutput', 'Invoke-PanelSpecialAccess'
         'Test-PanelSpecialAccessDone', 'Receive-PanelSpecialAccess', 'Clear-PanelSpecialAccessWorkers',
         'Test-PanelPackageName', 'Test-PanelSpecialAccessOp', 'Read-AppSpecialAccessResult',
         'Read-SetSpecialAccessResult', 'Get-AppSpecialAccess', 'Set-AppSpecialAccess', 'ConvertFrom-PanelRequest',
-        'Receive-PanelResultTokens', 'Write-PanelLog') {
+        'Receive-PanelResultTokens', 'Write-PanelLog', 'Get-PanelVisitIdentity',
+        'Send-PanelSettingsShown', 'Send-PanelSettingsClosed', 'Update-PanelVisitReports') {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -31,7 +32,7 @@ foreach ($name in 'ConvertFrom-SpecialAccessOutput', 'Invoke-PanelSpecialAccess'
     if ($functions.Count -ne 1) { throw "Expected one production function: $name" }
     . ([scriptblock]::Create($functions[0].Extent.Text))
 }
-foreach ($variable in '$script:SpecialAccessLabels', '$script:SpecialAccessTimeoutMs', '$script:OrphanSpecialAccessWorkers') {
+foreach ($variable in '$script:SpecialAccessLabels', '$script:SpecialAccessTimeoutMs', '$script:OrphanSpecialAccessWorkers', '$script:PanelVisitReports') {
     $assignments = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq $variable
@@ -223,6 +224,35 @@ try {
     try { $heldTaken = @(Receive-PanelResultTokens 'com.example.app') } finally { $stream.Dispose() }
     Assert-Access ($heldTaken.Count -eq 1 -and $heldTaken[0] -eq $held -and (Test-Path -LiteralPath $heldPath)) 'A token whose file could not be removed is still reported'
 } finally { Remove-Item -LiteralPath $script:PanelResultsDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+# The host reports only its own visible visit, and the result waits for its deliberate writes.
+& {
+    $script:VisitCommands = [Collections.Generic.List[string]]::new()
+    function Start-PanelSpecialAccess([string[]] $arguments, [string] $command) {
+        $script:VisitCommands.Add(($command + ' ' + ($arguments -join ' ')))
+        return @{ Done = $true }
+    }
+    function Test-PanelSpecialAccessDone($worker) { return $worker.Done }
+    function Receive-PanelSpecialAccess($worker) { return @{ ExitCode = 0 } }
+    $identity = (Get-PanelVisitIdentity) -join ' '
+    $token = '0123456789abcdef0123456789abcdef'
+    $mutation = @{ Done = $false }
+    Send-PanelSettingsShown @($token)
+    Send-PanelSettingsClosed @($token) @($mutation)
+    Update-PanelVisitReports
+    Update-PanelVisitReports
+    Update-PanelVisitReports
+    Assert-Access ($script:VisitCommands.Count -eq 1 -and
+        $script:VisitCommands[0] -eq "settings-shown $identity $token") 'Visible visit carries the exact panel process'
+    $mutation.Done = $true
+    Update-PanelVisitReports
+    Update-PanelVisitReports
+    Assert-Access ($script:VisitCommands.Count -eq 2 -and
+        $script:VisitCommands[1] -eq "settings-closed $identity $token" -and
+        $script:PanelVisitReports.Count -eq 0) 'Closing reports only after outstanding writes finish'
+}
+$script:ShowingPackage = $null
+$script:SettingsVisitVisible = $false
 
 # The App info dialog's switches in actual WPF, through the production background
 # polling: shown at once while loading, a switch disabled while its change runs, the
