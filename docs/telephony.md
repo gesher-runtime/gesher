@@ -2,7 +2,7 @@
 
 Gesher backs Android telephony with the host's cellular (WWAN) modem when Windows
 reports one, and otherwise behaves as an Android device without telephony. The
-design decision is [ADR 0091](decisions/0091-telephony-cellular-modem.md).
+design decision is [ADR 0092](decisions/0092-telephony-cellular-modem.md).
 
 ## Android contract
 

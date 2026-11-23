@@ -81,8 +81,9 @@ Not reported:
 | `android.hardware.camera.external` | a camera without a configured mounting | Camera2 reports it `LENS_FACING_EXTERNAL`, hardware level EXTERNAL, as Android's USB cameras, which Android declares with this feature |
 | `android.hardware.ram.normal` / `.ram.low` | whichever `ActivityManager.isLowRamDevice()` says (`ro.config.low_ram` is unset: normal) | as AOSP's SystemConfig |
 | `android.software.webview` | the WebView2 Runtime is installed | `android.webkit.WebView` on WebView2 (docs/webview.md); without the runtime WebViews stay empty, so it is not claimed |
-| sensors (`android.hardware.sensor.*`) | the sensors change (branch feat/hardware-features) | SensorManager over Windows sensors |
-| Wi-Fi, telephony | their own changes | |
+| `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass`, `.light` | the matching sensor in the list SensorManager gives apps (Windows.Devices.Sensors' default sensors) | SensorManager over Windows sensors (docs/devices.md) |
+| `android.hardware.wifi` | a WLAN interface in a synchronous `WlanEnumInterfaces` census at boot | WifiManager over wlanapi (docs/wifi.md); no Wi-Fi Direct, Aware, RTT or Passpoint |
+| `android.hardware.telephony`, `.telephony.subscription`, `.telephony.radio_access`, `.telephony.data`, `.telephony.gsm` (3GPP only) | a cellular modem the Mobile Broadband API reports at boot | read-only, data-only telephony services (docs/telephony.md) |
 
 ## Not reported
 
@@ -126,8 +127,9 @@ promises. Absent (c): nothing implements it.
 | `android.hardware.type.pc` | open question | Gesher presents a phone (DeviceProfile, `touchscreen`, Pixel build properties). `type.pc` makes apps and Play treat it as a ChromeOS-style PC (keyboard and mouse first, large-screen app catalog). It is a product decision about the presented form factor, not a hardware fact. Not claimed. |
 | `android.hardware.type.automotive`, `.television`, `.watch`, `.embedded`, `android.software.leanback`, `.leanback_only`, `.live_tv` | c | other form factors |
 | `android.software.vr.mode`, `android.hardware.vr.*` | c | no VR |
-| `android.hardware.sensor.hifi_sensors` | sensors change | |
-| `android.hardware.wifi*`, `android.hardware.telephony*` | other changes | |
+| `android.hardware.sensor.hifi_sensors`, `.sensor.barometer`, `.proximity`, `.stepcounter`, `.stepdetector`, `.heartrate*`, `.ambient_temperature`, `.relative_humidity`, `.hinge_angle` | c | SensorManager does not list them (Windows.Devices.Sensors has a barometer and proximity sensor that are not wired); hifi_sensors also needs CDD 7.3.9's rate and latency limits |
+| `android.hardware.wifi.direct`, `.wifi.aware`, `.wifi.rtt`, `.wifi.passpoint` | c | Wi-Fi Direct over `Windows.Devices.WiFiDirect`; the others have no Windows equivalent |
+| `android.hardware.telephony.calling`, `.messaging`, `.ims`, `.euicc*`, `.cdma`, `.mbms`, `.carrierlock`, `.satellite` | c | no voice path or SMS through the modem yet (docs/telephony.md follow-ups) |
 
 ## Validation
 
@@ -150,6 +152,6 @@ promises. Absent (c): nothing implements it.
   one wired Ethernet interface (the physical I219-LM). Hyper-V virtual, WAN
   miniport and kernel-debug adapters are excluded.
 - Limits: the development machine has no touch digitizer, camera, audio
-  endpoint, Wi-Fi or sensors. Multitouch on a real touchscreen, a real webcam's
+  endpoint, Wi-Fi adapter, cellular modem or sensors. Multitouch on a real touchscreen, a real webcam's
   `camera.external`, an unplugged audio jack counting as an output, and a
   hardware GPU below feature level 10_1 falling back to WARP were not observed.

@@ -1,4 +1,4 @@
-# 0091: Wi-Fi connections through user-approved Windows profiles
+# 0093: Wi-Fi connections through user-approved Windows profiles
 
 Status: proposed, 2026-11-23. Implementation and contract details are in
 [docs/wifi.md](../wifi.md) ("Connecting") and [docs/windows-wifi.md](../windows-wifi.md).
