@@ -847,7 +847,9 @@ uint32_t Track::underrun_count() const {
 }
 
 uint32_t Track::LatencyMs() const {
-  const OutputTiming timing = engine_->output_timing();
+  // An explicitly configured Track can query latency before any output query
+  // or playback. Refresh device metadata before taking the Track mutex.
+  const OutputInfo timing = engine_->Info();
   uint32_t sink_ms = timing.sample_rate != 0
       ? static_cast<uint32_t>(static_cast<uint64_t>(timing.latency_frames) * 1000 / timing.sample_rate) : 0;
   std::lock_guard<std::mutex> lock(mu_);

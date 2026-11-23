@@ -186,13 +186,10 @@ int main(int argc, char**) {
     std::printf("audio thread failure: %d checks\n", checks); std::fflush(stdout); std::_Exit(0);
   }
   if (std::getenv("GESHER_TEST_OUTPUT_TIMING")) {
-    GetOutputInfo();
     auto track = NewTrack();
-    Check(track->LatencyMs() == 120, "before first playback Track latency includes discovered20ms sink");
+    Check(track->LatencyMs() == 120, "first latency query discovers the 20ms sink before playback");
     fixture::timing = (uint64_t(44100) << 32) | 1323; fixture::Route();
-    const auto changed = GetOutputInfo();
-    Check(changed.sample_rate == 44100 && changed.latency_frames == 1323 && track->LatencyMs() == 130,
-          "stopped Track uses newly discovered rate and latency together");
+    Check(track->LatencyMs() == 130, "stopped Track discovers the new route without a prior output query");
     Check(fixture::ticks == 0 && idle_test::armed_timers == 0,
           "latency discovery starts neither mixing nor timer");
     fixture::timing = (uint64_t(48000) << 32) | 960; fixture::Route(); GetOutputInfo();
