@@ -65,6 +65,22 @@ CheckSounds 'media: the engine''s capture has each tone at its frequency, durati
   @(440, 0.6, 0.354), @(500, 0.5, 0.354), @(660, 0.5, 0.354), @(880, 0.5, 0.354),
   @(330, 0.5, 0.177), @(1200, 0.4, 0.354), @(750, 0.6, 0.354), @(520, 0.5, 0.354))
 
+$phaseWav = Join-Path $mediaTmp 'resampler-phases.wav'
+$env:GESHER_AUDIO_CAPTURE = $phaseWav
+try {
+  $phaseOut = & "$Dir/media_probe.exe" resampler-phases 2>&1 | Out-String
+  $phaseCode = $LASTEXITCODE
+} finally { Remove-Item Env:GESHER_AUDIO_CAPTURE }
+Check 'media: actual half/integer resampling retains every source frame and marker/period/end callback' {
+  $global:LASTEXITCODE = $phaseCode
+  $phaseOut
+} @('media_probe resampler-phases: all passed', 'resampler-phases output: capture to',
+    'half-speed stereo: exact source position and all real callbacks are delivered',
+    'one-and-half-speed mono: exact source position and all real callbacks are delivered',
+    'integer-rate stereo: exact source position and all real callbacks are delivered')
+CheckSounds 'media: actual half/integer resampling capture retains frequency, duration and level' $phaseWav @(
+  @(375, 0.75, 0.354), @(1125, 0.25, 0.354), @(440, 0.4, 0.354))
+
 # The real output: WASAPI shared mode opens and renders, or there is no
 # endpoint (CI) and that is said, not a crash.
 $out = & "$Dir/media_probe.exe" wasapi 2>&1 | Out-String
