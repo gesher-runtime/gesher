@@ -359,6 +359,23 @@ static void test_rewritten_code(void) {
   code[page / 4 - 2] = 0x528000A0;  // mov w0, #5
   __builtin___clear_cache((char*)(code + page / 4 - 2), (char*)(code + page / 4 - 1));
   check("rewritten code: IC IVAU of separate lines", ok && call_code(code + page / 4 - 2) == 5);
+  // Both functions rewritten, then IC IVAU of each line and one ISB: the
+  // first line must not be lost when the second does not extend its range.
+  ok = ok && call_code(code) == 4 && call_code(code + page / 4 - 2) == 5;
+  code[0] = 0x528000C0;             // mov w0, #6
+  code[page / 4 - 2] = 0x528000E0;  // mov w0, #7
+  __asm__ volatile("dc cvau, %0\n\t"
+                   "dc cvau, %1\n\t"
+                   "dsb ish\n\t"
+                   "ic ivau, %0\n\t"
+                   "ic ivau, %1\n\t"
+                   "dsb ish\n\t"
+                   "isb"
+                   :
+                   : "r"(code), "r"(code + page / 4 - 2)
+                   : "memory");
+  check("rewritten code: IC IVAU of two separate lines, one ISB",
+        ok && call_code(code) == 6 && call_code(code + page / 4 - 2) == 7);
   munmap(code, page);
 }
 
