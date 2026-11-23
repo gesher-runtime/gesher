@@ -8,6 +8,7 @@
   #define AppVersion "0.0.0"
 #endif
 #define BrokerDir "{commonpf}\Gesher Raw USB Broker"
+#define RuntimeDir BrokerDir + "\runtime"
 #define BrokerExe "gesher-usb-authority.exe"
 #define BrokerSource AddBackslash(BuildDir) + BrokerExe
 #define BrokerSha256 GetSHA256OfFile(BrokerSource)
@@ -33,6 +34,13 @@ SetupIconFile=gesher.ico
 
 [Files]
 Source: "{#BrokerSource}"; DestDir: "{#BrokerDir}"; Flags: ignoreversion
+#define EmitRuntimeFile(str Source, str Subdir) \
+  'Source: "' + Source + '"; DestDir: "' + RuntimeDir + Subdir + '"; Flags: ignoreversion'
+#include "usb-broker-runtime-files.iss"
+#undef EmitRuntimeFile
+
+[Dirs]
+Name: "{#RuntimeDir}\art"
 
 [UninstallDelete]
 Type: dirifempty; Name: "{#BrokerDir}"
@@ -276,13 +284,54 @@ begin
   Log('USB authority ' + Verb + ': exit code ' + IntToStr(Code));
 end;
 
+function ProtectedRuntimeFile(Root, Relative, Digest: String): Boolean;
+var
+  FilePath, Parent: String;
+begin
+  Result := False;
+  FilePath := Root + Relative;
+  Parent := ExtractFileDir(FilePath);
+  while CompareText(Parent, Root) <> 0 do
+  begin
+    if not ProtectedNode(Parent, True, True) then
+    begin
+      Log('Protected runtime directory failed verification: ' + Parent);
+      Exit;
+    end;
+    Parent := ExtractFileDir(Parent);
+  end;
+  if ProtectedNode(FilePath, False, True) then
+    Result := CompareText(GetSHA256OfFile(FilePath), Digest) = 0;
+  if not Result then
+    Log('Protected runtime file failed verification: ' + Relative);
+end;
+
+function VerifyRuntime(): Boolean;
+var
+  Root: String;
+begin
+  Result := False;
+  Root := BrokerDirectory() + '\runtime';
+  if not FixedDestination() or not ProtectedNode(BrokerDirectory(), True, True) or
+     not ProtectedNode(Root, True, True) or not ProtectedNode(Root + '\art', True, True) then
+    Exit;
+#define EmitRuntimeFile(str Source, str Subdir) \
+  "  if not ProtectedRuntimeFile(Root, '" + Subdir + "\" + ExtractFileName(Source) + \
+  "', '" + GetSHA256OfFile(Source) + "') then Exit;"
+#include "usb-broker-runtime-files.iss"
+#undef EmitRuntimeFile
+  Result := True;
+end;
+
 procedure CurStepChanged(Step: TSetupStep);
 begin
   if Step = ssPostInstall then
   begin
-    RegistrationFailed := not RunBroker('install-service');
+    RegistrationFailed := True;
+    if VerifyRuntime() then
+      RegistrationFailed := not RunBroker('install-service');
     if RegistrationFailed then
-      SuppressibleMsgBox('The USB authority service could not be registered. The protected files can be removed through Windows Installed apps.',
+      SuppressibleMsgBox('The protected runtime could not be verified or the USB authority service could not be registered. The protected files can be removed through Windows Installed apps.',
         mbError, MB_OK, IDOK);
   end;
 end;

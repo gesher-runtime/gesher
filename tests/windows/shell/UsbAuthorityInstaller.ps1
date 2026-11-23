@@ -10,6 +10,8 @@ $service = 'GesherUsbAuthority'
 $folder = Join-Path $env:ProgramFiles 'Gesher Raw USB Broker'
 $exe = Join-Path $folder 'gesher-usb-authority.exe'
 $uninstall = Join-Path $folder 'unins000.exe'
+$ordinary = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
+$ordinaryExisted = Test-Path -LiteralPath $ordinary
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -65,6 +67,14 @@ try {
     Assert-ProtectedOwner $folder
     Assert-ProtectedOwner $exe
     Assert-ProtectedOwner $uninstall
+    foreach ($relative in 'dalvikvm.exe', 'binderd.exe', 'servicemanager.exe',
+        'framework\x86_64\boot.art', 'system\framework\framework-res.apk',
+        'libgesher_webview_bridge.so') {
+        Assert-ProtectedOwner (Join-Path $folder "runtime\$relative")
+    }
+    if (Test-Path -LiteralPath (Join-Path $folder 'runtime\data')) {
+        throw 'The runtime tree contains mutable Android data.'
+    }
     $descriptor = Read-ServiceAcl
     $queryAccess = $false
     foreach ($ace in $descriptor.DiscretionaryAcl) {
@@ -113,5 +123,8 @@ while ($existing = Get-Service -Name $service -ErrorAction SilentlyContinue) {
 }
 if (Test-Path -LiteralPath $exe) {
     throw 'Uninstall left the optional service or broker image behind.'
+}
+if ((Test-Path -LiteralPath $ordinary) -ne $ordinaryExisted) {
+    throw 'The optional installer changed the ordinary installation.'
 }
 Write-Output 'PASS: optional USB authority installation, manual start, stop and uninstall'

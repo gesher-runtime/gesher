@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -150,7 +151,7 @@ bool ProtectedFile(const std::wstring& path, bool directory, PSID installer,
       ProtectedFileAcl(object.get(), installer, restrict_creation);
 }
 
-DWORD TrustedImage(std::wstring* image) {
+DWORD TrustedImage(std::wstring* image, std::wstring* application_directory = nullptr) {
   PWSTR program_files = nullptr;
   if (FAILED(SHGetKnownFolderPath(FOLDERID_ProgramFilesX64, KF_FLAG_DONT_VERIFY,
                                   nullptr, &program_files))) return ERROR_PATH_NOT_FOUND;
@@ -179,6 +180,56 @@ DWORD TrustedImage(std::wstring* image) {
   LocalFree(installer);
   if (!trusted) return ERROR_ACCESS_DENIED;
   *image = L"\"" + expected + L"\" service";
+  if (application_directory) *application_directory = directory;
+  return ERROR_SUCCESS;
+}
+
+bool ProtectedRuntimeTree(const std::wstring& directory, PSID installer,
+                          unsigned depth, unsigned* remaining) {
+  if (depth == 0 || !ProtectedFile(directory, true, installer)) return false;
+  WIN32_FIND_DATAW entry{};
+  HANDLE search = FindFirstFileW((directory + L"\\*").c_str(), &entry);
+  if (search == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
+  bool protected_tree = true;
+  do {
+    if (std::wcscmp(entry.cFileName, L".") == 0 || std::wcscmp(entry.cFileName, L"..") == 0) continue;
+    if (*remaining == 0 || (entry.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+      protected_tree = false;
+      break;
+    }
+    --*remaining;
+    const std::wstring child = directory + L"\\" + entry.cFileName;
+    protected_tree = (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        ? ProtectedRuntimeTree(child, installer, depth - 1, remaining)
+        : ProtectedFile(child, false, installer);
+  } while (protected_tree && FindNextFileW(search, &entry));
+  const bool end = protected_tree && GetLastError() == ERROR_NO_MORE_FILES;
+  FindClose(search);
+  return end;
+}
+
+DWORD ValidateRuntime(const std::wstring& directory) {
+  const std::wstring runtime = directory + L"\\runtime";
+  PSID installer = nullptr;
+  if (!ConvertStringSidToSidW(kTrustedInstaller, &installer)) return GetLastError();
+  unsigned remaining = 1024;
+  const bool protected_tree = ProtectedRuntimeTree(runtime, installer, 24, &remaining);
+  LocalFree(installer);
+  if (!protected_tree) return ERROR_ACCESS_DENIED;
+  // The elevated installer verifies every packaged digest. Check the core boot
+  // files also exist before announcing the installed authority as ready.
+  constexpr const wchar_t* required[] = {
+      L"dalvikvm.exe", L"binderd.exe", L"servicemanager.exe", L"gesher-exec.exe",
+      L"core-oj.jar", L"core-libart.jar", L"core-icu4j.jar", L"framework.jar",
+      L"gesher-app.jar", L"framework\\x86_64\\boot.art", L"framework\\x86_64\\boot.oat",
+      L"framework\\x86_64\\boot.vdex", L"system\\framework\\framework-res.apk",
+      L"system\\build.prop", L"i18n\\etc\\icu\\icudt76l.dat", L"tzdata\\etc\\tz\\tzdata",
+      L"libgesher_webview_bridge.so"};
+  for (const wchar_t* name : required) {
+    const DWORD attributes = GetFileAttributesW((runtime + L"\\" + name).c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) return GetLastError();
+    if (attributes & FILE_ATTRIBUTE_DIRECTORY) return ERROR_INVALID_DATA;
+  }
   return ERROR_SUCCESS;
 }
 
@@ -365,9 +416,10 @@ void WINAPI ServiceMain(DWORD argc, wchar_t**) {
   service.status = RegisterServiceCtrlHandlerExW(kService, HandleServiceControl, &service);
   if (!service.status) return;
   Report(service, SERVICE_START_PENDING);
-  std::wstring image;
+  std::wstring image, directory;
   DWORD status = event_error != ERROR_SUCCESS ? event_error :
-      (argc == 1 && IsLocalSystem() ? TrustedImage(&image) : ERROR_ACCESS_DENIED);
+      (argc == 1 && IsLocalSystem() ? TrustedImage(&image, &directory) : ERROR_ACCESS_DENIED);
+  if (status == ERROR_SUCCESS) status = ValidateRuntime(directory);
   if (status == ERROR_SUCCESS) status = ClearInterruptedBootstrapQueries();
   if (status != ERROR_SUCCESS) {
     Report(service, SERVICE_STOPPED, status);
