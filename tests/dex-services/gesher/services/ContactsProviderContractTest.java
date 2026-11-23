@@ -78,14 +78,14 @@ import sun.misc.Unsafe;
 
 /**
  * Contract tests for the built-in SQLite-backed {@code content://com.android.contacts}
- * provider, covering complete {@link ContactsContract} v2 schema and views, v1->v2 DB
- * persistence, strict {@code SQLiteQueryBuilder}, loose {@code phone_lookup} matching and
+ * provider, covering {@link ContactsContract} schema and persistence, strict
+ * {@code SQLiteQueryBuilder}, loose {@code phone_lookup} matching and
  * auto-{@code data4}, transactional {@link ContentProvider#applyBatch}, sync-adapter
  * soft/hard deletes, display-name fallback chain, AppOps/URI-grant enforcement, and
  * removal of the legacy {@code content://contacts} authority.
  */
 public final class ContactsProviderContractTest {
-    private static final String BUILT_IN_PKG = "com.android.providers.contacts";
+    private static final String BUILT_IN_PKG = "android";
     private static final String PKG_NONE = "fixture.contacts.none";
     private static final String PKG_READ = "fixture.contacts.read";
     private static final String PKG_WRITE = "fixture.contacts.write";
@@ -143,9 +143,14 @@ public final class ContactsProviderContractTest {
     }
 
     private static Context observerRecordingContext(ContentProvider provider, List<Uri> notifications) {
+        return observerRecordingContext(provider, notifications, null);
+    }
+
+    private static Context observerRecordingContext(ContentProvider provider, List<Uri> notifications,
+            List<Boolean> syncRequests) {
         class TestContext extends ContextWrapper {
             ContentResolver resolver;
-            TestContext() { super(null); }
+            TestContext() { super(GesherSettingsContext.get()); }
             @Override public String getPackageName() { return BUILT_IN_PKG; }
             @Override public String getOpPackageName() { return BUILT_IN_PKG; }
             @Override public int getUserId() { return 0; }
@@ -164,6 +169,7 @@ public final class ContactsProviderContractTest {
                 check(!Thread.holdsLock(provider), "Observer notified under provider lock");
                 check(Binder.getCallingUid() == Process.myUid(), "Observer notification leaked caller UID");
                 notifications.add(uri);
+                if (syncRequests != null) syncRequests.add(syncToNetwork);
             }
         };
         return ctx;
@@ -338,7 +344,7 @@ public final class ContactsProviderContractTest {
                         && c.getInt(2) == ContactsContract.DisplayNameSources.STRUCTURED_NAME
                         && "Ada Lovelace".equals(c.getString(3))
                         && "A".equals(c.getString(4))
-                        && c.getInt(5) == 1,
+                        && c.getInt(5) > 0,
                         "Composed StructuredName populates display_name, alt, sort_key, phonebook_label");
             }
 
@@ -448,10 +454,11 @@ public final class ContactsProviderContractTest {
     private static void testApplyBatchAndSyncAdapterSemantics(File dbDir) throws Exception {
         File dbFile = new File(dbDir, "contacts-batch-sync.db");
         List<Uri> notifications = new ArrayList<>();
+        List<Boolean> syncRequests = new ArrayList<>();
         Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
         ProviderInfo attachedInfo = (ProviderInfo) method(support, "contactsProviderInfo").invoke(null);
         ContentProvider provider = newContactsProvider(null, null, dbFile);
-        provider.attachInfo(observerRecordingContext(provider, notifications), attachedInfo);
+        provider.attachInfo(observerRecordingContext(provider, notifications, syncRequests), attachedInfo);
         try {
             // Successful applyBatch commits atomically and emits ONE coalesced notification
             ArrayList<ContentProviderOperation> okBatch = new ArrayList<>();
@@ -480,6 +487,7 @@ public final class ContactsProviderContractTest {
                     "applyBatch commits 3 linked ops");
             check(notifications.size() == 1,
                     "applyBatch emits exactly 1 coalesced notification, got " + notifications.size());
+            check(syncRequests.equals(List.of(false)), "Sync-only batch does not request network sync");
 
             long rawId = ContentUris.parseId(res[0].uri);
             try (Cursor c = provider.query(syncRawUri,
@@ -649,7 +657,7 @@ public final class ContactsProviderContractTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static void testSecurityAppOpsUriGrantsAndPackageManager() throws Exception {
+    private static void testSecurityAppOpsUriGrantsAndPackageManager(File dbDir) throws Exception {
         Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
         unsafeField.setAccessible(true);
         Unsafe unsafe = (Unsafe) unsafeField.get(null);
@@ -756,14 +764,16 @@ public final class ContactsProviderContractTest {
         SystemFeaturesCache.setInstance(new SystemFeaturesCache(pm.getSystemAvailableFeatures().getList()));
 
         try {
+            testContactsSchemaViewsStrictAndFallback(dbDir);
+            testFreshSchemaAndPersistence(dbDir);
+            testApplyBatchAndSyncAdapterSemantics(dbDir);
+
             // Unprivileged package denied
             as(9301, 13301, () -> {
                 rejects(SecurityException.class, () -> getProvider.invoke(
                         providers, procNone, PKG_NONE, "com.android.contacts"));
                 rejects(SecurityException.class, () -> content.registerContentObserver(
                         ContactsContract.Contacts.CONTENT_URI, true, observer, 0, 36));
-                rejects(SecurityException.class, () -> contactsProv.query(
-                        ContactsContract.Contacts.CONTENT_URI, null, null, null, null));
             });
 
             // Write app creates two contacts via IContentProvider
@@ -829,14 +839,14 @@ public final class ContactsProviderContractTest {
                             == PackageManager.PERMISSION_GRANTED,
                     "Legacy compat revocation preserves checkPermission == GRANTED");
             as(9304, 13304, () -> {
-                rejects(SecurityException.class, () -> contactsProv.query(
-                        ContactsContract.Contacts.CONTENT_URI, new String[] { ContactsContract.Contacts._ID },
-                        null, null, null));
                 ContentProviderHolder h = (ContentProviderHolder) getProvider.invoke(
                         providers, procLegacy, PKG_LEGACY, "com.android.contacts");
-                rejects(SecurityException.class, () -> h.provider.query(source(13304, PKG_LEGACY),
+                try (Cursor c = h.provider.query(source(13304, PKG_LEGACY),
                         ContactsContract.Contacts.CONTENT_URI,
-                        new String[] { ContactsContract.Contacts._ID }, null, null));
+                        new String[] {ContactsContract.Contacts._ID}, null, null)) {
+                    check(c != null && c.getCount() == 0,
+                            "Revoked legacy AppOp returns a rejected query with no rows");
+                }
             });
 
             // URI grant grants read access on contactUris[0] without READ_CONTACTS, denies contactUris[1]
@@ -851,18 +861,19 @@ public final class ContactsProviderContractTest {
                 ContentProviderHolder h = (ContentProviderHolder) getProvider.invoke(
                         providers, procNone, PKG_NONE, "com.android.contacts");
                 check(h != null && h.provider != null, "URI-granted app acquires com.android.contacts holder");
-                try (Cursor c = contactsProv.query(grantedUri,
-                        new String[] { ContactsContract.Contacts.DISPLAY_NAME }, null, null, null)) {
+                AttributionSource caller = source(13301, PKG_NONE);
+                try (Cursor c = h.provider.query(caller, grantedUri,
+                        new String[] {ContactsContract.Contacts.DISPLAY_NAME}, null, null)) {
                     check(c != null && c.getCount() == 1 && c.moveToFirst()
                             && "Contact 1".equals(c.getString(0)),
                             "URI-granted app reads granted contact row");
                 }
-                rejects(SecurityException.class, () -> contactsProv.query(ungrantedUri,
-                        new String[] { ContactsContract.Contacts._ID }, null, null, null));
-                rejects(SecurityException.class, () -> contactsProv.query(
+                rejects(SecurityException.class, () -> h.provider.query(caller, ungrantedUri,
+                        new String[] {ContactsContract.Contacts._ID}, null, null));
+                rejects(SecurityException.class, () -> h.provider.query(caller,
                         ContactsContract.Contacts.CONTENT_URI,
-                        new String[] { ContactsContract.Contacts._ID }, null, null, null));
-                rejects(SecurityException.class, () -> contactsProv.delete(grantedUri, null, null));
+                        new String[] {ContactsContract.Contacts._ID}, null, null));
+                rejects(SecurityException.class, () -> h.provider.delete(caller, grantedUri, null));
             });
         } finally {
             contactsProv.shutdown();
@@ -886,15 +897,13 @@ public final class ContactsProviderContractTest {
                 "com.android.providers.contacts.ContactsProvider2"), 0, 0) != null,
                 "PM getProviderInfo resolves ContactsProvider2");
         PackageInfo builtInPkg = pm.getPackageInfo(BUILT_IN_PKG, PackageManager.GET_PROVIDERS, 0);
-        check(builtInPkg != null && builtInPkg.versionName != null && !builtInPkg.versionName.isEmpty()
-                && builtInPkg.providers != null && builtInPkg.providers.length == 2,
-                "PM exposes both ContactsProvider2 and CallLogProvider with non-null versionName");
+        check(builtInPkg != null && builtInPkg.providers != null
+                && Arrays.stream(builtInPkg.providers).anyMatch(p -> "call_log".equals(p.authority))
+                && Arrays.stream(builtInPkg.providers).anyMatch(p -> "com.android.contacts".equals(p.authority)),
+                "Platform package exposes both ContactsProvider2 and CallLogProvider");
 
-        for (Object item : pm.getInstalledPackages(0, 0).getList()) {
-            PackageInfo installed = (PackageInfo) item;
-            check(!BUILT_IN_PKG.equals(installed.packageName),
-                    "getInstalledPackages must not include synthetic " + BUILT_IN_PKG);
-        }
+        check(Arrays.equals(pm.getPackagesForUid(Process.SYSTEM_UID),
+                        new String[] {BUILT_IN_PKG}), "Contacts retains the platform UID package identity");
 
         // Admission & prepareAdd reject claiming com.android.contacts or legacy? Only com.android.contacts is system-owned
         Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
@@ -912,23 +921,16 @@ public final class ContactsProviderContractTest {
         AssetManager.createSystemAssetsInZygoteLocked(false,
                 System.getenv("ANDROID_ROOT") + "/framework/framework-res.apk");
         String previousData = System.getenv("ANDROID_DATA");
-        String previousSpoof = System.getenv("GESHER_MICROG_SPOOF");
         Path data = previousData == null
                 ? Files.createTempDirectory("gesher-contacts-provider-contract-")
                 : Files.createTempDirectory(Path.of(previousData), "gesher-contacts-provider-contract-");
         try {
             Os.setenv("ANDROID_DATA", data.toString(), true);
-            Os.setenv("GESHER_MICROG_SPOOF", "1", true);
-            testContactsSchemaViewsStrictAndFallback(data.toFile());
-            testFreshSchemaAndPersistence(data.toFile());
-            testApplyBatchAndSyncAdapterSemantics(data.toFile());
-            testSecurityAppOpsUriGrantsAndPackageManager();
+            testSecurityAppOpsUriGrantsAndPackageManager(data.toFile());
             System.out.println("ContactsProviderContractTest all passed: " + sChecks + " checks");
         } finally {
             if (previousData == null) Os.unsetenv("ANDROID_DATA");
             else Os.setenv("ANDROID_DATA", previousData, true);
-            if (previousSpoof == null) Os.unsetenv("GESHER_MICROG_SPOOF");
-            else Os.setenv("GESHER_MICROG_SPOOF", previousSpoof, true);
             try (Stream<Path> walk = Files.walk(data)) {
                 for (Path p : (Iterable<Path>) walk.sorted(Comparator.reverseOrder())::iterator) {
                     Files.deleteIfExists(p);

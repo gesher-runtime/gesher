@@ -5,15 +5,19 @@
 package com.gesher.server;
 
 import android.app.ContentProviderHolder;
+import android.app.GesherSettingsContext;
 import android.content.AttributionSource;
 import android.content.ContentProvider;
 import android.content.ContentProviderOperation;
 import android.content.ContentProviderResult;
 import android.content.ContentUris;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
 import android.content.OperationApplicationException;
+import android.content.PermissionChecker;
 import android.content.UriMatcher;
+import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.database.DatabaseUtils;
@@ -22,6 +26,8 @@ import android.database.sqlite.SQLiteQueryBuilder;
 import android.icu.text.AlphabeticIndex;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Process;
+import android.os.UserHandle;
 import android.provider.ContactsContract;
 import android.telephony.PhoneNumberUtils;
 
@@ -45,6 +51,9 @@ import java.util.TreeSet;
  * directory entry, enforces {@code READ_CONTACTS} / {@code WRITE_CONTACTS}, AppOps,
  * and URI grants, and implements transactional {@link #applyBatch}, sync-adapter
  * soft/hard deletes, loose {@code phone_lookup} matching, and display-name fallback.
+ * The legacy {@code contacts} authority, usage feedback, frequent contacts,
+ * provider status, callable queries and dedicated contact photo URIs are outside
+ * this implementation.
  *
  * <p><b>Limitation (1:1 contacts without multi-raw-contact aggregation):</b>
  * Inserting a {@code raw_contact} without an explicit {@code contact_id} creates a
@@ -178,6 +187,7 @@ final class ContactsProvider extends ContentProvider {
         sUriMatcher.addURI(auth, "data/postals/#", POSTALS_ID);
 
         sUriMatcher.addURI(auth, "phone_lookup/*", PHONE_LOOKUP);
+        sUriMatcher.addURI(auth, "phone_lookup_enterprise/*", PHONE_LOOKUP);
         sUriMatcher.addURI(auth, "groups", GROUPS);
         sUriMatcher.addURI(auth, "groups/#", GROUPS_ID);
         sUriMatcher.addURI(auth, "groups_summary", GROUPS_SUMMARY);
@@ -283,7 +293,8 @@ final class ContactsProvider extends ContentProvider {
         return identityMap(columns.toArray(new String[0]));
     }
 
-    private final PackageManagerService mPm;
+    private final AttributionSource mDataSource = new AttributionSource.Builder(Process.SYSTEM_UID)
+            .setPackageName(ContactsProviderSupport.PACKAGE).build();
     private final CallerIdentity mCallers;
     private final UriGrants mGrants;
     private final File mDatabase;
@@ -308,8 +319,8 @@ final class ContactsProvider extends ContentProvider {
 
     ContactsProvider(ContentProviders providers, PackageManagerService pm,
             ActivityTaskManagerService atm, UriGrants grants, File databaseFile) {
-        mPm = pm;
-        mCallers = pm == null ? null : new CallerIdentity(pm, atm);
+        mCallers = providers != null ? providers.callers()
+                : pm == null ? null : new CallerIdentity(pm, atm);
         mGrants = grants;
         mDatabase = databaseFile.getAbsoluteFile();
         if (providers != null) {
@@ -333,7 +344,8 @@ final class ContactsProvider extends ContentProvider {
         ProviderInfo declared = info();
         if (!mInitialized) {
             try {
-                attachInfo(ContactsProviderSupport.contextForProvider(mGrants, mRegistration),
+                attachInfo(ContactsProviderSupport.contextForProvider(
+                        GesherSettingsContext.get(), mGrants, mRegistration),
                         declared);
                 mInitialized = true;
             } catch (RuntimeException | Error failure) {
@@ -347,16 +359,43 @@ final class ContactsProvider extends ContentProvider {
 
     @Override
     protected int enforceReadPermissionInner(Uri uri, AttributionSource source) {
-        return ContactsProviderSupport.enforcePermissionInner(
-                mPm, mCallers, mGrants, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                ContactsProviderSupport.READ_CONTACTS, source);
+        return enforceContactsPermission(uri, source, ContactsProviderSupport.READ_CONTACTS,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION);
     }
 
     @Override
     protected int enforceWritePermissionInner(Uri uri, AttributionSource source) {
-        return ContactsProviderSupport.enforcePermissionInner(
-                mPm, mCallers, mGrants, uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                ContactsProviderSupport.WRITE_CONTACTS, source);
+        return enforceContactsPermission(uri, source, ContactsProviderSupport.WRITE_CONTACTS,
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+    }
+
+    private int enforceContactsPermission(Uri uri, AttributionSource source, String permission,
+            int mode) {
+        int pid = Binder.getCallingPid();
+        int uid = Binder.getCallingUid();
+        if (pid == Process.myPid()) return PermissionChecker.PERMISSION_GRANTED;
+        ContactsProviderSupport.authenticate(mCallers, source);
+        if (UserHandle.getUserId(uid) != 0) {
+            throw new SecurityException("Only the primary user's address book is available");
+        }
+
+        Context context = getContext();
+        long identity = Binder.clearCallingIdentity();
+        int result;
+        try {
+            result = PermissionChecker.checkPermissionForDataDeliveryFromDataSource(
+                    context, permission, -1, new AttributionSource(mDataSource, source), null);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+        if (result != PermissionChecker.PERMISSION_GRANTED
+                && context.checkUriPermission(uri, pid, uid, mode) == PackageManager.PERMISSION_GRANTED) {
+            return PermissionChecker.PERMISSION_GRANTED;
+        }
+        if (result == PermissionChecker.PERMISSION_HARD_DENIED) {
+            throw new SecurityException("Contacts access requires " + permission);
+        }
+        return result;
     }
 
     @Override
@@ -729,7 +768,7 @@ final class ContactsProvider extends ContentProvider {
         createEntityView(db, "view_raw_entities", sRawEntityProjectionMap, false);
         String membership = " FROM view_data member WHERE member.mimetype = '"
                 + ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE
-                + "' AND CAST(member.data1 AS INTEGER) = groups._id AND member.is_user_profile = 0";
+                + "' AND member.data1 = CAST(groups._id AS TEXT) AND member.is_user_profile = 0";
         db.execSQL("CREATE VIEW IF NOT EXISTS view_groups_summary AS SELECT groups.*, "
                 + "(SELECT COUNT(DISTINCT member.contact_id)" + membership + ") AS summ_count, "
                 + "(SELECT COUNT(DISTINCT member.contact_id)" + membership
@@ -841,8 +880,6 @@ final class ContactsProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION, ContactsProviderSupport.READ_CONTACTS);
         String directory = uri.getQueryParameter(ContactsContract.DIRECTORY_PARAM_KEY);
         boolean localInvisible = false;
         if (directory != null) {
@@ -1106,8 +1143,13 @@ final class ContactsProvider extends ContentProvider {
             cursor = qb.query(db, projection, effSelection, effArgs,
                     null, null, sortOrder, limit);
         }
-        ContactsProviderSupport.setNotificationUri(cursor, getContext(), uri);
-        return cursor;
+        try {
+            ContactsProviderSupport.setNotificationUri(cursor, getContext(), uri);
+            return cursor;
+        } catch (RuntimeException | Error failure) {
+            cursor.close();
+            throw failure;
+        }
     }
 
     private static List<Long> findMatchingPhoneDataIds(SQLiteDatabase db, String queryNumber) {
@@ -1157,8 +1199,6 @@ final class ContactsProvider extends ContentProvider {
     @Override
     public ContentProviderResult[] applyBatch(ArrayList<ContentProviderOperation> operations)
             throws OperationApplicationException {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, NOTIFY_URI,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CONTACTS);
         if (operations == null || operations.isEmpty()) {
             return new ContentProviderResult[0];
         }
@@ -1201,8 +1241,6 @@ final class ContactsProvider extends ContentProvider {
 
     @Override
     public Uri insert(Uri uri, ContentValues values) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CONTACTS);
         long id;
         boolean notifyNow = false;
         synchronized (mDbLock) {
@@ -1229,8 +1267,6 @@ final class ContactsProvider extends ContentProvider {
 
     @Override
     public int bulkInsert(Uri uri, ContentValues[] values) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CONTACTS);
         if (values == null || values.length == 0) return 0;
         int inserted = 0;
         boolean notifyNow = false;
@@ -1338,8 +1374,6 @@ final class ContactsProvider extends ContentProvider {
 
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CONTACTS);
         int match = sUriMatcher.match(uri);
         int count;
         boolean notifyNow = false;
@@ -1547,8 +1581,6 @@ final class ContactsProvider extends ContentProvider {
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
-        ContactsProviderSupport.enforce(mPm, mCallers, mGrants, uri,
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION, ContactsProviderSupport.WRITE_CONTACTS);
         int match = sUriMatcher.match(uri);
         int count;
         boolean notifyNow = false;
@@ -1688,7 +1720,8 @@ final class ContactsProvider extends ContentProvider {
         String supplied = values.getAsString("data4");
         String e164 = null;
         if (raw != null && !raw.isEmpty()) {
-            if (supplied != null && supplied.startsWith("+")) {
+            if (supplied != null && supplied.startsWith("+")
+                    && PhoneNumberUtils.compareLoosely(raw, supplied)) {
                 e164 = PhoneNumberUtils.formatNumberToE164(supplied, "ZZ");
             }
             if (e164 == null) {
@@ -1885,11 +1918,6 @@ final class ContactsProvider extends ContentProvider {
             sb.append(p);
         }
         return sb.length() == 0 ? null : sb.toString();
-    }
-
-    private static int asInt(ContentValues values, String key) {
-        Integer v = values.getAsInteger(key);
-        return v == null ? 0 : v;
     }
 
     private static Set<Long> queryIds(SQLiteDatabase db, String sql, String[] args) {
