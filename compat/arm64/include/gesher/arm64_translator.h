@@ -79,7 +79,8 @@ struct gesher_arm64_api {
 
   // Guest TLS (variant I, TPIDR_EL0). Registers a PT_TLS module and gives
   // its offset from the thread pointer, the same in every thread; -1 if the
-  // static TLS area is full. After relocation, tls_prepare initializes only
+  // layout is invalid/full or backing storage cannot be committed. After
+  // relocation, tls_prepare initializes only
   // the loader owner's blocks. Publication initializes other threads while
   // retaining any mutations made by that owner's IFUNC calls.
   int64_t (*tls_register)(size_t total_size, size_t align);

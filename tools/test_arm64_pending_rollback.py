@@ -53,11 +53,16 @@ def main() -> None:
             raise ValueError(f"ARM64 pending rollback fixture marker changed: {marker}")
         template = template.replace(marker, production)
         print(marker + " production SHA256 " + hashlib.sha256(production.encode()).hexdigest(), flush=True)
-    # Reuse the same test contract for both implementations, changing only
-    # test call names; no production allocator/rollback body is rewritten.
+    # Reuse the same assertions for both implementations. Only fixture call
+    # names and its six live-block storage seams change: the translated owner
+    # can decommit pages, so it needs mappings rather than stack arrays.
+    # No production allocator/rollback body is rewritten.
     native_test = (ROOT / "tests/native/arm64_native_rollback_host.cc.in").read_text(encoding="utf-8")
     tls_test = section(native_test, "void TestTls() {", "}  // namespace fixture")
     tls_test = tls_test.replace("NativeTls", "ApiTls").replace("native ARM64 rollback", "ARM64 pending rollback")
+    if tls_test.count("std::array<uint8_t, kTlsBlockSize>") != 6:
+        raise ValueError("ARM64 shared TLS storage boundary changed")
+    tls_test = tls_test.replace("std::array<uint8_t, kTlsBlockSize>", "TlsTestBlock")
     if template.count("@TLS_TEST@") != 1:
         raise ValueError("ARM64 shared TLS test marker changed")
     template = template.replace("@TLS_TEST@", tls_test)

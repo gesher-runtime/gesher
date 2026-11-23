@@ -33,14 +33,18 @@ void Require(bool ok, const char* expression, int line) {
 using DWORD = uint32_t;
 using BOOL = int;
 using HANDLE = void*;
-constexpr DWORD MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_RELEASE = 0x8000;
+constexpr DWORD MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000,
+                MEM_DECOMMIT = 0x4000, MEM_RELEASE = 0x8000;
 constexpr DWORD PAGE_READWRITE = 4, PAGE_EXECUTE_READWRITE = 0x40;
 constexpr DWORD DUPLICATE_SAME_ACCESS = 2;
 constexpr BOOL FALSE = 0;
 constexpr size_t kPage = 4096;
+struct SYSTEM_INFO { DWORD dwPageSize; };
+void GetSystemInfo(SYSTEM_INFO* info) { info->dwPageSize = kPage; }
 std::mutex allocation_mutex;
 std::unordered_map<void*, size_t> allocations;
 size_t allocation_calls = 0;
+bool deny_tls_decommit = false;
 std::atomic<DWORD> next_thread_id{1};
 thread_local DWORD thread_id = next_thread_id.fetch_add(1);
 DWORD GetCurrentThreadId() { return thread_id; }
@@ -53,9 +57,20 @@ BOOL DuplicateHandle(HANDLE, HANDLE, HANDLE, HANDLE*, DWORD, BOOL, DWORD) {
   return 0;
 }
 void* VirtualAlloc(void* address, size_t size, DWORD flags, DWORD protect) {
-  REQUIRE(flags == (MEM_COMMIT | MEM_RESERVE));
   REQUIRE(protect == PAGE_READWRITE || protect == PAGE_EXECUTE_READWRITE);
   REQUIRE(size != 0 && size % kPage == 0);
+  if (flags == MEM_COMMIT) {
+    std::lock_guard<std::mutex> lock(allocation_mutex);
+    const uintptr_t at = reinterpret_cast<uintptr_t>(address);
+    REQUIRE(at % kPage == 0);
+    for (const auto& [base, bytes] : allocations) {
+      const uintptr_t begin = reinterpret_cast<uintptr_t>(base);
+      if (at >= begin && at - begin < bytes && size <= bytes - (at - begin))
+        return mprotect(address, size, PROT_READ | PROT_WRITE) == 0 ? address : nullptr;
+    }
+    return nullptr;
+  }
+  REQUIRE(flags == (MEM_COMMIT | MEM_RESERVE));
   const int fixed = address == nullptr ? 0 : MAP_FIXED_NOREPLACE;
   void* result = mmap(address, size, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS | fixed, -1, 0);
@@ -67,8 +82,22 @@ void* VirtualAlloc(void* address, size_t size, DWORD flags, DWORD protect) {
   return result;
 }
 BOOL VirtualFree(void* address, size_t size, DWORD flags) {
-  REQUIRE(flags == MEM_RELEASE && size == 0);
   std::lock_guard<std::mutex> lock(allocation_mutex);
+  if (flags == MEM_DECOMMIT) {
+    if (deny_tls_decommit) return 0;
+    const uintptr_t at = reinterpret_cast<uintptr_t>(address);
+    REQUIRE(at % kPage == 0 && size != 0 && size % kPage == 0);
+    for (const auto& [base, bytes] : allocations) {
+      const uintptr_t begin = reinterpret_cast<uintptr_t>(base);
+      if (at >= begin && at - begin < bytes && size <= bytes - (at - begin)) {
+        REQUIRE(mprotect(address, size, PROT_NONE) == 0);
+        REQUIRE(madvise(address, size, MADV_DONTNEED) == 0);
+        return 1;
+      }
+    }
+    REQUIRE(false);
+  }
+  REQUIRE(flags == MEM_RELEASE && size == 0);
   auto entry = allocations.find(address);
   REQUIRE(entry != allocations.end());
   REQUIRE(munmap(address, entry->second) == 0);
@@ -148,6 +177,23 @@ std::unordered_map<uintptr_t, bool> g_host_pages;
 @PROFILE@
 @REGISTRY@
 @TLS@
+// The shared native TLS assertions use explicit live-block seams. Translated
+// TLS now changes page commitment, so those seams must own actual mappings,
+// rather than stack arrays that a decommit could protect across other locals.
+class TlsTestBlock {
+ public:
+  TlsTestBlock() : bytes_(static_cast<uint8_t*>(
+      VirtualAlloc(nullptr, kTlsBlockSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))) {
+    REQUIRE(bytes_ != nullptr);
+  }
+  ~TlsTestBlock() { REQUIRE(VirtualFree(bytes_, 0, MEM_RELEASE)); }
+  TlsTestBlock(const TlsTestBlock&) = delete;
+  TlsTestBlock& operator=(const TlsTestBlock&) = delete;
+  uint8_t* data() const { return bytes_; }
+  uint8_t& operator[](size_t index) const { REQUIRE(index < kTlsBlockSize); return bytes_[index]; }
+ private:
+  uint8_t* bytes_;
+};
 @ENTRIES@
 @RETIRE@
 @CLASSIFY@
@@ -445,6 +491,8 @@ void TestAttachAfterRollback() {
   REQUIRE(std::memcmp(late.tls_block_ + next, image, sizeof(image)) == 0);
   late.UnattachForTest();
   std::memset(late.tls_block_, 0xee, g_tls_offset);
+  // Actual Unpark recommits the entire reservation before calling Attach.
+  REQUIRE(VirtualAlloc(late.tls_block_, kTlsBlockSize, MEM_COMMIT, PAGE_READWRITE));
   late.Attach();
   for (size_t i = 0; i < kTcbSize; ++i) REQUIRE(late.tls_block_[i] == 0);
   REQUIRE(late.tls_block_[stable] == initial && late.tls_block_[next] == image[0]);
@@ -459,7 +507,12 @@ void TestAttachAfterRollback() {
   std::memset(late.tls_block_ + tail, 0x77, 3 * kPage);
   REQUIRE(ApiTlsRollback(tail, 3 * kPage) && g_tls_offset == before);
   REQUIRE(late.tls_block_[tail + 3 * kPage - 1] == 0x77);
+  REQUIRE(VirtualAlloc(late.tls_block_, kTlsBlockSize, MEM_COMMIT, PAGE_READWRITE));
+  // Keep the tail readable after Attach so these existing assertions observe
+  // actual historical clearing, not the OS's zeroing on a later recommit.
+  deny_tls_decommit = true;
   late.Attach();
+  deny_tls_decommit = false;
   for (size_t i = 0; i < 3 * kPage; ++i) REQUIRE(late.tls_block_[tail + i] == 0);
   REQUIRE(late.tls_block_[stable] == initial && existing.tls_block_[stable] == 0xa5);
   std::puts("PASS ARM64 pending rollback: actual Attach restores images and clears retained pooled tails after reclaim");
@@ -524,14 +577,21 @@ void Cleanup() {
 }  // namespace fixture
 
 int main() {
+  // The shared native assertions read retired bytes. Exercise the supported
+  // decommit-failure path here so they continue to observe explicit clearing;
+  // the separate TLS lifecycle fixture verifies successful page reclamation.
+  deny_tls_decommit = true;
   fixture::TestTls();
+  deny_tls_decommit = false;
   fixture::TestClassificationAndEntries();
   fixture::TestNestedAndPooledDispatch();
   fixture::TestTrampolineReuse();
   fixture::TestSvcSnapshot();
   fixture::TestAttachAfterRollback();
+  deny_tls_decommit = true;
   fixture::TestTlsInteriorReuse();
   fixture::TestTlsPreparation();
+  deny_tls_decommit = false;
   fixture::TestPreparedAttach();
   fixture::Cleanup();
   std::puts("ARM64 pending rollback host contracts passed (verbatim production methods; Win32/Jit adapter, no guest execution)");

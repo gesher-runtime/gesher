@@ -1,6 +1,10 @@
 #define WIN32_LEAN_AND_MEAN
+#ifdef GESHER_TLS_HOST_BOUNDARY
+#include "arm64_tls_vm_host.h"
+#else
 #include <windows.h>
 #include <psapi.h>
+#endif
 #include "translator.h"
 #include <algorithm>
 #include <atomic>
@@ -11,23 +15,29 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <thread>
+#include <barrier>
 
-static unsigned checks = 0;
+static std::atomic<unsigned> checks{0};
 static bool enforce = true;
 static void Check(bool ok, const char* message) {
-  ++checks;
+  const unsigned number = ++checks;
   if (!ok) {
-    std::fprintf(stderr, "ARM64 TLS check %u: %s (Win32=%lu)\n", checks, message, GetLastError());
+    std::fprintf(stderr, "ARM64 TLS check %u: %s (Win32=%lu)\n", number, message,
+                 static_cast<unsigned long>(GetLastError()));
     std::exit(1);
   }
 }
 static unsigned fail_commit = 0;
 static unsigned fail_decommit = 0;
+static unsigned commit_calls = 0, decommit_calls = 0;
 static void* CountCommit(void* address, size_t bytes, DWORD flags, DWORD protect) {
+  if (flags == MEM_COMMIT) ++commit_calls;
   if (flags == MEM_COMMIT && fail_commit != 0 && --fail_commit == 0) return nullptr;
   return VirtualAlloc(address, bytes, flags, protect);
 }
 static BOOL CountDecommit(void* address, size_t bytes, DWORD flags) {
+  if (flags == MEM_DECOMMIT) ++decommit_calls;
   if (flags == MEM_DECOMMIT && fail_decommit != 0 && --fail_decommit == 0) return FALSE;
   return VirtualFree(address, bytes, flags);
 }
@@ -43,6 +53,16 @@ static size_t Committed(void* pointer, size_t length) {
     length -= count;
   }
   return committed;
+}
+static size_t RequiredCommit(size_t extent) {
+  SYSTEM_INFO info;
+  GetSystemInfo(&info);
+  return ((extent - 1) / info.dwPageSize + 1) * info.dwPageSize;
+}
+static void CheckCommit(void* base, size_t reservation, size_t extent, const char* message) {
+  const size_t committed = Committed(base, reservation);
+  Check(committed >= extent, "all assigned TLS bytes stay committed");
+  if (enforce) Check(committed == RequiredCommit(extent), message);
 }
 
 namespace fixture {
@@ -63,7 +83,11 @@ void* ResolveStack(const char* name) {
 }
 const gesher_arm64_host host{GESHER_ARM64_API_VERSION, ResolveStack, nullptr};
 const gesher_arm64_host* g_host = &host;
+#define VirtualAlloc CountCommit
+#define VirtualFree CountDecommit
 @TLS@
+#undef VirtualAlloc
+#undef VirtualFree
 class Env;
 thread_local Env* t_env_raw = nullptr;
 std::mutex g_envs_mutex;
@@ -102,10 +126,10 @@ class Env {
     Check(VirtualFree(stack_base_, 0, MEM_RELEASE), "release stack reservation");
   }
   bool Reusable() const { return depth_ == 0; }
-@ATTACH@
-@DETACH@
 #define VirtualAlloc CountCommit
 #define VirtualFree CountDecommit
+@ATTACH@
+@DETACH@
 @PARK@
 #undef VirtualAlloc
 #undef VirtualFree
@@ -141,7 +165,8 @@ void TestMethods() {
   uint8_t* address = old->tls_block_;
   auto* jit = old->jits_[0].get();
   Check(g_tls_blocks.size() == 2 && g_envs.size() == 2, "track both active Env blocks");
-  std::memset(address, 0x94, kTlsBlockSize);
+  CheckCommit(address, kTlsBlockSize, g_tls_offset, "active attachment commits only its assigned prefix");
+  std::memset(address, 0x94, g_tls_offset);
   t_env.reset();
   Check(g_tls_blocks.size() == 1 && g_envs.size() == 1, "detach before parking");
   Check(cleared == 2, "retire exclusive state before pooling");
@@ -151,7 +176,7 @@ void TestMethods() {
   const size_t parked = Committed(address, kTlsBlockSize);
   std::printf("Parked TLS committed bytes=%zu, source TLS bytes=%zu\n", parked, kTlsBlockSize);
   if (enforce) Check(parked == 0, "park decommits dead TLS");
-  Check(Committed(active->tls_block_, kTlsBlockSize) == kTlsBlockSize, "other active TLS stays committed");
+  CheckCommit(active->tls_block_, kTlsBlockSize, g_tls_offset, "other active TLS retains its assigned prefix");
   Check(active->tls_block_[0] == 0x73, "other active TCB is intact");
   const int64_t second = ApiTlsRegister(7000, 256);
   ApiTlsPublish(second, image2, sizeof(image2), 7000); // Must not touch a parked block.
@@ -160,7 +185,7 @@ void TestMethods() {
   CheckStackPublication(resumed, ++publications, "pooled attachment republishes the recommitted stack");
   Check(resumed == old && resumed->tls_block_ == address, "reuse reservation and guest address");
   Check(resumed->jits_[0].get() == jit, "retain translated code/Jit object");
-  Check(Committed(address, kTlsBlockSize) == kTlsBlockSize, "recommit before attachment");
+  CheckCommit(address, kTlsBlockSize, g_tls_offset, "recommit before attachment, then trim unused tail");
   for (size_t i = 0; i < kTcbSize; ++i) Check(address[i] == 0, "fresh TCB including opaque errno/destructor slots");
   for (size_t i = 0; i < 8192; ++i)
     Check(address[first + i] == (i < sizeof(image1) ? image1[i] : 0), "restore initial TLS image and zero BSS");
@@ -178,7 +203,7 @@ void TestMethods() {
     } else {
       Check(destroyed == before + 1, "failed Unpark destroys unusable Env");
     }
-    Check(Committed(fresh->tls_block_, kTlsBlockSize) == kTlsBlockSize, "failed reuse creates attached usable Env");
+    CheckCommit(fresh->tls_block_, kTlsBlockSize, g_tls_offset, "failed reuse creates attached usable Env");
     Check(g_tls_blocks.size() == 2 && g_envs.size() == 2, "failed Env is not published");
     t_env.reset();
   }
@@ -188,7 +213,7 @@ void TestMethods() {
   fail_decommit = 2; // Stack decommit succeeds, but TLS decommit is denied.
   t_env.reset();
   fail_decommit = 0;
-  Check(Committed(retained->tls_block_, kTlsBlockSize) == kTlsBlockSize,
+  Check(Committed(retained->tls_block_, kTlsBlockSize) >= g_tls_offset,
         "failed TLS decommit leaves readable committed memory");
   Check(ThreadEnv() == retained && retained->tls_block_[0] == 0,
         "normal Attach resets retained TLS even if decommit failed");
@@ -201,8 +226,205 @@ void TestMethods() {
   Check(constructed == destroyed, "no retained Env allocation after fixture teardown");
   Check(g_tls_blocks.empty() && g_envs.empty(), "no stale publication after teardown");
 }
+
+void ResetRegistry() {
+  Check(g_tls_blocks.empty() && g_envs.empty() && g_env_pool.empty() && !t_env,
+        "test registry resets only after every attachment and pooled owner retires");
+  g_tls_images.clear();
+  g_tls_offset = g_tls_clear_size = kTcbSize;
+  profile = 0;
+  fail_commit = fail_decommit = commit_calls = decommit_calls = 0;
+}
+
+template<class Block> size_t RecordedCommit(const Block& block) {
+  // The unchanged source has no prefix bookkeeping. This adapter keeps the
+  // same measurement fixture compilable against that baseline.
+  if constexpr (requires { block.committed_size; }) return block.committed_size;
+  else return kTlsBlockSize;
+}
+
+void CheckLiveCommit(size_t extent) {
+  for (const auto& block : g_tls_blocks) {
+    CheckCommit(block.base, kTlsBlockSize, extent, "live TLS has the exact page-rounded prefix");
+    Check(RecordedCommit(block) == Committed(block.base, kTlsBlockSize),
+          "recorded commitment matches actual page state");
+  }
+}
+
+void TestActiveCommit() {
+  ResetRegistry();
+  Env first, same_owner, parked;
+  fail_decommit = 1;
+  first.Attach();
+  Check(fail_decommit == 0 && Committed(first.tls_block_, kTlsBlockSize) == kTlsBlockSize,
+        "failed attachment trim keeps the full usable reservation committed");
+  Check(RecordedCommit(g_tls_blocks.front()) == kTlsBlockSize,
+        "failed attachment trim keeps accurate bookkeeping");
+  same_owner.Attach();
+  CheckCommit(same_owner.tls_block_, kTlsBlockSize, kTcbSize,
+              "fresh attachment retains only the TCB page");
+  first.tls_block_[0] = 0x11;
+  same_owner.tls_block_[0] = 0x22;
+  Check(first.tls_block_ != same_owner.tls_block_, "same process/thread owners retain distinct TLS storage");
+
+  std::barrier rendezvous(2);
+  Env* sleeping = nullptr;
+  int64_t stable = -1, nested = -1;
+  std::thread worker([&] {
+    Env env;
+    env.Attach();
+    env.tls_block_[0] = 0x33;
+    sleeping = &env;
+    rendezvous.arrive_and_wait();
+    // This actual host thread stays asleep throughout reservation, private
+    // preparation, publication, failed growth, and rollback by the owner.
+    rendezvous.arrive_and_wait();
+    Check(env.tls_block_[0] == 0x33 && env.tls_block_[stable] == 0x41 &&
+              env.tls_block_[nested] == 0x72,
+          "sleeping thread receives complete publication without losing its TCB");
+    env.Detach();
+  });
+  rendezvous.arrive_and_wait();
+  parked.Attach();
+  parked.Detach();
+  parked.Park();
+  Check(Committed(parked.tls_block_, kTlsBlockSize) == 0 && g_tls_blocks.size() == 3,
+        "parked reservation is absent from the live growth registry");
+  const unsigned char stable_image[] = {0x41, 0x52};
+  const unsigned char outer_image[] = {0x63};
+  const unsigned char nested_image[] = {0x72, 0x83};
+  const unsigned before_commit = commit_calls;
+  stable = ApiTlsRegister(8192, 64);
+  Check(stable == static_cast<int64_t>(kTcbSize) && commit_calls == before_commit + 2,
+        "registration grows every smaller block before exposing its offset");
+  for (const auto& block : g_tls_blocks) {
+    Check(Committed(block.base + stable, 8192) == 8192,
+          "entire registered range, including its last page, is already committed");
+    Check(block.base[stable + 8191] == 0, "new registration exposes zeroed last-page storage");
+  }
+  Check(ApiTlsPrepare(stable, stable_image, sizeof(stable_image), 8192), "prepare first module");
+  Check(first.tls_block_[stable] == 0x41 && same_owner.tls_block_[stable] == 0x41 &&
+            sleeping->tls_block_[stable] == 0,
+        "preparation initializes owner contexts and leaves a foreign thread private");
+  first.tls_block_[stable] = 0xa1;
+  same_owner.tls_block_[stable] = 0xb2;
+  ApiTlsPublish(stable, stable_image, sizeof(stable_image), 8192);
+  Check(first.tls_block_[stable] == 0xa1 && same_owner.tls_block_[stable] == 0xb2 &&
+            sleeping->tls_block_[stable] == 0x41,
+        "publication preserves independent constructor writes and initializes sleeping threads");
+
+  const size_t outer_size = 4096 + 32;
+  const int64_t outer = ApiTlsRegister(outer_size, 64);
+  Check(outer == stable + 8192 && ApiTlsPrepare(outer, outer_image, sizeof(outer_image), outer_size),
+        "reserve and privately prepare an outer constructor's module");
+  first.tls_block_[outer] = 0xc3;
+  nested = ApiTlsRegister(64, 1);
+  Check(nested == outer + static_cast<int64_t>(outer_size), "nested module retains its own distinct reservation");
+  ApiTlsPublish(nested, nested_image, sizeof(nested_image), 64);
+  first.tls_block_[nested] = 0xd4;
+  same_owner.tls_block_[nested] = 0xe5;
+  const size_t live_extent = g_tls_offset;
+  Check(ApiTlsRollback(outer, outer_size), "failed outer constructor rolls back its private module");
+  CheckLiveCommit(live_extent);
+  Check(g_tls_offset == live_extent && first.tls_block_[nested] == 0xd4 &&
+            same_owner.tls_block_[nested] == 0xe5 && sleeping->tls_block_[nested] == 0x72,
+        "outer rollback retains a nested committed module sharing its final page");
+  for (const auto& block : g_tls_blocks)
+    for (size_t i = 0; i < outer_size; ++i)
+      Check(block.base[outer + i] == 0, "rollback clears only the abandoned interval");
+  unsigned commits = commit_calls;
+  const int64_t gap = ApiTlsRegister(outer_size, 64);
+  Check(gap == outer && commit_calls == commits, "interior gap reuse makes no redundant VM commitment");
+  Check(ApiTlsRollback(gap, outer_size), "release reused interior reservation");
+  const size_t image_count = g_tls_images.size(), clear_extent = g_tls_clear_size;
+  const size_t tail_size = kTlsBlockSize - live_extent;
+  for (unsigned failure : {1u, 2u, 3u}) {
+    fail_commit = failure;
+    Check(ApiTlsRegister(tail_size, 1) == -1 && fail_commit == 0,
+          "failure in any live block rejects whole-tail registration");
+    Check(g_tls_images.size() == image_count && g_tls_offset == live_extent &&
+              g_tls_clear_size == clear_extent,
+          "failed growth publishes no reservation, offset, or historical clear extent");
+    CheckLiveCommit(live_extent);
+    Check(Committed(parked.tls_block_, kTlsBlockSize) == 0,
+          "failed growth never recommits detached/parked TLS");
+  }
+  fail_commit = 2;
+  fail_decommit = 1;
+  Check(ApiTlsRegister(tail_size, 1) == -1 && fail_commit == 0 && fail_decommit == 0,
+        "growth failure with failed cleanup still reports registration failure");
+  Check(RecordedCommit(g_tls_blocks[0]) == kTlsBlockSize &&
+            Committed(first.tls_block_, kTlsBlockSize) == kTlsBlockSize,
+        "failed cleanup retains accurate full commitment for the first block");
+  CheckCommit(same_owner.tls_block_, kTlsBlockSize, live_extent,
+              "uncommitted peer remains at its old extent after failed cleanup");
+  commits = commit_calls;
+  const int64_t tail = ApiTlsRegister(tail_size, 1);
+  Check(tail == static_cast<int64_t>(live_extent) && commit_calls == commits + 2,
+        "retry reuses retained commitment and grows exactly the remaining blocks");
+  CheckLiveCommit(kTlsBlockSize);
+  for (const auto& block : g_tls_blocks) block.base[kTlsBlockSize - 1] = 0x94;
+  Check(ApiTlsRollback(tail, tail_size), "successful unexposed whole-tail reservation rolls back");
+  CheckLiveCommit(live_extent);
+  Check(g_tls_clear_size == kTlsBlockSize, "historical clear extent survives reclamation");
+  commits = commit_calls;
+  Check(ApiTlsRegister(1, 3) == -1 && ApiTlsRegister(kTlsBlockSize, 1) == -1 &&
+            commit_calls == commits,
+        "invalid alignment and oversized modules fail before any VM call");
+  const int64_t empty1 = ApiTlsRegister(0, 1), empty2 = ApiTlsRegister(0, 1);
+  Check(empty1 >= 0 && empty2 != empty1 && commit_calls == commits,
+        "empty pending modules keep distinct tokens in a committed interior page");
+  Check(ApiTlsRollback(empty1, 0) && ApiTlsRollback(empty2, 0), "empty reservations retire independently");
+
+  Check(parked.Unpark() && Committed(parked.tls_block_, kTlsBlockSize) == kTlsBlockSize,
+        "unpark commits the full historical range before infallible Attach clearing");
+  parked.Attach();
+  CheckLiveCommit(live_extent);
+  Check(parked.tls_block_[0] == 0 && parked.tls_block_[stable] == 0x41 &&
+            parked.tls_block_[nested] == 0x72 &&
+            first.tls_block_[0] == 0x11 && same_owner.tls_block_[0] == 0x22 &&
+            first.tls_block_[stable] == 0xa1 && same_owner.tls_block_[stable] == 0xb2,
+        "reused TLS restores its images without aliasing live owner contexts");
+  rendezvous.arrive_and_wait();
+  worker.join();
+  first.Detach();
+  same_owner.Detach();
+  parked.Detach();
+  Check(g_tls_blocks.empty(), "all live growth records retire before reservations are released");
+  std::printf("Active TLS growth/failure VM calls: commits=%u, decommits=%u\n", commit_calls, decommit_calls);
+}
+
+void MeasureActiveCommit() {
+  ResetRegistry();
+  const unsigned char image[] = {0x41, 0x52};
+  const int64_t module = ApiTlsRegister(8192, 64);
+  ApiTlsPublish(module, image, sizeof(image), 8192);
+  for (const unsigned population : {1u, 32u, 128u}) {
+    std::vector<std::unique_ptr<Env>> envs;
+    size_t active = 0, transient = 0;
+    const unsigned before = decommit_calls;
+    for (unsigned i = 0; i < population; ++i) {
+      auto env = std::make_unique<Env>();
+      transient += Committed(env->tls_block_, kTlsBlockSize);
+      env->Attach();
+      active += Committed(env->tls_block_, kTlsBlockSize);
+      Check(env->tls_block_[module] == image[0] && env->tls_block_[module + 8191] == 0,
+            "measured active population contains real initialized module storage");
+      envs.push_back(std::move(env));
+    }
+    std::printf("metric,active_tls,contexts=%u,assigned_bytes=%zu,reserved_bytes=%zu,"
+                "transient_committed_bytes=%zu,active_committed_bytes=%zu,trim_calls=%u\n",
+                population, g_tls_offset, population * kTlsBlockSize, transient, active,
+                decommit_calls - before);
+    Check(transient == population * kTlsBlockSize, "initialization commitment remains explicit");
+    if (enforce) Check(active == population * RequiredCommit(g_tls_offset), "active commitment budget");
+    for (auto& env : envs) env->Detach();
+  }
+  Check(g_tls_blocks.empty() && g_envs.empty(), "measured population has no stale live records");
+}
 } // namespace fixture
 
+#ifndef GESHER_TLS_HOST_BOUNDARY
 namespace actual {
 const gesher_arm64_api* api;
 void* tls_function;
@@ -224,8 +446,41 @@ void* Resolve(const char* name) {
   return nullptr;
 }
 int Describe(const void*, const char**, const void**, const char**, const void**) { return 0; }
-extern "C" __attribute__((sysv_abi)) uint64_t Nested(uint64_t) { return api->call(tls_function, nullptr, 0); }
-struct Result { uint8_t* tls = nullptr; HANDLE ready = nullptr, release = nullptr; bool dirty = false; int64_t first = 0, second = 0; };
+thread_local bool construct_nested = false;
+thread_local int64_t constructed_nested = -1;
+constexpr size_t kNestedSize = 256;  // larger than earlier alignment padding
+extern "C" __attribute__((sysv_abi)) uint64_t Nested(uint64_t) {
+  auto* tls = reinterpret_cast<uint8_t*>(api->call(tls_function, nullptr, 0));
+  if (construct_nested) {
+    construct_nested = false;
+    static const uint8_t outer_image[] = {0x73}, inner_image[] = {0x84};
+    const size_t outer_size = 4096 + 32;
+    const int64_t outer = api->tls_register(outer_size, 64);
+    Check(outer >= 0 && api->tls_prepare(outer, outer_image, sizeof(outer_image), outer_size),
+          "actual nested callback reserves and privately prepares its outer module");
+    tls[outer] = 0x94;
+    constructed_nested = api->tls_register(kNestedSize, 1);
+    Check(constructed_nested == outer + static_cast<int64_t>(outer_size) &&
+              api->tls_prepare(constructed_nested, inner_image, sizeof(inner_image), kNestedSize),
+          "actual nested callback prepares an independent adjacent module");
+    tls[constructed_nested] = 0x95;
+    api->tls_publish(constructed_nested, inner_image, sizeof(inner_image), kNestedSize);
+    Check(api->tls_rollback(outer, outer_size) && tls[constructed_nested] == 0x95,
+          "actual rollback preserves nested constructor mutations on a shared page");
+    for (size_t i = 0; i < outer_size; ++i)
+      Check(tls[outer + i] == 0, "actual failed constructor interval is cleared");
+    Check(tls == reinterpret_cast<uint8_t*>(api->call(tls_function, nullptr, 0)),
+          "actual nested registration preserves the outer guest TLS address");
+  }
+  return reinterpret_cast<uintptr_t>(tls);
+}
+struct Result {
+  uint8_t* tls = nullptr;
+  HANDLE ready = nullptr, release = nullptr, construct = nullptr, constructed = nullptr;
+  bool dirty = false;
+  int64_t first = 0, second = 0, nested = -1;
+  size_t extent = fixture::kTcbSize + 8192;
+};
 DWORD WINAPI Worker(void* context) {
   auto& result = *static_cast<Result*>(context);
   uint64_t args[3] = {0, 0, reinterpret_cast<uint64_t>(trampoline)};
@@ -241,16 +496,34 @@ DWORD WINAPI Worker(void* context) {
   result.tls = reinterpret_cast<uint8_t*>(api->call(outer_function, args, 3));
   Check(result.tls == reinterpret_cast<uint8_t*>(api->call(tls_function, nullptr, 0)), "nested callback shares correct thread TLS");
   if (result.dirty) {
-    std::memset(result.tls, 0x92, fixture::kTlsBlockSize);
+    std::memset(result.tls, 0x92, result.extent);
     *errno_slot = 77;
   } else {
     for (size_t i = 0; i < fixture::kTcbSize; ++i) Check(result.tls[i] == 0, "real fresh thread TCB");
     Check(result.tls[result.first] == 0x41 && result.tls[result.first + 3000] == 0, "real initial ELF-style TLS image/BSS");
     Check(result.tls[result.second] == 0x62 && result.tls[result.second + 3000] == 0, "real newly published TLS image/BSS");
+    if (result.nested >= 0)
+      Check(result.tls[result.nested] == 0x84 && result.tls[result.nested + kNestedSize - 1] == 0,
+            "real replacement thread initializes the nested committed image and BSS");
     Check(host_errno == 0, "host errno is thread-local after Env reuse");
   }
   SetEvent(result.ready);
-  Check(WaitForSingleObject(result.release, 30000) == WAIT_OBJECT_0, "bounded actual worker release");
+  if (result.construct) {
+    HANDLE requests[] = {result.release, result.construct};
+    for (;;) {
+      const DWORD request = WaitForMultipleObjects(2, requests, FALSE, 30000);
+      Check(request == WAIT_OBJECT_0 || request == WAIT_OBJECT_0 + 1, "bounded actual worker command");
+      if (request == WAIT_OBJECT_0) break;
+      construct_nested = true;
+      Check(result.tls == reinterpret_cast<uint8_t*>(api->call(outer_function, args, 3)),
+            "actual constructor callback reenters the existing guest context");
+      result.nested = constructed_nested;
+      result.extent = static_cast<size_t>(constructed_nested) + kNestedSize;
+      SetEvent(result.constructed);
+    }
+  } else {
+    Check(WaitForSingleObject(result.release, 30000) == WAIT_OBJECT_0, "bounded actual worker release");
+  }
   return 0;
 }
 void TestDll(const char* path) {
@@ -292,7 +565,10 @@ void TestDll(const char* path) {
   active.dirty = true;
   active.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   active.release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  Check(active.ready && active.release, "create simultaneous active-Env events");
+  active.construct = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  active.constructed = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  Check(active.ready && active.release && active.construct && active.constructed,
+        "create simultaneous active-Env and constructor events");
   HANDLE owner = CreateThread(nullptr, 0, Worker, &active, 0, nullptr);
   Check(owner && WaitForSingleObject(active.ready, 30000) == WAIT_OBJECT_0, "actual simultaneous active TLS worker");
   Check(active.tls != original, "simultaneous guest TLS blocks are distinct");
@@ -302,14 +578,29 @@ void TestDll(const char* path) {
   size_t retained = Committed(original, fixture::kTlsBlockSize);
   std::printf("Actual DLL parked TLS committed bytes=%zu\n", retained);
   if (enforce) Check(retained == 0, "actual translator parks TLS pages");
-  Check(Committed(active.tls, fixture::kTlsBlockSize) == fixture::kTlsBlockSize && active.tls[0] == 0x92,
-        "actual other active thread keeps committed TLS and TCB");
+  CheckCommit(active.tls, fixture::kTlsBlockSize, first_offset + 8192,
+              "actual sleeping thread keeps only its assigned TLS pages");
+  Check(active.tls[0] == 0x92, "actual other active thread keeps its TCB");
   const int64_t second_offset = api->tls_register(7000, 256);
   api->tls_publish(second_offset, second, sizeof(second), 7000);
+  CheckCommit(active.tls, fixture::kTlsBlockSize, second_offset + 7000,
+              "actual module growth commits every sleeping thread before publication");
   Check(active.tls[0] == 0x92 && active.tls[second_offset] == 0x62,
         "actual publication touches active module without changing its TCB");
+  SetEvent(active.construct);
+  Check(WaitForSingleObject(active.constructed, 30000) == WAIT_OBJECT_0,
+        "actual sleeping worker runs nested construction and outer rollback");
+  CheckCommit(active.tls, fixture::kTlsBlockSize, active.extent,
+              "actual nested publication keeps only the complete live prefix");
+  Check(active.tls[0] == 0x92 && active.tls[second_offset] == 0x62 &&
+            active.tls[active.nested] == 0x95,
+        "actual nested construction retains prior TLS and its own private mutations");
+  Check(Committed(original, fixture::kTlsBlockSize) == 0,
+        "actual nested registration never touches the parked reservation");
   result.first = first_offset;
   result.second = second_offset;
+  result.nested = active.nested;
+  result.extent = active.extent;
   result.dirty = false;
   for (int reuse = 0; reuse < 8; ++reuse) {
     ResetEvent(result.ready);
@@ -324,19 +615,26 @@ void TestDll(const char* path) {
   }
   CloseHandle(result.ready);
   CloseHandle(result.release);
-  Check(Committed(active.tls, fixture::kTlsBlockSize) == fixture::kTlsBlockSize,
-        "other active TLS survives repeated parked-Env reuse");
+  CheckCommit(active.tls, fixture::kTlsBlockSize, active.extent,
+              "other active TLS survives repeated parked-Env reuse");
   SetEvent(active.release);
   Check(WaitForSingleObject(owner, 30000) == WAIT_OBJECT_0, "actual active worker exits");
   CloseHandle(owner);
   CloseHandle(active.ready);
   CloseHandle(active.release);
+  CloseHandle(active.construct);
+  CloseHandle(active.constructed);
   // The translator owns process-lifetime callbacks/code regions. Do not unload it.
 }
 } // namespace actual
+#endif
 int main(int argc, char** argv) {
   enforce = argc < 2 || std::strcmp(argv[1], "measure") != 0;
   fixture::TestMethods();
+  if (enforce) fixture::TestActiveCommit();
+  fixture::MeasureActiveCommit();
+#ifndef GESHER_TLS_HOST_BOUNDARY
   if (argc > 2) actual::TestDll(argv[2]);
-  std::printf("ARM64 TLS lifecycle: %u checks PASS\n", checks);
+#endif
+  std::printf("ARM64 TLS lifecycle: %u checks PASS\n", checks.load());
 }

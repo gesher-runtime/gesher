@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "date_utc": "2026-11-23",
+  "scope": "Extracted production TLS/Env component with explicit POSIX VM/profiling/JIT boundaries; not Windows commitment, RSS, or translated execution",
+  "baseline_commit": "d38b5549dc3963f8d491e9205f9b2743bb6d3745",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "compiler": "c++ (Debian 14.2.0-19) 14.2.0",
+  "pinned_windows_toolchain": "llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64",
+  "dynarmic_commit": "9d4582339990d4eae53f1dc7160686920fc2075c",
+  "source_sha256": {
+    "compat/arm64/dll/translator.cc": "8d442347e1a1c0b257cb19d2d8e68a398852ca137a8b6b6b399b07bb92b4ade8",
+    "compat/arm64/include/gesher/arm64_translator.h": "b4eef37c3fa675ae02acce3ff5d7879dfb81ff4c07b4853ec484b7aca570f482",
+    "tests/native/arm64_tls_lifecycle_windows.cc.in": "aa570940f73c55be42ce113def8130b53d5fd7aa62f58e1175136269b648218a",
+    "tests/native/arm64_tls_vm_host.h": "27e15b08c9d12cf1c96c167bc1384bb733fc5a0c058cd8321512ac07b2537871",
+    "tools/test_arm64_tls_lifecycle.py": "33ed12d1a509f2ed560fd1d2adefb6473a5b42e6826c81e2c7ecd63603e1e7de"
+  },
+  "runs": [
+    {
+      "label": "baseline",
+      "command": [
+        "python3",
+        "tools/test_arm64_tls_lifecycle.py",
+        "--host-boundary",
+        "--sanitize",
+        "--source-ref",
+        "d38b5549dc3963f8d491e9205f9b2743bb6d3745",
+        "--measure"
+      ],
+      "source_sha256": "eef6fbc4b3cff2f1421f026be993501bd76f1f88d43b1aa992c9571596b6dd2e",
+      "samples": [
+        {
+          "contexts": 1,
+          "assigned_bytes": 8256,
+          "reserved_bytes": 262144,
+          "transient_committed_bytes": 262144,
+          "active_committed_bytes": 262144,
+          "trim_calls": 0
+        },
+        {
+          "contexts": 32,
+          "assigned_bytes": 8256,
+          "reserved_bytes": 8388608,
+          "transient_committed_bytes": 8388608,
+          "active_committed_bytes": 8388608,
+          "trim_calls": 0
+        },
+        {
+          "contexts": 128,
+          "assigned_bytes": 8256,
+          "reserved_bytes": 33554432,
+          "transient_committed_bytes": 33554432,
+          "active_committed_bytes": 33554432,
+          "trim_calls": 0
+        }
+      ],
+      "log": "translator.cc source SHA256 eef6fbc4b3cff2f1421f026be993501bd76f1f88d43b1aa992c9571596b6dd2e\nParked TLS committed bytes=0, source TLS bytes=262144\nmetric,active_tls,contexts=1,assigned_bytes=8256,reserved_bytes=262144,transient_committed_bytes=262144,active_committed_bytes=262144,trim_calls=0\nmetric,active_tls,contexts=32,assigned_bytes=8256,reserved_bytes=8388608,transient_committed_bytes=8388608,active_committed_bytes=8388608,trim_calls=0\nmetric,active_tls,contexts=128,assigned_bytes=8256,reserved_bytes=33554432,transient_committed_bytes=33554432,active_committed_bytes=33554432,trim_calls=0\nARM64 TLS lifecycle: 16437 checks PASS\n"
+    },
+    {
+      "label": "candidate",
+      "command": [
+        "python3",
+        "tools/test_arm64_tls_lifecycle.py",
+        "--host-boundary",
+        "--sanitize",
+        "--negative-controls"
+      ],
+      "source_sha256": "8d442347e1a1c0b257cb19d2d8e68a398852ca137a8b6b6b399b07bb92b4ade8",
+      "samples": [
+        {
+          "contexts": 1,
+          "assigned_bytes": 8256,
+          "reserved_bytes": 262144,
+          "transient_committed_bytes": 262144,
+          "active_committed_bytes": 12288,
+          "trim_calls": 1
+        },
+        {
+          "contexts": 32,
+          "assigned_bytes": 8256,
+          "reserved_bytes": 8388608,
+          "transient_committed_bytes": 8388608,
+          "active_committed_bytes": 393216,
+          "trim_calls": 32
+        },
+        {
+          "contexts": 128,
+          "assigned_bytes": 8256,
+          "reserved_bytes": 33554432,
+          "transient_committed_bytes": 33554432,
+          "active_committed_bytes": 1572864,
+          "trim_calls": 128
+        }
+      ],
+      "log": "translator.cc source SHA256 8d442347e1a1c0b257cb19d2d8e68a398852ca137a8b6b6b399b07bb92b4ade8\nParked TLS committed bytes=0, source TLS bytes=262144\nActive TLS growth/failure VM calls: commits=16, decommits=15\nmetric,active_tls,contexts=1,assigned_bytes=8256,reserved_bytes=262144,transient_committed_bytes=262144,active_committed_bytes=12288,trim_calls=1\nmetric,active_tls,contexts=32,assigned_bytes=8256,reserved_bytes=8388608,transient_committed_bytes=8388608,active_committed_bytes=393216,trim_calls=32\nmetric,active_tls,contexts=128,assigned_bytes=8256,reserved_bytes=33554432,transient_committed_bytes=33554432,active_committed_bytes=1572864,trim_calls=128\nARM64 TLS lifecycle: 29229 checks PASS\nPASS negative control missing-attachment-trim: active attachment commits only its assigned prefix\nPASS negative control missing-sleeping-thread-growth: registration grows every smaller block before exposing its offset\nPASS negative control partial-range-commit: entire registered range, including its last page\nPASS negative control publish-after-allocation-failure: failure in any live block rejects whole-tail registration\nPASS negative control lost-failed-decommit-record: failed attachment trim keeps accurate bookkeeping\nPASS negative control missing-rollback-trim: live TLS has the exact page-rounded prefix\nPASS negative control overlapping-page-reclamation: all assigned TLS bytes stay committed\nPASS negative control missing-failed-growth-cleanup: live TLS has the exact page-rounded prefix\n"
+    }
+  ],
+  "windows_actual_execution": "pending required full fork CI; fixture and complete production translation unit crosscompiled only",
+  "native_aarch64_host_execution": "not established",
+  "resident_set_size": null,
+  "latency": null,
+  "cpu": null
+}

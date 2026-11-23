@@ -326,6 +326,7 @@ jobs:
           python3 tools/test_elf_tls_rollback.py --sanitize
           python3 tools/test_arm64_pending_rollback.py --sanitize
           python3 tools/test_arm64_native_rollback.py --sanitize
+          python3 tools/test_arm64_tls_lifecycle.py --host-boundary --sanitize --negative-controls
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
@@ -675,6 +676,12 @@ jobs:
           python3 tools/test_arm64_tls_lifecycle.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/arm64_tls_lifecycle_test.exe
+          # Same fixture and actual Windows VM API, immutable pre-change owner.
+          git fetch --no-tags --depth=1 https://github.com/gesher-runtime/gesher.git d38b5549dc3963f8d491e9205f9b2743bb6d3745
+          python3 tools/test_arm64_tls_lifecycle.py --compile-only \
+            --source-ref d38b5549dc3963f8d491e9205f9b2743bb6d3745 \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/arm64_tls_lifecycle_baseline.exe
 
       - name: Build
         run: |
@@ -928,7 +935,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@06d175a84affff8914c00151269b0aa2f7f4032a
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@6afcb6e671fc4f2d08a4a98220f9d9a906a327bf
     with:
       local-runner: false
 
@@ -1985,11 +1992,13 @@ jobs:
           python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: ARM64 parked TLS, reuse and actual translator callbacks
+      - name: ARM64 active and parked TLS, baseline commitment and actual translator callbacks
         if: matrix.shard == 'native'
         timeout-minutes: 3
         shell: pwsh
         run: |
+          & ./dist/arm64_tls_lifecycle_baseline.exe measure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
