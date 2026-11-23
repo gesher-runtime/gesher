@@ -1235,7 +1235,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         // Telephony only with a cellular modem Windows reported at boot (docs/telephony.md).
         TelephonyService.addTelephonyFeatures(FEATURES, TelephonyService.bootSnapshot());
-        // Synchronous WLAN census: no wlanapi, a stopped WLAN service or no adapter
+        // WLAN census bounded to 5 s: a timeout, no wlanapi, a stopped WLAN service or no adapter
         // leaves FEATURE_WIFI out (docs/wifi.md).
         addWifiFeature(FEATURES, com.gesher.net.WindowsWifi.hardware());
     }
