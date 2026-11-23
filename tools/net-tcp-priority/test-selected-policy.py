@@ -425,7 +425,7 @@ APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
  'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
 }
 
-def preceding_appcontainer_identity_sources():
+def preceding_appcontainer_identity_sources(netlink):
  patch=(ROOT/'tools/net-tcp-priority/qualified/appcontainer-identity-source.patch').read_bytes()
  assert hashlib.sha256(patch).hexdigest()==APPCONTAINER_IDENTITY_PATCH_SHA256,'AppContainer identity transition changed'
  paths=list(APPCONTAINER_IDENTITY_SOURCE_SHA256)
@@ -433,10 +433,35 @@ def preceding_appcontainer_identity_sources():
  with tempfile.TemporaryDirectory(prefix='gesher-identity-qualification-') as temporary:
   work=Path(temporary)
   for path,digest in APPCONTAINER_IDENTITY_SOURCE_SHA256.items():
-   source=(ROOT/path).read_bytes()
+   source=netlink.get(path,(ROOT/path).read_bytes())
    assert hashlib.sha256(source).hexdigest()==digest,path
    (work/path).parent.mkdir(parents=True,exist_ok=True)
    (work/path).write_bytes(source)
+  reverse=['git','-c','core.autocrlf=false','apply','--reverse','--unidiff-zero']
+  subprocess.run([*reverse,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
+  return {path:(work/path).read_bytes() for path in paths}
+
+NETLINK_QUALIFICATION_SHA256 = 'b1294fc79d8aa89b08145e1f2e4dffc9045a24423a3ca9b934341550fddcf753'
+
+def preceding_netlink_sources():
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'netlink-route-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==NETLINK_QUALIFICATION_SHA256,'NETLINK source qualification changed'
+ qualification=json.loads(raw)
+ patch=(folder/'netlink-route-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'NETLINK transition patch changed'
+ sources=qualification['source_sha256']
+ paths=qualification['paths']
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
+ with tempfile.TemporaryDirectory(prefix='gesher-netlink-qualification-') as temporary:
+  work=Path(temporary)
+  for path,digest in sources.items():
+   source=(ROOT/path).read_bytes()
+   assert hashlib.sha256(source).hexdigest()==digest,path
+   if path in paths:
+    (work/path).parent.mkdir(parents=True,exist_ok=True)
+    (work/path).write_bytes(source)
   reverse=['git','-c','core.autocrlf=false','apply','--reverse','--unidiff-zero']
   subprocess.run([*reverse,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
   subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
@@ -453,7 +478,8 @@ def preceding_ofd_sources():
         'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
- identity=preceding_appcontainer_identity_sources()
+ netlink=preceding_netlink_sources()
+ identity={**netlink,**preceding_appcontainer_identity_sources(netlink)}
  shared_stdio=preceding_shared_stdio_sources(qualification)
  for path,digest in qualification['source_sha256'].items():
   actual=identity.get(path,shared_stdio.get(path,(ROOT/path).read_bytes()))
@@ -481,7 +507,7 @@ def preceding_ofd_sources():
    'compat/posix/src/fd.cc':[b'bool Remove(',b'void Insert(',b'bool ReplaceSocket(',b'bool LookupSocket(',b'static int PollFdsImpl('],
    'compat/posix/src/system.cc':[b'bool SocketIo('],
  }.items():
-  current=(ROOT/path).read_bytes()
+  current=netlink.get(path,(ROOT/path).read_bytes())
   for marker in markers:
    actual=function(current,marker);expected=function(previous[path],marker)
    if marker==b'static int PollFdsImpl(':
@@ -489,7 +515,7 @@ def preceding_ofd_sources():
      assert actual.count(after)==expected.count(before)==1,(path,marker)
      actual=actual.replace(after,before,1)
    assert actual==expected,(path,marker)
- return previous
+ return {**netlink,**previous}
 # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
 # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
 # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
@@ -637,6 +663,8 @@ def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
  cases=[
+  ('compat/posix/src/netlink.cc',b'request_link && !binder_endpoint::MayInspectNetlink()',b'false'),
+  ('compat/binder/binderd.cc',b'client->role == peer::Role::kSystemServer',b'true'),
   ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
   ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),

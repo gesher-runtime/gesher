@@ -85,6 +85,16 @@ target_compile_options(appcontainer_record_lock_probe PRIVATE -Wall -Wextra -Wer
 target_link_options(appcontainer_record_lock_probe PRIVATE -municode)
 target_link_libraries(appcontainer_record_lock_probe PRIVATE gesher_exec_spawn advapi32 ole32)
 
+add_executable(appcontainer_netlink_probe
+  ${CMAKE_SOURCE_DIR}/tests/sandbox/netlink-authority-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
+target_include_directories(appcontainer_netlink_probe PRIVATE
+  ${CMAKE_SOURCE_DIR}/compat/framework ${CMAKE_SOURCE_DIR}/compat/binder)
+target_compile_options(appcontainer_netlink_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(appcontainer_netlink_probe PRIVATE -municode)
+target_link_libraries(appcontainer_netlink_probe PRIVATE advapi32 ole32)
+
 add_executable(exec3_property_host_probe ${CMAKE_SOURCE_DIR}/tests/exec/property-host-probe.cc)
 target_compile_options(exec3_property_host_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(exec3_property_host_probe PRIVATE utils)

@@ -24,7 +24,7 @@ using binder_bootstrap::ReadStartup;
 using binder_bootstrap::Transfer;
 
 enum class Action : uint32_t { kEnroll = 1, kHandoff, kRetire, kRevokeInstallation,
-                               kRestoreInstallation, kAttachJob };
+                               kRestoreInstallation, kAttachJob, kEnableNetlinkInspection };
 
 struct Request {
   uint32_t magic = 0x474c4152;  // GLAR

@@ -18,6 +18,7 @@ void NetlinkClose(NetlinkState& state);
 int NetlinkPoll(NetlinkState& state, int events);
 
 int NetlinkConnect(NetlinkState& state, const void* addr, uint32_t len);
+int NetlinkBind(NetlinkState& state, const void* addr, uint32_t len);
 int NetlinkGetSockName(NetlinkState& state, void* addr, uint32_t* len, bool peer);
 
 ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count, int flags,

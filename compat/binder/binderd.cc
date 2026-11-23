@@ -70,6 +70,7 @@ namespace peer = gesher::binder_peer;
 
 bool g_trace = false;
 bool g_record_only = false;
+std::atomic<bool> g_netlink_inspection = false;
 gesher::process_identity::Sid g_record_container;
 
 void Log(const char* format, ...) {
@@ -1627,6 +1628,7 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
                           gesher::process_identity::Principal authority) {
   peer::OwnedHandle endpoint_owner(endpoint);
   peer::Registry::Lease system;
+  bool device_attached = false;
   bool admitted_standalone = false;
   launch::Request request;
   while (launch::Transfer(endpoint, &request, sizeof(request), false)) {
@@ -1684,6 +1686,14 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
       case launch::Action::kAttachJob: {
         peer::OwnedHandle job(launch::DecodeHandle(request.process));
         if (system || g_record_only) accepted = g_peer_registry->AttachJob(std::move(job));
+        device_attached |= accepted;
+        break;
+      }
+      case launch::Action::kEnableNetlinkInspection: {
+        // Only the private, handed-off system server lane can enable this mode.
+        accepted = !g_record_only && device_attached && system &&
+            request.pid == system->generation.pid && request.birth == system->generation.birth;
+        if (accepted) g_netlink_inspection.store(true, std::memory_order_release);
         break;
       }
     }
@@ -1755,9 +1765,30 @@ void ServeProc(HANDLE pipe, In in, bool operator_hello) {
   ProcRelease(proc);
 }
 
-#ifdef GESHER_RECORD_LOCK_BROKER
-bool WaitRecordClient(HANDLE pipe, bool accept_ack);
-#endif
+bool WaitForClient(HANDLE pipe, bool accept_ack) {
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  while (GetTickCount64() < deadline) {
+    DWORD bytes = 0;
+    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes, nullptr)) return false;
+    if (accept_ack && bytes >= 2 * sizeof(uint32_t)) {
+      uint32_t acknowledgment[2];
+      return ReadExact(pipe, acknowledgment, sizeof(acknowledgment)) &&
+          acknowledgment[0] == sizeof(uint32_t) && acknowledgment[1] == 1;
+    }
+    Sleep(1);
+  }
+  return false;
+}
+
+void ServeNetlinkInspection(HANDLE pipe, In in) {
+  uint32_t version = 0;
+  if (!in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
+  const auto client = !g_record_only && g_peer_registry &&
+      g_netlink_inspection.load(std::memory_order_acquire) ? g_peer_registry->Authenticate(pipe) : nullptr;
+  WireReply reply;
+  reply.Put<int32_t>(client && client->role == peer::Role::kSystemServer ? 0 : -EACCES);
+  if (WriteMessage(pipe, reply)) WaitForClient(pipe, false);
+}
 
 void ServeEnrollChild(HANDLE pipe, In in) {
   uint32_t version = 0;
@@ -1775,7 +1806,7 @@ void ServeEnrollChild(HANDLE pipe, In in) {
   if (!WriteMessage(pipe, reply)) return;
 #ifdef GESHER_RECORD_LOCK_BROKER
   if (g_record_only) {
-    WaitRecordClient(pipe, false);
+    WaitForClient(pipe, false);
     return;
   }
 #endif
@@ -1818,26 +1849,10 @@ bool ReplyRecordLock(HANDLE pipe, int error, const locks::LinuxFlock* result = n
   return WriteMessage(pipe, reply);
 }
 
-bool WaitRecordClient(HANDLE pipe, bool expect_acknowledgment) {
-  // A guest cannot keep a broker thread or a temporary file pin indefinitely.
-  const ULONGLONG deadline = GetTickCount64() + 5000;
-  while (GetTickCount64() < deadline) {
-    DWORD bytes = 0;
-    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes, nullptr)) return false;
-    if (expect_acknowledgment && bytes >= 2 * sizeof(uint32_t)) {
-      uint32_t acknowledgment[2];
-      return ReadExact(pipe, acknowledgment, sizeof(acknowledgment)) &&
-          acknowledgment[0] == sizeof(uint32_t) && acknowledgment[1] == 1;
-    }
-    Sleep(1);
-  }
-  return false;
-}
-
 void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result = nullptr) {
   // The client closes after reading its reply. A bounded wait avoids both
   // discarding unread bytes on DisconnectNamedPipe and blocking in FlushFileBuffers.
-  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
+  if (ReplyRecordLock(pipe, error, result)) WaitForClient(pipe, false);
 }
 
 namespace playback = gesher::audio_playback;
@@ -1957,7 +1972,7 @@ void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
   locks::File identity{};
   int error = locks::FileIdentity(file.get(), &identity);
   if (error) return complete(error);
-  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
+  if (!ReplyRecordLock(pipe, 0) || !WaitForClient(pipe, true)) return;
   file.reset();  // Neither temporary pin should be counted as an OFD user alias.
   if (g_peer_registry->Authenticate(pipe) != caller_peer) return complete(EACCES);
   complete(locks::BrokerDescriptorClosed(identity, caller));
@@ -2388,6 +2403,8 @@ void Serve(HANDLE pipe) {
           ServeThread(pipe, in);
         } else if (op == wire::kHelloRights) {
           ServeRights(pipe, in);
+        } else if (op == wire::kNetlinkInspection) {
+          ServeNetlinkInspection(pipe, in);
         }
       }
     }

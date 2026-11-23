@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -24,6 +25,7 @@
 #include <utility>
 #include <vector>
 #include <windows.h>
+#include <gesher/binder_endpoint.h>
 
 #include "event_internal.h"
 #include "linux_socket.h"
@@ -91,10 +93,10 @@ uint32_t SelfNetlinkPid() {
   return pid > 0 ? static_cast<uint32_t>(pid) : 1u;
 }
 
-int BindPort(NetlinkState& state) {
+int BindPort(NetlinkState& state, uint32_t requested = 0) {
   if (state.bound_pid != 0) return 0;
   static std::atomic<uint32_t> next_port{0x80000000u};
-  uint32_t candidate = SelfNetlinkPid();
+  uint32_t candidate = requested != 0 ? requested : SelfNetlinkPid();
   // The Windows object manager arbitrates port ownership across Gesher
   // processes in the logon session. The name lives as long as the socket.
   for (unsigned attempt = 0; attempt < 1024; ++attempt) {
@@ -111,6 +113,7 @@ int BindPort(NetlinkState& state) {
     if (reservation == nullptr && status != ERROR_ACCESS_DENIED && status != ERROR_INVALID_HANDLE) {
       return errno = ENOBUFS, -1;
     }
+    if (requested != 0) return errno = EADDRINUSE, -1;
     candidate = next_port.fetch_add(1, std::memory_order_relaxed);
     if (candidate == 0) candidate = next_port.fetch_add(1, std::memory_order_relaxed);
   }
@@ -249,7 +252,7 @@ Bytes AddressMessage(const ws::Interface& iface, const ws::InterfaceAddress& ent
   return msg;
 }
 
-Bytes LinkMessage(const ws::Interface& iface) {
+Bytes LinkMessage(const ws::Interface& iface, bool include_hardware) {
   Bytes msg(NLMSG_LENGTH(sizeof(ifinfomsg)), 0);
   ifinfomsg ifi{};
   ifi.ifi_index = static_cast<int>(iface.index);
@@ -264,15 +267,20 @@ Bytes LinkMessage(const ws::Interface& iface) {
   memcpy(msg.data() + NLMSG_HDRLEN, &ifi, sizeof(ifi));
   AppendAttr(&msg, IFLA_IFNAME, iface.name.c_str(), iface.name.size() + 1);
   AppendAttr(&msg, IFLA_MTU, &iface.mtu, sizeof(iface.mtu));
+  if (include_hardware && iface.hardware_len != 0 && iface.hardware_len <= sizeof(iface.hardware)) {
+    AppendAttr(&msg, IFLA_ADDRESS, iface.hardware, iface.hardware_len);
+  }
   return msg;
 }
 
-bool CaptureInterfaces(uint32_t groups, InterfaceSnapshot* snapshot) {
+bool CaptureInterfaces(uint32_t groups, InterfaceSnapshot* snapshot, bool include_hardware = false) {
   std::vector<ws::Interface> interfaces;
   if (!sock::ListNamedInterfaces(&interfaces)) return false;
   for (const auto& iface : interfaces) {
     if (iface.index == 0) continue;
-    if ((groups & RTMGRP_LINK) != 0) snapshot->links.emplace(iface.index, LinkMessage(iface));
+    if ((groups & RTMGRP_LINK) != 0) {
+      snapshot->links.emplace(iface.index, LinkMessage(iface, include_hardware));
+    }
     for (const auto& entry : iface.addresses) {
       if ((entry.address.family == ws::Family::kInet && (groups & RTMGRP_IPV4_IFADDR) == 0) ||
           (entry.address.family == ws::Family::kInet6 && (groups & RTMGRP_IPV6_IFADDR) == 0)) continue;
@@ -439,11 +447,54 @@ int SetGroups(NetlinkState& state, uint32_t groups, WatchesToStop* cleanup) {
   return 0;
 }
 
+bool CaptureOnce(InterfaceSnapshot* interfaces, bool* captured, bool inspect) {
+  if (*captured) return true;
+  const uint32_t groups = kAddressGroups | (inspect ? RTMGRP_LINK : 0);
+  *captured = CaptureInterfaces(groups, interfaces, inspect);
+  return *captured;
+}
+
+int AppendLinkReply(const nlmsghdr& request, const uint8_t* payload, uint32_t pid,
+                    InterfaceSnapshot* interfaces, bool* captured, PacketBatcher* out) {
+  const size_t length = request.nlmsg_len - NLMSG_HDRLEN;
+  const bool dump = (request.nlmsg_flags & NLM_F_DUMP) == NLM_F_DUMP;
+  if (length == 0) return -EINVAL;
+  if (payload[0] != AF_UNSPEC && payload[0] != AF_PACKET) return -EAFNOSUPPORT;
+  if ((request.nlmsg_flags & NLM_F_ATOMIC) != 0 || length > sizeof(ifinfomsg)) return -EOPNOTSUPP;
+  int index = 0;
+  if (length == sizeof(ifinfomsg)) {
+    ifinfomsg filter;
+    memcpy(&filter, payload, sizeof(filter));
+    index = filter.ifi_index;
+    if (index < 0) return -EINVAL;
+    if (filter.ifi_type != 0 || filter.ifi_flags != 0 || filter.ifi_change != 0) return -EOPNOTSUPP;
+  } else if (!dump || length > NLMSG_ALIGN(sizeof(rtgenmsg))) {
+    return -EINVAL;
+  }
+  if (!dump && index == 0) return -EINVAL;
+  if (!CaptureOnce(interfaces, captured, true)) return -errno;
+  if (!dump && !interfaces->links.contains(static_cast<uint32_t>(index))) return -ENODEV;
+  const uint16_t flags = dump ? NLM_F_MULTI | (index != 0 ? NLM_F_DUMP_FILTERED : 0) : 0;
+  for (const auto& [key, message] : interfaces->links) {
+    if (index != 0 && static_cast<uint32_t>(index) != key) continue;
+    Bytes packet = message;
+    FinalizeNlmsg(&packet, RTM_NEWLINK, flags, request.nlmsg_seq, pid);
+    out->Push(packet);
+    if (out->overflow) break;
+  }
+  if (dump) out->PushDone(request.nlmsg_seq, pid, flags);
+  else if ((request.nlmsg_flags & NLM_F_ACK) != 0) AppendErrorPacket(0, request, payload, pid, out);
+  return 0;
+}
+
 int AppendReply(const nlmsghdr& request, const uint8_t* payload, uint32_t pid,
-                InterfaceSnapshot* interfaces, bool* captured, PacketBatcher* out) {
+                InterfaceSnapshot* interfaces, bool* captured, bool inspect, PacketBatcher* out) {
   if ((request.nlmsg_flags & NLM_F_REQUEST) == 0 || request.nlmsg_type == NLMSG_NOOP) {
     if ((request.nlmsg_flags & NLM_F_ACK) != 0) AppendErrorPacket(0, request, payload, pid, out);
     return 0;
+  }
+  if (request.nlmsg_type == RTM_GETLINK) {
+    return AppendLinkReply(request, payload, pid, interfaces, captured, out);
   }
   if (request.nlmsg_type != RTM_GETADDR) return -EOPNOTSUPP;
   const bool dump = (request.nlmsg_flags & NLM_F_DUMP) == NLM_F_DUMP;
@@ -452,10 +503,6 @@ int AppendReply(const nlmsghdr& request, const uint8_t* payload, uint32_t pid,
   if (length == 0) return -EINVAL;
   const uint8_t family = payload[0];
   if (family != AF_UNSPEC && family != AF_INET && family != AF_INET6) return -EAFNOSUPPORT;
-  if (!*captured) {
-    if (!CaptureInterfaces(kAddressGroups, interfaces)) return -errno;
-    *captured = true;
-  }
 
   if (length > sizeof(ifaddrmsg)) return -EOPNOTSUPP;
   uint32_t index = 0;
@@ -467,6 +514,7 @@ int AppendReply(const nlmsghdr& request, const uint8_t* payload, uint32_t pid,
   } else if (length > NLMSG_ALIGN(sizeof(rtgenmsg))) {
     return -EINVAL;
   }
+  if (!CaptureOnce(interfaces, captured, inspect)) return -errno;
   const uint16_t flags = NLM_F_MULTI | (index != 0 ? NLM_F_DUMP_FILTERED : 0);
   for (const auto& [key, message] : interfaces->addresses) {
     if ((family != AF_UNSPEC && family != key.family) || (index != 0 && index != key.index)) continue;
@@ -526,6 +574,28 @@ int NetlinkConnect(NetlinkState& state, const void* addr, uint32_t len) {
   return BindPort(state);
 }
 
+int NetlinkBind(NetlinkState& state, const void* addr, uint32_t len) {
+  if (!binder_endpoint::MayInspectNetlink()) return errno = EACCES, -1;
+  if (addr == nullptr) return errno = EFAULT, -1;
+  if (len < sizeof(sockaddr_nl)) return errno = EINVAL, -1;
+  sockaddr_nl local{};
+  if (!ws::CopyFromUser(&local, addr, sizeof(local))) return errno = EFAULT, -1;
+  if (local.nl_family != AF_NETLINK) return errno = EINVAL, -1;
+  if ((local.nl_groups & ~kSupportedGroups) != 0) return errno = EOPNOTSUPP, -1;
+  WatchesToStop cleanup;
+  std::lock_guard<std::mutex> lock(state.mu);
+  if (state.closed) return errno = EBADF, -1;
+  const bool newly_bound = state.bound_pid == 0;
+  if (!newly_bound && state.bound_pid != local.nl_pid) return errno = EINVAL, -1;
+  if (BindPort(state, local.nl_pid) < 0) return -1;
+  const int result = SetGroups(state, local.nl_groups, &cleanup);
+  if (result != 0 && newly_bound) {
+    CloseHandle(std::exchange(state.port_reservation, nullptr));
+    state.bound_pid = 0;
+  }
+  return result;
+}
+
 int NetlinkGetSockName(NetlinkState& state, void* addr, uint32_t* len, bool peer) {
   if (addr == nullptr || len == nullptr) return errno = EFAULT, -1;
   sockaddr_nl local = {};
@@ -577,6 +647,7 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
   }
   if (req.size() < sizeof(nlmsghdr)) return errno = EINVAL, -1;
 
+  bool request_link = false;
   for (size_t offset = 0; offset < req.size();) {
     if (req.size() - offset < sizeof(nlmsghdr)) return errno = EINVAL, -1;
     nlmsghdr hdr;
@@ -584,16 +655,15 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
     if (hdr.nlmsg_len < sizeof(nlmsghdr) || hdr.nlmsg_len > req.size() - offset) {
       return errno = EINVAL, -1;
     }
-    // An environment value is insufficient authority to expose hardware
-    // addresses. Only the ordinary app NETLINK_ROUTE contract is available.
-    if (hdr.nlmsg_type == RTM_GETLINK ||
-        hdr.nlmsg_type == RTM_NEWLINK || hdr.nlmsg_type == RTM_DELLINK ||
+    request_link |= hdr.nlmsg_type == RTM_GETLINK;
+    if (hdr.nlmsg_type == RTM_NEWLINK || hdr.nlmsg_type == RTM_DELLINK ||
         hdr.nlmsg_type == RTM_NEWADDR || hdr.nlmsg_type == RTM_DELADDR ||
         hdr.nlmsg_type == RTM_NEWROUTE || hdr.nlmsg_type == RTM_DELROUTE) {
       return errno = EACCES, -1;
     }
     offset += std::min(static_cast<size_t>(NLMSG_ALIGN(hdr.nlmsg_len)), req.size() - offset);
   }
+  if (request_link && !binder_endpoint::MayInspectNetlink()) return errno = EACCES, -1;
 
   PacketBatcher batch;
   InterfaceSnapshot interfaces;
@@ -606,7 +676,7 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
       nlmsghdr hdr;
       memcpy(&hdr, req.data() + offset, sizeof(hdr));
       const uint8_t* payload = req.data() + offset + NLMSG_HDRLEN;
-      const int error = AppendReply(hdr, payload, state.bound_pid, &interfaces, &captured, &batch);
+      const int error = AppendReply(hdr, payload, state.bound_pid, &interfaces, &captured, request_link, &batch);
       if (error != 0) AppendErrorPacket(error, hdr, payload, state.bound_pid, &batch);
       if (batch.overflow) break;
       offset += std::min(static_cast<size_t>(NLMSG_ALIGN(hdr.nlmsg_len)), req.size() - offset);
@@ -614,6 +684,7 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
     if (batch.overflow || batch.bytes > kMaxQueueBytes - state.queued_bytes) {
       return errno = ENOBUFS, -1;
     }
+    batch.FinishPacket();
     for (auto& pkt : batch.packets) {
       state.queue.push_back({std::move(pkt), 0});
     }

@@ -774,6 +774,25 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 
 }  // namespace
 
+bool binder_endpoint::MayInspectNetlink() {
+  auto& binding = Current();
+  if (!binding.PinsTrustedHost()) return false;
+  const std::wstring name = PipeName();
+  if (name.empty()) return false;
+  HANDLE pipe = ConnectPipe(name);
+  if (pipe == INVALID_HANDLE_VALUE) return false;
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  uint32_t request[] = {3 * sizeof(uint32_t), wire::kNetlinkInspection, wire::kMagic, wire::kVersion};
+  uint32_t reply[2]{};
+  const bool accepted = SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) &&
+      binder_bootstrap::Transfer(pipe, request, sizeof(request), true, deadline) &&
+      binder_bootstrap::Transfer(pipe, reply, sizeof(reply), false, deadline) &&
+      reply[0] == sizeof(reply[1]) && reply[1] == 0 && binding.VerifyPipe(pipe);
+  CloseHandle(pipe);
+  return accepted;
+}
+
 bool binder_endpoint::EnrollChild(HANDLE process) {
   const ULONGLONG deadline = GetTickCount64() + 5000;
   const std::wstring name = RecordPipeName();

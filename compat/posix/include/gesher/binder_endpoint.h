@@ -101,6 +101,17 @@ class Binding {
   bool IsStandalone() const { return standalone_; }
   bool UsesProtectedAudio() const { return guest_ || system_; }
 
+  bool PinsTrustedHost() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!required_ || guest_ || operator_ || broker_ == nullptr) return false;
+    process_identity::Process caller, broker;
+    return process_identity::ReadLiveProcess(GetCurrentProcess(), &caller) &&
+           caller.principal.container.size == 0 && !caller.principal.restricted &&
+           caller.principal.integrity >= SECURITY_MANDATORY_MEDIUM_RID &&
+           process_identity::ReadLiveProcess(broker_, &broker) &&
+           broker.principal == caller.principal;
+  }
+
   DWORD StandaloneRecordBrokerPid() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!standalone_ || !broker_ || WaitForSingleObject(broker_, 0) != WAIT_TIMEOUT) return 0;
@@ -130,6 +141,7 @@ inline Binding& Current() {
 }
 
 bool EnrollChild(HANDLE process);
+bool MayInspectNetlink();
 audio_playback::Activity* OpenAudioPlaybackActivity();
 bool IsAudioPlaybackActive(int stream, int in_past_ms);
 int NewProtectedAudioSession();

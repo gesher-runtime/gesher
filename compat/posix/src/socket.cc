@@ -385,9 +385,7 @@ int bind(int fd, const struct sockaddr* addr, socklen_t len) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   if (state.description->netlink) {
-    // Android untrusted app domains cannot bind NETLINK_ROUTE explicitly.
-    // The native guest identity does not yet authenticate trusted domains.
-    return errno = EACCES, -1;
+    return gesher::NetlinkBind(*state.description->netlink, addr, static_cast<uint32_t>(len));
   }
   ws::Address address;
   if (!ToAddress(addr, len, &address) || !MapUnixPath(&address, true)) {
