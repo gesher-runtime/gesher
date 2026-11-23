@@ -25,6 +25,7 @@ namespace {
 
 std::mutex g_lock;
 std::map<int, HANDLE> g_children;  // processes this one started, for their exit codes
+std::map<int, HANDLE> g_compiler_jobs;  // lifetime-bound compiler resource budgets
 HANDLE g_job = nullptr;
 
 const wchar_t* W(const std::u16string& s) { return reinterpret_cast<const wchar_t*>(s.c_str()); }
@@ -124,7 +125,31 @@ struct HandleList {
 
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
-          bool breakaway) {
+          bool breakaway, uint32_t compiler_memory_mib, uint32_t compiler_cpu_rate) {
+  const bool compiler = compiler_memory_mib != 0;
+  if (compiler && (breakaway || compiler_memory_mib < 512 || compiler_memory_mib > 2048 ||
+                   compiler_cpu_rate < 100 || compiler_cpu_rate > 10000))
+    return -ERROR_INVALID_PARAMETER;
+  OwnedHandle compiler_job;
+  if (compiler) {
+    compiler_job.value = CreateJobObjectW(nullptr, nullptr);
+    if (compiler_job.value == nullptr) return -static_cast<int>(GetLastError());
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+    // CREATE_PROCESS's BELOW_NORMAL flag needs no elevated base-priority
+    // privilege; JOB_OBJECT_LIMIT_PRIORITY_CLASS would impose that requirement.
+    limits.BasicLimitInformation.ActiveProcessLimit = 1;
+    limits.ProcessMemoryLimit = static_cast<SIZE_T>(compiler_memory_mib) * 1024 * 1024;
+    JOBOBJECT_CPU_RATE_CONTROL_INFORMATION cpu = {};
+    cpu.ControlFlags = JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
+    cpu.CpuRate = compiler_cpu_rate;
+    if (!SetInformationJobObject(compiler_job.value, JobObjectExtendedLimitInformation,
+                                 &limits, sizeof(limits)) ||
+        !SetInformationJobObject(compiler_job.value, JobObjectCpuRateControlInformation,
+                                 &cpu, sizeof(cpu)))
+      return -static_cast<int>(GetLastError());
+  }
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, TRUE};
   // Appending only: stdout and stderr share the handle, and every write goes
   // to the end, also with another process appending to the same log.
@@ -162,6 +187,7 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
     std::u16string cmd = command_line;  // CreateProcessW may write to it
     DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT |
                   EXTENDED_STARTUPINFO_PRESENT;
+    if (compiler) flags |= CREATE_SUSPENDED | BELOW_NORMAL_PRIORITY_CLASS;
     PROCESS_INFORMATION pi = {};
     BOOL ok = FALSE;
     if (breakaway) {
@@ -176,12 +202,38 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
                           TRUE, flags, const_cast<char16_t*>(env.data()), nullptr,
                           &si.StartupInfo, &pi);
     }
+    MEMORY_PRIORITY_INFORMATION memory_priority = {MEMORY_PRIORITY_LOW};
+    if (ok && compiler &&
+        (!AssignProcessToJobObject(compiler_job.value, pi.hProcess) ||
+         !SetProcessInformation(pi.hProcess, ProcessMemoryPriority, &memory_priority,
+                                 sizeof(memory_priority)))) {
+      DWORD error = GetLastError();
+      TerminateProcess(pi.hProcess, 137);
+      WaitForSingleObject(pi.hProcess, INFINITE);
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      result = -static_cast<int>(error);
+      ok = FALSE;
+    }
+    if (ok && compiler && ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) {
+      DWORD error = GetLastError();
+      TerminateProcess(pi.hProcess, 137);
+      WaitForSingleObject(pi.hProcess, INFINITE);
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      result = -static_cast<int>(error);
+      ok = FALSE;
+    }
     if (ok) {
       CloseHandle(pi.hThread);
       result = static_cast<int>(pi.dwProcessId);
       std::lock_guard<std::mutex> guard(g_lock);
       g_children[result] = pi.hProcess;
-    } else {
+      if (compiler) {
+        g_compiler_jobs[result] = compiler_job.value;
+        compiler_job.value = nullptr;
+      }
+    } else if (result == 0) {
       result = -static_cast<int>(GetLastError());
     }
     DeleteProcThreadAttributeList(attributes);
@@ -284,9 +336,14 @@ int ExitCode(int pid) {
   if (it == g_children.end()) return -1;
   DWORD code = 0;
   if (!GetExitCodeProcess(it->second, &code)) return -1;
-  if (code != STILL_ACTIVE) {
+  if (WaitForSingleObject(it->second, 0) == WAIT_OBJECT_0) {
     CloseHandle(it->second);
     g_children.erase(it);
+    auto job = g_compiler_jobs.find(pid);
+    if (job != g_compiler_jobs.end()) {
+      CloseHandle(job->second);
+      g_compiler_jobs.erase(job);
+    }
   }
   return static_cast<int>(code);
 }
@@ -322,6 +379,65 @@ bool Kill(int pid) {
   BOOL ok = TerminateProcess(h, 137);
   CloseHandle(h);
   return ok != FALSE;
+}
+
+uint64_t AvailableMemory() {
+  MEMORYSTATUSEX memory = {};
+  memory.dwLength = sizeof(memory);
+  return GlobalMemoryStatusEx(&memory) ? memory.ullAvailPhys : 0;
+}
+
+int WaitChild(int pid, int64_t start_time, int timeout_ms, intptr_t cancel_event,
+              bool stop_on_low_memory) {
+  if (pid <= 0 || start_time <= 0 || timeout_ms < 0) return -1;
+  OwnedHandle process, memory;
+  {
+    std::lock_guard<std::mutex> guard(g_lock);
+    auto it = g_children.find(pid);
+    if (it == g_children.end()) return -1;
+    FILETIME created, exited, kernel, user;
+    if (!GetProcessTimes(it->second, &created, &exited, &kernel, &user) ||
+        ((static_cast<int64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime) != start_time ||
+        !DuplicateHandle(GetCurrentProcess(), it->second, GetCurrentProcess(), &process.value,
+                          0, FALSE, DUPLICATE_SAME_ACCESS)) return -1;
+  }
+  HANDLE handles[3] = {process.value};
+  DWORD count = 1;
+  if (cancel_event != 0) handles[count++] = reinterpret_cast<HANDLE>(cancel_event);
+  if (stop_on_low_memory) {
+    memory.value = CreateMemoryResourceNotification(LowMemoryResourceNotification);
+    if (memory.value != nullptr) handles[count++] = memory.value;
+  }
+  DWORD wait = stop_on_low_memory && memory.value == nullptr ? WAIT_FAILED
+      : WaitForMultipleObjects(count, handles, FALSE, static_cast<DWORD>(timeout_ms));
+  int result = 0;
+  if (wait != WAIT_OBJECT_0) {
+    result = wait == WAIT_TIMEOUT ? -2
+        : wait >= WAIT_OBJECT_0 + 1 && wait < WAIT_OBJECT_0 + count ? -3 : -1;
+    // The pinned handle continues to name the original child even if a different
+    // caller consumes the map's exit code or the numeric PID is later reused.
+    TerminateProcess(process.value, 137);
+    WaitForSingleObject(process.value, INFINITE);
+  } else {
+    DWORD code = 0;
+    result = GetExitCodeProcess(process.value, &code) ? static_cast<int>(code) : -1;
+  }
+  {
+    std::lock_guard<std::mutex> guard(g_lock);
+    auto it = g_children.find(pid);
+    FILETIME created, exited, kernel, user;
+    if (it != g_children.end() && GetProcessTimes(it->second, &created, &exited, &kernel, &user) &&
+        ((static_cast<int64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime) == start_time) {
+      CloseHandle(it->second);
+      g_children.erase(it);
+      auto job = g_compiler_jobs.find(pid);
+      if (job != g_compiler_jobs.end()) {
+        CloseHandle(job->second);
+        g_compiler_jobs.erase(job);
+      }
+    }
+  }
+  return result;
 }
 
 bool JoinJob(int pid) {

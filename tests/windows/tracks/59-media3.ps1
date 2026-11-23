@@ -231,6 +231,9 @@ if (Test-Path "$Dir/recordapp.apk") {
   CheckTimed 'media3: Camera2 request selection is atomic against 1000 contended cancel/flush calls, with ordered frame numbers and queued-capture priority' "$Dir/dalvikvm.exe" `
     @($dvmRec + @('-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.CameraRequestRaceTest')) `
     @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed') 120
+  CheckTimed 'media3: camera callback admission includes actual native metadata and blocked consumers' "$Dir/dalvikvm.exe" `
+    @($dvmRec + @('-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.CameraCallbackAdmissionTest')) `
+    @('CameraCallbackAdmissionTest: real native metadata, bounded requests/callbacks, ordered flush and nonjoining close passed') 120
   $env:GESHER_CAMERA_TEST = '1'
   $env:GESHER_MEDIA_TRACE_RECORD = '1'
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-single'
