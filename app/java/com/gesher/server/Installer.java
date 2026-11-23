@@ -613,6 +613,7 @@ final class Installer {
                 mPm.publishPrepared(installed, this);
             }
         }
+        Dexopt.packagesChanged();
     }
 
     private void commitEntry(Entry entry) throws IOException {
@@ -787,6 +788,8 @@ final class Installer {
         boolean committed = false, restored = false;
         Attribution metadata = mAttributions.get(packageName);
         try {
+            Dexopt.packageChanging(packageName);
+            Dexopt.awaitCompiler();
             mPm.checkPackageRemoval(packageName);
             mAtm.forceStopPackage(packageName);
             // Fail closed on persistent revocation errors. A failed removal can leave
@@ -817,6 +820,7 @@ final class Installer {
             throw failure;
         } finally {
             mRemovalActive = false;
+            Dexopt.packagesChanged();
             if (committed || restored) {
                 mPm.endPackageRemoval(target);
                 reconcileAccountRemovalsBestEffort();
@@ -824,6 +828,7 @@ final class Installer {
         }
         quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);
+        AppSandbox.deleteContainer(packageName);
         mPm.packageRemoved(target, this);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;

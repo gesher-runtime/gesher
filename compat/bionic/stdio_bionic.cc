@@ -31,7 +31,6 @@
 #include <unistd.h>
 
 #include <array>
-#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -516,155 +515,35 @@ FILE* F(void* f) {
   return static_cast<FILE*>(f);
 }
 
-// Stream metadata is used only while the caller owns the CRT's FILE lock,
-// or supplies the synchronization required by an unlocked stdio API. The
-// registry mutex protects insert/erase and is released before doing any I/O.
+// Bionic conversion metadata belongs to the same shared stream lifetime as
+// descriptor-backed I/O, orientation and locking. A host fclose/freopen must
+// retire it too; a second FILE-address registry could outlive a recycled token.
 constexpr uint32_t kWeof = 0xffffffffu;
-struct StreamState {
-  FILE* stream = nullptr;
-  int orientation = 0;
-  bool conversion_error = false;
-  uint32_t pushback = kWeof;
-  std::array<uint8_t, 8> input_state{};  // Bionic LP64 mbstate_t
-};
-struct StreamStateBucket {
-  std::mutex mutex;
-  std::unordered_map<FILE*, StreamState> streams;
-  std::atomic<uint64_t> generation{1};
-};
-std::array<StreamStateBucket, 32> g_stream_states;
+using StreamState = gesher::stdio::BionicState;
+// Locked entry points already hold the shared owner/CRT lock; unlocked entry
+// points must rely on their caller's synchronization instead of acquiring it.
+int Orient(FILE* stream, int mode) { return gesher::stdio::Orient(stream, mode, true); }
 
-// The FILE lock (or the caller of an unlocked API) protects each record's
-// lifetime and contents. unordered_map rehashing preserves record addresses.
-// Cache only positive lookups: another thread may orient a previously unseen
-// stream. A close/reopen invalidates every cached pointer in its bucket before
-// erasing the record, while it still holds the CRT's persistent FILE lock.
-struct CachedStreamState {
-  FILE* stream = nullptr;
-  StreamState* state = nullptr;
-  uint64_t generation = 0;
-};
-constinit thread_local std::array<CachedStreamState, 8> t_stream_states{};
+using StreamLock = gesher::stdio::StreamGuard;
 
-StreamStateBucket& StreamBucket(FILE* stream) {
-  auto key = reinterpret_cast<uintptr_t>(stream);
-  return g_stream_states[(key >> 4) % g_stream_states.size()];
-}
+void BIONIC_SYSV Flockfile(void* f) { gesher::stdio::Lock(F(f)); }
+void BIONIC_SYSV Funlockfile(void* f) { gesher::stdio::Unlock(F(f)); }
+int BIONIC_SYSV Ftrylockfile(void* f) { return gesher::stdio::TryLock(F(f)); }
 
-StreamState* State(FILE* stream, bool create = true) {
-  auto& bucket = StreamBucket(stream);
-  auto& cached = t_stream_states[(reinterpret_cast<uintptr_t>(stream) >> 4) % t_stream_states.size()];
-  if (cached.stream == stream && cached.state != nullptr && cached.generation != 0 &&
-      cached.generation == bucket.generation.load(std::memory_order_acquire)) {
-    return cached.state;
-  }
-  std::lock_guard<std::mutex> lock(bucket.mutex);
-  auto found = bucket.streams.find(stream);
-  if (found != bucket.streams.end()) {
-    cached = {stream, &found->second, bucket.generation.load(std::memory_order_relaxed)};
-    return cached.state;
-  }
-  if (!create) return nullptr;
-  // The registry is a host implementation detail. Allocation failure must
-  // remain a stdio error, rather than unwinding through the guest's C ABI.
-  try {
-    auto* state = &bucket.streams.try_emplace(stream).first->second;
-    state->stream = stream;
-    cached = {stream, state, bucket.generation.load(std::memory_order_relaxed)};
-    return state;
-  } catch (const std::bad_alloc&) {
-    errno = kENOMEM;
-    return nullptr;
-  } catch (const std::length_error&) {
-    errno = kENOMEM;
-    return nullptr;
-  }
-}
-
-int Orient(StreamState& state, int mode) {
-  // Native and guest operations use the same descriptor-backed byte buffer.
-  // Keep orientation in that owner as well, before a wide codec emits bytes.
-  state.orientation = gesher::stdio::Orient(state.stream, mode, true);
-  return state.orientation;
-}
-
-int Orient(FILE* stream, int mode) {
-  // An orientation query does not need to create a record for a fresh FILE.
-  auto* state = State(stream, mode != 0);
-  return state ? Orient(*state, mode) :
-      (mode == 0 ? gesher::stdio::Orient(stream, 0, true) : 0);
-}
-
-void ResetStream(FILE* stream) {
-  auto& bucket = StreamBucket(stream);
-  std::lock_guard<std::mutex> lock(bucket.mutex);
-  // Never wrap back to an old cache generation, even after UINT64_MAX resets.
-  // Zero permanently disables the cache for this bucket; lookup stays valid.
-  const uint64_t generation = bucket.generation.load(std::memory_order_relaxed);
-  if (generation != 0) bucket.generation.store(generation + 1, std::memory_order_release);
-  bucket.streams.erase(stream);
-}
-
-class StreamLock {
- public:
-  explicit StreamLock(FILE* stream) : stream_(stream) { _lock_file(stream_); }
-  ~StreamLock() { _unlock_file(stream_); }
-  StreamLock(const StreamLock&) = delete;
-  StreamLock& operator=(const StreamLock&) = delete;
-
- private:
-  FILE* stream_;
-};
-
-void BIONIC_SYSV Flockfile(void* f) { _lock_file(F(f)); }
-void BIONIC_SYSV Funlockfile(void* f) { _unlock_file(F(f)); }
-int BIONIC_SYSV Ftrylockfile(void* f) {
-  switch (stdio_windows::TryLock(F(f))) {
-    case stdio_windows::TryLockResult::kAcquired: return 0;
-    case stdio_windows::TryLockResult::kBusy: return kEBUSY;
-    case stdio_windows::TryLockResult::kUnsupported: return kEOPNOTSUPP;
-  }
-}
-
-// bionic's fopen modes as the CRT's: always binary (bionic has no text
-// mode), 'e' (O_CLOEXEC) as 'N' (not inherited), 'x' kept; anything else the
-// CRT would reject as an invalid parameter is dropped.
-std::string CrtMode(const char* mode) {
-  std::string out;
-  if (mode == nullptr || (*mode != 'r' && *mode != 'w' && *mode != 'a')) return out;
-  out += *mode;
-  bool plus = false, excl = false, noinherit = false;
-  for (const char* p = mode + 1; *p; ++p) {
-    if (*p == '+') plus = true;
-    if (*p == 'x') excl = true;
-    if (*p == 'e') noinherit = true;
-  }
-  if (plus) out += '+';
-  out += 'b';
-  if (excl && *mode == 'w') out += 'x';
-  if (noinherit) out += 'N';
-  return out;
-}
 }  // namespace
 
 int CloseBionicStream(FILE* stream, int* retired_out) {
-  // UCRT fclose marks its stream slot reusable. Allocation takes its lock
-  // before reusing it; the lock persists until CRT shutdown or fcloseall.
-  // Keep our state removal in the same transaction as Gesher POSIX fclose.
-  StreamLock lock(stream);
-  int retired = 0;
-  int result = gesher_fclose_state(stream, &retired);
-  if (retired) ResetStream(stream);
-  if (retired_out) *retired_out = retired;
-  return result;
+  // The POSIX owner removes all stream metadata before native close releases
+  // FILE. Preserve the retirement outcome for pclose's child association.
+  return gesher_fclose_state(stream, retired_out);
 }
 
 int CloseBionicStream(FILE* stream) { return CloseBionicStream(stream, nullptr); }
 
 namespace {
 
-// /dev/zero, /dev/random, pipes and revocable descriptors all use the shared
-// descriptor-backed buffer. CRT I/O would bypass its status and revocation.
+// Descriptor-backed streams cover regular files, pipes and virtual devices
+// through the same shared open-file description and buffering path.
 size_t ReadStream(void* buf, size_t size, size_t n, FILE* f) {
   return gesher::stdio::Read(buf, size, n, f, true);
 }
@@ -676,21 +555,9 @@ FILE* BIONIC_SYSV Fopen(const char* path, const char* mode) {
 }
 FILE* BIONIC_SYSV Fdopen(int fd, const char* mode) { return fdopen(fd, mode); }
 FILE* BIONIC_SYSV Freopen(const char* path, const char* mode, void* f) {
-  std::string m = CrtMode(mode);
-  if (m.empty()) {
-    CloseBionicStream(F(f));
-    return errno = kEINVAL, nullptr;
-  }
-  // gesher-base's freopen consumes Linux modes and maps them for the CRT.
-  // Passing CrtMode's 'N' would lose Android's 'e' before that mapping.
-  FILE* stream = F(f);
-  StreamLock lock(stream);
-  int retired = 0;
-  FILE* reopened = gesher_freopen_state(path, mode, stream, &retired);
-  // A descriptor-transaction failure can precede the actual close. Keep the
-  // old state in that case; a later error still retires the closed stream.
-  if (retired) ResetStream(stream);
-  return reopened;
+  // The POSIX owner applies the same Android mode parser as fopen/fdopen,
+  // including truthful unsupported mode-only reopen and metadata retirement.
+  return gesher_freopen_state(path, mode, F(f), nullptr);
 }
 int BIONIC_SYSV Fgetpos(void* f, int64_t* pos) {
   int64_t p = gesher::stdio::Tell(F(f));
@@ -698,17 +565,7 @@ int BIONIC_SYSV Fgetpos(void* f, int64_t* pos) {
   *pos = p;
   return 0;
 }
-// A successful fseek, fsetpos or rewind discards ungetwc pushback, as in bionic.
-// The wide pushback lives in host stream state, outside the byte buffer.
-int SeekDiscardingPushback(FILE* stream, int64_t off, int whence) {
-  StreamLock lock(stream);
-  const int result = static_cast<int>(gesher::stdio::Seek(stream, off, whence));
-  if (result == 0) {
-    if (auto* state = State(stream, false)) state->pushback = kWeof;
-  }
-  return result;
-}
-int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return SeekDiscardingPushback(F(f), *pos, SEEK_SET); }
+int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return static_cast<int>(gesher::stdio::Seek(F(f), *pos, SEEK_SET)); }
 
 // getline/getdelim: *line grows with the CRT's realloc, which the .so's
 // free (the shim's) accepts.
@@ -716,6 +573,7 @@ int64_t BIONIC_SYSV Getdelim(char** line, size_t* n, int delim, void* f) {
   if (line == nullptr || n == nullptr) return errno = kEINVAL, -1;
   FILE* fp = F(f);
   StreamLock lock(fp);
+  if (!lock) return -1;
   if (Orient(fp, -1) == 0) return -1;
   size_t len = 0;
   int c;
@@ -793,16 +651,18 @@ bool WriteWide(FILE* stream, StreamState& state, uint32_t wc) {
 uint32_t BIONIC_SYSV Fgetwc(void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
-  auto* state = State(stream);
-  if (!state || Orient(*state, 1) == 0) return kWeof;
+  if (!lock) return kWeof;
+  auto* state = lock.Metadata();
+  if (!state || Orient(stream, 1) == 0) return kWeof;
   return ReadWide(stream, *state);
 }
 
 uint32_t* BIONIC_SYSV Fgetws(uint32_t* out, int n, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
-  auto* state = State(stream);
-  if (!state || Orient(*state, 1) == 0) return nullptr;
+  if (!lock) return nullptr;
+  auto* state = lock.Metadata();
+  if (!state || Orient(stream, 1) == 0) return nullptr;
   if (n <= 0) return errno = kEINVAL, nullptr;
   int count = 0;
   while (count < n - 1) {
@@ -823,8 +683,9 @@ uint32_t BIONIC_SYSV Ungetwc(uint32_t c, void* f) {
   if (c == kWeof) return kWeof;
   FILE* stream = F(f);
   StreamLock lock(stream);
-  auto* state = State(stream);
-  if (!state || Orient(*state, 1) == 0) return kWeof;
+  if (!lock) return kWeof;
+  auto* state = lock.Metadata();
+  if (!state || Orient(stream, 1) == 0) return kWeof;
   if (state->pushback != kWeof) return kWeof;
   state->pushback = c;
   state->conversion_error = false;
@@ -835,16 +696,18 @@ uint32_t BIONIC_SYSV Ungetwc(uint32_t c, void* f) {
 uint32_t BIONIC_SYSV Fputwc(uint32_t c, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
-  auto* state = State(stream);
-  if (!state || Orient(*state, 1) == 0) return kWeof;
+  if (!lock) return kWeof;
+  auto* state = lock.Metadata();
+  if (!state || Orient(stream, 1) == 0) return kWeof;
   return WriteWide(stream, *state, c) ? c : kWeof;
 }
 
 int BIONIC_SYSV Fputws(const uint32_t* ws, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
-  auto* state = State(stream);
-  if (!state || Orient(*state, 1) == 0) return -1;
+  if (!lock) return -1;
+  auto* state = lock.Metadata();
+  if (!state || Orient(stream, 1) == 0) return -1;
   for (; *ws != 0; ++ws) {
     if (!WriteWide(stream, *state, *ws)) return -1;
   }
@@ -854,9 +717,7 @@ int BIONIC_SYSV Fputws(const uint32_t* ws, void* f) {
 uint32_t BIONIC_SYSV Getwchar() { return Fgetwc(stdin); }
 uint32_t BIONIC_SYSV Putwchar(uint32_t c) { return Fputwc(c, stdout); }
 int BIONIC_SYSV Fwide(void* f, int mode) {
-  FILE* stream = F(f);
-  StreamLock lock(stream);
-  return Orient(stream, mode);
+  return gesher::stdio::Orient(F(f), mode);
 }
 int BIONIC_SYSV Fclose(void* f) { return CloseBionicStream(F(f)); }
 
@@ -907,30 +768,38 @@ char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) {
 }
 
 size_t BIONIC_SYSV Fread(void* buf, size_t size, size_t n, void* f) {
+  if (size == 0 || n == 0) return 0;
   StreamLock lock(F(f));
+  if (!lock) return 0;
   return FreadUnlocked(buf, size, n, f);
 }
 size_t BIONIC_SYSV Fwrite(const void* buf, size_t size, size_t n, void* f) {
+  if (size == 0 || n == 0) return 0;
   StreamLock lock(F(f));
+  if (!lock) return 0;
   return FwriteUnlocked(buf, size, n, f);
 }
 int BIONIC_SYSV Fputs(const char* s, void* f) {
   StreamLock lock(F(f));
+  if (!lock) return EOF;
   return FputsUnlocked(s, f);
 }
 int BIONIC_SYSV Fputc(int c, void* f) {
   StreamLock lock(F(f));
+  if (!lock) return EOF;
   return PutcUnlocked(c, f);
 }
 int BIONIC_SYSV Putchar(int c) { return Fputc(c, stdout); }
 int BIONIC_SYSV Puts(const char* s) {
   StreamLock lock(stdout);
+  if (!lock) return EOF;
   if (Orient(stdout, -1) == 0) return EOF;
   return std::puts(s);
 }
 char* BIONIC_SYSV Fgets(char* s, int n, void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
+  if (!lock) return nullptr;
   if (n > 0 && Orient(stream, -1) == 0) return nullptr;
   return std::fgets(s, n, stream);
 }
@@ -952,6 +821,7 @@ size_t BIONIC_SYSV FwriteChk(const void* buf, size_t size, size_t n, void* f, si
 }
 int BIONIC_SYSV Fgetc(void* f) {
   StreamLock lock(F(f));
+  if (!lock) return EOF;
   return GetcUnlocked(f);
 }
 int BIONIC_SYSV Getchar() { return Fgetc(stdin); }
@@ -959,34 +829,29 @@ int BIONIC_SYSV Ungetc(int c, void* f) {
   if (c == EOF) return EOF;
   FILE* stream = F(f);
   StreamLock lock(stream);
-  auto* state = State(stream);
-  if (!state) return EOF;
+  if (!lock) return EOF;
   int result = std::ungetc(c, stream);
-  if (result != EOF) Orient(*state, -1);
+  if (result != EOF) Orient(stream, -1);
   return result;
 }
 int BIONIC_SYSV Fflush(void* f) { return std::fflush(f ? F(f) : nullptr); }
 int BIONIC_SYSV Feof(void* f) { return std::feof(F(f)); }
 int BIONIC_SYSV FerrorUnlocked(void* f) {
   FILE* stream = F(f);
-  auto* state = State(stream, false);
-  return (state && state->conversion_error) || gesher::stdio::Error(stream, true);
+  return gesher::stdio::Error(stream, true);
 }
 int BIONIC_SYSV Ferror(void* f) {
-  StreamLock lock(F(f));
-  return FerrorUnlocked(f);
+  return gesher::stdio::Error(F(f));
 }
 void BIONIC_SYSV ClearerrUnlocked(void* f) {
   FILE* stream = F(f);
-  if (auto* state = State(stream, false)) state->conversion_error = false;
   gesher::stdio::Clear(stream, true);
 }
 void BIONIC_SYSV Clearerr(void* f) {
-  StreamLock lock(F(f));
-  ClearerrUnlocked(f);
+  gesher::stdio::Clear(F(f));
 }
 int BIONIC_SYSV Fileno(void* f) { return _fileno(F(f)); }
-int BIONIC_SYSV Fseek(void* f, int64_t off, int whence) { return SeekDiscardingPushback(F(f), off, whence); }
+int BIONIC_SYSV Fseek(void* f, int64_t off, int whence) { return static_cast<int>(gesher::stdio::Seek(F(f), off, whence)); }
 int64_t BIONIC_SYSV Ftell(void* f) { return gesher::stdio::Tell(F(f)); }
 int BIONIC_SYSV Getw(void* f) {
   int word;
@@ -998,7 +863,8 @@ int BIONIC_SYSV Putw(int word, void* f) {
 void BIONIC_SYSV Rewind(void* f) {
   FILE* stream = F(f);
   StreamLock lock(stream);
-  SeekDiscardingPushback(stream, 0, SEEK_SET);
+  if (!lock) return;
+  gesher::stdio::Seek(stream, 0, SEEK_SET);
   // Like Android's rewind, clear stream errors even if seeking failed.
   ClearerrUnlocked(f);
 }
@@ -1012,6 +878,7 @@ void BIONIC_SYSV Setbuf(void* f, char* buf) { std::setvbuf(F(f), buf, buf ? _IOF
 FILE* BIONIC_SYSV Tmpfile() { return std::tmpfile(); }
 void BIONIC_SYSV Perror(const char* s) {
   StreamLock lock(stderr);
+  if (!lock) return;
   if (Orient(stderr, -1) == 0) return;
   if (s != nullptr && *s != 0) {
     std::fprintf(stderr, "%s: %s\n", s, strerror(errno));
@@ -1205,6 +1072,7 @@ int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* a
 int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt, SysvVaList* ap) {
   FILE* stream = F(f);
   StreamLock lock(stream);
+  if (!lock) return -1;
   if (Orient(stream, -1) == 0) return -1;
   bool valid;
   std::string s = Format(fmt, ap, &valid);
@@ -1255,6 +1123,7 @@ int BIONIC_SYSV gesher_bionic_vsscanf(const char* str, const char* fmt, SysvVaLi
 int BIONIC_SYSV gesher_bionic_vfscanf(void* f, const char* fmt, SysvVaList* ap) {
   FILE* stream = F(f);
   StreamLock lock(stream);
+  if (!lock) return EOF;
   if (Orient(stream, -1) == 0) return EOF;
   return VFscanfImpl(stream, fmt, ap);
 }
@@ -1297,10 +1166,11 @@ int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t*
 int BIONIC_SYSV gesher_bionic_vfwprintf(void* f, const uint32_t* fmt, SysvVaList* ap) {
   FILE* stream = F(f);
   StreamLock lock(stream);
+  if (!lock) return -1;
   StreamState* state = nullptr;
   try {
-    state = State(stream);
-    if (!state || Orient(*state, 1) == 0) return -1;
+    state = lock.Metadata();
+    if (!state || Orient(stream, 1) == 0) return -1;
     struct Target { FILE* stream; StreamState* state; } target{stream, state};
     WideSink sink{&target, [](void* context, uint32_t wc) {
       auto* target = static_cast<Target*>(context);
