@@ -143,12 +143,6 @@ int Resolve(const Roots& roots, Area area, std::wstring_view path, Resolved* sco
   return 0;
 }
 
-int DuplicateDirectory(HANDLE file, ACCESS_MASK access, HANDLE* result) {
-  HANDLE process = GetCurrentProcess();
-  return DuplicateHandle(process, file, process, result, access | SYNCHRONIZE, FALSE, 0)
-      ? 0 : ErrnoFromWin32(GetLastError());
-}
-
 int CheckRemoveType(bool is_directory, bool requested_directory) {
   if (is_directory == requested_directory) return 0;
   return is_directory ? EISDIR : ENOTDIR;
@@ -164,10 +158,10 @@ int Open(const Roots& roots, Area area, std::wstring_view path, OpenRequest requ
   ACCESS_MASK rights = FILE_READ_ATTRIBUTES;
   switch (request.access) {
     case Access::kRead: rights |= FILE_READ_DATA; break;
-      case Access::kWrite: rights |= FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES; break;
-      case Access::kReadWrite:
-        rights |= FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES;
-        break;
+    case Access::kWrite: rights |= FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES; break;
+    case Access::kReadWrite:
+      rights |= FILE_READ_DATA | FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES;
+      break;
     case Access::kMetadata: break;
     case Access::kMetadataWrite: rights |= FILE_WRITE_ATTRIBUTES; break;
     default: return EINVAL;
@@ -187,7 +181,9 @@ int Open(const Roots& roots, Area area, std::wstring_view path, OpenRequest requ
     if (request.create && request.exclusive) return EEXIST;
     if (request.create || writes || request.delete_on_close) return EISDIR;
     if (request.share_mode != kShareAll || request.overlapped) return EOPNOTSUPP;
-    return DuplicateDirectory(scope.parent, rights, result);
+    // An empty name relative to this pinned handle opens the same directory
+    // object with a fresh cursor, independently of other guest opens.
+    return OpenChild(scope.parent, {}, rights, FILE_OPEN, FILE_DIRECTORY_FILE, kShareAll, result);
   }
   const ULONG disposition = !request.create ? FILE_OPEN : request.exclusive ? FILE_CREATE : FILE_OPEN_IF;
   ULONG options = request.directory ? FILE_DIRECTORY_FILE :
