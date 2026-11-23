@@ -58,6 +58,13 @@ foreach ($http2ContractMode in $http2ContractModes) {
   } @('Http2DeviceSmoke passed:')
 }
 
+$http2BindingsOut = FixesRun ($dvmFixes + 'Http2BindingsTest') 60
+$http2BindingsCode = $LASTEXITCODE
+Check 'network: HTTP/2 preserves complete headers and bodies across owned streams' {
+  if ($http2BindingsCode -ne 0) { throw "HTTP/2 binding contracts failed: $http2BindingsOut" }
+  $http2BindingsOut
+} @('Http2BindingsTest passed:')
+
 $http2CreditOut = FixesRun ($dvmFixes + 'Http2CreditContracts') 45
 $http2CreditCode = $LASTEXITCODE
 Check 'network: HTTP/2 returns discarded receive credit exactly once' {
