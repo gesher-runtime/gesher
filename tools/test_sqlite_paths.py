@@ -125,6 +125,10 @@ std::string Narrow(const wchar_t* input) {
 static bool BinderDeviceExists() { return false; }
 static int SystemFontPath(const char*, std::wstring*) { return 0; }
 namespace procfs { static unsigned Type(const std::wstring&) { return 0; } }
+namespace drop_mount {
+inline constexpr char kAndroidPrefix[] = "/mnt/gesher/drop/";
+inline bool Enabled() { return false; }
+}
 namespace storage_root {
 struct Selection {
   int error = 0;
