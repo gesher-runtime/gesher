@@ -1044,6 +1044,21 @@ public class RecordActivity extends Activity {
                 + ", frame at 1.25 s " + frame + "; audio " + tones(pcm, pcm.length, Math.max(rate[0], 1), 0.05));
     }
 
+    @FunctionalInterface
+    private interface CameraCleanup {
+        void run() throws Exception;
+    }
+
+    private static Throwable cleanupCamera(Throwable failure, CameraCleanup cleanup) {
+        try {
+            cleanup.run();
+        } catch (Exception | Error error) {
+            if (failure == null) return error;
+            failure.addSuppressed(error);
+        }
+        return failure;
+    }
+
     /** MediaRecorder: video from the camera (Camera2, a repeating request into getSurface()). */
     void recorderCamera() throws Exception {
         CameraManager cm = getSystemService(CameraManager.class);
@@ -1128,55 +1143,81 @@ public class RecordActivity extends Activity {
         AtomicInteger captureFailed = new AtomicInteger(), buffersLost = new AtomicInteger();
         AtomicLong firstSourceNs = new AtomicLong(), lastSourceNs = new AtomicLong();
         AtomicLong firstFrame = new AtomicLong(-1), lastFrame = new AtomicLong(-1);
-        r.start();
-        long collectStartNs = System.nanoTime();
-        int requestId = session[0].setRepeatingRequest(b.build(), new CameraCaptureSession.CaptureCallback() {
-            @Override
-            public void onCaptureStarted(CameraCaptureSession s, CaptureRequest request, long timestamp, long frameNumber) {
-                captureStarted.incrementAndGet();
-                firstSourceNs.compareAndSet(0, timestamp);
-                lastSourceNs.set(timestamp);
-                firstFrame.compareAndSet(-1, frameNumber);
-                lastFrame.set(frameNumber);
-            }
+        CountDownLatch firstCapture = new CountDownLatch(1);
+        int requestId = -1;
+        long requestStartNs = 0, collectStartNs = 0, collectStopNs = 0;
+        long drainStartNs = 0, drainStopNs = 0;
+        boolean recorderStarted = false;
+        Throwable captureError = null;
+        try {
+            r.start();
+            recorderStarted = true;
+            requestStartNs = System.nanoTime();
+            requestId = session[0].setRepeatingRequest(b.build(), new CameraCaptureSession.CaptureCallback() {
+                @Override
+                public void onCaptureStarted(CameraCaptureSession s, CaptureRequest request, long timestamp, long frameNumber) {
+                    captureStarted.incrementAndGet();
+                    firstSourceNs.compareAndSet(0, timestamp);
+                    lastSourceNs.set(timestamp);
+                    firstFrame.compareAndSet(-1, frameNumber);
+                    lastFrame.set(frameNumber);
+                    firstCapture.countDown();
+                }
 
-            @Override
-            public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest request, TotalCaptureResult result) {
-                captureCompleted.incrementAndGet();
-            }
+                @Override
+                public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest request, TotalCaptureResult result) {
+                    captureCompleted.incrementAndGet();
+                }
 
-            @Override
-            public void onCaptureFailed(CameraCaptureSession s, CaptureRequest request, CaptureFailure failure) {
-                captureFailed.incrementAndGet();
-            }
+                @Override
+                public void onCaptureFailed(CameraCaptureSession s, CaptureRequest request, CaptureFailure failure) {
+                    captureFailed.incrementAndGet();
+                }
 
-            @Override
-            public void onCaptureBufferLost(CameraCaptureSession s, CaptureRequest request, Surface target, long frameNumber) {
-                buffersLost.incrementAndGet();
+                @Override
+                public void onCaptureBufferLost(CameraCaptureSession s, CaptureRequest request, Surface target, long frameNumber) {
+                    buffersLost.incrementAndGet();
+                }
+            }, h);
+            // onConfigured permits requests; it does not establish that a frame has
+            // arrived. Bound cold camera startup separately from the same 2 s of
+            // recording. Only an actual capture callback releases this wait.
+            if (!firstCapture.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("recorder camera: no capture started within 10 s");
             }
-        }, h);
-        Thread.sleep(2000);
-        long collectStopNs = System.nanoTime();
-        session[0].stopRepeating();
-        session[0].close();
-        long drainStartNs = System.nanoTime();
-        r.stop();
-        long drainStopNs = System.nanoTime();
-        r.release();
-        device[0].close();
-        boolean closedBeforeQuit = closed.await(5, TimeUnit.SECONDS) && ht.isAlive()
-                && closeCallbacks.get() == 1;
-        ht.quitSafely();
-        ht.join(2000);
-        closedBeforeQuit &= closeCallbacks.get() == 1;
+            collectStartNs = System.nanoTime();
+            Thread.sleep(2000);
+            collectStopNs = System.nanoTime();
+        } catch (Exception | Error error) {
+            captureError = error;
+        }
+        // A readiness timeout is a failure, but all owners still retire. Preserve
+        // that first failure if stop() also rejects an empty recording.
+        captureError = cleanupCamera(captureError, () -> session[0].stopRepeating());
+        captureError = cleanupCamera(captureError, () -> session[0].close());
+        drainStartNs = System.nanoTime();
+        if (recorderStarted) captureError = cleanupCamera(captureError, r::stop);
+        drainStopNs = System.nanoTime();
+        captureError = cleanupCamera(captureError, r::release);
+        captureError = cleanupCamera(captureError, () -> device[0].close());
+        boolean[] closedBeforeQuit = {false};
+        captureError = cleanupCamera(captureError, () -> {
+            closedBeforeQuit[0] = closed.await(5, TimeUnit.SECONDS) && ht.isAlive()
+                    && closeCallbacks.get() == 1;
+        });
+        captureError = cleanupCamera(captureError, () -> ht.quitSafely());
+        captureError = cleanupCamera(captureError, () -> ht.join(2000));
+        closedBeforeQuit[0] &= closeCallbacks.get() == 1;
         say("recorder camera close: onClosed exactly once before callback thread quit "
-                + closedBeforeQuit + ", callback thread stopped " + !ht.isAlive());
+                + closedBeforeQuit[0] + ", callback thread stopped " + !ht.isAlive());
         say("recorder camera trace: request " + requestId + ", started " + captureStarted.get()
                 + ", completed " + captureCompleted.get() + ", failed " + captureFailed.get()
                 + ", buffers lost " + buffersLost.get() + ", source ns " + firstSourceNs.get() + ".." + lastSourceNs.get()
                 + ", source frame numbers " + firstFrame.get() + ".." + lastFrame.get()
-                + ", collection ns " + collectStartNs + ".." + collectStopNs
+                + ", request ns " + requestStartNs + ", collection ns " + collectStartNs + ".." + collectStopNs
                 + ", stop/drain ns " + drainStartNs + ".." + drainStopNs);
+        if (captureError instanceof Exception) throw (Exception) captureError;
+        if (captureError instanceof Error) throw (Error) captureError;
         // The test camera's picture: Y = x + y (at its own size: the recorder's 320x240 takes
         // every other pixel of 640x480, so Y = 2 (x + y)), gray chroma, away from the square.
         Video v = decodeVideo(file, null, 60, 40);

@@ -1,0 +1,258 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Explicit host adapters for the complete real recorderCamera fixture method.
+// No camera image, encoder or file-content result is asserted by this harness.
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+public final class RecorderCameraReadinessHost {
+    private static final AtomicInteger checks = new AtomicInteger(), failures = new AtomicInteger();
+    private static Scenario scenario;
+
+    private static void check(boolean condition, String message) {
+        checks.incrementAndGet();
+        if (!condition) {
+            failures.incrementAndGet();
+            System.err.println("FAIL " + message);
+        }
+    }
+
+    private static final class Scenario {
+        final boolean absent;
+        final List<String> events = java.util.Collections.synchronizedList(new ArrayList<>());
+        final List<String> output = new ArrayList<>();
+        final RuntimeException emptyStop = new RuntimeException("no valid recorder data");
+        long nowNs = 1_000_000_000L, collectionStart, collectionEnd;
+        int waits, collections, stopRepeating, sessionClose, recorderStop, recorderRelease, deviceClose, decodes;
+        boolean recorderStarted;
+        volatile boolean captureStarted;
+        HandlerThread thread;
+        Handler handler;
+        CameraDevice.StateCallback deviceCallback;
+        CameraCaptureSession.CaptureCallback captureCallback;
+        CameraCaptureSession session;
+        CaptureRequest request;
+
+        Scenario(boolean absent) { this.absent = absent; }
+        void event(String value) { events.add(value); }
+    }
+
+    // A declared scheduling seam: expire the requested deadline or deliver the
+    // actual capture callback at 6.355 s, after the old 2 s window would end.
+    // CountDownLatch and callback execution on a separate thread remain real.
+    private static final class Boundary {
+        static long nanoTime() { return scenario.nowNs; }
+        static boolean await(CountDownLatch latch, long timeout, TimeUnit unit) throws InterruptedException {
+            Scenario s = scenario;
+            s.waits++;
+            check(unit.toMillis(timeout) == 10_000, "readiness remains bounded at 10 s");
+            check(latch.getCount() == 1 && !s.captureStarted, "configuration did not release capture readiness");
+            check(s.recorderStarted && s.captureCallback != null, "start and repeat precede readiness wait");
+            if (s.absent) {
+                s.nowNs += unit.toNanos(timeout);
+                return false;
+            }
+            s.nowNs += 6_355_000_000L;
+            s.handler.post(() -> {
+                check(Thread.currentThread() == s.thread, "capture callback runs on handler thread");
+                s.captureStarted = true;
+                s.event("capture");
+                s.captureCallback.onCaptureStarted(s.session, s.request, s.nowNs, 0);
+                s.captureCallback.onCaptureCompleted(s.session, s.request, new TotalCaptureResult());
+            });
+            return latch.await(2, TimeUnit.SECONDS);
+        }
+        static void sleep(long millis) {
+            Scenario s = scenario;
+            check(millis == 2_000, "collection duration remains exactly 2 s");
+            s.collections++;
+            s.collectionStart = s.nowNs;
+            s.event("collect");
+            s.nowNs += TimeUnit.MILLISECONDS.toNanos(millis);
+            s.collectionEnd = s.nowNs;
+        }
+    }
+
+    private static final class HandlerThread extends Thread {
+        private final BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
+        private final Runnable stop = () -> {};
+        HandlerThread(String name) { super(name); scenario.thread = this; }
+        HandlerThread getLooper() { return this; }
+        @Override public void run() {
+            try {
+                for (;;) {
+                    Runnable task = queue.take();
+                    if (task == stop) return;
+                    task.run();
+                }
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        boolean quitSafely() { scenario.event("quit"); return queue.offer(stop); }
+        void forceQuit() { queue.offer(stop); }
+    }
+    private static final class Handler {
+        final HandlerThread thread;
+        Handler(HandlerThread thread) { this.thread = thread; scenario.handler = this; }
+        boolean post(Runnable runnable) { return thread.queue.offer(runnable); }
+    }
+    private static final class Surface {}
+    private static final class OutputConfiguration { OutputConfiguration(Surface surface) {} }
+    private static final class SessionConfiguration {
+        static final int SESSION_REGULAR = 0;
+        final Executor executor;
+        final CameraCaptureSession.StateCallback callback;
+        SessionConfiguration(int type, List<OutputConfiguration> outputs, Executor executor,
+                             CameraCaptureSession.StateCallback callback) {
+            this.executor = executor; this.callback = callback;
+        }
+    }
+    private static final class CaptureRequest {
+        static final class Builder {
+            void addTarget(Surface surface) {}
+            CaptureRequest build() { return new CaptureRequest(); }
+        }
+    }
+    private static final class TotalCaptureResult {}
+    private static final class CaptureFailure {}
+    private static final class CameraManager {
+        String[] getCameraIdList() { return new String[] {"camera0"}; }
+        void openCamera(String id, CameraDevice.StateCallback callback, Handler handler) {
+            scenario.deviceCallback = callback;
+            handler.post(() -> callback.onOpened(new CameraDevice()));
+        }
+    }
+    private static final class CameraDevice {
+        static final int TEMPLATE_RECORD = 3;
+        abstract static class StateCallback {
+            public abstract void onOpened(CameraDevice device);
+            public abstract void onDisconnected(CameraDevice device);
+            public abstract void onError(CameraDevice device, int error);
+            public void onClosed(CameraDevice device) {}
+        }
+        void createCaptureSession(SessionConfiguration config) {
+            scenario.session = new CameraCaptureSession();
+            config.executor.execute(() -> config.callback.onConfigured(scenario.session));
+        }
+        CaptureRequest.Builder createCaptureRequest(int type) { return new CaptureRequest.Builder(); }
+        void close() {
+            scenario.deviceClose++;
+            scenario.event("device.close");
+            scenario.handler.post(() -> {
+                scenario.event("onClosed");
+                scenario.deviceCallback.onClosed(this);
+            });
+        }
+    }
+    private static final class CameraCaptureSession {
+        abstract static class StateCallback {
+            public abstract void onConfigured(CameraCaptureSession session);
+            public abstract void onConfigureFailed(CameraCaptureSession session);
+        }
+        static class CaptureCallback {
+            public void onCaptureStarted(CameraCaptureSession session, CaptureRequest request, long timestamp, long frame) {}
+            public void onCaptureCompleted(CameraCaptureSession session, CaptureRequest request, TotalCaptureResult result) {}
+            public void onCaptureFailed(CameraCaptureSession session, CaptureRequest request, CaptureFailure failure) {}
+            public void onCaptureBufferLost(CameraCaptureSession session, CaptureRequest request, Surface target, long frame) {}
+        }
+        int setRepeatingRequest(CaptureRequest request, CaptureCallback callback, Handler handler) {
+            check(scenario.recorderStarted, "recorder start precedes repeating request");
+            scenario.request = request;
+            scenario.captureCallback = callback;
+            scenario.event("repeat");
+            return 17;
+        }
+        void stopRepeating() { scenario.stopRepeating++; scenario.event("stopRepeating"); }
+        void close() { scenario.sessionClose++; scenario.event("session.close"); }
+    }
+    private static final class MediaRecorder {
+        static final class VideoSource { static final int SURFACE = 2; }
+        static final class OutputFormat { static final int MPEG_4 = 2; }
+        static final class VideoEncoder { static final int H264 = 2; }
+        MediaRecorder(RecorderCameraReadinessHost owner) {}
+        void setVideoSource(int value) {}
+        void setOutputFormat(int value) {}
+        void setVideoEncoder(int value) {}
+        void setVideoSize(int width, int height) {}
+        void setVideoFrameRate(int value) {}
+        void setOutputFile(String value) {}
+        void prepare() {}
+        Surface getSurface() { return new Surface(); }
+        void start() { scenario.recorderStarted = true; scenario.event("start"); }
+        void stop() {
+            scenario.recorderStop++;
+            scenario.event("recorder.stop");
+            if (!scenario.captureStarted) throw scenario.emptyStop;
+        }
+        void release() { scenario.recorderRelease++; scenario.event("release"); }
+    }
+    private static final class Video { int frames, sampleY = -1, sampleU = -1, sampleV = -1; boolean ordered; }
+    private <T> T getSystemService(Class<T> type) { return type.cast(new CameraManager()); }
+    private File getFilesDir() { return new File(System.getProperty("java.io.tmpdir")); }
+    private void say(String text) { scenario.output.add(text); }
+    private Video decodeVideo(File file, Object unused, int x, int y) { scenario.decodes++; return new Video(); }
+    private String tracks(File file) { return "host codec adapter (not decoded video)"; }
+
+    @SUBJECT@
+
+    private static void runCase(boolean absent) throws Exception {
+        Scenario s = new Scenario(absent);
+        scenario = s;
+        Throwable error = null;
+        try {
+            try { new RecorderCameraReadinessHost().recorderCamera(); }
+            catch (Exception | Error caught) { error = caught; }
+            String label = absent ? "absent" : "delayed";
+            check(s.waits == 1, label + ": actual capture readiness was awaited");
+            if (absent) {
+                check(error instanceof AssertionError && error.getMessage().contains("no capture started within 10 s"),
+                      "absent: deadline fails explicitly with readiness error");
+                check(error != null && java.util.Arrays.asList(error.getSuppressed()).contains(s.emptyStop),
+                      "absent: empty-recorder stop does not replace readiness error");
+                check(s.collections == 0 && !s.captureStarted && s.decodes == 0,
+                      "absent: no collection or codec success after missing capture");
+                check(s.nowNs == 11_000_000_000L, "absent: declared 10 s deadline expired");
+            } else {
+                check(error == null, "delayed: method completes after real callback");
+                check(s.captureStarted && s.collections == 1 && s.decodes == 1,
+                      "delayed: only actual capture permits collection and decode");
+                check(s.collectionStart == 7_355_000_000L && s.collectionEnd - s.collectionStart == 2_000_000_000L,
+                      "delayed: full 2 s collection follows 6.355 s acquisition");
+                check(s.events.indexOf("capture") >= 0 && s.events.indexOf("capture") < s.events.indexOf("collect"),
+                      "delayed: collection starts after actual capture");
+            }
+            check(s.stopRepeating == 1 && s.sessionClose == 1, label + ": session retired once");
+            check(s.recorderStop == 1 && s.recorderRelease == 1, label + ": recorder retired once");
+            check(s.deviceClose == 1 && s.events.indexOf("onClosed") > s.events.indexOf("device.close"),
+                  label + ": device close callback delivered");
+            check(s.thread != null && !s.thread.isAlive(), label + ": callback thread joined");
+            check(s.output.contains("recorder camera close: onClosed exactly once before callback thread quit true, callback thread stopped true"),
+                  label + ": original close assertion retained");
+            System.out.println("Recorder camera " + label + " events: " + s.events);
+        } finally {
+            // A failing historical/control body may skip release/quit. Bound the
+            // harness itself after observing (and failing) its cleanup assertions.
+            if (s.thread != null && s.thread.isAlive()) {
+                s.thread.forceQuit();
+                s.thread.join(2_000);
+                if (s.thread.isAlive()) throw new AssertionError("host callback thread did not stop");
+            }
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        String selected = args.length == 0 ? "all" : args[0];
+        if (!selected.equals("absent")) runCase(false);
+        if (!selected.equals("delayed")) runCase(true);
+        System.out.println("Recorder camera readiness: " + checks.get() + " checks, " + failures.get() + " failures");
+        if (failures.get() != 0) throw new AssertionError("recorder camera readiness contract failed");
+    }
+}

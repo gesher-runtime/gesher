@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 
 from test_install_metadata_comparison import method
+from test_recorder_camera_readiness import run as run_recorder_readiness
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,6 +58,8 @@ def main() -> None:
         subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData', '-Xmx128m',
                         '-cp', str(work), 'com.gesher.server.Camera2CaptureDispatchHost'],
                        check=True, timeout=60)
+    if not args.source_ref and not args.measure:
+        run_recorder_readiness(args.java_home)
 
 
 if __name__ == '__main__':
