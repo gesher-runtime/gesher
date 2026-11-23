@@ -9,6 +9,7 @@
 #include <wchar.h>
 #include "../../compat/locale/ui_locale.h"
 #include "../../compat/credentials/permission_dialog.inc"
+#include "../../compat/credentials/exact_alarm_dialog.inc"
 
 enum { DENY, ALLOW, CLOSE, ENTER, ESCAPE, TAB_ALLOW };
 static int action;
@@ -18,6 +19,8 @@ static int phase;
 static BOOL expect_icon;
 static enum GesherUiLanguage language;
 static WCHAR permissions[8193];
+static int exact_action;
+static unsigned char exact_initial[] = {0, 1};
 static BOOL prompt_confirmation;
 static int prompt_action;
 static const WCHAR* prompt_message = L"com.example.app\r\nandroid.permission.CAMERA";
@@ -98,6 +101,31 @@ static void CALLBACK Inspect(HWND dialog, UINT message, UINT_PTR timer, DWORD ti
   }
 }
 
+static void CALLBACK InspectExactAlarm(HWND dialog, UINT message, UINT_PTR timer, DWORD time) {
+  (void)message; (void)time;
+  KillTimer(dialog, timer);
+  HWND packages = GetDlgItem(dialog, EXACT_ALARM_PACKAGES);
+  HWND allowed = GetDlgItem(dialog, EXACT_ALARM_ALLOWED);
+  HWND apply = GetDlgItem(dialog, IDOK);
+  HWND close = GetDlgItem(dialog, IDCANCEL);
+  Check(packages && allowed && apply && close, "exact alarm Settings controls exist");
+  Check(GetFocus() == close, "exact alarm Settings defaults to preserving current access");
+  Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == IDCANCEL, "closing Settings is default");
+  Check(SendMessageW(allowed, BM_GETCHECK, 0, 0) == BST_UNCHECKED, "checkbox shows actual initial denial");
+  Check((GetWindowLongW(packages, GWL_EXSTYLE) & (WS_EX_RTLREADING | WS_EX_LAYOUTRTL)) == 0,
+      "exact alarm package identifiers remain LTR");
+  if (exact_action == 0) { PostMessageW(dialog, WM_CLOSE, 0, 0); return; }
+  if (exact_action == 1) {
+    SendMessageW(allowed, BM_CLICK, 0, 0);
+  } else {
+    SendMessageW(packages, CB_SETCURSEL, 1, 0);
+    SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(EXACT_ALARM_PACKAGES, CBN_SELCHANGE), (LPARAM)packages);
+    Check(SendMessageW(allowed, BM_GETCHECK, 0, 0) == BST_CHECKED, "selection reads the selected app's current access");
+    SendMessageW(allowed, BM_CLICK, 0, 0);
+  }
+  SendMessageW(apply, BM_CLICK, 0, 0);
+}
+
 /* The same UI component handles the system-server's account-token consent and
  * the shell's error/crash messages. Verify those real paths, not a duplicate UI. */
 static void CALLBACK InspectHostPrompt(HWND dialog, UINT message, UINT_PTR timer, DWORD time) {
@@ -168,6 +196,9 @@ static LRESULT CALLBACK AfterInit(int code, WPARAM wparam, LPARAM lparam) {
       if (GetDlgItem(call->hwnd, PERMISSION_DETAILS)) SetTimer(call->hwnd, 1, 20, Inspect);
       else if (GetDlgItem(call->hwnd, GESHER_HOST_MESSAGE_TEXT))
         SetTimer(call->hwnd, 1, 20, InspectHostPrompt);
+    }
+    if (call->message == WM_INITDIALOG && GetDlgItem(call->hwnd, EXACT_ALARM_PACKAGES)) {
+      SetTimer(call->hwnd, 1, 20, InspectExactAlarm);
     }
   }
   return CallNextHookEx(NULL, code, wparam, lparam);
@@ -277,6 +308,13 @@ int main(void) {
           : action == DENY || action == ENTER ? PERMISSION_DENIED : PERMISSION_DISMISSED;
       Check(decision == expected, "only explicit buttons record a permission decision");
       printf("scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", action, decision);
+    }
+    const WCHAR* packages[] = {L"com.gesher.test.clock", L"com.gesher.test.reminder"};
+    for (exact_action = 0; exact_action < 3; ++exact_action) {
+      int result = ExactAlarmDialog(language, packages, exact_initial, 2);
+      Check(result == (exact_action == 0 ? -1 : exact_action == 1 ? 1 : 2),
+          "Settings returns only the explicitly applied selected-app choice");
+      printf("exact alarm settings: locale=%s action=%d result=%d\n", locale ? "he" : "en", exact_action, result);
     }
   }
   // The host prompts below share the icon helper; they run with gesher.ico.

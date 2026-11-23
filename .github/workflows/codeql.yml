@@ -41,6 +41,8 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          debug: ${{ matrix.language == 'java-kotlin' }}
+          debug-artifact-name: codeql-debug-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
