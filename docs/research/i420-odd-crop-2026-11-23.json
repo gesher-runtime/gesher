@@ -7705,5 +7705,364 @@
     "sha256": "b73e520b02cb3f2acf39ce1592526b2d501711dc61c6aed40423412a5eadfa45",
     "members": 451,
     "manifest_sha256": "32a7d7c99802102b0c8c0917aafe8569c54481e7de7e76a1c0b8342d814367bc"
+  },
+  "native_link_followup": {
+    "published_parent": "5c9b88fb108d122ae19f2b72d3be13aa7ee31022",
+    "actual_failed_run": "https://github.com/yom-chadash/gesher/actions/runs/45241081232",
+    "actual_failed_job": "https://github.com/yom-chadash/gesher/actions/runs/45241081232/job/137962507717",
+    "attempt": 1,
+    "event": "workflow_dispatch",
+    "failure": "The required media_i420_crop_test.exe link has all fourteen player objects but no audio objects and fails with sixteen real audio-engine undefined symbols.",
+    "fix": "Add gesher_media_audio as an explicit direct OBJECT-library dependency of media_i420_crop_test, matching the existing media_muxer_verify target pattern.",
+    "qualification": {
+      "published_parent": "5c9b88fb108d122ae19f2b72d3be13aa7ee31022",
+      "cmake_before_sha256": "fdab253874bb682f4c7ee6770de7083873ef2f56da435c3085a2d48b48205cd1",
+      "cmake_after_sha256": "90f40d03291329187071cedad915bd01bc3bc824e3529e799cc3c0611679b857",
+      "only_edit": {
+        "before": "target_link_libraries(media_i420_crop_test PRIVATE gesher_media_player_core gesher_elf)",
+        "after": "target_link_libraries(media_i420_crop_test PRIVATE gesher_media_audio gesher_media_player_core gesher_elf)"
+      },
+      "existing_working_target": "media_muxer_verify",
+      "actual_failed_run": 45241081232,
+      "actual_failed_job": 137962507717,
+      "attempt": 1,
+      "actual_failed_log_sha256": "bd3806d0179fcc1e71c2bb36b6dc37c38a34075f579b67d1b3dcb49d89a70dc9",
+      "actual_failed_link": ": && /home/runner/work/gesher/gesher/out-pthread-cancel/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++ -O2 -g -DNDEBUG -static -s -Wl,-u,gesher_crash_reporter_anchor -Wl,-u,gesher_signal_mailbox_anchor -Wl,-u,gesher_futex_owner_anchor_v1 -Wl,-u,gesher_ofd_owner_anchor_v1 -Wl,-u,gesher_descriptor_transaction_anchor_v1 -Wl,-u,gesher_stdio_output_anchor_v1 -Wl,-u,gesher_environment_anchor_v1 -Wl,--wrap=__mingw_vfscanf -Wl,--wrap=__mingw_vfwscanf -Wl,-u,__mingw_vfscanf -Wl,-u,__mingw_vfwscanf -Wl,--wrap=free -Wl,--wrap=realloc -Wl,-u,gesher_android_log_anchor CMakeFiles/gesher_media_player_core.dir/compat/media/player/data_source.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/http_source.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/extractor.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/decode_file.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/mf_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/player.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/video_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/d3d11_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/mf_video.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_avc.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_m4v.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/render.cc.obj CMakeFiles/media_i420_crop_test.dir/tests/media/i420_crop_test.cc.obj -o media_i420_crop_test.exe -Wl,--out-implib,libmedia_i420_crop_test.dll.a -Wl,--major-image-version,0,--minor-image-version,0  libgesher_posix.a  libgesher_elf.a  libextractor_mp3.a  libextractor_mp4.a  libextractor_ogg.a  libextractor_flac.a  libextractor_wav.a  libextractor_aac.a  libextractor_mkv.a  libstagefright_foundation.a  libbinder.a  libnativehelper.a  libvorbisidec.a  libFLAC.a  libopus.a  libstagefright_mp3dec.a  libvpx.a  libdav1d.a  libhevcdec.a  libavc.a  libm4vh263dec.a  libwebm_mkvmuxer.a  libgesher_bionic.a  libgesher_elf.a  libgesher_exec_spawn.a  libz.a  libgesher_bionic_unicode.a  libicuuc.a  libandroidicuinit.a  libgesher_bionic_binary128.a  libgesher_window_surface.a  libgesher_window.a  -lgdi32  libgesher_desktop_compat.a  -luser32  libhostgraphics.a  libui_types.a  libutils.a  libutils_binder.a  libcutils.a  libbase.a  liblog.a  libfmtlib.a  libgesher_posix.a  -lpowrprof  -lsynchronization  -lpsapi  -lws2_32  -liphlpapi  -lbcrypt  -lshell32  -ladvapi32  -luuid  -lpthread  -lkernel32  -lmincore  -lwinhttp  -lole32  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 && :",
+      "missing_symbols": [
+        "gesher::media::BytesPerSample(gesher::media::PcmFormat)",
+        "gesher::media::CreateTrack(gesher::media::TrackParams const&, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>*)",
+        "gesher::media::PostEvent(std::__1::function<void ()>)",
+        "gesher::media::RaiseAudioThreadPriority(bool)",
+        "gesher::media::Track::Flush()",
+        "gesher::media::Track::Pause()",
+        "gesher::media::Track::Queued() const",
+        "gesher::media::Track::Release()",
+        "gesher::media::Track::SetSpeed(float)",
+        "gesher::media::Track::SetVolume(float, float)",
+        "gesher::media::Track::Start()",
+        "gesher::media::Track::Stop()",
+        "gesher::media::Track::Timestamp(long long*, long long*) const",
+        "gesher::media::Track::Write(void const*, unsigned long long, bool)",
+        "gesher::media::Track::buffer_size_frames() const",
+        "gesher::media::Track::stopped() const"
+      ],
+      "graphs": [
+        {
+          "label": "baseline",
+          "exact_audio_block_sha256": "398f736fdbd29cd008719f4f30f96613c6ffffa0f2685ea6c48b67037b351283",
+          "exact_player_block_sha256": "b4141020b8d13876fda80dbbfd7e1b8222556a381e0d6b457ebfc27a1411997a",
+          "exact_target_block_sha256": "6bbac752cc0084407963eca3dcc8c53ea83bed475b9b20c67be4aa272956d426",
+          "cmake_lists_sha256": "4f8579cae23b47ee9d16d464a47ee184bbfeb95352fb956d7ac8886af9c005e4",
+          "configure": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/cmake-python/cmake/data/bin/cmake",
+            "-S",
+            "/workspace/scratch/aa09b1a0dc1f/media-pr412-audio-link-qualification/baseline",
+            "-B",
+            "/workspace/scratch/aa09b1a0dc1f/media-pr412-audio-link-qualification/baseline/build",
+            "-G",
+            "Ninja",
+            "-DCMAKE_MAKE_PROGRAM=/workspace/scratch/aa09b1a0dc1f/toolchains/cmake-python/bin/ninja",
+            "-DCMAKE_TOOLCHAIN_FILE=/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/cmake/toolchain-llvm-mingw.cmake",
+            "-DLLVM_MINGW=/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64"
+          ],
+          "link": ": && /workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++   CMakeFiles/gesher_media_player_core.dir/compat/media/player/data_source.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/http_source.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/extractor.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/decode_file.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/mf_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/player.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/video_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/d3d11_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/mf_video.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_avc.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_m4v.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/render.cc.obj CMakeFiles/media_i420_crop_test.dir/tests/media/i420_crop_test.cc.obj -o media_i420_crop_test.exe -Wl,--out-implib,libmedia_i420_crop_test.dll.a -Wl,--major-image-version,0,--minor-image-version,0  -lgesher_elf  -llog  -luuid  -lgesher_media_codecs  -lgesher_bionic  -lgesher_window_surface  -lwinhttp  -lole32  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 && :",
+          "audio_objects": [],
+          "player_objects": [
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/data_source.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/http_source.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/extractor.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/decoder.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/decode_file.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/mf_decoder.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/player.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/video_decoder.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/d3d11_decoder.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/mf_video.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_avc.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_m4v.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/render.cc.obj"
+          ]
+        },
+        {
+          "label": "repaired",
+          "exact_audio_block_sha256": "398f736fdbd29cd008719f4f30f96613c6ffffa0f2685ea6c48b67037b351283",
+          "exact_player_block_sha256": "b4141020b8d13876fda80dbbfd7e1b8222556a381e0d6b457ebfc27a1411997a",
+          "exact_target_block_sha256": "66003deb51a0d5090cd7cac803e509ea43b0d9b79e58427a743b3910693bec09",
+          "cmake_lists_sha256": "6efcdfbff2fe0de81c0d11ac13ab93039b5016422fcca25fd905f8c99c463b1c",
+          "configure": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/cmake-python/cmake/data/bin/cmake",
+            "-S",
+            "/workspace/scratch/aa09b1a0dc1f/media-pr412-audio-link-qualification/repaired",
+            "-B",
+            "/workspace/scratch/aa09b1a0dc1f/media-pr412-audio-link-qualification/repaired/build",
+            "-G",
+            "Ninja",
+            "-DCMAKE_MAKE_PROGRAM=/workspace/scratch/aa09b1a0dc1f/toolchains/cmake-python/bin/ninja",
+            "-DCMAKE_TOOLCHAIN_FILE=/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/cmake/toolchain-llvm-mingw.cmake",
+            "-DLLVM_MINGW=/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64"
+          ],
+          "link": ": && /workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++   CMakeFiles/gesher_media_audio.dir/compat/media/audio/engine.cc.obj CMakeFiles/gesher_media_audio.dir/compat/media/audio/shared_state.cc.obj CMakeFiles/gesher_media_audio.dir/compat/media/audio/sink_file.cc.obj CMakeFiles/gesher_media_audio.dir/compat/media/audio/sink_wasapi.cc.obj CMakeFiles/gesher_media_audio.dir/compat/media/audio/wasapi_sink.cc.obj CMakeFiles/gesher_media_audio.dir/compat/media/audio/capture.cc.obj CMakeFiles/gesher_media_audio.dir/compat/media/audio/capture_wasapi.cc.obj CMakeFiles/gesher_media_audio.dir/compat/media/audio/record_permission.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/data_source.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/http_source.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/extractor.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/decode_file.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/mf_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/player/player.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/video_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/d3d11_decoder.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/mf_video.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_avc.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_m4v.cc.obj CMakeFiles/gesher_media_player_core.dir/compat/media/video/render.cc.obj CMakeFiles/media_i420_crop_test.dir/tests/media/i420_crop_test.cc.obj -o media_i420_crop_test.exe -Wl,--out-implib,libmedia_i420_crop_test.dll.a -Wl,--major-image-version,0,--minor-image-version,0  -lgesher_elf  -llog  -luuid  -lgesher_media_codecs  -lgesher_bionic  -lgesher_window_surface  -lwinhttp  -lole32  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 && :",
+          "audio_objects": [
+            "CMakeFiles/gesher_media_audio.dir/compat/media/audio/engine.cc.obj",
+            "CMakeFiles/gesher_media_audio.dir/compat/media/audio/shared_state.cc.obj",
+            "CMakeFiles/gesher_media_audio.dir/compat/media/audio/sink_file.cc.obj",
+            "CMakeFiles/gesher_media_audio.dir/compat/media/audio/sink_wasapi.cc.obj",
+            "CMakeFiles/gesher_media_audio.dir/compat/media/audio/wasapi_sink.cc.obj",
+            "CMakeFiles/gesher_media_audio.dir/compat/media/audio/capture.cc.obj",
+            "CMakeFiles/gesher_media_audio.dir/compat/media/audio/capture_wasapi.cc.obj",
+            "CMakeFiles/gesher_media_audio.dir/compat/media/audio/record_permission.cc.obj"
+          ],
+          "player_objects": [
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/data_source.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/http_source.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/extractor.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/decoder.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/decode_file.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/mf_decoder.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/player/player.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/video_decoder.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/d3d11_decoder.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/mf_video.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_avc.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/soft_video_m4v.cc.obj",
+            "CMakeFiles/gesher_media_player_core.dir/compat/media/video/render.cc.obj"
+          ]
+        }
+      ],
+      "real_engine_exports": [
+        {
+          "arch": "x86_64",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+            "-std=gnu++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/engine.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-pr412-audio-link-qualification/x86_64-engine.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-pr412-audio-link-qualification/x86_64-engine.d"
+          ],
+          "object_sha256": "ffcec6b0025374eb720c58f28dc05e680f8af8250d1cade12e55413f88c8841f",
+          "all_sixteen_missing_definitions_present": true,
+          "actual_inputs": [
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/engine.cc",
+              "sha256": "26869b74489faada856804f5bc48dd5c54dc8b81ea49de6a5a854554a3002634"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/engine.h",
+              "sha256": "d536c33e232ce224e28c62c0fb4b799d4a3670747df0488dcdc4ba6cd4f9a9d2"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/sys/types.h",
+              "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/time.h",
+              "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/gesher/clocks.h",
+              "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/errno.h",
+              "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/gesher/awake_clock.h",
+              "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/log.h",
+              "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+              "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/sys/cdefs.h",
+              "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/sys/time.h",
+              "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/shared_state.h",
+              "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/sink.h",
+              "sha256": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65"
+            }
+          ]
+        },
+        {
+          "arch": "aarch64",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+            "-std=gnu++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/engine.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-pr412-audio-link-qualification/aarch64-engine.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-pr412-audio-link-qualification/aarch64-engine.d"
+          ],
+          "object_sha256": "9a7c20d2e12a00c8ca1092fc60ffcd2d4a4efc87e3de7332173f3a1eec523717",
+          "all_sixteen_missing_definitions_present": true,
+          "actual_inputs": [
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/engine.cc",
+              "sha256": "26869b74489faada856804f5bc48dd5c54dc8b81ea49de6a5a854554a3002634"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/engine.h",
+              "sha256": "d536c33e232ce224e28c62c0fb4b799d4a3670747df0488dcdc4ba6cd4f9a9d2"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/sys/types.h",
+              "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/time.h",
+              "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/gesher/clocks.h",
+              "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/errno.h",
+              "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/gesher/awake_clock.h",
+              "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/log.h",
+              "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+              "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/sys/cdefs.h",
+              "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/posix/include/sys/time.h",
+              "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/shared_state.h",
+              "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-i420-ci-fix/compat/media/audio/sink.h",
+              "sha256": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65"
+            }
+          ]
+        }
+      ],
+      "cmake_reference": "https://cmake.org/cmake/help/latest/command/target_link_libraries.html#linking-object-libraries",
+      "limits": [
+        "The graph boundary preserves the actual audio/player/test declarations and source files but does not configure or link all external AOSP libraries.",
+        "Both full real Windows engine translation units compile strictly and define all missing symbols; complete executable link and Windows execution remain the full CI gate.",
+        "No production, test assertion, warning policy, workflow gate or historical performance source changed."
+      ]
+    },
+    "independent_source_review": {
+      "checks": 141,
+      "source_parent": "5c9b88fb108d122ae19f2b72d3be13aa7ee31022",
+      "cmake_before": "fdab253874bb682f4c7ee6770de7083873ef2f56da435c3085a2d48b48205cd1",
+      "cmake_after": "90f40d03291329187071cedad915bd01bc3bc824e3529e799cc3c0611679b857",
+      "scope": "One-line actual OBJECT closure fix; all measured/runtime/oracle sources unchanged. No full executable link or Windows execution inferred. Final report appendices/commit remain to be adopted."
+    },
+    "historical_report_unchanged": true,
+    "historical_archive_unchanged": {
+      "path": "docs/research/data/i420-odd-crop-2026-11-23.tar.gz",
+      "bytes": 921503,
+      "sha256": "b73e520b02cb3f2acf39ce1592526b2d501711dc61c6aed40423412a5eadfa45",
+      "members": 451,
+      "manifest_sha256": "32a7d7c99802102b0c8c0917aafe8569c54481e7de7e76a1c0b8342d814367bc"
+    },
+    "archive": {
+      "path": "docs/research/data/i420-native-link-2026-11-23.tar.gz",
+      "bytes": 1051265,
+      "sha256": "5e3652a734c4917f9d3c3ccab592a04f27ed99165f42d56740e7b28f6eaa6384",
+      "members": 91,
+      "manifest_sha256": "35db45e3702b9342fdf81f6f5c5425408e3da8756ebd5885c6343cbb92d6217a"
+    },
+    "limits": [
+      "Earlier strict full-translation-unit compilation did not exercise the aggregate executable link; this missing dependency was found by genuine full CI.",
+      "The isolated CMake graph does not configure or link the complete external AOSP dependency closure.",
+      "Real Windows engine objects compile and define the missing symbols; complete executable link and actual Windows runtime remain pending full-CI evidence.",
+      "Production behavior, samples, oracle, assertions, warning flags, Windows/CI gates and all historical timing rows are unchanged."
+    ]
   }
 }
