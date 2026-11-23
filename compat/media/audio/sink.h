@@ -33,6 +33,9 @@ class Sink {
   // Android type (AUDIO_DEVICE_OUT_SPEAKER, ..._WIRED_HEADPHONE, ...).
   virtual std::string DeviceName() const { return "Gesher audio output"; }
   virtual int DeviceType() const { return 0x2; }
+  // Wait for the engine's timer or for the output device to request a refill.
+  // The opaque timer is a borrowed Windows waitable timer handle.
+  virtual void WaitForRefill(void* timer);
   // One period: pull what the output needs now. Returns false when the
   // output is gone (the device was removed); the engine then opens another.
   virtual bool Tick(Mixer* mixer) = 0;

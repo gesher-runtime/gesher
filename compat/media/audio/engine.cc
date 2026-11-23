@@ -177,6 +177,8 @@ struct Track::Resampler {
 
 // --- Engine ------------------------------------------------------------------------------
 
+void Sink::WaitForRefill(void* timer) { WaitForSingleObject(timer, 100); }
+
 class Engine : public Mixer {
  public:
   static Engine* Get() {
@@ -323,7 +325,7 @@ class Engine : public Mixer {
     uint64_t last_retry = GetTickCount64();
     bool null_sink = sink->Describe().rfind("none", 0) == 0;
     for (;;) {
-      WaitForSingleObject(timer, 100);
+      sink->WaitForRefill(timer);
       uint32_t g = Generation();
       if (g != generation) {
         generation = g;
@@ -954,14 +956,17 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
   // would wait for data that may never come (AAudio's getFramesRead, a
   // position that must reach what was written).
   if (starved && out_done == 0 && rs.primed) {
-    if (++starved_ticks_ >= 2) {
+    if (starved_since_ns_ < 0) starved_since_ns_ = played_time_ns_;
+    // Preserve the 10 ms grace between empty mixes when the device asks
+    // for frames more often than the engine's periodic timer.
+    if (played_time_ns_ - starved_since_ns_ >= 10'000'000) {
       int64_t end = rs.start_index + static_cast<int64_t>(rs.frames());
       if (end > rs.played_index) played_ += static_cast<uint64_t>(end - rs.played_index);
       rs.Reset();
-      starved_ticks_ = 0;
+      starved_since_ns_ = -1;
     }
-  } else if (!starved) {
-    starved_ticks_ = 0;
+  } else {
+    starved_since_ns_ = -1;
   }
 
   // Drop history the filter no longer needs.

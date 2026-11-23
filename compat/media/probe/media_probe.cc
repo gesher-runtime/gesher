@@ -9,7 +9,7 @@
 //   media_probe analyze <wav>      the WAV's sounds: start, duration, frequency
 //                                  (zero crossings) and level of each, one per line
 //   media_probe wasapi             opens WASAPI shared mode on the default endpoint
-//                                  and renders 200 ms (a tone with GESHER_PROBE_AUDIBLE,
+//                                  and renders media and voice (tones with GESHER_PROBE_AUDIBLE,
 //                                  else silence), or says why it cannot
 //   media_probe mf                 lists the Media Foundation decoders this machine has
 //   media_probe capture [out.wav]  records 2 s through the capture engine (capture.h:
@@ -23,6 +23,7 @@
 #include <windows.h>
 #include <objbase.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -336,35 +337,54 @@ int Wasapi() {
     return 0;
   }
   printf("wasapi: %s\n", sink->Describe().c_str());
-  // 200 ms of a quiet 440 Hz tone, through the sink as the engine would.
+  // Exercise simultaneous media and voice render sessions as the engine would.
   class ToneMixer : public Mixer {
    public:
     explicit ToneMixer(Sink* s) : sink_(s) {}
     bool MixGroup(int group, float* out, size_t frames) override {
       uint32_t ch = sink_->channels();
-      for (size_t i = 0; i < frames; i++, n_++) {
-        float v = group == 0 ? amplitude_ * static_cast<float>(std::sin(2 * M_PI * 440 * n_ / sink_->rate())) : 0;
+      const int frequency = group == GroupOfStream(0) ? 660 : 440;
+      for (size_t i = 0; i < frames; i++, rendered_[group]++) {
+        const float v = amplitude_ * static_cast<float>(
+            std::sin(2 * M_PI * frequency * rendered_[group] / sink_->rate()));
         for (uint32_t c = 0; c < ch; c++) out[i * ch + c] = v;
       }
-      if (group == 0) rendered_ += frames;
-      return group == 0;
+      return true;
     }
-    bool GroupWanted(int group) override { return group == 0; }
+    bool GroupWanted(int group) override {
+      return group == GroupOfStream(3) || group == GroupOfStream(0);
+    }
     Sink* sink_;
-    uint64_t n_ = 0;
-    uint64_t rendered_ = 0;
+    std::array<uint64_t, kNumGroups> rendered_{};
     // Silent unless asked: the probe runs on people's machines too.
     float amplitude_ = getenv("GESHER_PROBE_AUDIBLE") != nullptr ? 0.05f : 0.0f;
   } mixer(sink.get());
-  for (int i = 0; i < 20; i++) {
+  HANDLE timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+  LARGE_INTEGER due;
+  due.QuadPart = -100000;
+  if (timer == nullptr || !SetWaitableTimer(timer, &due, 10, nullptr, nullptr, FALSE)) {
+    if (timer != nullptr) CloseHandle(timer);
+    printf("wasapi: could not start the refill timer\n");
+    return 1;
+  }
+  const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+  do {
     if (!sink->Tick(&mixer)) {
+      CloseHandle(timer);
       printf("wasapi: the output stopped\n");
       return 1;
     }
-    Sleep(10);
-  }
-  printf("wasapi: rendered %llu frames\n", static_cast<unsigned long long>(mixer.rendered_));
-  return 0;
+    sink->WaitForRefill(timer);
+  } while (std::chrono::steady_clock::now() < end);
+  CloseHandle(timer);
+  const uint64_t media = mixer.rendered_[GroupOfStream(3)];
+  const uint64_t calls = mixer.rendered_[GroupOfStream(0)];
+  printf("wasapi: rendered %llu media frames and %llu voice frames\n",
+         static_cast<unsigned long long>(media), static_cast<unsigned long long>(calls));
+  // Allow startup and scheduler jitter while catching a sink that drains only
+  // one group or refills substantially slower than the render endpoint.
+  const uint32_t minimum_frames = sink->rate() * 3 / 20;
+  return media >= minimum_frames && calls >= minimum_frames ? 0 : 1;
 }
 
 // Which Media Foundation decoders this machine has (loaded at run time:

@@ -31,7 +31,7 @@
 #include "log.h"
 #include "shared_state.h"
 #include "sink.h"
-#include "wasapi_sink.h"
+#include "wasapi_refill.h"
 
 namespace gesher::media {
 namespace {
@@ -248,7 +248,10 @@ class WasapiSink : public Sink {
 
   uint32_t rate() const override { return rate_; }
   uint32_t channels() const override { return channels_; }
-  uint32_t latency_frames() const override { return target_frames_ + latency_extra_frames_; }
+  uint32_t latency_frames() const override {
+    const Group& media = groups_[0];
+    return std::min(target_frames_, media.buffer_frames) + media.latency_extra_frames;
+  }
 
   std::string DeviceName() const override { return device_name_; }
   int DeviceType() const override { return device_type_; }
@@ -257,8 +260,18 @@ class WasapiSink : public Sink {
     std::string s = "WASAPI shared mode on " + device_name_ + ", " + std::to_string(rate_) + " Hz, " +
                     std::to_string(channels_) + " channels, float";
     if (convert_) s += " (converted by Windows)";
-    s += ", " + std::to_string(target_frames_ * 1000 / rate_) + " ms buffered";
+    if (groups_[0].refill_event != nullptr) s += " (device-paced low latency)";
+    s += ", " + std::to_string(latency_frames() * 1000 / rate_) + " ms latency";
     return s;
+  }
+
+  void WaitForRefill(void* timer) override {
+    HANDLE events[kNumGroups + 1] = {timer};
+    DWORD count = 1;
+    for (const auto& g : groups_) {
+      if (g.running && g.refill_event != nullptr) events[count++] = g.refill_event;
+    }
+    WaitForMultipleObjects(count, events, FALSE, 100);
   }
 
   bool Tick(Mixer* mixer) override {
@@ -285,24 +298,15 @@ class WasapiSink : public Sink {
         }
         continue;
       }
+      // GESHER_PERF_TRACE: how long a refill takes, and how often the device
+      // had played everything it was given (an audible gap) before it.
+      static gesher::perf::Site refill_site("audio engine: WASAPI refill (count: device buffer found empty)");
+      const int64_t start = gesher::perf::Now();
       UINT32 padding = 0;
-      HRESULT hr = g.client->GetCurrentPadding(&padding);
+      HRESULT hr = RefillWasapiGroup(*g.client, *g.render, *mixer, i,
+                                    std::min(target_frames_, g.buffer_frames), &padding);
       if (FAILED(hr)) return Lost(hr);
-      uint32_t target = std::min(target_frames_, g.buffer_frames);
-      if (padding < target) {
-        // GESHER_PERF_TRACE: how long a refill takes, and how often the device
-        // had played everything it was given (an audible gap) before it.
-        static gesher::perf::Site refill_site("audio engine: WASAPI refill (count: device buffer found empty)");
-        const int64_t start = gesher::perf::Now();
-        uint32_t n = target - padding;
-        BYTE* data = nullptr;
-        hr = g.render->GetBuffer(n, &data);
-        if (FAILED(hr)) return Lost(hr);
-        mixer->MixGroup(i, reinterpret_cast<float*>(data), n);
-        hr = g.render->ReleaseBuffer(n, 0);
-        if (FAILED(hr)) return Lost(hr);
-        refill_site.Add(gesher::perf::Now() - start, g.running && padding == 0 ? 1 : 0);
-      }
+      if (hr == S_OK) refill_site.Add(gesher::perf::Now() - start, g.running && padding == 0 ? 1 : 0);
       if (!g.running) {
         hr = g.client->Start();
         if (FAILED(hr)) return Lost(hr);
@@ -323,7 +327,9 @@ class WasapiSink : public Sink {
     ISimpleAudioVolume* volume = nullptr;
     IAudioSessionControl* control = nullptr;
     SessionEvents* events = nullptr;
+    HANDLE refill_event = nullptr;
     UINT32 buffer_frames = 0;
+    UINT32 latency_extra_frames = 0;
     bool running = false;
   };
 
@@ -332,27 +338,71 @@ class WasapiSink : public Sink {
     return false;
   }
 
-  bool OpenGroup(Group& g, int index, std::string* error) {
+  HRESULT OpenLowLatencyGroup(Group& g, const GUID& session) {
+    // An endpoint format that requires conversion uses the conventional
+    // shared-mode path, which supports AUTOCONVERTPCM.
+    if (convert_) return E_NOTIMPL;
+    IAudioClient* base = nullptr;
     HRESULT hr = device_->Activate(kIidIAudioClient, CLSCTX_ALL, nullptr,
-                                   reinterpret_cast<void**>(&g.client));
-    if (FAILED(hr)) {
-      *error = "WASAPI: IAudioClient (" + Hr(hr) + ")";
-      return false;
+                                   reinterpret_cast<void**>(&base));
+    if (FAILED(hr)) return hr;
+    IAudioClient3* client = nullptr;
+    hr = base->QueryInterface(__uuidof(IAudioClient3), reinterpret_cast<void**>(&client));
+    base->Release();
+    if (FAILED(hr)) return hr;
+    UINT32 normal = 0, fundamental = 0, minimum = 0, maximum = 0;
+    hr = client->GetSharedModeEnginePeriod(&format_.Format, &normal, &fundamental,
+                                           &minimum, &maximum);
+    if (SUCCEEDED(hr)) {
+      const DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_SESSIONFLAGS_DISPLAY_HIDEWHENEXPIRED;
+      hr = client->InitializeSharedAudioStream(flags, minimum, &format_.Format, &session);
     }
-    DWORD flags = AUDCLNT_STREAMFLAGS_NOPERSIST | AUDCLNT_SESSIONFLAGS_DISPLAY_HIDEWHENEXPIRED;
-    if (convert_) flags |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-    GUID session = SessionGuid(index);
-    hr = g.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 1000000 /* 100 ms */, 0,
-                              &format_.Format, &session);
+    if (SUCCEEDED(hr)) {
+      g.refill_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      hr = g.refill_event != nullptr ? client->SetEventHandle(g.refill_event)
+                                    : HRESULT_FROM_WIN32(GetLastError());
+    }
     if (FAILED(hr)) {
-      *error = "WASAPI: Initialize (" + Hr(hr) + ")";
+      client->Release();
+      if (g.refill_event != nullptr) {
+        CloseHandle(g.refill_event);
+        g.refill_event = nullptr;
+      }
+    } else {
+      g.client = client;
+    }
+    return hr;
+  }
+
+  bool OpenGroup(Group& g, int index, std::string* error) {
+    const GUID session = SessionGuid(index);
+    HRESULT hr = OpenLowLatencyGroup(g, session);
+    if (FAILED(hr)) {
+      hr = device_->Activate(kIidIAudioClient, CLSCTX_ALL, nullptr,
+                             reinterpret_cast<void**>(&g.client));
+      if (FAILED(hr)) {
+        *error = "WASAPI: IAudioClient (" + Hr(hr) + ")";
+        return false;
+      }
+      DWORD flags = AUDCLNT_STREAMFLAGS_NOPERSIST | AUDCLNT_SESSIONFLAGS_DISPLAY_HIDEWHENEXPIRED;
+      if (convert_) flags |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+      hr = g.client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 1000000 /* 100 ms */, 0,
+                                &format_.Format, &session);
+      if (FAILED(hr)) {
+        *error = "WASAPI: Initialize (" + Hr(hr) + ")";
+        CloseGroup(g);
+        return false;
+      }
+    }
+    hr = g.client->GetBufferSize(&g.buffer_frames);
+    if (FAILED(hr)) {
+      *error = "WASAPI: GetBufferSize (" + Hr(hr) + ")";
       CloseGroup(g);
       return false;
     }
-    g.client->GetBufferSize(&g.buffer_frames);
     REFERENCE_TIME latency = 0;
     if (SUCCEEDED(g.client->GetStreamLatency(&latency))) {
-      latency_extra_frames_ = static_cast<uint32_t>(latency * rate_ / 10000000);
+      g.latency_extra_frames = static_cast<uint32_t>(latency * rate_ / 10000000);
     }
     hr = g.client->GetService(kIidIAudioRenderClient, reinterpret_cast<void**>(&g.render));
     if (FAILED(hr)) {
@@ -422,6 +472,10 @@ class WasapiSink : public Sink {
     SafeRelease(g.volume);
     SafeRelease(g.render);
     SafeRelease(g.client);
+    if (g.refill_event != nullptr) {
+      CloseHandle(g.refill_event);
+      g.refill_event = nullptr;
+    }
     g.running = false;
   }
 
@@ -438,15 +492,12 @@ class WasapiSink : public Sink {
   uint32_t channels_ = 2;
   uint32_t device_period_frames_ = 0;
   uint32_t target_frames_ = 1920;
-  uint32_t latency_extra_frames_ = 0;
   Group groups_[kNumGroups];
 };
 
 }  // namespace
 
 std::unique_ptr<Sink> OpenWasapiSink(const std::u16string& app_name, std::string* error) {
-  auto low_latency = OpenLowLatencyWasapiSink(app_name, error);
-  if (low_latency != nullptr) return low_latency;
   auto sink = std::make_unique<WasapiSink>();
   if (!sink->Open(app_name, error)) return nullptr;
   return sink;
