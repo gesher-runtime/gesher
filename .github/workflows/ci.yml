@@ -334,7 +334,7 @@ jobs:
 
       - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
         run: |
-          python3 tools/test_bionic_key_contracts.py --sanitize
+          python3 tools/test_bionic_key_contracts.py --sanitize --negative-controls
           python3 tools/test_pthread_clock_contracts.py --sanitize
           python3 tools/test_pthread_clock_contracts.py --linux-reference
           python3 tools/test_pthread_attribute_contracts.py --sanitize

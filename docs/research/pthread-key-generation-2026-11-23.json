@@ -1,0 +1,2363 @@
+{
+  "schema": 1,
+  "date": "2026-11-23",
+  "scope": "Issue56 T12: calling-thread pthread_getspecific generation lookup only",
+  "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+  "measured_baseline_ref": "fdf4861b608d7a5fe8c0fa6c8a285dfbdf573d91",
+  "local_feature_checkpoint": "fb66b006914ae1810b9b87773c77e6c4d1c9b9e7",
+  "production": {
+    "path": "compat/bionic/pthread_bionic.cc",
+    "baseline_sha256": "b8b14e916e7380261bc2aa9241da9690b95c0f67883f868d117d7fa54f364817",
+    "candidate_sha256": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223"
+  },
+  "source_inputs_sha256": {
+    "tests/native/pthread_key_measurement.cc": "c736f57f27e843a29b1597fe83b16e74927dcb752a3627aca20671c51d1abb8d",
+    "tests/native/pthread_key_measurement.h": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+    "tools/measure_bionic_key_lookup.py": "ad01e907e2c8423ead18eeec0a48d1e54cb336e9f614d87388dc6c1772e8634e",
+    "tools/test_bionic_key_contracts.py": "0bf44648754cb25367c4be7b7995d7c1337ed22fe8a9e3fe2215d7dfa9c7e7f5",
+    "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+    "compat/bionic/abi_types.h": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+    "compat/bionic/pthread_cleanup.h": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+    "compat/arm64/include/gesher/arm64_va_list.h": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+    "compat/arm64/include/gesher/symbol_table.h": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb",
+    "compat/bionic/pthread_bionic.cc": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223",
+    "tests/native/pthread_key_contract_test.inc": "7ac104958a78c50618fa66088ba3913e7c687ea2ea2a6d31a4abb829836fea88",
+    "tests/native/pthread_key_contract_host_test.cc.in": "699cf2e64c960d4324cc750877d7a37ee04fe957ba4d1da83395770b96fbf1b9",
+    "tests/native/bionic_key_exit_test.cc": "07625c284313291b402c134016def43d432c0f4c98c977a0e710dc34a63318b6",
+    "tests/windows/tracks/40-native-libs.ps1": "1beb7d937f4d6152d6e5a4b905e974c911b1e0601f6ec2b955dd4ca7c3dd4b3b",
+    ".github/workflows/ci.yml": "9e26595a2ac3b24898811519f26152820d6e3a8673e213a012fb7d085df5b6fa"
+  },
+  "android_reference": {
+    "commit": "f22516cbc67e81c13cf943ce02f01b8929a98726",
+    "path": "libc/bionic/pthread_key.cpp",
+    "sha256": "18adb3106579c24140534295936f739fb09575247e70612284968f12daa18567",
+    "use": "generation/lifetime design reference; this is not an executable AOSP differential oracle"
+  },
+  "measurement": {
+    "summary": {
+      "source": "native-key-observed-final-abba.json",
+      "started_utc": "2026-11-23T13:43:51.991398+00:00",
+      "ended_utc": "2026-11-23T13:44:35.466905+00:00",
+      "timed_processes": 144,
+      "timed_observations": 1296,
+      "counted_processes": 2,
+      "counted_observations": 18,
+      "individual_worker_receipts": 175302,
+      "method": "median of per-process medians; steady samples 2..9; cold sole first observation; eight process medians per variant and workload",
+      "cases": [
+        {
+          "case": "cold-single",
+          "values": {
+            "cpu_ns": {
+              "baseline": 212515.0,
+              "candidate": 253416.5,
+              "change_percent": 19.246406136037454,
+              "process_medians": {
+                "baseline": [
+                  390832,
+                  217846,
+                  263443,
+                  196303,
+                  201468,
+                  191773,
+                  257088,
+                  207184
+                ],
+                "candidate": [
+                  272358,
+                  384825,
+                  262860,
+                  228282,
+                  190538,
+                  216628,
+                  467091,
+                  243973
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 215979.0,
+              "candidate": 281063.5,
+              "change_percent": 30.134642719894057,
+              "process_medians": {
+                "baseline": [
+                  383339,
+                  209324,
+                  242578,
+                  190572,
+                  198010,
+                  222634,
+                  240480,
+                  188770
+                ],
+                "candidate": [
+                  257103,
+                  354588,
+                  328431,
+                  214981,
+                  198585,
+                  198775,
+                  305024,
+                  310085
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 81642.0,
+              "candidate": 102728.0,
+              "change_percent": 25.827392763528568,
+              "process_medians": {
+                "baseline": [
+                  254418,
+                  82227,
+                  142276,
+                  79778,
+                  81057,
+                  74178,
+                  132498,
+                  78008
+                ],
+                "candidate": [
+                  104268,
+                  184281,
+                  117147,
+                  94279,
+                  77801,
+                  79984,
+                  221939,
+                  101188
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 51624.5,
+              "candidate": 51956.0,
+              "change_percent": 0.6421369698495827,
+              "process_medians": {
+                "baseline": [
+                  65140,
+                  73038,
+                  53348,
+                  52616,
+                  40942,
+                  47591,
+                  50633,
+                  48853
+                ],
+                "candidate": [
+                  47743,
+                  76762,
+                  65238,
+                  52966,
+                  43872,
+                  50946,
+                  47791,
+                  74834
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 1,
+            "exits": 1,
+            "registry_locks": 5,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 1,
+            "exits": 1,
+            "registry_locks": 4,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        },
+        {
+          "case": "single",
+          "values": {
+            "cpu_ns": {
+              "baseline": 19550040.25,
+              "candidate": 1917604.5,
+              "change_percent": -90.19130152430249,
+              "process_medians": {
+                "baseline": [
+                  20039912.0,
+                  19517471.0,
+                  18441209.5,
+                  19973252.0,
+                  18357048.5,
+                  19582609.5,
+                  18426438.0,
+                  21837198.0
+                ],
+                "candidate": [
+                  1823798.0,
+                  1954191.0,
+                  2106499.5,
+                  1886679.5,
+                  1785786.5,
+                  1871462.0,
+                  1948529.5,
+                  3321638.0
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 19588095.0,
+              "candidate": 1932087.0,
+              "change_percent": -90.13642214824871,
+              "process_medians": {
+                "baseline": [
+                  20059142.0,
+                  19572079.0,
+                  18771649.5,
+                  19978660.5,
+                  18382023.5,
+                  19604111.0,
+                  18454352.0,
+                  21881757.5
+                ],
+                "candidate": [
+                  1824623.5,
+                  1988234.5,
+                  2120458.5,
+                  1904289.5,
+                  1804427.5,
+                  1886598.5,
+                  1959884.5,
+                  3391031.0
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 56893.5,
+              "candidate": 29035.25,
+              "change_percent": -48.96561118581209,
+              "process_medians": {
+                "baseline": [
+                  60353.5,
+                  51585.5,
+                  53433.5,
+                  134933.5,
+                  51073.0,
+                  125543.5,
+                  44758.0,
+                  77272.0
+                ],
+                "candidate": [
+                  41783.0,
+                  26853.5,
+                  25719.0,
+                  28930.5,
+                  29140.0,
+                  27976.0,
+                  49898.5,
+                  582312.5
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 19439243.25,
+              "candidate": 1838732.75,
+              "change_percent": -90.5411299897181,
+              "process_medians": {
+                "baseline": [
+                  19949741.0,
+                  19431641.5,
+                  18345204.5,
+                  19505254.0,
+                  18100241.0,
+                  19446845.0,
+                  18330952.0,
+                  21695753.5
+                ],
+                "candidate": [
+                  1743055.0,
+                  1894295.5,
+                  2026951.0,
+                  1826038.0,
+                  1722049.5,
+                  1811187.5,
+                  1851427.5,
+                  2672964.0
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 1000000,
+            "exits": 1,
+            "registry_locks": 1000004,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 1000000,
+            "exits": 1,
+            "registry_locks": 4,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        },
+        {
+          "case": "shared8",
+          "values": {
+            "cpu_ns": {
+              "baseline": 312349789.25,
+              "candidate": 3216904.75,
+              "change_percent": -98.97009543123936,
+              "process_medians": {
+                "baseline": [
+                  318809227.5,
+                  321809400.0,
+                  305780271.5,
+                  324891321.5,
+                  311622966.5,
+                  270532938.0,
+                  313076612.0,
+                  298222913.0
+                ],
+                "candidate": [
+                  3516561.0,
+                  3240672.5,
+                  2978563.5,
+                  3392827.5,
+                  2908068.5,
+                  3474294.5,
+                  3193137.0,
+                  2635447.0
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 72729931.5,
+              "candidate": 1267231.25,
+              "change_percent": -98.25762072936918,
+              "process_medians": {
+                "baseline": [
+                  76689439.0,
+                  72829180.0,
+                  72630683.0,
+                  72981377.0,
+                  73128795.0,
+                  64851334.0,
+                  71227753.0,
+                  70055996.5
+                ],
+                "candidate": [
+                  1648985.5,
+                  1409014.5,
+                  1221252.0,
+                  1413125.5,
+                  1203906.0,
+                  1302846.5,
+                  1231616.0,
+                  941621.5
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 665027.0,
+              "candidate": 492588.25,
+              "change_percent": -25.929586317548015,
+              "process_medians": {
+                "baseline": [
+                  817984.5,
+                  674058.0,
+                  655996.0,
+                  715879.0,
+                  676789.5,
+                  519940.5,
+                  611756.0,
+                  534623.0
+                ],
+                "candidate": [
+                  881778.5,
+                  806305.5,
+                  547406.0,
+                  625451.0,
+                  437770.5,
+                  372740.5,
+                  430239.5,
+                  319344.0
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 311369694.25,
+              "candidate": 2295305.25,
+              "change_percent": -99.26283601378461,
+              "process_medians": {
+                "baseline": [
+                  317536662.0,
+                  321008437.5,
+                  304637621.0,
+                  324085255.0,
+                  310547891.5,
+                  269794667.5,
+                  312191497.0,
+                  297465490.0
+                ],
+                "candidate": [
+                  2348911.0,
+                  2241699.5,
+                  2046045.0,
+                  2596738.0,
+                  2183892.5,
+                  2911851.5,
+                  2512361.0,
+                  2082734.0
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 1000000,
+            "exits": 8,
+            "registry_locks": 1000018,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 1000000,
+            "exits": 8,
+            "registry_locks": 18,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        },
+        {
+          "case": "distinct8",
+          "values": {
+            "cpu_ns": {
+              "baseline": 304683671.0,
+              "candidate": 3187924.5,
+              "change_percent": -98.95369368186456,
+              "process_medians": {
+                "baseline": [
+                  297237179.5,
+                  317003303.0,
+                  312112793.5,
+                  333890589.0,
+                  274111233.5,
+                  310019564.5,
+                  268352079.0,
+                  299347777.5
+                ],
+                "candidate": [
+                  3977778.5,
+                  3690655.5,
+                  3351418.0,
+                  3024431.0,
+                  3550096.5,
+                  2441200.0,
+                  2773777.0,
+                  2918621.0
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 69065988.5,
+              "candidate": 1296334.75,
+              "change_percent": -98.1230490171005,
+              "process_medians": {
+                "baseline": [
+                  68397412.5,
+                  71890489.0,
+                  69273341.5,
+                  75694312.0,
+                  68858635.5,
+                  69324329.5,
+                  67838408.0,
+                  68666939.5
+                ],
+                "candidate": [
+                  1980422.0,
+                  1750921.0,
+                  1324032.0,
+                  1268637.5,
+                  1390992.5,
+                  935179.5,
+                  1080786.0,
+                  1186971.5
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 578782.5,
+              "candidate": 515047.75,
+              "change_percent": -11.01186542440381,
+              "process_medians": {
+                "baseline": [
+                  561416.5,
+                  589189.5,
+                  637989.0,
+                  568375.5,
+                  871378.0,
+                  482152.0,
+                  611526.5,
+                  402893.0
+                ],
+                "candidate": [
+                  985757.0,
+                  853315.5,
+                  560435.0,
+                  550054.5,
+                  480041.0,
+                  324385.5,
+                  342707.0,
+                  386087.0
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 303933280.25,
+              "candidate": 2312997.75,
+              "change_percent": -99.23897845339692,
+              "process_medians": {
+                "baseline": [
+                  296207213.0,
+                  315795728.0,
+                  310749826.0,
+                  332938751.5,
+                  271677748.0,
+                  309313370.5,
+                  267469048.5,
+                  298553190.0
+                ],
+                "candidate": [
+                  2727741.5,
+                  2511683.0,
+                  2333146.0,
+                  2238801.5,
+                  2712217.0,
+                  1964980.5,
+                  2260999.5,
+                  2292849.5
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 1000000,
+            "exits": 8,
+            "registry_locks": 1000032,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 1000000,
+            "exits": 8,
+            "registry_locks": 32,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        },
+        {
+          "case": "distinct32",
+          "values": {
+            "cpu_ns": {
+              "baseline": 434937101.75,
+              "candidate": 7734044.25,
+              "change_percent": -98.2218016768674,
+              "process_medians": {
+                "baseline": [
+                  449956034.5,
+                  434275741.5,
+                  423768039.5,
+                  430761292.0,
+                  430473611.5,
+                  435598462.0,
+                  451690049.5,
+                  442455084.0
+                ],
+                "candidate": [
+                  8364319.5,
+                  7333986.5,
+                  7734998.0,
+                  8675810.5,
+                  7733090.5,
+                  7836993.5,
+                  6449390.0,
+                  6448922.5
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 71753482.75,
+              "candidate": 3316769.0,
+              "change_percent": -95.37754980959443,
+              "process_medians": {
+                "baseline": [
+                  72896777.0,
+                  70312909.5,
+                  72874704.0,
+                  70784181.5,
+                  69927894.0,
+                  69908211.0,
+                  74075949.0,
+                  72722784.0
+                ],
+                "candidate": [
+                  3721066.0,
+                  3280147.5,
+                  3353390.5,
+                  4244222.0,
+                  3040594.5,
+                  4141539.0,
+                  2626341.0,
+                  2649229.0
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 1740980.75,
+              "candidate": 2472679.5,
+              "change_percent": 42.027963261512234,
+              "process_medians": {
+                "baseline": [
+                  2715853.5,
+                  1704561.0,
+                  2281458.5,
+                  1639510.0,
+                  1777400.5,
+                  1792926.5,
+                  1565129.5,
+                  1583997.5
+                ],
+                "candidate": [
+                  2892396.5,
+                  2704876.5,
+                  2558274.5,
+                  3566932.0,
+                  2387084.5,
+                  2252983.5,
+                  1763485.0,
+                  1800657.0
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 431753812.75,
+              "candidate": 3282091.5,
+              "change_percent": -99.23982338937665,
+              "process_medians": {
+                "baseline": [
+                  445700800.0,
+                  431224857.0,
+                  420698981.0,
+                  427788846.0,
+                  426757183.0,
+                  432282768.5,
+                  448805467.0,
+                  439535656.5
+                ],
+                "candidate": [
+                  3639511.5,
+                  3385262.0,
+                  3169425.5,
+                  3430411.0,
+                  3178921.0,
+                  3495814.5,
+                  3074180.5,
+                  3072518.0
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 1000000,
+            "exits": 32,
+            "registry_locks": 1000128,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 1000000,
+            "exits": 32,
+            "registry_locks": 128,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        },
+        {
+          "case": "churn8",
+          "values": {
+            "cpu_ns": {
+              "baseline": 321648898.75,
+              "candidate": 6238444.25,
+              "change_percent": -98.06048014644415,
+              "process_medians": {
+                "baseline": [
+                  316736395.0,
+                  326561402.5,
+                  297854171.5,
+                  282900165.5,
+                  334522905.5,
+                  337379948.0,
+                  340404738.5,
+                  289693877.5
+                ],
+                "candidate": [
+                  6256955.0,
+                  6045334.0,
+                  6458959.0,
+                  7307689.5,
+                  6683487.5,
+                  6219933.5,
+                  5982988.0,
+                  6041122.0
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 73580085.75,
+              "candidate": 1808605.25,
+              "change_percent": -97.54199083683454,
+              "process_medians": {
+                "baseline": [
+                  71504397.0,
+                  74894175.0,
+                  73646913.5,
+                  70800563.0,
+                  73513258.0,
+                  75938006.0,
+                  75652180.5,
+                  68212649.0
+                ],
+                "candidate": [
+                  1761133.0,
+                  1745455.5,
+                  1856077.5,
+                  2105074.5,
+                  1869491.5,
+                  1944753.5,
+                  1740114.0,
+                  1713936.5
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 680468.5,
+              "candidate": 442497.5,
+              "change_percent": -34.97164086214131,
+              "process_medians": {
+                "baseline": [
+                  431790.0,
+                  758620.0,
+                  682514.5,
+                  842592.0,
+                  438844.5,
+                  678422.5,
+                  495939.5,
+                  984927.0
+                ],
+                "candidate": [
+                  393733.5,
+                  411877.5,
+                  474417.5,
+                  547651.0,
+                  409179.5,
+                  491300.5,
+                  436006.5,
+                  448988.5
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 320114567.75,
+              "candidate": 5570318.75,
+              "change_percent": -98.25989838914478,
+              "process_medians": {
+                "baseline": [
+                  314925568.5,
+                  325303567.0,
+                  296699198.5,
+                  281639172.5,
+                  333913523.5,
+                  335969885.0,
+                  339200848.5,
+                  288378880.5
+                ],
+                "candidate": [
+                  5593708.5,
+                  5472038.0,
+                  5709208.5,
+                  6338025.5,
+                  5774770.5,
+                  5546929.0,
+                  5395090.0,
+                  5322895.0
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 1000000,
+            "exits": 8,
+            "registry_locks": 1008018,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 1000000,
+            "exits": 8,
+            "registry_locks": 8018,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        },
+        {
+          "case": "tiny-lifecycle",
+          "values": {
+            "cpu_ns": {
+              "baseline": 49935673.0,
+              "candidate": 44690878.25,
+              "change_percent": -10.50310216105428,
+              "process_medians": {
+                "baseline": [
+                  52169795.0,
+                  41389122.5,
+                  51671424.5,
+                  39379930.0,
+                  48199921.5,
+                  32452347.0,
+                  57035775.0,
+                  52384719.0
+                ],
+                "candidate": [
+                  79892909.5,
+                  44584078.5,
+                  45109576.5,
+                  38019847.5,
+                  44797678.0,
+                  37606078.0,
+                  45548868.0,
+                  41569820.5
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 38857613.0,
+              "candidate": 34235804.25,
+              "change_percent": -11.89421684239843,
+              "process_medians": {
+                "baseline": [
+                  41113216.5,
+                  32082823.0,
+                  41863229.5,
+                  30243647.5,
+                  36718323.5,
+                  23968109.5,
+                  44566474.5,
+                  40996902.5
+                ],
+                "candidate": [
+                  68928756.0,
+                  34261833.0,
+                  34282040.5,
+                  29119037.5,
+                  34209775.5,
+                  28794589.0,
+                  36100680.0,
+                  29934560.0
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 27578860.75,
+              "candidate": 22839283.25,
+              "change_percent": -17.185544910516292,
+              "process_medians": {
+                "baseline": [
+                  31188492.0,
+                  19089522.5,
+                  29596959.5,
+                  19620565.0,
+                  25940117.0,
+                  14905797.0,
+                  33794996.0,
+                  29217604.5
+                ],
+                "candidate": [
+                  42464931.0,
+                  23151042.0,
+                  23916306.0,
+                  18082692.0,
+                  22527524.5,
+                  17042496.0,
+                  24204141.0,
+                  19608168.5
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 7299388.0,
+              "candidate": 6787615.5,
+              "change_percent": -7.011169977537845,
+              "process_medians": {
+                "baseline": [
+                  7546497.0,
+                  7977113.5,
+                  6671652.5,
+                  6172875.5,
+                  7787854.0,
+                  6345839.5,
+                  7170955.0,
+                  7427821.0
+                ],
+                "candidate": [
+                  10379420.0,
+                  7056616.0,
+                  6671500.5,
+                  5753015.0,
+                  7265391.5,
+                  6591282.5,
+                  6903730.5,
+                  6389693.0
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 512,
+            "exits": 512,
+            "registry_locks": 2560,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 512,
+            "exits": 512,
+            "registry_locks": 2048,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        },
+        {
+          "case": "no-read-lifecycle",
+          "values": {
+            "cpu_ns": {
+              "baseline": 40025175.75,
+              "candidate": 39598309.75,
+              "change_percent": -1.0664937554958787,
+              "process_medians": {
+                "baseline": [
+                  40331307.0,
+                  37601255.5,
+                  43602442.5,
+                  36098993.5,
+                  39719044.5,
+                  34599414.0,
+                  47788930.5,
+                  42795975.0
+                ],
+                "candidate": [
+                  39057274.0,
+                  40139345.5,
+                  41256048.5,
+                  35308935.5,
+                  35496030.5,
+                  35626004.5,
+                  40244283.5,
+                  50057735.0
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 30127830.0,
+              "candidate": 30523245.75,
+              "change_percent": 1.3124601074820275,
+              "process_medians": {
+                "baseline": [
+                  30989395.0,
+                  28297805.5,
+                  33326881.5,
+                  27512643.5,
+                  29266265.0,
+                  25809041.5,
+                  37532615.5,
+                  31691400.0
+                ],
+                "candidate": [
+                  30056260.0,
+                  31119034.0,
+                  30990231.5,
+                  25813929.0,
+                  25756101.0,
+                  26710020.5,
+                  31707715.5,
+                  41339656.0
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 19749019.25,
+              "candidate": 19068542.5,
+              "change_percent": -3.445623002266307,
+              "process_medians": {
+                "baseline": [
+                  20458077.0,
+                  16650189.0,
+                  21927753.5,
+                  17302560.0,
+                  19039961.5,
+                  16166078.0,
+                  25451466.0,
+                  21205179.5
+                ],
+                "candidate": [
+                  19354635.5,
+                  19097397.0,
+                  20668521.5,
+                  17523539.5,
+                  15918059.0,
+                  15252721.5,
+                  19039688.0,
+                  28532804.5
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 6493314.25,
+              "candidate": 6790005.75,
+              "change_percent": 4.569184372987944,
+              "process_medians": {
+                "baseline": [
+                  6250134.0,
+                  6887733.0,
+                  6564954.0,
+                  6421674.5,
+                  7206655.0,
+                  6196615.5,
+                  6648798.5,
+                  6319874.0
+                ],
+                "candidate": [
+                  6595547.0,
+                  6887614.0,
+                  7003277.0,
+                  5977839.5,
+                  6039588.5,
+                  7081280.5,
+                  6692397.5,
+                  6916159.0
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 0,
+            "exits": 512,
+            "registry_locks": 2048,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 0,
+            "exits": 512,
+            "registry_locks": 2048,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        },
+        {
+          "case": "mutation-control",
+          "values": {
+            "cpu_ns": {
+              "baseline": 1511883.25,
+              "candidate": 1473536.25,
+              "change_percent": -2.5363730962691733,
+              "process_medians": {
+                "baseline": [
+                  1434315.0,
+                  1552090.0,
+                  1529904.5,
+                  1493862.0,
+                  1436524.5,
+                  1597159.5,
+                  1616023.0,
+                  1419799.0
+                ],
+                "candidate": [
+                  1491185.5,
+                  1410978.5,
+                  1431615.0,
+                  1522625.0,
+                  1391985.0,
+                  1469350.0,
+                  1477722.5,
+                  1529636.0
+                ]
+              }
+            },
+            "wall_ns": {
+              "baseline": 1511900.0,
+              "candidate": 1473576.5,
+              "change_percent": -2.5347906607579906,
+              "process_medians": {
+                "baseline": [
+                  1434315.5,
+                  1558423.5,
+                  1529958.5,
+                  1493841.5,
+                  1436512.0,
+                  1597235.5,
+                  1616134.5,
+                  1419836.0
+                ],
+                "candidate": [
+                  1491175.0,
+                  1410915.5,
+                  1431658.5,
+                  1522603.5,
+                  1391904.5,
+                  1469377.0,
+                  1477776.0,
+                  1529627.5
+                ]
+              }
+            },
+            "main_cpu_ns": {
+              "baseline": 1511071.5,
+              "candidate": 1472768.25,
+              "change_percent": -2.534840343425182,
+              "process_medians": {
+                "baseline": [
+                  1433757.0,
+                  1551389.5,
+                  1529083.5,
+                  1493059.5,
+                  1435703.5,
+                  1596376.5,
+                  1615211.5,
+                  1419160.0
+                ],
+                "candidate": [
+                  1490533.0,
+                  1410448.0,
+                  1430863.5,
+                  1521762.5,
+                  1391475.5,
+                  1468571.5,
+                  1476965.0,
+                  1528789.0
+                ]
+              }
+            },
+            "worker_cpu_ns": {
+              "baseline": 0.0,
+              "candidate": 0.0,
+              "change_percent": null,
+              "process_medians": {
+                "baseline": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "candidate": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            }
+          },
+          "baseline_counted": {
+            "verified": 0,
+            "exits": 0,
+            "registry_locks": 160000,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048
+          },
+          "candidate_counted": {
+            "verified": 0,
+            "exits": 0,
+            "registry_locks": 160000,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048
+          }
+        }
+      ]
+    },
+    "raw_member": "native-key-observed-final-abba.json",
+    "method": {
+      "rounds": 4,
+      "order": "ABBA",
+      "samples_per_case": 10,
+      "warmup_samples": [
+        0,
+        1
+      ],
+      "first_stream_per_process": true,
+      "separate_counted_binaries": true,
+      "cases": [
+        "cold-single",
+        "single",
+        "shared8",
+        "distinct8",
+        "distinct32",
+        "churn8",
+        "tiny-lifecycle",
+        "no-read-lifecycle",
+        "mutation-control"
+      ],
+      "fresh_process_per_workload": true,
+      "worker_cpu_receipts": "entry through actual TLS destructor; churn writer entry through return",
+      "process_cpu_consistency": "must cover caller thread plus all measured worker CPU"
+    },
+    "environment": {
+      "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+      "cpu_count": 9,
+      "affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "process_clock_resolution_seconds": 1e-09,
+      "thread_clock_resolution_seconds": 1e-09
+    },
+    "builds": {
+      "baseline": {
+        "source_ref": "fdf4861b608d7a5fe8c0fa6c8a285dfbdf573d91",
+        "production_sha256": "b8b14e916e7380261bc2aa9241da9690b95c0f67883f868d117d7fa54f364817",
+        "registry_lock_sites": 5,
+        "inputs": {
+          "tests/native/pthread_key_measurement.cc": "c736f57f27e843a29b1597fe83b16e74927dcb752a3627aca20671c51d1abb8d",
+          "tests/native/pthread_key_measurement.h": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+          "tools/measure_bionic_key_lookup.py": "ad01e907e2c8423ead18eeec0a48d1e54cb336e9f614d87388dc6c1772e8634e",
+          "tools/test_bionic_key_contracts.py": "0bf44648754cb25367c4be7b7995d7c1337ed22fe8a9e3fe2215d7dfa9c7e7f5",
+          "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+          "compat/bionic/abi_types.h": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+          "compat/bionic/pthread_cleanup.h": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+          "compat/arm64/include/gesher/arm64_va_list.h": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+          "compat/arm64/include/gesher/symbol_table.h": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb"
+        },
+        "compiler": "c++ (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+        "builds": [
+          {
+            "name": "timed",
+            "command": [
+              "c++",
+              "-std=c++20",
+              "-O2",
+              "-g",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-fno-exceptions",
+              "-fno-builtin",
+              "-fno-lto",
+              "-pthread",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+              "/workspace/scratch/aa09b1a0dc1f/native-key-observed-before/timed-production.cc",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native/pthread_key_measurement.cc",
+              "-o",
+              "/workspace/scratch/aa09b1a0dc1f/native-key-observed-before/timed"
+            ],
+            "instrumented": false,
+            "generated_sha256": "dd487280524907d197234cbc977dcede431cbd10ea6fde714ba8b27342cab5b3",
+            "executable_sha256": "5373bb00d0a1a1811ea7e5348ca792c4d4087b2d020e06b1c82f146892c5562a"
+          },
+          {
+            "name": "counted",
+            "command": [
+              "c++",
+              "-std=c++20",
+              "-O2",
+              "-g",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-fno-exceptions",
+              "-fno-builtin",
+              "-fno-lto",
+              "-pthread",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+              "/workspace/scratch/aa09b1a0dc1f/native-key-observed-before/counted-production.cc",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native/pthread_key_measurement.cc",
+              "-o",
+              "/workspace/scratch/aa09b1a0dc1f/native-key-observed-before/counted"
+            ],
+            "instrumented": true,
+            "generated_sha256": "8b8f2b288c9feeb7bd39da2455e9941d1b2d08b5e5a28687a748c04958d37a77",
+            "executable_sha256": "c4b05eb5615e32d23066b0d644c5979d55a6a8ee50364a9d67fa2a61c6cdb248"
+          }
+        ]
+      },
+      "candidate": {
+        "source_ref": null,
+        "production_sha256": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223",
+        "registry_lock_sites": 4,
+        "inputs": {
+          "tests/native/pthread_key_measurement.cc": "c736f57f27e843a29b1597fe83b16e74927dcb752a3627aca20671c51d1abb8d",
+          "tests/native/pthread_key_measurement.h": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+          "tools/measure_bionic_key_lookup.py": "ad01e907e2c8423ead18eeec0a48d1e54cb336e9f614d87388dc6c1772e8634e",
+          "tools/test_bionic_key_contracts.py": "0bf44648754cb25367c4be7b7995d7c1337ed22fe8a9e3fe2215d7dfa9c7e7f5",
+          "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+          "compat/bionic/abi_types.h": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+          "compat/bionic/pthread_cleanup.h": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+          "compat/arm64/include/gesher/arm64_va_list.h": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+          "compat/arm64/include/gesher/symbol_table.h": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb"
+        },
+        "compiler": "c++ (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+        "builds": [
+          {
+            "name": "timed",
+            "command": [
+              "c++",
+              "-std=c++20",
+              "-O2",
+              "-g",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-fno-exceptions",
+              "-fno-builtin",
+              "-fno-lto",
+              "-pthread",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+              "/workspace/scratch/aa09b1a0dc1f/native-key-observed-after/timed-production.cc",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native/pthread_key_measurement.cc",
+              "-o",
+              "/workspace/scratch/aa09b1a0dc1f/native-key-observed-after/timed"
+            ],
+            "instrumented": false,
+            "generated_sha256": "251fa852a24e89afc121b1f72d55b78cafc436b4dce87d7c5bac28fb260ad737",
+            "executable_sha256": "6aba7bb5bca6af272c5547f31e15af99a20692ca8832b7fab5f11c3bf1c11ddc"
+          },
+          {
+            "name": "counted",
+            "command": [
+              "c++",
+              "-std=c++20",
+              "-O2",
+              "-g",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-fno-exceptions",
+              "-fno-builtin",
+              "-fno-lto",
+              "-pthread",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+              "/workspace/scratch/aa09b1a0dc1f/native-key-observed-after/counted-production.cc",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native/pthread_key_measurement.cc",
+              "-o",
+              "/workspace/scratch/aa09b1a0dc1f/native-key-observed-after/counted"
+            ],
+            "instrumented": true,
+            "generated_sha256": "d65bd3b43fcd27d3f121ae494767fe6a81e8869fce51af5809a6390a81c4ec1d",
+            "executable_sha256": "28fb0dc1017b77de4c008f0cc83e143b25c956f1bb6af4f606e459d423263484"
+          }
+        ]
+      }
+    },
+    "all_process_cpu_covers_caller_and_worker_lower_bounds": true,
+    "individual_worker_cpu_receipts": 175302,
+    "quiet_window": "Root, Java and Media explicitly confirmed no heavy work; exact receipt timestamps are in summary.",
+    "first_call_limit": "Eight fresh first calls per variant; descriptive observed cost only, no cold-start equivalence or release-budget acceptance."
+  },
+  "superseded_campaign": {
+    "raw_member": "native-key-final-abba.json",
+    "summary_member": "native-key-final-summary.json",
+    "timed_processes": 16,
+    "timed_observations": 1296,
+    "counted_observations": 18,
+    "started_utc": "2026-11-23T13:18:14.720255+00:00",
+    "ended_utc": "2026-11-23T13:18:55.312225+00:00",
+    "cpu_qualification": "rejected; short-lived-worker process-clock receipts were suspect and lacked an independent per-worker lower bound",
+    "exact_cause": "not established; no kernel/JVM/clock-resolution mechanism is claimed",
+    "original_control_summaries": {
+      "cold-single": {
+        "case": "cold-single",
+        "cpu_ns": {
+          "baseline": 118804.0,
+          "candidate": 109368.5,
+          "change_percent": -7.9420726574862766,
+          "process_medians": {
+            "baseline": [
+              98918,
+              114823,
+              101655,
+              138641,
+              124981,
+              129865,
+              120879,
+              116729
+            ],
+            "candidate": [
+              106954,
+              93125,
+              103731,
+              111783,
+              302696,
+              181390,
+              86594,
+              112629
+            ]
+          }
+        },
+        "wall_ns": {
+          "baseline": 239757.0,
+          "candidate": 231924.5,
+          "change_percent": -3.2668493516351926,
+          "process_medians": {
+            "baseline": [
+              244809,
+              612595,
+              202225,
+              339652,
+              234705,
+              225800,
+              202003,
+              255399
+            ],
+            "candidate": [
+              227401,
+              209686,
+              236448,
+              213559,
+              535074,
+              294705,
+              300619,
+              219218
+            ]
+          }
+        },
+        "counts": {
+          "baseline": {
+            "case": "cold-single",
+            "sample": 0,
+            "verified": 1,
+            "exits": 1,
+            "cpu_ns": 117719,
+            "wall_ns": 242538,
+            "registry_locks": 5,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048,
+            "instrumented": true
+          },
+          "candidate": {
+            "case": "cold-single",
+            "sample": 0,
+            "verified": 1,
+            "exits": 1,
+            "cpu_ns": 84584,
+            "wall_ns": 246665,
+            "registry_locks": 4,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048,
+            "instrumented": true
+          }
+        }
+      },
+      "tiny-lifecycle": {
+        "case": "tiny-lifecycle",
+        "cpu_ns": {
+          "baseline": 34898695.25,
+          "candidate": 43744976.75,
+          "change_percent": 25.348459123267663,
+          "process_medians": {
+            "baseline": [
+              35353596.5,
+              42900048.0,
+              43102293.5,
+              32784591.0,
+              41428219.0,
+              34035446.0,
+              33419611.5,
+              34443794.0
+            ],
+            "candidate": [
+              29996328.5,
+              60386150.5,
+              52445863.5,
+              48863468.5,
+              45288068.0,
+              42201885.5,
+              38388677.5,
+              35581444.0
+            ]
+          }
+        },
+        "wall_ns": {
+          "baseline": 32537573.0,
+          "candidate": 39217716.0,
+          "change_percent": 20.530550941829627,
+          "process_medians": {
+            "baseline": [
+              33014512.5,
+              42525154.5,
+              37802346.5,
+              29485647.5,
+              34842816.5,
+              29045265.0,
+              28935383.5,
+              32060633.5
+            ],
+            "candidate": [
+              25202326.5,
+              54885265.0,
+              47863725.0,
+              42974275.0,
+              41274829.0,
+              36592246.0,
+              37160603.0,
+              32966496.5
+            ]
+          }
+        },
+        "counts": {
+          "baseline": {
+            "case": "tiny-lifecycle",
+            "sample": 0,
+            "verified": 512,
+            "exits": 512,
+            "cpu_ns": 27597799,
+            "wall_ns": 22036953,
+            "registry_locks": 2560,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048,
+            "instrumented": true
+          },
+          "candidate": {
+            "case": "tiny-lifecycle",
+            "sample": 0,
+            "verified": 512,
+            "exits": 512,
+            "cpu_ns": 26341924,
+            "wall_ns": 22147315,
+            "registry_locks": 2048,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048,
+            "instrumented": true
+          }
+        }
+      },
+      "no-read-lifecycle": {
+        "case": "no-read-lifecycle",
+        "cpu_ns": {
+          "baseline": 35383829.75,
+          "candidate": 42497358.75,
+          "change_percent": 20.103897882902277,
+          "process_medians": {
+            "baseline": [
+              32430856.0,
+              45575845.0,
+              35808820.0,
+              32787986.5,
+              36827370.0,
+              45073764.0,
+              33972240.0,
+              34958839.5
+            ],
+            "candidate": [
+              28691399.5,
+              56847019.5,
+              49019487.5,
+              48526676.0,
+              48146581.0,
+              36848136.5,
+              35753996.0,
+              30593159.0
+            ]
+          }
+        },
+        "wall_ns": {
+          "baseline": 30924564.25,
+          "candidate": 38720131.5,
+          "change_percent": 25.20833337207007,
+          "process_medians": {
+            "baseline": [
+              28276803.5,
+              41387455.0,
+              31392502.0,
+              27810775.5,
+              31439443.0,
+              39372535.5,
+              28826489.0,
+              30456626.5
+            ],
+            "candidate": [
+              25073495.0,
+              53708300.0,
+              45997904.5,
+              43326495.0,
+              45798386.0,
+              34113768.0,
+              33108379.0,
+              27384941.0
+            ]
+          }
+        },
+        "counts": {
+          "baseline": {
+            "case": "no-read-lifecycle",
+            "sample": 0,
+            "verified": 0,
+            "exits": 512,
+            "cpu_ns": 41671386,
+            "wall_ns": 37009776,
+            "registry_locks": 2048,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048,
+            "instrumented": true
+          },
+          "candidate": {
+            "case": "no-read-lifecycle",
+            "sample": 0,
+            "verified": 0,
+            "exits": 512,
+            "cpu_ns": 34916014,
+            "wall_ns": 32255264,
+            "registry_locks": 2048,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048,
+            "instrumented": true
+          }
+        }
+      },
+      "mutation-control": {
+        "case": "mutation-control",
+        "cpu_ns": {
+          "baseline": 2945350.5,
+          "candidate": 3304405.5,
+          "change_percent": 12.19056950946924,
+          "process_medians": {
+            "baseline": [
+              2817860.5,
+              2912227.0,
+              2829211.0,
+              2986181.0,
+              3318089.5,
+              3553456.0,
+              2849785.0,
+              2978474.0
+            ],
+            "candidate": [
+              4484524.0,
+              3441718.0,
+              3042487.5,
+              4911259.0,
+              3728500.5,
+              3081319.0,
+              2853424.5,
+              3167093.0
+            ]
+          }
+        },
+        "wall_ns": {
+          "baseline": 2945677.75,
+          "candidate": 3309854.75,
+          "change_percent": 12.363097083514996,
+          "process_medians": {
+            "baseline": [
+              2820070.0,
+              2912491.0,
+              2856461.0,
+              2990418.5,
+              3318257.0,
+              3653555.5,
+              2863249.0,
+              2978864.5
+            ],
+            "candidate": [
+              4484959.5,
+              3442412.0,
+              3047520.0,
+              4912697.0,
+              3728646.0,
+              3081620.0,
+              2853721.0,
+              3177297.5
+            ]
+          }
+        },
+        "counts": {
+          "baseline": {
+            "case": "mutation-control",
+            "sample": 0,
+            "verified": 0,
+            "exits": 0,
+            "cpu_ns": 2858196,
+            "wall_ns": 2858263,
+            "registry_locks": 160000,
+            "global_array_bytes": 2176,
+            "thread_array_bytes": 2048,
+            "instrumented": true
+          },
+          "candidate": {
+            "case": "mutation-control",
+            "sample": 0,
+            "verified": 0,
+            "exits": 0,
+            "cpu_ns": 3097260,
+            "wall_ns": 3097543,
+            "registry_locks": 160000,
+            "global_array_bytes": 3072,
+            "thread_array_bytes": 2048,
+            "instrumented": true
+          }
+        }
+      }
+    },
+    "original_driver_sha256": "3fd1f821cf5b0187917027a1bd0ddfaf7a2de0bc2dfd3d546d248fc7a68fad39",
+    "diagnostics": "All diagnostic source/stdout and original assembly are in the archive; longer duration alone did not resolve the concern."
+  },
+  "validation_pilot": {
+    "raw_member": "native-key-observed-gate-pilot.json",
+    "timed_processes": 36,
+    "timed_observations": 100,
+    "counted_observations": 18,
+    "performance_qualification": false
+  },
+  "storage": {
+    "global_arrays_baseline_bytes": 2176,
+    "global_arrays_candidate_bytes": 3072,
+    "fixed_increase_bytes": 896,
+    "thread_arrays_bytes_both": 2048,
+    "boundary": "sizeof the existing three global key arrays and two thread-local arrays only; excludes mutex/TLS machinery, process RSS and OS allocation commitment"
+  },
+  "functional": {
+    "cases": [
+      "public",
+      "mutations",
+      "exit_order",
+      "host_exit",
+      "generation_limit",
+      "readers",
+      "read_progress"
+    ],
+    "negative_controls": [
+      {
+        "name": "global-read-lock",
+        "case": "read_progress",
+        "assertion": "pthread keys: local read proceeds while key registry is locked",
+        "returncode": 1,
+        "mutation": [
+          "  const uint64_t generation = g_key_live_generations[key].load(std::memory_order_acquire);",
+          "  std::lock_guard<std::mutex> lock(g_keys_mutex);\n  const uint64_t generation = g_key_live_generations[key].load(std::memory_order_acquire);"
+        ],
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-pthread",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/global-read-lock.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/global-read-lock",
+          "-DHAVE_KEY_GENERATIONS",
+          "-fsanitize=address,undefined",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "a46809f634e0be517ffce46d25fbbb72fc46ff1476b1aadfee9cb7621a5c4c3d"
+      },
+      {
+        "name": "stale-generation",
+        "case": "public",
+        "assertion": "pthread keys: another thread sees empty replacement",
+        "returncode": 1,
+        "mutation": [
+          "generation == 0 || t_key_generations[key] != generation",
+          "generation == 0"
+        ],
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-pthread",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/stale-generation.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/stale-generation",
+          "-DHAVE_KEY_GENERATIONS",
+          "-fsanitize=address,undefined",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "2938750e0860d492f9c6d760bff9612a8680e2aa2271e746c990a421057c5021"
+      },
+      {
+        "name": "deleted-publication",
+        "case": "public",
+        "assertion": "pthread keys: deleted key reads empty",
+        "returncode": 1,
+        "mutation": [
+          "  g_key_live_generations[key].store(0, std::memory_order_release);",
+          "  // mutation: retain deleted publication"
+        ],
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-pthread",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/deleted-publication.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/deleted-publication",
+          "-DHAVE_KEY_GENERATIONS",
+          "-fsanitize=address,undefined",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "7edeb0ee6ab299109ff74ddc792b4f21014bb41356fb60562e79ee1b9431a561"
+      },
+      {
+        "name": "wrong-publication",
+        "case": "public",
+        "assertion": "pthread keys: set/get preserves value",
+        "returncode": 1,
+        "mutation": [
+          "g_key_live_generations[i].store(g_key_generations[i],",
+          "g_key_live_generations[i].store(g_key_generations[i] + 1,"
+        ],
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-pthread",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/wrong-publication.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/wrong-publication",
+          "-DHAVE_KEY_GENERATIONS",
+          "-fsanitize=address,undefined",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "f1e170def7ffb59fa6cf5d0d1919c7cd084f738cfed070b7186000318b8c8bf3"
+      },
+      {
+        "name": "generation-wrap",
+        "case": "generation_limit",
+        "assertion": "pthread keys: exhausted generation retires without wrap",
+        "returncode": 1,
+        "mutation": [
+          "g_key_generations[i] != UINT64_MAX",
+          "true"
+        ],
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-pthread",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/generation-wrap.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/generation-wrap",
+          "-DHAVE_KEY_GENERATIONS",
+          "-fsanitize=address,undefined",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "e022f68f91e48291f8dd0793c73ccb828286a9facd0cb7fad98580f8d6ebe960"
+      },
+      {
+        "name": "obsolete-destructor",
+        "case": "public",
+        "assertion": "pthread keys: obsolete values never reach replacement destructor",
+        "returncode": 1,
+        "mutation": [
+          "t_key_generations[k] == g_key_generations[k]",
+          "true"
+        ],
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-pthread",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/obsolete-destructor.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/obsolete-destructor",
+          "-DHAVE_KEY_GENERATIONS",
+          "-fsanitize=address,undefined",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "8fc5d9d38181796658379741ca651094e3042e3f883a0ffcc51c426f1ce27a01"
+      }
+    ],
+    "source_receipt": {
+      "source_sha256": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223",
+      "generated_sha256": "c13d98f9bb0a7ab641037bacf3873f8a7f6c2182af917386da2871d8c7e645f5",
+      "template_sha256": "699cf2e64c960d4324cc750877d7a37ee04fe957ba4d1da83395770b96fbf1b9",
+      "public_fixture_sha256": "7ac104958a78c50618fa66088ba3913e7c687ea2ea2a6d31a4abb829836fea88",
+      "command": [
+        "c++",
+        "-std=c++20",
+        "-O1",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-fno-exceptions",
+        "-fno-builtin",
+        "-pthread",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+        "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/pthread_key_test.cc",
+        "-o",
+        "/workspace/scratch/aa09b1a0dc1f/native-key-contracts-final/pthread_key_test",
+        "-DHAVE_KEY_GENERATIONS",
+        "-fsanitize=address,undefined",
+        "-fno-omit-frame-pointer"
+      ],
+      "executable_sha256": "154d507afa75787f8fc702d43bf7a73235c5cdb2bd943cc77ff01ba2d1a6d24e",
+      "reference": false
+    },
+    "independent_candidate_receipt": {
+      "source_sha256": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223",
+      "generated_sha256": "c13d98f9bb0a7ab641037bacf3873f8a7f6c2182af917386da2871d8c7e645f5",
+      "template_sha256": "699cf2e64c960d4324cc750877d7a37ee04fe957ba4d1da83395770b96fbf1b9",
+      "public_fixture_sha256": "7ac104958a78c50618fa66088ba3913e7c687ea2ea2a6d31a4abb829836fea88",
+      "command": [
+        "c++",
+        "-std=c++20",
+        "-O1",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-fno-exceptions",
+        "-fno-builtin",
+        "-pthread",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+        "/workspace/scratch/aa09b1a0dc1f/media-review-pthread-key/pthread_key_test.cc",
+        "-o",
+        "/workspace/scratch/aa09b1a0dc1f/media-review-pthread-key/pthread_key_test",
+        "-DHAVE_KEY_GENERATIONS",
+        "-fsanitize=address,undefined",
+        "-fno-omit-frame-pointer"
+      ],
+      "executable_sha256": "7e2c9dd8a83cae431a2b0fad80f94af92d1464b70d60538a952070db6c9ba2b6",
+      "reference": false
+    },
+    "independent_baseline_receipt": {
+      "source_sha256": "b8b14e916e7380261bc2aa9241da9690b95c0f67883f868d117d7fa54f364817",
+      "generated_sha256": "a677e91fac5ba4ca4f299c13ff7bb1b50a8b366bfa2623399f901ee225cded38",
+      "template_sha256": "699cf2e64c960d4324cc750877d7a37ee04fe957ba4d1da83395770b96fbf1b9",
+      "public_fixture_sha256": "7ac104958a78c50618fa66088ba3913e7c687ea2ea2a6d31a4abb829836fea88",
+      "command": [
+        "c++",
+        "-std=c++20",
+        "-O1",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-fno-exceptions",
+        "-fno-builtin",
+        "-pthread",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native",
+        "/workspace/scratch/aa09b1a0dc1f/media-review-pthread-key-baseline/pthread_key_test.cc",
+        "-o",
+        "/workspace/scratch/aa09b1a0dc1f/media-review-pthread-key-baseline/pthread_key_test",
+        "-DHAVE_KEY_GENERATIONS",
+        "-fsanitize=address,undefined",
+        "-fno-omit-frame-pointer"
+      ],
+      "executable_sha256": "d9589a0f8f45f8bafd9d831c7f616954d7bad691466b6373f20780ee9d227da1",
+      "reference": true
+    },
+    "actual_windows_execution": "pending full CI",
+    "local_limit": "Actual extracted key/exit source and real host pthread TLS; Windows ThreadRecord boundary is supplied."
+  },
+  "windows_translation_unit_compilation": [
+    {
+      "source": "compat/bionic/pthread_bionic.cc",
+      "source_sha256": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223",
+      "target": "x86_64",
+      "command": [
+        "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+        "-std=gnu++20",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-mno-ms-bitfields",
+        "-fsized-deallocation",
+        "-fno-exceptions",
+        "-fno-builtin",
+        "-DGESHER",
+        "-DUSE_MINGW",
+        "-DWIN32_LEAN_AND_MEAN",
+        "-DNOMINMAX",
+        "-DNOGDI",
+        "-D_USE_MATH_DEFINES",
+        "-D__STDC_FORMAT_MACROS",
+        "-D__STDC_CONSTANT_MACROS",
+        "-D__STDC_LIMIT_MACROS",
+        "-D_WIN32_WINNT=0x0A00",
+        "-DWINVER=0x0A00",
+        "-D_FILE_OFFSET_BITS=64",
+        "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/posix/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/elf/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+        "-c",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic/pthread_bionic.cc",
+        "-o",
+        "/workspace/scratch/aa09b1a0dc1f/native-key-main982-windows/x86_64-pthread_bionic.o"
+      ],
+      "returncode": 0,
+      "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a"
+    },
+    {
+      "source": "tests/native/bionic_key_exit_test.cc",
+      "source_sha256": "07625c284313291b402c134016def43d432c0f4c98c977a0e710dc34a63318b6",
+      "target": "x86_64",
+      "command": [
+        "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+        "-std=gnu++20",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-mno-ms-bitfields",
+        "-fsized-deallocation",
+        "-fno-exceptions",
+        "-fno-builtin",
+        "-DGESHER",
+        "-DUSE_MINGW",
+        "-DWIN32_LEAN_AND_MEAN",
+        "-DNOMINMAX",
+        "-DNOGDI",
+        "-D_USE_MATH_DEFINES",
+        "-D__STDC_FORMAT_MACROS",
+        "-D__STDC_CONSTANT_MACROS",
+        "-D__STDC_LIMIT_MACROS",
+        "-D_WIN32_WINNT=0x0A00",
+        "-DWINVER=0x0A00",
+        "-D_FILE_OFFSET_BITS=64",
+        "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/posix/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/elf/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+        "-c",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native/bionic_key_exit_test.cc",
+        "-o",
+        "/workspace/scratch/aa09b1a0dc1f/native-key-main982-windows/x86_64-bionic_key_exit_test.o"
+      ],
+      "returncode": 0,
+      "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a"
+    },
+    {
+      "source": "compat/bionic/pthread_bionic.cc",
+      "source_sha256": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223",
+      "target": "aarch64",
+      "command": [
+        "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+        "-std=gnu++20",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-mno-ms-bitfields",
+        "-fsized-deallocation",
+        "-fno-exceptions",
+        "-fno-builtin",
+        "-DGESHER",
+        "-DUSE_MINGW",
+        "-DWIN32_LEAN_AND_MEAN",
+        "-DNOMINMAX",
+        "-DNOGDI",
+        "-D_USE_MATH_DEFINES",
+        "-D__STDC_FORMAT_MACROS",
+        "-D__STDC_CONSTANT_MACROS",
+        "-D__STDC_LIMIT_MACROS",
+        "-D_WIN32_WINNT=0x0A00",
+        "-DWINVER=0x0A00",
+        "-D_FILE_OFFSET_BITS=64",
+        "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/posix/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/elf/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+        "-c",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic/pthread_bionic.cc",
+        "-o",
+        "/workspace/scratch/aa09b1a0dc1f/native-key-main982-windows/aarch64-pthread_bionic.o"
+      ],
+      "returncode": 0,
+      "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a"
+    },
+    {
+      "source": "tests/native/bionic_key_exit_test.cc",
+      "source_sha256": "07625c284313291b402c134016def43d432c0f4c98c977a0e710dc34a63318b6",
+      "target": "aarch64",
+      "command": [
+        "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+        "-std=gnu++20",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-mno-ms-bitfields",
+        "-fsized-deallocation",
+        "-fno-exceptions",
+        "-fno-builtin",
+        "-DGESHER",
+        "-DUSE_MINGW",
+        "-DWIN32_LEAN_AND_MEAN",
+        "-DNOMINMAX",
+        "-DNOGDI",
+        "-D_USE_MATH_DEFINES",
+        "-D__STDC_FORMAT_MACROS",
+        "-D__STDC_CONSTANT_MACROS",
+        "-D__STDC_LIMIT_MACROS",
+        "-D_WIN32_WINNT=0x0A00",
+        "-DWINVER=0x0A00",
+        "-D_FILE_OFFSET_BITS=64",
+        "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/posix/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/bionic/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/elf/include",
+        "-I",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/compat/arm64/include",
+        "-c",
+        "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-key/tests/native/bionic_key_exit_test.cc",
+        "-o",
+        "/workspace/scratch/aa09b1a0dc1f/native-key-main982-windows/aarch64-bionic_key_exit_test.o"
+      ],
+      "returncode": 0,
+      "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a"
+    }
+  ],
+  "main_integration": {
+    "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+    "feature_commit": "fb66b006914ae1810b9b87773c77e6c4d1c9b9e7",
+    "preintegration_feature": "54b18131ae74069045e7dcf998c9ded8e31533f7",
+    "paths": {
+      ".github/workflows/ci.yml": {
+        "sha256": "9e26595a2ac3b24898811519f26152820d6e3a8673e213a012fb7d085df5b6fa",
+        "unchanged_from_preintegration": false
+      },
+      "compat/bionic/pthread_bionic.cc": {
+        "sha256": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223",
+        "unchanged_from_preintegration": true
+      },
+      "tests/native/bionic_key_exit_test.cc": {
+        "sha256": "07625c284313291b402c134016def43d432c0f4c98c977a0e710dc34a63318b6",
+        "unchanged_from_preintegration": true
+      },
+      "tests/native/pthread_key_contract_host_test.cc.in": {
+        "sha256": "699cf2e64c960d4324cc750877d7a37ee04fe957ba4d1da83395770b96fbf1b9",
+        "unchanged_from_preintegration": true
+      },
+      "tests/native/pthread_key_contract_test.inc": {
+        "sha256": "7ac104958a78c50618fa66088ba3913e7c687ea2ea2a6d31a4abb829836fea88",
+        "unchanged_from_preintegration": true
+      },
+      "tests/native/pthread_key_measurement.cc": {
+        "sha256": "c736f57f27e843a29b1597fe83b16e74927dcb752a3627aca20671c51d1abb8d",
+        "unchanged_from_preintegration": true
+      },
+      "tests/native/pthread_key_measurement.h": {
+        "sha256": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+        "unchanged_from_preintegration": true
+      },
+      "tests/windows/tracks/40-native-libs.ps1": {
+        "sha256": "1beb7d937f4d6152d6e5a4b905e974c911b1e0601f6ec2b955dd4ca7c3dd4b3b",
+        "unchanged_from_preintegration": false
+      },
+      "tools/measure_bionic_key_lookup.py": {
+        "sha256": "ad01e907e2c8423ead18eeec0a48d1e54cb336e9f614d87388dc6c1772e8634e",
+        "unchanged_from_preintegration": true
+      },
+      "tools/test_bionic_key_contracts.py": {
+        "sha256": "0bf44648754cb25367c4be7b7995d7c1337ed22fe8a9e3fe2215d7dfa9c7e7f5",
+        "unchanged_from_preintegration": true
+      }
+    },
+    "baseline_byte_identity": {
+      "compat/bionic/pthread_bionic.cc": {
+        "sha256": "b8b14e916e7380261bc2aa9241da9690b95c0f67883f868d117d7fa54f364817",
+        "fdf_equals_982": true
+      },
+      "compat/bionic/shim_internal.h": {
+        "sha256": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+        "fdf_equals_982": true
+      },
+      "compat/bionic/abi_types.h": {
+        "sha256": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+        "fdf_equals_982": true
+      },
+      "compat/bionic/pthread_cleanup.h": {
+        "sha256": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+        "fdf_equals_982": true
+      },
+      "compat/arm64/include/gesher/arm64_va_list.h": {
+        "sha256": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+        "fdf_equals_982": true
+      },
+      "compat/arm64/include/gesher/symbol_table.h": {
+        "sha256": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb",
+        "fdf_equals_982": true
+      }
+    },
+    "incoming_main_paths": {
+      "tools/net-tcp-priority/qualified/ofd-stream-source.json": {
+        "sha256": "9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01",
+        "unchanged": true
+      },
+      "tools/net-tcp-priority/test-selected-policy.py": {
+        "sha256": "8ea68df5b79b1ba3a9f0feeb49a9a96d3201264a0275f8b2b49d7b83c570ead0",
+        "unchanged": true
+      },
+      ".github/workflows/framework.yml": {
+        "sha256": "e70d9ddc5de5dd9c0e2827bc9c8bac1c65378761315a4990369a7cb26d791c6b",
+        "unchanged": true
+      }
+    },
+    "ci_only_change": "append --negative-controls to existing required pthread-key contract step"
+  },
+  "archive": {
+    "path": "data/pthread-key-generation-2026-11-23.tar.gz",
+    "sha256": "b6e0068b49aac50cbc146fe63bb5fc5d23c550e243a684867f169c42ecf5c1c4",
+    "bytes": 1385744,
+    "members_including_manifest": 351,
+    "manifest_member": "MANIFEST.json",
+    "manifest_sha256": "e10fc97d9487361a99a8c9b38f72b28628d4749208e1a4836c3df951978cadfc"
+  },
+  "remaining_limits": [
+    "Full Windows linking/execution, actual exported native/ART/ELF fixture and app performance remain remote CI work.",
+    "No application startup, whole-runtime CPU, process RSS or universal speedup claim.",
+    "The atomic snapshot does not extend caller value, destructor or loaded-module lifetime.",
+    "Cold one-read CPU/wall regressions and all earlier adverse controls remain disclosed."
+  ]
+}
