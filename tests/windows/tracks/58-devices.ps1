@@ -73,6 +73,10 @@ Check 'devices: camera request selection is atomic against cancel and flush' {
   DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
     'gesher.services.CameraRequestRaceTest') 90
 } @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed')
+Check 'devices: camera callback/request admission bounds real native metadata and blocked consumers' {
+  DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+    'gesher.services.CameraCallbackAdmissionTest') 90
+} @('CameraCallbackAdmissionTest: real native metadata, bounded requests/callbacks, ordered flush and nonjoining close passed')
 $d = 'devices: location: '
 
 # The location checks of devices.apk's LocationSteps (both modes).
