@@ -1064,13 +1064,13 @@ void LoadArtShimFor(const char* path) {
   const char* data = std::getenv("ANDROID_DATA");
   const std::string dir = std::string(data != nullptr && *data != 0 ? data : ".") +
                           "/system/gesher-art";
-  if (header.e_machine == EM_AARCH64 &&
-      gesher::bionic::IsArtHookingPacker(path) && std::string(path).size() >= 12 &&
-      std::string(path).substr(std::string(path).size() - 12) == "/libnesec.so") {
+  // Each shell has a stand-in for one machine only (Ijiami's x86-64 libexec*.so,
+  // NetEase Yidun's arm64 libnesec.so); another machine's gets none.
+  if (header.e_machine != gesher::bionic::ArtHookingPackerMachine(path)) return;
+  if (header.e_machine == EM_AARCH64) {
     LoadArtShimArm64For(path, dir);
     return;
   }
-  if (header.e_machine != EM_X86_64) return;
   std::string shim, message;
   void* entry = gesher::bionic::LoadArtShim(dir, &shim, &message);
   if (entry == nullptr) {

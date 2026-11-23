@@ -263,6 +263,14 @@ void CheckArm64StandIns() {
   Check("NetEase Yidun's arm64 shell is recognized (libnesec.so)",
         IsArtHookingPacker("/data/app/x/lib/arm64/libnesec.so") &&
             !IsArtHookingPacker("/data/app/x/lib/arm64/libnesec2.so"));
+  // Each shell's stand-in is for one machine: an x86-64 libnesec.so gets
+  // neither (ADR 0086), an arm64 libexec*.so no x86-64 one.
+  Check("libnesec.so's stand-in is arm64 only, Ijiami's x86-64 only",
+        ArtHookingPackerMachine("/data/app/x/lib/x86_64/libnesec.so") == EM_AARCH64 &&
+            ArtHookingPackerMachine("C:\\a\\libexec_x86.so") == EM_X86_64 &&
+            ArtHookingPackerMachine("/data/app/x/lib/arm64/libexec.so") == EM_X86_64 &&
+            ArtHookingPackerMachine("/data/app/x/lib/arm64/libnesec2.so") == 0 &&
+            ArtHookingPackerMachine(nullptr) == 0);
 
   const std::string version("999", 4);  // the 4 bytes of OatHeader::kOatVersion
   Image art, dexfile;

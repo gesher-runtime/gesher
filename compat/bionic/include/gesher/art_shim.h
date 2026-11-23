@@ -16,6 +16,7 @@
 // when the packer has hooked it, the packer's code runs there, as on a device.
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace gesher::bionic {
@@ -28,6 +29,11 @@ extern const char kArtLoadClassSymbol[];
 // name: Ijiami's libexec.so, libexecmain.so and their _x86 variants, NetEase
 // Yidun's libnesec.so)? Which stand-in it gets depends on its machine.
 bool IsArtHookingPacker(const char* path);
+
+// The ELF machine (e_machine) of the shells named `path` that a stand-in
+// covers, or 0 when none: EM_X86_64 for Ijiami's names, EM_AARCH64 for NetEase
+// Yidun's libnesec.so (ADR 0086). A shell of another machine gets no stand-in.
+uint16_t ArtHookingPackerMachine(const char* path);
 
 // The stand-in libart.so's bytes (an ELF64 x86-64 ET_DYN object: one
 // read-execute PT_LOAD from offset 0, .dynsym with DT_HASH and DT_GNU_HASH,

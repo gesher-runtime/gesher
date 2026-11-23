@@ -150,12 +150,20 @@ bool WriteOnce(const std::string& path, const std::string& image, std::string* e
 
 }  // namespace
 
-bool IsArtHookingPacker(const char* path) {
-  if (path == nullptr) return false;
+uint16_t ArtHookingPackerMachine(const char* path) {
+  if (path == nullptr) return 0;
   const std::string base = Base(path);
-  return base == "libexec.so" || base == "libexecmain.so" || base == "libexec_x86.so" ||
-         base == "libexecmain_x86.so" || base == "libnesec.so";
+  if (base == "libexec.so" || base == "libexecmain.so" || base == "libexec_x86.so" ||
+      base == "libexecmain_x86.so") {
+    return EM_X86_64;
+  }
+  // x86-64 NetEase Yidun is not covered: it needs OpenCommon and the Runtime
+  // functions, which only the arm64 stand-in has.
+  if (base == "libnesec.so") return EM_AARCH64;
+  return 0;
 }
+
+bool IsArtHookingPacker(const char* path) { return ArtHookingPackerMachine(path) != 0; }
 
 std::string ArtShimImage() {
   // Layout, in one read-execute PT_LOAD from file offset 0 at address 0, so

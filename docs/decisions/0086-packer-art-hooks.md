@@ -227,7 +227,9 @@ and loads two arm64 stand-ins in one directory named after their contents,
 `libart.so` and `libdexfile.so`, as a device's ART module has them in its
 `lib64` (`compat/bionic/art_shim.cc`, `LoadArtShimArm64`;
 `compat/bionic/jni_bridge.cc`, `LoadArtShimArm64For`). The x86-64 stand-in is
-unchanged, and an arm64 shell with Ijiami's generic names still gets nothing.
+unchanged; each shell gets the stand-in of its own machine only
+(`ArtHookingPackerMachine`), so an arm64 shell with Ijiami's generic names and
+an x86-64 `libnesec.so` get nothing.
 
 - **`libart.so`** exports `LoadClass` (a frame record around NOPs: whatever a
   hook displaces is position-independent); the three Runtime functions, each
@@ -239,7 +241,9 @@ unchanged, and an arm64 shell with Ijiami's generic names still gets nothing.
 - **The Runtime functions act on the real Runtime.** Their GOT slots are
   bound to host functions that call `patches/art/0802`'s
   `gesher_art_runtime_disable_verifier` and
-  `gesher_art_runtime_verification`. These act only on this process's
+  `gesher_art_runtime_verification` (the stand-in's `__gesher_art_*` imports,
+  registered in the bionic symbol table once at startup, since that table is
+  not locked against lookups on app threads). These act only on this process's
   `Runtime::Current()`; for any other pointer they log it and do nothing
   (or report false). The verifier is disabled only because the app asked
   ART to do so, through ART's own function.
