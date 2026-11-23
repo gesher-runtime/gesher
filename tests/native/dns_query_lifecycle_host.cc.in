@@ -37,6 +37,10 @@ static void Pair(int descriptors[2]) {
 
 @QUERY_STATE@
 
+// These fixtures seed already-owned worker results, with no queued dispatcher
+// job. The complete admission/worker fixture covers pending cancellation.
+static bool CancelPendingQuery(const std::shared_ptr<Query>&) { return false; }
+
 @TRANSFER@
 
 static int observed_fd = -1, close_count = 0, other_close_count = 0;

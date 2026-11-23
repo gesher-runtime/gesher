@@ -93,6 +93,72 @@ inline HANDLE OpenOwnedForExit(DWORD tid, uint64_t expected_birth) {
   return thread;
 }
 
+// A real public fclose call, with its actual argument retained in a nonvolatile
+// register for the unwinder. This wrapper contains no wait, readiness latch or
+// replacement lock. The verifier checks the generated call bytes and target;
+// an unsupported compiler shape fails rather than guessing a register's meaning.
+__attribute__((noinline)) int Close(FILE* stream) {
+  register FILE* retained __asm__("r12") = stream;
+  __asm__ __volatile__("" : "+r"(retained));
+  int result = std::fclose(retained);
+  __asm__ __volatile__("" : : "r"(retained) : "memory");
+  return result;
+}
+
+inline bool PublicCallShape(const unsigned char (&code)[9], bool* indirect) {
+  *indirect = code[0] == 0x4c && code[1] == 0x89 && code[2] == 0xe1 &&
+      code[3] == 0xff && code[4] == 0x15;
+  return *indirect || (code[1] == 0x4c && code[2] == 0x89 && code[3] == 0xe1 && code[4] == 0xe8);
+}
+
+inline bool ExactPublicFileCall(DWORD64 pc, DWORD64 r12, FILE* stream) {
+  if (pc < 9 || r12 != reinterpret_cast<uintptr_t>(stream)) return false;
+  HMODULE worker = GetModuleHandleW(nullptr);
+  MEMORY_BASIC_INFORMATION instruction{}, import_region{};
+  if (!VirtualQuery(reinterpret_cast<const void*>(pc - 9), &instruction, sizeof(instruction)) ||
+      instruction.Type != MEM_IMAGE || instruction.AllocationBase != worker) return false;
+  DWORD64 image = 0;
+  auto* function = RtlLookupFunctionEntry(reinterpret_cast<uintptr_t>(&Close), &image, nullptr);
+  if (!function || function->BeginAddress >= function->EndAddress ||
+      image > UINT64_MAX - function->EndAddress ||
+      pc <= image + function->BeginAddress || pc >= image + function->EndAddress) return false;
+  unsigned char code[9]{};
+  SIZE_T copied = 0;
+  bool indirect = false;
+  if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(pc - 9), code, sizeof(code), &copied) ||
+      copied != sizeof(code) || !PublicCallShape(code, &indirect)) return false;
+  int32_t displacement = 0;
+  std::memcpy(&displacement, code + 5, sizeof(displacement));
+  uintptr_t slot = 0;
+  if (displacement < 0) {
+    uint64_t subtract = static_cast<uint64_t>(-static_cast<int64_t>(displacement));
+    if (pc < subtract) return false;
+    slot = pc - subtract;
+  } else {
+    if (pc > UINTPTR_MAX - static_cast<unsigned>(displacement)) return false;
+    slot = pc + static_cast<unsigned>(displacement);
+  }
+  if (!indirect) return slot == reinterpret_cast<uintptr_t>(&std::fclose);
+  if (!VirtualQuery(reinterpret_cast<const void*>(slot), &import_region, sizeof(import_region)) ||
+      import_region.Type != MEM_IMAGE || import_region.AllocationBase != worker) return false;
+  uintptr_t target = 0;
+  copied = 0;
+  return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(slot), &target, sizeof(target), &copied) &&
+      copied == sizeof(target) && target == reinterpret_cast<uintptr_t>(&std::fclose);
+}
+
+inline bool RejectsUnsupportedPublicCall(DWORD64 pc) {
+  if (pc < 9) return false;
+  unsigned char code[9]{};
+  SIZE_T copied = 0;
+  bool indirect = false;
+  if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(pc - 9), code, sizeof(code), &copied) ||
+      copied != sizeof(code) || !PublicCallShape(code, &indirect)) return false;
+  // Change an owned copy of the observed argument-move opcode only.
+  code[indirect ? 0 : 1] ^= 1;
+  return !PublicCallShape(code, &indirect);
+}
+
 // Match the exact observed argument-copy instructions, then independently
 // require their indirect call to resolve to the worker's _lock_file import.
 // This is never a nearest-export or generic register-value inference.
@@ -154,6 +220,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
     return false;
   }
   DWORD64 pcs[32]{};
+  DWORD64 r12s[32]{};
   DWORD64 rsis[32]{};
   DWORD64 rdis[32]{};
   unsigned count = 0;
@@ -163,6 +230,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   DWORD error = captured ? ERROR_SUCCESS : GetLastError();
   while (captured && count < 32 && context.Rip != 0) {
     pcs[count] = context.Rip;
+    r12s[count] = context.R12;
     rsis[count] = context.Rsi;
     rdis[count++] = context.Rdi;
     DWORD64 image_base = 0;
@@ -199,6 +267,7 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   unsigned module_count = 0;
   unsigned exact_file_calls = 0;
   unsigned other_file_calls = 0, enter_frames = 0;
+  unsigned public_file_calls = 0, other_public_file_calls = 0, rejected_public_calls = 0;
   FARPROC enter = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "EnterCriticalSection");
   DWORD64 enter_image = 0;
   PRUNTIME_FUNCTION enter_function = enter ? RtlLookupFunctionEntry(reinterpret_cast<uintptr_t>(enter), &enter_image, nullptr) : nullptr;
@@ -212,6 +281,15 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   for (unsigned index = 0; index < count; ++index) {
     std::fprintf(stderr, "ACTUAL_CLOSER_FRAME index=%u pc=0x%llx nearest-export=%s\n", index,
         static_cast<unsigned long long>(pcs[index]), Describe(pcs[index]).c_str());
+    if (ExactPublicFileCall(pcs[index], r12s[index], stream)) {
+      ++public_file_calls;
+      const bool rejected = RejectsUnsupportedPublicCall(pcs[index]);
+      rejected_public_calls += rejected;
+      std::fprintf(stderr, "ACTUAL_CLOSER_PUBLIC_FILE_CALL index=%u pc=0x%llx unwound-r12=0x%llx FILE=%p exact-r12-rcx-copy-and-public-fclose=true unsupported-code-copy=%s\n",
+          index, static_cast<unsigned long long>(pcs[index]), static_cast<unsigned long long>(r12s[index]),
+          static_cast<void*>(stream), rejected ? "reject" : "accept");
+    }
+    if (other_live_stream && ExactPublicFileCall(pcs[index], r12s[index], other_live_stream)) ++other_public_file_calls;
     FileArgumentRegister argument = ExactFileCall(pcs[index], rsis[index], rdis[index], stream);
     if (argument != FileArgumentRegister::None) {
       ++exact_file_calls;
@@ -245,7 +323,10 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FI
   }
   std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL_SUMMARY matches=%u required=1 enter-frames=%u other-FILE=%p other-matches=%u\n",
       exact_file_calls, enter_frames, static_cast<void*>(other_live_stream), other_file_calls);
-  return captured && count > 0 && closed && previous == 0 && resumed == 1 && exact_file_calls == 1 &&
+  std::fprintf(stderr, "ACTUAL_CLOSER_PUBLIC_FILE_CALL_SUMMARY matches=%u required=1 other-FILE=%p other-matches=%u\n",
+      public_file_calls, static_cast<void*>(other_live_stream), other_public_file_calls);
+  return captured && count > 0 && closed && previous == 0 && resumed == 1 &&
+      public_file_calls == 1 && rejected_public_calls == 1 && other_public_file_calls == 0 && exact_file_calls == 1 &&
       enter_frames == 1 && other_live_stream && other_live_stream != stream && other_file_calls == 0;
 }
 
