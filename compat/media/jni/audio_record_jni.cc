@@ -354,15 +354,15 @@ bool MayRecordAudio(JNIEnv* env) {
   if (env == nullptr) return false;
   jclass cls = env->FindClass("com/gesher/server/AudioService");
   if (cls == nullptr) {
-    // Not on Gesher's boot class path (a bare runtime): nothing to ask.
+    // A bare runtime has no authoritative recording identity or permission store.
     env->ExceptionClear();
-    return true;
+    return false;
   }
   jmethodID m = env->GetStaticMethodID(cls, "recordAudioAllowed", "()Z");
   if (m == nullptr) {
     env->ExceptionClear();
     env->DeleteLocalRef(cls);
-    return true;
+    return false;
   }
   jboolean ok = env->CallStaticBooleanMethod(cls, m);
   if (CheckException(env, "AudioService.recordAudioAllowed")) ok = JNI_FALSE;
@@ -372,7 +372,7 @@ bool MayRecordAudio(JNIEnv* env) {
 
 namespace {
 // The standalone native launcher has no Java provider. In ART retain the
-// existing manifest decision, including the bare-core boot path's policy.
+// live UID grant decision. Missing Java policy cannot authorize recording.
 [[maybe_unused]] const bool g_record_permission_registered =
     (SetRecordingPermissionProvider([] { return MayRecordAudio(nullptr); }), true);
 }

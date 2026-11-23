@@ -42,7 +42,7 @@ public final class PermissionRequestsTest {
         Class<?> requests = Class.forName("com.gesher.server.PermissionRequests");
         Class<?> choices = Class.forName("com.gesher.server.PermissionRequests$Decision");
         Object choice = Proxy.newProxyInstance(choices.getClassLoader(), new Class<?>[]{choices},
-                (proxy, called, args) -> decision.test((String) args[0], (String) args[1]));
+                (proxy, called, args) -> decision.test((String) args[0], (String) args[1]) ? 2 : 1);
         Constructor<?> constructor = requests.getDeclaredConstructor(pmClass, Executor.class, choices);
         constructor.setAccessible(true);
         return constructor.newInstance(pm, executor, choice);
