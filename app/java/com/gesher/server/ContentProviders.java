@@ -133,6 +133,22 @@ final class ContentProviders {
     private final Map<String, Set<ActivityTaskManagerService.ProcessRecord>> mClients = new HashMap<>();
     /** The reference-counted connections, by their Binder (ContentProviderHolder.connection). */
     private final Map<IBinder, Connection> mConnections = new HashMap<>();
+    private volatile ShortcutProcessState.Snapshot mShortcutSnapshot = ShortcutProcessState.Snapshot.EMPTY;
+
+    ShortcutProcessState.Snapshot shortcutSnapshot() { return mShortcutSnapshot; }
+
+    private void publishShortcutStateLocked() {
+        List<ShortcutProcessState.Link> links = new ArrayList<>();
+        for (Connection connection : mConnections.values()) {
+            if (connection.stable == 0 && connection.unstable == 0) continue;
+            ShortcutProcessState.Owner owner = new ShortcutProcessState.Owner(connection.owner,
+                    connection.ownerCode, connection.component, ApkPackage.ComponentKind.PROVIDER);
+            links.add(new ShortcutProcessState.Link(connection.client, connection.clientCode, owner,
+                    0, false, true, () -> true));
+        }
+        mShortcutSnapshot = links.isEmpty() ? ShortcutProcessState.Snapshot.EMPTY
+                : new ShortcutProcessState.Snapshot(List.of(), links);
+    }
 
     /**
      * ContentProviderConnection: one client process's references to one published
@@ -355,6 +371,7 @@ final class ContentProviders {
         if (declaredCode == null) return null;
         ProviderRequest request = new ProviderRequest(declaredCode, declared);
         long deadline = 0;
+        boolean acquired = false;
         synchronized (this) { mRequests.add(request); }
         try {
         while (true) {
@@ -397,7 +414,12 @@ final class ContentProviders {
                     if (counted && caller != null && owner != null && caller != owner) {
                         Connection c = connectionLocked(owner, caller,
                                 published.provider.asBinder(), name, declaredCode, declared.name);
+                        boolean held = c.stable != 0 || c.unstable != 0;
                         if (stable) c.stable++; else c.unstable++;
+                        if (!held) {
+                            publishShortcutStateLocked();
+                            acquired = true; // a new dependency edge to observe
+                        }
                         h.connection = c;
                         h.noReleaseNeeded = false;
                         owner.markActive(SystemClock.uptimeMillis());
@@ -459,6 +481,7 @@ final class ContentProviders {
         }
         } finally {
             synchronized (this) { mRequests.remove(request); }
+            if (acquired) mAtm.noteShortcutForeground(null, 0);
         }
     }
 
@@ -626,6 +649,7 @@ final class ContentProviders {
         // isSystem resolves the caller through ATM. Never acquire ATM under this monitor.
         int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
         boolean system = mCallers.isSystem();
+        boolean alive, changed;
         synchronized (this) {
             Connection c = callerConnectionLocked(connection, system, pid, uid);
             if (c == null) return false;
@@ -635,11 +659,17 @@ final class ContentProviders {
                 SystemServer.log("refContentProvider " + c + ": counts would go below zero ("
                         + stable + ", " + unstable + "); kept at zero");
             }
+            boolean held = c.stable != 0 || c.unstable != 0;
             c.stable = Math.max(0, c.stable + stable);
             c.unstable = Math.max(0, c.unstable + unstable);
+            changed = held != (c.stable != 0 || c.unstable != 0);
+            if (changed) publishShortcutStateLocked();
             c.owner.markActive(SystemClock.uptimeMillis());
-            return !c.owner.exiting && !c.owner.dead;
+            alive = !c.owner.exiting && !c.owner.dead;
         }
+        // Only a held-state flip changes the provider dependency graph.
+        if (changed) mAtm.noteShortcutForeground(null, 0);
+        return alive;
     }
 
     /**
@@ -650,6 +680,7 @@ final class ContentProviders {
     void removeContentProvider(IBinder connection, boolean stable) {
         int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
         boolean system = mCallers.isSystem();
+        boolean removed = false;
         synchronized (this) {
             Connection c = callerConnectionLocked(connection, system, pid, uid);
             if (c == null) return;
@@ -660,8 +691,13 @@ final class ContentProviders {
             if (stable) c.stable = Math.max(0, c.stable - 1);
             else c.unstable = Math.max(0, c.unstable - 1);
             c.owner.markActive(SystemClock.uptimeMillis());
-            if (c.stable == 0 && c.unstable == 0) mConnections.remove(c);
+            if (c.stable == 0 && c.unstable == 0) {
+                mConnections.remove(c);
+                publishShortcutStateLocked();
+                removed = true;
+            }
         }
+        if (removed) mAtm.noteShortcutForeground(null, 0);
     }
 
     /**
@@ -795,6 +831,7 @@ final class ContentProviders {
                 lost.add(connection);
                 return true;
             });
+            publishShortcutStateLocked();
             // A waiter must re-resolve disabled declarations instead of waiting two minutes.
             notifyAll();
         }
@@ -814,6 +851,7 @@ final class ContentProviders {
                 catch (RemoteException ignored) { }
             }
         }
+        mAtm.noteShortcutForeground(null, 0);
     }
 
     /**
@@ -830,6 +868,7 @@ final class ContentProviders {
                 if (c.owner == app && c.client != app) lost.add(c);
                 return c.client == app || c.owner == app;
             });
+            publishShortcutStateLocked();
             for (Map.Entry<String,
                     Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {
                 if (e.getValue().remove(app) && e.getValue().isEmpty()) {
