@@ -47,6 +47,29 @@ descriptor, partial unmap and `MAP_FIXED` replacement beside an already-dead
 tail. The 12 mapping-lease checks also run unchanged against the real Linux
 kernel before the modeled Windows checks.
 
+CI later exposed a scheduling assumption in the host lease fixture: all 400
+concurrent process rounds could legally favor the parent mapping, so the test
+failed its both-orders coverage assertion even though every safety check passed.
+Both orders are now required by explicit pipe handshakes between the processes
+and condition-variable handshakes between threads. Each ordered case asserts
+the successful operation, the other operation's exact `EBUSY`/`EPERM` result,
+and the stored seals. The fixture retains all 1,500 concurrent thread rounds,
+400 concurrent process rounds and 300 concurrent seal-addition rounds. Process
+rounds wait for the child's readiness before release, and all concurrent mapping
+versus sealing rounds reject dual success, no winner, incorrect errors and
+inconsistent seals.
+
+ASan/UBSan runs passed with normal CPU affinity, one-CPU affinity and a test-only
+fork wrapper delaying child execution by 50 ms. That wrapper changes scheduling
+only; it does not intercept memfd, mapping, sealing or locking operations. Under
+the same delayed-child schedule, the previous unchanged fixture reproduced the
+CI failure: zero seal wins, 400 mapping wins, zero dual successes or missing
+winners, and only the coverage assertion failed. The corrected race fixture has
+19 assertions; its coverage no longer depends on scheduler fairness. A separate
+negative control that deliberately omits the production exclusive lease probe
+fails eight assertions, including both controlled map-first cases and concurrent
+dual-success checks. No production source or CI workflow was changed.
+
 ## Executed checks
 
 All checks below passed on the integrated tree. Linux host tests compile or
@@ -56,7 +79,7 @@ replace ordinary application behavior.
 | Check | Result |
 | --- | --- |
 | `tools/test_mmap_noreplace_contracts.py --sanitize` | 274 checks, zero failures; partial live/dead tails, mapping handle and lease retirement |
-| `tools/test_memfd_contracts.py --sanitize` | Linux kernel mapping-lease reference: 12; direct/POSIX/guest routes: 57 checks each; faults: 19; lease basics: 44; process lifetime: 6; race assertions: 9; zero failures |
+| `tools/test_memfd_contracts.py --sanitize` | Linux kernel mapping-lease reference: 12; direct/POSIX/guest routes: 57 checks each; faults: 19; lease basics: 44; process lifetime: 6; race assertions: 19; zero failures |
 | `tools/net-tcp-priority/test-selected-policy.py` | PASS; both exact-source transition chains preserved |
 | `tools/net-tcp-priority/test-vector-policy.py` | PASS; 33 mutations, 4 repinned property and 7 repinned memfd controls rejected |
 | `tools/test_media_player_priming.py --sanitize` | 209 checks, zero failures; unchanged captured-tone tolerances pass |
@@ -71,8 +94,8 @@ replace ordinary application behavior.
 
 Java checks use Temurin JDK 21.0.13.1+2. Linux native checks use GCC 14 with ASan
 and UBSan. This container's tracing prevents LeakSanitizer from starting; local
-sanitized commands set `ASAN_OPTIONS=detect_leaks=0`. CI settings and test
-assertions are unchanged. Explicit handle/lease lifetime assertions still run.
+sanitized commands set `ASAN_OPTIONS=detect_leaks=0`. CI sanitizer settings are
+unchanged. Explicit handle/lease lifetime and mutual-exclusion assertions still run.
 
 ### Windows compilation
 
