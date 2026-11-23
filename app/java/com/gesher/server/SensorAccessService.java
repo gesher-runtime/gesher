@@ -11,6 +11,7 @@ import android.os.RemoteException;
 import com.gesher.sensors.NativeSensorAccess;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.NoSuchElementException;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -22,7 +23,8 @@ final class SensorAccessService extends Binder {
     private final PackageManagerService packages;
     private final ActivityTaskManagerService activities;
     private final SensorAccessPolicy policy = new SensorAccessPolicy();
-    private final Set<Session> sessions = new HashSet<>();
+    private final Map<ActivityTaskManagerService.ProcessRecord, Session> sessions = new HashMap<>();
+    private final Set<ActivityTaskManagerService.ProcessRecord> opening = new HashSet<>();
     private final ExecutorService notifications = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "gesher-sensor-access");
         thread.setDaemon(true);
@@ -49,15 +51,15 @@ final class SensorAccessService extends Binder {
 
     private void retire(String name) {
         Session[] captured;
-        synchronized (sessions) { captured = sessions.toArray(new Session[0]); }
+        synchronized (sessions) { captured = sessions.values().toArray(new Session[0]); }
         for (Session session : captured) if (session.owner.packageName.equals(name)) session.close();
     }
 
-    private ApkPackage callingOwner() {
-        ApkPackage owner = activities.authenticatedPackageCodeForPid(
+    private ActivityTaskManagerService.ProcessRecord callingProcess() {
+        ActivityTaskManagerService.ProcessRecord process = activities.authenticatedProcessForPid(
                 Binder.getCallingPid(), Binder.getCallingUid());
-        if (owner == null) throw new SecurityException("Unrecognized sensor application identity");
-        return owner;
+        if (process == null) throw new SecurityException("Unrecognized sensor application identity");
+        return process;
     }
 
     @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
@@ -75,19 +77,29 @@ final class SensorAccessService extends Binder {
     }
 
     private Session openSubscription(IBinder callback) throws RemoteException {
-        ApkPackage owner = callingOwner();
-        Session session = new Session(owner, Binder.getCallingPid(), callback);
-        try {
-            callback.linkToDeath(session, 0);
-            synchronized (sessions) { if (!session.closed) sessions.add(session); }
-            if (session.closed || callingOwner() != owner) {
-                session.close();
-                throw new SecurityException("Sensor application identity retired during registration");
+        ActivityTaskManagerService.ProcessRecord process = callingProcess();
+        synchronized (sessions) {
+            // This transport supplies one process-wide native policy snapshot.
+            // Individual NDK event queues do not need their own Binder sessions.
+            if (sessions.containsKey(process) || !opening.add(process)) {
+                throw new IllegalStateException("Sensor policy is already subscribed for this process");
             }
-            return session;
-        } catch (RemoteException | RuntimeException failure) {
-            session.close();
-            throw failure;
+        }
+        try {
+            Session session = new Session(process, callback);
+            try {
+                callback.linkToDeath(session, 0);
+                synchronized (sessions) { if (!session.closed) sessions.put(process, session); }
+                if (session.closed || callingProcess() != process) {
+                    throw new SecurityException("Sensor application identity retired during registration");
+                }
+                return session;
+            } catch (RemoteException | RuntimeException failure) {
+                session.close();
+                throw failure;
+            }
+        } finally {
+            synchronized (sessions) { opening.remove(process); }
         }
     }
 
@@ -97,16 +109,16 @@ final class SensorAccessService extends Binder {
     }
 
     private final class Session extends Binder implements IBinder.DeathRecipient {
+        final ActivityTaskManagerService.ProcessRecord process;
         final ApkPackage owner;
-        final int pid;
         final IBinder callback;
         final SensorAccessPolicy.Subscription subscription;
         volatile boolean closed;
 
-        Session(ApkPackage owner, int pid, IBinder callback) {
+        Session(ActivityTaskManagerService.ProcessRecord process, IBinder callback) {
             super(NativeSensorAccess.SESSION_DESCRIPTOR);
-            this.owner = owner;
-            this.pid = pid;
+            this.process = process;
+            owner = process.packageCode;
             this.callback = callback;
             boolean capped = owner.parsed.getTargetSdkVersion() >= 31
                     && packages.permissions().checkPermission(owner.packageName,
@@ -131,7 +143,7 @@ final class SensorAccessService extends Binder {
             if (code != NativeSensorAccess.CLOSE) return super.onTransact(code, data, reply, flags);
             data.enforceInterface(NativeSensorAccess.SESSION_DESCRIPTOR);
             data.enforceNoDataAvail();
-            if (Binder.getCallingPid() != pid || callingOwner() != owner)
+            if (callingProcess() != process)
                 throw new SecurityException("Sensor subscription belongs to another process");
             close();
             if (reply != null) reply.writeNoException();
@@ -142,10 +154,11 @@ final class SensorAccessService extends Binder {
             synchronized (sessions) {
                 if (closed) return;
                 closed = true;
-                sessions.remove(this);
+                sessions.remove(process, this);
             }
             subscription.close();
-            callback.unlinkToDeath(this, 0);
+            try { callback.unlinkToDeath(this, 0); }
+            catch (NoSuchElementException ignored) { } // Registration may have failed.
         }
 
         @Override public void binderDied() { close(); }

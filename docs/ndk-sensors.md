@@ -56,7 +56,9 @@ re-resume also publishes without waiting for its acknowledgement, while failed
 enqueue restores the preceding state. Existing visible paused activities retain
 their foreground classification.
 
-The Java client subscribes once and receives ordered policy notifications.
+The Java client subscribes once per authenticated process generation and receives
+ordered policy notifications. The server enforces that single policy subscription;
+individual NDK event queues keep their own registration and lifetime.
 Connection loss revokes access; stale connection/generation messages cannot
 revive it. Native policy flags and generation share one atomic word. The sampler
 does not call JNI or Binder per event, and reads/drains do not perform IPC.

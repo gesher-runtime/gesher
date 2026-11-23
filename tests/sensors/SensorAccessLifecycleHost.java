@@ -304,6 +304,14 @@ public final class SensorAccessLifecycleHost {
                     "Rate policy derives from actual target SDK and installed manifest grant");
             check(((state(session).flags() & SensorAccessPolicy.DEBUGGABLE) != 0) == debuggable,
                     "Debug policy derives from authenticated package metadata");
+            Token duplicate = new Token();
+            try {
+                call(access, "openSubscription", new Class<?>[]{IBinder.class}, duplicate);
+                throw new AssertionError("One process acquired a duplicate policy subscription");
+            } catch (IllegalStateException expected) {
+                check(duplicate.deaths.isEmpty() && token.deaths.size() == 1,
+                        "Duplicate subscription adds no callback and preserves the original");
+            }
             Class stateType = Class.forName("com.gesher.server.ActivityTaskManagerService$State");
             Object stopped = Enum.valueOf(stateType, "STOPPED"), resumed = Enum.valueOf(stateType, "RESUMED");
             set(process, "inProcessActivityState", stopped);
@@ -348,6 +356,11 @@ public final class SensorAccessLifecycleHost {
             Binder.restoreCallingIdentity(((long)UID << 32) | PID);
             token.die();
             check(state(session).flags() == 0 && token.deaths.isEmpty(), "Callback death retires authority and its death registration");
+            Token replacement = new Token();
+            Object renewed = call(access, "openSubscription", new Class<?>[]{IBinder.class}, replacement);
+            check((state(renewed).flags() & SensorAccessPolicy.AVAILABLE) != 0,
+                    "Process can acquire a fresh subscription after its old callback dies");
+            replacement.die();
         } finally {
             Binder.restoreCallingIdentity(identity);
             notifications.shutdownNow();
