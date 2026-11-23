@@ -9,6 +9,7 @@
 #include <share.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstdio>
@@ -347,6 +348,8 @@ int ReadPinnedSource(const fs::path& dir) {
   return 0;
 }
 
+constexpr uint32_t kCohostClipboardProbeBytes = 2 * 65536 + 17;
+
 int CohostGuest() {
   namespace permissions = gesher::cohost_permissions;
   const auto& scope = gesher::cohost_bootstrap::Current();
@@ -368,6 +371,22 @@ int CohostGuest() {
                 &permissions_result) == ERROR_SUCCESS &&
              permissions_result == std::vector<int32_t>{0, -1},
              "cohost permission reply retains exact request order")) return 1;
+  permissions::ClipboardFrame input, output;
+  if (!input.Allocate(kCohostClipboardProbeBytes)) return 1;
+  for (uint32_t i = 0; i < input.size(); i++) input.data()[i] = static_cast<uint8_t>(i);
+  if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardWrite, input,
+              &output) == ERROR_SUCCESS && output.size() == sizeof(uint32_t) &&
+              output.data()[0] == 0x5a,
+             "contained clipboard request preserves exact bytes across pipe buffers")) return 1;
+  if (!input.Allocate(0)) return 1;
+  if (!Check(permissions::ClipboardExchange(permissions::Operation::kClipboardRead, input,
+              &output) == ERROR_SUCCESS && output.size() == kCohostClipboardProbeBytes,
+             "trusted clipboard response spans multiple pipe buffers")) return 1;
+  bool matches = true;
+  for (uint32_t i = 0; i < output.size(); i++) {
+    if (output.data()[i] != static_cast<uint8_t>(i)) { matches = false; break; }
+  }
+  if (!Check(matches, "cohost clipboard response bytes match")) return 1;
   return Check(StandaloneChild(L" --cohost-descendant", GetStdHandle(STD_INPUT_HANDLE)),
              "enrolled cohost child inherits the sealed scope") ? 0 : 1;
 }
@@ -375,10 +394,13 @@ int CohostGuest() {
 int CohostDescendant() {
   namespace permissions = gesher::cohost_permissions;
   std::vector<int32_t> result;
+  permissions::ClipboardFrame input, output;
   return Check(Lowbox() && gesher::cohost_bootstrap::Current() &&
       permissions::Exchange(permissions::Operation::kCheck,
-          {u"android.permission.INTERNET"}, &result) != ERROR_SUCCESS,
-      "cohost native descendant carries metadata but no parent permission authority") ? 0 : 1;
+          {u"android.permission.INTERNET"}, &result) != ERROR_SUCCESS &&
+      permissions::ClipboardExchange(permissions::Operation::kClipboardRead, input, &output)
+          != ERROR_SUCCESS,
+      "cohost native descendant carries metadata but no parent permission or clipboard authority") ? 0 : 1;
 }
 
 bool CheckCohost(const fs::path& dir, const fs::path& exe) {
@@ -392,6 +414,22 @@ bool CheckCohost(const fs::path& dir, const fs::path& exe) {
   permissions::Server authority([](permissions::Operation /* operation */,
       const std::vector<std::u16string>& names, std::vector<int32_t>* values) {
     for (const auto& name : names) values->push_back(name == u"android.permission.INTERNET" ? 0 : -1);
+    return ERROR_SUCCESS;
+  }, [](permissions::Operation operation, const permissions::ClipboardFrame& input,
+        permissions::ClipboardFrame* output) -> DWORD {
+    if (operation == permissions::Operation::kClipboardWrite) {
+      if (input.size() != kCohostClipboardProbeBytes) return ERROR_INVALID_DATA;
+      for (uint32_t i = 0; i < input.size(); ++i) {
+        if (input.data()[i] != static_cast<uint8_t>(i)) return ERROR_INVALID_DATA;
+      }
+      if (!output->Allocate(sizeof(uint32_t))) return ERROR_NOT_ENOUGH_MEMORY;
+      std::fill_n(output->data(), output->size(), 0x5a);
+    } else if (operation == permissions::Operation::kClipboardRead) {
+      if (!output->Allocate(kCohostClipboardProbeBytes)) return ERROR_NOT_ENOUGH_MEMORY;
+      for (uint32_t i = 0; i < output->size(); i++) output->data()[i] = static_cast<uint8_t>(i);
+    } else {
+      return ERROR_ACCESS_DENIED;
+    }
     return ERROR_SUCCESS;
   });
   launch::CohostSpec services{{}, {}, {}, U16(authority.name()),

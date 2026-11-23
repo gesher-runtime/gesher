@@ -90,6 +90,17 @@ inline bool Valid(const Header& head) {
   return false;
 }
 
+inline bool ValidClipboardReply(Operation operation, uint32_t bytes) {
+  switch (operation) {
+    case Operation::kClipboardState: return bytes == 3 * sizeof(uint32_t);
+    case Operation::kClipboardRead: return bytes >= kClipboardHeaderBytes
+        && bytes <= kMaxClipboardPayload;
+    case Operation::kClipboardWrite:
+    case Operation::kClipboardClear: return bytes == sizeof(uint32_t);
+    default: return false;
+  }
+}
+
 // Bound each write to the named pipe's buffer capacity.
 inline bool TransferClipboard(HANDLE pipe, void* data, uint32_t size, bool write,
                               ULONGLONG deadline) {
@@ -208,9 +219,10 @@ inline DWORD ClipboardExchange(Operation operation, const ClipboardFrame& input,
   }
   Reply reply;
   if (!binder_bootstrap::Transfer(pipe, &reply, sizeof(reply), false, deadline) ||
-      reply.magic != kMagic || reply.version != kVersion || reply.count > kMaxClipboardPayload ||
+      reply.magic != kMagic || reply.version != kVersion ||
       !cohost_bootstrap::Current().VerifyPeer(pipe)) return close(ERROR_INVALID_DATA);
   if (reply.error != 0) return close(static_cast<DWORD>(reply.error));
+  if (!ValidClipboardReply(operation, reply.count)) return close(ERROR_INVALID_DATA);
   if (!output->Allocate(reply.count)) return close(ERROR_NOT_ENOUGH_MEMORY);
   if (!TransferClipboard(pipe, output->data(), reply.count, false, deadline)) {
     return close(ERROR_READ_FAULT);

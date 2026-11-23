@@ -494,7 +494,7 @@ DWORD DispatchCohostClipboard(JavaVM* vm, jobject host, jmethodID dispatch,
         cohost::ClipboardFrame* output) {
     JNIEnv* env = nullptr;
     if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return ERROR_GEN_FAILURE;
-    DWORD error = ERROR_NO_SYSTEM_RESOURCES;
+    DWORD error = ERROR_ACCESS_DENIED;
     jbyteArray args = ByteArray(env, input);
     if (args != nullptr && !env->ExceptionCheck()) {
         auto result = static_cast<jbyteArray>(

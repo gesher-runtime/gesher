@@ -120,14 +120,16 @@ class Server {
     Header request;
     const ULONGLONG deadline = GetTickCount64() + 5000;
     if (!binder_bootstrap::Transfer(pipe, &request, sizeof(request), false, deadline) ||
-        !Valid(request) ||
-        !process_identity::MatchPipeSender(pipe, child_.get(), generation_)) return;
+        !Valid(request)) return;
     if (IsClipboard(request.operation)) {
-      if (clipboard_) ServeClipboard(pipe, request);
+      if (clipboard_ && process_identity::MatchPipeSender(pipe, child_.get(), generation_)) {
+        ServeClipboard(pipe, request);
+      }
       return;
     }
     std::vector<std::u16string> names;
-    if (!ReadNames(pipe, request.count, &names, deadline)) return;
+    if (!ReadNames(pipe, request.count, &names, deadline) ||
+        !process_identity::MatchPipeSender(pipe, child_.get(), generation_)) return;
     std::vector<int32_t> result;
     DWORD error = decide_(request.operation, names, &result);
     if (!IsLive()) return;
@@ -159,7 +161,9 @@ class Server {
       }
     }
     if (!IsLive()) return;
-    if (result.size() > kMaxClipboardPayload) error = ERROR_INVALID_DATA;
+    if (error == ERROR_SUCCESS && !ValidClipboardReply(request.operation, result.size())) {
+      error = ERROR_INVALID_DATA;
+    }
     Reply reply;
     reply.error = static_cast<int32_t>(error);
     if (error == ERROR_SUCCESS) reply.count = static_cast<uint32_t>(result.size());
