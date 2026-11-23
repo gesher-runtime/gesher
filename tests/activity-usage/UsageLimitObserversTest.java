@@ -254,6 +254,33 @@ public final class UsageLimitObserversTest {
                 + " peak_pending=" + f.timer.peak + " idle_wakeups=0");
     }
 
+    private static void revocableReadyCallbacks() {
+        Fixture f = new Fixture();
+        f.observers.register(1, 1, "owner.1", new String[]{"app"}, 60_000,
+                (id, limit, used) -> {
+                    check(!Thread.holdsLock(f.observers), "Callback retained the observer monitor");
+                    f.callback.reached(id, limit, used);
+                    f.observers.unregister(1, 2);
+                    f.register(1, 3, 120_000, "app");
+                    f.observers.forgetPackage("retired");
+                });
+        f.register(1, 2, 60_000, "app");
+        f.register(1, 3, 60_000, "app");
+        f.observers.register(1, 4, "retired", new String[]{"app"}, 60_000, f.callback);
+        f.observers.transition(new Object(), "app", "app", true);
+        // All four become due together. Ready callbacks remain revocable until
+        // each delivery starts; callback 1 can cancel/replace the later ones.
+        f.timer.advance(61_000);
+        check(f.notices.equals(List.of(new Notice(1, 60_000, 60_000))),
+                "A cancelled, replaced or retired ready callback was delivered");
+        check(f.timer.pending() == 1 && f.timer.next() == 181_000,
+                "Replacement lost its fresh deadline or retained an obsolete timer");
+        f.timer.advance(181_000);
+        check(f.notices.equals(List.of(new Notice(1, 60_000, 60_000), new Notice(3, 120_000, 120_000))),
+                "Replacement was confused with its previously ready callback");
+        check(f.timer.pending() == 0, "Ready delivery retained an idle timer");
+    }
+
     private static void concurrentRealScheduler() throws Exception {
         AtomicLong clock = new AtomicLong(1_000);
         AtomicInteger delivered = new AtomicInteger(), failures = new AtomicInteger();
@@ -295,6 +322,7 @@ public final class UsageLimitObserversTest {
         registrationReplacementAndCancellation();
         reportsAndTaskRoots();
         retirementAndReentrancy();
+        revocableReadyCallbacks();
         noPollingAndDeadlineOrder();
         concurrentRealScheduler();
         System.out.println("UsageLimitObserversTest passed: " + checks + " checks");

@@ -107,9 +107,11 @@ SOURCES = {
             Operations appOps(){return new Operations();}
         }
         final class Permissions {
+            Object atm;
             boolean granted; String lastPermission; int lastUid,lastPid;
             int checkProcessPermission(String permission,int pid,int uid){
-                lastPermission=permission;lastUid=uid;lastPid=pid;return granted?0:-1;
+                // The real policy authenticates the PID through synchronized ATM.
+                synchronized(atm){lastPermission=permission;lastUid=uid;lastPid=pid;return granted?0:-1;}
             }
         }
         final class Operations {
@@ -118,13 +120,26 @@ SOURCES = {
         }
         final class CallerIdentity {
             final PackageManagerService pm; final ApkPackage owner; final int pid=73;
-            CallerIdentity(PackageManagerService pm,ApkPackage owner){this.pm=pm;this.owner=owner;}
-            int callerUid(){return owner.uid();} int callerPid(){return pid;} boolean isSystem(){return false;}
+            final Object atm=new Object();
+            volatile Runnable beforeIdentity;
+            java.util.function.Consumer<String> afterCurrentPackage;
+            CallerIdentity(PackageManagerService pm,ApkPackage owner){this.pm=pm;this.owner=owner;pm.permissions.atm=atm;}
+            int callerUid(){return owner.uid();} int callerPid(){return pid;}
+            boolean isSystem(){synchronized(atm){return false;}}
             String requirePackage(String caller){
-                if(!owner.packageName.equals(caller)||pm.get(caller)!=owner||pm.isRemovalPending(caller))
-                    throw new SecurityException("Unrecognized owner");return caller;
+                Runnable hook=beforeIdentity;if(hook!=null)hook.run();
+                // Identity crosses the ATM monitor in the real CallerIdentity.
+                synchronized(atm){
+                    ApkPackage claimed=pm.get(caller);
+                    if(pm.get(owner.packageName)!=owner||pm.isRemovalPending(owner.packageName)
+                            ||claimed==null||claimed.uid()!=owner.uid()||pm.isRemovalPending(caller))
+                        throw new SecurityException("Unrecognized owner");return owner.packageName;
+                }
             }
-            ApkPackage requireCurrentPackage(String caller){requirePackage(caller);return owner;}
+            ApkPackage requireCurrentPackage(String caller){
+                requirePackage(caller);ApkPackage captured=pm.get(caller);
+                var hook=afterCurrentPackage;if(hook!=null)hook.accept(caller);return captured;
+            }
         }
         final class SystemServer { static void log(String message){ } }
     ''',

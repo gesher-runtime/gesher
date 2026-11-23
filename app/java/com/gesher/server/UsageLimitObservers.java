@@ -298,13 +298,22 @@ final class UsageLimitObservers {
                 Observer observer = mDeadlines.first();
                 long used = observer.active == 0 ? observer.used
                         : add(observer.used, Math.max(0, now - observer.started));
-                remove(observer); // one-shot, before any reentrant callback
+                // Still revocable while earlier callbacks run. Unregister,
+                // replacement or package removal must cancel a ready callback
+                // until its own delivery begins, as AOSP clears the callback.
+                dequeue(observer);
                 ready.add(new Notification(observer, used));
             }
             schedule(now);
         }
         for (Notification notification : ready) {
             Observer observer = notification.observer;
+            synchronized (this) {
+                Map<Integer, Observer> groups = mOwners.get(observer.uid);
+                if (groups == null || groups.get(observer.id) != observer) continue;
+                remove(observer); // claim this one-shot before its reentrant callback
+                schedule(now());
+            }
             try { observer.callback.reached(observer.id, observer.limit, notification.used); }
             catch (RuntimeException failure) { mOnFailure.accept(failure); }
         }

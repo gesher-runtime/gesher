@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--java-home", type=Path, default=Path(os.environ["JAVA_HOME"]) if "JAVA_HOME" in os.environ else None)
+    parser.add_argument("--source-ref", help="Compile exact prior production sources as a negative control")
+    parser.add_argument("--case", choices=("all", "engine", "service", "task-root"), default="all")
     args = parser.parse_args()
     javac = str(args.java_home / "bin/javac") if args.java_home else shutil.which("javac")
     java = str(args.java_home / "bin/java") if args.java_home else shutil.which("java")
@@ -32,8 +34,13 @@ def main() -> None:
     spec = importlib.util.spec_from_file_location("observer_host_boundaries", fixture / "observer_host_boundaries.py")
     boundaries = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(boundaries)
-    service = ROOT / "app/java/com/gesher/server/DesktopUsageStatsService.java"
-    service_text = service.read_text()
+    def source(name):
+        relative = "app/java/com/gesher/server/" + name + ".java"
+        text = (subprocess.check_output(["git", "show", args.source_ref + ":" + relative],
+                                       cwd=ROOT, text=True) if args.source_ref else (ROOT / relative).read_text())
+        print(relative + " SHA256 " + hashlib.sha256(text.encode()).hexdigest(), flush=True)
+        return text
+    service_text = source("DesktopUsageStatsService")
     # Type-only IUsageStatsManager boundary. All method bodies remain the exact
     # production source; real Android AIDL compatibility is checked by framework CI.
     signatures = re.findall(r"@Override public ([^{]+)\{", service_text)
@@ -55,12 +62,12 @@ def main() -> None:
                              + declarations + "\n} }\n")
         sources.append(str(interface))
         for name in ("ActivityUsageHistory", "UsageLimitObservers", "DesktopUsageStatsService"):
-            path = ROOT / "app/java/com/gesher/server" / (name + ".java")
-            print(str(path.relative_to(ROOT)) + " SHA256 " + hashlib.sha256(path.read_bytes()).hexdigest(), flush=True)
+            path = work / (name + ".java")
+            path.write_text(service_text if name == "DesktopUsageStatsService" else source(name))
             sources.append(str(path))
         for name in ("UsageLimitObserversTest", "UsageObserverServiceTest"):
             sources.append(str(fixture / (name + ".java")))
-        manager = (ROOT / "app/java/com/gesher/server/ActivityTaskManagerService.java").read_text()
+        manager = source("ActivityTaskManagerService")
         signature = "private void recordUsage(ActivityRecord record, ActivityUsageHistory.State state)"
         if manager.count(signature) != 1:
             raise ValueError("Task-manager usage hook boundary changed")
@@ -76,7 +83,9 @@ def main() -> None:
         sources.append(str(hook))
         classes = work / "classes"
         subprocess.run([javac, "-encoding", "UTF-8", "-d", str(classes), *sources], check=True, timeout=60)
-        for name in ("UsageLimitObserversTest", "UsageObserverServiceTest", "TaskRootUsageHookHost"):
+        cases = {"engine": "UsageLimitObserversTest", "service": "UsageObserverServiceTest",
+                 "task-root": "TaskRootUsageHookHost"}
+        for name in cases.values() if args.case == "all" else (cases[args.case],):
             subprocess.run([java, "-XX:-UsePerfData", "-cp", str(classes), "com.gesher.server." + name],
                            check=True, timeout=60)
 

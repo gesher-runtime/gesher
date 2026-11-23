@@ -334,14 +334,16 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     @Override public void setEstimatedLaunchTimes(ParceledListSlice times, int userId) { throw denied(); }
     @Override public void registerAppUsageObserver(int id, String[] packages, long limit,
             PendingIntent callback, String caller) {
+        ObservationCaller admitted = observationCaller(caller, true);
         synchronized (mPackages) {
-            ApkPackage owner = observerAccess(caller);
+            revalidateObservationCaller(caller, admitted);
             requireManagedObservation();
             if (packages == null || packages.length == 0) {
                 throw new IllegalArgumentException("Must specify at least one package or token");
             }
             Objects.requireNonNull(callback, "callbackIntent");
-            mObservers.register(mCallers.callerUid(), id, caller, packages, limit,
+            ApkPackage owner = admitted.owner;
+            mObservers.register(admitted.uid, id, caller, packages, limit,
                     (observerId, timeLimit, timeUsed) -> {
                         // Do not deliver an old installation's authority to its replacement.
                         if (mPackages.isRemovalPending(caller)
@@ -362,14 +364,35 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
         }
     }
 
-    private ApkPackage observerAccess(String caller) {
-        mCallers.requirePackage(Objects.requireNonNull(caller, "callingPackage"));
-        if (!mCallers.isSystem() && mPackages.permissions().checkProcessPermission(
-                Manifest.permission.OBSERVE_APP_USAGE, mCallers.callerPid(), mCallers.callerUid())
+    private record ObservationCaller(int uid, ApkPackage owner, ApkPackage attached) { }
+
+    private ObservationCaller observationCaller(String caller, boolean observer) {
+        // CallerIdentity and process permission checks enter ATM. Lifecycle
+        // delivery takes ATM -> PM, so authenticate before taking the PM monitor.
+        int uid = mCallers.callerUid();
+        String actual = mCallers.requirePackage(Objects.requireNonNull(caller, "callingPackage"));
+        boolean system = mCallers.isSystem();
+        if (observer && !system && mPackages.permissions().checkProcessPermission(
+                Manifest.permission.OBSERVE_APP_USAGE, mCallers.callerPid(), uid)
                 != PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException("Caller doesn't have OBSERVE_APP_USAGE permission");
         }
-        return mCallers.requireCurrentPackage(caller);
+        ApkPackage attached = mCallers.requireCurrentPackage(actual);
+        ApkPackage owner = actual.equals(caller) ? attached : mCallers.requireCurrentPackage(caller);
+        return new ObservationCaller(uid, owner, system ? null : attached);
+    }
+
+    private void revalidateObservationCaller(String caller, ObservationCaller admitted) {
+        // No callbacks into ATM under PM. Retain both installations for a
+        // shared-UID call: a still-installed peer cannot confer authority on a
+        // process whose own package was replaced after authentication.
+        ApkPackage attached = admitted.attached;
+        if (mPackages.isRemovalPending(caller) || mPackages.get(caller) != admitted.owner
+                || (attached != null && (mPackages.get(attached.packageName) != attached
+                        || mPackages.isRemovalPending(attached.packageName)
+                        || attached.uid() != admitted.uid))) {
+            throw new SecurityException("Calling package changed during usage observation");
+        }
     }
 
     private void requireManagedObservation() {
@@ -384,9 +407,10 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
     @Override public void registerAppUsageLimitObserver(int id, String[] packages, long limit,
             long used, PendingIntent callback, String caller) { throw denied(); }
     @Override public void unregisterAppUsageObserver(int id, String caller) {
+        ObservationCaller admitted = observationCaller(caller, true);
         synchronized (mPackages) {
-            observerAccess(caller);
-            mObservers.unregister(mCallers.callerUid(), id);
+            revalidateObservationCaller(caller, admitted);
+            mObservers.unregister(admitted.uid, id);
         }
     }
     // Session and persistent-limit observers cannot have registered.
@@ -396,17 +420,19 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
         reportPastUsageStart(token, name, 0, caller);
     }
     @Override public void reportPastUsageStart(IBinder token, String name, long ago, String caller) {
+        ObservationCaller admitted = observationCaller(caller, false);
         synchronized (mPackages) {
-            mCallers.requireCurrentPackage(Objects.requireNonNull(caller, "callingPackage"));
+            revalidateObservationCaller(caller, admitted);
             requireManagedObservation();
-            mObservers.reportStart(mCallers.callerUid(), caller, token, name, ago);
+            mObservers.reportStart(admitted.uid, caller, token, name, ago);
         }
     }
     @Override public void reportUsageStop(IBinder token, String name, String caller) {
+        ObservationCaller admitted = observationCaller(caller, false);
         synchronized (mPackages) {
-            mCallers.requireCurrentPackage(Objects.requireNonNull(caller, "callingPackage"));
+            revalidateObservationCaller(caller, admitted);
             requireManagedObservation();
-            mObservers.reportStop(mCallers.callerUid(), caller, token, name);
+            mObservers.reportStop(admitted.uid, caller, token, name);
         }
     }
     @Override public void reportChooserSelection(String pkg, int userId, String type,

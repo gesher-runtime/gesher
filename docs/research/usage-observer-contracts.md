@@ -24,6 +24,9 @@ follows that behavior independently of the historical foreground-time statistic.
   existing authority), authenticated package ownership and the current installed
   package generation. The runtime has no active profile/device owner that could
   claim Android's additional owner exemption.
+  Identity and permission checks enter ATM before taking the PM monitor; under
+  PM, admission revalidates the captured installations without calling ATM.
+  Shared-UID calls retain both the attached process's package and the named peer.
 - Null or empty entity arrays fail with `IllegalArgumentException`; a null
   callback fails with `NullPointerException`; limits below 60,000 ms fail with
   `IllegalArgumentException`. There are at most 1,000 registrations per caller
@@ -45,6 +48,8 @@ follows that behavior independently of the historical foreground-time statistic.
   `IIntentSender` server path with cleared Binder identity; there is no synthetic
   success or app-specific branch. Remote cancellation/failure cannot prevent
   other due callbacks. Callbacks never run while holding the observer monitor.
+  When several callbacks become due together, each remains revocable by
+  unregister, replacement or package retirement until its own delivery begins.
 - Package retirement removes its registrations and live inputs. An installation
   generation check additionally suppresses an already claimed callback when the
   registering package has been replaced or is being removed.
@@ -74,6 +79,11 @@ windows, paused-first visibility, registration while active, replacement,
 unregister races, UID isolation, minimum/quota errors, token reports, source
 attribution, package retirement, permission errors, callback extras, failure,
 reentrancy and concurrent registration with the real scheduled executor.
+The service fixture also models CallerIdentity's actual ATM monitor boundary:
+six concurrent lifecycle/admission cases reject the PM-to-ATM inversion, and
+retirement between authentication and admission cannot acquire a replacement's
+authority. `--source-ref` and `--case engine|service` run these same regressions
+against earlier production sources as negative controls.
 
 A deterministic workload with 1,000 live observers and 10,000 duplicate lifecycle
 events schedules one task and delivers all overdue callbacks in one deadline

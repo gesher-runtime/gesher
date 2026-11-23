@@ -15,13 +15,82 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.gesher.server.UsageLimitObserversTest.check;
 import static com.gesher.server.UsageLimitObserversTest.throwsType;
 
 /** Compiles the complete service/history/observer sources over explicit Android I/O boundaries. */
 public final class UsageObserverServiceTest {
+    private static void lockOrder(DesktopUsageStatsService service, CallerIdentity callers,
+            PendingIntent callback) throws Exception {
+        Binder token = new Binder();
+        List<Runnable> operations = List.of(
+                () -> service.registerAppUsageObserver(101, new String[]{"inactive"}, 60000, callback, "owner"),
+                () -> service.unregisterAppUsageObserver(101, "owner"),
+                () -> service.reportUsageStart(token, "lock-order", "owner"),
+                () -> service.reportUsageStop(token, "lock-order", "owner"),
+                () -> service.reportPastUsageStart(token, "lock-order", 0, "owner"),
+                () -> service.reportUsageStop(token, "lock-order", "owner"));
+        for (int i = 0; i < operations.size(); i++) {
+            CountDownLatch holdingAtm = new CountDownLatch(1), authenticating = new CountDownLatch(1);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            callers.beforeIdentity = authenticating::countDown;
+            Runnable operation = operations.get(i);
+            Thread lifecycle = new Thread(() -> {
+                try {
+                    synchronized (callers.atm) {
+                        holdingAtm.countDown();
+                        check(authenticating.await(3, TimeUnit.SECONDS), "Binder did not authenticate");
+                        // The real ATM calls this path with its own monitor held.
+                        service.transition(new Binder(), "lock-app", "Activity", ActivityUsageHistory.State.STOPPED);
+                    }
+                } catch (Throwable error) { failure.set(error); }
+            }, "usage-lifecycle");
+            Thread binder = new Thread(() -> {
+                try { operation.run(); } catch (Throwable error) { failure.set(error); }
+            }, "usage-binder");
+            // A regressed lock cycle must fail this test rather than hang its JVM.
+            lifecycle.setDaemon(true); binder.setDaemon(true);
+            lifecycle.start();
+            check(holdingAtm.await(3, TimeUnit.SECONDS), "Lifecycle did not take ATM");
+            binder.start();
+            lifecycle.join(3000); binder.join(3000);
+            callers.beforeIdentity = null;
+            check(!lifecycle.isAlive() && !binder.isAlive(), "PM/ATM lock inversion in usage operation " + i);
+            check(failure.get() == null, "Concurrent usage operation failed: " + failure.get());
+        }
+    }
+
+    private static void retirementAfterAuthentication(DesktopUsageStatsService service,
+            PackageManagerService packages, CallerIdentity callers, ApkPackage owner, PendingIntent callback) {
+        Binder token = new Binder();
+        List<Runnable> operations = List.of(
+                () -> service.registerAppUsageObserver(102, new String[]{"inactive"}, 60000, callback, "owner"),
+                () -> service.unregisterAppUsageObserver(102, "owner"),
+                () -> service.reportUsageStart(token, "retired", "owner"),
+                () -> service.reportUsageStop(token, "retired", "owner"));
+        for (Runnable operation : operations) {
+            callers.afterCurrentPackage = ignored -> packages.installed.put("owner", new ApkPackage("owner", owner.uid()));
+            try { throwsType(SecurityException.class, operation); }
+            finally { callers.afterCurrentPackage = null; packages.installed.put("owner", owner); }
+        }
+        ApkPackage peer = new ApkPackage("peer", owner.uid());
+        packages.installed.put("peer", peer);
+        callers.afterCurrentPackage = name -> {
+            if (name.equals("peer")) packages.installed.put("owner", new ApkPackage("owner", owner.uid()));
+        };
+        try {
+            throwsType(SecurityException.class, () -> service.registerAppUsageObserver(
+                    103, new String[]{"inactive"}, 60000, callback, "peer"));
+        } finally {
+            callers.afterCurrentPackage = null; packages.installed.put("owner", owner); packages.installed.remove("peer");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("gesher-observer-service-");
         PackageManagerService packages = new PackageManagerService();
@@ -36,6 +105,8 @@ public final class UsageObserverServiceTest {
         PendingIntent callback = new PendingIntent((code, intent, type, whitelist, receiver, permission, options) -> {
             check(code == 0 && type == null && permission == null, "Wrong callback send parameters");
             check(Binder.cleared, "Callback retained the app's Binder identity");
+            check(!Thread.holdsLock(packages) && !Thread.holdsLock(callers.atm),
+                    "Application callback ran with PM or ATM held");
             delivered.add(intent);
         });
         try {
@@ -58,6 +129,8 @@ public final class UsageObserverServiceTest {
                     "Wrong observer permission checked");
             check(packages.permissions.lastUid == owner.uid() && packages.permissions.lastPid == callers.pid,
                     "Observer permission was not checked against Binder identity");
+            lockOrder(service, callers, callback);
+            retirementAfterAuthentication(service, packages, callers, owner, callback);
 
             service.registerAppUsageObserver(73, new String[]{"root"}, 60000, callback, "owner");
             service.registerAppUsageObserver(74, new String[]{"child"}, 60000, callback, "owner");
