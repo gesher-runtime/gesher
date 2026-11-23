@@ -125,6 +125,7 @@ def main():
         'explicitBoundaries': ['parsed package/framework-permission metadata', 'native PID/UID',
                                'Binder lifetime', 'serial dispatch and delayed cleanup retry',
                                'already-connected client service boundary', 'advertiser backend',
+                               'host package-cache nonce storage',
                                'unrelated device locale settings']}, indent=2) + '\n')
 
 

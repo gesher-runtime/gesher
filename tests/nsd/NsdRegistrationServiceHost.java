@@ -221,7 +221,6 @@ public final class NsdRegistrationServiceHost {
         return code;
     }
     static final class Harness {
-        final Map<String, ApkPackage> installed = new LinkedHashMap<>();
         final List<ActivityTaskManagerService.ProcessRecord> processes = new ArrayList<>();
         final PackageManagerService pm;
         final ActivityTaskManagerService atm;
@@ -234,11 +233,8 @@ public final class NsdRegistrationServiceHost {
         final Object lock;
         Harness() throws Exception {
             pkg = code("fixture.nsd.registration", 12351, true);
-            installed.put(pkg.packageName, pkg);
-            pm = (PackageManagerService) UNSAFE.allocateInstance(PackageManagerService.class);
-            set(pm, "mPackages", installed); set(pm, "mRemoving", new LinkedHashMap<>());
-            set(pm, "mPackageRemoval", new ArrayList<>());
-            PermissionPolicy permissions = new PermissionPolicy(pm);
+            pm = new PackageManagerService(List.of(pkg), false);
+            PermissionPolicy permissions = pm.permissions();
             PermissionCatalog catalog = (PermissionCatalog) get(permissions, "mCatalog");
             PermissionInfo internet = new PermissionInfo();
             internet.name = Manifest.permission.INTERNET; internet.packageName = "android";
@@ -247,7 +243,6 @@ public final class NsdRegistrationServiceHost {
             // checks the actual fixture manifest and authenticated PID/UID.
             set(catalog, "mFramework", new LinkedHashMap<>(Map.of(internet.name, internet)));
             set(catalog, "mLoaded", true);
-            set(pm, "mPermissions", permissions);
             atm = (ActivityTaskManagerService) UNSAFE.allocateInstance(ActivityTaskManagerService.class);
             set(atm, "mPm", pm); set(atm, "mProcesses", processes);
             am = new ActivityManagerService(atm, pm, null);
@@ -313,7 +308,7 @@ public final class NsdRegistrationServiceHost {
         check(p.info.getAttributes().get("opaque")[2] == 8, "Local Binder TXT snapshot shares caller bytes");
         check(p.info.getPublicKey()[4] == 77, "Initial Binder snapshot lost/aliased the key");
         ApkPackage sibling = code("fixture.nsd.other", 12355, true);
-        h.installed.put(sibling.packageName, sibling);
+        h.pm.add(sibling);
         ActivityTaskManagerService.ProcessRecord foreign = h.attach(861005, sibling);
         rejects(SecurityException.class, () -> as(foreign.pid, foreign.uid,
                 () -> h.service.register(c, 9, request(), 0)), "A callback token cannot change its authenticated owner");
@@ -357,7 +352,7 @@ public final class NsdRegistrationServiceHost {
         rejects(SecurityException.class, () -> as(861999, 1000,
                 () -> h.service.register(c, 1, request(), 0)), "Unknown remote system-looking caller");
         ApkPackage denied = code("fixture.nsd.denied", 12352, false);
-        h.installed.put(denied.packageName, denied);
+        h.pm.add(denied);
         ActivityTaskManagerService.ProcessRecord deniedProcess = h.attach(861002, denied);
         rejects(SecurityException.class, () -> as(deniedProcess.pid, deniedProcess.uid,
                 () -> h.service.register(c, 1, request(), 0)), "INTERNET absent from actual manifest");
@@ -367,9 +362,9 @@ public final class NsdRegistrationServiceHost {
             set(h.process, flag, false);
         }
         ApkPackage replacement = code(h.pkg.packageName, h.pkg.uid(), true);
-        h.installed.put(h.pkg.packageName, replacement);
+        h.pm.add(replacement);
         rejects(SecurityException.class, () -> h.register(c, 1, request(), 0), "Replaced package object admitted");
-        h.installed.put(h.pkg.packageName, h.pkg);
+        h.pm.add(h.pkg);
         h.pm.beginPackageRemoval(h.pkg);
         rejects(SecurityException.class, () -> h.register(c, 1, request(), 0), "Removing package admitted");
         h.pm.endPackageRemoval(h.pkg);
@@ -765,6 +760,11 @@ public final class NsdRegistrationServiceHost {
 
     public static void main(String[] args) throws Throwable {
         System.load(args[0]);
+        // Use Android's host test mode for package-cache nonce storage.
+        android.app.PropertyInvalidatedCache.setTestMode(true);
+        Field cache = android.content.pm.PackageManager.class.getDeclaredField("sPackageInfoCache");
+        cache.setAccessible(true);
+        ((android.app.PropertyInvalidatedCache<?, ?>) cache.get(null)).testPropertyName();
         // Unrelated constructed device settings: host has no Android ICU data image.
         // Real identity, permission, registration and process-death code remain selected.
         Class<?> locales = Class.forName("com.gesher.app.locale.SystemLocale");
