@@ -1201,6 +1201,21 @@ public final class PackageManagerService extends IPackageManager.Default {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
         addLocationFeatures(FEATURES);
+        try {
+            addPrintingFeature(FEATURES, PrintManagerService.supported());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no printing to report.
+        }
+    }
+
+    /**
+     * FEATURE_PRINTING when the runtime prints through Windows (PrintManagerService). It
+     * describes the print framework, as on Android, not whether a printer is installed:
+     * with none, Windows' print dialog says so and the job is canceled.
+     */
+    static void addPrintingFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean supported) {
+        if (supported) addFeature(features, PackageManager.FEATURE_PRINTING);
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */

@@ -84,7 +84,7 @@ final class PrintSpooler {
         /** The default printer with the app's requested attributes applied; null: no printer. */
         Choice defaults(Object requestedAttributes) throws IOException;
         /** The print dialog; null when the user canceled it or {@code active} became false. */
-        Choice choose(String label, Choice initial, int pageCount, BooleanSupplier active)
+        Choice choose(String label, int owner, Choice initial, int pageCount, BooleanSupplier active)
                 throws IOException;
         /**
          * Prints {@code filePages} of {@code pdf}. Returns only when Windows accepted the
@@ -386,8 +386,12 @@ final class PrintSpooler {
             return false;
         }
 
-        /** The whole conversation; returns once the job left CREATED. */
-        void run() {
+        /**
+         * The adapter conversation, its dialog owned by the window of process
+         * {@code owner} (0: none); returns once the job left CREATED. A QUEUED job is
+         * then printed by {@link #printQueued}.
+         */
+        void run(int owner) {
             boolean started = false;
             String status = null;
             int outcome = STATE_CANCELED;
@@ -410,7 +414,7 @@ final class PrintSpooler {
                     synchronized (PrintSpooler.this) { job.documentInfo = layout.info; }
                 }
                 if (!active()) return;
-                Choice choice = mHost.choose(job.label, defaults, pageCount, this::active);
+                Choice choice = mHost.choose(job.label, owner, defaults, pageCount, this::active);
                 if (choice == null || !active()) return;
                 synchronized (PrintSpooler.this) { job.choice = choice; }
                 final Object previous = current;
@@ -467,7 +471,6 @@ final class PrintSpooler {
                 }
                 dispatch(changed);
             }
-            printQueued(job.id);
         }
 
         private Pending command(boolean layout, Command call) throws Exception {

@@ -105,7 +105,7 @@ public final class PrintSpoolerHost {
             return printers ? new PrintSpooler.Choice("Printer A", "defaults", null, 1, "dm0") : null;
         }
 
-        @Override public PrintSpooler.Choice choose(String label, PrintSpooler.Choice initial,
+        @Override public PrintSpooler.Choice choose(String label, int owner, PrintSpooler.Choice initial,
                 int pageCount, BooleanSupplier active) throws IOException {
             calls.add("choose " + label);
             dialogPageCount = pageCount;
@@ -160,7 +160,12 @@ public final class PrintSpoolerHost {
         Run start(String id) {
             session = spooler.create(id, 10042, "Job " + id, "requested", adapter, 1234L);
             adapter.session = session;
-            thread = new Thread(() -> { if (session.admit()) session.run(); }, "print-" + id);
+            thread = new Thread(() -> {
+                if (session.admit()) {
+                    session.run(0);
+                    spooler.printQueued(session.id());
+                }
+            }, "print-" + id);
             thread.start();
             return this;
         }
@@ -437,7 +442,7 @@ public final class PrintSpoolerHost {
             PrintSpooler.Session session = spooler.create("open" + i, 1, "Job", null, adapter, 0);
             adapter.session = session;
             check(session.admit(), "dialog " + i + " is admitted");
-            Thread t = new Thread(session::run);
+            Thread t = new Thread(() -> session.run(0));
             t.start();
             open.add(session);
             threads.add(t);
