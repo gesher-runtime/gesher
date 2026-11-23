@@ -97,10 +97,11 @@ builds are labeled and cannot qualify CI.
 
 ## Runtime acceptance
 
-- Eight real supplier load/unload cycles in an executable without pthread
-  imports. Each cycle acquires a clock on a native thread and unloads after
-  that thread exits, without issuing another clock call to reap the slot.
-  The process handle count must return to its initial value.
+- Two groups of eight real supplier load/unload cycles in an executable
+  without pthread imports. Both groups attach and retire a native thread in
+  each cycle. One group also acquires a clock, then unloads without issuing
+  another clock call to reap its slot. The paired handle deltas must match,
+  isolating clock ownership from handles retained by the supplier's other paths.
 - Busy and idle peers while the caller sleeps, measured against independent
   Win32 handle brackets; 10,000 acquisitions report cost and handle counts.
 - Two-image public calls, function pointers, literal dynamic symbols,
