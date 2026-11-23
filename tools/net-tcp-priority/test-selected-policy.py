@@ -399,12 +399,14 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # is checked against historical main bytes; the socket ownership and poll
 # checks still compare live code.
 USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
-USB_BLOCK_TRANSITION_SHA256 = '3fa0c779715e291564becbd71d16784969db61c957f24d86ca0e67c9e908724d'
+USB_BLOCK_TRANSITION_SHA256 = '0eaad7cb2db7f3e5e894492121bda55758c3923511eeeff439a04030ba013625'
 USB_BLOCK_TRANSITION_PATHS = (
+ 'compat/binder/binderd.cc',
  'compat/elf/exec/exec_spawn.cc',
  'compat/elf/exec/gesher_shell.cc',
  'compat/elf/exec/shell_execute.inc',
  'compat/posix/posix.cmake',
+ 'compat/posix/src/binder.cc',
  'compat/posix/src/fd.cc',
  'compat/posix/src/fsops.cc',
  'compat/posix/src/internal.h',
@@ -414,6 +416,7 @@ USB_BLOCK_TRANSITION_PATHS = (
  'compat/posix/src/system.cc',
  'compat/posix/src/system_properties.cc',
  'compat/posix/src/unistd.cc',
+ 'compat/posix/src/unix_rights.cc',
 )
 
 

@@ -1,9 +1,11 @@
 # gesher-base: the Linux/POSIX interfaces AOSP code expects, on Win32.
 # Headers in include/ shadow or extend mingw's; implementations in src/.
 add_library(gesher_posix STATIC
+  ${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc
   ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/block_broker_client.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/binder.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/binder_transport.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/crash.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/dirent.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/dlfcn.cc
@@ -115,6 +117,8 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/native_fence.cc PROPER
 # uapi header; searched last, so gesher-base's <linux/*.h> come first.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
   COMPILE_OPTIONS "-idirafter;${AOSP_DIR}/bionic/libc/kernel/uapi")
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")
 
 # Only detached alias bookkeeping may throw; same pinned STL/CRT/allocator ABI.
 # Actual compile_commands effective ordering and throwing runtime require CI proof.

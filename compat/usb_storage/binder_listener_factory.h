@@ -8,6 +8,7 @@
 #include <mutex>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace gesher::usb_storage {
 
@@ -17,7 +18,9 @@ class AuthorityLaunch;
 // process. Only the authority can create additional named-pipe instances.
 class BinderListenerFactory final {
  public:
-  static DWORD Create(const AuthorityLaunch& broker, std::span<PSID const> app_containers,
+  static DWORD CreateLocator(std::wstring* locator);
+  static DWORD Create(const AuthorityLaunch& broker, std::wstring_view locator,
+                      std::span<PSID const> app_containers,
                       std::unique_ptr<BinderListenerFactory>* result);
   ~BinderListenerFactory();
   BinderListenerFactory(const BinderListenerFactory&) = delete;
@@ -45,7 +48,8 @@ class BinderListenerFactory final {
 
  private:
   BinderListenerFactory() = default;
-  static DWORD CreateOwned(HANDLE broker, PSID owner, std::span<PSID const> app_containers,
+  static DWORD CreateOwned(HANDLE broker, PSID owner, std::wstring_view locator,
+                           std::span<PSID const> app_containers,
                            std::unique_ptr<BinderListenerFactory>* result);
 
   std::wstring name_;

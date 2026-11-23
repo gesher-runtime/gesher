@@ -5,15 +5,29 @@
 #include <aclapi.h>
 #include <sddl.h>
 #include <shlobj.h>
+#include <wtsapi32.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "../framework/app_container.h"
+#include "authority_launch.h"
+#include "binder_authority_control.h"
+#include "binder_listener_factory.h"
+
 namespace {
+
+namespace appcontainer = gesher::appcontainer;
+using gesher::usb_storage::AuthorityLaunch;
+using gesher::usb_storage::AuthorityLaunchSpec;
+using gesher::usb_storage::BinderAuthorityControl;
+using gesher::usb_storage::BinderListenerFactory;
 
 constexpr wchar_t kService[] = L"GesherUsbAuthority";
 constexpr wchar_t kFolder[] = L"Gesher Raw USB Broker";
@@ -381,6 +395,92 @@ DWORD ClearInterruptedBootstrapQueries() {
                                               security.data()) ? ERROR_SUCCESS : GetLastError();
 }
 
+// Session profiles belong to the actual desktop user. The service keeps the
+// user's kernel token, and never starts an APK while impersonating that user.
+class BinderProfile {
+ public:
+  BinderProfile(HANDLE token, std::wstring name) : token_(token), name_(std::move(name)) {}
+  ~BinderProfile() {
+    if (sid_.value && ImpersonateLoggedOnUser(token_)) {
+      appcontainer::DeleteContainerProfile(name_);
+      if (!RevertToSelf()) std::abort();
+    }
+  }
+  DWORD Create() {
+    if (!ImpersonateLoggedOnUser(token_)) return GetLastError();
+    const DWORD result = appcontainer::EnsureProfile(name_, L"Gesher protected Binder", &sid_);
+    if (!RevertToSelf()) std::abort();
+    return result;
+  }
+  PSID sid() const { return sid_.value; }
+ private:
+  HANDLE token_;
+  std::wstring name_;
+  appcontainer::Sid sid_;
+};
+
+DWORD StartProtectedBinder(const std::wstring& directory, DWORD session, HANDLE stop) {
+  HANDLE user = nullptr;
+  if (!WTSQueryUserToken(session, &user)) return GetLastError();
+  const ScopedHandle desktop_user(user);
+  alignas(TOKEN_USER) BYTE identity[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
+  DWORD size = 0;
+  if (!GetTokenInformation(user, TokenUser, identity, sizeof(identity), &size)) return GetLastError();
+
+  std::wstring registration, listeners, data;
+  DWORD status = BinderAuthorityControl::CreateLocator(&registration);
+  if (status == ERROR_SUCCESS) status = BinderAuthorityControl::CreateLocator(&listeners);
+  if (status == ERROR_SUCCESS) status = BinderListenerFactory::CreateLocator(&data);
+  if (status != ERROR_SUCCESS) return status;
+
+  const std::wstring runtime = directory + L"\\runtime";
+  const std::wstring binary = runtime + L"\\binderd.exe";
+  appcontainer::Sid capability;
+  status = appcontainer::CapabilitySid(appcontainer::kRuntimeFilesCapability, &capability);
+  if (status != ERROR_SUCCESS) return status;
+  constexpr DWORD kReadExecute = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+  status = appcontainer::Grant(runtime, capability.value, kReadExecute, false);
+  if (status == ERROR_SUCCESS) status = appcontainer::Grant(binary, capability.value, kReadExecute, false);
+  if (status != ERROR_SUCCESS) return status;
+
+  BinderProfile profile(user, L"Gesher.ProtectedBinder." + registration.substr(registration.size() - 32));
+  status = profile.Create();
+  if (status != ERROR_SUCCESS) return status;
+  SID_AND_ATTRIBUTES capabilities[] = {{capability.value, SE_GROUP_ENABLED}};
+  const SECURITY_CAPABILITIES lowbox{profile.sid(), capabilities, 1, 0};
+  std::wstring arguments = L"--gesher-protected-binder " + registration + L" " + listeners + L" " + data;
+
+  wchar_t windows[MAX_PATH]{};
+  const UINT root_length = GetWindowsDirectoryW(windows, MAX_PATH);
+  if (root_length == 0 || root_length >= MAX_PATH) return ERROR_PATH_NOT_FOUND;
+  const std::wstring system_root(windows, root_length);
+  std::wstring environment = L"PATH=" + system_root + L"\\System32";
+  environment.push_back(L'\0');
+  environment += L"SystemRoot=" + system_root;
+  environment.push_back(L'\0');
+  environment += L"WINDIR=" + system_root;
+  environment.append(2, L'\0');
+  const AuthorityLaunchSpec spec{binary.c_str(), runtime.c_str(), arguments, environment, lowbox,
+                                 reinterpret_cast<const TOKEN_USER*>(identity)->User.Sid, session};
+  std::unique_ptr<AuthorityLaunch> broker;
+  status = AuthorityLaunch::Create(user, spec, &broker);
+  if (status != ERROR_SUCCESS) return status;
+
+  // Bootstrap only the restricted Binder realm. No Android app is admitted
+  // before the separate signed-enrollment and launcher paths register it.
+  const PSID contained[] = {profile.sid()};
+  std::unique_ptr<BinderListenerFactory> factory;
+  status = BinderListenerFactory::Create(*broker, data, contained, &factory);
+  if (status != ERROR_SUCCESS) return status;
+  std::unique_ptr<BinderAuthorityControl> control, listener_control;
+  status = BinderAuthorityControl::Connect(*broker, registration, stop, &control);
+  if (status == ERROR_SUCCESS) {
+    status = BinderAuthorityControl::ConnectListeners(*broker, listeners, stop, &listener_control);
+  }
+  if (status != ERROR_SUCCESS) return status;
+  return listener_control->ServeListeners(*factory);
+}
+
 struct ServiceContext {
   SERVICE_STATUS_HANDLE status = nullptr;
   HANDLE stop = nullptr;
@@ -409,16 +509,25 @@ DWORD WINAPI HandleServiceControl(DWORD control, DWORD, void*, void* context) {
   return control == SERVICE_CONTROL_INTERROGATE ? ERROR_SUCCESS : ERROR_CALL_NOT_IMPLEMENTED;
 }
 
-void WINAPI ServiceMain(DWORD argc, wchar_t**) {
+void WINAPI ServiceMain(DWORD argc, wchar_t** argv) {
   ScopedHandle stop(CreateEventW(nullptr, TRUE, FALSE, nullptr));
   const DWORD event_error = stop.get() ? ERROR_SUCCESS : GetLastError();
   ServiceContext service{nullptr, stop.get()};
   service.status = RegisterServiceCtrlHandlerExW(kService, HandleServiceControl, &service);
   if (!service.status) return;
   Report(service, SERVICE_START_PENDING);
+  DWORD desktop_session = 0;
+  if (argc == 3 && std::wstring_view(argv[1]) == L"binder-session") {
+    const std::wstring_view requested(argv[2]);
+    if (!requested.empty() && requested.size() <= 9 &&
+        requested.find_first_not_of(L"0123456789") == std::wstring_view::npos) {
+      desktop_session = std::wcstoul(argv[2], nullptr, 10);
+    }
+  }
+  const bool valid_arguments = argc == 1 || desktop_session != 0;
   std::wstring image, directory;
   DWORD status = event_error != ERROR_SUCCESS ? event_error :
-      (argc == 1 && IsLocalSystem() ? TrustedImage(&image, &directory) : ERROR_ACCESS_DENIED);
+      (valid_arguments && IsLocalSystem() ? TrustedImage(&image, &directory) : ERROR_ACCESS_DENIED);
   if (status == ERROR_SUCCESS) status = ValidateRuntime(directory);
   if (status == ERROR_SUCCESS) status = ClearInterruptedBootstrapQueries();
   if (status != ERROR_SUCCESS) {
@@ -428,8 +537,15 @@ void WINAPI ServiceMain(DWORD argc, wchar_t**) {
   // No clients are enrolled until the protected application launch path can
   // bind the installed package and running process to a selected disk grant.
   Report(service, SERVICE_RUNNING);
-  const DWORD waited = WaitForSingleObject(stop.get(), INFINITE);
-  Report(service, SERVICE_STOPPED, waited == WAIT_OBJECT_0 ? ERROR_SUCCESS : GetLastError());
+  if (desktop_session != 0) {
+    status = StartProtectedBinder(directory, desktop_session, stop.get());
+    if (status == ERROR_OPERATION_ABORTED && WaitForSingleObject(stop.get(), 0) == WAIT_OBJECT_0) {
+      status = ERROR_SUCCESS;
+    }
+  } else if (WaitForSingleObject(stop.get(), INFINITE) != WAIT_OBJECT_0) {
+    status = GetLastError();
+  }
+  Report(service, SERVICE_STOPPED, status);
 }
 
 }  // namespace

@@ -32,6 +32,7 @@
 #include "binder_internal.h"
 #include "binder_file_descriptions.h"
 #include "binder_sg.h"
+#include "binder_transport.h"
 #include "binder_wire.h"
 #include "internal.h"
 #include "native_fence_internal.h"
@@ -116,6 +117,7 @@ std::wstring PipeName() {
 }
 
 HANDLE ConnectPipe(const std::wstring& name) {
+  if (const auto* endpoint = ProtectedBinderEndpoint()) return OpenProtectedBinder(*endpoint);
   for (int attempt = 0; attempt < 50; ++attempt) {
     HANDLE h = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING,
                            0, nullptr);
@@ -761,6 +763,12 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 }  // namespace
 
 bool BinderDeviceExists() {
+  if (const auto* endpoint = ProtectedBinderEndpoint()) {
+    HANDLE pipe = OpenProtectedBinder(*endpoint);
+    if (pipe == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(pipe);
+    return true;
+  }
   std::wstring name = PipeName();
   if (name.empty()) return false;
   // WaitNamedPipe fails at once with ERROR_FILE_NOT_FOUND when no server
@@ -770,8 +778,9 @@ bool BinderDeviceExists() {
 }
 
 int OpenBinder(int flags) {
-  std::wstring name = PipeName();
-  if (name.empty()) return errno = ENOENT, -1;
+  const bool is_protected = ProtectedBinderEndpoint() != nullptr;
+  std::wstring name = is_protected ? std::wstring() : PipeName();
+  if (!is_protected && name.empty()) return errno = ENOENT, -1;
   HANDLE pipe = ConnectPipe(name);
   if (pipe == INVALID_HANDLE_VALUE) return errno = ENOENT, -1;
   auto file = std::make_shared<BinderFile>();

@@ -15,6 +15,7 @@
 #include <vector>
 #include "../../compat/binder/protected_data_client.h"
 #include "../../compat/binder/protected_data_pipe.h"
+#include "../../compat/posix/src/binder_transport.h"
 #include "../../compat/framework/app_container.h"
 #include "../../compat/usb_storage/binder_listener_factory.h"
 
@@ -171,6 +172,22 @@ void RejectImpostor(PSID owner) {
   endpoint.locator = LR"(\\attacker\pipe\gesher-private-binder-data-00000000000000000000000000000000)";
   Require(OpenProtectedDataPipeForFixture(endpoint, owner, &result) == ERROR_INVALID_PARAMETER &&
           !result, "reject remote locator before any open");
+
+  const Handle impostor(CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX |
+      FILE_FLAG_FIRST_PIPE_INSTANCE, pipe_modes, 1, pipe_buffer, pipe_buffer, 0, nullptr));
+  Require(impostor.get() != INVALID_HANDLE_VALUE, "create protected POSIX routing impostor");
+  auto startup_name = name;
+  endpoint = Endpoint(startup_name, GetCurrentProcessId());
+  endpoint.authority_session = 0;
+  Require(gesher::ConfigureProtectedBinder(endpoint) == ERROR_SUCCESS, "provision native routing");
+  startup_name.clear();
+  const auto* sealed = gesher::ProtectedBinderEndpoint();
+  Require(sealed && sealed->locator == name && sealed->authority_session == 0,
+          "protected POSIX routing owns its startup snapshot");
+  Require(gesher::ConfigureProtectedBinder({}) == ERROR_ALREADY_INITIALIZED,
+          "later calls cannot switch the protected route");
+  const Handle rejected(gesher::OpenProtectedBinder(*sealed));
+  Require(rejected.get() == INVALID_HANDLE_VALUE, "reject ordinary pipe with exact private name");
 }
 DWORD Broker(HANDLE bootstrap) {
   const Handle own(bootstrap);

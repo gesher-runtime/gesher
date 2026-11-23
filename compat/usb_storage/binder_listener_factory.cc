@@ -165,27 +165,40 @@ DWORD PublishDacl(HANDLE guard, PSECURITY_DESCRIPTOR security) {
 
 }  // namespace
 
-DWORD BinderListenerFactory::Create(const AuthorityLaunch& broker,
+DWORD BinderListenerFactory::CreateLocator(std::wstring* locator) {
+  return locator && locator->empty() ? NewName(locator) : ERROR_INVALID_PARAMETER;
+}
+
+DWORD BinderListenerFactory::Create(const AuthorityLaunch& broker, std::wstring_view locator,
     std::span<PSID const> app_containers, std::unique_ptr<BinderListenerFactory>* result) {
   const DWORD authorized = VerifyOwnService();
   if (authorized != ERROR_SUCCESS) return authorized;
   alignas(DWORD) BYTE system[SECURITY_MAX_SID_SIZE]{};
   DWORD size = sizeof(system);
   if (!CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &size)) return GetLastError();
-  return CreateOwned(broker.process(), system, app_containers, result);
+  return CreateOwned(broker.process(), system, locator, app_containers, result);
 }
 
 #ifdef GESHER_BINDER_LISTENER_FACTORY_FIXTURE
 DWORD BinderListenerFactory::CreateForFixture(HANDLE broker, PSID owner,
     std::span<PSID const> app_containers, std::unique_ptr<BinderListenerFactory>* result) {
-  return CreateOwned(broker, owner, app_containers, result);
+  std::wstring locator;
+  const DWORD status = CreateLocator(&locator);
+  return status == ERROR_SUCCESS ? CreateOwned(broker, owner, locator, app_containers, result) : status;
 }
 #endif
 
-DWORD BinderListenerFactory::CreateOwned(HANDLE broker, PSID owner,
+DWORD BinderListenerFactory::CreateOwned(HANDLE broker, PSID owner, std::wstring_view locator,
     std::span<PSID const> app_containers, std::unique_ptr<BinderListenerFactory>* result) try {
   if (!broker || broker == INVALID_HANDLE_VALUE || !owner || !IsValidSid(owner) ||
       app_containers.empty() || !result || *result) return ERROR_INVALID_PARAMETER;
+  constexpr std::wstring_view prefix(data_pipe::kLocatorPrefix);
+  if (!locator.starts_with(prefix) || locator.size() != prefix.size() + data_pipe::kLocatorHexDigits) {
+    return ERROR_INVALID_NAME;
+  }
+  for (const wchar_t digit : locator.substr(prefix.size())) {
+    if (!((digit >= L'0' && digit <= L'9') || (digit >= L'a' && digit <= L'f'))) return ERROR_INVALID_NAME;
+  }
   auto factory = std::unique_ptr<BinderListenerFactory>(new BinderListenerFactory);
   if (!DuplicateHandle(GetCurrentProcess(), broker, GetCurrentProcess(), &factory->broker_,
           PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE | PROCESS_TERMINATE | SYNCHRONIZE,
@@ -195,10 +208,9 @@ DWORD BinderListenerFactory::CreateOwned(HANDLE broker, PSID owner,
   if (pid == GetCurrentProcessId()) return ERROR_INVALID_PARAMETER;
   if (WaitForSingleObject(factory->broker_, 0) != WAIT_TIMEOUT) return ERROR_PROCESS_ABORTED;
 
-  DWORD status = NewName(&factory->name_);
-  if (status != ERROR_SUCCESS) return status;
+  factory->name_ = locator;
   LocalMemory private_guard, admitted;
-  status = BuildPolicies(factory->broker_, owner, app_containers, &private_guard, &admitted);
+  DWORD status = BuildPolicies(factory->broker_, owner, app_containers, &private_guard, &admitted);
   if (status != ERROR_SUCCESS) return status;
   SECURITY_ATTRIBUTES security{sizeof(security), private_guard.get(), FALSE};
   factory->guard_ = CreateNamedPipeW(factory->name_.c_str(), PIPE_ACCESS_DUPLEX | WRITE_DAC |

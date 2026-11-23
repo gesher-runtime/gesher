@@ -1,9 +1,11 @@
 {
   "after_sha256": {
+    "compat/binder/binderd.cc": "75cb0c8645a7d9eb1a9539766ae71699eaf5e11f9a8cdd36297ef43cdd6f9d94",
     "compat/elf/exec/exec_spawn.cc": "9c1102d318957c41d5895b9d30f8f8b7a9584ce8ce449ba19cffb33a7dfa39ef",
     "compat/elf/exec/gesher_shell.cc": "369ce381b1d72c3c88cc6058aff91aef273c7d36bf32fbf7b35238f2da284cb5",
     "compat/elf/exec/shell_execute.inc": "c8dd42b203d84f4278ae8e6253d4d3944b5ca73b9369480c22fd9dc17d52d81b",
-    "compat/posix/posix.cmake": "1a20d169ded70212041734319a41d9a9572b9d689d12f3411b016c51c99d7031",
+    "compat/posix/posix.cmake": "0bb09ecc8edac329aa577dabba0f5b288289ca227a32ec17675cec8df534511d",
+    "compat/posix/src/binder.cc": "f466589cacf7c82b4c1f1c23ed8ce5745b8ee8b5e6ef04d66a9c478a47491362",
     "compat/posix/src/fd.cc": "b8f823ff96439707607cda67206939498e5850e6720841f67a7946e55a01e4f6",
     "compat/posix/src/fsops.cc": "55f6a688c6fb1ac98514d3282ca90cf212504343ce9f9c07e809a7f456b1a48f",
     "compat/posix/src/internal.h": "e212906ec5ad67acae7cb003ea2d24b450989ca3a050323f83a4d4d56906b80e",
@@ -12,16 +14,22 @@
     "compat/posix/src/procfs.cc": "09202bd750893e89684be559c2d380074f35ccbdec4a68627b02df1d1a9a6e56",
     "compat/posix/src/system.cc": "2dd756ed879890c5daf81fe7c70bc96ea52ab2c5530c5c6f6a8002b63626cdcb",
     "compat/posix/src/system_properties.cc": "a5a8c29d17120b6bf1d5e7cb4db1c1d3120a339fcc0ce1bd77cd4a38f7a40866",
-    "compat/posix/src/unistd.cc": "a1e8e136be67d4f3187ef369a2f1341ccc5a0ecb628d61f90af9e5b5429a018c"
+    "compat/posix/src/unistd.cc": "a1e8e136be67d4f3187ef369a2f1341ccc5a0ecb628d61f90af9e5b5429a018c",
+    "compat/posix/src/unix_rights.cc": "d3c39bbc3d9ae6a9c4c443eb9e060e6eaa7697becbb968cb13b32f696891a0d5"
   },
   "base": "08146b1ea150229313ef14a8fcd99df217a57fb9",
   "dependencies_sha256": {
+    "compat/binder/protected_data_client.cc": "50a47ec6348fc019f4f4fe6fcf0b66f39d6a7a98cad85ebee0916a083d9b68fe",
+    "compat/binder/protected_data_client.h": "c28d4830b31e4d21070e5946932dda7a910f0ee5dea71f438a95cd278643d59f",
+    "compat/binder/protected_data_pipe.h": "107e98b44e6075102e55fa434dc06422866f213ef800c4ddbcddb294f2bd2529",
     "compat/posix/include/gesher/usb_block.h": "7a8ccd07ed0f647864abc4eb6636878fc412ca7e8c6d6f90d214a07df190967a",
+    "compat/posix/src/binder_transport.cc": "6478c72048f42fca44a1ec2a2b2d34c136b630819e3285aa949002e460327dd5",
+    "compat/posix/src/binder_transport.h": "a73e103703643489bb3141b374491fbcd6fa260820357a15ba324bfa16a94c2d",
     "compat/posix/src/usb_block.cc": "2de236769f94f593b727a4d19b7fb4dea64c4fac00e743a18f760fde66321f3b",
     "compat/posix/src/usb_block_internal.h": "9ee0b45c7667985a90dcf110af5342bb926ef9676ce79b1c99bdfb7512ec5788",
     "compat/usb_storage/block_broker.h": "3d088db96f596d1874a908bff9f6f470a1122cd03e8dfd5c255def4b505cb872",
     "compat/usb_storage/block_broker_client.cc": "60e61a05023f458e3bf9acaec814f6798fa1f8500d806fbd644c62e9b87d6fb5",
     "compat/usb_storage/block_broker_client.h": "be97fa633582846452caf40e752a4932e88ea7747d407ed43bfa6163b2c9bc89"
   },
-  "patch_sha256": "81607e9cc11790d84c00647971f5640e7b93f16faf8977906cb8a066b9e64ce4"
+  "patch_sha256": "dd65e5f6b9aa5647f72134ae3fa72cfd427a062c1f0225968025808d7dfc88f9"
 }

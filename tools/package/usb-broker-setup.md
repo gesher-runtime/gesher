@@ -36,6 +36,19 @@ apps. Its elevated uninstaller verifies the protected binary, then asks it to
 stop and unregister the service before removing the installed files. To update
 the companion, uninstall the previous version before running the new setup.
 
+## Protected Binder startup
+
+On a disposable test machine with an ordinary desktop user logged in, an
+administrator can start the isolated Binder realm for that Windows session.
+Pass the Windows session number to the service.
+
+    sc.exe start GesherUsbAuthority binder-session <session-id>
+
+The service launches the installed `binderd.exe` under a restricted
+AppContainer token and owns the control and data endpoints. The protected
+realm starts with no Android applications enrolled. Stop the service to
+retire that realm and its process.
+
 ## Build
 
 Use Inno Setup 6.7 or later with the CMake target output staged from the same

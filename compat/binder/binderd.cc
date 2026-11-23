@@ -38,6 +38,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <list>
@@ -46,6 +47,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -56,9 +58,16 @@
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 
+#ifdef GESHER_PROTECTED_BINDER
+#include "protected_bootstrap.h"
+#else
+namespace gesher::binder { class ProtectedPeer; }
+#endif
+
 namespace {
 
 namespace wire = gesher::binder_wire;
+using ProtectedIdentity = std::shared_ptr<const gesher::binder::ProtectedPeer>;
 
 bool g_trace = false;
 
@@ -202,6 +211,7 @@ struct Proc {
   uint64_t key = 0;
   int pid = 0;
   uint32_t uid = 0;
+  ProtectedIdentity protected_peer;
   bool is_dead = false;
   std::map<uint64_t, Node*> nodes;
   std::map<uint32_t, Ref*> refs_by_desc;
@@ -215,6 +225,14 @@ struct Proc {
   uint32_t requested_threads = 0;
   uint32_t requested_threads_started = 0;
 };
+
+bool ProcLive(const Proc* proc) {
+  if (proc->is_dead) return false;
+#ifdef GESHER_PROTECTED_BINDER
+  if (proc->protected_peer) return proc->protected_peer->live();
+#endif
+  return true;
+}
 
 // Every object is guarded by one lock, as the driver's are by its locks; the
 // broker's threads only block on their thread's condition variable, which
@@ -700,6 +718,9 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
     flat_binder_object fp;
     memcpy(&fp, buffer->data.data() + off, sizeof(fp));
     if (type == BINDER_TYPE_FD) {
+      // No native-handle transfer is enabled on the protected endpoint until
+      // descriptor kind and host-control handle exclusions are enforced.
+      if (proc->protected_peer || target_proc->protected_peer) return BR_FAILED_REPLY;
       // binder_translate_fd: fp.binder is binder_fd_object's pad_binder,
       // where the sender's /dev/binder put the fd's handle.
       if (fp.binder == 0) {
@@ -849,6 +870,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
       }
     }
   }
+  if (target_proc->protected_peer && !ProcLive(target_proc)) return fail(BR_DEAD_REPLY);
   gesher::binder_sg::Layout sg_layout;
   if (td.copy_error != 0 ||
       !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout) ||
@@ -1363,6 +1385,10 @@ retry:
     if (!HasWork(thread, wait_for_proc_work)) ret = -EAGAIN;
   } else {
     for (;;) {
+      if (proc->protected_peer && (thread->is_dead || !ProcLive(proc))) {
+        ret = -EBADF;
+        break;
+      }
       if (HasWork(thread, wait_for_proc_work)) break;
       if (thread->is_dead || proc->is_dead) {
         ret = -EBADF;
@@ -1372,7 +1398,12 @@ retry:
         proc->waiting_threads.push_front(thread);
         thread->waiting = true;
       }
-      thread->cv.wait(lock);
+      if (proc->protected_peer) {
+        // Protected registration can be revoked without a Binder message.
+        thread->cv.wait_for(lock, std::chrono::milliseconds(200));
+      } else {
+        thread->cv.wait(lock);
+      }
       if (thread->waiting) {
         proc->waiting_threads.remove(thread);
         thread->waiting = false;
@@ -1554,9 +1585,9 @@ bool WriteExact(HANDLE pipe, const void* buf, size_t n) {
 
 constexpr uint32_t kMaxMessage = 64u << 20;
 
-bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg) {
+bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg, uint32_t limit = kMaxMessage) {
   uint32_t len;
-  if (!ReadExact(pipe, &len, sizeof(len)) || len > kMaxMessage) return false;
+  if (!ReadExact(pipe, &len, sizeof(len)) || len > limit) return false;
   msg->resize(len);
   return ReadExact(pipe, msg->data(), len);
 }
@@ -1607,10 +1638,14 @@ bool ClientIsRestricted(HANDLE pipe) {
   return restricted;
 }
 
-void ServeProc(HANDLE pipe, In in) {
+void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
   uint32_t version, pid, uid;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
-  if (g_sandbox && ClientIsRestricted(pipe)) {
+#ifdef GESHER_PROTECTED_BINDER
+  if (protected_peer && (!protected_peer->live() || pid != protected_peer->pid() ||
+      uid != protected_peer->uid() || in.p != in.end)) return;
+#endif
+  if (!protected_peer && g_sandbox && ClientIsRestricted(pipe)) {
     // A first step of kernel-verified identity (ADR 0090, milestone M2 completes it):
     // a restricted process is an app, at its own pid. It cannot claim a system UID
     // (SYSTEM_UID 1000 and every other below FIRST_APPLICATION_UID) or another pid.
@@ -1634,6 +1669,7 @@ void ServeProc(HANDLE pipe, In in) {
     proc->key = RandomKey();
     proc->pid = static_cast<int>(pid);
     proc->uid = uid;
+    proc->protected_peer = protected_peer;
     g_procs[proc->id] = proc_owner;
   }
   TRACE("proc %u: pid %u opened the device", proc->id, pid);
@@ -1645,7 +1681,7 @@ void ServeProc(HANDLE pipe, In in) {
     // Nothing more comes on this connection: it breaks when the process
     // closes the fd or exits.
     std::vector<uint8_t> msg;
-    while (ReadMessage(pipe, &msg)) {
+    while (ReadMessage(pipe, &msg, protected_peer ? 0 : kMaxMessage)) {
     }
   }
   ProcRelease(proc);
@@ -1895,6 +1931,9 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
     }
     case BINDER_SET_CONTEXT_MGR:
     case BINDER_SET_CONTEXT_MGR_EXT: {
+      // An authenticated app UID does not confer the authority role. The
+      // protected bootstrap does not grant a context-manager role yet.
+      if (proc->protected_peer) return -EPERM;
       flat_binder_object fbo = {};
       if (request == BINDER_SET_CONTEXT_MGR_EXT && !in.Get(&fbo)) return -EINVAL;
       if (g_context_mgr_node != nullptr) {
@@ -1930,11 +1969,11 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
   }
 }
 
-void ServeThread(HANDLE pipe, In in) {
+void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {}) {
   uint32_t version, proc_id, tid;
   uint64_t key;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&proc_id) || !in.Get(&key) ||
-      !in.Get(&tid)) {
+      !in.Get(&tid) || (protected_peer && in.p != in.end)) {
     return;
   }
   std::shared_ptr<Thread> thread_owner;
@@ -1944,7 +1983,8 @@ void ServeThread(HANDLE pipe, In in) {
   {
     std::lock_guard<std::mutex> lock(g_lock);
     auto it = g_procs.find(proc_id);
-    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
+    if (it != g_procs.end() && it->second->key == key &&
+        it->second->protected_peer == protected_peer && ProcLive(it->second.get())) {
       proc_owner = it->second;
       proc = proc_owner.get();
       thread_owner = std::make_shared<Thread>();
@@ -1971,7 +2011,7 @@ void ServeThread(HANDLE pipe, In in) {
     if (!req.Get(&op)) break;
     WireReply reply;
     std::unique_lock<std::mutex> lock(g_lock);
-    if (thread->is_dead || proc->is_dead) {
+    if (thread->is_dead || !ProcLive(proc)) {
       lock.unlock();
       reply.Put<int32_t>(-EBADF);
       reply.Put<uint32_t>(0);
@@ -2026,17 +2066,20 @@ void ServeThread(HANDLE pipe, In in) {
   ThreadRelease(thread);
 }
 
-void Serve(HANDLE pipe) {
+void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
   std::vector<uint8_t> msg;
-  if (ReadMessage(pipe, &msg)) {
+  // The largest protected hello is op, magic, version, proc id, key and tid.
+  constexpr uint32_t kProtectedHelloLimit = 7 * sizeof(uint32_t);
+  if (ReadMessage(pipe, &msg, protected_peer ? kProtectedHelloLimit : kMaxMessage) &&
+      !msg.empty()) {
     In in{msg.data(), msg.data() + msg.size()};
     uint32_t op, magic;
     if (in.Get(&op) && in.Get(&magic) && magic == wire::kMagic) {
       if (op == wire::kHelloProc) {
-        ServeProc(pipe, in);
+        ServeProc(pipe, in, protected_peer);
       } else if (op == wire::kHelloThread) {
-        ServeThread(pipe, in);
-      } else if (op == wire::kHelloRights) {
+        ServeThread(pipe, in, protected_peer);
+      } else if (op == wire::kHelloRights && !protected_peer) {
         ServeRights(pipe, in);
       }
     }
@@ -2045,11 +2088,78 @@ void Serve(HANDLE pipe) {
   CloseHandle(pipe);
 }
 
+void Serve(HANDLE pipe) { ServeConnection(pipe); }
+
+#ifdef GESHER_PROTECTED_BINDER
+ProtectedIdentity AdmitProtected(HANDLE pipe, const gesher::binder::ProtectedPeers& peers) {
+  ProtectedIdentity identity;
+  if (peers.FindClient(pipe, &identity) != ERROR_SUCCESS) {
+    DisconnectNamedPipe(pipe);
+    CloseHandle(pipe);
+  }
+  return identity;
+}
+
+std::wstring ProtectedLocator(std::string_view value) {
+  return std::wstring(value.begin(), value.end());
+}
+
+int RunProtected(int argc, char** argv) {
+  if (argc != 5) return 1;
+  using gesher::binder::ProtectedBootstrap;
+  std::unique_ptr<ProtectedBootstrap> registration, listeners;
+  DWORD status = ProtectedBootstrap::Connect(ProtectedLocator(argv[2]), &registration);
+  if (status == ERROR_SUCCESS) {
+    status = ProtectedBootstrap::ConnectListeners(ProtectedLocator(argv[3]),
+        ProtectedLocator(argv[4]), &listeners);
+  }
+  if (status != ERROR_SUCCESS) {
+    Log("protected authority connection failed: %lu", status);
+    return 1;
+  }
+  // The registration thread and accepted connections live until the protected
+  // broker exits. Losing either authenticated control closes the entire broker
+  // with no ordinary device discovery or UID/handle fallback.
+  static gesher::binder::ProtectedPeers peers;
+  std::thread([registration = std::move(registration)] {
+    const DWORD error = registration->Serve(peers);
+    Log("protected registration channel retired: %lu", error);
+    ExitProcess(1);
+  }).detach();
+  for (;;) {
+    HANDLE pipe = nullptr;
+    status = listeners->TakeListener(&pipe);
+    if (status != ERROR_SUCCESS) {
+      Log("protected listener channel retired: %lu", status);
+      ExitProcess(1);
+    }
+    if (!ConnectNamedPipe(pipe, nullptr)) {
+      const DWORD error = GetLastError();
+      if (error != ERROR_PIPE_CONNECTED) {
+        CloseHandle(pipe);
+        if (error == ERROR_NO_DATA) continue;
+        Log("protected listener failed: %lu", error);
+        ExitProcess(1);
+      }
+    }
+    auto identity = AdmitProtected(pipe, peers);
+    if (identity) std::thread(ServeConnection, pipe, std::move(identity)).detach();
+  }
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
   const char* trace = getenv("GESHER_BINDER_TRACE");
   g_trace = trace != nullptr && trace[0] == '1';
+  if (argc > 1 && std::string_view(argv[1]) == "--gesher-protected-binder") {
+#ifdef GESHER_PROTECTED_BINDER
+    return RunProtected(argc, argv);
+#else
+    return 1;
+#endif
+  }
   std::string device;
   if (argc > 1) {
     device = argv[1];

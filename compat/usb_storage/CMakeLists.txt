@@ -1,9 +1,15 @@
-add_executable(gesher-usb-authority usb_authority_service.cc)
+add_executable(gesher-usb-authority
+  usb_authority_service.cc
+  authority_launch.cc
+  authority_peer.cc
+  binder_authority_control.cc
+  binder_listener_factory.cc
+  ${CMAKE_CURRENT_LIST_DIR}/../framework/app_container.cc)
 set_target_properties(gesher-usb-authority PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-target_compile_options(gesher-usb-authority PRIVATE -Wall -Wextra -Werror)
+target_compile_options(gesher-usb-authority PRIVATE -Wall -Wextra -Werror -fexceptions)
 target_link_options(gesher-usb-authority PRIVATE -municode)
-target_link_libraries(gesher-usb-authority PRIVATE advapi32 ole32 shell32 uuid)
+target_link_libraries(gesher-usb-authority PRIVATE advapi32 bcrypt ole32 shell32 uuid wtsapi32)
 
 # Full launch validation needs a disposable LocalSystem test host with an
 # ordinary desktop user logged on. The default invocation tests refusal.

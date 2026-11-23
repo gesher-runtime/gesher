@@ -34,6 +34,7 @@ set_tests_properties(binder_protected_bootstrap PROPERTIES TIMEOUT 15)
 add_executable(binder_protected_data_test
   ../../compat/binder/protected_data_client.cc
   ../../compat/framework/app_container.cc
+  ../../compat/posix/src/binder_transport.cc
   ../../compat/usb_storage/binder_listener_factory.cc
   ../../tests/native/binder_listener_factory_test.cc)
 target_compile_features(binder_protected_data_test PRIVATE cxx_std_20)
