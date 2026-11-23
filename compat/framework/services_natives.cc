@@ -29,10 +29,13 @@
 #include <nativehelper/JNIHelp.h>
 #include <unistd.h>
 #include <cstdio>
+#include <map>
 #include <mutex>
 #include <gesher/system_properties.h>
 
 #include "core_jni_helpers.h"
+#include "cohost_permission_server.h"
+#include "../posix/src/standalone_input.h"
 #include "services_zygote.h"
 
 // Its layout checks use offsetof on a class with atomics, which Soong's flags
@@ -343,6 +346,162 @@ static jint Zygote_runContainedStandalone(JNIEnv* env, jclass, jstring command, 
     return static_cast<jint>(exit);
 }
 
+namespace {
+namespace cohost = gesher::cohost_permissions;
+using gesher::binder_peer::OwnedHandle;
+std::mutex gCohostLeasesLock;
+std::map<jlong, OwnedHandle> gCohostLeases;
+uint64_t gNextCohostLease = 1;
+
+class CohostLease {
+public:
+    ~CohostLease() {
+        std::lock_guard<std::mutex> lock(gCohostLeasesLock);
+        gCohostLeases.erase(id_);
+    }
+
+    jlong attach(HANDLE process) {
+        HANDLE retained = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &retained,
+                             SYNCHRONIZE, FALSE, 0)) return 0;
+        OwnedHandle owner(retained);
+        std::lock_guard<std::mutex> lock(gCohostLeasesLock);
+        if (id_ != 0 || gNextCohostLease > INT64_MAX) return 0;
+        id_ = static_cast<jlong>(gNextCohostLease++);
+        gCohostLeases.emplace(id_, std::move(owner));
+        return id_;
+    }
+
+private:
+    jlong id_ = 0;
+};
+
+DWORD DispatchCohostPermission(JavaVM* vm, jobject host, jmethodID dispatch,
+        cohost::Operation operation, const std::vector<std::u16string>& names,
+        std::vector<int32_t>* values) {
+    JNIEnv* env = nullptr;
+    if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return ERROR_GEN_FAILURE;
+    DWORD error = ERROR_NO_SYSTEM_RESOURCES;
+    jclass string = env->FindClass("java/lang/String");
+    jobjectArray arguments = string == nullptr ? nullptr
+        : env->NewObjectArray(static_cast<jsize>(names.size()), string, nullptr);
+    if (arguments != nullptr) {
+        for (jsize i = 0; i < static_cast<jsize>(names.size()) && !env->ExceptionCheck(); ++i) {
+            const auto& name = names[i];
+            if (name.empty()) continue;
+            jstring argument = env->NewString(reinterpret_cast<const jchar*>(name.data()),
+                                               static_cast<jsize>(name.size()));
+            if (argument == nullptr) break;
+            env->SetObjectArrayElement(arguments, i, argument);
+            env->DeleteLocalRef(argument);
+        }
+        if (!env->ExceptionCheck()) {
+            auto result = static_cast<jintArray>(
+                env->CallObjectMethod(host, dispatch, static_cast<jint>(operation), arguments));
+            if (!env->ExceptionCheck() && result != nullptr &&
+                env->GetArrayLength(result) == static_cast<jsize>(names.size())) {
+                values->resize(names.size());
+                if (!values->empty()) env->GetIntArrayRegion(result, 0,
+                    static_cast<jsize>(values->size()), values->data());
+                if (!env->ExceptionCheck()) error = ERROR_SUCCESS;
+            }
+        }
+    }
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        error = ERROR_ACCESS_DENIED;
+    }
+    vm->DetachCurrentThread();
+    return error;
+}
+}  // namespace
+
+static jboolean Zygote_cohostPermissionLive(JNIEnv*, jclass, jlong lease) {
+    if (lease <= 0) return JNI_FALSE;
+    std::lock_guard<std::mutex> lock(gCohostLeasesLock);
+    auto entry = gCohostLeases.find(lease);
+    return entry != gCohostLeases.end() &&
+        WaitForSingleObject(entry->second.get(), 0) == WAIT_TIMEOUT ? JNI_TRUE : JNI_FALSE;
+}
+
+static jboolean Zygote_hasCohostPermissionScope(JNIEnv*, jclass) {
+    const auto& boot = gesher::cohost_bootstrap::Current();
+    return boot && !boot.permission_pipe.empty() &&
+        WaitForSingleObject(boot.storage_host, 0) == WAIT_TIMEOUT ? JNI_TRUE : JNI_FALSE;
+}
+
+static jboolean Zygote_cohostOwnsApk(JNIEnv* env, jclass type, jstring path) {
+    if (Zygote_hasCohostPermissionScope(env, type) != JNI_TRUE) return JNI_FALSE;
+    const auto value = ZygoteString(env, path);
+    const std::wstring native(value.begin(), value.end());
+    return gesher::standalone_input::Current().Matches(native) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jintArray Zygote_cohostPermissionExchange(JNIEnv* env, jclass, jint operation,
+                                                  jobjectArray names) {
+    if (names == nullptr || env->GetArrayLength(names) > static_cast<jsize>(cohost::kMaxNames)) return nullptr;
+    std::vector<int32_t> values;
+    if (cohost::Exchange(static_cast<cohost::Operation>(operation), ZygoteStrings(env, names),
+                         &values) != ERROR_SUCCESS) return nullptr;
+    jintArray result = env->NewIntArray(static_cast<jsize>(values.size()));
+    if (result != nullptr && !values.empty()) {
+        env->SetIntArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());
+    }
+    return result;
+}
+
+static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring name,
+        jstring display, jobjectArray capabilities, jlong pin, jint uid, jobject permissions,
+        jstring credential, jstring device, jstring storagePipe) {
+    if (pin <= 0 || permissions == nullptr || !gesher::zygote::HasProtectedLaunchAuthority()) {
+        jniThrowException(env, "java/lang/SecurityException", "Protected cohost cannot launch");
+        return 0;
+    }
+    jclass type = env->GetObjectClass(permissions);
+    if (type == nullptr) return 0;
+    jmethodID bind = env->GetMethodID(type, "bindNativeLease", "(J)V");
+    if (bind == nullptr) return 0;
+    jmethodID dispatch = env->GetMethodID(type, "dispatch", "(I[Ljava/lang/String;)[I");
+    if (dispatch == nullptr) return 0;
+    JavaVM* vm = nullptr;
+    if (env->GetJavaVM(&vm) != JNI_OK) {
+        jniThrowException(env, "java/lang/IllegalStateException", "Cannot attach host consent");
+        return 0;
+    }
+    jobject host = env->NewGlobalRef(permissions);
+    if (host == nullptr) return 0;
+    uint32_t exit = 0;
+    uint32_t failure = ERROR_GEN_FAILURE;
+    {
+        CohostLease lease;
+        cohost::Server authority([&](cohost::Operation operation,
+                const std::vector<std::u16string>& names, std::vector<int32_t>* values) {
+            return DispatchCohostPermission(vm, host, dispatch, operation, names, values);
+        });
+        gesher::zygote::CohostSpec services{ZygoteString(env, credential), ZygoteString(env, device),
+            ZygoteString(env, storagePipe), std::u16string(authority.name().begin(), authority.name().end()),
+            [&](void* process, void* job) -> uint32_t {
+                const jlong leaseId = lease.attach(static_cast<HANDLE>(process));
+                if (leaseId == 0) return ERROR_ACCESS_DENIED;
+                env->CallVoidMethod(host, bind, leaseId);
+                if (env->ExceptionCheck()) return ERROR_ACCESS_DENIED;
+                return authority.Start(static_cast<HANDLE>(process), static_cast<HANDLE>(job));
+            }};
+        gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),
+                                             ZygoteStrings(env, capabilities)};
+        failure = gesher::zygote::RunPinnedCohost(ZygoteString(env, command), spec,
+            static_cast<uint64_t>(pin), static_cast<uint32_t>(uid), services, &exit);
+    }
+    env->DeleteGlobalRef(host);
+    if (failure != 0 && !env->ExceptionCheck()) {
+        char message[128];
+        std::snprintf(message, sizeof(message), "Standalone application launch failed: Win32 error %u",
+                      failure);
+        jniThrowException(env, "java/lang/IllegalStateException", message);
+    }
+    return static_cast<jint>(exit);
+}
+
 static jlong Zygote_startTime(JNIEnv*, jclass, jint pid) {
     return gesher::zygote::StartTime(pid);
 }
@@ -434,6 +593,14 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeRunContainedStandalone",
      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;JI)I",
      GESHER_JNI(Zygote_runContainedStandalone)},
+    {"nativeRunPinnedCohost",
+     "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;JI"
+     "Lcom/gesher/server/CohostPermissionHost;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_runPinnedCohost)},
+    {"nativeCohostPermissionLive", "(J)Z", GESHER_JNI(Zygote_cohostPermissionLive)},
+    {"nativeHasCohostPermissionScope", "()Z", GESHER_JNI(Zygote_hasCohostPermissionScope)},
+    {"nativeCohostOwnsApk", "(Ljava/lang/String;)Z", GESHER_JNI(Zygote_cohostOwnsApk)},
+    {"nativeCohostPermissionExchange", "(I[Ljava/lang/String;)[I", GESHER_JNI(Zygote_cohostPermissionExchange)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
     {"nativeChildStartTime", "(I)J", GESHER_JNI(Zygote_childStartTime)},
     {"nativeExitCode", "(I)I", GESHER_JNI(Zygote_exitCode)},

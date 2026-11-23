@@ -94,6 +94,18 @@ public final class Services {
 
     /** Trusted standalone startup: admit the actual APK before selecting the VM identity. */
     public static InProcessApplication createInProcess(ApkPackage pkg) {
+        if (Zygote.nativeHasCohostPermissionScope()) {
+            int uid = android.os.Process.myUid();
+            if (uid < android.os.Process.FIRST_APPLICATION_UID
+                    || !Zygote.nativeCohostOwnsApk(Zygote.windowsPath(pkg.apkPath))) {
+                throw new SecurityException("The contained APK does not match the host admission");
+            }
+            pkg.assignUid(uid);
+            android.permission.PermissionManager.disablePermissionCache();
+            android.permission.PermissionManager.disablePackageNamePermissionCache();
+            return new InProcessApplication(pkg,
+                    new PackageManagerService(java.util.List.of(pkg), false, true));
+        }
         return new InProcessApplication(pkg,
                 new PackageManagerService(java.util.List.of(pkg), false));
     }

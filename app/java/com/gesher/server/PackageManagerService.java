@@ -53,7 +53,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     private IntentPackageIndex mIntentPackageIndex;
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
-    private final PermissionPolicy mPermissions = new PermissionPolicy(this);
+    private final boolean mCohost;
+    private final PermissionPolicy mPermissions;
     private final Executor mPackageEventExecutor = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "gesher-package-events");
         thread.setDaemon(true);
@@ -203,19 +204,32 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     PackageManagerService(Collection<ApkPackage> packages, boolean persistentEnabled) {
+        this(packages, persistentEnabled, false);
+    }
+
+    PackageManagerService(Collection<ApkPackage> packages, boolean persistentEnabled, boolean cohost) {
         mTransientEnabled = !persistentEnabled;
+        mCohost = cohost;
+        mPermissions = new PermissionPolicy(this, cohost);
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
             if (map.put(p.packageName, p) != null) throw new IllegalArgumentException("Duplicate installed package");
         }
-        try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
-            identity.commit();
+        if (cohost) {
             publishPackages(map);
             enabledStore();
-            identity.accept();
+        } else {
+            try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
+                identity.commit();
+                publishPackages(map);
+                enabledStore();
+                identity.accept();
+            }
         }
         mPermissions.initializePackages();
     }
+
+    boolean isCohost() { return mCohost; }
 
     private synchronized PackageEnabledStore enabledStore() {
         if (mEnabledStore == null) {

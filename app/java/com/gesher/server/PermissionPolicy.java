@@ -33,6 +33,7 @@ import static android.app.AppOpsManager.*;
 /** UID permission state shared by package/activity/permission services. */
 public final class PermissionPolicy extends IPermissionManager.Default {
     private final PackageManagerService mPm;
+    private final boolean mCohost;
     private final PermissionCatalog mCatalog;
     private final File mFile = new File(Device.dataDir(), "system/runtime-permissions");
     private final Properties mDecisions;
@@ -56,12 +57,18 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     private final Map<IBinder, RegisteredAttribution> mAttributions = new WeakHashMap<>();
     private volatile CallerIdentity mCallers;
 
-    PermissionPolicy(PackageManagerService pm) {
+    PermissionPolicy(PackageManagerService pm, boolean cohost) {
         mPm = pm;
+        mCohost = cohost;
         mCatalog = new PermissionCatalog(pm);
         mCallers = new CallerIdentity(pm, null);
-        mPermissionFile = new AtomicFile(mFile);
         mDecisions = new Properties();
+        if (cohost) {
+            mPermissionFile = null;
+            mWriter = null;
+            return;
+        }
+        mPermissionFile = new AtomicFile(mFile);
         try (var input = mPermissionFile.openRead()) {
             mDecisions.load(input);
             for (String key : mDecisions.stringPropertyNames()) {
@@ -93,6 +100,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         }
     }
     private void scheduleWrite() {
+        if (mCohost) return;
         Properties snapshot = new Properties();
         snapshot.putAll(mDecisions);
         // PermissionFlags.ONE_TIME and its user decisions are session state. Persisting the
@@ -110,7 +118,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     private void requireSystem() {
-        if (mCallers == null || !mCallers.isSystem()) {
+        if (mCohost || mCallers == null || !mCallers.isSystem()) {
             throw new SecurityException("Only the Gesher host can change permission grants");
         }
     }
@@ -140,6 +148,10 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     synchronized boolean granted(String name, String packageName) {
         ApkPackage pkg = mPm.get(packageName);
         if (pkg == null || name == null) return false;
+        if (mCohost) {
+            return cohostValue(CohostPermissionHost.CHECK, name, PackageManager.PERMISSION_DENIED)
+                    == PackageManager.PERMISSION_GRANTED;
+        }
         return granted(name, pkg, uidMembers(pkg.uid()), null);
     }
 
@@ -271,14 +283,21 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     private int permissionMode(int uid, String permission, List<ApkPackage> members) {
-        PermissionInfo info = mCatalog.get(permission);
-        if (info != null && permissionState(uid, permission, members).appOpGranted()) {
+        return permissionMode(uid, permission, members, null);
+    }
+
+    private int permissionMode(int uid, String permission, List<ApkPackage> members,
+            ApkPackage scoped) {
+        if (mCohost) return cohostValue(CohostPermissionHost.APP_OP_MODE, permission, MODE_IGNORED);
+        PermissionInfo info = mCatalog.get(permission, scoped);
+        if (info != null && permissionState(uid, permission, members, info).appOpGranted()) {
             return info.backgroundPermission == null
-                    || permissionState(uid, info.backgroundPermission, members).appOpGranted()
+                    || permissionState(uid, info.backgroundPermission, members,
+                            mCatalog.get(info.backgroundPermission, scoped)).appOpGranted()
                     ? MODE_ALLOWED : MODE_FOREGROUND;
         }
         String fuller = fullerPermission(permission);
-        return fuller == null ? MODE_IGNORED : permissionMode(uid, fuller, members);
+        return fuller == null ? MODE_IGNORED : permissionMode(uid, fuller, members, scoped);
     }
 
     private Map<Integer, Integer> runtimeModes(int uid) {
@@ -464,6 +483,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
 
     /** Boot admission re-evaluates saved flags against the installed requesting packages. */
     synchronized void initializePackages() {
+        if (mCohost) return;
         Properties saved = new Properties(); saved.putAll(mDecisions);
         // Definitions do not change while the initial admitted set is reconciled.
         // Rebuilding the entire catalogue for each UID multiplies package scans.
@@ -606,7 +626,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         if (NotificationManagerService.sLast != null) NotificationManagerService.sLast.permissionChanged(packageName);
         // Retirement is an explicit durable boundary, unlike an ordinary permission change.
         // The installer must not publish a successful uninstall with stale grants on disk.
-        if (!mWriter.flush()) throw new IllegalStateException("Cannot clear permission decisions");
+        if (mWriter != null && !mWriter.flush()) throw new IllegalStateException("Cannot clear permission decisions");
     }
 
     /** Called under the PM monitor after commit or rollback of this exact removal. */
@@ -669,6 +689,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     public boolean canRequest(String pkg, String permission) {
+        if (mCohost) return mPm.get(pkg) != null
+                && cohostValue(CohostPermissionHost.CAN_REQUEST, permission, 0) != 0;
         return canRequest(mPm.get(pkg), permission, mCatalog.get(permission));
     }
 
@@ -681,7 +703,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     /** Admission is an operation on the host's existing policy owner and UID registry. */
     ScopedOwner openScopedOwner(String apk,
             java.util.function.BooleanSupplier processLive) throws Exception {
-        if (!SystemServer.isProtectedDevice() || !Zygote.nativeHasProtectedLaunchAuthority(false)) {
+        if (!Zygote.nativeHasProtectedLaunchAuthority(false)) {
             throw new SecurityException("Standalone permission admission requires the protected system server");
         }
         java.util.Objects.requireNonNull(processLive);
@@ -756,6 +778,21 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             } }
         }
 
+        int flags(String name) {
+            if (name == null) return 0;
+            synchronized (mPm) { synchronized (PermissionPolicy.this) {
+                return isCurrent() ? permissionState(mCode.uid(), name, members(),
+                        mCatalog.get(name, mCode)).flags : 0;
+            } }
+        }
+
+        int mode(String name) {
+            if (name == null) return MODE_IGNORED;
+            synchronized (mPm) { synchronized (PermissionPolicy.this) {
+                return isCurrent() ? permissionMode(mCode.uid(), name, members(), mCode) : MODE_IGNORED;
+            } }
+        }
+
         // This call is private to the real host consent controller.
         void grantAfterConsent(String permission) {
             synchronized (mPm) { synchronized (PermissionPolicy.this) {
@@ -788,6 +825,12 @@ public final class PermissionPolicy extends IPermissionManager.Default {
 
     public int checkPermission(String pkg, String permission) {
         return checkPermission(pkg, permission, "default:0", 0);
+    }
+
+    private static int cohostValue(int operation, String name, int fallback) {
+        if (name == null) return fallback;
+        int[] result = Zygote.nativeCohostPermissionExchange(operation, new String[] {name});
+        return result != null && result.length == 1 ? result[0] : fallback;
     }
 
     public void grantRuntime(String pkg, String permission, int userId) {
@@ -884,6 +927,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     @Override public synchronized int getPermissionFlags(String pkg, String permission, String deviceId, int userId) {
         ApkPackage installed = mPm.get(pkg);
         if (installed == null || userId != 0 || !"default:0".equals(deviceId)) return 0;
+        if (mCohost) return cohostValue(CohostPermissionHost.FLAGS, permission, 0);
         return permissionState(installed.uid(), permission, uidMembers(installed.uid())).flags;
     }
 

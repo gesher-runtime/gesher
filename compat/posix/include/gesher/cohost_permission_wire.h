@@ -16,7 +16,9 @@ constexpr uint32_t kMagic = 0x47504353;  // GPCS
 constexpr uint32_t kVersion = 1;
 constexpr uint32_t kMaxNames = 128;
 constexpr uint32_t kMaxName = 300;
-enum class Operation : uint32_t { kCheck = 1, kRequest = 2, kFlags = 3 };
+enum class Operation : uint32_t {
+  kCheck = 1, kRequest = 2, kFlags = 3, kCanRequest = 4, kAppOpMode = 5
+};
 
 struct Header {
   uint32_t magic = kMagic;
@@ -39,6 +41,8 @@ inline bool Valid(const Header& head) {
   switch (head.operation) {
     case Operation::kCheck:
     case Operation::kFlags:
+    case Operation::kCanRequest:
+    case Operation::kAppOpMode:
       return head.count == 1;
     case Operation::kRequest:
       return true;

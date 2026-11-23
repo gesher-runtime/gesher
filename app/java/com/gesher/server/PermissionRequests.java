@@ -123,29 +123,16 @@ final class PermissionRequests {
                 int[] grants = new int[names.length];
                 Arrays.fill(grants, PackageManager.PERMISSION_DENIED);
                 try {
-                    List<String> prompt = new ArrayList<>();
-                    for (String name : names) {
-                        if (name != null && owner.canRequest(name)
-                                && owner.check(name) != PackageManager.PERMISSION_GRANTED
-                                && !prompt.contains(name)) prompt.add(name);
-                    }
-                    boolean allow = !prompt.isEmpty() && owner.isCurrent()
-                            && mDecision.allow(owner.name(), describe(mPm.permissions(), prompt));
-                    // PM.add/remove are synchronized on the PM. Keep identity stable
-                    // across the final recheck and the entire grant operation.
-                    synchronized (mPm) {
+                    if (mPm.isCohost()) {
                         if (owner.isCurrent()) {
-                            if (allow) {
-                                for (String name : prompt) {
-                                    if (owner.canRequest(name)) owner.grantAfterConsent(name);
-                                }
-                            }
-                            for (int i = 0; i < names.length; i++) {
-                                if (names[i] != null) {
-                                    grants[i] = owner.check(names[i]);
-                                }
+                            int[] actual = Zygote.nativeCohostPermissionExchange(
+                                    CohostPermissionHost.REQUEST, names);
+                            if (actual != null && actual.length == names.length && owner.isCurrent()) {
+                                grants = actual;
                             }
                         }
+                    } else {
+                        hostConsent(owner, names, grants);
                     }
                 } catch (RuntimeException e) {
                     SystemServer.log("permission request denied for " + owner.name()
@@ -158,6 +145,28 @@ final class PermissionRequests {
         } catch (RuntimeException e) {
             synchronized (mPending) { mPending.remove(owner.name()); }
             throw e;
+        }
+    }
+
+    private void hostConsent(Owner owner, String[] names, int[] grants) {
+        List<String> prompt = new ArrayList<>();
+        for (String name : names) {
+            if (name != null && owner.canRequest(name)
+                    && owner.check(name) != PackageManager.PERMISSION_GRANTED
+                    && !prompt.contains(name)) prompt.add(name);
+        }
+        boolean allow = !prompt.isEmpty() && owner.isCurrent()
+                && mDecision.allow(owner.name(), describe(mPm.permissions(), prompt));
+        // PM.add/remove are synchronized on the PM. Keep identity stable
+        // across the final recheck and the entire grant operation.
+        synchronized (mPm) {
+            if (!owner.isCurrent()) return;
+            if (allow) for (String name : prompt) {
+                if (owner.canRequest(name)) owner.grantAfterConsent(name);
+            }
+            for (int i = 0; i < names.length; i++) {
+                if (names[i] != null) grants[i] = owner.check(names[i]);
+            }
         }
     }
 
