@@ -347,6 +347,9 @@ class HevcDecoder : public VideoDecoder {
         // A new size: what is inside comes out, then the decoder starts over.
         FlushInternal(out);
         Reset();
+        // Reset discards old pictures and their timestamps. The current access
+        // unit is retried below, so keep only its still-unconsumed marker.
+        times_[marker] = in.time_us;
         continue;
       }
       if (IS_IVD_FATAL_ERROR(o.u4_error_code)) {
