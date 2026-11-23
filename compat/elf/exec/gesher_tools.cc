@@ -15,11 +15,21 @@
 #include <tlhelp32.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <charconv>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <limits>
 #include <map>
+#include <memory>
+#include <new>
 #include <string>
+#include <string_view>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 extern "C" int gesher_kill_other(int pid, int sig);
@@ -67,6 +77,141 @@ int Cat(const std::vector<std::string>& args) {
   if (!any) CatFile(stdin);
   std::fflush(stdout);
   return status;
+}
+
+// --- dd ------------------------------------------------------------------------
+
+struct DdFile {
+  int fd;
+  bool owned;
+  ~DdFile() { if (owned && fd >= 0) close(fd); }
+};
+
+int DdError(const char* operation) {
+  const int error = errno;
+  std::fprintf(stderr, "dd: %s: %s\n", operation, std::strerror(error));
+  return 1;
+}
+
+bool DdNumber(std::string_view text, uint64_t* value) {
+  if (text.empty()) return false;
+  uint64_t scale = 1;
+  switch (text.back()) {
+    case 'c': text.remove_suffix(1); break;
+    case 'w': scale = 2; text.remove_suffix(1); break;
+    case 'b': scale = 512; text.remove_suffix(1); break;
+    case 'k': case 'K': scale = 1024; text.remove_suffix(1); break;
+    case 'M': scale = 1024 * 1024; text.remove_suffix(1); break;
+    case 'G': scale = 1024 * 1024 * 1024; text.remove_suffix(1); break;
+    default: break;
+  }
+  if (text.empty()) return false;
+  uint64_t n = 0;
+  const auto end = text.data() + text.size();
+  auto result = std::from_chars(text.data(), end, n);
+  if (result.ec != std::errc{} || result.ptr != end || n > UINT64_MAX / scale) return false;
+  *value = n * scale;
+  return true;
+}
+
+ssize_t DdRead(int fd, void* buffer, size_t length) {
+  ssize_t n;
+  do {
+    n = read(fd, buffer, length);
+  } while (n < 0 && errno == EINTR);
+  return n;
+}
+
+bool DdWrite(int fd, const char* buffer, size_t length) {
+  while (length > 0) {
+    ssize_t n = write(fd, buffer, length);
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) {
+      if (n == 0) errno = EIO;
+      return false;
+    }
+    buffer += n;
+    length -= static_cast<size_t>(n);
+  }
+  return true;
+}
+
+int Dd(const std::vector<std::string>& args) {
+  const char* input = nullptr;
+  const char* output = nullptr;
+  constexpr auto kMaxPosition = static_cast<uint64_t>(std::numeric_limits<off_t>::max());
+  uint64_t block = 512, skip = 0, seek = 0, count = 0;
+  bool limited = false;
+  bool notrunc = false;
+  for (const std::string& arg : args) {
+    const size_t separator = arg.find('=');
+    if (separator != std::string::npos) {
+      const std::string_view key(arg.data(), separator);
+      const char* value = arg.c_str() + separator + 1;
+      if (key == "if") { input = value; continue; }
+      if (key == "of") { output = value; continue; }
+      if (key == "conv" && std::string_view(value) == "notrunc") { notrunc = true; continue; }
+      if (key == "bs" && DdNumber(value, &block) && block != 0 && block <= INT32_MAX) continue;
+      if (key == "skip" && DdNumber(value, &skip)) continue;
+      if (key == "seek" && DdNumber(value, &seek)) continue;
+      if (key == "count" && DdNumber(value, &count)) { limited = true; continue; }
+    }
+    std::fprintf(stderr, "dd: unsupported or invalid operand: %s\n", arg.c_str());
+    return 1;
+  }
+  if (skip > kMaxPosition / block || seek > kMaxPosition / block ||
+      (limited && count > UINT64_MAX / block)) {
+    errno = EOVERFLOW;
+    return DdError("block offset");
+  }
+  std::unique_ptr<char[]> buffer(new (std::nothrow) char[block]);
+  if (!buffer) { errno = ENOMEM; return DdError("buffer"); }
+
+  DdFile in{input ? open(input, O_RDONLY | O_CLOEXEC) : STDIN_FILENO, input != nullptr};
+  if (in.fd < 0) return DdError(input);
+  if (skip && lseek(in.fd, static_cast<off_t>(skip * block), SEEK_CUR) == -1) {
+    if (errno != ESPIPE) return DdError("input seek");
+    uint64_t remaining = skip * block;
+    while (remaining != 0) {
+      ssize_t received = DdRead(in.fd, buffer.get(), std::min(block, remaining));
+      if (received < 0) return DdError("input skip");
+      if (received == 0) { errno = EIO; return DdError("input skip"); }
+      remaining -= static_cast<uint64_t>(received);
+    }
+  }
+  int output_flags = O_WRONLY | O_CREAT | O_CLOEXEC;
+  if (!notrunc && seek == 0) output_flags |= O_TRUNC;
+  DdFile out{output ? open(output, output_flags, 0666) : STDOUT_FILENO, output != nullptr};
+  if (out.fd < 0) return DdError(output);
+  if (seek) {
+    const off_t position = lseek(out.fd, static_cast<off_t>(seek * block), SEEK_CUR);
+    if (position == -1) return DdError("output seek");
+    if (output && !notrunc) {
+      struct stat info{};
+      if (fstat(out.fd, &info) != 0) return DdError(output);
+      if (S_ISREG(info.st_mode) && ftruncate(out.fd, position) != 0) return DdError(output);
+    }
+  }
+  uint64_t full = 0;
+  uint64_t partial = 0;
+  uint64_t remaining = count * block;
+  while (!limited || remaining != 0) {
+    ssize_t received = DdRead(in.fd, buffer.get(), limited ? std::min(block, remaining) : block);
+    if (received < 0) return DdError("read");
+    if (received == 0) break;
+    if (!DdWrite(out.fd, buffer.get(), static_cast<size_t>(received))) return DdError("write");
+    if (limited) remaining -= static_cast<uint64_t>(received);
+    if (static_cast<uint64_t>(received) == block) ++full;
+    else ++partial;
+  }
+  if (out.owned) {
+    out.owned = false;
+    if (close(out.fd) != 0) return DdError("close output");
+  }
+  std::fprintf(stderr, "%llu+%llu records in\n%llu+%llu records out\n",
+               static_cast<unsigned long long>(full), static_cast<unsigned long long>(partial),
+               static_cast<unsigned long long>(full), static_cast<unsigned long long>(partial));
+  return 0;
 }
 
 // --- ls ------------------------------------------------------------------------
@@ -383,7 +528,7 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
 int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "toybox") {
     if (args.empty()) {
-      std::fprintf(stdout, "toybox (gesher)\nls cat id ps getprop setprop logcat kill sleep pm am\n");
+      std::fprintf(stdout, "toybox (gesher)\nls cat dd id ps getprop setprop logcat kill sleep pm am\n");
       std::fflush(stdout);
       return 0;
     }
@@ -391,6 +536,7 @@ int RunTool(const std::string& name, const std::vector<std::string>& args) {
   }
   if (name == "ls") return Ls(args);
   if (name == "cat") return Cat(args);
+  if (name == "dd") return Dd(args);
   if (name == "id") return Id(args);
   if (name == "ps") return Ps(args);
   if (name == "getprop") return Getprop(args);
