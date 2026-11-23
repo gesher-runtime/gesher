@@ -94,5 +94,328 @@
     "log_sha256": "8c5fbf3e0a1c933e08fe243c344da366b5d0b9df0751ae36860c97ce3f1be49f"
   },
   "reference": "https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_process_id_list",
-  "limits": "The historical PID-list header/IDs were not logged. Adjacent raw observations and the separately invoked actual controller are not one atomic kernel observation; the probe will not claim otherwise."
+  "limits": "The historical PID-list header/IDs were not logged. Adjacent raw observations and the separately invoked actual controller are not one atomic kernel observation; the probe will not claim otherwise.",
+  "winrt_source_identity_followup": {
+    "published_parent": "218b735e6c9a67a50124f50063c9dc672d6393be",
+    "failed_upstream_run": 45235096965,
+    "failed_run_attempt": 2,
+    "tested_merge": "71c4be9899c19cd280c674bb56bed9a90f2bb15b",
+    "diagnosed_failure": "The WinRT identity gate still pinned geocoder-compile.ps1 before the reviewed one-call PID diagnostic extension.",
+    "workflow_sha256": "784d9f7a0c1ec07e44f8093295e6944ecbdac8542780ecb8cbf67fa996416dfd",
+    "original_json_keys_retained": [
+      "status",
+      "failed_upstream_pr",
+      "failed_head",
+      "run",
+      "job",
+      "event",
+      "log_utf8_sha256",
+      "original_decoded_log",
+      "provider_retirement_record",
+      "baseline",
+      "controller_sha256",
+      "pr393_controller_sha256",
+      "failed_main_controller_identical",
+      "original_geocoder_entry_restored_by_removing_single_invocation",
+      "current_inputs",
+      "local_host_controls",
+      "original_selected_source_policy",
+      "reference",
+      "limits"
+    ],
+    "scope": "One reviewed helper pin and two new exact diagnostic input pins; nine original source pins and all executable gate predicates unchanged.",
+    "proof": {
+      "published_parent": "218b735e6c9a67a50124f50063c9dc672d6393be",
+      "workflow": ".github/workflows/services-geocoder-worker-component.yml",
+      "original_workflow_sha256": "e36fab8edbd2ef63e7e6330e383888732678fa776f4d5fb34a6cc4f373d4fd9e",
+      "current_workflow_sha256": "784d9f7a0c1ec07e44f8093295e6944ecbdac8542780ecb8cbf67fa996416dfd",
+      "original_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "current_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+        "tests/windows/helpers/pid-census-exit-probe.ps1": "21926a098bfc48e86b5723765ae3f4234615b5ab",
+        "tests/windows/helpers/PidCensusExitProbe.cs": "c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "unchanged_original_pins": 9,
+      "new_diagnostic_pins": 2,
+      "original_helper_git_blob": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+      "current_helper_git_blob": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+      "helper_changes_exactly_one_invocation": true,
+      "executable_workflow_skeleton_identical": true,
+      "runs": [
+        {
+          "label": "original-gate-negative",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "73c348c814082d109592d276975ecd64f78e21cf9c46abe19505e1be6f98a528",
+          "log": "media-pr405-winrt-qualification/original-gate-negative.log",
+          "log_sha256": "7740e3331487f1cf1558254455336c030c7a9db1fc54ee5b1c42b192963af874"
+        },
+        {
+          "label": "current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/current-gate.log",
+          "log_sha256": "4ce6f7e95f4890508810dafb7bbf1d6124c6479adda478ef74c80a4f23d8c364"
+        },
+        {
+          "label": "isolated-current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/isolated-current-gate.log",
+          "log_sha256": "f88e338b186aacf168a55db24ad30bbfc10e5591fb7c49e9212dfda9f6530f8a"
+        },
+        {
+          "label": "changed-input-0",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/changed-input-0.log",
+          "log_sha256": "d776e03e867ca04d22b38ef2573f7bd6e24127fd5e8c9a8d69d8f168748fe5c2"
+        },
+        {
+          "label": "changed-input-1",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/pid-census-exit-probe.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/changed-input-1.log",
+          "log_sha256": "2abe5d80858f20fea6050c9a674982f6239ca612ff6b39d3f53aed5e7f1daa50"
+        },
+        {
+          "label": "changed-input-2",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/PidCensusExitProbe.cs",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/changed-input-2.log",
+          "log_sha256": "add4409a824d9dd6d50fc1e7ebb487f079686bb53d2773f6023f37dbe515ccfc"
+        },
+        {
+          "label": "changed-input-3",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/geocoder-operation.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/changed-input-3.log",
+          "log_sha256": "ab723c252fb5be1847ff6dbd730000fa97613c0c84cf4c09b3715943fd2cbbfd"
+        },
+        {
+          "label": "wrong-checkout",
+          "returncode": 1,
+          "expected_failure": "WinRT checkout identity mismatch",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/wrong-checkout.log",
+          "log_sha256": "661ab36189d70e975d5f8bb82a3079ba0596ec35c4a131f2be84596cffbf0c12"
+        }
+      ],
+      "checks": 48,
+      "limits": [
+        "Actual PowerShell identity gate with real git/hash/filesystem operations.",
+        "Mutation controls use an isolated real Git repository; the source worktree is not mutated.",
+        "No Windows kernel/WinRT/provider execution occurs in this local qualification.",
+        "Original #360 PID-census failure remains unresolved; this corrects source qualification only."
+      ]
+    },
+    "independent_proof": {
+      "published_parent": "218b735e6c9a67a50124f50063c9dc672d6393be",
+      "workflow": ".github/workflows/services-geocoder-worker-component.yml",
+      "original_workflow_sha256": "e36fab8edbd2ef63e7e6330e383888732678fa776f4d5fb34a6cc4f373d4fd9e",
+      "current_workflow_sha256": "784d9f7a0c1ec07e44f8093295e6944ecbdac8542780ecb8cbf67fa996416dfd",
+      "original_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "current_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+        "tests/windows/helpers/pid-census-exit-probe.ps1": "21926a098bfc48e86b5723765ae3f4234615b5ab",
+        "tests/windows/helpers/PidCensusExitProbe.cs": "c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "unchanged_original_pins": 9,
+      "new_diagnostic_pins": 2,
+      "original_helper_git_blob": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+      "current_helper_git_blob": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+      "helper_changes_exactly_one_invocation": true,
+      "executable_workflow_skeleton_identical": true,
+      "runs": [
+        {
+          "label": "original-gate-negative",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "73c348c814082d109592d276975ecd64f78e21cf9c46abe19505e1be6f98a528",
+          "log": "native-review-pr405-winrt/original-gate-negative.log",
+          "log_sha256": "cdd76c66199826e6744b704f7860a3b6f056cd5105228a154f4509ccc45086f9"
+        },
+        {
+          "label": "current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/current-gate.log",
+          "log_sha256": "ffa073fbcea3ef4c16c9dd45fadbaf1c6366e35734baee75b15fbadd800791a4"
+        },
+        {
+          "label": "isolated-current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/isolated-current-gate.log",
+          "log_sha256": "05f9acece34d495dba0cb5b84b97d2c19104d31d120af1c98762f34ca82024b4"
+        },
+        {
+          "label": "changed-input-0",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/changed-input-0.log",
+          "log_sha256": "41f3b4b68d70195aaf8b435ba9e868092cddd8ecddae64d65bab925b17d92c33"
+        },
+        {
+          "label": "changed-input-1",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/pid-census-exit-probe.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/changed-input-1.log",
+          "log_sha256": "cc749623255b42d6a3f496bdaa7913476e90f1b130d5666b49076b0cd4b5dd04"
+        },
+        {
+          "label": "changed-input-2",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/PidCensusExitProbe.cs",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/changed-input-2.log",
+          "log_sha256": "ad575df31295c4f7bcd9b29576f6ab8b0dced233f62e677b7ff8544b3dc84367"
+        },
+        {
+          "label": "changed-input-3",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/geocoder-operation.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/changed-input-3.log",
+          "log_sha256": "1f7d6c5933f6f1e062a6725c425ee48d252a3465f622cef0e45995a5443dfe40"
+        },
+        {
+          "label": "wrong-checkout",
+          "returncode": 1,
+          "expected_failure": "WinRT checkout identity mismatch",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/wrong-checkout.log",
+          "log_sha256": "afea31f865234e1acfa296841e69d4262d69762c03561d283bedd4db0c6f639b"
+        }
+      ],
+      "checks": 48,
+      "limits": [
+        "Actual PowerShell identity gate with real git/hash/filesystem operations.",
+        "Mutation controls use an isolated real Git repository; the source worktree is not mutated.",
+        "No Windows kernel/WinRT/provider execution occurs in this local qualification.",
+        "Original #360 PID-census failure remains unresolved; this corrects source qualification only."
+      ]
+    },
+    "upstream_logs": [
+      {
+        "job": 137908795382,
+        "kind": "shared_primary_core_quota",
+        "bytes": 2856078,
+        "sha256": "bd6bfb913c31bfb6a202a8eea7c6eb49cfa6480072e43468ee74c1a309a4a42c",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137908795382",
+        "archive_member": "upstream/native-upstream-1900-405-137908795382.log"
+      },
+      {
+        "job": 137908797759,
+        "kind": "source_identity",
+        "bytes": 53634,
+        "sha256": "ed164a1fcd5f277b748222f09f21e9af6d0f3e0d0e86284c039c1bb987e114c8",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137908797759",
+        "archive_member": "upstream/native-upstream-1900-405-137908797759.log"
+      },
+      {
+        "job": 137908797902,
+        "kind": "source_identity",
+        "bytes": 57464,
+        "sha256": "0055deab0e55f99d5e4dedfe87c873099fb8fee01cdf2acc4d4e7ed0411c4c7a",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137908797902",
+        "archive_member": "upstream/native-upstream-1900-405-137908797902.log"
+      },
+      {
+        "job": 137910897739,
+        "kind": "shared_primary_core_quota",
+        "bytes": 111223,
+        "sha256": "5a775304a4c47fca2322395fc9b13e3db5df5400f5c2ace272506f6a826b1c3c",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137910897739",
+        "archive_member": "upstream/native-upstream-1900-405-137910897739.log"
+      },
+      {
+        "job": 137912354934,
+        "kind": "shared_primary_core_quota",
+        "bytes": 35049,
+        "sha256": "4d156a1b637dbd7409641d528fad62b94922bf3ad9378fda58a9d25766bd5379",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137912354934",
+        "archive_member": "upstream/native-upstream-1900-405-137912354934.log"
+      },
+      {
+        "job": 137913206284,
+        "kind": "shared_primary_core_quota",
+        "bytes": 32611,
+        "sha256": "2f51652075174fbe6ef5803ed5f7de039fbdbe1a9533e46ddd1c433af4e3d564",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137913206284",
+        "archive_member": "upstream/native-upstream-1900-405-137913206284.log"
+      },
+      {
+        "job": 137913387392,
+        "kind": "shared_primary_core_quota",
+        "bytes": 24060,
+        "sha256": "6c0cae7ad28f766bea39eb52f49e4180a4d1451c2ca85b0ad8d33278199bcec8",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137913387392",
+        "archive_member": "upstream/native-upstream-1900-405-137913387392.log"
+      }
+    ],
+    "archive": {
+      "path": "docs/research/data/job-pid-census-winrt-qualification-2026-11-23.tar.gz",
+      "bytes": 339259,
+      "sha256": "352831fd602d1a6b4dacb815ba64f82dc873048a9a325717b042638c60f68287",
+      "members": 65,
+      "manifest_sha256": "2eb6eae5592008ccbbf8959fe951667fd9614f513921661aed630b253d49ae63"
+    },
+    "limitations": [
+      "The original submission omitted this coupled workflow pin update; the failed source gate is retained, not treated as infrastructure noise.",
+      "Other sampled jobs in the same attempt independently hit the existing shared primary core quota guard; its budget and refusal behavior are unchanged.",
+      "Only source qualification ran locally; no Windows kernel, WinRT provider, PID census or full CI success is claimed.",
+      "The original #360 incomplete PID census remains unresolved; the diagnostic is not a production repair or efficiency improvement."
+    ]
+  }
 }
