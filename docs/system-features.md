@@ -64,7 +64,7 @@ Not reported:
 | `android.hardware.screen.portrait`, `.landscape` | always | windows rotate (docs/windows3.md) |
 | `android.hardware.touchscreen.multitouch`, `.multitouch.distinct` | Windows touch digitizer with ≥ 2 contacts (`SM_DIGITIZER` ready with integrated/external touch, `SM_MAXIMUMTOUCHES`) | WM_POINTER contacts become separate MotionEvent pointer ids (`compat/input/translate.cc`, up to 16) |
 | `android.hardware.touchscreen.multitouch.jazzhand` | the same, ≥ 5 contacts | as above |
-| `android.hardware.audio.output` | an active audio render endpoint (MMDevice `eRender`, `DEVICE_STATE_ACTIVE`) | AudioTrack/AAudio/OpenSL to the WASAPI sink (docs/media.md); without an endpoint the engine has a null sink, so no output is claimed |
+| `android.hardware.audio.output` | an audio render endpoint that is active or an unplugged jack (MMDevice `eRender`, `DEVICE_STATE_ACTIVE \| DEVICE_STATE_UNPLUGGED`): CDD 7.8.2 requires the feature for a speaker or an audio output port, and forbids it without one | AudioTrack/AAudio/OpenSL to the WASAPI sink (docs/media.md). While there is no default endpoint (a jack with nothing in it) the engine plays to a null sink and retries every 5 s, so output starts when something is plugged in. Without any render endpoint (disabled or none) no output is claimed, and the audio APIs keep working as no-ops (CDD 7.8.2 C-2-2) |
 | `android.hardware.microphone` | an audio capture device | AudioRecord |
 | `android.hardware.ethernet` | a hardware wired Ethernet interface (`GetIfTable2`: `IF_TYPE_ETHERNET_CSMACD`, `NdisPhysicalMedium802_3`, `HardwareInterface`), connected or not | ConnectivityManager's `TRANSPORT_ETHERNET` networks (docs/network.md) |
 | `android.hardware.location`, `.location.network` | always | LocationManagerService, Windows location with IP fallback |
@@ -144,5 +144,5 @@ promises. Absent (c): nothing implements it.
   miniport and kernel-debug adapters are excluded.
 - Limits: the development machine has no touch digitizer, camera, audio
   endpoint, Wi-Fi or sensors. Multitouch on a real touchscreen, a real webcam's
-  `camera.external` and a hardware GPU below feature level 10_1 falling back to
-  WARP were not observed.
+  `camera.external`, an unplugged audio jack counting as an output, and a
+  hardware GPU below feature level 10_1 falling back to WARP were not observed.

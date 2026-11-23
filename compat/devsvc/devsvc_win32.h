@@ -95,9 +95,12 @@ int NetworkState();
 // has NID_READY and NID_INTEGRATED_TOUCH or NID_EXTERNAL_TOUCH, then
 // SM_MAXIMUMTOUCHES); 0 without one. Pen-only digitizers do not count.
 int TouchContacts();
-// Active audio render endpoints (IMMDeviceEnumerator::EnumAudioEndpoints(eRender,
-// DEVICE_STATE_ACTIVE)), what the audio engine's WASAPI sink can play to; -1 if
-// Windows' audio endpoint service cannot be asked.
+// Audio render endpoints that are active or unplugged (IMMDeviceEnumerator::
+// EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE | DEVICE_STATE_UNPLUGGED)): the
+// device's speakers and output jacks, an unplugged one being a jack with nothing in it
+// (CDD 7.8.2 counts an audio output port). The audio engine's WASAPI sink plays to the
+// default one and picks up a jack once something is plugged in. Disabled and removed
+// endpoints do not count. -1 if Windows' audio endpoint service cannot be asked.
 int AudioRenderEndpoints();
 // Hardware wired Ethernet interfaces (GetIfTable2: IF_TYPE_ETHERNET_CSMACD on
 // NdisPhysicalMedium802_3 with the HardwareInterface flag), connected or not;

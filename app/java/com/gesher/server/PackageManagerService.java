@@ -1172,7 +1172,7 @@ public final class PackageManagerService extends IPackageManager.Default {
      * The rest (docs/system-features.md lists every SDK feature and why it is or is not
      * here) follow what Windows has when the system server starts: FEATURE_WEBVIEW with a
      * WebView2 Runtime behind android.webkit.WebView ({@link #addWebViewFeature}),
-     * FEATURE_AUDIO_OUTPUT with an active audio render endpoint, FEATURE_ETHERNET with a
+     * FEATURE_AUDIO_OUTPUT with an audio render endpoint or jack, FEATURE_ETHERNET with a
      * wired Ethernet interface, the touchscreen's multitouch features with a touch
      * digitizer's contacts ({@link #addHostHardwareFeatures}), and FEATURE_RAM_NORMAL as
      * AOSP's SystemConfig adds it for a device that is not low-RAM. The OpenGL ES version
@@ -1258,8 +1258,10 @@ public final class PackageManagerService extends IPackageManager.Default {
      * <li>FEATURE_TOUCHSCREEN_MULTITOUCH and _DISTINCT with a touch digitizer of two or more
      * contacts, _JAZZHAND with five or more: WM_POINTER touch reaches apps with each contact
      * tracked as its own pointer id (compat/input/translate.cc, up to MAX_POINTERS).
-     * <li>FEATURE_AUDIO_OUTPUT with an active render endpoint, which the audio engine's
-     * WASAPI sink plays to (without one it plays to nothing).
+     * <li>FEATURE_AUDIO_OUTPUT with an audio output: a render endpoint that is active or
+     * a jack with nothing plugged in (CDD 7.8.2: a device with a speaker or an audio output
+     * port reports it). The audio engine's WASAPI sink plays to the default endpoint and,
+     * while there is none, retries and follows the one that appears.
      * <li>FEATURE_ETHERNET with a wired Ethernet interface; ConnectivityManager reports its
      * networks as TRANSPORT_ETHERNET.
      * </ul>

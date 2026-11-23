@@ -283,7 +283,7 @@ public final class WindowsHost {
     /**
      * The hardware behind system features (compat/devsvc/devsvc_hardware.cc,
      * docs/system-features.md): {touch digitizer contacts (0 without a touch digitizer),
-     * active audio render endpoints, wired Ethernet interfaces}, -1 for a count Windows
+     * audio render endpoints active or unplugged, wired Ethernet interfaces}, -1 for a count Windows
      * could not give; null without the natives.
      */
     public static int[] hardwareSummary() {

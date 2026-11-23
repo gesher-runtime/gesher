@@ -1,6 +1,6 @@
 // Gesher: the Windows hardware behind PackageManager's system features
-// (docs/system-features.md): a touch digitizer's contacts, active audio render
-// endpoints and wired Ethernet interfaces. See devsvc_win32.h.
+// (docs/system-features.md): a touch digitizer's contacts, audio render endpoints
+// (speakers and output jacks) and wired Ethernet interfaces. See devsvc_win32.h.
 
 #include "devsvc_win32.h"
 
@@ -46,7 +46,8 @@ int AudioRenderEndpoints() {
                                  kIidIMMDeviceEnumerator,
                                  reinterpret_cast<void**>(&enumerator)))) {
     IMMDeviceCollection* devices = nullptr;
-    if (SUCCEEDED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices))) {
+    if (SUCCEEDED(enumerator->EnumAudioEndpoints(
+            eRender, DEVICE_STATE_ACTIVE | DEVICE_STATE_UNPLUGGED, &devices))) {
       UINT n = 0;
       if (SUCCEEDED(devices->GetCount(&n))) count = static_cast<int>(n);
       devices->Release();
