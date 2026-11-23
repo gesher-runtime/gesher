@@ -22,29 +22,30 @@ class BinderListenerFactory;
 class BinderAuthorityControl {
  public:
   static DWORD CreateLocator(std::wstring* locator);
-  // Creates the private endpoint before resuming the suspended broker.
-  static DWORD Connect(AuthorityLaunch& broker, const std::wstring& locator,
-                       HANDLE stop, std::unique_ptr<BinderAuthorityControl>* result);
-  // The registration channel has already resumed the same broker.
-  static DWORD ConnectListeners(AuthorityLaunch& broker, const std::wstring& locator,
-                                HANDLE stop, std::unique_ptr<BinderAuthorityControl>* result);
+  // Publish both private endpoints and grant the broker query access before
+  // resuming it. Keep query access until both channels authenticate.
+  static DWORD Connect(AuthorityLaunch& broker, const std::wstring& registration_locator,
+                       const std::wstring& listener_locator, HANDLE stop,
+                       std::unique_ptr<BinderAuthorityControl>* registration,
+                       std::unique_ptr<BinderAuthorityControl>* listeners);
   ~BinderAuthorityControl();
   BinderAuthorityControl(const BinderAuthorityControl&) = delete;
   BinderAuthorityControl& operator=(const BinderAuthorityControl&) = delete;
 
-  DWORD Register(uint64_t id, uint32_t uid, const AuthorityLaunch& process);
+  DWORD Register(uint64_t id, uint32_t uid, binder::PeerRole role, const AuthorityLaunch& process);
   DWORD Revoke(uint64_t id);
   // Dedicated worker. Connection failure retires the endpoint and its broker.
   DWORD ServeListeners(BinderListenerFactory& factory);
 
  private:
   BinderAuthorityControl() = default;
-  static DWORD ConnectRole(AuthorityLaunch& broker, const std::wstring& locator, HANDLE stop,
-                           binder::bootstrap_wire::Role role,
-                           std::unique_ptr<BinderAuthorityControl>* result);
+  static DWORD Prepare(AuthorityLaunch& broker, const std::wstring& locator, HANDLE stop,
+                       binder::bootstrap_wire::Role role, SECURITY_ATTRIBUTES& security,
+                       std::unique_ptr<BinderAuthorityControl>* result);
+  DWORD Handshake();
   DWORD Transfer(void* data, DWORD bytes, bool writing, bool wait_idle = false);
   DWORD Exchange(binder::bootstrap_wire::Operation op, uint64_t id,
-                 uint32_t uid, HANDLE remote_handle);
+                 uint32_t uid, binder::PeerRole role, HANDLE remote_handle);
   DWORD FailClosed(DWORD status);
 
   // This retained handle can retire the exact broker on an ambiguous exchange.

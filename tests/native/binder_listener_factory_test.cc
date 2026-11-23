@@ -15,6 +15,7 @@
 #include <vector>
 #include "../../compat/binder/protected_data_client.h"
 #include "../../compat/binder/protected_data_pipe.h"
+#include "../../compat/binder/protected_client_startup.h"
 #include "../../compat/posix/src/binder_transport.h"
 #include "../../compat/framework/app_container.h"
 #include "../../compat/usb_storage/binder_listener_factory.h"
@@ -176,13 +177,23 @@ void RejectImpostor(PSID owner) {
   const Handle impostor(CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX |
       FILE_FLAG_FIRST_PIPE_INSTANCE, pipe_modes, 1, pipe_buffer, pipe_buffer, 0, nullptr));
   Require(impostor.get() != INVALID_HANDLE_VALUE, "create protected POSIX routing impostor");
-  auto startup_name = name;
-  endpoint = Endpoint(startup_name, GetCurrentProcessId());
-  endpoint.authority_session = 0;
-  Require(gesher::ConfigureProtectedBinder(endpoint) == ERROR_SUCCESS, "provision native routing");
+  std::string startup_name;
+  for (wchar_t ch : name) startup_name.push_back(static_cast<char>(ch));
+  const auto current = Endpoint(name, GetCurrentProcessId());
+  const auto pid = std::to_string(current.authority_pid);
+  const auto desktop = std::to_string(current.desktop_session);
+  Require(!gesher::ConfigureProtectedBinderStartup(startup_name, "-2", desktop) &&
+          !gesher::ConfigureProtectedBinderStartup(startup_name, "4294967296", desktop) &&
+          !gesher::ConfigureProtectedBinderStartup(startup_name, pid, "0") &&
+          !gesher::ConfigureProtectedBinderStartup(startup_name, pid, "2 "),
+          "reject invalid native routing and decimal values");
+  Require(gesher::ConfigureProtectedBinderStartup(startup_name, pid, desktop),
+          "provision the exact native routing");
   startup_name.clear();
   const auto* sealed = gesher::ProtectedBinderEndpoint();
-  Require(sealed && sealed->locator == name && sealed->authority_session == 0,
+  Require(sealed && sealed->locator == name && sealed->authority_session == 0 &&
+          sealed->authority_pid == current.authority_pid &&
+          sealed->desktop_session == current.desktop_session,
           "protected POSIX routing owns its startup snapshot");
   Require(gesher::ConfigureProtectedBinder({}) == ERROR_ALREADY_INITIALIZED,
           "later calls cannot switch the protected route");

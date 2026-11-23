@@ -15,6 +15,7 @@
 
 namespace {
 using gesher::binder::ProtectedPeers;
+using gesher::binder::PeerRole;
 
 constexpr DWORD kWait = 6000;
 constexpr uint32_t kUid = 1000;
@@ -79,6 +80,18 @@ void ThreadHello(HANDLE pipe, const Ticket& ticket) {
   Require(WriteMessage(pipe, hello), "send thread hello");
 }
 
+Ticket OpenProcessTicket(HANDLE pipe) {
+  ProcHello(pipe, GetCurrentProcessId(), kUid);
+  std::vector<uint8_t> reply;
+  Require(ReadMessage(pipe, &reply), "open Binder on registered process");
+  In reader{reply.data(), reply.data() + reply.size()};
+  int32_t result = 0;
+  Ticket ticket;
+  Require(reader.Get(&result) && result == 0 && reader.Get(&ticket.id) &&
+      reader.Get(&ticket.key) && reader.p == reader.end, "receive exact registered process reply");
+  return ticket;
+}
+
 int32_t Ioctl(HANDLE pipe, uint32_t request) {
   WireReply message;
   message.Put<uint32_t>(wire::kIoctl);
@@ -121,13 +134,7 @@ void RegisteredClient(const wchar_t* name, HANDLE ticket_pipe, HANDLE resume) {
   }
 
   const auto process = Connect(name);
-  ProcHello(process.get(), pid, kUid);
-  std::vector<uint8_t> reply;
-  Require(ReadMessage(process.get(), &reply), "open Binder on registered process");
-  In reader{reply.data(), reply.data() + reply.size()};
-  Ticket ticket;
-  Require(reader.Get(&result) && result == 0 && reader.Get(&ticket.id) &&
-      reader.Get(&ticket.key) && reader.p == reader.end, "receive exact registered process reply");
+  const Ticket ticket = OpenProcessTicket(process.get());
   const auto thread = Connect(name);
   ThreadHello(thread.get(), ticket);
   Require(ReadStatus(thread.get(), &result) && result == 0, "join thread of exact process");
@@ -152,6 +159,19 @@ void RegisteredClient(const wchar_t* name, HANDLE ticket_pipe, HANDLE resume) {
           "revoked peer cannot use existing thread");
   const auto reopened = Connect(name);
   Require(!ReadStatus(reopened.get(), &result), "reject revoked live process before reading hello");
+}
+
+void ContextManager(const wchar_t* name) {
+  const auto process = Connect(name);
+  const Ticket ticket = OpenProcessTicket(process.get());
+  const auto thread = Connect(name);
+  ThreadHello(thread.get(), ticket);
+  int32_t status = 0;
+  Require(ReadStatus(thread.get(), &status) && status == 0, "join context manager thread");
+  Require(Ioctl(thread.get(), BINDER_SET_CONTEXT_MGR_EXT) == 0,
+          "explicit authority role can become context manager at the same Android UID");
+  Require(Ioctl(thread.get(), BINDER_SET_CONTEXT_MGR) == -EBUSY,
+          "only one context manager can be active");
 }
 
 void SameUidSibling(const wchar_t* name, const Ticket& found) {
@@ -184,7 +204,7 @@ struct UserPolicy {
 
 FixtureHandle StartChild(HANDLE job, const std::wstring& args, UserPolicy& owner,
                          ProtectedPeers* peers = nullptr, ProtectedIdentity* peer = nullptr,
-                         std::span<HANDLE> inherited = {}) {
+                         std::span<HANDLE> inherited = {}, PeerRole role = PeerRole::kClient) {
   wchar_t image[MAX_PATH]{};
   const DWORD size = GetModuleFileNameW(nullptr, image, MAX_PATH);
   Require(size && size < MAX_PATH, "get test executable");
@@ -213,7 +233,7 @@ FixtureHandle StartChild(HANDLE job, const std::wstring& args, UserPolicy& owner
   FixtureHandle process(child.hProcess), thread(child.hThread);
   Require(AssignProcessToJobObject(job, process.get()), "own fixture child lifetime");
   if (peers) {
-    Require(peers->RegisterForFixture(process.get(), kUid, owner.Sid(), peer) == ERROR_SUCCESS,
+    Require(peers->RegisterForFixture(process.get(), kUid, role, owner.Sid(), peer) == ERROR_SUCCESS,
             "register exact child object before resume");
   }
   Require(ResumeThread(thread.get()) == 1, "resume fixture child");
@@ -224,6 +244,16 @@ void Finished(HANDLE child, const char* operation) {
   DWORD result = 0;
   Require(WaitForSingleObject(child, kWait) == WAIT_OBJECT_0 &&
       GetExitCodeProcess(child, &result) && result == 0, operation);
+}
+
+bool IsWaiting(const Ticket& ticket) {
+  std::lock_guard lock(g_lock);
+  const auto proc = g_procs.find(ticket.id);
+  if (proc == g_procs.end() || proc->second->key != ticket.key) return false;
+  for (const Thread* thread : proc->second->threads) {
+    if (thread->looper & kLooperWaiting) return true;
+  }
+  return false;
 }
 
 void Test() {
@@ -240,15 +270,15 @@ void Test() {
       &limits, sizeof(limits)), "bound test child lifetime");
   UserPolicy owner;
   ProtectedPeers peers;
-  ProtectedIdentity selected, sibling;
+  ProtectedIdentity selected, sibling, manager;
   const std::wstring name = L"\\\\.\\pipe\\gesher-protected-admission-fixture-" +
       std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
-  // Six initial opens from the selected process, plus outsider, sibling and
-  // an attempt from the selected process after revocation.
+  // Six initial opens from the selected process, plus outsider, sibling,
+  // manager process/thread, and the selected process after revocation.
   unsigned accepted = 0, rejected = 0;
   std::thread server([&] {
     std::vector<std::thread> workers;
-    for (unsigned i = 0; i < 9; ++i) {
+    for (unsigned i = 0; i < 11; ++i) {
       HANDLE listener = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX,
           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
           PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, nullptr);
@@ -285,11 +315,17 @@ void Test() {
   auto second = StartChild(job.get(), L"--sibling " + name + L" " +
       std::to_wstring(found.id) + L" " + std::to_wstring(found.key), owner, &peers, &sibling);
   Finished(second.get(), "same-UID sibling could not join another process");
+  auto context = StartChild(job.get(), L"--manager " + name, owner, &peers, &manager,
+                            {}, PeerRole::kContextManager);
+  Finished(context.get(), "authority-tagged system peer became context manager");
+  const ULONGLONG wait_deadline = GetTickCount64() + kWait;
+  while (!IsWaiting(found) && GetTickCount64() < wait_deadline) Sleep(10);
+  Require(IsWaiting(found), "observe the native broker's blocked read before revocation");
   peers.Revoke(selected);
   Require(SetEvent(proceed.get()), "let selected child verify revocation");
   Finished(child.get(), "selected connection accepted then revoked");
   server.join();
-  Require(accepted == 7 && rejected == 2, "only the registered live identities reached decoding");
+  Require(accepted == 9 && rejected == 2, "only the registered live identities reached decoding");
   std::puts("Protected Binder admission: exact peer, UID, role, rights and revoke checks passed");
 }
 
@@ -313,6 +349,8 @@ int main(int argc, char** argv) {
       const auto pipe = Connect(path.c_str());
       int32_t result = 0;
       Require(!ReadStatus(pipe.get(), &result), "client rejected without sending any bytes");
+    } else if (mode == "--manager" && argc == 3) {
+      ContextManager(path.c_str());
     } else {
       return 2;
     }

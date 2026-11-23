@@ -1931,9 +1931,10 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
     }
     case BINDER_SET_CONTEXT_MGR:
     case BINDER_SET_CONTEXT_MGR_EXT: {
-      // An authenticated app UID does not confer the authority role. The
-      // protected bootstrap does not grant a context-manager role yet.
-      if (proc->protected_peer) return -EPERM;
+#ifdef GESHER_PROTECTED_BINDER
+      if (proc->protected_peer &&
+          proc->protected_peer->role() != gesher::binder::PeerRole::kContextManager) return -EPERM;
+#endif
       flat_binder_object fbo = {};
       if (request == BINDER_SET_CONTEXT_MGR_EXT && !in.Get(&fbo)) return -EINVAL;
       if (g_context_mgr_node != nullptr) {

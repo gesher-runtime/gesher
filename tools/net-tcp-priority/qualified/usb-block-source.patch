@@ -1,5 +1,22 @@
+diff --git a/compat/art/dalvikvm_main.cc b/compat/art/dalvikvm_main.cc
+index 66d85f2ab..35f5fa6d9 100644
+--- a/compat/art/dalvikvm_main.cc
++++ b/compat/art/dalvikvm_main.cc
+@@ -12,0 +13 @@
++#include "../binder/protected_client_startup.h"
+@@ -144,0 +146,10 @@ extern "C" int wmain(int argc, wchar_t** wide_argv) {
++  if (argc > 1 && values[1] == gesher::kProtectedBinderStartupOption) {
++    constexpr int kNativeArguments = 4;
++    if (argc <= kNativeArguments + 1 ||
++        !gesher::ConfigureProtectedBinderStartup(values[2], values[3], values[4])) {
++      std::fprintf(stderr, "dalvikvm: invalid protected Binder bootstrap\n");
++      return EXIT_FAILURE;
++    }
++    values.erase(values.begin() + 1, values.begin() + 1 + kNativeArguments);
++    argc -= kNativeArguments;
++  }
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index ee26bfc04..1f990063e 100644
+index ee26bfc04..2d97eaa95 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -40,0 +41 @@
@@ -66,41 +83,42 @@ index ee26bfc04..1f990063e 100644
 @@ -1648 +1684 @@ void ServeProc(HANDLE pipe, In in) {
 -    while (ReadMessage(pipe, &msg)) {
 +    while (ReadMessage(pipe, &msg, protected_peer ? 0 : kMaxMessage)) {
-@@ -1897,0 +1934,3 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
-+      // An authenticated app UID does not confer the authority role. The
-+      // protected bootstrap does not grant a context-manager role yet.
-+      if (proc->protected_peer) return -EPERM;
-@@ -1933 +1972 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
+@@ -1897,0 +1934,4 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
++#ifdef GESHER_PROTECTED_BINDER
++      if (proc->protected_peer &&
++          proc->protected_peer->role() != gesher::binder::PeerRole::kContextManager) return -EPERM;
++#endif
+@@ -1933 +1973 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
 -void ServeThread(HANDLE pipe, In in) {
 +void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {}) {
-@@ -1937 +1976 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1937 +1977 @@ void ServeThread(HANDLE pipe, In in) {
 -      !in.Get(&tid)) {
 +      !in.Get(&tid) || (protected_peer && in.p != in.end)) {
-@@ -1947 +1986,2 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1947 +1987,2 @@ void ServeThread(HANDLE pipe, In in) {
 -    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
 +    if (it != g_procs.end() && it->second->key == key &&
 +        it->second->protected_peer == protected_peer && ProcLive(it->second.get())) {
-@@ -1974 +2014 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1974 +2015 @@ void ServeThread(HANDLE pipe, In in) {
 -    if (thread->is_dead || proc->is_dead) {
 +    if (thread->is_dead || !ProcLive(proc)) {
-@@ -2029 +2069 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -2029 +2070 @@ void ServeThread(HANDLE pipe, In in) {
 -void Serve(HANDLE pipe) {
 +void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
-@@ -2031 +2071,4 @@ void Serve(HANDLE pipe) {
+@@ -2031 +2072,4 @@ void Serve(HANDLE pipe) {
 -  if (ReadMessage(pipe, &msg)) {
 +  // The largest protected hello is op, magic, version, proc id, key and tid.
 +  constexpr uint32_t kProtectedHelloLimit = 7 * sizeof(uint32_t);
 +  if (ReadMessage(pipe, &msg, protected_peer ? kProtectedHelloLimit : kMaxMessage) &&
 +      !msg.empty()) {
-@@ -2036 +2079 @@ void Serve(HANDLE pipe) {
+@@ -2036 +2080 @@ void Serve(HANDLE pipe) {
 -        ServeProc(pipe, in);
 +        ServeProc(pipe, in, protected_peer);
-@@ -2038,2 +2081,2 @@ void Serve(HANDLE pipe) {
+@@ -2038,2 +2082,2 @@ void Serve(HANDLE pipe) {
 -        ServeThread(pipe, in);
 -      } else if (op == wire::kHelloRights) {
 +        ServeThread(pipe, in, protected_peer);
 +      } else if (op == wire::kHelloRights && !protected_peer) {
-@@ -2047,0 +2091,60 @@ void Serve(HANDLE pipe) {
+@@ -2047,0 +2092,60 @@ void Serve(HANDLE pipe) {
 +void Serve(HANDLE pipe) { ServeConnection(pipe); }
 +
 +#ifdef GESHER_PROTECTED_BINDER
@@ -161,7 +179,7 @@ index ee26bfc04..1f990063e 100644
 +}
 +#endif
 +
-@@ -2052,0 +2156,7 @@ int main(int argc, char** argv) {
+@@ -2052,0 +2157,7 @@ int main(int argc, char** argv) {
 +  if (argc > 1 && std::string_view(argv[1]) == "--gesher-protected-binder") {
 +#ifdef GESHER_PROTECTED_BINDER
 +    return RunProtected(argc, argv);
@@ -650,3 +668,72 @@ index c50426737..4b11868f2 100644
 @@ -251,0 +255,2 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
 +  // The private data endpoint provisions no shared rights sections.
 +  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
+diff --git a/tests/art-temp/entry_test.cc b/tests/art-temp/entry_test.cc
+index 6b226dd4d..de654e675 100644
+--- a/tests/art-temp/entry_test.cc
++++ b/tests/art-temp/entry_test.cc
+@@ -9,0 +10 @@
++#include <string_view>
+@@ -32,0 +34 @@ std::vector<std::string> vm_arguments;
++std::vector<std::string> protected_routing;
+@@ -48,0 +51 @@ void Reset() {
++  protected_routing.clear();
+@@ -130,0 +134,6 @@ int SetWideEnvironment(const wchar_t* name, const wchar_t* value) {
++bool ConfigureProtectedBinderStartup(std::string_view locator, std::string_view authority_pid,
++                                     std::string_view desktop_session) {
++  protected_routing = {std::string(locator), std::string(authority_pid),
++                       std::string(desktop_session)};
++  return locator == "private-name" && authority_pid == "17" && desktop_session == "4";
++}
+@@ -198,0 +208,23 @@ int main() {
++#ifdef GESHER_ART_TEST_PROTECTED_STARTUP
++    const wchar_t* flag = L"--gesher-protected-services";
++    Reset(); temp_failure = true;
++    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4",
++                 L"-Djava.io.tmpdir=/explicit", L"Main", flag}) == 77 && vm_calls == 1 &&
++                temp_reads == 0, "strip native routing before parsing ART options");
++    Require(protected_routing == std::vector<std::string>({"private-name", "17", "4"}) &&
++                vm_arguments == std::vector<std::string>({"dalvikvm.exe",
++                    "-Djava.io.tmpdir=/explicit", "Main", "--gesher-protected-services"}),
++            "pass only Android args to ART and preserve a later identical Java argument");
++    Reset();
++    Require(Run({L"dalvikvm.exe", L"Main", flag, L"private-name", L"17", L"4"}) == 77 &&
++                protected_routing.empty() && vm_arguments[2] == "--gesher-protected-services",
++            "Java arguments cannot configure or erase native routing");
++    Reset();
++    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4"}) == EXIT_FAILURE &&
++                protected_routing.empty() && vm_calls == 0 && temp_reads == 0,
++            "incomplete protected invocation fails before initialization");
++    Reset();
++    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"bogus", L"4", L"Main"}) ==
++                EXIT_FAILURE && vm_calls == 0 && temp_reads == 0,
++            "failed protected routing must not invoke ART in the ordinary mode");
++#endif
+diff --git a/tools/test_temp_directory.py b/tools/test_temp_directory.py
+index 9c65429d2..b80279fc0 100644
+--- a/tools/test_temp_directory.py
++++ b/tools/test_temp_directory.py
+@@ -26,7 +26,12 @@ def main():
+-            baseline = subprocess.check_output([
+-                'git', 'show', args.baseline_ref + ':compat/art/dalvikvm_main.cc'], cwd=root)
+-            old = work / 'dalvikvm_main.cc'
+-            old.write_bytes(baseline)
+-            source = work / 'entry_test.cc'
+-            source.write_text((tests / 'entry_test.cc').read_text().replace(
+-                '#include "../../compat/art/dalvikvm_main.cc"', '#include "dalvikvm_main.cc"'))
++            adapter = 'compat/art/dalvikvm_main.cc'
++            baseline = subprocess.check_output(['git', 'show', f'{args.baseline_ref}:{adapter}'], cwd=root)
++            (work / adapter).parent.mkdir(parents=True)
++            (work / adapter).write_bytes(baseline)
++            if b'"../binder/protected_client_startup.h"' in baseline:
++                header = 'compat/binder/protected_client_startup.h'
++                (work / header).parent.mkdir()
++                (work / header).write_bytes(subprocess.check_output(
++                    ['git', 'show', f'{args.baseline_ref}:{header}'], cwd=root))
++            source = work / 'tests/art-temp/entry_test.cc'
++            source.parent.mkdir(parents=True)
++            source.write_bytes((tests / 'entry_test.cc').read_bytes())
+@@ -34 +39,2 @@ def main():
+-        subprocess.run([args.cxx, '-std=c++17', '-Wall', '-Wextra', '-Werror',
++        features = [] if args.baseline_ref else ['-DGESHER_ART_TEST_PROTECTED_STARTUP']
++        subprocess.run([args.cxx, '-std=c++17', '-Wall', '-Wextra', '-Werror', *features,

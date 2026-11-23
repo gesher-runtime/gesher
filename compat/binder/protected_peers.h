@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "protected_peer_role.h"
+
 #include <windows.h>
 
 #include <atomic>
@@ -28,6 +30,7 @@ class ProtectedPeer final {
   DWORD session() const { return session_; }
   uint64_t creation_time() const { return creation_time_; }
   uint32_t uid() const { return uid_; }
+  PeerRole role() const { return role_; }
   bool live() const;
 
  private:
@@ -39,6 +42,7 @@ class ProtectedPeer final {
   DWORD session_ = 0;
   uint64_t creation_time_ = 0;
   uint32_t uid_ = 0;
+  PeerRole role_ = PeerRole::kClient;
   std::atomic<bool> revoked_ = false;
 };
 
@@ -51,7 +55,7 @@ class ProtectedPeers final {
  public:
   using Peer = std::shared_ptr<const ProtectedPeer>;
 
-  DWORD Register(HANDLE launched_process, uint32_t android_uid, Peer* result);
+  DWORD Register(HANDLE launched_process, uint32_t android_uid, PeerRole role, Peer* result);
 
   // Use only with an authority-protected duplex pipe server while the connection is
   // stable. The Windows kernel supplies PID and session. The retained process
@@ -66,11 +70,12 @@ class ProtectedPeers final {
   // This translation unit is built separately for an unprivileged native
   // fixture. The Windows process owner is the fixture's real Windows account.
   DWORD RegisterForFixture(HANDLE launched_process, uint32_t android_uid,
-                           PSID fixture_owner, Peer* result);
+                           PeerRole role, PSID fixture_owner, Peer* result);
 #endif
 
  private:
-  DWORD RegisterOwned(HANDLE launched_process, uint32_t android_uid, PSID owner, Peer* result);
+  DWORD RegisterOwned(HANDLE launched_process, uint32_t android_uid, PeerRole role,
+                      PSID owner, Peer* result);
 
   mutable std::mutex mutex_;
   std::map<DWORD, std::shared_ptr<ProtectedPeer>> peers_;

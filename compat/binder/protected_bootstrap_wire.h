@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "protected_peer_role.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -11,7 +13,7 @@ constexpr wchar_t kPipePrefix[] = LR"(\\.\pipe\gesher-binder-authority-)";
 constexpr size_t kLocatorHexDigits = 32;
 constexpr wchar_t kAuthorityService[] = L"GesherUsbAuthority";
 constexpr uint32_t kMagic = 0x31425047;  // GPB1
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;
 constexpr uint32_t kPipeClientAccess = 0x0012018b;
 
 enum class Operation : uint32_t {
@@ -38,7 +40,8 @@ struct Hello {
 static_assert(sizeof(Hello) == 16);
 
 // The authority sends Ready first, with all payload fields zero. Register
-// and Revoke use a nonzero registration_id. Revoke has zero uid and handle.
+// and Revoke use a nonzero registration_id. Revoke has zero uid and handle
+// and kClient role. Only Register can grant kContextManager.
 // Register transfers a PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION
 // | SYNCHRONIZE | READ_CONTROL process handle already duplicated into binderd.
 // binderd owns and closes the transferred handle after consuming the frame.
@@ -51,8 +54,10 @@ struct Request {
   uint32_t uid;
   uint64_t registration_id;
   uint64_t process_handle;
+  PeerRole peer_role;
+  uint32_t reserved;
 };
-static_assert(sizeof(Request) == 32);
+static_assert(sizeof(Request) == 40);
 
 // One reply to every accepted frame. status is a Win32 error code.
 struct Reply {

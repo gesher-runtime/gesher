@@ -60,24 +60,27 @@ bool ProtectedPeer::live() const {
   return !revoked_.load(std::memory_order_acquire) && LiveStatus(process_) == ERROR_SUCCESS;
 }
 
-DWORD ProtectedPeers::Register(HANDLE launched_process, uint32_t android_uid, Peer* result) {
+DWORD ProtectedPeers::Register(HANDLE launched_process, uint32_t android_uid,
+                               PeerRole role, Peer* result) {
   alignas(DWORD) std::byte system[SECURITY_MAX_SID_SIZE];
   DWORD size = sizeof(system);
   if (!CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &size)) return GetLastError();
-  return RegisterOwned(launched_process, android_uid, system, result);
+  return RegisterOwned(launched_process, android_uid, role, system, result);
 }
 
 #ifdef GESHER_BINDER_PEER_FIXTURE
 DWORD ProtectedPeers::RegisterForFixture(HANDLE launched_process, uint32_t android_uid,
-                                         PSID fixture_owner, Peer* result) {
-  return RegisterOwned(launched_process, android_uid, fixture_owner, result);
+                                         PeerRole role, PSID fixture_owner, Peer* result) {
+  return RegisterOwned(launched_process, android_uid, role, fixture_owner, result);
 }
 #endif
 
 DWORD ProtectedPeers::RegisterOwned(HANDLE launched_process, uint32_t android_uid,
-                                   PSID owner, Peer* result) try {
+                                   PeerRole role, PSID owner, Peer* result) try {
   if (!launched_process || launched_process == INVALID_HANDLE_VALUE || !result || *result ||
-      !owner || !IsValidSid(owner) || android_uid > std::numeric_limits<int32_t>::max()) {
+      !owner || !IsValidSid(owner) ||
+      android_uid > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) ||
+      !IsAllowedPeerRole(android_uid, role)) {
     return ERROR_INVALID_PARAMETER;
   }
   auto peer = std::shared_ptr<ProtectedPeer>(new ProtectedPeer);
@@ -95,6 +98,7 @@ DWORD ProtectedPeers::RegisterOwned(HANDLE launched_process, uint32_t android_ui
   // without asking a protected lowbox broker to open another process token.
   if (!ProcessIdToSessionId(peer->pid_, &peer->session_)) return GetLastError();
   peer->uid_ = android_uid;
+  peer->role_ = role;
 
   std::lock_guard lock(mutex_);
   error = LiveStatus(peer->process_);

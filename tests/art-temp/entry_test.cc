@@ -7,6 +7,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "exec_spawn.h"
@@ -30,6 +31,7 @@ int attribute_reads;
 int crt_writes;
 int vm_calls;
 std::vector<std::string> vm_arguments;
+std::vector<std::string> protected_routing;
 
 void Require(bool value, const char* message) {
   ++checks;
@@ -46,6 +48,7 @@ void Reset() {
   environment_failure = temp_failure = publish_failure = false;
   crt_failure = temp_reads = attribute_reads = crt_writes = vm_calls = 0;
   vm_arguments.clear();
+  protected_routing.clear();
 }
 
 int Run(std::vector<std::wstring> arguments = {L"dalvikvm.exe", L"Main"}) {
@@ -128,6 +131,12 @@ int SetWideEnvironment(const wchar_t* name, const wchar_t* value) {
   wide_environment[name] = value;
   return 0;
 }
+bool ConfigureProtectedBinderStartup(std::string_view locator, std::string_view authority_pid,
+                                     std::string_view desktop_session) {
+  protected_routing = {std::string(locator), std::string(authority_pid),
+                       std::string(desktop_session)};
+  return locator == "private-name" && authority_pid == "17" && desktop_session == "4";
+}
 }
 int gesher_dalvikvm_main(int argc, char** argv) {
   ++vm_calls;
@@ -196,6 +205,29 @@ int main() {
     Require(Run() == EXIT_FAILURE && vm_calls == 0, "CRT publication failure must not start ART");
     Reset(); publish_failure = true;
     Require(Run() == EXIT_FAILURE && vm_calls == 0, "Wide publication failure must not start ART");
+#ifdef GESHER_ART_TEST_PROTECTED_STARTUP
+    const wchar_t* flag = L"--gesher-protected-services";
+    Reset(); temp_failure = true;
+    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4",
+                 L"-Djava.io.tmpdir=/explicit", L"Main", flag}) == 77 && vm_calls == 1 &&
+                temp_reads == 0, "strip native routing before parsing ART options");
+    Require(protected_routing == std::vector<std::string>({"private-name", "17", "4"}) &&
+                vm_arguments == std::vector<std::string>({"dalvikvm.exe",
+                    "-Djava.io.tmpdir=/explicit", "Main", "--gesher-protected-services"}),
+            "pass only Android args to ART and preserve a later identical Java argument");
+    Reset();
+    Require(Run({L"dalvikvm.exe", L"Main", flag, L"private-name", L"17", L"4"}) == 77 &&
+                protected_routing.empty() && vm_arguments[2] == "--gesher-protected-services",
+            "Java arguments cannot configure or erase native routing");
+    Reset();
+    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4"}) == EXIT_FAILURE &&
+                protected_routing.empty() && vm_calls == 0 && temp_reads == 0,
+            "incomplete protected invocation fails before initialization");
+    Reset();
+    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"bogus", L"4", L"Main"}) ==
+                EXIT_FAILURE && vm_calls == 0 && temp_reads == 0,
+            "failed protected routing must not invoke ART in the ordinary mode");
+#endif
     std::printf("TempDirectory entry host tests passed: %d checks; Windows APIs modeled\n", checks);
     return 0;
   } catch (const std::exception& error) {

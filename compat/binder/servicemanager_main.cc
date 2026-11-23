@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <string_view>
+
 #include <android-base/logging.h>
 #include <binder/IPCThreadState.h>
 #include <binder/ProcessState.h>
@@ -21,6 +23,7 @@
 
 #include "Access.h"
 #include "ServiceManager.h"
+#include "protected_client_startup.h"
 
 using ::android::Access;
 using ::android::IPCThreadState;
@@ -30,13 +33,19 @@ using ::android::sp;
 using ::android::os::IServiceManager;
 
 int main(int argc, char** argv) {
+  const bool protected_binder = argc > 1 && argv[1] == gesher::kProtectedBinderStartupOption;
+  if (protected_binder &&
+      (argc != 5 || !gesher::ConfigureProtectedBinderStartup(argv[2], argv[3], argv[4]))) {
+    fputs("servicemanager: invalid protected Binder bootstrap\n", stderr);
+    return EXIT_FAILURE;
+  }
   android::base::InitLogging(argv, android::base::StderrLogger);
 
-  if (argc > 2) {
+  if (!protected_binder && argc > 2) {
     LOG(FATAL) << "usage: " << argv[0] << " [binder driver]";
   }
 
-  const char* driver = argc == 2 ? argv[1] : "/dev/binder";
+  const char* driver = !protected_binder && argc == 2 ? argv[1] : "/dev/binder";
 
   LOG(INFO) << "Starting sm instance on " << driver;
 

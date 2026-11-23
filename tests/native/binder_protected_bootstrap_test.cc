@@ -13,6 +13,7 @@ namespace {
 
 using gesher::binder::ProtectedBootstrap;
 using gesher::binder::ProtectedPeers;
+using gesher::binder::PeerRole;
 namespace wire = gesher::binder::bootstrap_wire;
 namespace data_pipe = gesher::binder::data_pipe;
 
@@ -121,25 +122,33 @@ void Transport(bool malformed) {
     Check(hello.magic == wire::kMagic && hello.version == wire::kVersion &&
           hello.operation == wire::Operation::kHello && hello.role == wire::Role::kRegistration,
           "validate registration Hello");
-    Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kReady, 0, 0, 0});
+    Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kReady,
+                                    0, 0, 0, PeerRole::kClient, 0});
     ExpectReply(server.value, 0, ERROR_SUCCESS);
 
     // Use an actual transferred process handle. Its default ordinary ACL
     // means production registration must reject it, even inside the protocol
     // fixture; the heap-side handle must have been closed after the reply.
-    HANDLE transferred = nullptr;
-    Check(DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(),
-                          &transferred, 0, FALSE, DUPLICATE_SAME_ACCESS), "create transferred handle");
-    Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kRegister,
-        12345, 17, reinterpret_cast<uintptr_t>(transferred)});
-    ExpectReply(server.value, 17, ERROR_ACCESS_DENIED);
-    Check(GetProcessId(transferred) == 0,
-          "failed registration closes its transferred handle");
-    Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kRevoke, 0, 17, 0});
+    const auto reject_registration = [&](uint32_t uid, PeerRole role, DWORD expected) {
+      HANDLE transferred = nullptr;
+      Check(DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(),
+          &transferred, 0, FALSE, DUPLICATE_SAME_ACCESS), "create transferred handle");
+      Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kRegister,
+          uid, 17, reinterpret_cast<uintptr_t>(transferred), role, 0});
+      ExpectReply(server.value, 17, expected);
+      Check(GetProcessId(transferred) == 0, "failed registration closes its transferred handle");
+    };
+    reject_registration(12345, PeerRole::kClient, ERROR_ACCESS_DENIED);
+    reject_registration(1000, PeerRole::kContextManager, ERROR_ACCESS_DENIED);
+    reject_registration(12345, PeerRole::kContextManager, ERROR_INVALID_PARAMETER);
+    reject_registration(1000, static_cast<PeerRole>(42), ERROR_INVALID_PARAMETER);
+    Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kRevoke,
+                                    0, 17, 0, PeerRole::kClient, 0});
     ExpectReply(server.value, 17, ERROR_NOT_FOUND);
 
     if (malformed) {
-      Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kRevoke, 0, 17, 1});
+      Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kRevoke,
+                                      0, 17, 0, PeerRole::kContextManager, 0});
       Check(broker.get() == ERROR_INVALID_DATA, "malformed request closes the bootstrap");
     } else {
       server.Close();
@@ -194,7 +203,8 @@ void ListenerTransport(ListenerCase test) {
     Check(hello.magic == wire::kMagic && hello.version == wire::kVersion &&
           hello.operation == wire::Operation::kHello && hello.role == wire::Role::kListeners,
           "validate listener Hello");
-    Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kReady, 0, 0, 0});
+    Write(server.value, wire::Request{wire::kMagic, wire::kVersion, wire::Operation::kReady,
+                                    0, 0, 0, PeerRole::kClient, 0});
     ExpectReply(server.value, 0, ERROR_SUCCESS);
 
     wire::ListenerRequest request{};

@@ -13,6 +13,8 @@
 #include <cwchar>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,7 @@
 namespace {
 
 namespace appcontainer = gesher::appcontainer;
+using gesher::binder::PeerRole;
 using gesher::usb_storage::AuthorityLaunch;
 using gesher::usb_storage::AuthorityLaunchSpec;
 using gesher::usb_storage::BinderAuthorityControl;
@@ -419,7 +422,7 @@ class BinderProfile {
   appcontainer::Sid sid_;
 };
 
-DWORD StartProtectedBinder(const std::wstring& directory, DWORD session, HANDLE stop) {
+DWORD StartProtectedBinder(const std::wstring& directory, DWORD session, HANDLE stop) try {
   HANDLE user = nullptr;
   if (!WTSQueryUserToken(session, &user)) return GetLastError();
   const ScopedHandle desktop_user(user);
@@ -435,12 +438,16 @@ DWORD StartProtectedBinder(const std::wstring& directory, DWORD session, HANDLE 
 
   const std::wstring runtime = directory + L"\\runtime";
   const std::wstring binary = runtime + L"\\binderd.exe";
+  const std::wstring manager_binary = runtime + L"\\servicemanager.exe";
   appcontainer::Sid capability;
   status = appcontainer::CapabilitySid(appcontainer::kRuntimeFilesCapability, &capability);
   if (status != ERROR_SUCCESS) return status;
   constexpr DWORD kReadExecute = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
   status = appcontainer::Grant(runtime, capability.value, kReadExecute, false);
   if (status == ERROR_SUCCESS) status = appcontainer::Grant(binary, capability.value, kReadExecute, false);
+  if (status == ERROR_SUCCESS) {
+    status = appcontainer::Grant(manager_binary, capability.value, kReadExecute, false);
+  }
   if (status != ERROR_SUCCESS) return status;
 
   BinderProfile profile(user, L"Gesher.ProtectedBinder." + registration.substr(registration.size() - 32));
@@ -472,13 +479,47 @@ DWORD StartProtectedBinder(const std::wstring& directory, DWORD session, HANDLE 
   std::unique_ptr<BinderListenerFactory> factory;
   status = BinderListenerFactory::Create(*broker, data, contained, &factory);
   if (status != ERROR_SUCCESS) return status;
-  std::unique_ptr<BinderAuthorityControl> control, listener_control;
-  status = BinderAuthorityControl::Connect(*broker, registration, stop, &control);
-  if (status == ERROR_SUCCESS) {
-    status = BinderAuthorityControl::ConnectListeners(*broker, listeners, stop, &listener_control);
-  }
+  constexpr uint32_t kSystemUid = 1000;
+  constexpr uint64_t kManagerRegistration = 1;
+  const std::wstring manager_arguments = L"--gesher-protected-services " + data + L" " +
+      std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(session);
+  // The conventional hello claim remains on the wire. The authority's
+  // registration, backed by a retained process object and role, is decisive.
+  std::wstring manager_environment = L"GESHER_BINDER_UID=" + std::to_wstring(kSystemUid);
+  manager_environment.push_back(L'\0');
+  manager_environment += environment;
+  const AuthorityLaunchSpec manager_spec{
+      manager_binary.c_str(), runtime.c_str(), manager_arguments, manager_environment, lowbox,
+      reinterpret_cast<const TOKEN_USER*>(identity)->User.Sid, session};
+  std::unique_ptr<AuthorityLaunch> manager;
+  status = AuthorityLaunch::Create(user, manager_spec, &manager);
   if (status != ERROR_SUCCESS) return status;
-  return listener_control->ServeListeners(*factory);
+
+  std::unique_ptr<BinderAuthorityControl> control, listener_control;
+  status = BinderAuthorityControl::Connect(*broker, registration, listeners, stop, &control,
+                                            &listener_control);
+  if (status != ERROR_SUCCESS) return status;
+
+  DWORD listener_result = ERROR_OPERATION_ABORTED;
+  std::thread listener_worker([&] {
+    listener_result = listener_control->ServeListeners(*factory);
+    SetEvent(stop);
+  });
+  status = control->Register(kManagerRegistration, kSystemUid, PeerRole::kContextManager, *manager);
+  if (status == ERROR_SUCCESS) status = manager->Resume();
+  if (status == ERROR_SUCCESS) {
+    const HANDLE lifecycle[] = {stop, manager->process()};
+    const DWORD waited = WaitForMultipleObjects(2, lifecycle, FALSE, INFINITE);
+    if (waited == WAIT_OBJECT_0 + 1) status = ERROR_PROCESS_ABORTED;
+    if (waited == WAIT_FAILED) status = GetLastError();
+  }
+  SetEvent(stop);
+  listener_worker.join();
+  return status == ERROR_SUCCESS ? listener_result : status;
+} catch (const std::bad_alloc&) {
+  return ERROR_NOT_ENOUGH_MEMORY;
+} catch (const std::system_error&) {
+  return ERROR_NOT_READY;
 }
 
 struct ServiceContext {

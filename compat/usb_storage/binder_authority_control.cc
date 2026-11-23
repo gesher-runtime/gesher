@@ -95,6 +95,7 @@ DWORD WaitIo(HANDLE pipe, OVERLAPPED* pending, HANDLE stop, HANDLE broker,
     return GetOverlappedResult(pipe, pending, bytes, FALSE) ? ERROR_SUCCESS : GetLastError();
   }
   DWORD error = ERROR_OPERATION_ABORTED;
+  if (state == WAIT_OBJECT_0 + 1) error = ERROR_PROCESS_ABORTED;
   if (state == WAIT_TIMEOUT) error = ERROR_TIMEOUT;
   if (state == WAIT_FAILED) error = GetLastError();
   CancelIoEx(pipe, pending);
@@ -253,23 +254,44 @@ DWORD BinderAuthorityControl::CreateLocator(std::wstring* locator) {
   return ERROR_SUCCESS;
 }
 
-DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker, const std::wstring& locator,
-                                      HANDLE stop, std::unique_ptr<BinderAuthorityControl>* result) {
-  return ConnectRole(broker, locator, stop, wire::Role::kRegistration, result);
-}
-
-DWORD BinderAuthorityControl::ConnectListeners(AuthorityLaunch& broker, const std::wstring& locator,
-                                               HANDLE stop,
-                                               std::unique_ptr<BinderAuthorityControl>* result) {
-  return ConnectRole(broker, locator, stop, wire::Role::kListeners, result);
-}
-
-DWORD BinderAuthorityControl::ConnectRole(AuthorityLaunch& broker, const std::wstring& locator,
-                                          HANDLE stop, wire::Role role,
-                                          std::unique_ptr<BinderAuthorityControl>* result) {
-  if (!result || *result || !stop || stop == INVALID_HANDLE_VALUE || !ValidLocator(locator)) {
+DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker,
+    const std::wstring& registration_locator, const std::wstring& listener_locator, HANDLE stop,
+    std::unique_ptr<BinderAuthorityControl>* registration,
+    std::unique_ptr<BinderAuthorityControl>* listeners) {
+  if (!registration || *registration || !listeners || *listeners || registration == listeners ||
+      !stop || stop == INVALID_HANDLE_VALUE || !ValidLocator(registration_locator) ||
+      !ValidLocator(listener_locator) || registration_locator == listener_locator) {
     return ERROR_INVALID_PARAMETER;
   }
+  LocalMemory descriptor, package;
+  DWORD status = ConnectionSecurity(broker.process(), &descriptor, &package);
+  if (status != ERROR_SUCCESS) return status;
+  SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
+  std::unique_ptr<BinderAuthorityControl> admission, factory;
+  status = Prepare(broker, registration_locator, stop, wire::Role::kRegistration, security,
+                   &admission);
+  if (status != ERROR_SUCCESS) return status;
+  status = Prepare(broker, listener_locator, stop, wire::Role::kListeners, security, &factory);
+  if (status != ERROR_SUCCESS) return status;
+  BinderServiceQueryGrant service_query(std::move(package));
+  status = service_query.Apply();
+  if (status != ERROR_SUCCESS) return status;
+  if (WaitForSingleObject(stop, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
+  status = broker.Resume();
+  if (status == ERROR_SUCCESS) status = admission->Handshake();
+  if (status == ERROR_SUCCESS) status = factory->Handshake();
+  // Each channel retains its own authenticated SCM handle. No new AppContainer
+  // connection needs query access after both handshakes have finished.
+  if (status == ERROR_SUCCESS) status = service_query.Retire();
+  if (status != ERROR_SUCCESS) return admission->FailClosed(status);
+  *registration = std::move(admission);
+  *listeners = std::move(factory);
+  return ERROR_SUCCESS;
+}
+
+DWORD BinderAuthorityControl::Prepare(AuthorityLaunch& broker, const std::wstring& locator,
+                                       HANDLE stop, wire::Role role, SECURITY_ATTRIBUTES& security,
+                                       std::unique_ptr<BinderAuthorityControl>* result) {
   auto control = std::unique_ptr<BinderAuthorityControl>(new (std::nothrow) BinderAuthorityControl);
   if (!control) return ERROR_NOT_ENOUGH_MEMORY;
   control->stop_ = stop;
@@ -280,53 +302,40 @@ DWORD BinderAuthorityControl::ConnectRole(AuthorityLaunch& broker, const std::ws
                        PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0)) {
     return GetLastError();
   }
-  LocalMemory descriptor, package;
-  DWORD status = ConnectionSecurity(broker.process(), &descriptor, &package);
+  const DWORD status = AuthorityPeer::Create(broker.process(), locator.c_str(), &security,
+                                             &control->peer_);
   if (status != ERROR_SUCCESS) return status;
-  BinderServiceQueryGrant service_query(std::move(package));
-  status = service_query.Apply();
-  if (status != ERROR_SUCCESS) return status;
-  SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
-  status = AuthorityPeer::Create(broker.process(), locator.c_str(), &security, &control->peer_);
-  if (status != ERROR_SUCCESS) return status;
+  *result = std::move(control);
+  return ERROR_SUCCESS;
+}
 
+DWORD BinderAuthorityControl::Handshake() {
   Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-  if (!event) return control->FailClosed(GetLastError());
-  if (WaitForSingleObject(stop, 0) != WAIT_TIMEOUT) return control->FailClosed(ERROR_OPERATION_ABORTED);
-  if (role == wire::Role::kRegistration) {
-    status = broker.Resume();
-    if (status != ERROR_SUCCESS) return control->FailClosed(status);
-  }
+  if (!event) return GetLastError();
+  if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
   OVERLAPPED pending{};
   pending.hEvent = event.get();
-  const HANDLE pipe = control->peer_->pipe();
+  const HANDLE pipe = peer_->pipe();
   if (!ConnectNamedPipe(pipe, &pending)) {
-    status = GetLastError();
+    DWORD status = GetLastError();
     if (status == ERROR_IO_PENDING) {
       DWORD bytes = 0;
-      status = WaitIo(pipe, &pending, stop, control->broker_, kHandshakeWait, &bytes);
+      status = WaitIo(pipe, &pending, stop_, broker_, kHandshakeWait, &bytes);
     } else if (status == ERROR_PIPE_CONNECTED) {
       status = ERROR_SUCCESS;
     }
-    if (status != ERROR_SUCCESS) return control->FailClosed(status);
+    if (status != ERROR_SUCCESS) return status;
   }
   wire::Hello hello{};
-  status = control->Transfer(&hello, sizeof(hello), false);
-  if (status != ERROR_SUCCESS) return control->FailClosed(status);
+  DWORD status = Transfer(&hello, sizeof(hello), false);
+  if (status != ERROR_SUCCESS) return status;
   if (hello.magic != wire::kMagic || hello.version != wire::kVersion ||
-      hello.operation != wire::Operation::kHello || hello.role != role) {
-    return control->FailClosed(ERROR_INVALID_DATA);
+      hello.operation != wire::Operation::kHello || hello.role != role_) {
+    return ERROR_INVALID_DATA;
   }
-  status = control->peer_->Authenticate();
-  if (status != ERROR_SUCCESS) return control->FailClosed(status);
-  status = control->Exchange(wire::Operation::kReady, 0, 0, nullptr);
-  if (status != ERROR_SUCCESS) return control->FailClosed(status);
-  // The receiver retains its open SCM handle for the session. No further
-  // AppContainer token needs access to the installed service object.
-  status = service_query.Retire();
-  if (status != ERROR_SUCCESS) return control->FailClosed(status);
-  *result = std::move(control);
-  return ERROR_SUCCESS;
+  status = peer_->Authenticate();
+  if (status != ERROR_SUCCESS) return status;
+  return Exchange(wire::Operation::kReady, 0, 0, binder::PeerRole::kClient, nullptr);
 }
 
 DWORD BinderAuthorityControl::Transfer(void* data, DWORD bytes, bool writing, bool wait_idle) {
@@ -373,9 +382,9 @@ DWORD BinderAuthorityControl::FailClosed(DWORD status) {
 }
 
 DWORD BinderAuthorityControl::Exchange(wire::Operation op, uint64_t id, uint32_t uid,
-                                       HANDLE remote_handle) {
+                                       binder::PeerRole role, HANDLE remote_handle) {
   wire::Request request{wire::kMagic, wire::kVersion, op, uid, id,
-                        reinterpret_cast<uintptr_t>(remote_handle)};
+                        reinterpret_cast<uintptr_t>(remote_handle), role, 0};
   DWORD status = Transfer(&request, sizeof(request), true);
   if (status != ERROR_SUCCESS) return FailClosed(status);
   wire::Reply reply{};
@@ -388,8 +397,10 @@ DWORD BinderAuthorityControl::Exchange(wire::Operation op, uint64_t id, uint32_t
   return reply.status;
 }
 
-DWORD BinderAuthorityControl::Register(uint64_t id, uint32_t uid, const AuthorityLaunch& process) {
-  if (id == 0 || uid > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+DWORD BinderAuthorityControl::Register(uint64_t id, uint32_t uid, binder::PeerRole role,
+                                       const AuthorityLaunch& process) {
+  if (id == 0 || uid > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+      !binder::IsAllowedPeerRole(uid, role)) {
     return ERROR_INVALID_PARAMETER;
   }
   if (!peer_ || role_ != wire::Role::kRegistration) return ERROR_INVALID_HANDLE;
@@ -398,7 +409,7 @@ DWORD BinderAuthorityControl::Register(uint64_t id, uint32_t uid, const Authorit
   HANDLE remote = nullptr;
   if (!DuplicateHandle(GetCurrentProcess(), process.process(), broker_, &remote,
                        kTransferRights, FALSE, 0)) return GetLastError();
-  return Exchange(wire::Operation::kRegister, id, uid, remote);
+  return Exchange(wire::Operation::kRegister, id, uid, role, remote);
 }
 
 DWORD BinderAuthorityControl::Revoke(uint64_t id) {
@@ -406,7 +417,7 @@ DWORD BinderAuthorityControl::Revoke(uint64_t id) {
   if (!peer_ || role_ != wire::Role::kRegistration) return ERROR_INVALID_HANDLE;
   const DWORD status = peer_->Authenticate();
   if (status != ERROR_SUCCESS) return FailClosed(status);
-  return Exchange(wire::Operation::kRevoke, id, 0, nullptr);
+  return Exchange(wire::Operation::kRevoke, id, 0, binder::PeerRole::kClient, nullptr);
 }
 
 DWORD BinderAuthorityControl::ServeListeners(BinderListenerFactory& factory) {

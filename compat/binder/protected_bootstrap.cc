@@ -203,9 +203,10 @@ namespace {
 
 bool ValidRegistration(const wire::Request& request) {
   if (request.magic != wire::kMagic || request.version != wire::kVersion ||
-      request.registration_id == 0) return false;
+      request.registration_id == 0 || request.reserved != 0) return false;
   if (request.operation == wire::Operation::kRevoke) {
-    return request.uid == 0 && request.process_handle == 0;
+    return request.uid == 0 && request.process_handle == 0 &&
+        request.peer_role == PeerRole::kClient;
   }
   return request.operation == wire::Operation::kRegister &&
          request.uid <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) &&
@@ -234,7 +235,8 @@ struct Registrations {
     }
     // Allocate bookkeeping before granting the peer admission.
     auto slot = entries.emplace(request.registration_id, ProtectedPeers::Peer{}).first;
-    const DWORD status = peers.Register(transferred.get(), request.uid, &slot->second);
+    const DWORD status = peers.Register(transferred.get(), request.uid, request.peer_role,
+                                        &slot->second);
     if (status != ERROR_SUCCESS) entries.erase(slot);
     return status;
   }
@@ -330,7 +332,8 @@ DWORD ProtectedBootstrap::Handshake() {
   if (status != ERROR_SUCCESS) return status;
   if (ready.magic != wire::kMagic || ready.version != wire::kVersion ||
       ready.operation != wire::Operation::kReady || ready.uid != 0 ||
-      ready.registration_id != 0 || ready.process_handle != 0) return ERROR_INVALID_DATA;
+      ready.registration_id != 0 || ready.process_handle != 0 ||
+      ready.peer_role != PeerRole::kClient || ready.reserved != 0) return ERROR_INVALID_DATA;
   return Reply(0, ERROR_SUCCESS);
 }
 

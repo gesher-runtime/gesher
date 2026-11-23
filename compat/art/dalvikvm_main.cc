@@ -10,6 +10,7 @@
 
 #include <gesher/unc_paths.h>
 #include <gesher/environment.h>
+#include "../binder/protected_client_startup.h"
 #include "exec_spawn.h"
 
 // Only upstream dalvikvm.cc is compiled with this main rename.
@@ -141,6 +142,16 @@ extern "C" int wmain(int argc, wchar_t** wide_argv) {
       return EXIT_FAILURE;
     }
     values.push_back(std::move(utf8));
+  }
+  if (argc > 1 && values[1] == gesher::kProtectedBinderStartupOption) {
+    constexpr int kNativeArguments = 4;
+    if (argc <= kNativeArguments + 1 ||
+        !gesher::ConfigureProtectedBinderStartup(values[2], values[3], values[4])) {
+      std::fprintf(stderr, "dalvikvm: invalid protected Binder bootstrap\n");
+      return EXIT_FAILURE;
+    }
+    values.erase(values.begin() + 1, values.begin() + 1 + kNativeArguments);
+    argc -= kNativeArguments;
   }
   if (!InitializeTemporaryDirectory(values)) return EXIT_FAILURE;
   std::vector<char*> argv;

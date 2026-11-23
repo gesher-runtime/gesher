@@ -399,8 +399,9 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # is checked against historical main bytes; the socket ownership and poll
 # checks still compare live code.
 USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
-USB_BLOCK_TRANSITION_SHA256 = '0eaad7cb2db7f3e5e894492121bda55758c3923511eeeff439a04030ba013625'
+USB_BLOCK_TRANSITION_SHA256 = '2359646392237560e78f1f8258d12afabc444e2bba7dbc1c9c7be92e93ac6e4a'
 USB_BLOCK_TRANSITION_PATHS = (
+ 'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
  'compat/elf/exec/exec_spawn.cc',
  'compat/elf/exec/gesher_shell.cc',
@@ -417,6 +418,8 @@ USB_BLOCK_TRANSITION_PATHS = (
  'compat/posix/src/system_properties.cc',
  'compat/posix/src/unistd.cc',
  'compat/posix/src/unix_rights.cc',
+ 'tests/art-temp/entry_test.cc',
+ 'tools/test_temp_directory.py',
 )
 
 

@@ -13,6 +13,7 @@
 namespace {
 
 using gesher::binder::ProtectedPeers;
+using gesher::binder::PeerRole;
 constexpr DWORD kTimeout = 3000;
 
 void Require(bool condition, const char* operation, DWORD error = GetLastError()) {
@@ -151,11 +152,13 @@ void Run() {
   Start(name, &restricted.attributes, &unrelated);
   Start(name, &broad.attributes, &wrong_acl);
   ProtectedPeers::Peer registered, result;
-  Require(peers.Register(selected.info.hProcess, 12345, &result) == ERROR_ACCESS_DENIED && !result,
+  Require(peers.Register(selected.info.hProcess, 12345, PeerRole::kClient, &result) ==
+              ERROR_ACCESS_DENIED && !result,
           "production rejects test user as process owner");
-  Require(peers.RegisterForFixture(wrong_acl.info.hProcess, 12345, owner, &result) ==
+  Require(peers.RegisterForFixture(wrong_acl.info.hProcess, 12345, PeerRole::kClient, owner, &result) ==
           ERROR_ACCESS_DENIED && !result, "reject nonexclusive process DACL");
-  const DWORD error = peers.RegisterForFixture(selected.info.hProcess, 12345, owner, &registered);
+  const DWORD error = peers.RegisterForFixture(selected.info.hProcess, 12345, PeerRole::kClient,
+                                                owner, &registered);
   Require(error == ERROR_SUCCESS, "register actual suspended process", error);
   FILETIME created{}, exited{}, kernel{}, user_time{};
   Require(GetProcessTimes(selected.info.hProcess, &created, &exited, &kernel, &user_time) != FALSE,
@@ -170,7 +173,7 @@ void Run() {
       OWNER_SECURITY_INFORMATION, &unexpected_owner, nullptr, nullptr, nullptr, &descriptor);
   LocalFree(descriptor);
   Require(visibility == ERROR_ACCESS_DENIED, "retained handle has no READ_CONTROL", visibility);
-  Require(peers.RegisterForFixture(selected.info.hProcess, 23456, owner, &result) ==
+  Require(peers.RegisterForFixture(selected.info.hProcess, 23456, PeerRole::kClient, owner, &result) ==
           ERROR_ALREADY_EXISTS && !result, "reject a second UID for the same process epoch");
 
   Require(ResumeThread(unrelated.info.hThread) == 1, "resume unregistered process");
@@ -196,13 +199,13 @@ void Run() {
   peers.Revoke(registered);
   Require(!registered->live() && peers.FindClient(pipe.value, &result) == ERROR_ACCESS_DENIED && !result,
           "deny admission after revocation");
-  Require(peers.RegisterForFixture(selected.info.hProcess, 23456, owner, &result) ==
+  Require(peers.RegisterForFixture(selected.info.hProcess, 23456, PeerRole::kClient, owner, &result) ==
           ERROR_ALREADY_EXISTS && !result, "do not rebind a revoked live process");
   CheckTransfer(registered);  // Outstanding operations still own their original process object.
   DisconnectAndFinish(pipe.value, selected);
   Require(WaitForSingleObject(registered->process(), 0) == WAIT_OBJECT_0,
           "retained process object reports its original exit");
-  Require(peers.RegisterForFixture(selected.info.hProcess, 12345, owner, &result) ==
+  Require(peers.RegisterForFixture(selected.info.hProcess, 12345, PeerRole::kClient, owner, &result) ==
           ERROR_PROCESS_ABORTED && !result, "reject a stale process object");
 }
 

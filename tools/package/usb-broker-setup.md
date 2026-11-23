@@ -15,7 +15,7 @@ the SHA-256 of each installed runtime file before registering the service. Setup
 and Uninstall verify the authority binary before executing it.
 
 Setup installs into `Program Files\Gesher Raw USB Broker` and registers the
-`GesherUsbAuthority` Windows service for manual start. Setup checks that the
+`GesherUsbAuthority` Windows service for manual start. Setup checks the
 destination, runtime directories and installed files for trusted ownership,
 restricted write access and reparse points. It rejects an alternate destination,
 writable or redirected path, or a directory containing a previous installation.
@@ -44,10 +44,11 @@ Pass the Windows session number to the service.
 
     sc.exe start GesherUsbAuthority binder-session <session-id>
 
-The service launches the installed `binderd.exe` under a restricted
-AppContainer token and owns the control and data endpoints. The protected
-realm starts with no Android applications enrolled. Stop the service to
-retire that realm and its process.
+The service launches the installed `binderd.exe` and `servicemanager.exe`
+under restricted AppContainer tokens and owns the control and data endpoints.
+It registers the exact service manager process as the Binder context manager
+before resuming it. This starts a Binder realm without Android applications
+enrolled. Stop the service to retire the realm and both processes.
 
 ## Build
 
