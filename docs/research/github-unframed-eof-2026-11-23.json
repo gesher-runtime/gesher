@@ -1,0 +1,543 @@
+{
+  "schema": 1,
+  "base": "5882d0a44765be56562ba25443b8572b6466712a",
+  "source_checkpoint": "3d1599f130906aa3778699209690db7c8a3d5854",
+  "sources": {
+    "tools/ci/github_read.py": "a6f9a7d9cc1a0255d48e2cff19f93e3cae1cf6bfb61eac1661f788daedb1b9f2",
+    "tools/ci/test_github_eof.py": "85beecba234397e33c49fc71467478c98fb35b2eb86550e5aee1eb230a11f700",
+    "tools/ci/test_component_producer.py": "a1e2b2658732f6d25caaecf2c0e19387275d43822644590e7a5c6ead9dec5c3e",
+    "tools/net-tcp-priority/run-component.ps1": "077b7a8575bf709bd8e5811efeae09f81cdb1d7b549f08602df11cbaac432459",
+    "tools/net-tcp-priority/test-helper-metadata.ps1": "a767620c4f48d64a592883b70938b8f89f2c385d9ae5586458f0abd3502e4c41"
+  },
+  "unchanged_sources": {
+    "tools/ci/github_jobs.py": "721b11c1df692c4890004b6c167aa7e93f1ecac18251874e555bac61e45d14af",
+    "tools/ci/producer_context.py": "40e8e80e405dc26fac914170420c5d3bca4adde1ab2778397bc1a3d9f45a83d2",
+    "tools/ci/artifact_receipt.py": "f4cbfd9a91eaa77f74dd85bbfcf96ee22c97d0d1325903dc62cda9e4a53a088a",
+    "tools/ci/component_producer.py": "f0d846c5f1b045f558fff62894c79429024bc54c1c75379af752e0cf0b875dad",
+    "tools/ci/source_identity.py": "c4fb79a76529c67bd22a1134900f42731a40a0063fc24d81cc77cdfa295e8cf8",
+    "tools/ci/artifact_candidates.py": "dd5da88fe42aedad99a2cc8bf257b7f8b1986211164e1508ff4aae611d5366e0",
+    "tools/surface/download-verified-artifact.py": "56e66861064956ceb43e9c5d8505190fe25590f73c428db0c216b1e8221ec443",
+    ".github/workflows/ci.yml": "41c4ad0dc99cdbded401cab7abd0a2bd16870839f81da51a6b24d56d29d622fe",
+    "tools/net-tcp-priority/qualified/ofd-stream-source.json": "c85383129e374f4511efe091896a3ce62d536d3eeb58fc8a1588995e7e799e1c",
+    "tools/net-tcp-priority/test-selected-policy.py": "6489e8f0b58798151cbb8c337e3c86420edda5825db8cc6ec6613f8d26345f1e"
+  },
+  "failures": [
+    {
+      "pr": 309,
+      "run": 45249096332,
+      "attempt": 3,
+      "job": 138010494677,
+      "head": "35083c4736b4753079e79ac7fa002625abf07950",
+      "checkout": "58082d0502332a63bd09baa1ae1d77f17c76606d",
+      "log": "native-pr309-job138010494677.log",
+      "source_dir": "native-pr309-sg-exact-source/tools/ci",
+      "boundary": "after authentication archive; current-attempt jobs snapshot",
+      "log_sha256": "d40cd283eade67e83550afa3cd39174a18ce7df99e6f9365b634ebda3370f3ab",
+      "log_bytes": 108145,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45249096332/job/138010494677",
+      "sources": {
+        "github_read.py": {
+          "sha256": "f1a78eb2fcfac5d14f66264ea80c155723bb608e37b2ee55f98abbcd87125063",
+          "bytes": 10701,
+          "functions_equal_current_baseline_ignoring_docstrings": {
+            "_transient": true,
+            "_http_response": true,
+            "get_json": true
+          }
+        },
+        "github_jobs.py": {
+          "sha256": "721b11c1df692c4890004b6c167aa7e93f1ecac18251874e555bac61e45d14af",
+          "bytes": 4403,
+          "whole_file_equal_current_baseline": true
+        },
+        "producer_context.py": {
+          "sha256": "40e8e80e405dc26fac914170420c5d3bca4adde1ab2778397bc1a3d9f45a83d2",
+          "bytes": 9763,
+          "whole_file_equal_current_baseline": true
+        }
+      },
+      "stdout_not_archived": true,
+      "remote_cause_proven": false,
+      "quota_cause_proven_for_this_read": false
+    },
+    {
+      "pr": 330,
+      "run": 45271588999,
+      "attempt": 1,
+      "job": 138033554385,
+      "head": "6ed97f62c136268d93153c7d6dc9c3875306052c",
+      "checkout": "c60df45e35b5e98a1c4ffefbaefb835e1a65f77a",
+      "log": "root-new-ci-2202-138033554385.log",
+      "source_dir": "native-github-eof-failed-sources/pr330",
+      "boundary": "after authentication archive; current-attempt jobs snapshot",
+      "log_sha256": "c2c8760993e23a21fd58d2914b5dea62d36d87656b67cc8080b0521f2cbc0aca",
+      "log_bytes": 46256,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45271588999/job/138033554385",
+      "sources": {
+        "github_read.py": {
+          "sha256": "082792cbe6f5e7718b266b2abb3f6453a7013254e28080f0da3efaf726b8e9be",
+          "bytes": 10829,
+          "functions_equal_current_baseline_ignoring_docstrings": {
+            "_transient": true,
+            "_http_response": true,
+            "get_json": true
+          }
+        },
+        "github_jobs.py": {
+          "sha256": "721b11c1df692c4890004b6c167aa7e93f1ecac18251874e555bac61e45d14af",
+          "bytes": 4403,
+          "whole_file_equal_current_baseline": true
+        },
+        "producer_context.py": {
+          "sha256": "40e8e80e405dc26fac914170420c5d3bca4adde1ab2778397bc1a3d9f45a83d2",
+          "bytes": 9763,
+          "whole_file_equal_current_baseline": true
+        }
+      },
+      "stdout_not_archived": true,
+      "remote_cause_proven": false,
+      "quota_cause_proven_for_this_read": false
+    },
+    {
+      "pr": 429,
+      "run": 45273973618,
+      "attempt": 1,
+      "job": 138043743970,
+      "head": "036a7fb6a1e44019f18295cb4bd849eae170e1b0",
+      "checkout": "2c3b462d2ea3a07ca35941b7dddb4eefa1ce46b0",
+      "log": "root-new-ci-2202-138043743970.log",
+      "source_dir": "native-github-eof-failed-sources/pr429",
+      "boundary": "after staged batch archive; original-attempt pre-authentication snapshot",
+      "log_sha256": "73d92662d32f17e333283548b486a7fdeb0022afa57482b4bc0918c160955355",
+      "log_bytes": 45624,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45273973618/job/138043743970",
+      "sources": {
+        "github_read.py": {
+          "sha256": "f1a78eb2fcfac5d14f66264ea80c155723bb608e37b2ee55f98abbcd87125063",
+          "bytes": 10701,
+          "functions_equal_current_baseline_ignoring_docstrings": {
+            "_transient": true,
+            "_http_response": true,
+            "get_json": true
+          }
+        },
+        "github_jobs.py": {
+          "sha256": "721b11c1df692c4890004b6c167aa7e93f1ecac18251874e555bac61e45d14af",
+          "bytes": 4403,
+          "whole_file_equal_current_baseline": true
+        },
+        "producer_context.py": {
+          "sha256": "40e8e80e405dc26fac914170420c5d3bca4adde1ab2778397bc1a3d9f45a83d2",
+          "bytes": 9763,
+          "whole_file_equal_current_baseline": true
+        }
+      },
+      "stdout_not_archived": true,
+      "remote_cause_proven": false,
+      "quota_cause_proven_for_this_read": false
+    }
+  ],
+  "gates": [
+    {
+      "name": "test_github_read",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_github_read.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "71b7911beecaef63e7689ae1614f191b823a2da730f65480f5b81244eeb3e31d",
+      "unittest_count": [
+        51
+      ]
+    },
+    {
+      "name": "test_github_eof",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_github_eof.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "84d8772355e571485804666521d02c4d9d3dc524b3389ba7950c37dc4c70d799",
+      "unittest_count": [
+        12
+      ]
+    },
+    {
+      "name": "test_github_rate_limits",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_github_rate_limits.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "c7ad40a18fdf84fca22385aa3a849365d3087b42bf0446420e6ed6d95d44b996",
+      "unittest_count": [
+        18
+      ]
+    },
+    {
+      "name": "test_artifact_batch",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_artifact_batch.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "a8385cb89e56f1c4d32c55f9f5f54eec53aabcaac417e122a2e28bde7acde76b",
+      "unittest_count": [
+        34
+      ]
+    },
+    {
+      "name": "test_supplier_bundle",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_supplier_bundle.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "e29d5a01549e5d4ffb4d1d50543477623899c9ef024c1c525a2ff51c51ba1382",
+      "unittest_count": [
+        16
+      ]
+    },
+    {
+      "name": "test_producer_context",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_producer_context.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "9b7443c455b453ec848c038ec7c3f393905531adb14a0c41d609d9cc1448b4b8",
+      "unittest_count": [
+        26
+      ]
+    },
+    {
+      "name": "test_binder_modes",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_binder_modes.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "1c27a6ee3ec6a2aea9e2bc142932a0e6476af4f5794280d067a2faeefde5373a",
+      "unittest_count": [
+        15
+      ]
+    },
+    {
+      "name": "test_native2_producer_context",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_native2_producer_context.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "6262854da233bfc52d9606e4cc75ac77e78bbad0540d78db419d4bd77f060a08",
+      "unittest_count": [
+        6
+      ]
+    },
+    {
+      "name": "test_component_producer",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_component_producer.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "cd3341e41ee9718ea61f10207c937e8aef173e51cc831036f127f6256d52437a",
+      "unittest_count": [
+        19
+      ]
+    },
+    {
+      "name": "test_source_identity",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/ci",
+        "-p",
+        "test_source_identity.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "20c6672dab381c15f1539c4689d345eccf756f1bb94786c11b5704021fa044f6",
+      "unittest_count": [
+        14
+      ]
+    },
+    {
+      "name": "source",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "tools/net-tcp-priority/test-selected-policy.py",
+        "--selftest"
+      ],
+      "returncode": 0,
+      "log_sha256": "34c22ac45564b380f28360fc26640ea1db5d8112ea66d94095fb194aad165a5e",
+      "unittest_count": []
+    },
+    {
+      "name": "supplier",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "tools/net-tcp-priority/test-selected-supplier.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120",
+      "unittest_count": []
+    },
+    {
+      "name": "vector",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "tools/net-tcp-priority/test-vector-policy.py"
+      ],
+      "returncode": 0,
+      "log_sha256": "d24e6cfdbb25d6d19fd035787f9947619fd2dd3ec060da33469cd6d37db3a409",
+      "unittest_count": []
+    },
+    {
+      "name": "helper_metadata",
+      "command": [
+        "/workspace/scratch/aa09b1a0dc1f/toolchains/powershell-7.5.4/pwsh",
+        "-NoProfile",
+        "-File",
+        "tools/net-tcp-priority/test-helper-metadata.ps1"
+      ],
+      "returncode": 0,
+      "log_sha256": "6a6ef759c6c172b03f85aeb7a0332258213c0a9834b8872ec3622b54c64164b9",
+      "unittest_count": []
+    }
+  ],
+  "controls": [
+    {
+      "name": "unchanged_reader",
+      "path": "tools/ci/github_read.py",
+      "kind": "negative",
+      "source_sha256": "082792cbe6f5e7718b266b2abb3f6453a7013254e28080f0da3efaf726b8e9be",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_github_eof",
+        "test_component_producer.ComponentConsumers.test_post_download_eof_restarts_complete_original_and_current_snapshots"
+      ],
+      "returncode": 1,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/unchanged_reader/run.log",
+      "log_sha256": "277f83ec17e734850e0618622f738af3b9e44419805b6a1fced4491f929f026a",
+      "designated_assertion": null
+    },
+    {
+      "name": "candidate",
+      "path": "tools/ci/github_read.py",
+      "kind": "pass",
+      "source_sha256": "a6f9a7d9cc1a0255d48e2cff19f93e3cae1cf6bfb61eac1661f788daedb1b9f2",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_github_eof",
+        "test_component_producer.ComponentConsumers.test_post_download_eof_restarts_complete_original_and_current_snapshots",
+        "test_component_producer.ComponentConsumers.test_post_download_eof_does_not_accept_changed_or_missing_provenance",
+        "test_component_producer.ComponentConsumers.test_post_download_eof_cannot_hide_changed_execution_or_role_bytes",
+        "test_component_producer.ComponentConsumers.test_post_download_eof_exhausts_existing_inventory_fallback_budget",
+        "test_component_producer.ComponentConsumers.test_post_download_eof_still_rejects_framed_json_and_inventory_errors"
+      ],
+      "returncode": 0,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/candidate/run.log",
+      "log_sha256": "598c73f69b38fc5c9c9fdf91a8d734252fecb5551b81c9d6687fe8028a4adfc9",
+      "designated_assertion": null
+    },
+    {
+      "name": "exit_code",
+      "path": "tools/ci/github_read.py",
+      "kind": "mutant",
+      "source_sha256": "26e3996d00a27c97fcf71509903aca72d618495cba2e5927fe105c4931cd6477",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_github_eof.ExactEofRead.test_other_exit_codes_are_not_an_eof_retry_or_inventory_fallback"
+      ],
+      "returncode": 1,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/exit_code/run.log",
+      "log_sha256": "daffdddd1ac47b185302ea7c74468861cb8120fd2acf95c31ed986378a5f3f91",
+      "designated_assertion": "test_github_eof.ExactEofRead.test_other_exit_codes_are_not_an_eof_retry_or_inventory_fallback"
+    },
+    {
+      "name": "http_framing",
+      "path": "tools/ci/github_read.py",
+      "kind": "mutant",
+      "source_sha256": "c2393bca492a7999138dc00d97dc44ce91958f0311e6f06fda3e38ed018e8bbd",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_github_eof.ExactEofRead.test_http_framing_prevents_the_unframed_eof_exception"
+      ],
+      "returncode": 1,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/http_framing/run.log",
+      "log_sha256": "488ed5c96e363228bcefae23056df852f33cff76097ab7328c88138e52bb9d7a",
+      "designated_assertion": "test_github_eof.ExactEofRead.test_http_framing_prevents_the_unframed_eof_exception"
+    },
+    {
+      "name": "mixed_diagnostic",
+      "path": "tools/ci/github_read.py",
+      "kind": "mutant",
+      "source_sha256": "99a935bd5dd3658f1a38d55014e5734cdce81795436958852e15deefda410100",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_github_eof.ExactEofRead.test_mixed_or_different_diagnostics_do_not_enter_the_eof_policy"
+      ],
+      "returncode": 1,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/mixed_diagnostic/run.log",
+      "log_sha256": "ab3abac20e5cbf1c3b905f2a51ba454b0c8cd1d1d3470c39db32150b5e1f5244",
+      "designated_assertion": "test_github_eof.ExactEofRead.test_mixed_or_different_diagnostics_do_not_enter_the_eof_policy"
+    },
+    {
+      "name": "transport_deadline",
+      "path": "tools/ci/github_read.py",
+      "kind": "mutant",
+      "source_sha256": "d4373b562863a519ddfabf8eedbc0ecc0c795ad40861cf719f1bced404b90638",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_github_eof.ExactEofRead.test_eof_does_not_extend_the_247_second_transport_deadline"
+      ],
+      "returncode": 1,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/transport_deadline/run.log",
+      "log_sha256": "3b130700258cdf24799c74bf8360758cdf2c79201487350e437fe63d67e61403",
+      "designated_assertion": "test_github_eof.ExactEofRead.test_eof_does_not_extend_the_247_second_transport_deadline"
+    },
+    {
+      "name": "inventory_no_retry",
+      "path": "tools/ci/github_read.py",
+      "kind": "mutant",
+      "source_sha256": "3b80ed8476369bc3513f194781b5f3b75d64d44035a6b28ab135730abee1ee71",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_github_eof.ExactEofRead.test_inventory_caller_gets_one_transient_failure_without_sleep"
+      ],
+      "returncode": 1,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/inventory_no_retry/run.log",
+      "log_sha256": "2a5bd53f5e3794737d084ef2188740603bcf0927607a10733bc32fcb32b6a4e6",
+      "designated_assertion": "test_github_eof.ExactEofRead.test_inventory_caller_gets_one_transient_failure_without_sleep"
+    },
+    {
+      "name": "framed_json_acceptance",
+      "path": "tools/ci/github_read.py",
+      "kind": "mutant",
+      "source_sha256": "b3f28ea38080508e6bf359093816cbf39c4a2a1bbd41db6092aaa8c461bb1521",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_github_eof.ExactEofRead.test_successful_framed_malformed_json_is_never_retried"
+      ],
+      "returncode": 1,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/framed_json_acceptance/run.log",
+      "log_sha256": "67bf5c26973869712232b6194e3f23f89675814f7adb4aa494b6d213410806a1",
+      "designated_assertion": "test_github_eof.ExactEofRead.test_successful_framed_malformed_json_is_never_retried"
+    },
+    {
+      "name": "post_download_snapshot",
+      "path": "tools/ci/producer_context.py",
+      "kind": "mutant",
+      "source_sha256": "aa20032e379ca2b96b370d8136c47d90e45e9b47cbe787d662bf5136b6532cec",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "test_component_producer.ComponentConsumers.test_post_download_eof_restarts_complete_original_and_current_snapshots"
+      ],
+      "returncode": 1,
+      "log": "/workspace/scratch/aa09b1a0dc1f/native-github-eof-final-controls/post_download_snapshot/run.log",
+      "log_sha256": "74421997ac30bd5648056b36c10631092a0da1d86a61a9a3470ea41d227c64dd",
+      "designated_assertion": "test_component_producer.ComponentConsumers.test_post_download_eof_restarts_complete_original_and_current_snapshots"
+    }
+  ],
+  "archive": {
+    "path": "docs/research/evidence/github-unframed-eof-2026-11-23.tar.gz",
+    "bytes": 244165,
+    "sha256": "0c70664e8fbc6227d775c43c19cba00d117a67aae2c58e2862cfe57adcc28305",
+    "members": 104
+  },
+  "limitations": [
+    "Subprocess/HTTP/storage boundaries supplied by host fixtures; actual receipt, ZIP digest, extraction, authentication and publication execute.",
+    "No live GitHub transport, quota recovery, Windows or native runtime result claimed.",
+    "Failed subprocess stdout and root cause were not captured in the original logs.",
+    "The intentional stacked-base authority rejection in #429 is unrelated and unchanged.",
+    "Because failed stdout was not retained, historical requests cannot all be proven to meet the new unframed-output guard."
+  ],
+  "markdown": {
+    "path": "docs/research/github-unframed-eof-2026-11-23.md",
+    "sha256": "d0699db197b5939e2dacbb198624af287f35246e09abf27b5f06ffc4aa248d83"
+  }
+}

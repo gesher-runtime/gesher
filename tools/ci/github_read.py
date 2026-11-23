@@ -185,6 +185,13 @@ def get_json(endpoint, *, retry_transient=True):
                 return json.loads(body, parse_constant=_reject_json_constant)
             except (ValueError, UnicodeDecodeError) as error:
                 raise GitHubReadError('GitHub GET returned invalid JSON') from error
+        # This sole observed gh diagnostic does not identify the underlying
+        # cause. Discard all unframed output and retry only the exact failed
+        # read; successful framed JSON parsing above remains fail-closed.
+        unframed_eof = result.returncode == 1 and status is None and stderr in (
+            'unexpected end of JSON input',
+            'unexpected end of JSON input\n',
+            'unexpected end of JSON input\r\n')
         quota = rate_limit_info(status, headers, body, rate_failures)
         delay = None
         if quota is not None:
@@ -200,7 +207,7 @@ def get_json(endpoint, *, retry_transient=True):
             rate_failures += 1
             # The quota wait is not transport time: extend the envelope by it.
             deadline += delay
-        elif _transient(stderr):
+        elif _transient(stderr) or unframed_eof:
             if not retry_transient:
                 raise GitHubTransientError(
                     f'GitHub GET transient failure (gh exit {result.returncode})')

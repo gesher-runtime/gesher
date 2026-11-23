@@ -23,6 +23,7 @@ import zipfile
 
 import artifact_receipt as receipts
 import component_producer as component
+import github_read
 import producer_context as proof
 import test_artifact_batch as transport
 
@@ -119,6 +120,138 @@ class ComponentConsumers(unittest.TestCase):
 
     def stage(self):
         return component.stage(self.name)
+
+    def post_download_eof(self, *, attempt='2', mutate=None, exhaust=False, following=None):
+        """Fail a real authentication read after both verified ZIP downloads.
+
+        The boundary supplies only gh output. All inventory, original/current
+        execution, archive identity and final publication checks still execute.
+        """
+        state = {'requests': [], 'fired': False}
+        def invoke(command, **kwargs):
+            if (command[0] == 'gh' and len(self.downloads) == 2 and
+                    f'/attempts/{attempt}/jobs?' in command[-1]):
+                state['requests'].append(command[-1])
+                if not state['fired'] or exhaust:
+                    self.assertFalse(self.destination.exists())
+                    if not state['fired'] and mutate is not None:
+                        mutate()
+                    state['fired'] = True
+                    self.json_reads.append(command[-1])
+                    return subprocess.CompletedProcess(command, 1,
+                        stdout=b'{"jobs":[{"id":999}],"total_count":1}',
+                        stderr=b'unexpected end of JSON input\n')
+                if following is not None:
+                    self.json_reads.append(command[-1])
+                    return following
+            return self.invoke(command, **kwargs)
+        return patch('subprocess.run', side_effect=invoke), state
+
+    def clear_staged_component(self):
+        # These are exclusively owned TemporaryDirectory fixture paths.
+        if self.destination.exists():
+            shutil.rmtree(self.destination)
+        batch = self.root / 'ci-suppliers' / component.POLICIES[self.name][2]
+        if batch.exists():
+            shutil.rmtree(batch)
+
+    def test_post_download_eof_restarts_complete_original_and_current_snapshots(self):
+        for role in ('tsf-format', 'native3-blocking'):
+            for attempt in ('1', '2'):
+                with self.subTest(role=role, attempt=attempt):
+                    self.clear_staged_component()
+                    self.configure(role)
+                    before = dict(os.environ)
+                    boundary, state = self.post_download_eof(attempt=attempt)
+                    with boundary:
+                        result = self.stage()
+                    self.assertTrue(state['fired'])
+                    self.assertEqual([value.split('?', 1)[1] for value in state['requests']],
+                                     ['per_page=100&page=1', 'per_page=50&page=1'])
+                    self.assertEqual(len(self.downloads), 2)
+                    self.assertEqual(result['producer_context'], self.original)
+                    self.assertEqual(result['consumer_attempt'], '2')
+                    self.assertEqual(result['artifact']['id'], 1000)
+                    self.assertEqual((self.destination / 'provenance.json').read_bytes(), self.raw)
+                    self.assertEqual(dict(os.environ), before)
+                    self.clear_staged_component()
+
+    def test_post_download_eof_does_not_accept_changed_or_missing_provenance(self):
+        cases = (
+            ('source', lambda: self.jobs[0].update(head_sha='f' * 40)),
+            ('attempt', lambda: self.jobs[0].update(run_attempt=3)),
+            ('failed', lambda: self.jobs[0].update(conclusion='failure')),
+            ('missing_job_id', lambda: self.jobs[0].pop('id')),
+            ('missing_run_id', lambda: self.jobs[0].pop('run_id')),
+            ('duplicate_job', lambda: self.jobs.append(dict(self.jobs[0]))),
+            ('digest', lambda: self.items[0].update(digest='sha256:' + 'f' * 64)),
+            ('size', lambda: self.items[0].update(size_in_bytes=self.items[0]['size_in_bytes'] + 1)),
+            ('expired', lambda: self.items[0].update(expired=True)),
+            ('artifact_source', lambda: self.items[0]['workflow_run'].update(head_sha='f' * 40)),
+            ('new_run_attempt', lambda: self.run.update(run_attempt=3)),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                self.clear_staged_component()
+                self.configure('tsf-format')
+                # The earlier snapshots and both archive digest checks have
+                # already succeeded when this real later observation changes.
+                boundary, state = self.post_download_eof(mutate=mutate)
+                error = KeyError if label == 'missing_run_id' else RuntimeError
+                with boundary, self.assertRaises(error):
+                    self.stage()
+                self.assertTrue(state['fired'])
+                self.assertEqual(len(self.downloads), 2)
+                self.assertFalse(self.destination.exists())
+                self.clear_staged_component()
+                self.run['run_attempt'] = 2
+
+    def test_post_download_eof_cannot_hide_changed_execution_or_role_bytes(self):
+        def change_execution():
+            for row in (self.jobs[0], self.historical_jobs['1'][0]):
+                row['completed_at'] = '2026-11-19T12:01:01Z'
+        def change_role():
+            staging = self.root / 'ci-suppliers' / component.POLICIES[self.name][2]
+            (staging / 'artifacts/fixture/provenance.json').write_bytes(self.raw + b' ')
+        for label, mutate, message in (
+                ('execution', change_execution, 'Producer differs from the verified batch supplier'),
+                ('role', change_role, 'Producer role changed during archive verification')):
+            with self.subTest(label=label):
+                self.configure('native3-blocking')
+                boundary, state = self.post_download_eof(attempt='1', mutate=mutate)
+                with boundary, self.assertRaisesRegex(RuntimeError, message):
+                    self.stage()
+                self.assertTrue(state['fired'])
+                self.assertEqual(len(self.downloads), 2)
+                self.assertFalse(self.destination.exists())
+                self.clear_staged_component()
+
+    def test_post_download_eof_exhausts_existing_inventory_fallback_budget(self):
+        self.configure('tsf-format')
+        boundary, state = self.post_download_eof(exhaust=True)
+        with boundary, self.assertRaisesRegex(github_read.GitHubReadError, r'after 4 attempt\(s\)'):
+            self.stage()
+        self.assertEqual([value.split('?', 1)[1] for value in state['requests']],
+                         ['per_page=100&page=1'] + ['per_page=50&page=1'] * 4)
+        self.assertEqual(len(self.downloads), 2)
+        self.assertFalse(self.destination.exists())
+
+    def test_post_download_eof_still_rejects_framed_json_and_inventory_errors(self):
+        for label, following, message in (
+                ('json', transport.response(raw=b'{"jobs":'), 'invalid JSON'),
+                ('missing_fields', transport.response({'total_count': 1}), 'Invalid or oversized job inventory'),
+                ('denied', transport.response(code=1, stderr='gh: Forbidden (HTTP 403)'),
+                 r'after 1 attempt\(s\)')):
+            with self.subTest(label=label):
+                self.clear_staged_component()
+                self.configure('tsf-format')
+                boundary, state = self.post_download_eof(following=following)
+                with boundary, self.assertRaisesRegex(RuntimeError, message):
+                    self.stage()
+                self.assertEqual(len(state['requests']), 2)
+                self.assertEqual(len(self.downloads), 2)
+                self.assertFalse(self.destination.exists())
+                self.clear_staged_component()
 
     def test_all_fixed_consumers_stage_original_archive_without_relabeling(self):
         for name in component.POLICIES:
