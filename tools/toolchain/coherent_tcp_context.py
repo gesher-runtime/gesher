@@ -20,6 +20,9 @@ def context(env,job,event=None,checkout_parents=None):
         # source_identity has already bound the event's exact head/ref and main
         # target. Retain all workflow, source, run, repository and role gates.
         assert ref.startswith('refs/heads/gh-readonly-queue/main/')
+    elif env['GITHUB_EVENT_NAME'] == 'push' and ref.startswith('refs/tags/'):
+        # ci.yml builds canonical version tags for release publication.
+        assert re.fullmatch(r'refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', ref)
     else:
         assert ref in ('refs/heads/'+BRANCH, 'refs/heads/main')
     assert env.get('GITHUB_WORKFLOW_REF') == REPOSITORY+'/'+PATH+'@'+ref

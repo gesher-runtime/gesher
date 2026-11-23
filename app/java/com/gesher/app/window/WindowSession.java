@@ -1464,17 +1464,22 @@ public final class WindowSession extends IWindowSession.Stub {
             return w.attrs.token != null ? mWindows.get(w.attrs.token) : null;
         }
         if (type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
-            if (!overActivity) return null;
+            // A floating theme alone does not make a task root a popup. Only a live
+            // Activity in the same known task can own it; a finishing splash (or an
+            // unrelated active task) must not own the replacement Activity's HWND.
+            if (!overActivity || w.taskId < 0) return null;
             AppWindow below = null;
             for (int i = 0; i < mWindows.size(); i++) {
                 AppWindow v = mWindows.valueAt(i);
                 if (v != w && v.shown && v.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
-                        && (w.taskId < 0 || v.taskId == w.taskId)
+                        && v.taskId == w.taskId
                         && (below == null || v.seq > below.seq)) {
+                    android.app.Activity a = activity(v.attrs.token);
+                    if (a == null || a.isFinishing() || a.isDestroyed()) continue;
                     below = v;
                 }
             }
-            return below != null ? below : activeRoot();
+            return below;
         }
         if (isApplicationWindow(type)) {
             AppWindow activity = null;
@@ -1776,7 +1781,9 @@ public final class WindowSession extends IWindowSession.Stub {
                     break;
                 }
             }
-            if (at == null && mOneWindow && !isTranslucentOrFloating(w.attrs.token)) {
+            // This is already a top-level window, even when its Activity's theme
+            // is floating. It uses the same app placement policy as other roots.
+            if (at == null && mOneWindow) {
                 for (int i = 0; i < mWindows.size(); i++) {
                     AppWindow v = mWindows.valueAt(i);
                     if (v != w && !v.popup && v.taskId >= 0 && v.taskId != w.taskId && v.shown

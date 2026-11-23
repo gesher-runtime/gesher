@@ -4,6 +4,7 @@
 // Device boot names isolate volatile properties; persist.* survive a new boot.
 
 #include <gesher/system_properties.h>
+#include <gesher/environment.h>
 
 #include <windows.h>
 
@@ -117,15 +118,15 @@ std::wstring Session() {
     GetSystemTimePreciseAsFileTime(&time);
     uint64_t ticks = (static_cast<uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
     session = std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(ticks);
-    if (_wputenv_s(L"GESHER_PROPERTY_SESSION", session.c_str()) != 0) return {};
+    if (SetWideEnvironment(L"GESHER_PROPERTY_SESSION", session.c_str()) != 0) return {};
   }
   return L"single-" + session;
 }
 bool InheritRoot(const std::wstring& session, const std::wstring& root) {
   if (Environment(L"GESHER_PROPERTY_ROOT_SESSION") == session &&
       Environment(L"GESHER_PROPERTY_ROOT") == root) return true;
-  return _wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str()) == 0 &&
-         _wputenv_s(L"GESHER_PROPERTY_ROOT_SESSION", session.c_str()) == 0;
+  return SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str()) == 0 &&
+         SetWideEnvironment(L"GESHER_PROPERTY_ROOT_SESSION", session.c_str()) == 0;
 }
 
 void Put32(std::string* data, uint32_t value) {

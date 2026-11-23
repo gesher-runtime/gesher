@@ -79,6 +79,41 @@ public final class SystemServer {
         selected.add(current);
     }
 
+    /**
+     * The package for the staged microG addon slot {@code name}: the staged addon, or a
+     * valid microG-signed installed update at least as new (both as system addons), or
+     * null when an installed package of that name is verifiably signed by another
+     * signer. Such a package is an ordinary installed app (Google's own Play Store, say):
+     * it keeps its name, data and lack of privileges, the staged addon is not published,
+     * and nothing else of the device changes. (AOSP's scan instead deletes a user app
+     * whose signer differs from a new system package's, with its data; this optional
+     * addon does not justify that.) Any other verification failure, such as changed
+     * content of a microG update, still fails startup: it is not a different signer.
+     */
+    static ApkPackage selectStagedAddon(List<ApkPackage> installed, String name, ApkPackage staged) {
+        List<ApkPackage> updates = new ArrayList<>();
+        for (ApkPackage current : installed) {
+            if (!name.equals(current.packageName)) continue;
+            if (GmsSignatureSpoofing.verifyAddonApk(name, current.apkPath)) {
+                updates.add(current);
+            } else if (current.hasVerifiedSigningIdentity() && !current.hasVerifiedMicrogSigner()) {
+                return null;
+            } else {
+                throw new SecurityException("Untrusted installed microG addon override: " + name);
+            }
+        }
+        ApkPackage selected = staged;
+        for (ApkPackage current : updates) {
+            // Even when selecting the bundled fallback, the old committed
+            // manifest is the authority for any legacy storage migration.
+            current.setSystemAddon(true);
+            // As an updated system app: preserve a valid newer user-installed
+            // release and its privileges, with the staged APK as fallback.
+            if (current.versionCode() >= selected.versionCode()) selected = current;
+        }
+        return selected;
+    }
+
     /** Prepare only the final selection, retaining the committed records' migration authority. */
     static void preparePackageStorage(List<ApkPackage> committed, List<ApkPackage> selected)
             throws java.io.IOException {
@@ -181,24 +216,15 @@ public final class SystemServer {
             for (String name : MicrogAddons.PACKAGES) {
                 File apk = new File(androidRoot, "priv-app/" + name + "/base.apk");
                 if (!apk.isFile()) continue;
-                ApkPackage p = MicrogAddons.load(apk, name);
-                boolean fromPrivApp = true;
-                for (ApkPackage installed : packages) {
-                    if (!name.equals(installed.packageName)) continue;
-                    if (!GmsSignatureSpoofing.verifyAddonApk(name, installed.apkPath)) {
-                        throw new SecurityException("Untrusted installed microG addon override: " + name);
-                    }
-                    // Even when selecting the bundled fallback, the old committed
-                    // manifest is the authority for any legacy storage migration.
-                    installed.setSystemAddon(true);
-                    // As an updated system app: preserve a valid newer user-installed
-                    // release and its privileges, with the staged APK as fallback.
-                    if (installed.versionCode() >= p.versionCode()) {
-                        p = installed;
-                        fromPrivApp = false;
-                    }
+                ApkPackage staged = MicrogAddons.load(apk, name);
+                ApkPackage p = selectStagedAddon(packages, name, staged);
+                if (p == null) {
+                    log("microg addon " + name + ": not loaded, the installed " + name
+                            + " has another signer and stays an ordinary app (uninstall it"
+                            + " to use the microG addon)");
+                    continue;
                 }
-                if (fromPrivApp) {
+                if (p == staged) {
                     // As the package manager's scan of a system package: its libraries
                     // on disk for every process that loads its code (Dynamite modules).
                     try {

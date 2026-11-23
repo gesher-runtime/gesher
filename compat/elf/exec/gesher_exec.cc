@@ -24,6 +24,7 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/system_properties.h>
+#include <gesher/environment.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -111,7 +112,6 @@ struct ProgramState {
 ProgramState* g_program = nullptr;
 
 // bionic's data the program may import: environ and __progname.
-char** g_environ = nullptr;
 const char* g_progname = "";
 
 std::atomic<bool> g_exiting{false};
@@ -125,7 +125,6 @@ GetauxvalFn g_shim_getauxval = nullptr;
 // .fini_array) in reverse order, stdio flushed, then the low 8 bits as the
 // process's exit code, as on Linux.
 [[noreturn]] void SYSV Exit(int status) {
-  gesher::bionic::ExitIfVforkChild(status);  // a fork child exiting without exec
   if (!g_exiting.exchange(true)) {
     if (auto finalize = reinterpret_cast<FinalizeFn>(gesher::bionic::LookupBionicSymbol("__cxa_finalize"))) {
       finalize(nullptr);
@@ -137,7 +136,6 @@ GetauxvalFn g_shim_getauxval = nullptr;
 
 // _exit()/_Exit(): no handlers and no stdio flush, as on Linux.
 [[noreturn]] void SYSV UnderscoreExit(int status) {
-  gesher::bionic::ExitIfVforkChild(status);
   ExitProcess(static_cast<UINT>(status) & 0xff);
 }
 
@@ -183,7 +181,6 @@ using MainFn = int (SYSV*)(int, char**, char**);
   int argc = static_cast<int>(words[0]);
   char** argv = reinterpret_cast<char**>(words + 1);
   char** envp = argv + argc + 1;
-  g_environ = envp;
   if (structors != nullptr && structors->fini_array != nullptr) {
     if (auto atexit_fn = reinterpret_cast<AtexitFn>(gesher::bionic::LookupBionicSymbol("__cxa_atexit"))) {
       atexit_fn(LibcFini, structors->fini_array, nullptr);
@@ -274,12 +271,9 @@ DWORD WINAPI ProgramThread(void*) {
   gesher::bionic::AddBionicSymbol("_exit", reinterpret_cast<void*>(&UnderscoreExit));
   gesher::bionic::AddBionicSymbol("_Exit", reinterpret_cast<void*>(&UnderscoreExit));
   gesher::bionic::AddBionicSymbol("getauxval", reinterpret_cast<void*>(&Getauxval));
-  gesher::bionic::AddBionicSymbol("environ", &g_environ);
-  gesher::bionic::AddBionicSymbol("__environ", &g_environ);
   gesher::bionic::AddBionicSymbol("__progname", &g_progname);
 
   int argc = static_cast<int>(p.args.size());
-  g_environ = p.envp.data();
   elf::SetInitArguments(argc, p.argv.data(), p.envp.data());
 
   elf::LoadOptions options;
@@ -355,12 +349,9 @@ int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
   state.args = args;
   // The environment, as UTF-8 "NAME=value" (Windows' per-drive "=C:" entries
   // are left out).
-  if (wchar_t* block = GetEnvironmentStringsW()) {
-    for (const wchar_t* e = block; *e != 0; e += wcslen(e) + 1) {
-      if (*e != L'=') state.env.push_back(ex::Narrow(e));
-    }
-    FreeEnvironmentStringsW(block);
-  }
+  if (!gesher::VisitEnvironment([](const char* entry, void* context) {
+        static_cast<std::vector<std::string>*>(context)->emplace_back(entry);
+      }, &state.env)) return 1;
   for (std::string& a : state.args) state.argv.push_back(a.data());
   state.argv.push_back(nullptr);
   for (std::string& e : state.env) state.envp.push_back(e.data());
@@ -415,14 +406,14 @@ int RunArguments(const std::vector<std::string>& args) {
     }
     // PE/batch programs keep the existing wait-and-propagate convention.
     std::vector<ex::ChildFd> fds;
-    for (int fd = 0; fd < 2048; ++fd) {
-      intptr_t value = _get_osfhandle(fd);
-      if (value != -1 && value != -2 && value != 0) {
-        fds.push_back({fd, reinterpret_cast<HANDLE>(value)});
-      }
+    std::vector<std::pair<int, gesher::DescriptorSnapshotPtr>> captured;
+    if (gesher::CaptureDescriptors(&captured, false) != 0) return 127;
+    for (auto& [fd, snapshot] : captured) {
+      fds.push_back({fd, snapshot->handle, std::move(snapshot)});
     }
     PROCESS_INFORMATION process{};
     if (ex::SpawnWithFds(launch, nullptr, L"", fds, &process) != 0) return 127;
+    fds.clear();
     CloseHandle(process.hThread);
     DWORD status = 127;
     if (WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0) {

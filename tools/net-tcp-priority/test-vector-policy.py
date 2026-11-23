@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 from pathlib import Path
+import subprocess
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +29,19 @@ def rejected(label, replacement, repin=False, target=source_path, pin_name='SYST
             try:
                 policy.check()
             except AssertionError as error:
-                assert str(error) == target.relative_to(ROOT).as_posix(), error
+                # The exact OFD transition also checks whole protected function
+                # bodies; its assertion identifies both the path and marker.
+                detail = error.args[0] if error.args else None
+                path = detail[0] if isinstance(detail, tuple) else detail
+                assert path == target.relative_to(ROOT).as_posix(), error
+                print_result = label
+            except subprocess.CalledProcessError as error:
+                # A mutation inside the pinned transition may be rejected by
+                # reverse application before the baseline hash comparison. This
+                # counts only when that exact check rejects the mutated path.
+                assert error.cmd == ['git', 'apply', '--reverse', '--unidiff-zero', '--check', '-'], error
+                assert error.returncode == 1, error
+                assert target.relative_to(ROOT).as_posix().encode() in error.stderr, error.stderr
                 print_result = label
             else:
                 raise RuntimeError('source policy accepted ' + label)

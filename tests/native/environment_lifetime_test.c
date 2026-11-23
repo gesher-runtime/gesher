@@ -68,6 +68,13 @@ int gesher_selftest(void) {
   check("the first result keeps its bytes after putenv", equals(first, kFirst));
   check("the first environ entry keeps its bytes after putenv", equals(first_entry, kFirst));
   check("getenv after putenv", equals(getenv(kName), kFirst));
+  char* assigned_value = strchr(assignment, '=') + 1;
+  check("putenv retains the exact caller value pointer", getenv(kName) == assigned_value);
+  check("environ retains the exact caller value pointer", environ_value(kName) == assigned_value);
+  assigned_value[0] = '!';
+  check("getenv observes caller mutation", getenv(kName) && getenv(kName)[0] == '!');
+  check("environ observes caller mutation", environ_value(kName) && environ_value(kName)[0] == '!');
+  assigned_value[0] = '/';
 
   char second[sizeof(kName) + 16];
   snprintf(second, sizeof(second), "%s=second", kName);
@@ -98,6 +105,23 @@ int gesher_selftest(void) {
   check("getenv after setting the first value again", equals(getenv(kName), kFirst));
   check("setenv of a name with '=' fails", setenv("GESHER=ENV", "x", 1) == -1);
   unsetenv(kName);
+
+  char mutable[] = "GESHER_ENV_MUTABLE_A=first";
+  check("putenv accepts automatic caller storage", putenv(mutable) == 0);
+  char* mutable_value = strchr(mutable, '=') + 1;
+  memcpy(mutable_value, "after", 6);
+  check("putenv value mutation reaches getenv and environ", equals(getenv("GESHER_ENV_MUTABLE_A"), "after") && equals(environ_value("GESHER_ENV_MUTABLE_A"), "after"));
+  mutable[sizeof("GESHER_ENV_MUTABLE_") - 1] = 'B';
+  check("putenv name mutation changes the actual table entry", getenv("GESHER_ENV_MUTABLE_A") == NULL && equals(getenv("GESHER_ENV_MUTABLE_B"), "after") && equals(environ_value("GESHER_ENV_MUTABLE_B"), "after"));
+  check("equal setenv detaches from caller storage", setenv("GESHER_ENV_MUTABLE_B", mutable_value, 1) == 0);
+  memcpy(mutable_value, "other", 6);
+  check("setenv copy stays independent after caller mutation", equals(getenv("GESHER_ENV_MUTABLE_B"), "after"));
+  check("caller may remove the copied value", unsetenv("GESHER_ENV_MUTABLE_B") == 0);
+  char empty[] = "GESHER_ENV_MUTABLE_B=";
+  check("putenv preserves a present empty value", putenv(empty) == 0 && equals(getenv("GESHER_ENV_MUTABLE_B"), "") && equals(environ_value("GESHER_ENV_MUTABLE_B"), ""));
+  char remove[] = "GESHER_ENV_MUTABLE_B";
+  check("putenv without equals removes the name", putenv(remove) == 0 && getenv(remove) == NULL && environ_value(remove) == NULL);
+  free(assignment);  // It is no longer in the environment; UCRT never owns it.
 
   if (failures == 0) printf("environment_lifetime: all passed\n");
   return failures;

@@ -245,6 +245,34 @@ public final class AppOpsContractTest {
         ((java.util.concurrent.ScheduledThreadPoolExecutor)get(h.service, "mEvents"))
                 .submit(() -> { }).get(5, TimeUnit.SECONDS);
     }
+    private static void fixedModeRefreshCost(Harness h) throws Exception {
+        drain(h);
+        Supplier<?> source = (Supplier<?>)get(h.service, "mStateSource");
+        AtomicInteger scans = new AtomicInteger();
+        set(h.service, "mStateSource", (Supplier<?>)() -> { scans.incrementAndGet(); return source.get(); });
+        try {
+            for (int mode : new int[]{MODE_ALLOWED, MODE_IGNORED, MODE_DEFAULT, MODE_ERRORED}) {
+                h.ops.setMode(OP_VIBRATE, UID, NAME, mode); drain(h); scans.set(0);
+                for (int i = 0; i < 1000; i++) {
+                    if (h.ops.checkOperation(OP_VIBRATE, UID, NAME) != mode) throw new AssertionError("Fixed operation mode changed");
+                }
+                check(scans.get() == 0, "1000 fixed-mode checks must not rebuild global process/activity/service state: " + scans.get());
+            }
+            h.ops.setMode(OP_VIBRATE, UID, NAME, MODE_FOREGROUND); drain(h); scans.set(0);
+            check(h.ops.checkOperation(OP_VIBRATE, UID, NAME) == MODE_IGNORED && scans.get() == 1,
+                    "Foreground checks still refresh actual lifecycle state before evaluating access");
+            h.ops.setMode(OP_VIBRATE, UID, NAME, MODE_ALLOWED); drain(h); scans.set(0);
+            h.ops.noteOperation(OP_VIBRATE, UID, NAME, null, false, null, false);
+            check(scans.get() == 1, "Fixed-mode notes still refresh the UID state used for access history");
+            Token token = new Token();
+            start(h.ops, token, "one", false);
+            check(scans.get() == 2, "Fixed-mode starts still refresh the UID state used for operation history");
+            h.ops.finishOperation(token, OP_VIBRATE, UID, NAME, "one");
+        } finally {
+            set(h.service, "mStateSource", source);
+            h.ops.setMode(OP_VIBRATE, UID, NAME, AppOpsManager.opToDefaultMode(OP_VIBRATE));
+        }
+    }
     private static void flags(Harness h, String permission, int mask, int values) {
         h.pm.permissions().updatePermissionFlags(NAME, permission, mask, values, true, "default:0", 0);
     }
@@ -1488,7 +1516,7 @@ public final class AppOpsContractTest {
 
     private static int runWithServiceContext(boolean parcel) throws Exception {
         binder = parcel; checks = 0;
-        Harness h = new Harness(); modes(h); lifetimes(h); watchers(h); foreground(h); restrictions(h); delivery(h); persistence(h);
+        Harness h = new Harness(); fixedModeRefreshCost(h); modes(h); lifetimes(h); watchers(h); foreground(h); restrictions(h); delivery(h); persistence(h);
         permissionCheckerEdges();
         foregroundServiceExit();
         return checks;
