@@ -405,6 +405,12 @@ public final class ExactAlarmContractTest {
                 for (String name : List.of(UNPRIV_PKG, EXACT_PKG, USE_EXACT_PKG, LEGACY_PKG,
                         BOTH_PKG, S_PKG, PRE_USE_PKG)) alarmService.removeAll(name);
                 appOps.resetAllModes(0, null);
+                // Reset publishes asynchronously. Retire this fixture's real write
+                // before another fixture reads the file or main removes its directory.
+                Object store = get(invoke(pm, "appOps", new Class<?>[0]), "mStore");
+                if (!(Boolean) invoke(store, "flush", new Class<?>[0])) {
+                    throw new AssertionError("Exact-alarm fixture could not persist its final AppOps state");
+                }
                 List<Object> sources = (List<Object>) field(type("DeviceWork"), "sSources").get(null);
                 sources.clear(); sources.addAll(previousWorkSources);
                 field(type("NotificationManagerService"), "sLast").set(null, previousNotifications);
