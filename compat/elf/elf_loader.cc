@@ -2053,8 +2053,9 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
   // is skipped; Library objects are never freed once listed, so the check
   // itself is safe. One unmapped while a callback is reading it is the app's
   // own race, as with bionic.
-  // Undone however the callback leaves (a return, or a longjmp/unwind out
-  // of dl_iterate_phdr through this frame's destructors).
+  // Undone when the callback returns or is unwound through this frame's
+  // destructors. A longjmp out of the callback skips them (gesher's longjmp
+  // runs no host cleanups) and leaves the count raised (docs/native-libs.md).
   struct CallbackScope {
     Library* lib;
     explicit CallbackScope(Library* l) : lib(l) { ++t_callback_depth; }
