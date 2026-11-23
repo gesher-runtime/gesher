@@ -435,6 +435,27 @@ public final class PackageInstallerSessionTest {
         }
     }
 
+    /** A preauthorized source must still launch the returned user-action intent. */
+    private static void confirmAllowedSource(IPackageInstaller service, int id,
+            AtomicReference<Intent> result, List<Runnable> jobs) throws Exception {
+        until(() -> result.get() != null, "Missing preauthorized install confirmation");
+        Intent status = result.getAndSet(null);
+        Intent action = status.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+        require(status.getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                    == PackageInstaller.STATUS_PENDING_USER_ACTION
+                && status.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) == id
+                && action != null && jobs.isEmpty(),
+                "Preauthorized installer skipped the pending per-install consent");
+        Method open = method(service.getClass(), "openConfirmation", Intent.class,
+                IBinder.class, int.class, String.class, int.class);
+        require(open.invoke(service, action, null, android.os.Process.myPid(), null, -1)
+                        .equals(android.app.ActivityManager.START_SUCCESS),
+                "Could not launch per-install consent for a preauthorized source");
+        until(() -> !jobs.isEmpty(), "Preauthorized confirmation did not resume");
+        jobs.remove(0).run();
+        require(result.get() != null, "Preauthorized confirmation lost final status");
+    }
+
     private static void installSource(IPackageInstaller service, IPackageManager pm,
             File fixtures, String pkg, Object backend, Class<?> installerClass,
             AtomicReference<String> caller, List<Runnable> jobs, AtomicReference<Intent> result)
@@ -462,8 +483,10 @@ public final class PackageInstallerSessionTest {
         require(service.getSessionInfo(id).getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE,
                 "Session retained mutable package source input");
         stage(service, id, rotated, "download.apk");
+        result.set(null);
         service.openSession(id).commit(receiver(result), false);
         jobs.remove(0).run();
+        confirmAllowedSource(service, id, result, jobs);
         require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
                 == PackageInstaller.STATUS_SUCCESS, "Rotated installer session did not update");
         InstallSourceInfo source = pm.getInstallSourceInfo(pkg, 0);
@@ -486,8 +509,10 @@ public final class PackageInstallerSessionTest {
                 .invoke(null, new File(currentPath).getParent());
         Files.deleteIfExists(new File(oat, "base.odex").toPath());
         stage(service, id, rotated, "download.apk");
+        result.set(null);
         service.openSession(id).commit(receiver(result), false);
         jobs.remove(0).run();
+        confirmAllowedSource(service, id, result, jobs);
         require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
                 == PackageInstaller.STATUS_SUCCESS, "Identical source-attribution session failed");
         require(currentPath.equals(((com.gesher.server.PackageManagerService)pm).get(pkg).apkPath),
@@ -592,6 +617,23 @@ public final class PackageInstallerSessionTest {
         PackageInstaller.SessionParams apex = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         apex.setInstallAsApex();
         rejected(() -> service.createSession(apex, pkg, null, 0), UnsupportedOperationException.class);
+        caller.set("android");
+        PackageInstaller.SessionParams explicitConsent = new PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        explicitConsent.appPackageName = pkg;
+        explicitConsent.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED);
+        int explicitId = service.createSession(explicitConsent, "android", null, 0);
+        stage(service, explicitId, apk, "base.apk");
+        AtomicReference<Intent> explicitStatus = new AtomicReference<>();
+        service.openSession(explicitId).commit(receiver(explicitStatus), false);
+        jobs.remove(0).run();
+        require(prompts.get() == 0, "Explicit host consent ran before its confirmation intent");
+        confirmAllowedSource(service, explicitId, explicitStatus, jobs);
+        require(explicitStatus.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
+                        == PackageInstaller.STATUS_FAILURE_ABORTED,
+                "Explicit confirmation from a trusted session was lost");
+        prompts.set(0);
+        caller.set(pkg);
         File sessionRoot = new File(data, "system/install-sessions");
         String[] stagesBefore = sessionRoot.list();
         int sessionsBefore = service.getAllSessions(0).getList().size();
@@ -640,6 +682,8 @@ public final class PackageInstallerSessionTest {
         require(result.get() == null && jobs.size() == 1, "Commit did not run asynchronously");
         rejected(() -> held.openWrite("new.apk", 0, 2), IllegalStateException.class);
         jobs.remove(0).run();
+        require(prompts.get() == 0, "Windows consent appeared before the install's pending action was launched");
+        confirmAllowedSource(service, first, result, jobs);
         require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
                 == PackageInstaller.STATUS_FAILURE_ABORTED && prompts.get() == 1,
                 "Host denial did not produce honest aborted status: "

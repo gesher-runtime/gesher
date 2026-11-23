@@ -462,14 +462,17 @@ A request that has not been displayed expires after 15 minutes or when a newer r
 replaces it. A visible visit waits for the same Control Center process to report its close
 and cancels if that process exits unexpectedly.
 
-`canRequestPackageInstalls` answers only for the calling package. An untrusted
-`PackageInstaller` session with a valid APK and an eligible source whose mode needs a user
-decision returns `STATUS_PENDING_USER_ACTION`. The installer app launches the returned
-confirmation intent, which opens its own Install unknown apps screen. The server checks the
-source again when that screen closes, requires user confirmation of the specific APK, and
-checks authorization before publishing package code. Trusted install sources keep their
+`canRequestPackageInstalls` answers only for the calling package. A `PackageInstaller`
+session from an eligible app source returns `STATUS_PENDING_USER_ACTION` once the APK is
+validated. The installer app launches the returned confirmation intent. If its source
+requires a decision, the intent opens Install unknown apps and the server checks the
+source on close. The user confirms the specific APK on Windows, then the server checks
+authorization again before publishing package code. Trusted install sources keep their
 existing Windows confirmation. Exact alarms and full-screen intents have no switch.
 StorageStatsService honours the Usage access op as usage stats do.
+The All files access switch writes Android's app-op. Enforcement of shared storage access
+through raw filesystem operations requires the shared-storage backend.
+
 Alert window admission uses the caller's installed process identity and Android's
 target-SDK and AppOps rules. A window admitted in a hidden mode stays hidden, including
 its attached children. Changing the alert-window mode updates the existing surfaces

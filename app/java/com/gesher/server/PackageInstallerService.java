@@ -323,7 +323,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 File stage = Files.createTempDirectory(root.toPath(), "session-").toFile();
                 int id = mIds.getAndIncrement();
                 created = new Session(id, owner, ownerCode, p.appPackageName, p.mode, p.sizeBytes,
-                        PackageInstallSource.category(p.packageSource), !"android".equals(actual), stage);
+                        PackageInstallSource.category(p.packageSource), !"android".equals(actual),
+                        p.requireUserAction == PackageInstaller.SessionParams.USER_ACTION_REQUIRED, stage);
                 mSessions.put(id, created);
             } catch (IOException e) { throw io(); }
         }
@@ -640,6 +641,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         final long expectedSize, created = System.currentTimeMillis();
         final int packageSource;
         final boolean hasApplicationInitiator;
+        final boolean requestedUserAction;
         final File stage;
         final IPackageInstallerSession binder;
         final Map<String, InstallFileBridge> writes = new HashMap<>();
@@ -651,11 +653,12 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         float progress;
         long bytes;
         Session(int id, String owner, ApkPackage code, String pkg, int mode, long size, int packageSource,
-                boolean hasApplicationInitiator, File stage) {
+                boolean hasApplicationInitiator, boolean requestedUserAction, File stage) {
             this.id = id; this.owner = owner; ownerCode = code; expectedPackage = pkg;
             this.mode = mode; expectedSize = size;
             this.packageSource = packageSource;
             this.hasApplicationInitiator = hasApplicationInitiator;
+            this.requestedUserAction = requestedUserAction;
             this.stage = stage;
             binder = StandIn.of(IPackageInstallerSession.class, this).asInterface();
         }
@@ -897,7 +900,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                         && source != AppOpsManager.MODE_ERRORED) {
                     throw new SecurityException("This package is not an eligible install source");
                 }
-                if (source == AppOpsManager.MODE_ALLOWED) {
+                if (source == AppOpsManager.MODE_ALLOWED && trustedInstallSource() && !requestedUserAction) {
                     handedOff = true;
                     publish(prepared, receiver, null);
                 } else {
@@ -921,14 +924,16 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
 
         /** A host or a genuine installer permission is separate from unknown-source access. */
+        private boolean trustedInstallSource() {
+            return "android".equals(owner) || mPm.permissions().checkPermission(owner,
+                    android.Manifest.permission.INSTALL_PACKAGES) == PackageManager.PERMISSION_GRANTED;
+        }
+
         private int installSourceMode() {
             if (destroyed || mPm.get(owner) != ownerCode || mPm.isRemovalPending(owner)) {
                 return AppOpsManager.MODE_IGNORED;
             }
-            if ("android".equals(owner) || mPm.permissions().checkPermission(owner,
-                    android.Manifest.permission.INSTALL_PACKAGES) == PackageManager.PERMISSION_GRANTED) {
-                return AppOpsManager.MODE_ALLOWED;
-            }
+            if (trustedInstallSource()) return AppOpsManager.MODE_ALLOWED;
             if (ownerCode == null || !SpecialAccess.installSourceEligible(ownerCode)) {
                 return AppOpsManager.MODE_IGNORED;
             }
@@ -954,7 +959,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 // removal of the installer immediately after it committed this session.
                 mCallbackExecutor.execute(() -> result(receiver, id, prepared.pkg,
                         PackageInstaller.STATUS_PENDING_USER_ACTION,
-                        "The user must choose whether to allow this install source", action));
+                        "The user must confirm this installation", action));
             }
         }
 

@@ -93,8 +93,11 @@ Media management (`SpecialAccess`; docs/services.md "Special app access"). They 
 app-op modes AOSP Settings writes, through `AppOpsService`, only on the user's click, over
 a `gesher` service transaction restricted to the host shell. Every switch starts off.
 `canRequestPackageInstalls` now follows `OP_REQUEST_INSTALL_PACKAGES` as AOSP does (it
-answered true for every requesting app before); installs still need the per-commit host
-consent. An INSTALL_PACKAGES holder is always allowed, so its switch is shown fixed on.
+answered true for every requesting app before). An eligible app's validated install session
+returns a pending Android user action. Launching it takes the installer through its
+Install unknown apps choice if required and asks for consent to the selected APK on
+Windows. The server rechecks the source at package publication. An INSTALL_PACKAGES
+holder is allowed to request installation, and its switch is shown fixed on.
 
 Item 4 changes for per-app details. The system creates an opaque visit token for a
 request from an activity and pauses the covered activity when the Control Center launch

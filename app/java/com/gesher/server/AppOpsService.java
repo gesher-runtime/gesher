@@ -224,6 +224,13 @@ public final class AppOpsService extends IAppOpsService.Default {
         changed(changes);
         return true;
     }
+    /** Serialize an install's final authorization and package commit against mode writes. */
+    <T> T withInstallSourceMode(java.util.concurrent.Callable<T> publication) throws Exception {
+        synchronized (mMutationLock) {
+            return publication.call();
+        }
+    }
+
     @Override public void setUidMode(int code, int uid, int mode) {
         enforce(Manifest.permission.MANAGE_APP_OPS_MODES);
         setUidModeChecked(code, uid, null, mode);
