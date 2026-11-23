@@ -19,21 +19,32 @@ import android.content.PermissionChecker;
 import android.content.UriMatcher;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
+import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.database.DatabaseUtils;
+import android.database.MatrixCursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteQueryBuilder;
 import android.icu.text.AlphabeticIndex;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.ParcelFileDescriptor;
 import android.os.Process;
+import android.os.SharedMemory;
 import android.os.UserHandle;
 import android.provider.ContactsContract;
+import android.provider.OpenableColumns;
+import android.system.ErrnoException;
+import android.system.OsConstants;
 import android.telephony.PhoneNumberUtils;
 
 import com.gesher.app.locale.SystemLocale;
 
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -45,6 +56,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Built-in SQLite-backed {@code content://com.android.contacts} provider for
@@ -118,6 +134,27 @@ final class ContactsProvider extends ContentProvider {
     private static final int DIRECTORIES_ID = 71;
     private static final int SETTINGS = 80;
     private static final int PROFILE = 90;
+    private static final int PROFILE_SYNC_STATE = 91;
+    private static final int PROFILE_SYNC_STATE_ID = 92;
+    private static final int PROFILE_VCARD = 93;
+    private static final int CONTACT_THUMBNAIL = 94;
+    private static final int CONTACT_DISPLAY_PHOTO = 95;
+    private static final int RAW_DISPLAY_PHOTO = 96;
+    private static final int DISPLAY_PHOTO_FILE = 97;
+    private static final int PHOTO_DIMENSIONS = 98;
+    private static final Executor sProfilePhotoWriters = new ThreadPoolExecutor(
+            0, 2, 30, TimeUnit.SECONDS, new SynchronousQueue<>(), task -> {
+                Thread worker = new Thread(task, "ContactsProfilePhoto");
+                worker.setDaemon(true);
+                return worker;
+            });
+    private static final String MIME_PHOTO = ContactsContract.CommonDataKinds.Photo.CONTENT_ITEM_TYPE;
+    private static final Map<String, String> PROFILE_SYNC_COLUMNS =
+            identityMap("_id", "account_name", "account_type", "data");
+    private static final Map<String, String> PROFILE_VCARD_COLUMNS = Map.of(
+            "_id", "_id",
+            OpenableColumns.DISPLAY_NAME, "display_name || '.vcf' AS " + OpenableColumns.DISPLAY_NAME,
+            OpenableColumns.SIZE, "NULL AS " + OpenableColumns.SIZE);
     private static final String PROFILE_LOOKUP = "profile";
 
     private static final String MIME_STRUCTURED_NAME =
@@ -205,6 +242,22 @@ final class ContactsProvider extends ContentProvider {
         sUriMatcher.addURI(auth, "profile/raw_contact_entities", RAW_CONTACT_ENTITIES);
         sUriMatcher.addURI(auth, "profile/data", DATA);
         sUriMatcher.addURI(auth, "profile/data/#", DATA_ID);
+        sUriMatcher.addURI(auth, "profile/syncstate", PROFILE_SYNC_STATE);
+        sUriMatcher.addURI(auth, "profile/syncstate/#", PROFILE_SYNC_STATE_ID);
+        sUriMatcher.addURI(auth, "profile/as_vcard", PROFILE_VCARD);
+        sUriMatcher.addURI(auth, "contacts/as_vcard/*", PROFILE_VCARD);
+        sUriMatcher.addURI(auth, "profile/photo", CONTACT_THUMBNAIL);
+        sUriMatcher.addURI(auth, "contacts/#/photo", CONTACT_THUMBNAIL);
+        sUriMatcher.addURI(auth, "contacts/lookup/*/photo", CONTACT_THUMBNAIL);
+        sUriMatcher.addURI(auth, "contacts/lookup/*/#/photo", CONTACT_THUMBNAIL);
+        sUriMatcher.addURI(auth, "profile/display_photo", CONTACT_DISPLAY_PHOTO);
+        sUriMatcher.addURI(auth, "contacts/#/display_photo", CONTACT_DISPLAY_PHOTO);
+        sUriMatcher.addURI(auth, "contacts/lookup/*/display_photo", CONTACT_DISPLAY_PHOTO);
+        sUriMatcher.addURI(auth, "contacts/lookup/*/#/display_photo", CONTACT_DISPLAY_PHOTO);
+        sUriMatcher.addURI(auth, "profile/raw_contacts/#/display_photo", RAW_DISPLAY_PHOTO);
+        sUriMatcher.addURI(auth, "raw_contacts/#/display_photo", RAW_DISPLAY_PHOTO);
+        sUriMatcher.addURI(auth, "display_photo/#", DISPLAY_PHOTO_FILE);
+        sUriMatcher.addURI(auth, "photo_dimensions", PHOTO_DIMENSIONS);
 
         sContactsProjectionMap = identityMap(
                 "_id", "lookup", "name_raw_contact_id", "photo_id", "photo_file_id",
@@ -313,6 +366,7 @@ final class ContactsProvider extends ContentProvider {
     private int mBatchDepth;
     private boolean mBatchDirty;
     private boolean mBatchSyncToNetwork;
+    private boolean mBatchProfileDirty;
 
     ContactsProvider(ContentProviders providers, PackageManagerService pm,
             ActivityTaskManagerService atm, UriGrants grants) {
@@ -583,6 +637,12 @@ final class ContactsProvider extends ContentProvider {
                 + "ungrouped_visible INTEGER NOT NULL DEFAULT 0,"
                 + "should_sync INTEGER NOT NULL DEFAULT 1"
                 + ");");
+        db.execSQL("CREATE TABLE IF NOT EXISTS profile_display_photos ("
+                + " data_id INTEGER PRIMARY KEY REFERENCES data(_id) ON DELETE CASCADE,"
+                + " contents BLOB NOT NULL)");
+        db.execSQL("CREATE TABLE IF NOT EXISTS profile_sync_state ("
+                + " _id INTEGER PRIMARY KEY, account_name TEXT NOT NULL, account_type TEXT NOT NULL,"
+                + " data BLOB, UNIQUE(account_name, account_type))");
         createIndexesAndViews(db);
     }
 
@@ -685,7 +745,10 @@ final class ContactsProvider extends ContentProvider {
                 + "data.data4 AS data4, data.data5 AS data5, data.data6 AS data6,"
                 + "data.data7 AS data7, data.data8 AS data8, data.data9 AS data9,"
                 + "data.data10 AS data10, data.data11 AS data11, data.data12 AS data12,"
-                + "data.data13 AS data13, data.data14 AS data14, data.data15 AS data15,"
+                + "data.data13 AS data13,"
+                + "CASE WHEN raw_contacts.raw_contact_is_user_profile = 1 AND mimetypes.mimetype = '"
+                + MIME_PHOTO + "' THEN profile_display_photos.data_id ELSE data.data14 END AS data14,"
+                + "data.data15 AS data15,"
                 + "data.data_sync1 AS data_sync1, data.data_sync2 AS data_sync2,"
                 + "data.data_sync3 AS data_sync3, data.data_sync4 AS data_sync4,"
                 + "data.carrier_presence AS carrier_presence,"
@@ -729,6 +792,7 @@ final class ContactsProvider extends ContentProvider {
                 + "contacts.is_user_profile AS is_user_profile,"
                 + "contacts.name_raw_contact_id AS name_raw_contact_id "
                 + "FROM data "
+                + "LEFT JOIN profile_display_photos ON profile_display_photos.data_id = data._id "
                 + "JOIN mimetypes ON data.mimetype_id = mimetypes._id "
                 + "JOIN raw_contacts ON data.raw_contact_id = raw_contacts._id "
                 + "LEFT JOIN contacts ON raw_contacts.contact_id = contacts._id "
@@ -846,6 +910,15 @@ final class ContactsProvider extends ContentProvider {
         switch (match) {
             case CONTACTS_LOOKUP_ID:
                 return uri.getPathSegments().get(3);
+            case CONTACT_THUMBNAIL:
+            case CONTACT_DISPLAY_PHOTO: {
+                List<String> segments = uri.getPathSegments();
+                if (hasProfilePath(uri)) return null;
+                if ("lookup".equals(segments.get(1))) {
+                    return segments.size() == 5 ? segments.get(3) : null;
+                }
+                return segments.get(1);
+            }
             case CONTACTS_ENTITY:
                 if (hasProfilePath(uri)) return null;
                 // A contact ID precedes the entity path segment.
@@ -855,11 +928,14 @@ final class ContactsProvider extends ContentProvider {
             case RAW_CONTACTS_ID:
             case RAW_CONTACTS_DATA:
             case RAW_CONTACT_ENTITY:
+            case RAW_DISPLAY_PHOTO:
             case DATA_ID:
+            case PROFILE_SYNC_STATE_ID:
                 return uri.getPathSegments().get(hasProfilePath(uri) ? 2 : 1);
             case PHONES_ID:
             case EMAILS_ID:
             case POSTALS_ID:
+            case DISPLAY_PHOTO_FILE:
                 return uri.getLastPathSegment();
             default:
                 return null;
@@ -868,9 +944,16 @@ final class ContactsProvider extends ContentProvider {
 
     private static boolean isProfileRequest(Uri uri, int match) {
         if (hasProfilePath(uri)) return true;
-        if ((match == CONTACTS_LOOKUP || match == CONTACTS_LOOKUP_ID)
-                && PROFILE_LOOKUP.equals(uri.getPathSegments().get(2))) return true;
-        return isProfileId(itemId(uri, match));
+        String id = itemId(uri, match);
+        if (id != null) return isProfileId(id);
+        if (match == CONTACTS_LOOKUP || match == PROFILE_VCARD) {
+            return PROFILE_LOOKUP.equals(uri.getPathSegments().get(2));
+        }
+        if (match == CONTACT_THUMBNAIL || match == CONTACT_DISPLAY_PHOTO) {
+            List<String> segments = uri.getPathSegments();
+            return segments.size() == 4 && PROFILE_LOOKUP.equals(segments.get(2));
+        }
+        return false;
     }
 
     private static boolean isProfileId(String id) {
@@ -929,6 +1012,15 @@ final class ContactsProvider extends ContentProvider {
             case RAW_CONTACT_ENTITIES:
                 return ContactsContract.RawContactsEntity.CONTENT_TYPE;
             case DATA_ID:
+                if (isProfileRequest(uri, DATA_ID)) {
+                    synchronized (mDbLock) {
+                        try (Cursor c = openDatabase().rawQuery(
+                                "SELECT mimetype FROM view_data WHERE _id = ? AND is_user_profile = 1",
+                                new String[] {itemId(uri, DATA_ID)})) {
+                            return c.moveToFirst() ? c.getString(0) : null;
+                        }
+                    }
+                }
                 return "vnd.android.cursor.item/data";
             case RAW_CONTACTS:
                 return ContactsContract.RawContacts.CONTENT_TYPE;
@@ -965,6 +1057,18 @@ final class ContactsProvider extends ContentProvider {
                 return ContactsContract.Directory.CONTENT_ITEM_TYPE;
             case SETTINGS:
                 return ContactsContract.Settings.CONTENT_TYPE;
+            case PROFILE_SYNC_STATE:
+            case PROFILE_SYNC_STATE_ID:
+                return "vnd.android.cursor.item/syncstate";
+            case PROFILE_VCARD:
+                if (isProfileRequest(uri, PROFILE_VCARD)) return ContactsContract.Contacts.CONTENT_VCARD_TYPE;
+                throw new IllegalArgumentException("Unknown URL " + uri);
+            case CONTACT_THUMBNAIL:
+            case CONTACT_DISPLAY_PHOTO:
+            case RAW_DISPLAY_PHOTO:
+            case DISPLAY_PHOTO_FILE:
+                if (isProfileRequest(uri, sUriMatcher.match(uri))) return "image/jpeg";
+                throw new IllegalArgumentException("Unknown URL " + uri);
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
@@ -986,6 +1090,7 @@ final class ContactsProvider extends ContentProvider {
             }
         }
         int match = sUriMatcher.match(uri);
+        if (match == PHOTO_DIMENSIONS) return profilePhotoDimensions(projection);
         boolean profile = isProfileRequest(uri, match);
         String id = itemId(uri, match);
         String limit = ContactsProviderSupport.parseLimit(uri);
@@ -1201,7 +1306,30 @@ final class ContactsProvider extends ContentProvider {
             case PROFILE:
                 qb.setTables("view_contacts");
                 qb.setProjectionMap(sContactsProjectionMap);
-                effSelection = scopedSelection(selection, "is_user_profile = 1");
+                break;
+            case PROFILE_VCARD:
+                if (!profile) throw new IllegalArgumentException("Unknown URL " + uri);
+                qb.setTables("view_contacts");
+                qb.setProjectionMap(PROFILE_VCARD_COLUMNS);
+                break;
+            case CONTACT_THUMBNAIL:
+                if (!profile) throw new IllegalArgumentException("Unknown URL " + uri);
+                qb.setTables("view_data");
+                qb.setProjectionMap(sDataProjectionMap);
+                qb.appendWhereStandalone("_id = photo_id");
+                if (id != null) {
+                    effSelection = scopedSelection(selection, "contact_id = ?");
+                    effArgs = ContactsProviderSupport.prependArgs(selectionArgs, id);
+                }
+                break;
+            case PROFILE_SYNC_STATE:
+            case PROFILE_SYNC_STATE_ID:
+                qb.setTables("profile_sync_state");
+                qb.setProjectionMap(PROFILE_SYNC_COLUMNS);
+                if (id != null) {
+                    effSelection = scopedSelection(selection, "_id = ?");
+                    effArgs = ContactsProviderSupport.prependArgs(selectionArgs, id);
+                }
                 break;
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
@@ -1212,7 +1340,10 @@ final class ContactsProvider extends ContentProvider {
         if (localInvisible) qb.appendWhereStandalone("0");
         if (qb.getProjectionMap().containsKey("account_name")) {
             AccountFilter account = AccountFilter.fromUri(uri);
-            if (account != null) {
+            if (account != null && (match == PROFILE_SYNC_STATE || match == PROFILE_SYNC_STATE_ID)) {
+                qb.appendWhereStandalone("account_name = ? AND account_type = ?");
+                effArgs = ContactsProviderSupport.prependArgs(effArgs, account.name, account.type);
+            } else if (account != null) {
                 qb.appendWhereStandalone(account.selection());
                 effArgs = account.withArgs(effArgs);
             }
@@ -1253,6 +1384,24 @@ final class ContactsProvider extends ContentProvider {
             }
         }
         return dataIds;
+    }
+
+    private static Cursor profilePhotoDimensions(String[] projection) {
+        String[] columns = projection == null ? new String[] {
+                ContactsContract.DisplayPhoto.DISPLAY_MAX_DIM,
+                ContactsContract.DisplayPhoto.THUMBNAIL_MAX_DIM
+        } : projection;
+        Object[] dimensions = new Object[columns.length];
+        for (int i = 0; i < columns.length; i++) {
+            dimensions[i] = switch (columns[i]) {
+                case ContactsContract.DisplayPhoto.DISPLAY_MAX_DIM -> ProfilePhoto.DISPLAY_DIMENSION;
+                case ContactsContract.DisplayPhoto.THUMBNAIL_MAX_DIM -> ProfilePhoto.THUMBNAIL_DIMENSION;
+                default -> throw new IllegalArgumentException("Invalid column " + columns[i]);
+            };
+        }
+        MatrixCursor cursor = new MatrixCursor(columns, 1);
+        cursor.addRow(dimensions);
+        return cursor;
     }
 
     private static String profileColumn(String table) {
@@ -1370,6 +1519,7 @@ final class ContactsProvider extends ContentProvider {
         ContentProviderResult[] results;
         boolean shouldNotify = false;
         boolean shouldSync = false;
+        boolean profileChanged = false;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
             db.beginTransaction();
@@ -1377,6 +1527,7 @@ final class ContactsProvider extends ContentProvider {
             if (outermost) {
                 mBatchDirty = false;
                 mBatchSyncToNetwork = false;
+                mBatchProfileDirty = false;
             }
             mBatchDepth++;
             boolean committed = false;
@@ -1392,14 +1543,16 @@ final class ContactsProvider extends ContentProvider {
                     if (outermost) {
                         shouldNotify = committed && mBatchDirty;
                         shouldSync = mBatchSyncToNetwork;
+                        profileChanged = mBatchProfileDirty;
                         mBatchDirty = false;
                         mBatchSyncToNetwork = false;
+                        mBatchProfileDirty = false;
                     }
                 }
             }
         }
         if (shouldNotify) {
-            notifyObservers(shouldSync);
+            notifyObservers(shouldSync, profileChanged);
         }
         return results;
     }
@@ -1407,6 +1560,7 @@ final class ContactsProvider extends ContentProvider {
     @Override
     public Uri insert(Uri uri, ContentValues values) {
         Uri result;
+        boolean profileChanged = false;
         boolean notifyNow = false;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
@@ -1415,19 +1569,16 @@ final class ContactsProvider extends ContentProvider {
                 result = insertLocked(db, uri, values);
                 db.setTransactionSuccessful();
                 if (result != null) {
-                    if (mBatchDepth > 0) {
-                        mBatchDirty = true;
-                        mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
-                    } else {
-                        notifyNow = true;
-                    }
+                    profileChanged = isProfileRequest(uri, sUriMatcher.match(uri))
+                            || isProfileRequest(result, sUriMatcher.match(result));
+                    notifyNow = markMutation(uri, profileChanged);
                 }
             } finally {
                 db.endTransaction();
             }
         }
         if (notifyNow) {
-            notifyObservers(!isCallerSyncAdapter(uri));
+            notifyObservers(shouldSyncToNetwork(uri), profileChanged);
         }
         return result;
     }
@@ -1436,29 +1587,27 @@ final class ContactsProvider extends ContentProvider {
     public int bulkInsert(Uri uri, ContentValues[] values) {
         if (values == null || values.length == 0) return 0;
         int inserted = 0;
+        boolean profileChanged = isProfileRequest(uri, sUriMatcher.match(uri));
         boolean notifyNow = false;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
             db.beginTransaction();
             try {
                 for (ContentValues item : values) {
-                    if (insertLocked(db, uri, item) != null) inserted++;
-                }
-                db.setTransactionSuccessful();
-                if (inserted > 0) {
-                    if (mBatchDepth > 0) {
-                        mBatchDirty = true;
-                        mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
-                    } else {
-                        notifyNow = true;
+                    Uri result = insertLocked(db, uri, item);
+                    if (result != null) {
+                        inserted++;
+                        profileChanged |= isProfileRequest(result, sUriMatcher.match(result));
                     }
                 }
+                db.setTransactionSuccessful();
+                if (inserted > 0) notifyNow = markMutation(uri, profileChanged);
             } finally {
                 db.endTransaction();
             }
         }
         if (notifyNow) {
-            notifyObservers(!isCallerSyncAdapter(uri));
+            notifyObservers(shouldSyncToNetwork(uri), profileChanged);
         }
         return inserted;
     }
@@ -1477,20 +1626,30 @@ final class ContactsProvider extends ContentProvider {
                 copy.remove("contact_id");
                 requireKeys(copy, RAW_WRITE_COLUMNS);
                 if (account != null) account.applyTo(copy);
-                ContentValues contactValues = new ContentValues();
-                contactValues.put("contact_last_updated_timestamp", now);
-                contactValues.put("is_user_profile", isProfile ? 1 : 0);
-                long contactId = isProfile ? findProfileId(db) : 0;
-                if (contactId == 0) {
-                    contactId = insertContactRow(db, "contacts", isProfile, contactValues);
+                long contactId;
+                if (isProfile) {
+                    copy.put("raw_contact_is_user_profile", 1);
+                    Integer deleted = copy.getAsInteger("deleted");
+                    if (deleted == null || deleted == 0) {
+                        contactId = ensureProfileContact(db, now);
+                        copy.put("contact_id", contactId);
+                    } else {
+                        contactId = 0;
+                        copy.putNull("contact_id");
+                        copy.put("aggregation_mode", ContactsContract.RawContacts.AGGREGATION_MODE_DISABLED);
+                    }
+                } else {
+                    ContentValues contactValues = new ContentValues();
+                    contactValues.put("contact_last_updated_timestamp", now);
+                    contactId = insertContactRow(db, "contacts", false, contactValues);
+                    copy.put("contact_id", contactId);
                 }
-                copy.put("contact_id", contactId);
-                if (isProfile) copy.put("raw_contact_is_user_profile", 1);
                 if (!syncAdapter && !copy.containsKey("dirty")) {
                     copy.put("dirty", 1);
                 }
                 long rawId = insertContactRow(db, "raw_contacts", isProfile, copy);
                 if (!isProfile) ensureSettingsRow(db, copy);
+                if (contactId == 0) return ContentUris.withAppendedId(uri, rawId);
                 ContentValues contactUpdate = new ContentValues();
                 contactUpdate.put("lookup", isProfile ? PROFILE_LOOKUP : "0r" + rawId);
                 contactUpdate.put("name_raw_contact_id", rawId);
@@ -1522,9 +1681,27 @@ final class ContactsProvider extends ContentProvider {
                 return ContentUris.withAppendedId(uri, db.insertOrThrow("groups", null, copy));
             case SETTINGS:
                 return insertSettings(db, copy, account);
+            case PROFILE_SYNC_STATE:
+                return insertProfileSyncState(db, uri, copy);
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
+    }
+
+    private static Uri insertProfileSyncState(SQLiteDatabase db, Uri uri, ContentValues values) {
+        requireKeys(values, Set.of("account_name", "account_type", "data"));
+        AccountFilter account = AccountFilter.fromValues(values);
+        if (account == null) throw new IllegalArgumentException("Sync state requires an account");
+        String[] args = {account.name, account.type};
+        try (Cursor c = db.rawQuery("SELECT _id FROM profile_sync_state "
+                + "WHERE account_name = ? AND account_type = ?", args)) {
+            if (c.moveToFirst()) {
+                long id = c.getLong(0);
+                db.update("profile_sync_state", values, "_id = ?", new String[] {Long.toString(id)});
+                return ContentUris.withAppendedId(uri, id);
+            }
+        }
+        return ContentUris.withAppendedId(uri, insertContactRow(db, "profile_sync_state", true, values));
     }
 
     private static long findProfileId(SQLiteDatabase db) {
@@ -1533,11 +1710,41 @@ final class ContactsProvider extends ContentProvider {
         }
     }
 
+    private static long ensureProfileContact(SQLiteDatabase db, long now) {
+        long id = findProfileId(db);
+        if (id != 0) return id;
+        ContentValues contact = new ContentValues();
+        contact.put("is_user_profile", 1);
+        contact.put("contact_last_updated_timestamp", now);
+        return insertContactRow(db, "contacts", true, contact);
+    }
+
+    private static void reconcileProfileContacts(SQLiteDatabase db, long now) {
+        ContentValues detached = new ContentValues();
+        detached.putNull("contact_id");
+        detached.put("aggregation_mode", ContactsContract.RawContacts.AGGREGATION_MODE_DISABLED);
+        db.update("raw_contacts", detached, "raw_contact_is_user_profile = 1 AND deleted != 0", null);
+        Set<Long> remaining = queryIds(db,
+                "SELECT _id FROM raw_contacts WHERE raw_contact_is_user_profile = 1 AND deleted = 0", null);
+        if (remaining.isEmpty()) {
+            db.delete("contacts", "is_user_profile = 1", null);
+            return;
+        }
+        long contactId = ensureProfileContact(db, now);
+        ContentValues linked = new ContentValues();
+        linked.put("contact_id", contactId);
+        db.update("raw_contacts", linked,
+                "raw_contact_is_user_profile = 1 AND deleted = 0 AND contact_id IS NULL", null);
+        ContentValues lookup = new ContentValues();
+        lookup.put("lookup", PROFILE_LOOKUP);
+        db.update("contacts", lookup, "_id = ?", new String[] {Long.toString(contactId)});
+        refreshRawAndParentContacts(db, remaining, now, false);
+    }
+
     private static Uri dataCollection(Uri uri, int match) {
-        Uri collection = isProfileRequest(uri, match)
-                ? Uri.withAppendedPath(ContactsContract.Profile.CONTENT_URI, "data")
-                : ContactsContract.Data.CONTENT_URI;
-        return collection.buildUpon().encodedQuery(uri.getEncodedQuery()).build();
+        if (!isProfileRequest(uri, match)) return uri;
+        return Uri.withAppendedPath(ContactsContract.Profile.CONTENT_URI, "data")
+                .buildUpon().encodedQuery(uri.getEncodedQuery()).build();
     }
 
     private static Uri insertSettings(SQLiteDatabase db, ContentValues values, AccountFilter account) {
@@ -1588,6 +1795,7 @@ final class ContactsProvider extends ContentProvider {
         if (MIME_PHONE.equals(mimetype)) {
             normalizePhoneValues(copy);
         }
+        if (profile && MIME_PHOTO.equals(mimetype)) normalizeProfileThumbnail(copy);
         copy.put("mimetype_id", resolveOrCreateMimetypeId(db, mimetype));
         long id = insertContactRow(db, "data", profile, copy);
         refreshRawAndParentContacts(db, Collections.singleton(rawContactId), now, !syncAdapter);
@@ -1597,6 +1805,7 @@ final class ContactsProvider extends ContentProvider {
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         int match = sUriMatcher.match(uri);
+        boolean profileChanged = isProfileRequest(uri, match);
         int count;
         boolean notifyNow = false;
         synchronized (mDbLock) {
@@ -1605,20 +1814,13 @@ final class ContactsProvider extends ContentProvider {
             try {
                 count = updateLocked(db, match, uri, values, selection, selectionArgs);
                 db.setTransactionSuccessful();
-                if (count > 0) {
-                    if (mBatchDepth > 0) {
-                        mBatchDirty = true;
-                        mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
-                    } else {
-                        notifyNow = true;
-                    }
-                }
+                if (count > 0) notifyNow = markMutation(uri, profileChanged);
             } finally {
                 db.endTransaction();
             }
         }
         if (notifyNow) {
-            notifyObservers(!isCallerSyncAdapter(uri));
+            notifyObservers(shouldSyncToNetwork(uri), profileChanged);
         }
         return count;
     }
@@ -1629,6 +1831,9 @@ final class ContactsProvider extends ContentProvider {
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
         if (match == SETTINGS) return mutateSettings(db, uri, copy, selection, selectionArgs);
+        if (match == PROFILE_SYNC_STATE || match == PROFILE_SYNC_STATE_ID) {
+            return mutateProfileSyncState(db, match, uri, copy, selection, selectionArgs);
+        }
         String rows = mutationRows(db, match, uri, selection, selectionArgs, syncAdapter);
         switch (match) {
             case CONTACTS:
@@ -1655,7 +1860,9 @@ final class ContactsProvider extends ContentProvider {
                     if (!syncAdapter && !copy.containsKey("dirty") && !copy.containsKey("version")) {
                         bumpRawContactsVersionAndDirty(db, rawIds);
                     }
-                    if (copy.containsKey("display_name") || copy.containsKey("deleted")) {
+                    if (copy.containsKey("deleted") && isProfileRequest(uri, match)) {
+                        reconcileProfileContacts(db, now);
+                    } else if (copy.containsKey("display_name") || copy.containsKey("deleted")) {
                         refreshRawAndParentContacts(db, rawIds, now, false);
                     }
                 }
@@ -1674,12 +1881,7 @@ final class ContactsProvider extends ContentProvider {
                 if (copy.size() == 0) return 0;
                 Set<Long> rawIds = queryIds(db, "SELECT DISTINCT raw_contact_id FROM data"
                         + " WHERE " + rows, null);
-                int updated;
-                if (copy.containsKey("data1") || copy.containsKey("data4")) {
-                    updated = updateDataWithPhoneNormalization(db, copy, rows);
-                } else {
-                    updated = db.update("data", copy, rows, null);
-                }
+                int updated = updateDataRows(db, copy, rows, isProfileRequest(uri, match));
                 if (updated > 0) {
                     refreshRawAndParentContacts(db, rawIds, now, !syncAdapter);
                 }
@@ -1703,6 +1905,24 @@ final class ContactsProvider extends ContentProvider {
         for (String key : values.keySet()) {
             if (!writable.contains(key)) throw new IllegalArgumentException("Invalid column " + key);
         }
+    }
+
+    private static int mutateProfileSyncState(SQLiteDatabase db, int match, Uri uri,
+            ContentValues update, String selection, String[] selectionArgs) {
+        SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
+        qb.setTables("profile_sync_state");
+        qb.setProjectionMap(PROFILE_SYNC_COLUMNS);
+        qb.setStrict(true);
+        qb.setStrictColumns(true);
+        qb.setStrictGrammar(true);
+        String id = itemId(uri, match);
+        if (id != null) {
+            qb.appendWhereStandalone("_id = ?");
+            selectionArgs = ContactsProviderSupport.prependArgs(selectionArgs, id);
+        }
+        if (update == null) return qb.delete(db, selection, selectionArgs);
+        requireKeys(update, Set.of("data"));
+        return update.size() == 0 ? 0 : qb.update(db, update, selection, selectionArgs);
     }
 
     private static int mutateSettings(SQLiteDatabase db, Uri uri, ContentValues update,
@@ -1815,6 +2035,45 @@ final class ContactsProvider extends ContentProvider {
         return idInClause("_id", ids);
     }
 
+    private int updateDataRows(SQLiteDatabase db, ContentValues values, String rows, boolean profile) {
+        int photosUpdated = 0;
+        if (profile && values.containsKey("data15")) {
+            String photoMime = "mimetype_id IN (SELECT _id FROM mimetypes WHERE mimetype = '"
+                    + MIME_PHOTO + "')";
+            String photoRows = scopedSelection(rows, photoMime);
+            try (Cursor c = db.rawQuery("SELECT 1 FROM data WHERE " + photoRows + " LIMIT 1", null)) {
+                if (c.moveToFirst()) {
+                    ContentValues photoValues = new ContentValues(values);
+                    normalizeProfileThumbnail(photoValues);
+                    db.delete("profile_display_photos",
+                            "data_id IN (SELECT _id FROM data WHERE " + photoRows + ")", null);
+                    photosUpdated = db.update("data", photoValues, photoRows, null);
+                    rows = scopedSelection(rows, "NOT (" + photoMime + ")");
+                }
+            }
+        }
+        int otherUpdated = values.containsKey("data1") || values.containsKey("data4")
+                ? updateDataWithPhoneNormalization(db, values, rows)
+                : db.update("data", values, rows, null);
+        return photosUpdated + otherUpdated;
+    }
+
+    private static void normalizeProfileThumbnail(ContentValues values) {
+        // Direct Data writes provide a thumbnail. A display-photo file exists only
+        // after a successful stream write to the raw contact's display-photo URI.
+        values.remove("data14");
+        byte[] bytes = values.getAsByteArray("data15");
+        if (bytes == null || bytes.length == 0) return;
+        if (bytes.length > ProfilePhoto.MAX_INPUT_BYTES) {
+            throw new IllegalArgumentException("Contacts Profile photo exceeds maximum input size");
+        }
+        try {
+            values.put("data15", ProfilePhoto.decode(bytes).thumbnail());
+        } catch (IOException failure) {
+            throw new IllegalArgumentException("Invalid Contacts Profile photo", failure);
+        }
+    }
+
     private int updateDataWithPhoneNormalization(SQLiteDatabase db, ContentValues copy, String rows) {
         String sql = "SELECT _id, (SELECT mimetype FROM mimetypes WHERE mimetypes._id = data.mimetype_id) "
                 + "FROM data WHERE " + rows;
@@ -1844,6 +2103,7 @@ final class ContactsProvider extends ContentProvider {
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         int match = sUriMatcher.match(uri);
+        boolean profileChanged = isProfileRequest(uri, match);
         int count;
         boolean notifyNow = false;
         synchronized (mDbLock) {
@@ -1852,20 +2112,13 @@ final class ContactsProvider extends ContentProvider {
             try {
                 count = deleteLocked(db, match, uri, selection, selectionArgs);
                 db.setTransactionSuccessful();
-                if (count > 0) {
-                    if (mBatchDepth > 0) {
-                        mBatchDirty = true;
-                        mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
-                    } else {
-                        notifyNow = true;
-                    }
-                }
+                if (count > 0) notifyNow = markMutation(uri, profileChanged);
             } finally {
                 db.endTransaction();
             }
         }
         if (notifyNow) {
-            notifyObservers(!isCallerSyncAdapter(uri));
+            notifyObservers(shouldSyncToNetwork(uri), profileChanged);
         }
         return count;
     }
@@ -1875,7 +2128,10 @@ final class ContactsProvider extends ContentProvider {
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
         if (match == SETTINGS) return mutateSettings(db, uri, null, selection, selectionArgs);
-        if (match == PROFILE || match == CONTACTS_ID && isProfileRequest(uri, match)) {
+        if (match == PROFILE_SYNC_STATE || match == PROFILE_SYNC_STATE_ID) {
+            return mutateProfileSyncState(db, match, uri, null, selection, selectionArgs);
+        }
+        if (match == PROFILE) {
             throw new UnsupportedOperationException("Delete the raw contacts that make up the profile");
         }
         String rows = mutationRows(db, match, uri, selection, selectionArgs, syncAdapter);
@@ -1963,13 +2219,37 @@ final class ContactsProvider extends ContentProvider {
         }
     }
 
-    private void notifyObservers(boolean syncToNetwork) {
+    private boolean markMutation(Uri uri, boolean profileChanged) {
+        if (mBatchDepth == 0) return true;
+        mBatchDirty = true;
+        mBatchSyncToNetwork |= shouldSyncToNetwork(uri);
+        mBatchProfileDirty |= profileChanged;
+        return false;
+    }
+
+    private static boolean shouldSyncToNetwork(Uri uri) {
+        int match = sUriMatcher.match(uri);
+        return match != PROFILE_SYNC_STATE && match != PROFILE_SYNC_STATE_ID
+                && !isCallerSyncAdapter(uri);
+    }
+
+    private void notifyObservers(boolean syncToNetwork, boolean profileChanged) {
         if (getContext() == null) return;
         long identity = Binder.clearCallingIdentity();
         try {
-            getContext().getContentResolver().notifyChange(NOTIFY_URI, null, syncToNetwork);
-        } catch (RuntimeException failure) {
-            SystemServer.log("contacts: observer notification failed: " + failure);
+            try {
+                getContext().getContentResolver().notifyChange(NOTIFY_URI, null, syncToNetwork);
+            } catch (RuntimeException failure) {
+                SystemServer.log("contacts: observer notification failed: " + failure);
+            }
+            if (profileChanged) {
+                try {
+                    getContext().sendBroadcast(new Intent(ContactsContract.Intents.ACTION_PROFILE_CHANGED),
+                            ContactsProviderSupport.READ_CONTACTS);
+                } catch (RuntimeException failure) {
+                    SystemServer.log("contacts: Profile change broadcast failed: " + failure);
+                }
+            }
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
@@ -2091,9 +2371,214 @@ final class ContactsProvider extends ContentProvider {
             update.put("has_phone_number", hasPhone ? 1 : 0);
             update.put("contact_last_updated_timestamp", now);
             if (bestRawId != 0) update.put("name_raw_contact_id", bestRawId);
+            if (ContactsContract.isProfileId(contactId)) {
+                updateProfilePhotoMetadata(db, contactId, update);
+            }
             applyNameDerivedFields(update, best.displayName, best.displayNameAlt, best.source);
             db.update("contacts", update, "_id = ?", new String[] { Long.toString(contactId) });
         }
+    }
+
+    private static void updateProfilePhotoMetadata(SQLiteDatabase db, long contactId, ContentValues values) {
+        try (Cursor c = db.rawQuery("SELECT _id FROM view_data WHERE contact_id = ? AND mimetype = ?"
+                + " AND data15 IS NOT NULL AND length(data15) > 0"
+                + " ORDER BY is_super_primary DESC, is_primary DESC, _id LIMIT 1",
+                new String[] {Long.toString(contactId), MIME_PHOTO})) {
+            if (c.moveToFirst()) {
+                values.put("photo_id", c.getLong(0));
+                Uri contact = ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, contactId);
+                String thumbnail = Uri.withAppendedPath(contact, "photo").toString();
+                values.put("photo_thumb_uri", thumbnail);
+                long photoId = c.getLong(0);
+                if (hasRemainingRows(db, "profile_display_photos", "data_id = ?", photoId)) {
+                    values.put("photo_file_id", photoId);
+                    values.put("photo_uri",
+                            ContentUris.withAppendedId(ContactsContract.DisplayPhoto.CONTENT_URI, photoId).toString());
+                } else {
+                    values.putNull("photo_file_id");
+                    values.put("photo_uri", thumbnail);
+                }
+            } else {
+                values.putNull("photo_id");
+                values.putNull("photo_file_id");
+                values.putNull("photo_uri");
+                values.putNull("photo_thumb_uri");
+            }
+        }
+    }
+
+    @Override
+    public AssetFileDescriptor openAssetFile(Uri uri, String mode) throws FileNotFoundException {
+        int match = sUriMatcher.match(uri);
+        boolean isAsset = match == PROFILE_VCARD || match == CONTACT_THUMBNAIL
+                || match == CONTACT_DISPLAY_PHOTO || match == RAW_DISPLAY_PHOTO || match == DISPLAY_PHOTO_FILE;
+        if (!isAsset || !isProfileRequest(uri, match)) return super.openAssetFile(uri, mode);
+        String id = itemId(uri, match);
+        if (match == RAW_DISPLAY_PHOTO && mode.contains("w")) {
+            return openProfilePhotoWriter(uri, Long.parseLong(id));
+        }
+        if (!"r".equals(mode)) throw new FileNotFoundException("Profile asset is read-only: " + uri);
+        byte[] contents;
+        synchronized (mDbLock) {
+            SQLiteDatabase db = openDatabase();
+            contents = switch (match) {
+                case PROFILE_VCARD -> profileVCard(db, uri);
+                case CONTACT_THUMBNAIL -> profileThumbnail(db, id);
+                default -> profileDisplayPhoto(db, match, id);
+            };
+        }
+        if (contents == null || contents.length == 0) throw new FileNotFoundException(uri.toString());
+        return snapshotAsset(contents);
+    }
+
+    private static byte[] profileDisplayPhoto(SQLiteDatabase db, int match, String id) {
+        String where = switch (match) {
+            case RAW_DISPLAY_PHOTO -> " d.raw_contact_id = ?";
+            case DISPLAY_PHOTO_FILE -> " p.data_id = ?";
+            default -> " d._id = d.photo_id" + (id == null ? "" : " AND d.contact_id = ?");
+        };
+        try (Cursor c = db.rawQuery("SELECT p.contents FROM profile_display_photos p"
+                + " JOIN view_data d ON p.data_id = d._id WHERE d.is_user_profile = 1 AND"
+                + where + " ORDER BY d.is_super_primary DESC, d.is_primary DESC, d._id LIMIT 1",
+                id == null ? null : new String[] {id})) {
+            return c.moveToFirst() ? c.getBlob(0) : null;
+        }
+    }
+
+    private AssetFileDescriptor openProfilePhotoWriter(Uri uri, long rawId) throws FileNotFoundException {
+        synchronized (mDbLock) {
+            if (!hasRemainingRows(openDatabase(), "raw_contacts",
+                    "_id = ? AND deleted = 0 AND raw_contact_is_user_profile = 1", rawId)) {
+                throw new FileNotFoundException(uri.toString());
+            }
+        }
+        ParcelFileDescriptor[] pipe;
+        try {
+            pipe = ParcelFileDescriptor.createPipe();
+        } catch (IOException failure) {
+            throw assetFailure("Could not open Contacts Profile photo stream", failure);
+        }
+        try {
+            sProfilePhotoWriters.execute(() -> receiveProfilePhoto(uri, rawId, pipe[0]));
+        } catch (RejectedExecutionException busy) {
+            for (ParcelFileDescriptor end : pipe) {
+                try {
+                    end.close();
+                } catch (IOException failure) {
+                    busy.addSuppressed(failure);
+                }
+            }
+            throw assetFailure("Contacts Profile photo writers are busy", busy);
+        }
+        return new AssetFileDescriptor(pipe[1], 0, AssetFileDescriptor.UNKNOWN_LENGTH);
+    }
+
+    private void receiveProfilePhoto(Uri uri, long rawId, ParcelFileDescriptor source) {
+        try (InputStream stream = new ParcelFileDescriptor.AutoCloseInputStream(source)) {
+            byte[] encoded = stream.readNBytes(ProfilePhoto.MAX_INPUT_BYTES + 1);
+            if (encoded.length > ProfilePhoto.MAX_INPUT_BYTES) {
+                throw new IOException("Contacts Profile photo exceeds maximum input size");
+            }
+            ProfilePhoto photo = ProfilePhoto.decode(encoded);
+            boolean syncAdapter = isCallerSyncAdapter(uri);
+            synchronized (mDbLock) {
+                SQLiteDatabase db = openDatabase();
+                if (!hasRemainingRows(db, "raw_contacts",
+                        "_id = ? AND deleted = 0 AND raw_contact_is_user_profile = 1", rawId)) return;
+                db.beginTransaction();
+                try {
+                    storeProfilePhoto(db, rawId, photo, !syncAdapter);
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+            notifyObservers(!syncAdapter, true);
+        } catch (IOException | RuntimeException failure) {
+            SystemServer.log("contacts: Profile photo write failed: " + failure);
+        }
+    }
+
+    private static void storeProfilePhoto(SQLiteDatabase db, long rawId, ProfilePhoto photo,
+            boolean markDirty) {
+        long mimeId = resolveOrCreateMimetypeId(db, MIME_PHOTO);
+        long dataId = 0;
+        try (Cursor c = db.rawQuery("SELECT _id FROM data WHERE raw_contact_id = ? AND mimetype_id = ?"
+                + " ORDER BY is_super_primary DESC, is_primary DESC, _id LIMIT 1",
+                new String[] {Long.toString(rawId), Long.toString(mimeId)})) {
+            if (c.moveToFirst()) dataId = c.getLong(0);
+        }
+        ContentValues values = new ContentValues();
+        values.put("data15", photo.thumbnail());
+        if (dataId == 0) {
+            values.put("mimetype_id", mimeId);
+            values.put("raw_contact_id", rawId);
+            values.put("is_primary", 1);
+            dataId = insertContactRow(db, "data", true, values);
+        } else {
+            db.update("data", values, "_id = ?", new String[] {Long.toString(dataId)});
+        }
+        if (photo.display() == null) {
+            db.delete("profile_display_photos", "data_id = ?", new String[] {Long.toString(dataId)});
+        } else {
+            ContentValues display = new ContentValues();
+            display.put("data_id", dataId);
+            display.put("contents", photo.display());
+            db.replaceOrThrow("profile_display_photos", null, display);
+        }
+        refreshRawAndParentContacts(db, Collections.singleton(rawId), System.currentTimeMillis(), markDirty);
+    }
+
+    private static byte[] profileThumbnail(SQLiteDatabase db, String contactId) {
+        String scope = contactId == null ? "is_user_profile = 1" : "is_user_profile = 1 AND contact_id = ?";
+        String[] args = contactId == null ? null : new String[] {contactId};
+        try (Cursor c = db.rawQuery("SELECT data15 FROM view_data WHERE _id = photo_id AND " + scope, args)) {
+            return c.moveToFirst() ? c.getBlob(0) : null;
+        }
+    }
+
+    private static byte[] profileVCard(SQLiteDatabase db, Uri uri) {
+        String displayName;
+        long contactId;
+        long nameRawId;
+        try (Cursor c = db.rawQuery("SELECT _id, display_name, name_raw_contact_id"
+                + " FROM contacts WHERE is_user_profile = 1", null)) {
+            if (!c.moveToFirst()) return null;
+            contactId = c.getLong(0);
+            displayName = c.getString(1);
+            nameRawId = c.getLong(2);
+        }
+        try (Cursor c = db.rawQuery("SELECT mimetype, data1, data2, data3, data4, data5,"
+                + " data6, data7, data8, data9, data10, data15 FROM view_data WHERE contact_id = ?"
+                + " ORDER BY (raw_contact_id = ?) DESC, is_super_primary DESC, is_primary DESC, _id",
+                new String[] {Long.toString(contactId), Long.toString(nameRawId)})) {
+            boolean exportPhoto = !uri.getBooleanQueryParameter(
+                    ContactsContract.Contacts.QUERY_PARAMETER_VCARD_NO_PHOTO, false);
+            return ProfileVCard.encode(displayName, c, exportPhoto);
+        }
+    }
+
+    private static AssetFileDescriptor snapshotAsset(byte[] bytes) throws FileNotFoundException {
+        try (SharedMemory memory = SharedMemory.create("contacts-profile", bytes.length)) {
+            ByteBuffer mapping = memory.mapReadWrite();
+            try {
+                mapping.put(bytes);
+            } finally {
+                SharedMemory.unmap(mapping);
+            }
+            if (!memory.setProtect(OsConstants.PROT_READ)) {
+                throw new IOException("Could not protect Contacts Profile snapshot");
+            }
+            return new AssetFileDescriptor(memory.getFdDup(), 0, bytes.length);
+        } catch (IOException | ErrnoException failure) {
+            throw assetFailure("Could not export Contacts Profile", failure);
+        }
+    }
+
+    private static FileNotFoundException assetFailure(String message, Exception failure) {
+        FileNotFoundException error = new FileNotFoundException(message);
+        error.initCause(failure);
+        return error;
     }
 
     private static final class NameResolution {

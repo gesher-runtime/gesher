@@ -30,11 +30,14 @@ import android.content.pm.PackageParser;
 import android.content.pm.ProviderInfo;
 import android.content.pm.Signature;
 import android.content.pm.SystemFeaturesCache;
+import android.content.res.AssetFileDescriptor;
 import android.content.res.AssetManager;
 import android.database.ContentObserver;
 import android.database.Cursor;
 import android.database.IContentObserver;
 import android.database.sqlite.SQLiteDatabase;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.hardware.display.IDisplayManager;
 import android.net.Uri;
 import android.os.Binder;
@@ -46,6 +49,7 @@ import android.os.ServiceManager;
 import android.permission.IPermissionChecker;
 import android.permission.IPermissionManager;
 import android.provider.ContactsContract;
+import android.provider.OpenableColumns;
 import android.system.Os;
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
@@ -59,11 +63,16 @@ import com.gesher.server.Services;
 import com.gesher.server.SharedLibraryGraph;
 import com.gesher.server.StandIn;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -98,7 +107,7 @@ public final class ContactsProviderContractTest {
         void run() throws Exception;
     }
 
-    private static void check(boolean ok, String reason) {
+    private static synchronized void check(boolean ok, String reason) {
         if (!ok) throw new AssertionError(reason);
         sChecks++;
     }
@@ -148,6 +157,11 @@ public final class ContactsProviderContractTest {
 
     private static Context observerRecordingContext(ContentProvider provider, List<Uri> notifications,
             List<Boolean> syncRequests) {
+        return observerRecordingContext(provider, notifications, syncRequests, null);
+    }
+
+    private static Context observerRecordingContext(ContentProvider provider, List<Uri> notifications,
+            List<Boolean> syncRequests, List<Intent> broadcasts) {
         class TestContext extends ContextWrapper {
             ContentResolver resolver;
             TestContext() { super(GesherSettingsContext.get()); }
@@ -157,6 +171,13 @@ public final class ContactsProviderContractTest {
             @Override public ApplicationInfo getApplicationInfo() { return new ApplicationInfo(); }
             @Override public Object getSystemService(String name) { return null; }
             @Override public ContentResolver getContentResolver() { return resolver; }
+            @Override public void sendBroadcast(Intent intent, String receiverPermission) {
+                if (broadcasts == null) return;
+                check(Manifest.permission.READ_CONTACTS.equals(receiverPermission),
+                        "Profile broadcast requires contact access");
+                check(Binder.getCallingUid() == Process.myUid(), "Profile broadcast uses server identity");
+                broadcasts.add(intent);
+            }
         }
         TestContext ctx = new TestContext();
         ctx.resolver = new ContentResolver(ctx) {
@@ -528,10 +549,15 @@ public final class ContactsProviderContractTest {
                 check(c.moveToFirst() && "Changed Profile".equals(c.getString(0)),
                         "Aggregate Profile reflects the data mutation through its high-ID alias");
             }
-            check(count(provider, Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, "profile")) == 1,
+            Uri profileLookup = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, "profile");
+            check(count(provider, profileLookup) == 1,
                     "Android Profile lookup key resolves the Profile aggregate");
+            check(count(provider, ContentUris.withAppendedId(profileLookup, ContentUris.parseId(ordinary))) == 0,
+                    "An explicitly ordinary lookup ID takes precedence over the Profile lookup key");
+            check(ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE.equals(
+                            provider.getType(ContentUris.withAppendedId(profileData, dataId))),
+                    "Profile data item advertises its stored MIME type");
             rejects(UnsupportedOperationException.class, () -> provider.delete(profile, null, null));
-            rejects(UnsupportedOperationException.class, () -> provider.delete(aggregate, null, null));
             check(provider.delete(first, null, null) == 1, "Delete the local raw as a Profile contributor");
             try (Cursor c = provider.query(profile, new String[] { "_id", "name_raw_contact_id", "display_name" },
                     null, null, null)) {
@@ -562,8 +588,163 @@ public final class ContactsProviderContractTest {
             }
             check(!ContactsContract.isProfileId(ContentUris.parseId(reopened.insert(ordinaryRaws, new ContentValues()))),
                     "Ordinary allocation resumes in its own range after reopening");
+            try (Cursor c = reopened.query(profile, ids, null, null, null)) {
+                check(c.moveToFirst() && reopened.delete(ContentUris.withAppendedId(
+                                ContactsContract.Contacts.CONTENT_URI, c.getLong(0)), null, null) == 1,
+                        "The numeric high-ID contact route handles delete like Android");
+            }
         } finally {
             reopened.shutdown();
+        }
+    }
+
+    private static void testProfileAssetsAndSyncState(File directory) throws Exception {
+        File database = new File(directory, "contacts-profile-assets.db");
+        Class<?> support = Class.forName("com.gesher.server.ContactsProviderSupport");
+        ProviderInfo info = (ProviderInfo) method(support, "contactsProviderInfo").invoke(null);
+        ContentProvider provider = newContactsProvider(null, null, database);
+        List<Intent> broadcasts = Collections.synchronizedList(new ArrayList<>());
+        List<Boolean> syncRequests = Collections.synchronizedList(new ArrayList<>());
+        provider.attachInfo(observerRecordingContext(provider,
+                Collections.synchronizedList(new ArrayList<>()), syncRequests, broadcasts), info);
+        Uri profile = ContactsContract.Profile.CONTENT_URI;
+        Uri vcard = ContactsContract.Profile.CONTENT_VCARD_URI;
+        Uri thumbnail = Uri.withAppendedPath(profile, "photo");
+        Uri display = Uri.withAppendedPath(profile, "display_photo");
+        try {
+            rejects(FileNotFoundException.class, () -> provider.openAssetFile(vcard, "r"));
+            Uri raw = provider.insert(ContactsContract.Profile.CONTENT_RAW_CONTACTS_URI, new ContentValues());
+            check(broadcasts.size() == 1 && ContactsContract.Intents.ACTION_PROFILE_CHANGED.equals(
+                            broadcasts.get(0).getAction()),
+                    "A committed Profile mutation broadcasts the Android Profile action");
+            provider.insert(ContactsContract.RawContacts.CONTENT_URI, new ContentValues());
+            check(broadcasts.size() == 1, "An ordinary mutation does not broadcast a Profile change");
+            int beforeRollback = broadcasts.size();
+            ArrayList<ContentProviderOperation> abort = new ArrayList<>();
+            abort.add(ContentProviderOperation.newUpdate(profile)
+                    .withValue("starred", 1).withExpectedCount(1).build());
+            abort.add(ContentProviderOperation.newAssertQuery(profile).withExpectedCount(0).build());
+            rejects(OperationApplicationException.class, () -> provider.applyBatch(abort));
+            check(broadcasts.size() == beforeRollback, "A failed batch does not announce a Profile change");
+
+            Uri rawData = Uri.withAppendedPath(raw, "data");
+            ContentValues name = new ContentValues();
+            name.put("mimetype", ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE);
+            name.put("data1", "שם; משפחה");
+            name.put("data2", "שם");
+            name.put("data3", "משפחה");
+            provider.insert(rawData, name);
+            ContentValues phone = new ContentValues();
+            phone.put("mimetype", ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE);
+            phone.put("data1", "+972501234567");
+            phone.put("data2", ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE);
+            provider.insert(rawData, phone);
+            ContentValues sip = new ContentValues();
+            sip.put("mimetype", ContactsContract.CommonDataKinds.SipAddress.CONTENT_ITEM_TYPE);
+            sip.put("data1", "profile@example.test");
+            provider.insert(rawData, sip);
+            check(ContactsContract.Contacts.CONTENT_VCARD_TYPE.equals(provider.getType(vcard)),
+                    "Profile vCard advertises the Android MIME type");
+            try (Cursor c = provider.query(vcard, new String[] {OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE},
+                    null, null, null)) {
+                check(c.moveToFirst() && "שם; משפחה.vcf".equals(c.getString(0)) && c.isNull(1),
+                        "Profile vCard exposes the display filename before opening");
+            }
+            String card = new String(profileAsset(provider, vcard), StandardCharsets.UTF_8);
+            check(card.startsWith("BEGIN:VCARD\r\nVERSION:3.0\r\n") && card.endsWith("END:VCARD\r\n")
+                            && card.contains("FN:שם\\; משפחה\r\n") && card.contains("N:משפחה;שם;;;\r\n")
+                            && card.contains("TEL;TYPE=CELL:+972501234567\r\n")
+                            && card.contains("IMPP:sip:profile@example.test\r\n"),
+                    "Profile vCard contains real UTF-8 contact data with escaped punctuation");
+
+            Uri lookupCard = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_VCARD_URI, "profile");
+            check(Arrays.equals(profileAsset(provider, lookupCard), profileAsset(provider, vcard)),
+                    "Contacts lookup form exports the same Profile vCard");
+            int beforeSyncState = syncRequests.size();
+            Uri sync = ContactsContract.ProfileSyncState.CONTENT_URI;
+            ContentValues state = new ContentValues();
+            state.put("account_name", "profile@example.test");
+            state.put("account_type", "fixture.contacts");
+            state.put("data", new byte[] {1, 2, 3});
+            Uri stateUri = provider.insert(sync, state);
+            state.put("data", new byte[] {4, 5});
+            check(stateUri.equals(provider.insert(sync, state)) && count(provider, sync) == 1,
+                    "Profile SyncState upserts account data with a stable row URI");
+            try (Cursor c = provider.query(stateUri, new String[] {"data"}, null, null, null)) {
+                check(c.moveToFirst() && Arrays.equals(c.getBlob(0), new byte[] {4, 5}),
+                        "Profile sync state reads back its actual updated data");
+            }
+            check(provider.delete(stateUri, null, null) == 1 && count(provider, sync) == 0,
+                    "Profile sync state can be removed by its returned row URI");
+            check(syncRequests.subList(beforeSyncState, syncRequests.size()).equals(List.of(false, false, false)),
+                    "SyncState changes do not trigger a new network sync");
+
+            rejects(FileNotFoundException.class, () -> provider.openAssetFile(display, "r"));
+            Uri upload = Uri.withAppendedPath(raw, "display_photo");
+            ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+            Bitmap original = Bitmap.createBitmap(240, 160, Bitmap.Config.ARGB_8888);
+            try {
+                original.eraseColor(0xff4d7f21);
+                check(original.compress(Bitmap.CompressFormat.PNG, 100, encoded), "Created a real photo fixture");
+            } finally {
+                original.recycle();
+            }
+            try (AssetFileDescriptor descriptor = provider.openAssetFile(upload, "w");
+                    OutputStream out = descriptor.createOutputStream()) {
+                encoded.writeTo(out);
+            }
+            long started = System.nanoTime();
+            byte[] large = null;
+            while (large == null && System.nanoTime() - started < 5_000_000_000L) {
+                try {
+                    large = profileAsset(provider, display);
+                } catch (FileNotFoundException pending) {
+                    Thread.sleep(20);
+                }
+            }
+            check(large != null, "Closing the Profile upload stores a display photo");
+            byte[] small = profileAsset(provider, thumbnail);
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(large, 0, large.length, bounds);
+            check(bounds.outWidth == 240 && bounds.outHeight == 160, "Display photo retains actual larger dimensions");
+            BitmapFactory.decodeByteArray(small, 0, small.length, bounds);
+            check(bounds.outWidth == 96 && bounds.outHeight == 64, "Thumbnail is scaled from the uploaded photo");
+            try (Cursor c = provider.query(profile, new String[] {"photo_uri", "photo_thumb_uri", "photo_file_id"},
+                    null, null, null)) {
+                check(c.moveToFirst() && ContactsContract.isProfileId(c.getLong(2))
+                                && Arrays.equals(profileAsset(provider, Uri.parse(c.getString(0))), large)
+                                && Arrays.equals(profileAsset(provider, Uri.parse(c.getString(1))), small),
+                        "Profile thumbnail and display metadata resolve the actual distinct photo assets");
+            }
+            String withPhoto = new String(profileAsset(provider, vcard), StandardCharsets.UTF_8);
+            String withoutPhoto = new String(profileAsset(provider,
+                    vcard.buildUpon().appendQueryParameter("no_photo", "true").build()), StandardCharsets.UTF_8);
+            check(withPhoto.contains("PHOTO;ENCODING=b;TYPE=JPEG:") && !withoutPhoto.contains("PHOTO;"),
+                    "vCard exports its real photo and honors the no-photo parameter");
+            long photoId;
+            try (Cursor c = provider.query(thumbnail, new String[] {"_id", "is_primary", "data14"},
+                    null, null, null)) {
+                check(c.moveToFirst() && c.getInt(1) == 1 && c.getLong(0) == c.getLong(2),
+                        "Uploaded primary photo Data row exposes the real display file ID");
+                photoId = c.getLong(0);
+            }
+            ContentValues replacement = new ContentValues();
+            replacement.put("data15", encoded.toByteArray());
+            check(provider.update(ContentUris.withAppendedId(ContactsContract.Data.CONTENT_URI, photoId),
+                    replacement, null, null) == 1, "An app can replace the thumbnail using the Photo Data row");
+            check(profileAsset(provider, thumbnail).length > 0,
+                    "Direct Photo Data replacement stores a real thumbnail");
+            rejects(FileNotFoundException.class, () -> provider.openAssetFile(display, "r"));
+        } finally {
+            provider.shutdown();
+        }
+    }
+
+    private static byte[] profileAsset(ContentProvider provider, Uri uri) throws Exception {
+        try (AssetFileDescriptor descriptor = provider.openAssetFile(uri, "r");
+                InputStream stream = descriptor.createInputStream()) {
+            return stream.readAllBytes();
         }
     }
 
@@ -939,6 +1120,7 @@ public final class ContactsProviderContractTest {
         try {
             testContactsSchemaViewsStrictAndFallback(dbDir);
             testProfileNamespaceAndLifecycle(dbDir);
+            testProfileAssetsAndSyncState(dbDir);
             testFreshSchemaAndPersistence(dbDir);
             testApplyBatchAndSyncAdapterSemantics(dbDir);
 
@@ -978,6 +1160,17 @@ public final class ContactsProviderContractTest {
                                 ContactsContract.Contacts.CONTENT_URI, rc.getLong(0));
                     }
                 }
+                AttributionSource writer = source(13303, PKG_WRITE);
+                Uri profileRaw = h.provider.insert(writer, ContactsContract.Profile.CONTENT_RAW_CONTACTS_URI,
+                        new ContentValues(), null);
+                ContentValues profileName = new ContentValues();
+                profileName.put(ContactsContract.Data.RAW_CONTACT_ID, ContentUris.parseId(profileRaw));
+                profileName.put(ContactsContract.Data.MIMETYPE,
+                        ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE);
+                profileName.put(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, "Transport Profile");
+                Uri profileData = h.provider.insert(writer, ContactsContract.Data.CONTENT_URI, profileName, null);
+                check(ContactsContract.isProfileId(ContentUris.parseId(profileData)),
+                        "Transport Data insert with a Profile raw routes into the Profile namespace");
             });
 
             // Read app queries via IContentProvider (with notification URI registration + close cleanup)
@@ -993,6 +1186,15 @@ public final class ContactsProviderContractTest {
                 }
                 rejects(SecurityException.class, () -> h.provider.insert(
                         source(13302, PKG_READ), ContactsContract.RawContacts.CONTENT_URI, new ContentValues(), null));
+                try (AssetFileDescriptor afd = h.provider.openAssetFile(source(13302, PKG_READ),
+                                ContactsContract.Profile.CONTENT_VCARD_URI, "r", null);
+                        InputStream stream = afd.createInputStream()) {
+                    String text = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+                    check(text.contains("FN:Transport Profile"),
+                            "Read-authorized caller opens the actual Profile vCard over provider transport");
+                }
+                rejects(SecurityException.class, () -> h.provider.insert(source(13302, PKG_READ),
+                        ContactsContract.Profile.CONTENT_RAW_CONTACTS_URI, new ContentValues(), null));
             });
 
             // Legacy targetSdk 22 app: allowed initially, denied by AppOps once FLAG_PERMISSION_REVOKED_COMPAT is set
@@ -1048,6 +1250,10 @@ public final class ContactsProviderContractTest {
                         ContactsContract.Contacts.CONTENT_URI,
                         new String[] {ContactsContract.Contacts._ID}, null, null));
                 rejects(SecurityException.class, () -> h.provider.delete(caller, grantedUri, null));
+                rejects(SecurityException.class, () -> h.provider.query(caller,
+                        ContactsContract.Profile.CONTENT_URI, new String[] {"_id"}, null, null));
+                rejects(SecurityException.class, () -> h.provider.openAssetFile(caller,
+                        ContactsContract.Profile.CONTENT_VCARD_URI, "r", null));
             });
         } finally {
             contactsProv.shutdown();
