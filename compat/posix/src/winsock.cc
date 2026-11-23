@@ -946,7 +946,7 @@ LPFN_WSARECVMSG RecvMsgFunction(SOCKET s) {
 
 // The host's IPv4 unicast addresses (host byte order), and the local address
 // recently chosen toward a few senders, kept for a second: a broadcast or
-// multicast receive asks for them per datagram.
+// multicast receive asks for them per datagram (a unicast one never does).
 struct LocalIpv4 {
   uint32_t address, mask, ifindex;
 };
@@ -997,11 +997,14 @@ void RefreshLocalAddresses(SpecificDestinationCache& cache) {
 // addresses. For a broadcast (limited or a local subnet's directed broadcast)
 // or multicast destination, the preferred source address of the route back to
 // the sender, or with no sender address (0.0.0.0) an address of the interface
-// it arrived on.
-uint32_t SpecificDestination(uint32_t ifindex, uint32_t destination, uint32_t source) {
-  auto& cache = LocalAddressCache();
+// it arrived on. `received_flags` are WSARecvMsg's: Windows marks a datagram
+// received as a broadcast (MSG_BCAST) or multicast (MSG_MCAST), so a unicast
+// one, the common case, needs neither the cache nor its lock.
+uint32_t SpecificDestination(uint32_t ifindex, uint32_t destination, uint32_t source, DWORD received_flags) {
   const bool multicast = (destination >> 28) == 0xe;
   bool broadcast = destination == 0xffffffffu;
+  if (!multicast && !broadcast && (received_flags & (MSG_BCAST | MSG_MCAST)) == 0) return destination;
+  auto& cache = LocalAddressCache();
   uint32_t on_interface = 0, on_sender_subnet = 0;
   {
     std::lock_guard<std::mutex> lock(cache.mutex);
@@ -1126,7 +1129,7 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
         packet_info->ifindex = info.ipi_ifindex;
         std::memcpy(packet_info->address, &info.ipi_addr, sizeof(packet_info->address));
         const uint32_t local = htonl(SpecificDestination(info.ipi_ifindex, ntohl(info.ipi_addr.s_addr),
-                                                         Ipv4Source(peer)));
+                                                         Ipv4Source(peer), message.dwFlags));
         std::memcpy(packet_info->local, &local, sizeof(packet_info->local));
       }
     } else if (WSARecvFrom(static_cast<SOCKET>(s), &whole, 1, &received, &win_flags,
