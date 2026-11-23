@@ -111,28 +111,25 @@ public final class AudioService extends IAudioService.Default {
     }
 
     /**
-     * Whether this process's app may record audio (media3, ADR 0059): its manifest asks for
-     * android.permission.RECORD_AUDIO (Gesher grants what a manifest asks for, as it does
-     * the camera's; docs/devices.md). AudioRecord, AAudio and OpenSL ES input and
-     * MediaRecorder ask this (their natives, compat/media) before they capture, as
-     * AudioFlinger checks the record permission on a phone. A process without an app
-     * (a tool on the boot class path) may.
+     * The current process UID's live RECORD_AUDIO grant. AudioRecord, MediaRecorder,
+     * AAudio and OpenSL ES ask through their native admission paths. Runtime grants
+     * change, so neither manifest declarations nor an earlier result are sufficient.
+     * The UID also covers native callers without ActivityThread package metadata and
+     * legitimate shared-UID grants, without borrowing another package's permission.
+     * This is the permission layer; AppOps capture/silencing policy is separate.
      */
     public static boolean recordAudioAllowed() {
-        String pkg = android.app.ActivityThread.currentPackageName();
-        if (pkg == null) return true;
+        int uid = android.os.Process.myUid();
+        long identity = android.os.Binder.clearCallingIdentity();
         try {
-            android.content.pm.PackageInfo info = android.app.ActivityThread.getPackageManager()
-                    .getPackageInfo(pkg, android.content.pm.PackageManager.GET_PERMISSIONS, 0);
-            if (info == null || info.requestedPermissions == null) return false;
-            for (String p : info.requestedPermissions) {
-                if (android.Manifest.permission.RECORD_AUDIO.equals(p)) return true;
-            }
-            Log.w(TAG, pkg + " does not have " + android.Manifest.permission.RECORD_AUDIO);
-            return false;
+            android.content.pm.IPackageManager pm = android.app.ActivityThread.getPackageManager();
+            return pm != null && pm.checkUidPermission(android.Manifest.permission.RECORD_AUDIO, uid)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
         } catch (RemoteException | RuntimeException e) {
-            Log.w(TAG, "checking " + pkg + "'s permissions: " + e);
+            Log.w(TAG, "checking UID " + uid + "'s recording permission: " + e);
             return false;
+        } finally {
+            android.os.Binder.restoreCallingIdentity(identity);
         }
     }
 

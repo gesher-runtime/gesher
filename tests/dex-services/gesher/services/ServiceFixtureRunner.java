@@ -18,6 +18,8 @@ public final class ServiceFixtureRunner {
                 || args[0].equals("UserDictionaryBootstrapTest")
                 || args[0].equals("NetworkStatsUnavailableTest")
                 || args[0].equals("GrammaticalInflectionUnavailableTest")
+                || args[0].equals("BluetoothBroadcastAttributionTest")
+                || args[0].equals("UsbServiceContractTest")
                 || args[0].equals("WifiUnsupportedTest")
                 || args[0].equals("WifiScannerUnsupportedTest")
                 || args[0].equals("RoleManagerUnsupportedTest")
