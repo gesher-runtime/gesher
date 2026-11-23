@@ -503,6 +503,7 @@ public final class ContactsProviderContractTest {
             ArrayList<ContentProviderOperation> failBatch = new ArrayList<>();
             failBatch.add(ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
                     .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, "should-rollback")
+                    .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, "com.example.sync")
                     .build());
             // Op 1 lacks required mimetype -> IllegalArgumentException inside batch
             failBatch.add(ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
@@ -594,6 +595,30 @@ public final class ContactsProviderContractTest {
                     .appendQueryParameter(ContactsContract.RawContacts.DATA_SET, "other").build();
             Uri original = provider.insert(scopedAccount, new ContentValues());
             Uri preserved = provider.insert(otherDataSet, new ContentValues());
+            Uri settings = ContactsContract.Settings.CONTENT_URI;
+            Uri scopedSettings = settings.buildUpon()
+                    .appendQueryParameter(ContactsContract.Settings.ACCOUNT_NAME, "scoped@example.org")
+                    .appendQueryParameter(ContactsContract.Settings.ACCOUNT_TYPE, "com.example.sync")
+                    .build();
+            check(provider.insert(settings, new ContentValues()) == null,
+                    "No explicit setting is inserted for the local account");
+            ContentValues syncSetting = new ContentValues();
+            syncSetting.put(ContactsContract.Settings.SHOULD_SYNC, 0);
+            check(scopedSettings.equals(provider.insert(scopedSettings, syncSetting))
+                    && scopedSettings.equals(provider.insert(scopedSettings, syncSetting)),
+                    "Settings upsert returns a stable account URI");
+            try (Cursor c = provider.query(scopedSettings,
+                    new String[] {ContactsContract.Settings.ANY_UNSYNCED,
+                            ContactsContract.Settings.UNGROUPED_COUNT}, null, null, null)) {
+                check(c != null && c.getCount() == 1 && c.moveToFirst()
+                        && c.getInt(0) == 1 && c.getInt(1) == 1,
+                        "Settings upsert preserves one account row and derives its summaries");
+            }
+            syncSetting.put(ContactsContract.Settings.SHOULD_SYNC, 1);
+            check(provider.update(scopedSettings, syncSetting, null, null) == 1,
+                    "Settings update modifies the account row");
+            check(provider.delete(scopedSettings, null, null) == 0,
+                    "Settings cannot be removed while a raw contact references their account");
             try (Cursor c = provider.query(scopedAccount, new String[] {"_id"}, null, null, null)) {
                 check(c != null && c.getCount() == 1 && c.moveToFirst()
                         && c.getLong(0) == ContentUris.parseId(original),
@@ -601,6 +626,8 @@ public final class ContactsProviderContractTest {
             }
             check(provider.delete(scopedAccount, null, null) == 1,
                     "Account-scoped delete removes only the requested data set");
+            check(provider.delete(scopedSettings, null, null) == 1,
+                    "Settings can be removed after the last account reference is deleted");
             try (Cursor c = provider.query(preserved, new String[] {"_id"}, null, null, null)) {
                 check(c != null && c.getCount() == 1 && c.moveToFirst()
                         && c.getLong(0) == ContentUris.parseId(preserved),

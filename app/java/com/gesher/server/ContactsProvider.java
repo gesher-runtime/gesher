@@ -80,6 +80,7 @@ final class ContactsProvider extends ContentProvider {
             "sync4");
     private static final Set<String> SETTINGS_WRITE_COLUMNS = Set.of(
             "account_name", "account_type", "data_set", "ungrouped_visible", "should_sync");
+    private static final Set<String> SETTINGS_UPDATE_COLUMNS = Set.of("ungrouped_visible", "should_sync");
     private static final int CONTACTS = 1;
     private static final int CONTACTS_ID = 2;
     private static final int CONTACTS_FILTER_EMPTY = 3;
@@ -282,8 +283,8 @@ final class ContactsProvider extends ContentProvider {
 
         sSettingsProjectionMap = identityMap(
                 "account_name", "account_type", "data_set", "ungrouped_visible",
-                "should_sync", "any_synced", "ungrouped_count",
-                "ungrouped_with_phones");
+                "should_sync", ContactsContract.Settings.ANY_UNSYNCED,
+                ContactsContract.Settings.UNGROUPED_COUNT, ContactsContract.Settings.UNGROUPED_WITH_PHONES);
     }
 
     private static Map<String, String> entityProjection(boolean aggregate) {
@@ -575,10 +576,7 @@ final class ContactsProvider extends ContentProvider {
                 + "account_type TEXT,"
                 + "data_set TEXT,"
                 + "ungrouped_visible INTEGER NOT NULL DEFAULT 0,"
-                + "should_sync INTEGER NOT NULL DEFAULT 1,"
-                + "any_synced INTEGER NOT NULL DEFAULT 0,"
-                + "ungrouped_count INTEGER NOT NULL DEFAULT 0,"
-                + "ungrouped_with_phones INTEGER NOT NULL DEFAULT 0"
+                + "should_sync INTEGER NOT NULL DEFAULT 1"
                 + ");");
         createIndexesAndViews(db);
     }
@@ -594,6 +592,8 @@ final class ContactsProvider extends ContentProvider {
         db.execSQL("CREATE INDEX IF NOT EXISTS raw_contacts_contact_idx ON raw_contacts(contact_id);");
         db.execSQL("CREATE INDEX IF NOT EXISTS data_raw_contact_idx ON data(raw_contact_id);");
         db.execSQL("CREATE INDEX IF NOT EXISTS data_mimetype_idx ON data(mimetype_id);");
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS settings_account_idx ON settings("
+                + "COALESCE(account_name, ''), COALESCE(account_type, ''), COALESCE(data_set, ''))");
         db.execSQL("CREATE TRIGGER IF NOT EXISTS data_update_version AFTER UPDATE ON data "
                 + "WHEN new.data_version = old.data_version BEGIN "
                 + "UPDATE data SET data_version = data_version + 1 WHERE _id = new._id; END");
@@ -774,6 +774,24 @@ final class ContactsProvider extends ContentProvider {
                 + "(SELECT COUNT(DISTINCT member.contact_id)" + membership + ") AS summ_count, "
                 + "(SELECT COUNT(DISTINCT member.contact_id)" + membership
                 + " AND member.has_phone_number != 0) AS summ_phones FROM groups");
+        String ungrouped = " FROM raw_contacts raw JOIN contacts c ON c._id = raw.contact_id"
+                + " WHERE " + accountMatchesSettings("raw")
+                + " AND raw.deleted = 0 AND c.is_user_profile = 0 AND NOT EXISTS ("
+                + "SELECT 1 FROM view_data member JOIN groups g ON member.data1 = CAST(g._id AS TEXT)"
+                + " WHERE member.raw_contact_id = raw._id AND g.deleted = 0 AND member.mimetype = '"
+                + ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE + "')";
+        db.execSQL("CREATE VIEW IF NOT EXISTS view_settings AS SELECT settings.*, "
+                + "(settings.should_sync = 0 OR EXISTS (SELECT 1 FROM groups g WHERE g.deleted = 0"
+                + " AND g.should_sync = 0 AND " + accountMatchesSettings("g") + ")) AS any_unsynced,"
+                + "(SELECT COUNT(DISTINCT c._id)" + ungrouped + ") AS summ_count, "
+                + "(SELECT COUNT(DISTINCT c._id)" + ungrouped
+                + " AND c.has_phone_number != 0) AS summ_phones FROM settings");
+    }
+
+    private static String accountMatchesSettings(String alias) {
+        return alias + ".account_name IS settings.account_name AND "
+                + alias + ".account_type IS settings.account_type AND "
+                + alias + ".data_set IS settings.data_set";
     }
 
     private static void createEntityView(SQLiteDatabase db, String view, Map<String, String> columns,
@@ -1102,7 +1120,7 @@ final class ContactsProvider extends ContentProvider {
                         selectionArgs, Long.toString(ContentUris.parseId(uri)));
                 break;
             case SETTINGS:
-                qb.setTables("settings");
+                qb.setTables("view_settings");
                 qb.setProjectionMap(sSettingsProjectionMap);
                 break;
             case PROFILE:
@@ -1195,16 +1213,24 @@ final class ContactsProvider extends ContentProvider {
         }
 
         static AccountFilter fromUri(Uri uri) {
-            String name = uri.getQueryParameter(ContactsContract.RawContacts.ACCOUNT_NAME);
-            String type = uri.getQueryParameter(ContactsContract.RawContacts.ACCOUNT_TYPE);
+            return fromIdentity(uri.getQueryParameter(ContactsContract.RawContacts.ACCOUNT_NAME),
+                    uri.getQueryParameter(ContactsContract.RawContacts.ACCOUNT_TYPE),
+                    uri.getQueryParameter(ContactsContract.RawContacts.DATA_SET));
+        }
+
+        static AccountFilter fromValues(ContentValues values) {
+            return fromIdentity(values.getAsString("account_name"), values.getAsString("account_type"),
+                    values.getAsString("data_set"));
+        }
+
+        private static AccountFilter fromIdentity(String name, String type, String dataSet) {
             boolean hasName = name != null && !name.isEmpty();
             boolean hasType = type != null && !type.isEmpty();
             if (hasName != hasType) {
                 throw new IllegalArgumentException("Specify both account name and account type");
             }
             if (!hasName) return null;
-            return new AccountFilter(name, type,
-                    uri.getQueryParameter(ContactsContract.RawContacts.DATA_SET));
+            return new AccountFilter(name, type, dataSet == null || dataSet.isEmpty() ? null : dataSet);
         }
 
         String selection() {
@@ -1223,8 +1249,18 @@ final class ContactsProvider extends ContentProvider {
             setValue(values, "data_set", dataSet);
         }
 
+        Uri settingsUri() {
+            Uri.Builder uri = ContactsContract.Settings.CONTENT_URI.buildUpon()
+                    .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_NAME, name)
+                    .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_TYPE, type);
+            if (dataSet != null) uri.appendQueryParameter(ContactsContract.RawContacts.DATA_SET, dataSet);
+            return uri.build();
+        }
+
         private static void setValue(ContentValues values, String column, String expected) {
-            if (values.containsKey(column) && !Objects.equals(values.getAsString(column), expected)) {
+            String supplied = values.getAsString(column);
+            if ("data_set".equals(column) && "".equals(supplied)) supplied = null;
+            if (values.containsKey(column) && !Objects.equals(supplied, expected)) {
                 throw new IllegalArgumentException("Conflicting account " + column);
             }
             values.put(column, expected);
@@ -1298,19 +1334,21 @@ final class ContactsProvider extends ContentProvider {
 
     @Override
     public Uri insert(Uri uri, ContentValues values) {
-        long id;
+        Uri result;
         boolean notifyNow = false;
         synchronized (mDbLock) {
             SQLiteDatabase db = openDatabase();
             db.beginTransaction();
             try {
-                id = insertLocked(db, uri, values);
+                result = insertLocked(db, uri, values);
                 db.setTransactionSuccessful();
-                if (mBatchDepth > 0) {
-                    mBatchDirty = true;
-                    mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
-                } else {
-                    notifyNow = true;
+                if (result != null) {
+                    if (mBatchDepth > 0) {
+                        mBatchDirty = true;
+                        mBatchSyncToNetwork |= !isCallerSyncAdapter(uri);
+                    } else {
+                        notifyNow = true;
+                    }
                 }
             } finally {
                 db.endTransaction();
@@ -1319,7 +1357,7 @@ final class ContactsProvider extends ContentProvider {
         if (notifyNow) {
             notifyObservers(!isCallerSyncAdapter(uri));
         }
-        return ContentUris.withAppendedId(uri, id);
+        return result;
     }
 
     @Override
@@ -1332,7 +1370,7 @@ final class ContactsProvider extends ContentProvider {
             db.beginTransaction();
             try {
                 for (ContentValues item : values) {
-                    if (insertLocked(db, uri, item) > 0) inserted++;
+                    if (insertLocked(db, uri, item) != null) inserted++;
                 }
                 db.setTransactionSuccessful();
                 if (inserted > 0) {
@@ -1353,7 +1391,7 @@ final class ContactsProvider extends ContentProvider {
         return inserted;
     }
 
-    private long insertLocked(SQLiteDatabase db, Uri uri, ContentValues values) {
+    private Uri insertLocked(SQLiteDatabase db, Uri uri, ContentValues values) {
         int match = sUriMatcher.match(uri);
         ContentValues copy = values == null ? new ContentValues() : new ContentValues(values);
         long now = System.currentTimeMillis();
@@ -1376,37 +1414,62 @@ final class ContactsProvider extends ContentProvider {
                     copy.put("dirty", 1);
                 }
                 long rawId = db.insertOrThrow("raw_contacts", null, copy);
+                if (!isProfile) ensureSettingsRow(db, copy);
                 ContentValues contactUpdate = new ContentValues();
                 contactUpdate.put("lookup", "0r" + rawId);
                 contactUpdate.put("name_raw_contact_id", rawId);
                 contactUpdate.put("contact_last_updated_timestamp", now);
                 db.update("contacts", contactUpdate, "_id = ? AND lookup IS NULL",
                         new String[] { Long.toString(contactId) });
-                return rawId;
+                return ContentUris.withAppendedId(uri, rawId);
             }
             case RAW_CONTACTS_DATA: {
                 long rawId = Long.parseLong(uri.getPathSegments().get(1));
                 copy.put("raw_contact_id", rawId);
-                return insertDataLocked(db, copy, null, account, now, syncAdapter);
+                return ContentUris.withAppendedId(uri,
+                        insertDataLocked(db, copy, null, account, now, syncAdapter));
             }
             case DATA:
             case PHONES:
             case EMAILS:
             case POSTALS:
-                return insertDataLocked(db, copy, forcedMime(match), account, now, syncAdapter);
+                return ContentUris.withAppendedId(uri,
+                        insertDataLocked(db, copy, forcedMime(match), account, now, syncAdapter));
             case GROUPS:
                 requireKeys(copy, GROUP_WRITE_COLUMNS);
                 if (account != null) account.applyTo(copy);
                 if (!syncAdapter && !copy.containsKey("dirty")) copy.put("dirty", 1);
-                return db.insertOrThrow("groups", null, copy);
+                ensureSettingsRow(db, copy);
+                return ContentUris.withAppendedId(uri, db.insertOrThrow("groups", null, copy));
             case SETTINGS:
-                requireKeys(copy, SETTINGS_WRITE_COLUMNS);
-                if (account != null) account.applyTo(copy);
-                db.insertWithOnConflict("settings", null, copy, SQLiteDatabase.CONFLICT_REPLACE);
-                return 1;
+                return insertSettings(db, copy, account);
             default:
                 throw new IllegalArgumentException("Unknown URL " + uri);
         }
+    }
+
+    private static Uri insertSettings(SQLiteDatabase db, ContentValues values, AccountFilter account) {
+        requireKeys(values, SETTINGS_WRITE_COLUMNS);
+        if (account == null) account = AccountFilter.fromValues(values);
+        if (account == null) return null;
+        account.applyTo(values);
+        if (db.update("settings", values, account.selection(), account.withArgs(null)) == 0) {
+            db.insertOrThrow("settings", null, values);
+        }
+        return account.settingsUri();
+    }
+
+    private static void ensureSettingsRow(SQLiteDatabase db, ContentValues source) {
+        ContentValues identity = new ContentValues();
+        AccountFilter account = AccountFilter.fromValues(source);
+        if (account != null) {
+            account.applyTo(identity);
+        } else {
+            identity.putNull("account_name");
+            identity.putNull("account_type");
+            identity.putNull("data_set");
+        }
+        db.insertWithOnConflict("settings", null, identity, SQLiteDatabase.CONFLICT_IGNORE);
     }
 
     private long insertDataLocked(SQLiteDatabase db, ContentValues copy, String forcedMime,
@@ -1472,6 +1535,7 @@ final class ContactsProvider extends ContentProvider {
         ContentValues copy = values == null ? new ContentValues() : new ContentValues(values);
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
+        if (match == SETTINGS) return mutateSettings(db, uri, copy, selection, selectionArgs);
         String rows = mutationRows(db, match, uri, selection, selectionArgs, syncAdapter);
         switch (match) {
             case CONTACTS:
@@ -1545,6 +1609,29 @@ final class ContactsProvider extends ContentProvider {
         for (String key : values.keySet()) {
             if (!writable.contains(key)) throw new IllegalArgumentException("Invalid column " + key);
         }
+    }
+
+    private static int mutateSettings(SQLiteDatabase db, Uri uri, ContentValues update,
+            String selection, String[] selectionArgs) {
+        SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
+        qb.setTables("settings");
+        qb.setProjectionMap(sSettingsProjectionMap);
+        qb.setStrict(true);
+        qb.setStrictColumns(true);
+        qb.setStrictGrammar(true);
+        AccountFilter account = AccountFilter.fromUri(uri);
+        if (account != null) {
+            qb.appendWhereStandalone(account.selection());
+            selectionArgs = account.withArgs(selectionArgs);
+        }
+        if (update == null) {
+            qb.appendWhereStandalone("NOT EXISTS (SELECT 1 FROM raw_contacts r WHERE "
+                    + accountMatchesSettings("r") + ") AND NOT EXISTS (SELECT 1 FROM groups g WHERE "
+                    + accountMatchesSettings("g") + ")");
+            return qb.delete(db, selection, selectionArgs);
+        }
+        requireKeys(update, SETTINGS_UPDATE_COLUMNS);
+        return update.size() == 0 ? 0 : qb.update(db, update, selection, selectionArgs);
     }
 
     // Resolve only public view columns with untrusted SQL. Subsequent writes use
@@ -1685,6 +1772,7 @@ final class ContactsProvider extends ContentProvider {
             String[] selectionArgs) {
         long now = System.currentTimeMillis();
         boolean syncAdapter = isCallerSyncAdapter(uri);
+        if (match == SETTINGS) return mutateSettings(db, uri, null, selection, selectionArgs);
         String rows = mutationRows(db, match, uri, selection, selectionArgs, syncAdapter);
         switch (match) {
             case CONTACTS:
