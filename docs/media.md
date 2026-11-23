@@ -42,8 +42,8 @@ the existing direct CameraFrames delivery path. See the
 
 `new AudioTrack(...)` → `native_setup` creates an engine `Track` (format,
 rate, channels, the stream type from the attributes, the buffer size); writes
-copy into its ring (streaming) or its static buffer; the engine's thread,
-every 10 ms, mixes the tracks of each stream group at the output's rate,
+copy into its ring (streaming) or its static buffer. The engine's thread wakes
+for WASAPI refill events or a 10 ms timer and mixes each stream group at the output's rate,
 resampling and converting channels, applies the track's volume (ramped) and
 the master volume, and gives the mix to the sink. WASAPI applies the stream
 volume as the session's; the capture applies it in software. Positions count

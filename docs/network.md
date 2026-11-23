@@ -167,7 +167,9 @@ config (`SystemCertificateSource`) read the system CAs from
 
 So a root an administrator, a company or a content filter (NetFree, TLS
 inspection) installed in Windows is trusted by Android apps with no setup.
-A manifest (`.gesher-cacerts`) makes the check cheap when nothing changed; a
+A manifest (`etc/security/.gesher-cacerts`, next to the directory rather than
+in it, so that cacerts holds only certificates, as Conscrypt expects) makes
+the check cheap when nothing changed; a
 named mutex serializes writers; `GESHER_WINDOWS_CERTS=0` leaves Windows'
 stores out; `GESHER_TRACE_CACERTS=1` reports what was written. User CAs
 (`$ANDROID_DATA/misc/keychain`) are Android's, unchanged.

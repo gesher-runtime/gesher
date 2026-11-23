@@ -69,6 +69,15 @@ std::array<float, 2> Channels(size_t frame, size_t channels) {
   return {l, r};
 }
 
+template <typename T>
+bool AwaitingStarvationGrace(const T& track) {
+  if constexpr (requires { track.starved_since_ns_; }) {
+    return track.starved_since_ns_ >= 0;
+  } else {
+    return track.starved_ticks_ != 0;
+  }
+}
+
 // Serialize individual values, not struct padding or nondeterministic clock
 // readings. Includes all ownership/timeline state that a batching change could
 // accidentally advance early, and all callback types in delivery order.
@@ -80,7 +89,7 @@ void Observe(FILE* output, Track& t, const std::vector<uint64_t>& events) {
   Write(output, t.played_); Write(output, t.position_base_); Write(output, t.write_interrupt_);
   Write(output, t.marker_); Write(output, t.marker_reached_); Write(output, t.next_update_);
   Write(output, t.update_period_); Write(output, t.underrun_count_); Write(output, t.underrun_frames_);
-  Write(output, t.was_underrun_); Write(output, t.end_signalled_); Write(output, t.starved_ticks_);
+  Write(output, t.was_underrun_); Write(output, t.end_signalled_); Write(output, AwaitingStarvationGrace(t));
   Write(output, t.vol_left_); Write(output, t.vol_right_);
   Write(output, t.applied_left_); Write(output, t.applied_right_);
   Write(output, t.rate_); Write(output, t.speed_);
@@ -91,6 +100,7 @@ void Observe(FILE* output, Track& t, const std::vector<uint64_t>& events) {
 }
 void Record(FILE* output, Track& t, size_t frames, uint32_t out_rate, uint32_t channels,
             const std::vector<uint64_t>& events) {
+  gesher::fixture_playback_ns += 10'000'000;
   std::vector<float> data(frames * channels);
   for (size_t i = 0; i < data.size(); ++i) data[i] = (i & 1) ? -0.125f : 0.25f;
   const bool active = t.MixInto(data.data(), frames, out_rate, channels);
