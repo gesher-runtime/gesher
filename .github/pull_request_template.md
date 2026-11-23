@@ -18,7 +18,8 @@ especially "Project scope: the same experience, implemented for Windows".
   any meaningful application-visible difference, not source-level AOSP parity.
 - Does it introduce synthetic inputs, device simulation, a new desktop default
   or package-specific behavior? Explain the production/test boundary and link
-  the maintainer decision for a default, or state that it does not.
+  the maintainer decision for a default and add it to CONTRIBUTING.md's
+  examples, or state that it does not.
 - If project scope is unclear, describe the question and link any relevant
   discussion; the maintainer decides. Otherwise, state "Within project scope".
 

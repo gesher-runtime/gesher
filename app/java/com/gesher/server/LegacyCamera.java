@@ -25,7 +25,8 @@ import java.util.WeakHashMap;
  * postEventFromNative, as libcameraservice's client does.
  *
  * <p>A device is camera {@code i} in Windows' order (the test camera last); a PC's camera
- * faces the user (CAMERA_FACING_FRONT), the test camera is BACK, orientation 0. Opening needs
+ * faces the user (CAMERA_FACING_FRONT), the test camera is BACK; the orientation follows the
+ * display rotation of the Activity using the camera (CameraService.sensorOrientation). Opening needs
  * CAMERA in the app's manifest, else "Fail to connect to camera service". Parameters: the
  * device's sizes for preview, picture and video, preview formats NV21 (yuv420sp, the
  * default) and YV12, 30 fps, fixed focus, no flash, no zoom, no face detection, JPEG

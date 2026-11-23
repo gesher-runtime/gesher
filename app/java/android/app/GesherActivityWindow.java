@@ -122,6 +122,11 @@ public final class GesherActivityWindow {
             new java.lang.ref.WeakReference<>(null);
     private static final java.util.concurrent.atomic.AtomicBoolean sTracking =
             new java.util.concurrent.atomic.AtomicBoolean();
+    /**
+     * A seed found nothing or timed out: not retried until an Activity lifecycle callback
+     * or the callbacks' registration, so callers do not each wait for the main thread.
+     */
+    private static volatile boolean sSeedFailed;
 
     /**
      * The {@code Surface.ROTATION_*} display rotation of this process's current Activity
@@ -133,7 +138,7 @@ public final class GesherActivityWindow {
     public static int activeDisplayRotation() {
         trackActivities();
         Activity a = sCurrent.get();
-        if (a == null) a = seedFromMainThread();
+        if (a == null && !sSeedFailed) a = seedFromMainThread();
         if (a == null || a.isDestroyed()) return WindowConfiguration.ROTATION_UNDEFINED;
         try {
             return a.getResources().getConfiguration().windowConfiguration.getDisplayRotation();
@@ -153,15 +158,19 @@ public final class GesherActivityWindow {
         if (sTracking.get()) return;
         Application app = ActivityThread.currentApplication();
         if (app == null || !sTracking.compareAndSet(false, true)) return;
+        sSeedFailed = false;
         app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
             @Override public void onActivityPreCreated(Activity a, android.os.Bundle b) {
                 sCurrent = new java.lang.ref.WeakReference<>(a);
+                sSeedFailed = false;
             }
             @Override public void onActivityResumed(Activity a) {
                 sCurrent = new java.lang.ref.WeakReference<>(a);
+                sSeedFailed = false;
             }
             @Override public void onActivityDestroyed(Activity a) {
                 if (sCurrent.get() == a) sCurrent = new java.lang.ref.WeakReference<>(null);
+                sSeedFailed = false;
             }
             @Override public void onActivityCreated(Activity a, android.os.Bundle b) {}
             @Override public void onActivityStarted(Activity a) {}
@@ -175,7 +184,8 @@ public final class GesherActivityWindow {
      * Before the callbacks saw an Activity (they were registered after it was created): the
      * top resumed one, else a resumed one, else one being created or started, read from
      * ActivityThread's records on the main thread, which owns them. Waits for the main
-     * thread up to a second (an Activity's onCreate may hold it); null if it has none.
+     * thread up to a second (an Activity's onCreate may hold it), once until the next
+     * lifecycle callback; null if it has none.
      */
     private static Activity seedFromMainThread() {
         ActivityThread at = ActivityThread.currentActivityThread();
@@ -205,13 +215,16 @@ public final class GesherActivityWindow {
                 java.util.concurrent.FutureTask<Activity> task =
                         new java.util.concurrent.FutureTask<>(find);
                 if (!new android.os.Handler(android.os.Looper.getMainLooper()).post(task)) {
+                    sSeedFailed = true;
                     return null;
                 }
                 found = task.get(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
         } catch (Exception e) {
+            sSeedFailed = true;
             return null;
         }
+        if (found == null) sSeedFailed = true;
         if (found != null && sCurrent.get() == null) {
             sCurrent = new java.lang.ref.WeakReference<>(found);
         }

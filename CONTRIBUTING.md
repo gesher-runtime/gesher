@@ -29,8 +29,8 @@ What must stay the same is what the user and the application actually do:
   something is unavailable, use Android's own unavailable or unsupported
   behavior.
 - **Honest capabilities.** Features, capabilities and hardware characteristics
-  describe what the PC really has, apart from the decided adaptations listed
-  below. Selecting a real camera or describing its mounting does not raise its
+  describe what the PC and Gesher really provide, apart from the decided
+  adaptations listed below. Selecting a real camera or describing its mounting does not raise its
   hardware level or add capabilities.
 - **The user's choices and protections.** Permissions, consent, security and the
   application lifecycle keep working as on Android.
@@ -40,8 +40,9 @@ and defaults may follow what a PC is. Such adaptations are documented, named as
 Gesher's where an application can see them, and give way to real hardware when
 it exists. A default may describe the PC's real state (it stands still, its
 camera faces the user); it never substitutes content (an image, a location, a
-reading of something that is not there). A new default that applications can
-see is a maintainer decision, recorded in the examples below.
+reading that does not match the PC's real state). A new default that
+applications can see is a maintainer decision and is listed in the examples
+below before it is merged.
 
 Examples:
 
@@ -99,8 +100,8 @@ Human reviewers and AI assistants used for review must:
    for, with honest results. Look for a replaced operation, a false success,
    package-specific workarounds and test/production differences. Evaluate what
    the user and the application observe, not whether the internals duplicate
-   AOSP or use a Windows-specific mechanism; desktop adaptations listed or
-   decided under the policy above are not violations.
+   AOSP or use a Windows-specific mechanism; desktop adaptations listed in the
+   examples above are not violations.
 3. Report a policy violation as a **merge blocker**, with the relevant code
    location, requested operation, actual behavior and observable consequence.
    A request to remove or redesign useful work must be grounded in such a

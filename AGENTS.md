@@ -16,13 +16,13 @@ asks for a general code review without repeating the policy.
   the real one is hard (for example, choosing an existing image when the
   application asked for a live camera capture), and do not report success for
   something that did not happen.
-- Report features, capabilities and hardware characteristics the PC really
-  has. Desktop adaptations (presentation, input, orientation) are in scope when
+- Report features, capabilities and hardware characteristics the PC and
+  Gesher really provide. Desktop adaptations (presentation, input, orientation) are in scope when
   they are documented, named as Gesher's where applications can see them, and
   give way to real hardware. A default may describe the PC's real state, never
   substitute content, and a new default applications can see needs a
-  maintainer decision recorded in CONTRIBUTING.md, which lists the decided
-  ones (display-relative camera orientation, the front-facing PC camera, the
+  maintainer decision listed in CONTRIBUTING.md's examples, which list the
+  decided ones (display-relative camera orientation, the front-facing PC camera, the
   stationary accelerometer).
 - Preserve permissions, consent, security and lifecycle behavior. Discuss
   unclear scope questions in the issue or PR; the maintainer decides them.
@@ -47,8 +47,9 @@ asks for a general code review without repeating the policy.
    differences from AOSP are not sufficient grounds for rejection.
    Recommend removal or redesign of the violating behavior,
    and do not recommend approval while the violation remains unresolved.
-   Follow the maintainer's scope decisions recorded in CONTRIBUTING.md or in
-   the linked discussion.
+   Follow the maintainer's scope decisions: a new application-visible default
+   must be listed in CONTRIBUTING.md's examples; other classification
+   questions may be decided in the linked discussion.
 4. Verify contract evidence and any relevant scope discussion in the supplied or
    accessible sources. If evidence is unavailable, state what is missing and
    withhold an approval recommendation. Do not treat a contributor's assertion
