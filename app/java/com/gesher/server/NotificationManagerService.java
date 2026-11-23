@@ -117,9 +117,15 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private final Set<String> mLoadedChannelPackages = new HashSet<>();
     private final Map<String, Record> mPosted = new LinkedHashMap<>();
     private final Object mPublicationLock = new Object();
+    // Only synchronous calls already owned by their callers; no worker/queue is
+    // created. Removal invalidates these tokens without joining a native encoder.
+    private final Set<Record> mPreparingImages = new HashSet<>(); // mPublicationLock
     private JobSchedulerService mJobScheduler; // Guarded by mPublicationLock.
     private final ThreadLocal<List<Runnable>> mDeferredListenerChanges = new ThreadLocal<>();
     private Runnable mBeforePostPublication; // Server-local race fixture; never a Binder option.
+    // Explicit image-codec/filesystem boundary for owner tests; never a Binder option.
+    private java.util.function.BiFunction<StatusBarNotification, Object,
+            NotificationImageStore.Prepared> mTestImagePreparation;
     private final List<Listener> mListeners = new ArrayList<>();
     private final Set<String> mRegisteredAppIds = new HashSet<>();
     private boolean mEventsStarted;
@@ -230,9 +236,9 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 : new String[]{legacy};
     }
 
-    private void retireLegacyToast(String pkg, String key) {
+    private boolean retireLegacyToast(String pkg, String key) {
         NotificationStore.Stored stored = NotificationStore.load(pkg, key);
-        if (stored == null) return;
+        if (stored == null) return false;
         // Called only after the new physical identity was shown successfully.
         // Keep that identity; retire the previous raw-hex spelling independently.
         boolean removed = removeWindowsToastTag(pkg, toastTag(stored.tag, stored.id), stored.id, null, false) == 0;
@@ -242,6 +248,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         if (removed && stored.legacyWindowsTag != null) {
             NotificationStore.legacyRemoved(pkg, key, stored.legacyWindowsTag);
         }
+        return removed;
     }
 
     private ActivityManagerService am() {
@@ -421,9 +428,11 @@ public final class NotificationManagerService extends INotificationManager.Defau
         if (!protectedMode() || mayPost(pkg)) return;
         synchronized (mPublicationLock) {
             if (mayPost(pkg)) return;
+            invalidateImagePreparations(pkg, null, false);
             synchronized (this) { mPosted.keySet().removeIf(k -> k.startsWith(pkg + "/")); }
             NotificationStore.deleteAll(pkg);
-            if (mTestToast == null) WindowsHost.clearToasts(AppShell.appUserModelId(pkg));
+            int cleared = mTestToast == null ? WindowsHost.clearToasts(AppShell.appUserModelId(pkg)) : 0;
+            if (cleared == 0) NotificationIcons.removeLargeIcons(pkg);
         }
     }
 
@@ -462,40 +471,88 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 System.currentTimeMillis());
         Record r = new Record(sbn, channel, notificationImportance(channel, notification,
                 captured != null && captured.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O));
-        Runnable beforePublication = mBeforePostPublication;
-        if (beforePublication != null) beforePublication.run();
         synchronized (mPublicationLock) {
-            if (authenticate && resolveNotificationOwner(opPkg, pkg, false) != captured) return;
-            if (packageFor(pkg) != captured || captured == null && !"android".equals(pkg) || !mayPost(pkg)) return;
-            boolean update;
-            synchronized (this) {
-                // Group/channel deletion and recreation must not authorize a post
-                // that captured a previous channel generation before publication.
-                if (mChannels.get(channelKey) != capturedChannel) return;
-                NotificationChannelGroup group = channel.getGroup() == null ? null
-                        : mChannelGroups.get(pkg + "/" + channel.getGroup());
-                if ((r.importance == NotificationManager.IMPORTANCE_NONE || group != null && group.isBlocked())
-                        && !notification.isMediaNotification()) return;
-                update = mPosted.put(key(pkg, tag, id), r) != null;
-            }
-            int importance = r.importance;
-            String shown;
-            if (importance == NotificationManager.IMPORTANCE_NONE) {
-                shown = "not shown: its channel is blocked";
-            } else {
-                // Its intents outlive this system server, as its toast does (ADR 0051).
-                if (WindowsHost.inSystemServer()) {
-                    NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification, opPkg);
+            mPreparingImages.add(r);
+        }
+        Runnable publish = () -> prepareAndPost(captured, pkg, opPkg, tag, id, r, channelKey,
+                capturedChannel, authenticate);
+        // Foreground-service and job associations hold the lifecycle fence when
+        // asking us to post. Waiting for an encoder/lane there would deadlock an
+        // earlier preparation trying to publish. Keep its cancellation token,
+        // then prepare on this same caller after the outer fence has been left.
+        List<Runnable> deferred = mDeferredListenerChanges.get();
+        if (Thread.holdsLock(mPublicationLock) && deferred != null) deferred.add(publish);
+        else publish.run();
+    }
+
+    private void prepareAndPost(ApkPackage captured, String pkg, String opPkg, String tag, int id,
+            Record r, String channelKey, NotificationChannel capturedChannel, boolean authenticate) {
+        Notification notification = r.n();
+        synchronized (mPublicationLock) { if (!mPreparingImages.contains(r)) return; }
+        try (NotificationImageStore.Prepared image = mTestImagePreparation == null
+                ? NotificationIcons.prepareLargeIcon(pkg, r.sbn.getKey(), captured, notification.getLargeIcon())
+                : mTestImagePreparation.apply(r.sbn, captured)) {
+            Runnable beforePublication = mBeforePostPublication;
+            if (beforePublication != null) beforePublication.run();
+            synchronized (mPublicationLock) {
+                if (!mPreparingImages.contains(r)) return;
+                if (authenticate && resolveNotificationOwner(opPkg, pkg, false) != captured) return;
+                if (packageFor(pkg) != captured || captured == null && !"android".equals(pkg) || !mayPost(pkg)) return;
+                boolean update;
+                synchronized (this) {
+                    // Group/channel deletion and recreation must not authorize a post
+                    // that captured a previous channel generation before publication.
+                    if (mChannels.get(channelKey) != capturedChannel) return;
+                    NotificationChannelGroup group = r.channel.getGroup() == null ? null
+                            : mChannelGroups.get(pkg + "/" + r.channel.getGroup());
+                    if ((r.importance == NotificationManager.IMPORTANCE_NONE || group != null && group.isBlocked())
+                            && !notification.isMediaNotification()) return;
+                    update = mPosted.put(key(pkg, tag, id), r) != null;
                 }
-                int hr = mTestToast == null ? showToast(r, update) : mTestToast.applyAsInt(sbn, update);
-                if (hr == 0) retireLegacyToast(pkg, sbn.getKey());
-                shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
-                        : String.format("no toast (0x%08x)", hr);
+                int importance = r.importance;
+                String shown;
+                if (importance == NotificationManager.IMPORTANCE_NONE) {
+                    shown = "not shown: its channel is blocked";
+                } else {
+                    // Its intents outlive this system server, as its toast does (ADR 0051).
+                    if (WindowsHost.inSystemServer()) {
+                        NotificationStore.save(am(), r.sbn.getKey(), pkg, tag, id, notification, opPkg);
+                    }
+                    File large = null;
+                    try { if (image != null) large = image.publish(); }
+                    catch (IOException failedImage) {
+                        SystemServer.log("notification: cannot publish large icon: " + failedImage);
+                    }
+                    int hr = mTestToast == null ? showToast(r, update, large) : mTestToast.applyAsInt(r.sbn, update);
+                    if (hr == 0) {
+                        boolean legacyRetired = retireLegacyToast(pkg, r.sbn.getKey());
+                        if (large == null) NotificationIcons.removeCurrentLargeIcon(pkg, r.sbn.getKey());
+                        if (legacyRetired) NotificationIcons.removeLegacyLargeIcon(pkg, r.sbn.getKey());
+                    }
+                    shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
+                            : String.format("no toast (0x%08x)", hr);
+                }
+                SystemServer.log("notification " + id + (update ? " updated" : " posted") + " for "
+                        + pkg + ": channel " + r.channel.getId() + " (importance " + importance + ", " + shown + ")");
             }
-            SystemServer.log("notification " + id + (update ? " updated" : " posted") + " for "
-                    + pkg + ": channel " + channel.getId() + " (importance " + importance + ", " + shown + ")");
+        } finally {
+            synchronized (mPublicationLock) { mPreparingImages.remove(r); }
         }
         notifyListeners(r, true, 0);
+    }
+
+    /** mPublicationLock held; cancellation never waits for image work. */
+    private void invalidateImagePreparations(String pkg, String notificationKey, boolean keepForeground) {
+        invalidateImagePreparations(pkg, notificationKey, keepForeground, null);
+    }
+
+    /** A delegate's cancellation owns only generations bearing its own opPkg. */
+    private void invalidateImagePreparations(String pkg, String notificationKey, boolean keepForeground,
+            String onlyPoster) {
+        mPreparingImages.removeIf(record -> pkg.equals(record.sbn.getPackageName())
+                && (notificationKey == null || notificationKey.equals(key(pkg, record.sbn.getTag(), record.sbn.getId())))
+                && (onlyPoster == null || onlyPoster.equals(record.sbn.getOpPkg()))
+                && (!keepForeground || (record.n().flags & Notification.FLAG_FOREGROUND_SERVICE) == 0));
     }
 
     void cancel(String pkg, String tag, int id) {
@@ -506,8 +563,21 @@ public final class NotificationManagerService extends INotificationManager.Defau
     void removeUserInitiatedJobFlag(String pkg, int id) {
         Record record;
         synchronized (mPublicationLock) {
+            // A job's final association can detach while its PNG is still being
+            // prepared. Retain that notification, but do not publish the UIJ
+            // flag captured before releaseNotification observed the last UIJ.
+            String notificationKey = key(pkg, null, id);
             synchronized (this) {
-                record = mPosted.get(key(pkg, null, id));
+                record = mPosted.get(notificationKey);
+                for (Record preparing : mPreparingImages) {
+                    // A published record remains in the preparation set until
+                    // its image owner closes. Handle it below so its persisted
+                    // flags and listener update are not skipped.
+                    if (preparing != record && notificationKey.equals(key(preparing.sbn.getPackageName(),
+                            preparing.sbn.getTag(), preparing.sbn.getId()))) {
+                        preparing.n().flags &= ~Notification.FLAG_USER_INITIATED_JOB;
+                    }
+                }
                 if (record == null || (record.n().flags & Notification.FLAG_USER_INITIATED_JOB) == 0) return;
                 record.n().flags &= ~Notification.FLAG_USER_INITIATED_JOB;
             }
@@ -571,10 +641,17 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 // the authorization check and the removal.
                 mPosted.remove(key(pkg, tag, id));
             }
+            String onlyPoster = opPkg != null && !pkg.equals(opPkg) && !callers().isSystem() ? opPkg : null;
+            invalidateImagePreparations(pkg, key(pkg, tag, id), false, onlyPoster);
             if (r == null) {
+                // A previous native removal may have failed after its record
+                // was retired. Without an owner record we cannot prove that
+                // Windows has stopped referencing a published image. Stale
+                // preparations still close and remove their own .part files.
                 if (retained == null) return;
                 NotificationStore.delete(pkg, sbnKey);
                 int hr = removeStoredToast(retained, false);
+                if (hr == 0) NotificationIcons.removeLargeIcon(pkg, sbnKey);
                 SystemServer.log("notification " + id + " of " + pkg + " (an earlier run's)"
                         + " cancelled" + (hr == 0 ? ", its toast removed"
                                 : String.format(" (toast: 0x%08x)", hr)));
@@ -584,6 +661,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
             NotificationStore.delete(pkg, r.sbn.getKey());
             int hr = stored != null ? removeStoredToast(stored, true)
                     : removeWindowsToast(pkg, toastTag(tag, id), id, null, true);
+            if (hr == 0) NotificationIcons.removeLargeIcon(pkg, r.sbn.getKey());
             SystemServer.log("notification " + id + " of " + pkg + " cancelled"
                     + (hr == 0 ? ", its toast removed" : String.format(" (toast: 0x%08x)", hr)));
         }
@@ -606,7 +684,18 @@ public final class NotificationManagerService extends INotificationManager.Defau
             synchronized (mPublicationLock) { action.run(); }
         } finally {
             mDeferredListenerChanges.remove();
-            for (Runnable callback : callbacks) callback.run();
+            // Each deferred post owns a cancellation token. One failed callback
+            // must not strand the later owners without running their cleanup.
+            Throwable failure = null;
+            for (Runnable callback : callbacks) {
+                try { callback.run(); }
+                catch (RuntimeException | Error problem) {
+                    if (failure == null) failure = problem;
+                    else if (failure != problem) failure.addSuppressed(problem);
+                }
+            }
+            if (failure instanceof RuntimeException problem) throw problem;
+            if (failure instanceof Error problem) throw problem;
         }
     }
 
@@ -614,13 +703,12 @@ public final class NotificationManagerService extends INotificationManager.Defau
         synchronized (mPublicationLock) { mJobScheduler = jobs; }
     }
 
-    private int showToast(Record r, boolean update) {
+    private int showToast(Record r, boolean update, File large) {
         String pkg = r.sbn.getPackageName();
         String appId = AppShell.appUserModelId(pkg);
         startEvents();
         File icon = registerAppId(pkg, appId);
         Notification n = r.n();
-        File large = NotificationIcons.largeIcon(pkg, r.sbn.getKey(), n.getLargeIcon());
         int importance = r.importance;
         boolean quiet = importance == NotificationManager.IMPORTANCE_MIN
                 || importance == NotificationManager.IMPORTANCE_LOW;
@@ -871,8 +959,16 @@ public final class NotificationManagerService extends INotificationManager.Defau
             }
         }
         if (action < 0 && (s.flags & Notification.FLAG_AUTO_CANCEL) != 0) {
-            NotificationStore.delete(s.packageName, key);
-            removeStoredToast(s, false);
+            synchronized (mPublicationLock) {
+                // Sending an intent may publish a replacement. A click on the
+                // retained generation must not remove its successor's image.
+                synchronized (this) {
+                    if (mPosted.containsKey(key(s.packageName, s.tag, s.id))) return;
+                }
+                invalidateImagePreparations(s.packageName, key(s.packageName, s.tag, s.id), false);
+                NotificationStore.delete(s.packageName, key);
+                if (removeStoredToast(s, false) == 0) NotificationIcons.removeLargeIcon(s.packageName, key);
+            }
         }
     }
 
@@ -1069,22 +1165,33 @@ public final class NotificationManagerService extends INotificationManager.Defau
     public void cancelAllNotifications(String pkg, int userId) {
         user(userId); own(pkg);
         List<Record> removed = new ArrayList<>();
-        synchronized (this) {
-            mPosted.entrySet().removeIf(e -> {
-                if (!e.getKey().startsWith(pkg + "/")) return false;
-                // Foreground services' notifications stay (as on Android).
-                if ((e.getValue().n().flags & Notification.FLAG_FOREGROUND_SERVICE) != 0) {
-                    return false;
-                }
-                removed.add(e.getValue());
-                return true;
-            });
+        synchronized (mPublicationLock) {
+            invalidateImagePreparations(pkg, null, true);
+            synchronized (this) {
+                mPosted.entrySet().removeIf(e -> {
+                    if (!e.getKey().startsWith(pkg + "/")) return false;
+                    // Foreground services' notifications stay (as on Android).
+                    if ((e.getValue().n().flags & Notification.FLAG_FOREGROUND_SERVICE) != 0) {
+                        return false;
+                    }
+                    removed.add(e.getValue());
+                    return true;
+                });
+            }
         }
         for (Record r : removed) {
-            NotificationStore.Stored stored = NotificationStore.load(pkg, r.sbn.getKey());
-            NotificationStore.delete(pkg, r.sbn.getKey());
-            if (stored != null) removeStoredToast(stored, false);
-            else removeWindowsToast(pkg, toastTag(r.sbn.getTag(), r.sbn.getId()), r.sbn.getId(), null, false);
+            synchronized (mPublicationLock) {
+                // A later post may legitimately replace this removed generation.
+                // Do not delete its image/store or its new Windows toast.
+                synchronized (this) {
+                    if (mPosted.containsKey(key(pkg, r.sbn.getTag(), r.sbn.getId()))) continue;
+                }
+                NotificationStore.Stored stored = NotificationStore.load(pkg, r.sbn.getKey());
+                NotificationStore.delete(pkg, r.sbn.getKey());
+                int hr = stored != null ? removeStoredToast(stored, false)
+                        : removeWindowsToast(pkg, toastTag(r.sbn.getTag(), r.sbn.getId()), r.sbn.getId(), null, false);
+                if (hr == 0) NotificationIcons.removeLargeIcon(pkg, r.sbn.getKey());
+            }
         }
         SystemServer.log("notification: all of " + pkg + " cancelled (" + removed.size() + ")");
         for (Record r : removed) {
@@ -1101,6 +1208,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         synchronized (mPublicationLock) { packageRemovedLocked(pkg); }
     }
     private void packageRemovedLocked(String pkg) {
+        invalidateImagePreparations(pkg, null, false);
         mDelegates.remove(pkg);
         synchronized (this) {
             AtomicFile file = channelFile(pkg);
@@ -1121,6 +1229,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         int cleared = mTestToast == null ? WindowsHost.clearToasts(appId) : 0;
         int unregistered = mTestToast == null ? WindowsHost.unregisterAppId(appId) : 0;
         NotificationStore.deleteAll(pkg);
+        if (cleared == 0) NotificationIcons.removeLargeIcons(pkg);
         synchronized (this) {
             mRegisteredAppIds.remove(appId);
         }
@@ -1697,14 +1806,15 @@ public final class NotificationManagerService extends INotificationManager.Defau
             String pkg = record.sbn.getPackageName();
             NotificationStore.Stored stored = NotificationStore.load(pkg, record.sbn.getKey());
             NotificationStore.delete(pkg, record.sbn.getKey());
-            if (stored != null) removeStoredToast(stored, true);
-            else removeWindowsToast(pkg, toastTag(record.sbn.getTag(), record.sbn.getId()), record.sbn.getId(), null, true);
+            int hr = stored != null ? removeStoredToast(stored, true)
+                    : removeWindowsToast(pkg, toastTag(record.sbn.getTag(), record.sbn.getId()), record.sbn.getId(), null, true);
+            if (hr == 0) NotificationIcons.removeLargeIcon(pkg, record.sbn.getKey());
         }
     }
 
     private void removeRetainedChannelToasts(String pkg, Set<String> channelIds) {
         for (NotificationStore.Stored stored : NotificationStore.deleteChannels(pkg, channelIds)) {
-            removeStoredToast(stored, true);
+            if (removeStoredToast(stored, true) == 0) NotificationIcons.removeLargeIcon(pkg, stored.key);
         }
     }
 

@@ -443,6 +443,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final ProcessExitStatus mExitStatus = new ProcessExitStatus();
     /** Since when (uptimeMillis) no app process runs or starts; 0 while some do. */
     private long mIdleSince = SystemClock.uptimeMillis();
+    private boolean mDexoptBusy;
 
     /** Starts a process for a package and returns its pid (ProcessList's zygote request). */
     interface ProcessStarter {
@@ -3686,6 +3687,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             mIdleSince = 0;
         } else if (mIdleSince == 0) {
             mIdleSince = SystemClock.uptimeMillis();
+        }
+        boolean busy = mIdleSince == 0 || startingLocked();
+        if (busy != mDexoptBusy) {
+            mDexoptBusy = busy;
+            // Publish/wake only: never wait for a compiler while holding ATM.
+            Dexopt.activityChanged();
         }
     }
 
