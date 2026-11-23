@@ -939,7 +939,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@eb94e0729f1c0fb354a10c955db48fdef68111b0
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@a31f1cdcc0c515905a4faa9bd3bf51e906e1c80b
     with:
       local-runner: false
 
