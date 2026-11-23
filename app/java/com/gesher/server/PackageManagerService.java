@@ -1158,7 +1158,8 @@ public final class PackageManagerService extends IPackageManager.Default {
      * (touchscreen and faketouch, matching {@link com.gesher.app.DeviceProfile#configuration()},
      * both orientations) whose launcher could host app widgets (apps reach
      * AppWidgetManager only on devices with app_widgets, and phone apps assume it).
-     * Wi-Fi is absent. Sensors follow the ones SensorManager lists
+     * FEATURE_WIFI follows the real WLAN adapters (docs/wifi.md); no Wi-Fi Direct, Aware,
+     * RTT or Passpoint feature is claimed. Sensors follow the ones SensorManager lists
      * ({@link #addSensorFeatures}). Telephony (docs/telephony.md) is there only when
      * Windows reports a cellular (WWAN) modem at boot: telephony, subscription, radio
      * access and data, plus GSM for a 3GPP modem; never calling or messaging. Bluetooth
@@ -1234,6 +1235,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         // Telephony only with a cellular modem Windows reported at boot (docs/telephony.md).
         TelephonyService.addTelephonyFeatures(FEATURES, TelephonyService.bootSnapshot());
+        // Synchronous WLAN census: no wlanapi, a stopped WLAN service or no adapter
+        // leaves FEATURE_WIFI out (docs/wifi.md).
+        addWifiFeature(FEATURES, com.gesher.net.WindowsWifi.hardware());
     }
 
     /**
@@ -1332,6 +1336,12 @@ public final class PackageManagerService extends IPackageManager.Default {
                     break;
             }
         }
+    }
+
+    /** FEATURE_WIFI when Windows enumerates at least one real WLAN interface. */
+    static void addWifiFeature(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            com.gesher.net.WindowsWifi.Hardware hardware) {
+        if (hardware != null && hardware.present()) addFeature(features, PackageManager.FEATURE_WIFI);
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */
