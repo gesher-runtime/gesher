@@ -32,6 +32,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -68,6 +69,7 @@ struct Child {
 
 std::mutex g_children_mutex;
 std::map<int, Child> g_children;  // pid -> child
+std::atomic<uint64_t> g_children_generation{0};
 
 void CALLBACK OnChildExit(void* param, BOOLEAN) {
   int pid = static_cast<int>(reinterpret_cast<intptr_t>(param));
@@ -83,20 +85,31 @@ void CALLBACK OnChildExit(void* param, BOOLEAN) {
       it->second.exited = true;
       sig_status = it->second.status;
       deliver = true;
+      g_children_generation.fetch_add(1, std::memory_order_release);
     }
   }
-  if (deliver) DeliverExternalSignal(kSigchld, 0, kCldExited, sig_status, false);
+  if (deliver) {
+    NotifyInterruptibleWaiters();
+    DeliverExternalSignal(kSigchld, 0, kCldExited, sig_status, false);
+  }
 }
 
 void Track(int pid, HANDLE process) {
-  std::lock_guard<std::mutex> lock(g_children_mutex);
-  Child& c = g_children[pid];
-  c.process = process;
-  c.exited = false;
-  c.status = 0;
-  RegisterWaitForSingleObject(&c.wait, process, OnChildExit,
-                              reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
-                              WT_EXECUTEONLYONCE);
+  {
+    std::lock_guard<std::mutex> lock(g_children_mutex);
+    Child& c = g_children[pid];
+    c.process = process;
+    c.exited = false;
+    c.status = 0;
+    c.wait = nullptr;
+    if (!RegisterWaitForSingleObject(&c.wait, process, OnChildExit,
+                                    reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
+                                    WT_EXECUTEONLYONCE)) c.wait = nullptr;
+    g_children_generation.fetch_add(1, std::memory_order_release);
+  }
+  // A failed watcher registration must also wake an existing any-child
+  // waiter so it can use the explicitly bounded fallback below.
+  NotifyInterruptibleWaiters();
 }
 
 // --- the environment and working directory as UTF-8 ----------------------------
@@ -231,6 +244,10 @@ constexpr int kWNOHANG = 1;
 
 int CollectOne(int pid, int* status, int options) {
   for (;;) {
+    uint64_t observed;
+    HANDLE retired_wait = nullptr, retired_process = nullptr;
+    int got = 0, sig_status = 0;
+    bool fallback = false, deliver = false;
     {
       std::lock_guard<std::mutex> lock(g_children_mutex);
       if (g_children.empty()) return errno = 10 /*ECHILD*/, -1;
@@ -239,23 +256,56 @@ int CollectOne(int pid, int* status, int options) {
       for (auto& kv : g_children) {
         if (pid > 0 && kv.first != pid) continue;
         found = true;
+        if (!kv.second.exited && kv.second.wait == nullptr) {
+          // Registration failure cannot strand an already spawned child.
+          // Only this fallback probes native state; successfully watched
+          // children wait indefinitely on actual lifecycle notifications.
+          DWORD ready = WaitForSingleObject(kv.second.process, 0);
+          if (ready == WAIT_FAILED) return errno = ex::ErrnoFromWin32(GetLastError()), -1;
+          if (ready == WAIT_OBJECT_0) {
+            DWORD code = 0;
+            if (!GetExitCodeProcess(kv.second.process, &code)) {
+              return errno = ex::ErrnoFromWin32(GetLastError()), -1;
+            }
+            kv.second.status = ex::WaitStatus(code);
+            kv.second.exited = true;
+            sig_status = kv.second.status;
+            deliver = true;
+          } else {
+            fallback = true;
+          }
+        }
         if (kv.second.exited) {
           if (status != nullptr) *status = kv.second.status;
-          int got = kv.first;
-          if (kv.second.wait != nullptr) UnregisterWaitEx(kv.second.wait, nullptr);
-          if (kv.second.process != nullptr) CloseHandle(kv.second.process);
+          got = kv.first;
+          retired_wait = kv.second.wait;
+          retired_process = kv.second.process;
           g_children.erase(kv.first);
-          return got;
+          g_children_generation.fetch_add(1, std::memory_order_release);
+          break;
         }
         if (pid > 0) break;
       }
       // None exited: wait below with the lock released.
       if (!found) return errno = 10 /*ECHILD*/, -1;  // no such child
+      observed = g_children_generation.load(std::memory_order_relaxed);
+    }
+    if (got != 0) {
+      // Other waiters must observe removal even if one of them missed the
+      // earlier exit notification. No callback/handle retirement runs under
+      // the child registry lock.
+      NotifyInterruptibleWaiters();
+      if (retired_wait != nullptr) UnregisterWaitEx(retired_wait, nullptr);
+      if (retired_process != nullptr) CloseHandle(retired_process);
+      if (deliver) DeliverExternalSignal(kSigchld, 0, kCldExited, sig_status, false);
+      return got;
     }
     if ((options & kWNOHANG) != 0) return 0;
-    // Block until a child exits (the watcher sets `exited`), then re-scan.
+    // Generation is captured with the eligibility scan. A change before
+    // arming is observed by the predicate; a later change wakes the condition.
     int error = 0;
-    InterruptibleSleep(20, nullptr, &error);
+    if (fallback) InterruptibleSleep(20, nullptr, &error);
+    else InterruptibleWaitForChange(g_children_generation, observed, &error);
     if (error != 0) return errno = error, -1;
   }
 }

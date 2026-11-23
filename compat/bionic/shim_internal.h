@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#include <atomic>
 #include <cstring>
 
 #include <string>
@@ -166,6 +167,14 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
 // handler has run then); returns true if interrupted, with what was left.
 // A nonzero error reports unavailable delivery/registration, never completion.
 bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
+
+// Wait without a deadline until an owner changes its generation or a signal
+// reaches this thread. The owner publishes the generation before notifying;
+// the wait checks it under the same signal mutex used to arm the condition.
+// Signal delivery/errors retain InterruptibleSleep's existing contract.
+bool InterruptibleWaitForChange(const std::atomic<uint64_t>& generation,
+                                uint64_t observed, int* error);
+void NotifyInterruptibleWaiters();
 
 // As above, observing an interruption before delivering its handlers. The
 // observer is an internal host callback, never loaded application code; it

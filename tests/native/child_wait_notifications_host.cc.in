@@ -1,0 +1,467 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Complete production child registry, collect loop and signal wait; Win32
+// process/watcher, guest registration and signal dispatch are host boundaries.
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <future>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace std::chrono_literals;
+static int checks, failures;
+static void Check(bool good, const char* message) {
+  ++checks;
+  if (!good) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); }
+}
+
+// A controllable observation gate, separate from the product's child/signal
+// locks. It can hold the exact scan-to-arm and predicate-to-sleep boundaries.
+class Gate {
+ public:
+  void Hold() { std::lock_guard lock(mutex_); held_ = true; entered_ = false; }
+  void Enter() {
+    std::unique_lock lock(mutex_);
+    if (!held_) return;
+    entered_ = true; changed_.notify_all();
+    changed_.wait(lock, [&] { return !held_; });
+  }
+  bool Entered() {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_for(lock, 2s, [&] { return entered_; });
+  }
+  void Release() { std::lock_guard lock(mutex_); held_ = false; changed_.notify_all(); }
+ private:
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  bool held_ = false, entered_ = false;
+};
+
+using DWORD = uint32_t;
+using BOOLEAN = unsigned char;
+using HANDLE = void*;
+#define CALLBACK
+#define BIONIC_SYSV
+constexpr DWORD INFINITE = 0xffffffff, WT_EXECUTEONLYONCE = 8;
+constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258, WAIT_FAILED = 0xffffffff;
+struct Process;
+struct Watch {
+  Process* process;
+  void (*callback)(void*, BOOLEAN);
+  void* argument;
+  std::atomic<bool> unregistered{false};
+};
+struct Process {
+  int id;
+  std::atomic<bool> exited{false}, closed{false};
+  std::atomic<DWORD> code{0};
+  std::atomic<bool> wait_error{false}, code_error{false};
+  Watch* watch = nullptr;
+};
+static std::vector<std::unique_ptr<Process>> processes;
+static std::vector<std::unique_ptr<Watch>> watches;
+static bool fail_next_watch;
+static std::atomic<unsigned> native_probes{0}, closes{0}, unregistrations{0}, sigchld{0};
+static std::atomic<bool> retirement_locked{false};
+static bool RegistryUnlocked();
+static DWORD GetLastError() { return 6; }
+static DWORD WaitForSingleObject(HANDLE handle, DWORD milliseconds) {
+  if (milliseconds != 0) std::abort();
+  ++native_probes;
+  auto* process = static_cast<Process*>(handle);
+  if (process->closed || process->wait_error) return WAIT_FAILED;
+  return process->exited ? WAIT_OBJECT_0 : WAIT_TIMEOUT;
+}
+static bool GetExitCodeProcess(HANDLE handle, DWORD* code) {
+  auto* process = static_cast<Process*>(handle);
+  if (process->closed) std::abort();
+  if (process->code_error) return false;
+  *code = process->exited ? process->code.load() : 259;
+  return true;
+}
+static bool RegisterWaitForSingleObject(HANDLE* out, HANDLE handle,
+    void (*callback)(void*, BOOLEAN), void* argument, DWORD timeout, DWORD flags) {
+  if (timeout != INFINITE || flags != WT_EXECUTEONLYONCE) std::abort();
+  if (fail_next_watch) { fail_next_watch = false; return false; }
+  auto watch = std::make_unique<Watch>();
+  watch->process = static_cast<Process*>(handle);
+  watch->callback = callback; watch->argument = argument;
+  watch->process->watch = watch.get();
+  *out = watch.get();
+  watches.push_back(std::move(watch));
+  return true;
+}
+static bool UnregisterWaitEx(HANDLE handle, HANDLE completion) {
+  if (completion != nullptr) std::abort();
+  if (!RegistryUnlocked()) retirement_locked = true;
+  auto* watch = static_cast<Watch*>(handle);
+  if (watch->unregistered.exchange(true)) std::abort();
+  ++unregistrations;
+  return true;
+}
+static bool CloseHandle(HANDLE handle) {
+  if (!RegistryUnlocked()) retirement_locked = true;
+  if (static_cast<Process*>(handle)->closed.exchange(true)) std::abort();
+  ++closes;
+  return true;
+}
+namespace ex {
+static int WaitStatus(DWORD code) { return static_cast<int>(code & 255) << 8; }
+static int ErrnoFromWin32(DWORD) { return EBADF; }
+}
+
+namespace gesher {
+static int64_t BoottimeNanos() { return 0; }
+struct ResumeSubscription { int Start(void (*)(void*), void*) { return 0; } };
+}
+
+namespace product {
+constexpr int kSigchld = 17, kCldExited = 1, kNsig = 65;
+constexpr int kEAGAIN = EAGAIN, kENOSYS = ENOSYS, kEINTR = EINTR;
+constexpr uintptr_t kSigDfl = 0, kSigIgn = 1;
+static uint64_t Bit(int sig) { return uint64_t{1} << (sig - 1); }
+static bool DefaultIgnores(int sig) { return sig == kSigchld; }
+struct BionicSiginfo {};
+struct BionicSigaction { uintptr_t handler = 2; };
+// Queue storage is a declared fixture boundary; actual pending-container and
+// mask contracts are covered by the existing signal suites.
+struct Pending {
+  uint64_t bits = 0;
+  uint64_t Mask() const { return bits; }
+  void Discard(int sig) { bits &= ~Bit(sig); }
+};
+struct ThreadState {
+  Pending pending;
+  uint64_t mask = 0, waiting_for = 0;
+  std::atomic<bool> any_pending{false};
+  bool registration_ok = true;
+  int delivery_error = 0;
+  std::atomic<unsigned> entries{0}, handlers{0};
+  std::atomic<uint64_t> cpu_ns{0};
+  Gate before_arm;
+};
+static thread_local ThreadState* current_thread;
+static std::atomic<bool> g_process_pending{false};
+class Condition {
+ public:
+  std::atomic<unsigned> timed{0}, indefinite{0}, wakes{0};
+  Gate arming;
+  void notify_all() { native_.notify_all(); }
+  void wait(std::unique_lock<std::mutex>& lock) {
+    { std::lock_guard observed(observation_); ++indefinite; observed_.notify_all(); }
+    arming.Enter();
+    native_.wait(lock); ++wakes;
+  }
+  template<typename T> std::cv_status wait_until(std::unique_lock<std::mutex>& lock, T deadline) {
+    { std::lock_guard observed(observation_); ++timed; observed_.notify_all(); }
+    arming.Enter();
+    auto result = native_.wait_until(lock, deadline); ++wakes; return result;
+  }
+  template<typename T> std::cv_status wait_for(std::unique_lock<std::mutex>& lock, T duration) {
+    return wait_until(lock, std::chrono::steady_clock::now() + duration);
+  }
+  bool Waits(unsigned count) {
+    std::unique_lock lock(observation_);
+    return observed_.wait_for(lock, 2s, [&] { return timed + indefinite >= count; });
+  }
+  void Reset() { timed = indefinite = wakes = 0; }
+ private:
+  std::condition_variable native_, observed_;
+  std::mutex observation_;
+};
+struct State {
+  std::mutex mutex;
+  Condition sent;
+  Pending process_pending;
+  BionicSigaction actions[kNsig];
+};
+static State& S() { static State state; return state; }
+static ThreadState* Self() {
+  if (!current_thread) std::abort();
+  ++current_thread->entries;
+  current_thread->before_arm.Enter();
+  return current_thread->registration_ok ? current_thread : nullptr;
+}
+static int DeliverAll(ThreadState* self) {
+  std::lock_guard lock(S().mutex);
+  if (self->delivery_error) return self->delivery_error;
+  for (int sig = 1; sig < kNsig; ++sig) {
+    if ((self->mask & Bit(sig)) != 0) continue;
+    if ((self->pending.Mask() & Bit(sig)) != 0) {
+      self->pending.Discard(sig);
+      if (S().actions[sig].handler != kSigIgn &&
+          !(S().actions[sig].handler == kSigDfl && DefaultIgnores(sig))) ++self->handlers;
+    }
+  }
+  return 0;
+}
+static bool ClaimActionLocked(ThreadState*, int sig, BionicSigaction* action) {
+  *action = S().actions[sig]; return true;
+}
+static void Pop(Pending& pending, int sig, BionicSiginfo*) { pending.Discard(sig); }
+static void Dispatch(ThreadState* self, int, const BionicSiginfo&, const BionicSigaction&) { ++self->handlers; }
+static Gate callback_tail;
+static bool DeliverExternalSignal(int sig, int, int, int, bool) {
+  if (sig != kSigchld) std::abort();
+  callback_tail.Enter();
+  ++sigchld; return false;  // default SIGCHLD; no handler or fabricated wake
+}
+
+@SIGNAL_WAIT@
+@CHILD_REGISTRY@
+@CHILD_WAIT@
+}
+
+static bool RegistryUnlocked() {
+  if (!product::g_children_mutex.try_lock()) return false;
+  product::g_children_mutex.unlock(); return true;
+}
+static Process* Add(int id) {
+  auto process = std::make_unique<Process>(); process->id = id;
+  auto* result = process.get(); processes.push_back(std::move(process));
+  product::Track(id, result); return result;
+}
+static void Finish(Process* process, DWORD code) {
+  process->code = code; process->exited = true;
+  if (process->watch) process->watch->callback(process->watch->argument, 0);
+}
+struct Result { int pid, status, error; };
+static Result Collect(int pid, int options = 0) {
+  int status = -123; errno = 0;
+  int result = product::Waitpid(pid, &status, options);
+  return {result, status, errno};
+}
+static std::future<Result> Async(product::ThreadState& state, int pid) {
+  return std::async(std::launch::async, [&state, pid] {
+    timespec start{}, finish{};
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start) != 0) std::abort();
+    product::current_thread = &state;
+    Result result = Collect(pid);
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &finish) != 0) std::abort();
+    state.cpu_ns = static_cast<uint64_t>((finish.tv_sec - start.tv_sec) * 1000000000LL +
+                                        finish.tv_nsec - start.tv_nsec);
+    return result;
+  });
+}
+static bool Ready(std::future<Result>& result) { return result.wait_for(2s) == std::future_status::ready; }
+static void Reset() {
+  Check(product::g_children.empty(), "previous case retained a child");
+  processes.clear(); watches.clear();
+  product::S().sent.Reset(); native_probes = closes = unregistrations = sigchld = 0;
+  retirement_locked = false;
+}
+static void Basics() {
+  Reset();
+  Check(Collect(-1).pid == -1 && errno == ECHILD, "empty registry reports ECHILD");
+  auto* first = Add(101); auto* second = Add(102);
+  Result pending = Collect(101, 1);
+  Check(pending.pid == 0 && pending.status == -123, "WNOHANG leaves pending status untouched");
+  Check(Collect(999, 1).error == ECHILD, "specific missing PID does not consume another child");
+  Finish(second, 259);
+  Result done = Collect(-1);
+  Check(done.pid == 102 && done.status == (3 << 8), "actual completion status259 is not mistaken for STILL_ACTIVE");
+  Check(Collect(102, 1).error == ECHILD, "each child is reaped once");
+  Finish(first, 23); done = Collect(101);
+  Check(done.pid == 101 && done.status == (23 << 8), "specific exited child status retained");
+  Check(product::S().sent.timed == 0 && product::S().sent.indefinite == 0, "ready and WNOHANG operations do not arm waits");
+  Check(closes == 2 && unregistrations == 2 && sigchld == 2, "one close, unregister and SIGCHLD per watched child");
+  Check(!retirement_locked, "watch and handle retirement occur outside child registry lock");
+}
+static void BeforeArming(bool reap) {
+  Reset(); auto* process = Add(201); product::ThreadState state;
+  state.before_arm.Hold(); auto future = Async(state, 201);
+  Check(state.before_arm.Entered(), "wait reaches scan-to-arm boundary");
+  Finish(process, 37);
+  if (reap) Check(Collect(201, 1).pid == 201, "another waiter can reap before arming");
+  state.before_arm.Release(); Check(Ready(future), "change before arming is not lost");
+  Result result = future.get();
+  Check(reap ? result.pid == -1 && result.error == ECHILD : result.pid == 201 && result.status == (37 << 8),
+        "pre-arm exit/removal has correct eligibility");
+  Check(product::S().sent.timed == 0 && product::S().sent.indefinite == 0,
+        "generation change before arming needs no timeout or host wait");
+}
+static void DuringArming() {
+  Reset(); auto* process = Add(301); product::ThreadState state;
+  product::S().sent.arming.Hold(); auto future = Async(state, 301);
+  Check(product::S().sent.arming.Entered(), "wait reaches predicate-to-sleep boundary");
+  auto exit = std::async(std::launch::async, [&] { Finish(process, 41); });
+  const auto limit = std::chrono::steady_clock::now() + 2s;
+  bool marked = false;
+  while (!marked && std::chrono::steady_clock::now() < limit) {
+    { std::lock_guard lock(product::g_children_mutex); marked = product::g_children.at(301).exited; }
+    if (!marked) std::this_thread::yield();
+  }
+  Check(marked, "exit publishes child state before notification");
+  product::S().sent.arming.Release();
+  Check(Ready(future), "exit during predicate-to-sleep transition is not lost");
+  Check(future.get().pid == 301, "armed waiter collects the actual exited child");
+  exit.get();
+  Check(product::S().sent.timed == 0 && product::S().sent.indefinite == 1,
+        "successful watcher uses one untimed condition wait");
+}
+static void SelectionAndSignals() {
+  Reset(); auto* wanted = Add(401); auto* other = Add(402);
+  product::ThreadState state; auto future = Async(state, 401);
+  Check(product::S().sent.Waits(1), "specific waiter arms");
+  Finish(other, 17);
+  Check(Collect(402, 1).pid == 402, "unrelated completion remains independently reapable");
+  Check(future.wait_for(30ms) == std::future_status::timeout, "other child cannot satisfy specific wait");
+  {
+    std::lock_guard lock(product::S().mutex);
+    state.pending.bits |= product::Bit(10); product::S().sent.notify_all();
+  }
+  const auto limit = std::chrono::steady_clock::now() + 2s;
+  while (state.handlers == 0 && std::chrono::steady_clock::now() < limit) std::this_thread::yield();
+  Check(state.handlers == 1, "signal transport still dispatches a handler during child wait");
+  // The pre-existing CollectOne restarts after handlers regardless of
+  // SA_RESTART. This case preserves that boundary; full EINTR parity is not
+  // claimed by this notification change.
+  Check(future.wait_for(10ms) == std::future_status::timeout, "existing restart behavior remains until child completion");
+  Finish(wanted, 29); Check(Ready(future), "selected child completes after signal");
+  Check(future.get().status == (29 << 8), "signal does not alter child status");
+  Check(product::S().sent.timed == 0, "normal notifications/signals need no timed polling");
+}
+static void RegistrationFailure() {
+  Reset(); fail_next_watch = true; auto* process = Add(501);
+  product::ThreadState state; auto future = Async(state, 501);
+  Check(product::S().sent.Waits(1), "failed watcher uses declared timed fallback");
+  Finish(process, 11); Check(Ready(future), "failed watcher cannot strand a spawned child");
+  Result result = future.get();
+  Check(result.pid == 501 && result.status == (11 << 8), "fallback observes actual process status");
+  Check(product::S().sent.timed > 0 && native_probes > 0 && unregistrations == 0 && closes == 1 && sigchld == 1,
+        "fallback is measured, owns no watcher and retires once");
+  Reset(); fail_next_watch = true; process = Add(502); process->wait_error = true;
+  result = Collect(502, 1);
+  Check(result.pid == -1 && result.error == EBADF && !process->closed,
+        "native fallback observation errors do not fabricate completion or drop child ownership");
+  process->wait_error = false; Finish(process, 9);
+  Check(Collect(502, 1).status == (9 << 8), "failed native observation can retry the retained child");
+
+  Reset(); fail_next_watch = true; process = Add(503); process->code_error = true;
+  Finish(process, 19); result = Collect(503, 1);
+  Check(result.pid == -1 && result.error == EBADF && !process->closed,
+        "exit-code query errors retain child ownership and do not invent status");
+  process->code_error = false;
+  Check(Collect(503, 1).status == (19 << 8), "actual exit status remains queryable after an observation error");
+}
+static void NewlyUnwatchedChild() {
+  Reset(); auto* watched = Add(510); product::ThreadState state;
+  auto future = Async(state, -1);
+  Check(product::S().sent.Waits(1), "any-child waiter arms before later registration failure");
+  fail_next_watch = true; auto* unwatched = Add(511);
+  Check(product::S().sent.Waits(2), "new unwatched child wakes an already armed any-child waiter");
+  Finish(unwatched, 27); Check(Ready(future), "new unwatched child is observed without a watcher wake");
+  Result result = future.get();
+  Check(result.pid == 511 && result.status == (27 << 8) && product::S().sent.timed > 0,
+        "any-child waiter switches to the declared fallback and reaps only the completed child");
+  Finish(watched, 28);
+  Check(Collect(510, 1).status == (28 << 8), "original watched child remains independently reapable");
+}
+static void CallbackTailAndReuse() {
+  Reset(); auto* first = Add(520);
+  product::callback_tail.Hold();
+  auto callback = std::async(std::launch::async, [&] { Finish(first, 31); });
+  Check(product::callback_tail.Entered(), "native callback can remain active after publishing exit");
+  Check(Collect(520, 1).status == (31 << 8), "reaping does not wait for a callback already past child ownership");
+  auto* reused = Add(520);
+  product::callback_tail.Release(); callback.get();
+  Result result = Collect(520, 1);
+  Check(result.pid == 0 && result.status == -123 && !reused->closed,
+        "old callback tail cannot complete or retire a new child with a reused PID");
+  Finish(reused, 32);
+  Check(Collect(520, 1).status == (32 << 8) && closes == 2 && unregistrations == 2,
+        "each PID incarnation retains its own status and native lifetime");
+}
+static void SignalRegistrationError() {
+  Reset(); auto* process = Add(601); product::ThreadState state; state.registration_ok = false;
+  auto future = Async(state, 601); Check(Ready(future), "signal registration failure returns");
+  Check(future.get().error == EAGAIN && !process->closed, "registration error retains child for later reap");
+  Finish(process, 7); Check(Collect(601, 1).pid == 601, "retained child remains reapable");
+}
+static void CompetingWaiters() {
+  Reset(); constexpr int count = 48, workers = 8;
+  for (int i = 0; i < count; ++i) Add(700 + i);
+  std::vector<int> received; std::mutex received_lock;
+  product::ThreadState states[workers]; std::vector<std::thread> threads;
+  for (int i = 0; i < workers; ++i) threads.emplace_back([&, i] {
+    product::current_thread = &states[i];
+    for (;;) {
+      Result result = Collect(-1);
+      if (result.pid < 0) { if (result.error != ECHILD) std::abort(); break; }
+      if (result.status != ((result.pid - 700) << 8)) std::abort();
+      std::lock_guard lock(received_lock); received.push_back(result.pid);
+    }
+  });
+  Check(product::S().sent.Waits(workers), "all competing waiters arm before exits");
+  for (auto& process : processes) Finish(process.get(), process->id - 700);
+  for (auto& thread : threads) thread.join();
+  std::sort(received.begin(), received.end());
+  Check(received.size() == count && std::adjacent_find(received.begin(), received.end()) == received.end(),
+        "competing waiters reap every child exactly once");
+  Check(product::g_children.empty() && closes == count && unregistrations == count,
+        "concurrent final reaping retires all handles and wakes ECHILD waiters");
+  Check(product::S().sent.timed == 0, "concurrent registered children cause no timeout polling");
+}
+static void Benchmark() {
+  for (int waiters : {1, 8}) {
+    for (int sample = 0; sample < 5; ++sample) {
+      Reset();
+      std::vector<std::unique_ptr<product::ThreadState>> states;
+      std::vector<std::future<Result>> results;
+      for (int i = 0; i < waiters; ++i) {
+        Add(1000 + i); states.push_back(std::make_unique<product::ThreadState>());
+      }
+      for (int i = 0; i < waiters; ++i) {
+        results.push_back(Async(*states[i], 1000 + i));
+      }
+      if (!product::S().sent.Waits(waiters)) std::abort();
+      const int idle_ms = 207 + sample * 3;
+      std::this_thread::sleep_for(std::chrono::milliseconds(idle_ms));
+      unsigned idle_entries = 0; for (auto& state : states) idle_entries += state->entries;
+      const unsigned idle_timed = product::S().sent.timed, idle_untimed = product::S().sent.indefinite;
+      const auto start = std::chrono::steady_clock::now();
+      for (auto& process : processes) Finish(process.get(), 31);
+      for (int i = 0; i < waiters; ++i) {
+        if (!Ready(results[i])) std::abort();
+        Result result = results[i].get();
+        if (result.pid != 1000 + i || result.status != (31 << 8)) std::abort();
+      }
+      const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start).count();
+      unsigned entries = 0; uint64_t cpu_ns = 0;
+      for (auto& state : states) { entries += state->entries; cpu_ns += state->cpu_ns; }
+      std::printf("{\"waiters\":%d,\"sample\":%d,\"idle_ms\":%d,\"wait_entries\":%u,"
+                  "\"timed_waits\":%u,\"untimed_waits\":%u,\"native_probes\":%u,"
+                  "\"idle_wait_entries\":%u,\"idle_timed_waits\":%u,\"idle_untimed_waits\":%u,"
+                  "\"waiter_cpu_ns\":%llu,\"exit_to_all_reaped_ns\":%lld}\n",
+                  waiters, sample, idle_ms, entries, product::S().sent.timed.load(),
+                  product::S().sent.indefinite.load(), native_probes.load(), idle_entries,
+                  idle_timed, idle_untimed, static_cast<unsigned long long>(cpu_ns), static_cast<long long>(elapsed));
+    }
+  }
+}
+int main(int argc, char** argv) {
+  product::ThreadState main_thread; product::current_thread = &main_thread;
+  if (argc == 2 && std::string(argv[1]) == "benchmark") { Benchmark(); return failures != 0; }
+  Basics(); BeforeArming(false); BeforeArming(true); DuringArming(); SelectionAndSignals();
+#if HAS_CHILD_NOTIFICATIONS
+  // The old registration-failure path never observes native exit and would
+  // wait forever. Its negative control is the no-timeout assertions above.
+  RegistrationFailure(); NewlyUnwatchedChild();
+#endif
+  CallbackTailAndReuse(); SignalRegistrationError(); CompetingWaiters(); Reset();
+  std::printf("Child wait production contracts: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}
