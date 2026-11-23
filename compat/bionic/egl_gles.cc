@@ -205,9 +205,20 @@ EGLDisplay OpenAngle(EGLint device_type) {
   return d;
 }
 
+// Whether `d` has an OpenGL ES 3 config. ANGLE's Direct3D 11 renderer marks its
+// configs EGL_OPENGL_ES3_BIT_KHR when the device's feature level gives ES 3.0
+// (10_1 and up); below that it is ES 2.0 only.
+bool HasEs3Config(EGLDisplay d) {
+  const EGLint attribs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_NONE};
+  EGLint count = 0;
+  return MS(eglChooseConfig)(d, attribs, nullptr, 0, &count) == EGL_TRUE && count > 0;
+}
+
 // Android's default display: ANGLE on Direct3D 11, the hardware adapter if it
-// initializes, else WARP. Initialized here (an app's own eglInitialize then
-// only reports the version).
+// initializes and gives OpenGL ES 3.0, else WARP (which does). The device
+// declares ES 3.0 (ro.opengles.version, app/build.prop; docs/system-features.md),
+// so a display that cannot create an ES 3.0 context is not Android's default.
+// Initialized here (an app's own eglInitialize then only reports the version).
 EGLDisplay DefaultDisplay() {
   static const EGLDisplay display = [] {
     if (!AngleAvailable()) return EGL_NO_DISPLAY;
@@ -215,11 +226,16 @@ EGLDisplay DefaultDisplay() {
     bool warp_only = want != nullptr && std::strcmp(want, "warp") == 0;
     if (!warp_only) {
       EGLDisplay d = OpenAngle(EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE);
-      if (d != EGL_NO_DISPLAY) {
+      if (d != EGL_NO_DISPLAY && HasEs3Config(d)) {
         Log("default display: ANGLE, Direct3D 11 hardware device");
         return d;
       }
-      Log("Direct3D 11 hardware device failed; trying WARP");
+      if (d != EGL_NO_DISPLAY) {
+        MS(eglTerminate)(d);
+        Log("Direct3D 11 hardware device has no OpenGL ES 3.0; trying WARP");
+      } else {
+        Log("Direct3D 11 hardware device failed; trying WARP");
+      }
     }
     EGLDisplay d = OpenAngle(EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE);
     Log(d != EGL_NO_DISPLAY ? "default display: ANGLE, Direct3D 11 WARP device"
