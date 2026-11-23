@@ -144,6 +144,14 @@ Check 'services: queued job completion, stopping work and alarm-clock replacemen
   $schedulerWorkOut
 } @('SchedulerWorkContractTest all passed:')
 
+$exactAlarmOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExactAlarmContractTest') 90
+$exactAlarmCode = $LASTEXITCODE
+Check 'services: exact alarm scheduling contracts, permissions and revocation' {
+  $global:LASTEXITCODE = $exactAlarmCode
+  $exactAlarmOut
+} @('ExactAlarmContractTest all passed: 414 checks verified')
+
 $schedulerConstraintsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'JobSchedulerConstraintContractTest') 90
 $schedulerConstraintsCode = $LASTEXITCODE
@@ -417,6 +425,21 @@ Check 'services: AppOps defaults, authority, attributed delivery, foreground lif
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
 } @('AppOpsContractTest all passed: 489 checks; binder=true')
+
+# Real UID grant decisions and the production AudioRecord/MediaRecorder JNI errors.
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
+$audioAdmissionData = Join-Path $root 'audio-recording-admission'
+New-Item -ItemType Directory -Force $audioAdmissionData | Out-Null
+$audioAdmissionOut = Invoke-FixtureProcess "$Dir/dalvikvm.exe" ($dvmFixes +
+  'gesher.services.ServiceFixtureRunner' + 'AudioRecordingPermissionTest') 90 @{
+    ANDROID_DATA = (NoDrive $audioAdmissionData)
+    GESHER_UID = '12772'; GESHER_BINDER_UID = '12772'; GESHER_MICROG_SPOOF = '1'
+  }
+$audioAdmissionCode = $LASTEXITCODE
+Check 'services: live UID microphone grants, revocation and native public admission errors' {
+  $global:LASTEXITCODE = $audioAdmissionCode
+  $audioAdmissionOut
+} @('AudioRecordingPermissionTest all passed:', 'checks; binder=true; production-jni=false')
 
 $uidIsolationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'PackageUidIsolationContractTest' +
