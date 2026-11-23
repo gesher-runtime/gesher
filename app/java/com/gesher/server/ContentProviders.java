@@ -56,8 +56,49 @@ final class ContentProviders {
     private final ActivityTaskManagerService mAtm;
     private final SettingsProvider mSettings;
     private final UserDictionaryProvider mUserDictionary;
+    private final DocumentsStorageProvider mDocumentsStorage;
     private final CallerIdentity mCallers;
     private final UriGrants mUriGrants;
+
+    /** Real server-hosted provider registrations, independent of installed APKs. */
+    static final class RegisteredProvider {
+        final ProviderInfo info;
+        final android.content.IContentProvider provider;
+        RegisteredProvider(ProviderInfo info, android.content.IContentProvider provider) {
+            this.info = new ProviderInfo(java.util.Objects.requireNonNull(info));
+            this.provider = java.util.Objects.requireNonNull(provider);
+        }
+    }
+    private volatile Map<String, RegisteredProvider> mRegisteredProviders = Map.of();
+
+    RegisteredProvider registeredProvider(String authority) {
+        return mRegisteredProviders.get(authority);
+    }
+
+    boolean isCurrentRegistration(RegisteredProvider registration) {
+        if (registration == null || registration.info.authority == null) return false;
+        for (String authority : registration.info.authority.split(";")) {
+            if (registeredProvider(authority) != registration) return false;
+        }
+        return true;
+    }
+
+    /** Called only by construction of an actual server provider and its transport. */
+    void registerProvider(RegisteredProvider registration) {
+        if (registration.info.authority == null || registration.info.authority.isEmpty()) {
+            throw new IllegalArgumentException("Provider has no authority");
+        }
+        synchronized (mPm) {
+            Map<String, RegisteredProvider> next = new HashMap<>(mRegisteredProviders);
+            for (String authority : registration.info.authority.split(";")) {
+                if (next.containsKey(authority) || declaredProvider(mPm, authority) != null) {
+                    throw new IllegalArgumentException("Provider authority is already registered");
+                }
+                next.put(authority, registration);
+            }
+            mRegisteredProviders = Map.copyOf(next);
+        }
+    }
 
     // Guarded by this. Published providers, by authority.
     private final Map<String, ContentProviderHolder> mPublished = new HashMap<>();
@@ -133,12 +174,18 @@ final class ContentProviders {
         mPm = pm;
         mAtm = atm;
         mCallers = new CallerIdentity(pm, atm);
-        mUriGrants = new UriGrants(pm, atm);
+        mUriGrants = new UriGrants(pm, atm, this);
         mSettings = new SettingsProvider(pm, atm);
         mUserDictionary = new UserDictionaryProvider(pm, atm);
+        mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
+        pm.setHostedProviders(this);
     }
 
     UriGrants uriGrants() { return mUriGrants; }
+    DocumentsStorageProvider documents() { return mDocumentsStorage; }
+    CallerIdentity callers() { return mCallers; }
+
+    SettingsProvider settingsProvider() { return mSettings; }
 
     static boolean hasAuthority(ProviderInfo info, String authority) {
         return info != null && hasDeclaredAuthority(info.authority, authority);
@@ -152,21 +199,23 @@ final class ContentProviders {
 
     /** Ambiguous declarations never select an attacker simply because it installed first. */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
-        ProviderInfo found = null;
-        for (ApkPackage pkg : pm.packages()) {
-            if (pm.isRemovalPending(pkg.packageName)) continue;
-            for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
-                    | PackageManager.GET_URI_PERMISSION_PATTERNS
-                    | PackageManager.GET_SHARED_LIBRARY_FILES)) {
-                if (!hasAuthority(info, authority)) continue;
-                if (found != null && (!found.packageName.equals(info.packageName)
-                        || !found.name.equals(info.name))) {
-                    throw new SecurityException("Conflicting content provider authority");
+        synchronized (pm) {
+            ProviderInfo found = null;
+            for (ApkPackage pkg : pm.providerPackages(authority)) {
+                if (pm.isRemovalPending(pkg.packageName)) continue;
+                for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
+                        | PackageManager.GET_URI_PERMISSION_PATTERNS
+                        | PackageManager.GET_SHARED_LIBRARY_FILES)) {
+                    if (!hasAuthority(info, authority)) continue;
+                    if (found != null && (!found.packageName.equals(info.packageName)
+                            || !found.name.equals(info.name))) {
+                        throw new SecurityException("Conflicting content provider authority");
+                    }
+                    found = info;
                 }
-                found = info;
             }
+            return found;
         }
-        return found;
     }
 
     private String callerPackage(ActivityTaskManagerService.ProcessRecord caller, String claimed) {
@@ -190,18 +239,38 @@ final class ContentProviders {
     }
 
     private void enforceAccess(String pkg, ProviderInfo info) {
-        if (pkg == null || pkg.equals(info.packageName)) return;
-        ApkPackage target = mPm.get(pkg);
-        boolean uriGrant = target != null && mUriGrants.hasAny(target, info);
-        if (!info.exported && !uriGrant) throw new SecurityException("Content provider is not exported");
-        if (uriGrant || holds(pkg, info.readPermission) || holds(pkg, info.writePermission)) return;
-        if (info.pathPermissions != null) {
-            for (android.content.pm.PathPermission path : info.pathPermissions) {
-                if ((path.getReadPermission() != null && holds(pkg, path.getReadPermission()))
-                        || (path.getWritePermission() != null && holds(pkg, path.getWritePermission()))) return;
+        if (pkg == null) return;
+        synchronized (mPm) {
+            ApkPackage target = mPm.get(pkg);
+            if (target == null || target.uidPending() || target.uid() < 0
+                    || mPm.isRemovalPending(pkg)) throw new SecurityException("Unknown content caller");
+            ApkPackage owner = mPm.get(info.packageName);
+            // Android provider ownership is per UID, including admitted shared-UID
+            // packages. Invalid or retired metadata cannot establish that identity.
+            if (info.applicationInfo != null && info.applicationInfo.uid >= 0
+                    && owner != null && !owner.uidPending() && !mPm.isRemovalPending(owner.packageName)
+                    && owner.uid() == info.applicationInfo.uid && target.uid() == owner.uid()) return;
+            boolean uriGrant = mUriGrants.hasAny(target, info);
+            if (!info.exported && !uriGrant) throw new SecurityException("Content provider is not exported");
+            if (uriGrant || holds(pkg, info.readPermission) || holds(pkg, info.writePermission)) return;
+            if (info.pathPermissions != null) {
+                for (android.content.pm.PathPermission path : info.pathPermissions) {
+                    if ((path.getReadPermission() != null && holds(pkg, path.getReadPermission()))
+                            || (path.getWritePermission() != null && holds(pkg, path.getWritePermission()))) return;
+                }
             }
+            throw new SecurityException("Content provider permissions denied");
         }
-        throw new SecurityException("Content provider permissions denied");
+    }
+
+    /**
+     * {@code pkg}'s registered providers, one per component. ApkPackage selects the
+     * first declaration before applying installed state, as ComponentResolver does.
+     * Bind and publication therefore agree with authority lookup even when duplicate
+     * declarations differ in process, enabled state, permissions or authorities.
+     */
+    static List<ProviderInfo> declaredProviders(ApkPackage pkg, long flags) {
+        return pkg.providers(flags);
     }
 
     /** The providers a process of {@code ai}'s package installs at bindApplication. */
@@ -214,12 +283,15 @@ final class ContentProviders {
         if (p == null) return List.of();
         List<ProviderInfo> result = new ArrayList<>();
         String processName = mAtm.componentProcess(ai.packageName, ai.processName);
-        for (ProviderInfo info : p.providers(PackageManager.GET_META_DATA
+        for (ProviderInfo info : declaredProviders(p, PackageManager.GET_META_DATA
                 | PackageManager.GET_SHARED_LIBRARY_FILES)) {
             if (processName.equals(mAtm.componentProcess(info.packageName, info.processName))) {
                 result.add(info);
             }
         }
+        // AOSP ContentProviderHelper.generateApplicationProvidersLocked initializes
+        // providers in descending initOrder and preserves manifest order for ties.
+        result.sort((a, b) -> Integer.compare(b.initOrder, a.initOrder));
         if (app != null) synchronized (this) {
             if (app.exiting || app.dead || app.packageCode != p
                     || mPm.get(p.packageName) != p || mPm.isRemovalPending(p.packageName)) return List.of();
@@ -261,6 +333,14 @@ final class ContentProviders {
         }
         if (UserDictionaryProvider.AUTHORITY.equals(name)) {
             return mUserDictionary.holder();
+        }
+        if (DocumentsStorageProvider.AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration == null || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Documents authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mDocumentsStorage.holder();
         }
         final ProviderInfo declared;
         final ApkPackage declaredCode;
@@ -443,7 +523,7 @@ final class ContentProviders {
             // A late publish cannot recreate it or turn an ordinary race into a crash.
             if (!current(admission) || admission.owner != pkg) continue;
             ProviderInfo declared = null;
-            for (ProviderInfo candidate : pkg.providers(PackageManager.GET_META_DATA
+            for (ProviderInfo candidate : declaredProviders(pkg, PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES | PackageManager.MATCH_DISABLED_COMPONENTS)) {
                 if (candidate.name.equals(info.name)) { declared = candidate; break; }
             }
@@ -579,6 +659,58 @@ final class ContentProviders {
         }
     }
 
+    /**
+     * A client observed DeadObjectException before the process death recipient ran.
+     * A report is only evidence: probe the exact published Binder outside all lifecycle
+     * monitors, then recheck the connection, publication and process incarnations.
+     */
+    void unstableProviderDied(IBinder connection) {
+        if (connection == null) throw new NullPointerException("connection is null");
+        if (!(connection instanceof Connection)) {
+            throw new IllegalArgumentException("Not a content provider connection");
+        }
+        int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
+        boolean system = mCallers.isSystem();
+        ActivityTaskManagerService.ProcessRecord caller = system ? null : mAtm.callerProcess(pid);
+        if (!system) mCallers.callerPackage();
+        final Connection reported;
+        synchronized (this) {
+            reported = callerConnectionLocked(connection, system, pid, uid);
+            if (reported == null) return;
+            if (!system && (reported.client != caller || reported.clientCode == null
+                    || mPm.get(reported.client.packageName) != reported.clientCode)) {
+                throw new SecurityException("Provider connection belongs to a retired caller");
+            }
+        }
+
+        // pingBinder can cross a process boundary. Do not let a client kill a live
+        // provider, or hold the service/ATM monitors while awaiting the provider.
+        if (reported.provider.pingBinder()) return;
+
+        // ATM -> providers is the existing provider-retirement lock order. Mark the
+        // authenticated owner dead before releasing either lock so new work cannot
+        // reuse it, without turning an unexpected death into an intentional force-stop.
+        synchronized (mAtm) {
+            synchronized (this) {
+                ContentProviderHolder published = mPublished.get(reported.authority);
+                if (mConnections.get(connection) != reported
+                        || !system && (mAtm.callerProcess(pid) != caller
+                            || caller.exiting || caller.dead
+                            || mPm.get(caller.packageName) != reported.clientCode)
+                        || published == null || published.provider.asBinder() != reported.provider
+                        || mPublishedBy.get(reported.authority) != reported.owner
+                        || mPublishedCode.get(reported.authority) != reported.ownerCode
+                        || mPm.get(reported.owner.packageName) != reported.ownerCode
+                        || mAtm.callerProcess(reported.owner.pid) != reported.owner
+                        || reported.owner.packageCode != reported.ownerCode) return;
+                reported.owner.dead = true;
+            }
+        }
+        long identity = Binder.clearCallingIdentity();
+        try { mAtm.processDied(reported.owner); }
+        finally { Binder.restoreCallingIdentity(identity); }
+    }
+
     /** Whether processes of other packages use the process's providers. */
     synchronized boolean hasClients(ActivityTaskManagerService.ProcessRecord app) {
         for (Map.Entry<String, Set<ActivityTaskManagerService.ProcessRecord>> clients : mClients.entrySet()) {
@@ -661,6 +793,11 @@ final class ContentProviders {
             // A waiter must re-resolve disabled declarations instead of waiting two minutes.
             notifyAll();
         }
+        notifyLostConnections(lost);
+    }
+
+    /** Connections have already been removed; application callbacks run without locks. */
+    private void notifyLostConnections(List<Connection> lost) {
         for (Connection connection : lost) {
             if (connection.stable > 0) {
                 mAtm.providerDependencyDied(connection.client, connection.clientCode);
@@ -678,18 +815,25 @@ final class ContentProviders {
      * The process went away: so did the providers it published, and its use of others'.
      * Returns the processes that lost their last client.
      */
-    synchronized List<ActivityTaskManagerService.ProcessRecord> processDied(
+    List<ActivityTaskManagerService.ProcessRecord> processDied(
             ActivityTaskManagerService.ProcessRecord app) {
-        unpublish(app);
-        mConnections.values().removeIf(c -> c.client == app || c.owner == app);
+        List<Connection> lost = new ArrayList<>();
         List<ActivityTaskManagerService.ProcessRecord> unused = new ArrayList<>();
-        for (Map.Entry<String,
-                Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {
-            if (e.getValue().remove(app) && e.getValue().isEmpty()) {
-                ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(e.getKey());
-                if (owner != null && !hasClients(owner) && !unused.contains(owner)) unused.add(owner);
+        synchronized (this) {
+            unpublish(app);
+            mConnections.values().removeIf(c -> {
+                if (c.owner == app && c.client != app) lost.add(c);
+                return c.client == app || c.owner == app;
+            });
+            for (Map.Entry<String,
+                    Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {
+                if (e.getValue().remove(app) && e.getValue().isEmpty()) {
+                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(e.getKey());
+                    if (owner != null && !hasClients(owner) && !unused.contains(owner)) unused.add(owner);
+                }
             }
         }
+        notifyLostConnections(lost);
         return unused;
     }
 }

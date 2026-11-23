@@ -5,6 +5,8 @@ param(
     [string] $CompanionApk,
     [string] $GsfProxyApk,
     [string] $StoreApk,
+    # The microG release the passed APKs are (Setup's own downloads).
+    [string] $Release,
     [switch] $AutoDownload,
     [switch] $InstallStore,
     [switch] $StoreOnly,
@@ -21,42 +23,10 @@ $RuntimeDir = if ($RuntimeDir) { [IO.Path]::GetFullPath($RuntimeDir) } else { $s
 $marker = Join-Path $ProfileRoot 'microg.enabled'
 $packages = 'com.google.android.gms', 'com.android.vending', 'com.google.android.gsf'
 function Initialize-MicrogDefaults([string] $ProfileRoot) {
-    # Pre-configure microG settings (Checkin & GCM enabled out of the box)
-    $prefsDir = Join-Path $ProfileRoot 'data/data/com.google.android.gms/shared_prefs'
-    New-Item -ItemType Directory -Force -Path $prefsDir | Out-Null
-
-    $checkinXml = @"
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <boolean name="checkin_enable_service" value="true" />
-</map>
-"@
-    if (-not (Test-Path -LiteralPath (Join-Path $prefsDir 'checkin.xml'))) {
-    Set-Content -LiteralPath (Join-Path $prefsDir 'checkin.xml') -Value $checkinXml -Encoding UTF8
-    }
-
-    $gcmXml = @"
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <boolean name="gcm_enable_mcs_service" value="true" />
-</map>
-"@
-    if (-not (Test-Path -LiteralPath (Join-Path $prefsDir 'gcm.xml'))) {
-    Set-Content -LiteralPath (Join-Path $prefsDir 'gcm.xml') -Value $gcmXml -Encoding UTF8
-    }
-
-    $settingsXml = @"
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <boolean name="checkin_enable_service" value="true" />
-    <boolean name="gcm_enable_mcs_service" value="true" />
-</map>
-"@
-    if (-not (Test-Path -LiteralPath (Join-Path $prefsDir 'org.microg.gms.settings_preferences.xml'))) {
-    Set-Content -LiteralPath (Join-Path $prefsDir 'org.microg.gms.settings_preferences.xml') -Value $settingsXml -Encoding UTF8
-    }
-
-    # Pre-seed runtime permissions for official microG
+    # Google device registration (Check-in) and Cloud Messaging stay microG's own
+    # opt-in settings: this helper never writes microG's preferences.
+    # Grants location and notifications to the verified official microG signer when
+    # none is recorded; an existing user decision (including a denial) is kept.
     $permFile = Join-Path $ProfileRoot 'data/system/runtime-permissions'
     $permLines = @()
     if (Test-Path -LiteralPath $permFile) {
@@ -90,7 +60,7 @@ function Install-AuroraStore {
     }
 if ($Disable -and $Remove) { throw (Get-GesherText 'microg_choose') }
 if (($Disable -or $Remove) -and ($GmsCoreApk -or $CompanionApk -or $GsfProxyApk -or
-        $StoreApk -or $AutoDownload -or $InstallStore -or $StoreOnly)) {
+        $Release -or $StoreApk -or $AutoDownload -or $InstallStore -or $StoreOnly)) {
     throw (Get-GesherText 'microg_no_files')
 }
 if ($StoreOnly -or ($InstallStore -and -not $AutoDownload -and -not $GmsCoreApk -and
@@ -113,11 +83,38 @@ if (Test-Path -LiteralPath $ready) {
 }
 if ($Remove) {
     if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker }
+    $releaseFile = Join-Path $ProfileRoot 'microg.release'
+    if (Test-Path -LiteralPath $releaseFile) { Remove-Item -LiteralPath $releaseFile }
     foreach ($package in $packages) {
         # Only known filenames; never recursively remove application/account data.
         foreach ($name in 'base.apk', 'base.apk.new') {
             $file = Join-Path $ProfileRoot "system/priv-app/$package/$name"
             if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
+        }
+        # The window icon com.gesher.app.shell.AppShell wrote for the staged addon, and its
+        # folder once empty (an installed update's shortcut record is gesher-app's).
+        $shell = Join-Path $ProfileRoot "data/data/$package/gesher-shell"
+        $icon = Join-Path $shell 'icon.ico'
+        if (-not (Test-Path -LiteralPath (Join-Path $shell 'shortcut.properties')) -and
+                (Test-Path -LiteralPath $icon -PathType Leaf)) {
+            Remove-Item -LiteralPath $icon
+            if (-not @(Get-ChildItem -LiteralPath $shell -Force).Count) { Remove-Item -LiteralPath $shell }
+        }
+        # Libraries startup extracted from these APKs; only regular .so files in
+        # plain (non-reparse) directories, and those directories only once empty.
+        $libRoot = Join-Path $ProfileRoot "system/priv-app/$package/lib"
+        if ((Test-Path -LiteralPath $libRoot -PathType Container) -and
+                -not ((Get-Item -LiteralPath $libRoot -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            foreach ($isa in 'x86_64', 'arm64') {
+                $libDir = Join-Path $libRoot $isa
+                if (-not (Test-Path -LiteralPath $libDir -PathType Container)) { continue }
+                if ((Get-Item -LiteralPath $libDir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+                Get-ChildItem -LiteralPath $libDir -Filter '*.so' -File -Force |
+                    Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+                    Remove-Item -Force
+                if (-not @(Get-ChildItem -LiteralPath $libDir -Force).Count) { Remove-Item -LiteralPath $libDir }
+            }
+            if (-not @(Get-ChildItem -LiteralPath $libRoot -Force).Count) { Remove-Item -LiteralPath $libRoot }
         }
     }
     Write-Host (Get-GesherText 'microg_removed')
@@ -164,14 +161,14 @@ foreach ($entry in $entries) {
     }
     $entry.Source = (Resolve-Path -LiteralPath $entry.Source).ProviderPath
 }
+$runtimeFilesHelper = Join-Path $RuntimeDir 'gesher-runtime-files.ps1'
+if (-not (Test-Path -LiteralPath $runtimeFilesHelper -PathType Leaf)) {
+    $runtimeFilesHelper = Join-Path $scriptRoot 'gesher-runtime-files.ps1'
+}
+. $runtimeFilesHelper
 $runtimeDrive = [IO.Path]::GetPathRoot($RuntimeDir).TrimEnd('\').TrimEnd(':')
 function AndroidPath([string] $path) {
-    $full = [IO.Path]::GetFullPath($path) -replace '\\', '/'
-    if ($full -match '^([A-Za-z]):(/.*)$') {
-        if ($Matches[1] -ieq $runtimeDrive) { return $Matches[2] }
-        return "/mnt/$($Matches[1].ToLower())$($Matches[2])"
-    }
-    return $full
+    return ConvertTo-GesherAndroidPath -Path ([IO.Path]::GetFullPath($path)) -BaseDrive $runtimeDrive
 }
 $dalvikvm = Join-Path $RuntimeDir 'dalvikvm.exe'
 if (-not (Test-Path -LiteralPath $dalvikvm)) {
@@ -235,6 +232,19 @@ try {
         Move-Item -LiteralPath (Join-Path $slot 'base.apk.new') -Destination (Join-Path $slot 'base.apk') -Force
     }
     Set-Content -LiteralPath $marker -Value 'official-microg-v1' -Encoding ASCII
+    # The release Setup compares to offer a microG update (gesher.iss
+    # MicrogRelease): the one -AutoDownload fetches when no APK was passed, or
+    # the -Release Setup gives for its own downloads; otherwise unknown.
+    $releaseFile = Join-Path $ProfileRoot 'microg.release'
+    $passed = @('GmsCoreApk', 'CompanionApk', 'GsfProxyApk' |
+        Where-Object { $PSBoundParameters.ContainsKey($_) }).Count
+    $stagedRelease = if ($Release) { $Release }
+        elseif ($AutoDownload -and -not $passed) { 'v0.3.17.252432' }
+    if ($stagedRelease) {
+        Set-Content -LiteralPath $releaseFile -Value $stagedRelease -Encoding ASCII
+    } elseif (Test-Path -LiteralPath $releaseFile) {
+        Remove-Item -LiteralPath $releaseFile
+    }
 
     Initialize-MicrogDefaults $ProfileRoot
 

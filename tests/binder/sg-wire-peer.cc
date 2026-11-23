@@ -124,6 +124,7 @@ struct Peer {
 struct Delivery {
   uint64_t buffer = 0;
   HANDLE staging = nullptr;
+  HANDLE shared_staging = nullptr;
   uint32_t code = 0;
   int32_t sender_pid = 0;
 };
@@ -141,22 +142,35 @@ bool Next(Peer* peer, Delivery* delivery) {
         if (size > reply.data.size() - reply.at) return false;
         reply.at += size; continue;
       }
-      binder_transaction_data tr; uint64_t extra;
-      if (!reply.Get(&tr) || !reply.Get(&delivery->buffer) || !reply.Get(&extra)) return false;
+      binder_transaction_data tr; uint64_t extra; uint32_t description_count;
+      if (!reply.Get(&tr) || !reply.Get(&delivery->buffer) || !reply.Get(&extra) ||
+          !reply.Get(&description_count)) return false;
       const uint64_t remaining = reply.data.size() - reply.at;
       if (tr.data_size > remaining || tr.offsets_size > remaining - tr.data_size ||
-          extra > remaining - tr.data_size - tr.offsets_size || tr.offsets_size % 8) return false;
+          extra > remaining - tr.data_size - tr.offsets_size || tr.offsets_size % 8 ||
+          description_count > tr.offsets_size / 8 ||
+          static_cast<uint64_t>(description_count) * sizeof(wire::FileDescription) >
+              remaining - tr.data_size - tr.offsets_size - extra) return false;
       const uint8_t* data = reply.data.data() + reply.at;
       const uint8_t* offsets = data + tr.data_size;
+      const uint8_t* descriptions = offsets + tr.offsets_size + extra;
       for (size_t at = 0; at < tr.offsets_size; at += 8) {
         uint64_t offset; memcpy(&offset, offsets + at, 8);
         if (offset > tr.data_size || sizeof(binder_fd_object) > tr.data_size - offset) continue;
         binder_fd_object object; memcpy(&object, data + offset, sizeof(object));
-        if (object.hdr.type == BINDER_TYPE_FD) delivery->staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(object.pad_binder));
+        if (object.hdr.type == BINDER_TYPE_FD) {
+          delivery->staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(object.pad_binder));
+          for (uint32_t index = 0; index < description_count; ++index) {
+            wire::FileDescription description;
+            memcpy(&description, descriptions + index * sizeof(description), sizeof(description));
+            if (description.object_offset == offset)
+              delivery->shared_staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(description.shared_handle));
+          }
+        }
       }
       delivery->code = tr.code;
       delivery->sender_pid = tr.sender_pid;
-      return delivery->staging != nullptr;
+      return delivery->staging != nullptr && delivery->shared_staging != nullptr;
     }
     Sleep(20);
   }
@@ -185,7 +199,7 @@ bool RejectedDimensions(Peer* peer) {
     if (test == 1) { sg.transaction_data.data_size = 1; sg.transaction_data.offsets_size = (64u << 20); }
     if (test == 2) { sg.transaction_data.data_size = 136; sg.transaction_data.offsets_size = 24; sg.buffers_size = 120; } // absent body
     if (test == 3) sg.buffers_size = 1;
-    message.Put(sg); message.Put<int32_t>(0);
+    message.Put(sg); message.Put<int32_t>(0); message.Put<uint32_t>(0);
     int32_t status; uint32_t consumed;
     const int32_t expected = test == 2 ? -EFAULT : -EINVAL;
     if (!Send(peer->thread, message) || !Receive(peer->thread, &reply) ||
@@ -203,7 +217,8 @@ int Main(const char* scenario, const std::string& prefix) {
   if (!report.Check(peer.Read(&enter, true) && binder_sg_fixture::Mark(prefix + ".ready"), "raw looper registered")) return report.Finish();
   if (!report.Check(binder_sg_fixture::WaitFile(prefix + ".release"), "delivery held until real sender snapshot")) return report.Finish();
   Delivery delivery;
-  if (!report.Check(Next(&peer, &delivery) && IsLive(delivery.staging), "broker supplies actual live FD staging handle")) return report.Finish();
+  if (!report.Check(Next(&peer, &delivery) && IsLive(delivery.staging) && IsLive(delivery.shared_staging),
+      "broker supplies live file and OFD staging handles")) return report.Finish();
   report.Check(delivery.sender_pid > 0 && static_cast<DWORD>(delivery.sender_pid) != GetCurrentProcessId(),
       "actual SG sender PID differs from raw receiver PID");
   const bool before = !strcmp(scenario, "wire-beforeclaim");
@@ -214,7 +229,7 @@ int Main(const char* scenario, const std::string& prefix) {
   const bool claim_loss = !strcmp(scenario, "wire-claimloss");
   const bool finish_loss = !strcmp(scenario, "wire-finishloss");
   const bool queue = !strcmp(scenario, "wire-queue");
-  HANDLE owned = nullptr;
+  HANDLE owned = nullptr, owned_shared = nullptr;
   auto die = [&](const char* boundary) {
     report.Check(binder_sg_fixture::Mark(prefix + ".death"), boundary);
     // Abrupt real process exit deliberately skips all Peer/FD destructors.
@@ -228,6 +243,9 @@ int Main(const char* scenario, const std::string& prefix) {
       if (death_claimed) die("receiver dies after actual claim success before adoption");
       if (!report.Check(DuplicateHandle(GetCurrentProcess(), delivery.staging, GetCurrentProcess(), &owned,
           0, FALSE, DUPLICATE_SAME_ACCESS) && owned != delivery.staging && ProveOwnedFile(owned), "distinct adopted copy reads sender file identity")) return report.Finish();
+      if (!report.Check(DuplicateHandle(GetCurrentProcess(), delivery.shared_staging, GetCurrentProcess(),
+          &owned_shared, 0, FALSE, DUPLICATE_SAME_ACCESS) && owned_shared != delivery.shared_staging,
+          "shared OFD has a distinct adopted owner")) return report.Finish();
       if (death_installed) die("receiver dies with actual separately adopted file copy");
       if (death_finished) {
         report.Check(peer.Buffer(wire::kFinishBuffer, delivery.buffer, true), "actual finish accepted before receiver death");
@@ -240,12 +258,15 @@ int Main(const char* scenario, const std::string& prefix) {
     }
   }
   peer.CloseThread();
-  report.Check(WaitClosed(delivery.staging), "disconnect/finish closes broker staging exactly once");
+  report.Check(WaitClosed(delivery.staging) && WaitClosed(delivery.shared_staging),
+      "disconnect/finish closes file and OFD staging exactly once");
   if (owned) {
-    report.Check(IsLive(owned) && ProveOwnedFile(owned), "caller-owned copy survives lost ACK and broker rollback");
+    report.Check(IsLive(owned) && IsLive(owned_shared) && ProveOwnedFile(owned),
+        "caller-owned file and OFD survive lost ACK and broker rollback");
     if (!report.Check(peer.OpenThread() && peer.Free(delivery.buffer), "fresh receiver thread can free old delivery after disconnect")) return report.Finish();
     report.Check(IsLive(owned) && ProveOwnedFile(owned), "real buffer free never closes distinct adopted descriptor");
     CloseHandle(owned);
+    CloseHandle(owned_shared);
     HANDLE reused = nullptr;
     std::vector<HANDLE> held;
     for (unsigned i = 0; i < 4096 && !reused; ++i) {

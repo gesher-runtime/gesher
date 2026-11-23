@@ -102,6 +102,11 @@ public final class NativeWindow implements AutoCloseable {
     nShow(ptr());
   }
 
+  /** Restores a minimized window, preserving its previous maximized placement. */
+  public void restore() {
+    nRestore(ptr());
+  }
+
   public void hide() {
     nHide(ptr());
   }
@@ -121,6 +126,15 @@ public final class NativeWindow implements AutoCloseable {
 
   public void setTitle(String title) {
     nSetTitle(ptr(), title);
+  }
+
+  /**
+   * The app's tasks listed at the top of the window menu (one window per app, ADR 0088),
+   * {@code checked} the shown one (-1: none); none when {@code labels} is empty. Choosing
+   * item i queues {@link #EVENT_TASK_MENU} with button i.
+   */
+  public void setTaskMenu(String[] labels, int checked) {
+    nSetTaskMenu(ptr(), labels, checked);
   }
 
   /** Whether the user may resize (and maximize) the window. */
@@ -187,6 +201,8 @@ public final class NativeWindow implements AutoCloseable {
   public static final int EVENT_RESIZE = 8;
   public static final int EVENT_FOCUS = 9;
   public static final int EVENT_CLOSE = 10;
+  /** An item of the window menu's task list (setTaskMenu): button, its index. */
+  public static final int EVENT_TASK_MENU = 31;
 
   /**
    * Takes the next queued event into {@code out} (13 values: type, x, y, button, key,
@@ -262,6 +278,7 @@ public final class NativeWindow implements AutoCloseable {
   private static native long nCreate(String title, int width, int height);
   private static native void nDestroy(long ptr);
   private static native void nShow(long ptr);
+  private static native void nRestore(long ptr);
   private static native Surface nGetSurface(long ptr);
   private static native int nGetWidth(long ptr);
   private static native int nGetHeight(long ptr);
@@ -273,6 +290,7 @@ public final class NativeWindow implements AutoCloseable {
   private static native void nMinimize(long ptr);
   private static native void nShowOffscreen(long ptr);
   private static native void nSetTitle(long ptr, String title);
+  private static native void nSetTaskMenu(long ptr, String[] labels, int checked);
   private static native void nSetResizable(long ptr, boolean resizable);
   private static native void nSetClientSize(long ptr, int width, int height);
   private static native void nSetSurfaceInsets(long ptr, int left, int top, int right, int bottom);

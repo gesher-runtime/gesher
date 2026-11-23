@@ -1,0 +1,207 @@
+{
+  "scope": "Selected SDK36 declarations on freshly compiled production classes; no runtime percentage",
+  "sdk_sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a",
+  "classes": {
+    "android.net.wifi.WifiNetworkSpecifier": {
+      "declarations": [
+        {
+          "kind": "field",
+          "name": "CREATOR",
+          "descriptor": "Landroid/os/Parcelable$Creator;",
+          "sdk_flags": 25,
+          "candidate_flags": 25
+        },
+        {
+          "kind": "method",
+          "name": "canBeSatisfiedBy",
+          "descriptor": "(Landroid/net/NetworkSpecifier;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "describeContents",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "equals",
+          "descriptor": "(Ljava/lang/Object;)Z",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getBand",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "getPreferredChannelFrequenciesMhz",
+          "descriptor": "()[I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "hashCode",
+          "descriptor": "()I",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "redact",
+          "descriptor": "()Landroid/net/NetworkSpecifier;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "toString",
+          "descriptor": "()Ljava/lang/String;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "writeToParcel",
+          "descriptor": "(Landroid/os/Parcel;I)V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "aeaba66da563a1e6bc77f7e146adedd76584ea54a1e7d87900832477761ff72b"
+    },
+    "android.net.wifi.WifiNetworkSpecifier$Builder": {
+      "declarations": [
+        {
+          "kind": "method",
+          "name": "<init>",
+          "descriptor": "()V",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "build",
+          "descriptor": "()Landroid/net/wifi/WifiNetworkSpecifier;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setBand",
+          "descriptor": "(I)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setBssid",
+          "descriptor": "(Landroid/net/MacAddress;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setBssidPattern",
+          "descriptor": "(Landroid/net/MacAddress;Landroid/net/MacAddress;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsEnhancedOpen",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setIsHiddenSsid",
+          "descriptor": "(Z)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setPreferredChannelsFrequenciesMhz",
+          "descriptor": "([I)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSsid",
+          "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setSsidPattern",
+          "descriptor": "(Landroid/os/PatternMatcher;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa2EnterpriseConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa2Passphrase",
+          "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa3Enterprise192BitModeConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa3EnterpriseConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa3EnterpriseStandardModeConfig",
+          "descriptor": "(Landroid/net/wifi/WifiEnterpriseConfig;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        },
+        {
+          "kind": "method",
+          "name": "setWpa3Passphrase",
+          "descriptor": "(Ljava/lang/String;)Landroid/net/wifi/WifiNetworkSpecifier$Builder;",
+          "sdk_flags": 1,
+          "candidate_flags": 1
+        }
+      ],
+      "compiled_sha256": "5df7ba0b837a8b7af7bfb88dd8d7ed44349176c719cf092a8c08baf88c574c6e"
+    }
+  },
+  "compile_target": "Java 17 against actual Gesher core module and framework classes",
+  "candidate_dex": {
+    "artifact_sha256": "cd91d6a96ca966b056f2f15334927acf0332c12f0aabc71062a690f67a17412b",
+    "scope": "Actual Android v2 candidate DEX with freshly compiled providers; not a complete Windows distribution census.",
+    "sdk_declarations_present": {
+      "android.net.wifi.WifiNetworkSpecifier": 10,
+      "android.net.wifi.WifiNetworkSpecifier$Builder": 16
+    }
+  }
+}

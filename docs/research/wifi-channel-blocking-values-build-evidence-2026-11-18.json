@@ -1,0 +1,214 @@
+{
+  "scope": "Focused A02 value-provider addition; build and provider evidence, not runtime support percentage",
+  "base_commit": "826ba8a0e87335607350a7ced029b97cc232e324",
+  "compiled_source_commit": "d6fb1130558c4b288884089997cad2c622839977",
+  "prerequisite_prs": [],
+  "selected_public_types": [
+    "android.net.wifi.WifiAvailableChannel",
+    "android.net.wifi.BlockingOption",
+    "android.net.wifi.BlockingOption$Builder"
+  ],
+  "sdk36_public_protected_declarations": 27,
+  "builds": {
+    "before-app": {
+      "wall_seconds": 31.887,
+      "child_user_cpu_seconds": 80.316317,
+      "child_system_cpu_seconds": 5.673967,
+      "maximum_child_rss_kib": 658812,
+      "rss_scope": "Maximum child high-water mark, not concurrent process-tree total",
+      "exit_code": 0,
+      "log_sha256": "708e9916a0ec7c41d022b57762c1d1e2fe24329150e74a1e1d356ab5da161f63"
+    },
+    "before-services": {
+      "wall_seconds": 10.012,
+      "child_user_cpu_seconds": 45.884518,
+      "child_system_cpu_seconds": 1.642059,
+      "maximum_child_rss_kib": 468964,
+      "rss_scope": "Maximum child high-water mark, not concurrent process-tree total",
+      "exit_code": 0,
+      "log_sha256": "f517db2a18b64fcac347c249b4aa6ecf51169df358b67a75cb3f8724f5441e7e",
+      "dex_bytes": 1621048,
+      "dex_sha256": "2b3b6628b5bcda782b1a00346b9977f7f0a954069b6b458402a4940f172245ad"
+    },
+    "after-app": {
+      "wall_seconds": 24.453,
+      "child_user_cpu_seconds": 75.974207,
+      "child_system_cpu_seconds": 3.581169,
+      "maximum_child_rss_kib": 673756,
+      "rss_scope": "Maximum child high-water mark, not concurrent process-tree total",
+      "exit_code": 0,
+      "log_sha256": "4188df1655f99991b90dd4c831d487628b43ed530c64230c1fc205070c60d5f7"
+    },
+    "after-services": {
+      "wall_seconds": 9.364,
+      "child_user_cpu_seconds": 41.200417,
+      "child_system_cpu_seconds": 1.575997,
+      "maximum_child_rss_kib": 447512,
+      "rss_scope": "Maximum child high-water mark, not concurrent process-tree total",
+      "exit_code": 0,
+      "log_sha256": "c6f23f4aa2e5ec672699233839cf7b62850e024606f5d7566ab66b0c0349e1c2",
+      "dex_bytes": 1633244,
+      "dex_sha256": "e1c884647b206c371f5c652c32ed79d12bb041a1d3a9db8c17ccabc8e7b341b6"
+    }
+  },
+  "providers": {
+    "before_app": {
+      "sha256": "46d2a751e62390ba71697393354e24543c6246b420ef5f13832545d0553fd486",
+      "bytes": 1352644,
+      "class_definitions": 2356,
+      "selected": {
+        "android.net.wifi.WifiAvailableChannel": false,
+        "android.net.wifi.BlockingOption": false,
+        "android.net.wifi.BlockingOption$Builder": false
+      },
+      "manifest": {
+        "source_id": "before_app",
+        "role": "boot",
+        "name": "gesher-app.jar",
+        "sha256": "46d2a751e62390ba71697393354e24543c6246b420ef5f13832545d0553fd486",
+        "archive_bytes": 1352644,
+        "entries": 1,
+        "uncompressed_bytes": 3240880,
+        "class_definitions": 2356,
+        "selected_members": 1,
+        "versions": {
+          "dex_039": 1
+        },
+        "encoded_member_definitions": 28918
+      },
+      "scan_seconds": 0.489
+    },
+    "after_app": {
+      "sha256": "f93794b7a67e4226d546737e17133bb68a599e08629a9dfff770db4182311e17",
+      "bytes": 1353891,
+      "class_definitions": 2364,
+      "selected": {
+        "android.net.wifi.WifiAvailableChannel": true,
+        "android.net.wifi.BlockingOption": true,
+        "android.net.wifi.BlockingOption$Builder": true
+      },
+      "manifest": {
+        "source_id": "after_app",
+        "role": "boot",
+        "name": "gesher-app.jar",
+        "sha256": "f93794b7a67e4226d546737e17133bb68a599e08629a9dfff770db4182311e17",
+        "archive_bytes": 1353891,
+        "entries": 1,
+        "uncompressed_bytes": 3245136,
+        "class_definitions": 2364,
+        "selected_members": 1,
+        "versions": {
+          "dex_039": 1
+        },
+        "encoded_member_definitions": 28975
+      },
+      "scan_seconds": 0.505
+    },
+    "before_compile": {
+      "sha256": "210334d90ef20fbcb299a592a0533beb48dadb2e3657a21aa8b710c0cf7ff5a2",
+      "bytes": 2510412,
+      "class_definitions": 1330,
+      "selected": {
+        "android.net.wifi.WifiAvailableChannel": false,
+        "android.net.wifi.BlockingOption": false,
+        "android.net.wifi.BlockingOption$Builder": false
+      },
+      "manifest": {
+        "format": "compile-only classfile JAR"
+      },
+      "scan_seconds": 0.794
+    },
+    "after_compile": {
+      "sha256": "2c4081455b624777042f7d65566271b003e29b02ad1e33860fed2da8f3085571",
+      "bytes": 2516476,
+      "class_definitions": 1337,
+      "selected": {
+        "android.net.wifi.WifiAvailableChannel": true,
+        "android.net.wifi.BlockingOption": true,
+        "android.net.wifi.BlockingOption$Builder": true
+      },
+      "manifest": {
+        "format": "compile-only classfile JAR"
+      },
+      "scan_seconds": 1.233
+    },
+    "framework": {
+      "sha256": "fed525b7fd92cfe2b82ac547172d545dd2f4073a6bb67740906b15ec7c8c1bb7",
+      "bytes": 17040072,
+      "class_definitions": 34764,
+      "selected": {
+        "android.net.wifi.WifiAvailableChannel": false,
+        "android.net.wifi.BlockingOption": false,
+        "android.net.wifi.BlockingOption$Builder": false
+      },
+      "manifest": {
+        "source_id": "framework",
+        "role": "boot",
+        "name": "framework",
+        "sha256": "fed525b7fd92cfe2b82ac547172d545dd2f4073a6bb67740906b15ec7c8c1bb7",
+        "archive_bytes": 17040072,
+        "entries": 1183,
+        "uncompressed_bytes": 44464732,
+        "class_definitions": 34764,
+        "selected_members": 5,
+        "versions": {
+          "dex_039": 5
+        },
+        "encoded_member_definitions": 456490
+      },
+      "scan_seconds": 8.492
+    }
+  },
+  "host_checks": {
+    "candidate": 96,
+    "pinned_r4": 96,
+    "exact_main_absence": "passed; closed loader rejects SDK fallback"
+  },
+  "capsule_artifact_correspondence": {
+    "candidate-classes.jar": {
+      "sha256": "006e0661fdb811d2e78d548eb94ee8bae1efc8be3ca5af8f2bef024c05466fa1",
+      "reviewed_sha256": "006e0661fdb811d2e78d548eb94ee8bae1efc8be3ca5af8f2bef024c05466fa1",
+      "identical": true
+    },
+    "candidate.jar": {
+      "sha256": "7b9830e74ecf4ebfb2998bef4f60b495815ff288d050f313145c6d65c667e3df",
+      "reviewed_sha256": "7b9830e74ecf4ebfb2998bef4f60b495815ff288d050f313145c6d65c667e3df",
+      "identical": true
+    },
+    "launcher-classes.jar": {
+      "sha256": "dd249772000f03f053f45bd2a72dd5a4325678df2f4ae6e67f8b60e3b7ec3478",
+      "reviewed_sha256": "dd249772000f03f053f45bd2a72dd5a4325678df2f4ae6e67f8b60e3b7ec3478",
+      "identical": true
+    },
+    "launcher.jar": {
+      "sha256": "90f691ca7bd4da052e83ba0a1f4d73dce89347e7d81e39e41385c72c20116325",
+      "reviewed_sha256": "90f691ca7bd4da052e83ba0a1f4d73dce89347e7d81e39e41385c72c20116325",
+      "identical": true
+    },
+    "pinned-r4-classes.jar": {
+      "sha256": "006e0661fdb811d2e78d548eb94ee8bae1efc8be3ca5af8f2bef024c05466fa1",
+      "reviewed_sha256": "006e0661fdb811d2e78d548eb94ee8bae1efc8be3ca5af8f2bef024c05466fa1",
+      "identical": true
+    },
+    "pinned-r4.jar": {
+      "sha256": "7b9830e74ecf4ebfb2998bef4f60b495815ff288d050f313145c6d65c667e3df",
+      "reviewed_sha256": "7b9830e74ecf4ebfb2998bef4f60b495815ff288d050f313145c6d65c667e3df",
+      "identical": true
+    },
+    "stock-classes.jar": {
+      "sha256": "707cbe353652c29f1b49b283b22b2b360efa6fb0699f40e0ea44f51bc7b1b7e0",
+      "reviewed_sha256": "707cbe353652c29f1b49b283b22b2b360efa6fb0699f40e0ea44f51bc7b1b7e0",
+      "identical": true
+    },
+    "stock.jar": {
+      "sha256": "a068e1c94b610209eb1ccf9597ddb61ab0b1d94c42926ed19aec549a67d2f31e",
+      "reviewed_sha256": "a068e1c94b610209eb1ccf9597ddb61ab0b1d94c42926ed19aec549a67d2f31e",
+      "identical": true
+    }
+  },
+  "limits": [
+    "Build durations are single observed runs with other work active, not a runtime performance comparison.",
+    "RSS is each child high-water mark, not total concurrent process-tree memory.",
+    "Actual Windows ART execution remains a separate qualification gate."
+  ]
+}

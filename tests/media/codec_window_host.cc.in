@@ -2,13 +2,31 @@
 // observable native-window/JNI boundaries. Logical windows stay in fixture
 // storage after refcount zero; controls never access freed memory.
 #include <atomic>
+#include <algorithm>
+#include <chrono>
 #include <condition_variable>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
+#include <vector>
+
+// <gesher/perf_trace.h>'s timing sites as production runs them without
+// GESHER_PERF_TRACE (docs/media.md, "Measuring playback"): off.
+namespace gesher::perf {
+inline bool Enabled() { return false; }
+inline int64_t Now() { return 0; }
+struct Site {
+  constexpr explicit Site(const char*, int64_t = 0) {}
+  void Add(int64_t, int64_t = 0) {}
+};
+}  // namespace gesher::perf
 
 int checks = 0, failures = 0;
 void Check(bool ok, const char* reason) {
@@ -17,8 +35,39 @@ void Check(bool ok, const char* reason) {
 }
 struct ANativeWindow { int references = 0, acquisitions = 0, releases = 0; bool retired = false; };
 struct JavaSurface { ANativeWindow* window = nullptr; bool reader = false; };
-struct JNIEnv {};
-using jobject = JavaSurface*;
+namespace android {
+constexpr int OK = 0, NO_INIT = -19, BAD_VALUE = -22, INVALID_OPERATION = -38;
+constexpr int UNKNOWN_ERROR = INT32_MIN;
+}
+using jint = int32_t;
+using jboolean = uint8_t;
+using jlong = int64_t;
+using jstring = std::string*;
+struct CodecException { int code, action; };
+using jobject = void*;
+using jthrowable = CodecException*;
+struct BufferInfo { int writes = 0; };
+struct JNIEnv {
+  std::string exception;
+  CodecException codec_exception{};
+  jstring NewStringUTF(const char* message) { return new std::string(message); }
+  jthrowable NewObject(int, int, int code, int action, jstring) {
+    codec_exception = {code, action};
+    return &codec_exception;
+  }
+  void DeleteLocalRef(jstring value) { delete value; }
+  void DeleteLocalRef(jobject) {}
+  void Throw(jthrowable) { exception = "android/media/MediaCodec$CodecException"; }
+  void CallVoidMethod(jobject object, int, int, int, jlong, int) {
+    ++static_cast<BufferInfo*>(object)->writes;
+  }
+};
+struct { int codec_exception = 1, codec_exception_ctor = 1, buffer_info_set = 1; } gJ;
+JNIEnv* AttachedEnv(const char*) { thread_local JNIEnv env; return &env; }
+bool CheckException(JNIEnv* env, const char*) { return !env->exception.empty(); }
+void jniThrow(JNIEnv* env, const char* type, const char*) { env->exception = type; }
+#define JNICALL
+@THROW_CODEC_EXCEPTION@
 void ANativeWindow_acquire(ANativeWindow* window) {
   Check(!window->retired, "acquire a live window");
   ++window->references; ++window->acquisitions;
@@ -29,10 +78,11 @@ void ANativeWindow_release(ANativeWindow* window) {
   if (--window->references == 0) window->retired = true;
 }
 ANativeWindow* ANativeWindow_fromSurface(JNIEnv*, jobject surface) {
-  if (surface->window != nullptr) ANativeWindow_acquire(surface->window);
-  return surface->window;
+  auto* value = static_cast<JavaSurface*>(surface);
+  if (value->window != nullptr) ANativeWindow_acquire(value->window);
+  return value->window;
 }
-bool IsReaderSurface(JNIEnv*, jobject surface) { return surface->reader; }
+bool IsReaderSurface(JNIEnv*, jobject surface) { return static_cast<JavaSurface*>(surface)->reader; }
 struct GlobalRef {
   jobject value;
   GlobalRef(JNIEnv*, jobject object) : value(object) {}
@@ -41,32 +91,100 @@ struct GlobalRef {
 struct VideoFrame { int id = 7; };
 std::function<void(ANativeWindow*)> on_render;
 int rendered = 0, delivered = 0;
-bool RenderFrame(ANativeWindow* window, const VideoFrame& frame) {
+bool render_ok = true, delivery_ok = true;
+int render_error = android::NO_INIT, delivery_error = android::NO_INIT;
+int64_t render_timestamp_ns = -1, reader_timestamp_ns = -1;
+int render_scaling_mode = 1;
+int RenderFrame(ANativeWindow* window, const VideoFrame& frame, int64_t timestamp_ns,
+                int video_scaling_mode = 1) {
   Check(!window->retired && frame.id == 7, "render receives live window and frame");
+  render_timestamp_ns = timestamp_ns;
+  render_scaling_mode = video_scaling_mode;
   ++rendered;
   if (on_render) on_render(window);
   Check(!window->retired, "window remains live until rendering ends");
-  return false;  // Failure also releases the render's reference.
+  return render_ok ? android::OK : render_error;
 }
 std::function<void()> on_deliver;
-void DeliverToReader(jobject, const VideoFrame&, int64_t) { ++delivered; if (on_deliver) on_deliver(); }
+int DeliverToReader(jobject, const VideoFrame&, int64_t timestamp_ns) {
+  ++delivered;
+  reader_timestamp_ns = timestamp_ns;
+  if (on_deliver) on_deliver();
+  return delivery_ok ? android::OK : delivery_error;
+}
 constexpr int kSlots = 2;
-struct Slot { bool client = false; std::shared_ptr<VideoFrame> frame; int64_t time_us = 0; };
+constexpr int kInfoTryAgainLater = -1, kInfoOutputFormatChanged = -2;
+constexpr int kCbInputAvailable = 1, kCbError = 3;
+struct Slot {
+  bool client = false;
+  std::shared_ptr<VideoFrame> frame;
+  int64_t time_us = 0;
+  int size = 0, flags = 0;
+};
+struct FakeInput { int abandonments = 0; void Abandon() { ++abandonments; } };
 class Codec {
  public:
   std::mutex lifecycle_mu_;
   std::mutex mu_;
   bool released_ = false;
-  std::condition_variable cv_;
+  bool started_ = true;
+  bool configured_ = true, fatal_ = false, failed_ = false, async_ = false;
+  bool quit_ = false, worker_running_ = false, flushed_ = false, flush_requested_ = false;
+  bool surface_eos_ = false, enc_eos_sent_ = false, output_known_ = false, format_pending_ = false;
+  bool force_key_ = false;
+  std::optional<int> pending_bitrate_, target_bitrate_;
+  int64_t last_out_us_ = 0;
+  uint64_t wait_generation_ = 0, execution_generation_ = 0, fatal_generation_ = 0;
+  std::condition_variable cv_, done_cv_;
+  std::thread worker_;
+  Slot inputs_[kSlots];
   Slot outputs_[kSlots];
+  std::unique_ptr<int> video_enc_, audio_enc_, video_, audio_;
+  std::unique_ptr<FakeInput> input_surface_;
+  std::deque<int> surface_frames_, csd_, work_, ready_, config_, pending_config_;
   ANativeWindow* window_ = nullptr;
+  int video_scaling_mode_ = 1;
   std::shared_ptr<GlobalRef> reader_;
   std::atomic<bool> frame_rendered_{true};
   int events = 0;
+  int error_events = 0;
+  CodecException callback_error{};
   int64_t last_time = -1;
-  ~Codec() { if (window_ != nullptr) ANativeWindow_release(window_); }
+  ~Codec() { Release(); }
   void PostFrameRendered(int64_t time) { ++events; last_time = time; }
+  void PostLocked(int what, int, jobject object) {
+    if (what == kCbError) {
+      ++error_events;
+      callback_error = *static_cast<CodecException*>(object);
+    }
+  }
+  bool InWork(int index) const {
+    return std::find(work_.begin(), work_.end(), index) != work_.end();
+  }
+  // The worker's decode call is a boundary. Lifecycle, retirement, waits,
+  // slot ownership and JNI status/error construction below are production.
+  void Run() {
+    std::unique_lock<std::mutex> lock(mu_);
+    for (;;) {
+      cv_.wait(lock, [&] { return quit_ || flush_requested_; });
+      if (quit_) return;
+      flush_requested_ = false;
+      done_cv_.notify_all();
+    }
+  }
+  @START@
+  @STOP@
+  @STOP_LOCKED@
+  @STOP_WORKER@
+  @RESET@
+  @RELEASE@
+  @FLUSH@
+  @DEQUEUE_INPUT@
+  @DEQUEUE_OUTPUT@
+  @POST_FATAL@
   @SET_SURFACE@
+  bool has_surface() const { return window_ != nullptr || reader_ != nullptr; }
+  @SET_VIDEO_SCALING@
   @RELEASE_OUTPUT@
   void Prepare(bool frame = true) {
     outputs_[0].client = true;
@@ -75,7 +193,213 @@ class Codec {
   }
 };
 
+Codec* jni_codec = nullptr;
+Codec* GetCodec(JNIEnv* env, jobject) {
+  if (jni_codec == nullptr || jni_codec->released_) {
+    jniThrow(env, "java/lang/IllegalStateException", "released codec");
+    return nullptr;
+  }
+  return jni_codec;
+}
+@JNI_RELEASE_OUTPUT@
+@JNI_DEQUEUE_INPUT@
+@JNI_DEQUEUE_OUTPUT@
+@JNI_SET_SURFACE@
+@JNI_START@
+@JNI_STOP@
+@JNI_FLUSH@
+@JNI_VIDEO_SCALING@
+
+void ScalingContracts() {
+  render_ok = delivery_ok = true;
+  on_render = {};
+  on_deliver = {};
+  Codec codec;
+  jni_codec = &codec;
+  JNIEnv env;
+  MC_setVideoScalingMode(&env, nullptr, 2);
+  Check(env.exception.empty() && codec.video_scaling_mode_ == 1,
+        "valid scaling without an output Surface has no effect");
+  for (int invalid : {-1, 0, 3, INT32_MAX}) {
+    env.exception.clear();
+    MC_setVideoScalingMode(&env, nullptr, invalid);
+    Check(env.exception == "java/lang/IllegalArgumentException" && codec.video_scaling_mode_ == 1,
+          "unknown scaling mode rejected before changing state");
+  }
+  env.exception.clear();
+  ANativeWindow first_window, second_window;
+  JavaSurface first{&first_window}, second{&second_window};
+  codec.SetSurface(&env, &first);
+  MC_setVideoScalingMode(&env, nullptr, 2);
+  Check(env.exception.empty() && codec.video_scaling_mode_ == 2, "crop mode admitted for a Surface");
+  std::string error;
+  codec.Prepare();
+  on_render = [&](ANativeWindow*) {
+    MC_setVideoScalingMode(&env, nullptr, 1);
+    codec.SetSurface(&env, &second);
+    Check(render_scaling_mode == 2, "in-flight frame keeps its admitted scaling during mode and Surface changes");
+  };
+  Check(codec.ReleaseOutput(0, true, true, 123, &error), "cropped frame releases normally");
+  Check(render_scaling_mode == 2 && render_timestamp_ns == 123, "render receives the mode and timestamp together");
+  on_render = {};
+  codec.Prepare();
+  Check(codec.ReleaseOutput(0, true, true, 456, &error) && render_scaling_mode == 1,
+        "next released frame uses the live mode on the replacement Surface");
+  MC_setVideoScalingMode(&env, nullptr, 2);
+  codec.Reset();
+  Check(codec.video_scaling_mode_ == 1, "reset retires session scaling");
+  MC_setVideoScalingMode(&env, nullptr, 2);
+  Check(env.exception.empty(), "scaling call does not require execution state");
+  codec.Release();
+  for (int mode : {1, 2, -1, 3}) {
+    env.exception.clear();
+    MC_setVideoScalingMode(&env, nullptr, mode);
+    Check(env.exception == "java/lang/IllegalStateException", "released-state error takes precedence over mode validation");
+  }
+  jni_codec = nullptr;
+}
+
+void ReleaseErrorContracts() {
+  for (bool reader : {false, true}) {
+    for (bool has_timestamp : {false, true}) {
+      ANativeWindow window;
+      JavaSurface surface{reader ? nullptr : &window, reader};
+      Codec codec;
+      codec.SetSurface(nullptr, &surface);
+      jni_codec = &codec;
+      codec.Prepare();
+      render_ok = delivery_ok = false;
+      render_error = delivery_error = android::BAD_VALUE;
+      JNIEnv env;
+      MC_releaseOutputBuffer(&env, nullptr, 0, true, has_timestamp, 0);
+      Check(env.exception.empty() && codec.events == 0 && !codec.outputs_[0].client,
+            "other renderer failures follow AOSP consumption without an invented abandonment error");
+
+      env = {};
+      MC_releaseOutputBuffer(&env, nullptr, -1, true, has_timestamp, 0);
+      Check(env.exception == "android/media/MediaCodec$CodecException"
+                && env.codec_exception.code == -ERANGE && env.codec_exception.action == 0,
+            "out-of-range output index retains Android's error status");
+      env = {};
+      MC_releaseOutputBuffer(&env, nullptr, 0, true, has_timestamp, 0);
+      Check(env.exception == "android/media/MediaCodec$CodecException"
+                && env.codec_exception.code == -EACCES && env.codec_exception.action == 0,
+            "already-consumed output index retains Android's ownership error");
+      codec.started_ = false;
+      env = {};
+      MC_releaseOutputBuffer(&env, nullptr, 0, true, has_timestamp, 0);
+      Check(env.exception == "java/lang/IllegalStateException",
+            "public nonexecuting release maps INVALID_OPERATION to IllegalStateException");
+
+      std::string error;
+      Check(codec.Start(&error), "the configured codec starts for the fatal render scenario");
+      codec.Prepare();
+      codec.outputs_[1] = codec.outputs_[0];
+      codec.inputs_[0].client = true;
+      std::weak_ptr<VideoFrame> output = codec.outputs_[1].frame;
+      const uint64_t generation = codec.execution_generation_;
+      codec.async_ = true;
+      render_error = delivery_error = android::NO_INIT;
+      env = {};
+      MC_releaseOutputBuffer(&env, nullptr, 0, true, has_timestamp, 0);
+      Check(env.exception == "android/media/MediaCodec$CodecException"
+                && env.codec_exception.code == -19 && env.codec_exception.action == 0,
+            "abandoned window/reader reaches Java as a fatal NO_INIT CodecException");
+      Check(!codec.outputs_[0].client && codec.outputs_[0].frame == nullptr && codec.events == 0,
+            "failed output remains consumed and emits no frame-rendered callback");
+      Check(reader || window.references == 0,
+            "fatal retirement releases codec and borrowed window references");
+      Check(codec.fatal_ && !codec.started_ && !codec.configured_ && !codec.worker_.joinable(),
+            "fatal consumer failure stops the worker and retires execution");
+      Check(!codec.inputs_[0].client && !codec.outputs_[1].client && output.expired(),
+            "fatal retirement invalidates other input/output ownership and frames");
+      Check(codec.error_events == 1 && codec.callback_error.code == android::UNKNOWN_ERROR
+                && codec.callback_error.action == 0,
+            "actual async callback construction reports CCodec's fatal component error once");
+      codec.RetireSurfaceFailure(generation, "duplicate completion");
+      Check(codec.error_events == 1, "duplicate fatal completion cannot send another error");
+
+      ANativeWindow replacement;
+      JavaSurface next{reader ? nullptr : &replacement, reader};
+      env = {};
+      MC_setSurface(&env, nullptr, &next);
+      Check(env.exception == "java/lang/IllegalStateException" && replacement.acquisitions == 0,
+            "surface replacement cannot revive a failed codec or acquire a new window");
+      for (auto operation : {MC_start, MC_stop, MC_flush}) {
+        env = {};
+        operation(&env, nullptr);
+        Check(env.exception == "java/lang/IllegalStateException", "start/stop/flush require reset after fatal failure");
+      }
+      env = {};
+      MC_dequeueInputBuffer(&env, nullptr, 0);
+      Check(env.exception == "java/lang/IllegalStateException", "new input dequeue rejects fatal state through JNI");
+      env = {};
+      BufferInfo info;
+      MC_dequeueOutputBuffer(&env, nullptr, &info, 0);
+      Check(env.exception == "java/lang/IllegalStateException" && info.writes == 0,
+            "new output dequeue rejects fatal state without fabricating BufferInfo");
+      env = {};
+      MC_releaseOutputBuffer(&env, nullptr, 1, true, has_timestamp, 0);
+      Check(env.exception == "java/lang/IllegalStateException", "old output cannot render after fatal retirement");
+
+      codec.Reset();
+      Check(!codec.fatal_ && !codec.configured_ && !codec.started_ && codec.frame_rendered_,
+            "reset returns to an unconfigured receiver and retains its frame-listener registration");
+      // Configuration and frame decoding are declared fixture boundaries;
+      // reset, worker ownership, rendering and public JNI below are actual.
+      codec.configured_ = true;
+      codec.SetSurface(nullptr, &next);
+      Check(codec.Start(&error), "fresh configuration can start after reset");
+      codec.Prepare();
+      render_ok = delivery_ok = true;
+      env = {};
+      MC_releaseOutputBuffer(&env, nullptr, 0, true, has_timestamp, 0);
+      Check(env.exception.empty() && codec.events == 1 && codec.error_events == 1,
+            "reset and new configuration restore real output without replaying the old error");
+      jni_codec = nullptr;
+    }
+  }
+  render_ok = delivery_ok = true;
+  render_error = delivery_error = android::NO_INIT;
+  rendered = delivered = 0;
+}
+
+void StaleRenderContracts() {
+  for (bool fail_old_render : {false, true}) {
+    ANativeWindow old_window, replacement;
+    JavaSurface before{&old_window}, after{&replacement};
+    Codec codec;
+    codec.SetSurface(nullptr, &before);
+    codec.Prepare();
+    render_ok = !fail_old_render;
+    render_error = android::NO_INIT;
+    on_render = [&](ANativeWindow*) {
+      codec.Reset();
+      codec.configured_ = true;
+      codec.SetSurface(nullptr, &after);
+      std::string error;
+      Check(codec.Start(&error), "reset starts a new session while old rendering holds its window");
+    };
+    std::string error;
+    int status = android::OK;
+    Check(codec.ReleaseOutput(0, true, true, 0, &error, &status) == !fail_old_render,
+          "old render retains its own success/error result");
+    Check(status == (fail_old_render ? android::NO_INIT : android::OK), "old render preserves its precise status");
+    Check(codec.started_ && !codec.fatal_ && codec.window_ == &replacement && codec.error_events == 0,
+          "stale render completion cannot retire or report an error for the replacement session");
+    Check(codec.events == 0, "old successful render cannot send a callback in a new session");
+    on_render = {};
+    render_ok = true;
+    codec.Prepare();
+    Check(codec.ReleaseOutput(0, true, true, 1, &error) && codec.events == 1,
+          "new session still renders after stale completion");
+  }
+  rendered = delivered = 0;
+}
+
 int main() {
+  ReleaseErrorContracts();
+  StaleRenderContracts();
   ANativeWindow old_window, new_window;
   JavaSurface first{&old_window}, second{&new_window};
   std::string error;
@@ -91,27 +415,35 @@ int main() {
       Check(!old_window.retired && old_window.references == 1 && new_window.references == 1,
             "surface replacement leaves render's old window alive");
     };
-    Check(codec.ReleaseOutput(0, true, 0, &error), "rendered release succeeds");
+    Check(codec.ReleaseOutput(0, true, false, 0, &error), "rendered release succeeds");
+    Check(render_timestamp_ns == 42000, "boolean release sends the buffer PTS in nanoseconds");
     Check(old_window.retired && old_window.references == 0 && old_window.acquisitions == 2
               && old_window.releases == 2, "render reference releases exactly once after swap");
     Check(codec.events == 1 && codec.last_time == 42 && rendered == 1, "frame event preserved");
     const int acquired = new_window.acquisitions, released = new_window.releases;
-    Check(!codec.ReleaseOutput(0, true, 0, &error), "same output slot cannot be released twice");
-    Check(!codec.ReleaseOutput(-1, true, 0, &error), "invalid output index rejected");
+    Check(!codec.ReleaseOutput(0, true, false, 0, &error), "same output slot cannot be released twice");
+    Check(!codec.ReleaseOutput(-1, true, false, 0, &error), "invalid output index rejected");
     Check(new_window.acquisitions == acquired && new_window.releases == released,
           "invalid output never borrows a window");
     codec.Prepare();
-    Check(codec.ReleaseOutput(0, false, 0, &error), "discarded output succeeds");
+    Check(codec.ReleaseOutput(0, false, false, 0, &error), "discarded output succeeds");
     Check(new_window.acquisitions == acquired && new_window.releases == released && rendered == 1,
           "discard neither renders nor takes references");
     codec.Prepare(false);
-    Check(codec.ReleaseOutput(0, true, 0, &error) && new_window.references == 1,
+    Check(codec.ReleaseOutput(0, true, true, 0, &error) && new_window.references == 1,
           "empty output balances its optional render reference");
     on_render = {};
     codec.Prepare();
+    render_ok = true;
     codec.frame_rendered_ = false;
-    Check(codec.ReleaseOutput(0, true, 0, &error) && new_window.references == 1 && codec.events == 1,
-          "failed renderer still releases and disabled callback remains disabled");
+    Check(codec.ReleaseOutput(0, true, true, 123456789, &error) && new_window.references == 1 &&
+              render_timestamp_ns == 123456789 && codec.events == 1,
+          "successful render with callback disabled emits no event");
+    codec.Prepare();
+    render_ok = false;
+    Check(!codec.ReleaseOutput(0, true, true, 0, &error) && new_window.references == 0 &&
+              render_timestamp_ns == 0 && codec.events == 1,
+          "explicit zero reaches renderer and fatal render retires ownership without a success event");
   }
   Check(new_window.retired && new_window.references == 0
             && new_window.acquisitions == new_window.releases, "remaining codec owner retires normally");
@@ -125,11 +457,19 @@ int main() {
       Check(!weak.expired(), "reader owner is retained across a surface swap");
     };
     codec.Prepare();
-    Check(codec.ReleaseOutput(0, true, 0, &error) && delivered == 1,
+    Check(codec.ReleaseOutput(0, true, true, -123456789, &error) && delivered == 1 &&
+              reader_timestamp_ns == -123456789 && codec.last_time == 42,
           "reader surface delivery preserved");
     Check(weak.expired() && codec.events == 1, "reader temporary retires after delivery");
     on_deliver = {};
+    codec.SetSurface(nullptr, &reader);
+    codec.Prepare();
+    codec.outputs_[0].time_us = INT64_MAX;
+    delivery_ok = false;
+    Check(!codec.ReleaseOutput(0, true, false, 0, &error) && reader_timestamp_ns == -1000 &&
+              codec.events == 1, "full-width PTS scales without overflow and failed reader posts no event");
   }
+  ScalingContracts();
   std::printf("codec window ownership contracts: %d checks, %d failures\n", checks, failures);
   return failures != 0;
 }

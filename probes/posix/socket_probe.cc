@@ -57,8 +57,99 @@ static sockaddr_in Loopback(unsigned short port) {
   return a;
 }
 
-int main(int, char** argv) {
+static void TestInterfaceIoctls() {
+  const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  CHECK(fd >= 0);
+  if (fd < 0) return;
+
+  ifconf size = {};
+  const int rc = ioctl(fd, SIOCGIFCONF, &size);
+  CHECK(rc == 0);
+  if (rc != 0) {
+    close(fd);
+    return;
+  }
+  CHECK(sizeof(ifreq) == 40 && sizeof(ifconf) == 16);
+  CHECK(size.ifc_len >= static_cast<int>(sizeof(ifreq)));
+  CHECK(size.ifc_len % sizeof(ifreq) == 0);
+
+  ifreq entries[2];
+  memset(entries, 0x5a, sizeof(entries));
+  ifreq sentinel;
+  memcpy(&sentinel, &entries[1], sizeof(sentinel));
+  ifconf list = {};
+  list.ifc_len = sizeof(entries) - 1;
+  list.ifc_req = entries;
+  const bool first_entry = ioctl(fd, SIOCGIFCONF, &list) == 0 &&
+                           list.ifc_len == sizeof(ifreq) &&
+                           memchr(entries[0].ifr_name, '\0', IFNAMSIZ) != nullptr;
+  CHECK(first_entry);
+  CHECK(memcmp(&entries[1], &sentinel, sizeof(sentinel)) == 0);
+  if (!first_entry) {
+    close(fd);
+    return;
+  }
+
+  ifreq& req = entries[0];
+  CHECK(req.ifr_addr.sa_family == AF_INET);
+  const sockaddr expected = req.ifr_addr;
+  CHECK(ioctl(fd, SIOCGIFADDR, &req) == 0);
+  CHECK(memcmp(&req.ifr_addr, &expected, sizeof(expected)) == 0);
+  const unsigned index = if_nametoindex(req.ifr_name);
+  CHECK(index != 0);
+  CHECK(ioctl(fd, SIOCGIFINDEX, &req) == 0);
+  CHECK(static_cast<unsigned>(req.ifr_ifindex) == index);
+  CHECK(ioctl(fd, SIOCGIFCONF, static_cast<ifconf*>(nullptr)) == -1 && errno == EFAULT);
+  list.ifc_req = reinterpret_cast<ifreq*>(1);
+  CHECK(ioctl(fd, SIOCGIFCONF, &list) == -1 && errno == EFAULT);
+  snprintf(req.ifr_name, sizeof(req.ifr_name), "no-such-if");
+  CHECK(ioctl(fd, SIOCGIFADDR, &req) == -1 && errno == ENODEV);
+  CHECK(ioctl(fd, SIOCGIFINDEX, &req) == -1 && errno == ENODEV);
+  close(fd);
+}
+
+static void CheckXattrPaths() {
+  // Own the parent so the negative case has exactly one invalid condition:
+  // a missing child, with a valid user.* name and output buffer.
+  char root[] = "socket-probe-xattr-XXXXXX";
+  char* created = mkdtemp(root);
+  CHECK(created != nullptr);
+  if (!created) return;
+  const std::string missing = std::string(root) + "/missing";
+  char value[16] = {};
+  errno = 0;
+  ssize_t result = getxattr(missing.c_str(), "user.a", value, sizeof(value));
+  int error = errno;
+  if (result != -1 || error != ENOENT)
+    printf("FAIL missing-path xattr: result=%lld errno=%d expected=-1/ENOENT\n",
+           static_cast<long long>(result), error);
+  CHECK(result == -1 && error == ENOENT);
+
+  // Namespace support is a separate check on an existing, owned file.
+  const std::string present = std::string(root) + "/present";
+  int fd = open(present.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  CHECK(fd >= 0);
+  if (fd >= 0) {
+    errno = 0;
+    result = getxattr(present.c_str(), "security.selinux", value, sizeof(value));
+    error = errno;
+    if (result != -1 || error != ENOTSUP)
+      printf("FAIL unsupported-namespace xattr: result=%lld errno=%d expected=-1/ENOTSUP\n",
+             static_cast<long long>(result), error);
+    CHECK(result == -1 && error == ENOTSUP);
+    CHECK(close(fd) == 0);
+    CHECK(unlink(present.c_str()) == 0);
+  }
+  CHECK(rmdir(root) == 0);
+}
+
+int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
+  TestInterfaceIoctls();
+  if (argc == 2 && strcmp(argv[1], "--interface-ioctl") == 0) {
+    if (fails == 0) puts("interface ioctl checks passed");
+    return fails == 0 ? 0 : 1;
+  }
   // Bad fds fail instead of ending the process.
   CHECK(close(-1) == -1 && errno == EBADF);
   CHECK(close(12345) == -1 && errno == EBADF);
@@ -110,7 +201,11 @@ int main(int, char** argv) {
   vl = sizeof(v);
   CHECK(setsockopt(sv[0], IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) == 0);
   CHECK(getsockopt(sv[0], IPPROTO_TCP, TCP_NODELAY, &v, &vl) == 0 && v != 0);
-  CHECK(getsockopt(sv[0], SOL_SOCKET, SO_PEERCRED, &v, &vl) == -1 && errno == ENOPROTOOPT);
+  // A socketpair's SO_PEERCRED is its creator (ADR 0088); a 4-byte buffer gets
+  // its first field, the pid, as on Linux.
+  vl = sizeof(v);
+  CHECK(getsockopt(sv[0], SOL_SOCKET, SO_PEERCRED, &v, &vl) == 0 && vl == sizeof(v) &&
+        v == static_cast<int>(GetCurrentProcessId()));
 
   // SO_RCVTIMEO expires with EAGAIN, as on Linux.
   timeval tv = {0, 100000};
@@ -310,7 +405,7 @@ int main(int, char** argv) {
   __user_cap_data_struct cd[2];
   memset(cd, 0xFF, sizeof(cd));
   CHECK(capget(&ch, cd) == 0 && cd[0].effective == 0 && cd[1].permitted == 0);
-  CHECK(getxattr("x", "user.a", buf, sizeof(buf)) == -1 && errno == ENOTSUP);
+  CheckXattrPaths();
   FILE* mounts = setmntent("/proc/mounts", "r");
   CHECK(mounts != nullptr && getmntent(mounts) == nullptr);
   endmntent(mounts);

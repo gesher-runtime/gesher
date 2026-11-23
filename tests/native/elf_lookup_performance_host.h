@@ -2,12 +2,15 @@
 // Hashing and symbol-table probing are extracted unchanged from elf_loader.cc.
 #pragma once
 #include <algorithm>
+#include <mutex>
 #include <cstdint>
 #include <cstring>
 #include <set>
 #include <string>
 #include <vector>
 #include "elf_types.h"
+
+inline std::recursive_mutex g_mutex;
 
 struct Library {
   std::vector<Library*> dependencies;

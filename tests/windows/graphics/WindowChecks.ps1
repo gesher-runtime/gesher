@@ -93,8 +93,16 @@ public static class GesherWin32 {
     PostMessageW(hwnd, down ? 0x0100u : 0x0101u, (IntPtr) vk, (IntPtr) l);
   }
   // Types letters and digits with WM_KEYDOWN/WM_KEYUP (shift for capitals), as a keyboard
-  // does; TranslateMessage adds the WM_CHARs.
+  // does; TranslateMessage adds the WM_CHARs. Text with other characters (whose keys
+  // depend on the keyboard layout) is typed as WM_CHARs only, each as Char() posts it:
+  // a translated key's WM_CHAR would come after a posted one that followed it.
   public static void TypeKeys(IntPtr hwnd, string text) {
+    foreach (char c in text) {
+      if (!char.IsLetterOrDigit(c) && c != ' ') {
+        foreach (char t in text) Char(hwnd, t);
+        return;
+      }
+    }
     foreach (char c in text) {
       bool upper = char.IsUpper(c);
       uint vk = (uint) char.ToUpperInvariant(c);
@@ -143,7 +151,11 @@ public static class GesherWin32 {
       Marshal.ReleaseComObject(store);
     }
   }
-  // The client area as 0xRRGGBB values row by row after [width, height]; null on failure.
+  // The composed client area as 0xRRGGBB values after [width, height]; null on failure.
+  // PW_CLIENTONLY alone asks WM_PRINTCLIENT to repaint the CPU back buffer, which
+  // can still contain an editor after a DirectComposition WebView covers it.
+  // Include PW_RENDERFULLCONTENT so the captured pixels include that child content.
+  // Do not fall back to the CPU buffer: it is not evidence of the composed result.
   public static int[] Capture(IntPtr hwnd) {
     RECT r;
     if (!GetClientRect(hwnd, out r)) return null;
@@ -156,7 +168,7 @@ public static class GesherWin32 {
     int[] pixels = null;
     if (bmp != IntPtr.Zero) {
       IntPtr old = SelectObject(dc, bmp);
-      if (PrintWindow(hwnd, dc, 1 /* PW_CLIENTONLY */)) {
+      if (PrintWindow(hwnd, dc, 1 /* PW_CLIENTONLY */ | 2 /* PW_RENDERFULLCONTENT */)) {
         GdiFlush();
         pixels = new int[w * h + 2];
         pixels[0] = w; pixels[1] = h;

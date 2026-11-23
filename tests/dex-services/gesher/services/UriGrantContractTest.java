@@ -3,9 +3,12 @@ package gesher.services;
 
 import android.app.IActivityManager;
 import android.app.IApplicationThread;
+import android.app.ContentProviderHolder;
+import android.content.IContentProvider;
 import android.content.Intent;
 import android.content.UriPermission;
 import android.content.pm.PackageManager;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PathPermission;
 import android.content.pm.PermissionInfo;
 import android.content.pm.ProviderInfo;
@@ -42,7 +45,7 @@ import sun.misc.Unsafe;
 public final class UriGrantContractTest {
     private static final String OWNER = "fixture.uri.owner", DELEGATE = "fixture.uri.delegate";
     private static final String BOTH = "fixture.uri.both", CLIENT = "fixture.uri.client";
-    private static final String OTHER = "fixture.uri.other", COLLISION = "fixture.uri.collision";
+    private static final String OTHER = "fixture.uri.other", PEER = "fixture.uri.peer";
     private static final String READ_PERMISSION = "fixture.uri.permission.READ";
     private static final String WRITE_PERMISSION = "fixture.uri.permission.WRITE";
     private static final String BLOCKED_PERMISSION = "fixture.uri.permission.BLOCKED";
@@ -131,6 +134,7 @@ public final class UriGrantContractTest {
         set(record, "apkPath", "/fixture/" + name + "/base.apk"); set(record, "mUid", uid);
         set(record, "mDataDir", "/fixture/" + name + "/data");
         set(record, "sharedLibraries", SharedLibraryGraph.EMPTY);
+        set(record, "mEnabledOwner", "fixture-install-owner:" + name);
         return record;
     }
     private static IBinder token() {
@@ -153,6 +157,7 @@ public final class UriGrantContractTest {
         final Map<String, ApkPackage> records = new LinkedHashMap<>();
         final Map<String, ThreadToken> threads = new LinkedHashMap<>();
         final Map<String, Integer> pids = new LinkedHashMap<>();
+        final Map<String, Object> processRecords = new LinkedHashMap<>();
         final PackageManagerService pm;
         final ActivityTaskManagerService atm;
         final ActivityManagerService service;
@@ -165,12 +170,10 @@ public final class UriGrantContractTest {
             records.put(BOTH, record(BOTH, 12103, READ_PERMISSION, WRITE_PERMISSION));
             records.put(CLIENT, record(CLIENT, 12104));
             records.put(OTHER, record(OTHER, 12105));
-            records.put(COLLISION, record(COLLISION, 12101));
-            if (binder) {
-                pm = new PackageManagerService(records.values());
-            } else {
-                // Omit only the unrelated PackageInstaller Binder construction.
-                // Provider projection and the complete permission policy stay real.
+            // Seed admitted provider/shared-UID metadata. Signed identity admission
+            // is exercised by PackageUidIsolationContractTest, not by these manifests.
+            records.put(PEER, record(PEER, 12101));
+            {
                 pm = (PackageManagerService) unsafe.allocateInstance(PackageManagerService.class);
                 set(pm, "mPackages", new LinkedHashMap<>(records));
                 set(pm, "mRemoving", new LinkedHashMap<String, ApkPackage>());
@@ -193,6 +196,7 @@ public final class UriGrantContractTest {
                 set(process, "thread", thread); set(process, "packageName", name);
                 set(process, "processName", name); set(process, "ready", true);
                 processes.add(process);
+                processRecords.put(name, process);
             }
             Class<?> grantsType = Class.forName("com.gesher.server.UriGrants");
             Constructor<?> constructor = grantsType.getDeclaredConstructor(PackageManagerService.class,
@@ -248,19 +252,61 @@ public final class UriGrantContractTest {
             call(providers, "enforceAccess", new Class<?>[]{String.class, ProviderInfo.class}, target, provider(uri));
             check(true, "Provider acquisition policy accepted the real grant");
         }
+        ContentProviderHolder publishProvider(Uri uri) throws Exception {
+            set(providers, "mAtm", atm);
+            set(providers, "mCallers", new CallerIdentity(pm, atm));
+            set(providers, "mRegisteredProviders", Map.of());
+            for (String name : new String[]{"mPublished", "mPublishedBy", "mPublishedCode",
+                    "mInstalling", "mClients", "mConnections"}) {
+                set(providers, name, new LinkedHashMap<>());
+            }
+            set(providers, "mRequests", new java.util.HashSet<>());
+            Object owner = processRecords.get(OWNER);
+            set(owner, "packageCode", records.get(OWNER));
+            ProviderInfo info = provider(uri);
+            call(providers, "providersFor", new Class<?>[]{owner.getClass(), ApplicationInfo.class},
+                    owner, info.applicationInfo);
+            ContentProviderHolder holder = new ContentProviderHolder(info);
+            IBinder transport = token();
+            holder.provider = (IContentProvider) Proxy.newProxyInstance(IContentProvider.class.getClassLoader(),
+                    new Class<?>[]{IContentProvider.class},
+                    (self, invoked, args) -> invoked.getName().equals("asBinder") ? transport : null);
+            as(OWNER, () -> am.publishContentProviders(threads.get(OWNER), List.of(holder)));
+            return holder;
+        }
+        ContentProviderHolder acquireFromAm(String target, Uri uri) throws Exception {
+            ContentProviderHolder[] result = new ContentProviderHolder[1];
+            as(target, () -> result[0] = am.getContentProvider(threads.get(target), target,
+                    uri.getAuthority(), 0, true));
+            return result[0];
+        }
+        void releaseFromAm(String target, ContentProviderHolder holder) throws Exception {
+            as(target, () -> am.removeContentProvider(holder.connection, true));
+            check(((Map<?, ?>) field(providers.getClass(), "mConnections").get(providers)).isEmpty(),
+                    "Releasing the actual provider connection retires its reference");
+        }
         @SuppressWarnings("unchecked") List<UriPermission> listed(String target) throws Exception {
             return (List<UriPermission>) call(grants, "list",
                     new Class<?>[]{String.class, boolean.class, boolean.class}, target, true, false);
         }
         String snapshot() throws Exception {
-            StringBuilder text = new StringBuilder();
-            for (Object grant : (List<?>) field(grants.getClass(), "mGrants").get(grants)) {
-                for (String key : new String[]{"owner", "target", "uri", "modes", "prefix"}) {
-                    Object value = field(grant.getClass(), key).get(grant);
-                    text.append(value instanceof ApkPackage ? ((ApkPackage) value).packageName : value).append('|');
+            List<String> rows = new ArrayList<>();
+            Map<?, ?> uids = (Map<?, ?>) field(grants.getClass(), "mGrants").get(grants);
+            for (Object table : uids.values()) {
+                for (Object permission : ((Map<?, ?>) table).values()) {
+                    StringBuilder row = new StringBuilder();
+                    for (String key : new String[]{"sourcePackage", "targetPackage", "targetUid", "identity"}) {
+                        row.append(field(permission.getClass(), key).get(permission)).append('|');
+                    }
+                    Object modes = field(permission.getClass(), "modes").get(permission);
+                    for (String key : new String[]{"global", "persistable", "persisted", "persistedTime"}) {
+                        row.append(field(modes.getClass(), key).get(modes)).append('|');
+                    }
+                    rows.add(row.toString());
                 }
             }
-            return text.toString();
+            java.util.Collections.sort(rows);
+            return rows.toString();
         }
         void rejected(Class<? extends Throwable> type, Operation operation) throws Exception {
             String before = snapshot();
@@ -282,6 +328,61 @@ public final class UriGrantContractTest {
         }
     }
 
+    private static void admission() throws Exception {
+        Harness h = new Harness();
+        Uri value = uri("private", "/shared-uid");
+        ContentProviderHolder published = h.publishProvider(value);
+        h.rejected(SecurityException.class, () -> h.acquireFromAm(CLIENT, value));
+        ContentProviderHolder shared = h.acquireFromAm(PEER, value);
+        check(shared != null && shared.provider != null && !shared.info.exported
+                && shared.connection != null && !shared.noReleaseNeeded
+                && shared.provider.asBinder().equals(published.provider.asBinder()),
+                "AMS admits a different installed package with the private provider's UID");
+        h.releaseFromAm(PEER, shared);
+        ContentProviderHolder owner = h.acquireFromAm(OWNER, value);
+        check(owner != null && owner.provider != null && owner.noReleaseNeeded,
+                "The provider's own process retains direct ownership access");
+
+        h.grant(OWNER, CLIENT, value, READ);
+        ContentProviderHolder granted = h.acquireFromAm(CLIENT, value);
+        check(granted != null && granted.connection != null && !granted.info.exported,
+                "An unrelated UID still acquires a private provider through its actual URI grant");
+        h.releaseFromAm(CLIENT, granted);
+        h.revoke(OWNER, CLIENT, value, READ);
+        h.rejected(SecurityException.class, () -> h.acquireFromAm(CLIENT, value));
+
+        ProviderInfo missing = new ProviderInfo(h.provider(value));
+        missing.applicationInfo = null;
+        h.rejected(SecurityException.class, () -> call(h.providers, "enforceAccess",
+                new Class<?>[]{String.class, ProviderInfo.class}, PEER, missing));
+        ProviderInfo invalid = new ProviderInfo(h.provider(value));
+        invalid.applicationInfo = new ApplicationInfo(invalid.applicationInfo);
+        invalid.applicationInfo.uid = -1;
+        h.rejected(SecurityException.class, () -> call(h.providers, "enforceAccess",
+                new Class<?>[]{String.class, ProviderInfo.class}, PEER, invalid));
+        set(h.records.get(OWNER), "mUid", -1);
+        set(h.records.get(PEER), "mUid", -1);
+        h.rejected(SecurityException.class, () -> call(h.providers, "enforceAccess",
+                new Class<?>[]{String.class, ProviderInfo.class}, PEER, invalid));
+        set(h.records.get(OWNER), "mUid", 12101);
+        set(h.records.get(PEER), "mUid", 12101);
+        set(h.records.get(PEER), "mUidPending", true);
+        h.rejected(SecurityException.class, () -> h.acquireFromAm(PEER, value));
+        set(h.records.get(PEER), "mUidPending", false);
+        set(h.records.get(OWNER), "mUidPending", true);
+        h.rejected(SecurityException.class, () -> h.acquireFromAm(PEER, value));
+        set(h.records.get(OWNER), "mUidPending", false);
+
+        @SuppressWarnings("unchecked") Map<String, ApkPackage> removing =
+                (Map<String, ApkPackage>) field(h.pm.getClass(), "mRemoving").get(h.pm);
+        removing.put(OWNER, h.records.get(OWNER));
+        check(h.acquireFromAm(PEER, value) == null,
+                "Provider removal still retires acquisition even for a shared-UID peer");
+        removing.clear();
+        removing.put(PEER, h.records.get(PEER));
+        h.rejected(SecurityException.class, () -> h.acquireFromAm(PEER, value));
+    }
+
     private static void delegation() throws Exception {
         Harness h = new Harness(); Uri protectedUri = uri("protected", "/item");
         h.access(DELEGATE, protectedUri, READ, true);
@@ -300,7 +401,8 @@ public final class UriGrantContractTest {
         h.rejected(SecurityException.class, () -> h.grant(DELEGATE, CLIENT, uri("path", "/outside"), READ));
         Uri privateUri = uri("private", "/item");
         h.rejected(SecurityException.class, () -> h.grant(BOTH, CLIENT, privateUri, READ));
-        h.rejected(SecurityException.class, () -> h.grant(COLLISION, CLIENT, privateUri, READ));
+        h.grant(PEER, CLIENT, privateUri, READ);
+        h.access(CLIENT, privateUri, READ, true);
         h.grant(OWNER, CLIENT, privateUri, READ); h.acquire(CLIENT, privateUri);
         h.grant(CLIENT, OTHER, privateUri, READ); h.access(OTHER, privateUri, READ, true);
         h.rejected(SecurityException.class, () -> h.grant(CLIENT, OTHER, privateUri, WRITE));
@@ -429,16 +531,25 @@ public final class UriGrantContractTest {
     private static void validation() throws Exception {
         Harness h = new Harness(); Uri value = uri("private", "/item");
         h.grant(OWNER, CLIENT, value, READ);
-        for (Uri invalid : new Uri[]{null, Uri.parse("file:///tmp/item"), Uri.parse("content:/item"),
+        for (Uri invalid : new Uri[]{Uri.parse("content:/item"),
                 Uri.parse("content://10@fixture.uri.private/item"), uri("private", "/a/../item"),
                 uri("private", "/a/%2e%2e/item")}) {
             h.rejected(SecurityException.class, () -> h.grant(OWNER, OTHER, invalid, READ));
         }
-        for (int modes : new int[]{0, 0x40000000, READ | 0x40000000}) {
+        for (int modes : new int[]{0x40000000, READ | 0x40000000}) {
             h.rejected(IllegalArgumentException.class, () -> h.grant(OWNER, OTHER, value, modes));
         }
-        h.rejected(UnsupportedOperationException.class, () -> h.grant(OWNER, OTHER, value,
-                READ | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION));
+        String unchanged = h.snapshot();
+        h.grant(OWNER, OTHER, null, READ);
+        h.grant(OWNER, OTHER, Uri.parse("file:///tmp/item"), READ);
+        h.grant(OWNER, OTHER, value, 0);
+        h.revoke(OWNER, null, null, READ);
+        h.revoke(OWNER, null, value, 0);
+        check(unchanged.equals(h.snapshot()), "No URI or access mode changed existing grants");
+        h.grant(OWNER, OTHER, value, READ | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        check(true, "persistable grant accepted");
+        h.revoke(OWNER, OTHER, value, READ);
+        check(true, "persistable grant revoked");
         String before = h.snapshot();
         h.grant(OWNER, "fixture.uri.unknown", value, READ);
         h.grant(OWNER, OTHER, uri("unknown", "/item"), READ);
@@ -455,9 +566,10 @@ public final class UriGrantContractTest {
     public static void contracts(String selected, boolean throughBinder) throws Exception {
         Field singleton = Unsafe.class.getDeclaredField("theUnsafe"); singleton.setAccessible(true);
         unsafe = (Unsafe) singleton.get(null); binder = throughBinder;
-        for (String group : new String[]{"delegation", "identity", "modes", "patterns", "revocation", "retirement", "validation"}) {
+        for (String group : new String[]{"admission", "delegation", "identity", "modes", "patterns", "revocation", "retirement", "validation"}) {
             if (selected != null && !selected.equals(group)) continue;
             switch (group) {
+                case "admission": admission(); break;
                 case "delegation": delegation(); break;
                 case "identity": identity(); break;
                 case "modes": modes(); break;

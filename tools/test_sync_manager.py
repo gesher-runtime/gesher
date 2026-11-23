@@ -4,6 +4,7 @@
 Use --source-ref with --case admission/clock/results/cancellation for separate negative
 controls. The same Java fixture runs generated Binder/Parcel calls on Windows;
 this host path uses local service calls and the declared existing native adapter.
+The full current-source gate also runs the account sessions and retirement suite.
 --idle-policy-probe uses production classes only from --app-classes, which must be
 the full application built after combining this change with PR15's idle policy.
 """
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--java-home', type=Path, required=True)
+    parser.add_argument('--cc', help='C compiler for the host JNI fixture')
     parser.add_argument('--framework-classes', type=Path, required=True)
     parser.add_argument('--core-classes', type=Path, required=True)
     parser.add_argument('--app-classes', type=Path, required=True)
@@ -28,11 +31,11 @@ def main() -> None:
     source.add_argument('--source-ref', help='Compile older production classes as a negative control')
     source.add_argument('--idle-policy-probe', action='store_true',
                         help='Probe the full PR15 combination supplied through --app-classes')
-    parser.add_argument('--case', choices=('all', 'admission', 'clock', 'results', 'cancellation'), default='all')
+    parser.add_argument('--case', choices=('all', 'admission', 'clock', 'results', 'cancellation', 'retention'), default='all')
     args = parser.parse_args()
     if args.idle_policy_probe and args.case != 'all':
         parser.error('--idle-policy-probe requires --case all')
-    cc = shutil.which('cc')
+    cc = args.cc or shutil.which('cc')
     if not cc:
         parser.error('A C compiler is required for the declared native boundaries')
     classpath = os.pathsep.join(str(p.resolve()) for p in
@@ -41,10 +44,13 @@ def main() -> None:
         work = Path(temporary)
         classes = work / 'classes'
         classes.mkdir()
-        library = work / 'libsync_host.so'
-        subprocess.run([cc, '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-shared', '-fPIC',
-                        '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include/linux'),
-                        str(ROOT / 'tests/sync/framework_host.c'), '-o', str(library)], check=True)
+        windows = os.name == 'nt'
+        library = work / ('sync_host.dll' if windows else 'libsync_host.so')
+        subprocess.run([cc, '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-shared',
+                        *([] if windows else ['-fPIC']),
+                        '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include' / ('win32' if windows else 'linux')),
+                        str(ROOT / 'tests/sync/framework_host.c'), '-o', str(library),
+                        *(['-lwinpthread', '-static'] if windows else [])], check=True)
         sources = []
         # The explicit coexistence probe must use the complete supplied merged app,
         # without substituting current or baseline production classes over its jar.
@@ -77,6 +83,12 @@ def main() -> None:
                         '-cp', str(classes) + os.pathsep + classpath,
                         main_class, str(library), args.case],
                        env=environment, check=True, timeout=90)
+
+    if args.case == 'all' and not args.source_ref and not args.idle_policy_probe:
+        subprocess.run([sys.executable, str(ROOT / 'tools/test_account_session_lifetime.py'),
+                        '--java-home', str(args.java_home), '--framework-classes', str(args.framework_classes),
+                        '--core-classes', str(args.core_classes), '--app-classes', str(args.app_classes),
+                        '--apksig-jar', str(args.apksig_jar), '--cc', cc], check=True)
 
 if __name__ == '__main__':
     main()

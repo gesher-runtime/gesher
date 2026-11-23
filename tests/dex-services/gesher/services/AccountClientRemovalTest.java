@@ -10,6 +10,7 @@ import java.io.File;
 import java.lang.reflect.*;
 import java.nio.file.Files;
 import java.util.*;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -59,9 +60,13 @@ public final class AccountClientRemovalTest {
         Object owner=apk.getMethod("parse",String.class).invoke(null,args[0]);
         Object client=apk.getMethod("parse",String.class).invoke(null,args[1]);
         String ownerName=(String)apk.getField("packageName").get(owner),clientName=(String)apk.getField("packageName").get(client);
+        Object packages=pm.getConstructor(Collection.class).newInstance(Arrays.asList(owner,client));
+        // The package manager assigns installed identities. Capture them only after admission.
         int uid=(Integer)method(apk,"uid").invoke(client);
         int ownerUid=(Integer)method(apk,"uid").invoke(owner);
-        Object packages=pm.getConstructor(Collection.class).newInstance(Arrays.asList(owner,client));
+        require(uid >= android.os.Process.FIRST_APPLICATION_UID
+                && ownerUid >= android.os.Process.FIRST_APPLICATION_UID && uid != ownerUid,
+                "Fixtures did not receive distinct application UIDs");
         Object manager=svc.getConstructor(am,pm).newInstance(null,packages);
         Class<?> writer=Class.forName(svc.getName()+"$StoreWriter");
         AtomicReference<Properties> persisted=new AtomicReference<>();AtomicBoolean failWrite=new AtomicBoolean();
@@ -75,6 +80,8 @@ public final class AccountClientRemovalTest {
         Class<?> caller=Class.forName(svc.getName()+"$Caller"),entry=Class.forName(svc.getName()+"$Entry");
         Object oldCaller=method(svc,"captureCaller",String.class,String.class,boolean.class,int.class,int.class)
                 .invoke(manager,clientName,clientCode,false,uid,123);
+        require((Boolean)method(svc,"callerUnchanged",caller).invoke(manager,oldCaller),
+                "Newly captured installed caller was invalid before removal");
         entries(manager).clear();
         Class<?> auth=Class.forName(svc.getName()+"$Authenticator"),answer=Class.forName(svc.getName()+"$Answer");
         Object realOwner=method(svc,"authenticator",String.class).invoke(manager,"com.gesher.devsvc.account");
@@ -112,12 +119,7 @@ public final class AccountClientRemovalTest {
         custom(provider).put(clientKey+"\u0000scope",cache);custom(provider).put(oldKey+"\u0000scope",cache);
         custom(provider).put(otherKey+"\u0000scope",cache);
         method(svc,"beginMutation").invoke(manager);method(svc,"save").invoke(manager);
-        try{method(pm,"checkPackageRemoval",String.class).invoke(packages,clientName);
-            throw new AssertionError("Provider with active accounts passed preflight");}
-        catch(InvocationTargetException expected){require(expected.getCause() instanceof UnsupportedOperationException,"Wrong provider preflight failure");}
-        require(entries(manager).containsKey(owned)&&visibility(provider).containsKey(clientKey),
-                "Provider preflight altered accounts or client grants");
-        // Simulate the user removing that synthetic provider account before uninstall.
+        // Keep a separate fixture for the client-only uninstall contract below.
         method(svc,"beginMutation").invoke(manager);entries(manager).remove(owned);method(svc,"save").invoke(manager);
         require(persisted.get()!=null,"Transaction did not reach the server-local store seam");
         Object sessions=get(manager,"mSessions");
@@ -164,6 +166,12 @@ public final class AccountClientRemovalTest {
         Object fresh=method(svc,"captureCaller",String.class,String.class,boolean.class,int.class,int.class)
                 .invoke(manager,clientName,clientCode,false,uid,124);
         require((Boolean)method(svc,"callerUnchanged",caller).invoke(manager,fresh),"Fresh same-signer caller rejected after epoch retirement");
+        // The removed grant is gone: Android resolves the reinstalled client's
+        // unset visibility to USER_MANAGED_NOT_VISIBLE, which enumerates nothing.
+        require((Integer)method(svc,"visibility",caller,entry).invoke(manager,fresh,provider)
+                        ==AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE
+                &&((Account[])method(svc,"filterAccounts",String.class,caller).invoke(manager,null,fresh)).length==0,
+                "Same-signer reinstall revived the removed client visibility");
         Properties committed=persisted.get();
         require("1".equals(committed.getProperty("count")),"Serialized removal lost an unrelated provider account");
         require(!committed.containsValue(clientKey)&&!committed.containsValue(oldKey),"Serialized state retained old client grants");
@@ -182,15 +190,82 @@ public final class AccountClientRemovalTest {
                     catch(Exception e){throw new AssertionError(e);}return true;});
             throw new AssertionError("Session consumed after concurrent removal");}
         catch(InvocationTargetException expected){require(expected.getCause() instanceof SecurityException,"Wrong removal race failure");}
-        method(pm,"beginPackageRemoval",apk).invoke(packages,owner);
-        try{method(pm,"checkPackageRemoval",String.class).invoke(packages,ownerName);
-            throw new AssertionError("Active provider was removed");}
-        catch(InvocationTargetException expected){require(expected.getCause() instanceof UnsupportedOperationException,"Wrong active-provider failure");}
-        require(method(svc,"validatedResult",auth,Bundle.class,Account.class)
-                .invoke(manager,authenticator,new Bundle(),null)==null,"Authenticator result accepted during removal");
-        method(pm,"endPackageRemoval",apk).invoke(packages,owner);
-        require(entries(manager).containsKey(account)&&"synthetic-provider-secret".equals(get(provider,"password")),
-                "Rejected provider removal lost an account or credential");
+        // Authenticator retirement remains reversible until the registry publishes.
+        Object retainedEntry = entry(entry, clientName, clientCode);
+        entries(manager).put(owned, retainedEntry);
+        visibility(provider).put(clientKey, AccountManager.VISIBILITY_VISIBLE);
+        Bundle providerSession = issue(sessions, clientKey, uid, ownerName, ownerCode);
+        Method beginRemoval = method(pm, "beginPackageRemoval", apk);
+        Method finishRemoval = method(pm, "endPackageRemoval", apk);
+        Method revoke = method(pm, "revokePackageCapabilities", String.class);
+        Method reconcile = method(pm, "reconcileAccountRemovals", Set.class);
+        Method canAccess = method(svc, "canAccessAccount", Account.class, String.class);
+        beginRemoval.invoke(packages, owner);
+        failWrite.set(true);
+        try {
+            revoke.invoke(packages, ownerName);
+            throw new AssertionError("Provider retirement proceeded without a durable marker");
+        } catch (InvocationTargetException expected) {
+            require(expected.getCause() instanceof IllegalStateException, "Wrong failed-marker error");
+        }
+        failWrite.set(false);
+        revoke.invoke(packages, ownerName);
+        require(ownerName.equals(persisted.get().getProperty("pendingRemoval.0"))
+                && persisted.get().containsValue(account.name), "Durable intent must retain the owner data for rollback");
+        require(!(Boolean) canAccess.invoke(manager, account, clientName), "Retiring account is still visible");
+        deniedSession(sessions, providerSession, clientKey, uid);
+        require(method(svc, "validatedResult", auth, Bundle.class, Account.class)
+                .invoke(manager, authenticator, new Bundle(), null) == null,
+                "Authenticator result accepted during removal");
+
+        finishRemoval.invoke(packages, owner);
+        reconcile.invoke(packages, Set.of(ownerName, clientName));
+        require("0".equals(persisted.get().getProperty("pendingRemoval.count"))
+                && (Boolean) canAccess.invoke(manager, account, clientName)
+                && "synthetic-provider-secret".equals(get(entries(manager).get(account), "password")),
+                "Registry rollback did not restore the account or preserve its secret");
+
+        beginRemoval.invoke(packages, owner);
+        revoke.invoke(packages, ownerName);
+        // Simulate a registry that committed before the transient package view caught up.
+        finishRemoval.invoke(packages, owner);
+        Properties beforeRestart = persisted.get();
+        AtomicBoolean syncCleaned = new AtomicBoolean();
+        method(svc, "setSyncRetirement", BiConsumer.class).invoke(manager,
+                (BiConsumer<Set<Account>, Set<Account>>) (removed, remaining) -> {
+                    require(removed.equals(Set.of(account)) && remaining.contains(owned),
+                            "Sync retirement escaped the removed provider's account set");
+                    syncCleaned.set(true);
+                });
+        failWrite.set(true);
+        try {
+            reconcile.invoke(packages, Set.of(clientName));
+            throw new AssertionError("Injected postcommit failure discarded the recovery record");
+        } catch (InvocationTargetException expected) {
+            require(expected.getCause() instanceof IllegalStateException, "Wrong failed-retirement error");
+        }
+        failWrite.set(false);
+        require(syncCleaned.get() && persisted.get() == beforeRestart
+                && !(Boolean) canAccess.invoke(manager, account, clientName),
+                "Postcommit account-store failure revived the removed owner or erased recovery state");
+
+        method(pm, "remove", String.class).invoke(packages, ownerName);
+        Object freshPackages = pm.getConstructor(Collection.class).newInstance(List.of(client));
+        Object restarted = make(svc, new Class<?>[]{am, pm, boolean.class}, null, freshPackages, false);
+        set(restarted, "mStoreWriter", get(manager, "mStoreWriter"));
+        method(svc, "loadProtectedState", Properties.class).invoke(restarted, beforeRestart);
+        require(!(Boolean) canAccess.invoke(restarted, account, clientName),
+                "Restart exposed account data before replaying the committed registry removal");
+        reconcile.invoke(freshPackages, Set.of(clientName));
+        require(!entries(restarted).containsKey(account) && entries(restarted).containsKey(owned)
+                && "0".equals(persisted.get().getProperty("pendingRemoval.count"))
+                && !persisted.get().containsValue(account.name) && !persisted.get().containsValue(clientKey),
+                "Recovery did not erase only the retired account and its visibility");
+        Object reinstalled = apk.getMethod("parse", String.class).invoke(null, args[0]);
+        method(pm, "add", apk).invoke(freshPackages, reinstalled);
+        require(!entries(restarted).containsKey(account)
+                && !(Boolean) canAccess.invoke(restarted, account, clientName),
+                "Same-signer reinstall inherited the retired account");
         System.out.println("AccountClientRemovalTest all passed: "+checks+" checks");
     }
 }

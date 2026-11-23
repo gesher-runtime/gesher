@@ -28,7 +28,20 @@
 namespace {
 namespace ws = gesher::ws;
 using Clock = std::chrono::steady_clock;
-constexpr int kTimeoutMs = 3000;
+// Android DnsResolver's res_nsend defaults (RES_TIMEOUT, RES_DFLRETRY):
+// retry_count rounds over the servers, each server waiting the base timeout
+// shifted by its index and divided by the server count (5s for the first),
+// never less than one second. ANDROID_RESOLV_NO_RETRY makes one request to
+// one server.
+constexpr int kBaseTimeoutMs = 5000;
+constexpr int kRetryCount = 2;
+constexpr size_t kMaxServers = 3;
+
+int ServerTimeout(size_t server, size_t count) {
+  int milliseconds = kBaseTimeoutMs << server;
+  if (server > 0) milliseconds /= static_cast<int>(count);
+  return std::max(milliseconds, 1000);
+}
 
 struct Query {
   std::atomic<bool> cancelled{false};
@@ -58,7 +71,8 @@ void Timeout(int fd, int milliseconds) {
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &value, sizeof(value));
 }
 
-int Open(const std::shared_ptr<Query>& query, const ws::Address& server, uint32_t index, bool tcp) {
+int Open(const std::shared_ptr<Query>& query, const ws::Address& server, uint32_t index, bool tcp,
+         int timeout) {
   std::lock_guard<std::mutex> lock(query->mutex);
   if (query->cancelled) return errno = ECANCELED, -1;
   ws::Socket endpoint = ws::Open(server.family, tcp ? ws::Type::kStream : ws::Type::kDgram, 0, false);
@@ -74,7 +88,7 @@ int Open(const std::shared_ptr<Query>& query, const ws::Address& server, uint32_
   if (fd < 0) return -1;
   if (query->cancelled) { close(fd); return errno = ECANCELED, -1; }
   query->active = fd;
-  Timeout(fd, kTimeoutMs);
+  Timeout(fd, timeout);
   return fd;
 }
 
@@ -84,7 +98,7 @@ void Close(const std::shared_ptr<Query>& query, int fd) {
   close(fd);
 }
 
-int Connect(int fd, const ws::Address& server, bool tcp) {
+int Connect(int fd, const ws::Address& server, bool tcp, int timeout) {
   sockaddr_storage address{};
   socklen_t length = sizeof(address);
   gesher::sock::FromAddress(server, reinterpret_cast<sockaddr*>(&address), &length);
@@ -95,7 +109,7 @@ int Connect(int fd, const ws::Address& server, bool tcp) {
   int error = result == 0 ? 0 : errno;
   if (result != 0 && error == EINPROGRESS) {
     pollfd pending{fd, POLLOUT, 0};
-    int ready = poll(&pending, 1, kTimeoutMs);
+    int ready = poll(&pending, 1, timeout);
     if (ready > 0) {
       socklen_t size = sizeof(error);
       if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) != 0) error = errno;
@@ -108,10 +122,10 @@ int Connect(int fd, const ws::Address& server, bool tcp) {
 }
 
 int Exchange(const std::shared_ptr<Query>& query, const ws::Address& server, uint32_t index,
-             const std::vector<uint8_t>& packet, std::vector<uint8_t>* answer, bool tcp) {
-  int fd = Open(query, server, index, tcp);
+             const std::vector<uint8_t>& packet, std::vector<uint8_t>* answer, bool tcp, int timeout) {
+  int fd = Open(query, server, index, tcp, timeout);
   if (fd < 0) return -errno;
-  int error = Connect(fd, server, tcp);
+  int error = Connect(fd, server, tcp, timeout);
   if (error == 0) {
     if (tcp) {
       uint8_t length[2] = {static_cast<uint8_t>(packet.size() >> 8), static_cast<uint8_t>(packet.size())};
@@ -125,7 +139,7 @@ int Exchange(const std::shared_ptr<Query>& query, const ws::Address& server, uin
     } else if (send(fd, packet.data(), packet.size(), 0) != static_cast<ssize_t>(packet.size())) {
       error = -errno;
     } else {
-      auto deadline = Clock::now() + std::chrono::milliseconds(kTimeoutMs);
+      auto deadline = Clock::now() + std::chrono::milliseconds(timeout);
       answer->resize(65535);
       while (true) {
         int remaining = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -175,13 +189,18 @@ DWORD WINAPI QueryWorker(void* argument) {
   std::unique_ptr<Job> job(static_cast<Job*>(argument));
   std::vector<uint8_t> answer;
   int error = -EIO;
-  size_t count = (job->flags & 1) != 0 ? 1 : std::min<size_t>(job->servers.size(), 3);
-  for (size_t i = 0; i < count && !job->query->cancelled; ++i) {
-    error = Exchange(job->query, job->servers[i], job->index, job->packet, &answer, false);
-    if (error == 0 && (answer[2] & 2) != 0) {
-      error = Exchange(job->query, job->servers[i], job->index, job->packet, &answer, true);
+  bool single = (job->flags & 1) != 0;  // ANDROID_RESOLV_NO_RETRY
+  size_t count = single ? 1 : std::min(job->servers.size(), kMaxServers);
+  int attempts = single ? 1 : kRetryCount;
+  for (int attempt = 0; attempt < attempts && error != 0 && !job->query->cancelled; ++attempt) {
+    for (size_t i = 0; i < count && !job->query->cancelled; ++i) {
+      int timeout = ServerTimeout(i, count);
+      error = Exchange(job->query, job->servers[i], job->index, job->packet, &answer, false, timeout);
+      if (error == 0 && (answer[2] & 2) != 0) {
+        error = Exchange(job->query, job->servers[i], job->index, job->packet, &answer, true, timeout);
+      }
+      if (error == 0) break;
     }
-    if (error == 0) break;
   }
   Publish(job->query, job->query->cancelled ? -ECANCELED : error, answer);
   return 0;

@@ -1,6 +1,7 @@
 # 0028 — Installed apps as Windows apps: Start menu shortcuts, icons, AppUserModelIDs
 
-**Status:** accepted, 2026-10-24 (shell track)
+**Status:** accepted, 2026-10-24 (shell track); amended 2026-11-22 (installs and
+removals committed through PackageInstaller sessions, below)
 
 ## Context
 With the Gesher device ([0026](0026-services-persistent-device.md)) packages stay
@@ -27,6 +28,23 @@ AppUserModelID that ties the app's taskbar buttons to it.
   goes on without a shortcut and says why. Gesher's own test runs (no
   `gesher-app.cmd` next to dalvikvm.exe) make none; `GESHER_SHORTCUTS=0` turns them
   off.
+
+  **Amended 2026-11-22:** apps also install and remove packages through Android's
+  `PackageInstaller` session API (an app store such as Aurora Store commits a
+  session; `PackageInstaller.uninstall` removes a package), which never runs
+  gesher-app. Those packages got no shortcut and no URL protocols, and a removed
+  one kept them. Such installs and removals are now reflected from the system
+  server: `PackageInstallerService`, after a session's install is committed and
+  published, registers the package's shortcut and URL protocols (the same
+  `AppShell` steps, for the published code generation, `changed` unless the code
+  was unchanged); before a session removal it reads the shortcut and URL protocol
+  records under the publication lock, and after the removal is committed it
+  unregisters them. This is best effort, as for the launcher: a failure is logged
+  and never changes the install's or removal's result, and a denied, blocked or
+  failed commit changes nothing. The system server is dalvikvm.exe in Gesher's
+  folder as well, so the rules above hold: Gesher's own test runs make none and
+  `GESHER_SHORTCUTS=0` turns them off. `gesher-app install`, `uninstall` and each
+  launch keep doing it from the launcher process.
 - **The label and the icon come from the framework**, as a launcher gets them:
   the APK's resources through `AssetManager`/`Resources` with the default locale
   and xxxhdpi (so the best density of a mipmap is chosen by the resource
@@ -57,7 +75,8 @@ AppUserModelID that ties the app's taskbar buttons to it.
   it itself (`SHGetPropertyStoreForWindow`, `PKEY_AppUserModel_ID`) — the hook for
   the window code if an app process ever hosts another package's windows.
 - **Uninstalling**: `gesher-app uninstall` removes the package's shortcut and icon
-  (and the folder when it is empty); Gesher's uninstaller removes
+  (and the folder when it is empty), as does a removal committed through
+  `PackageInstaller` (amendment above); Gesher's uninstaller removes
   `{userprograms}\Gesher Apps` as a whole (`[UninstallDelete]`), the icons going
   with `%LOCALAPPDATA%\Gesher`.
 - **Gesher's own icon**, `tools/package/gesher.ico` (drawn by

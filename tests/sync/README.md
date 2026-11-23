@@ -1,5 +1,23 @@
 # Sync host contracts and the PR15 coexistence probe
 
+## Timer retention checks
+
+The binding fixture initializes the actual URI-grant registry used by service
+teardown and asserts that terminal syncs deliver the adapter's stop callback.
+Unrelated settings-provider startup remains isolated.
+
+The ordinary suite also checks the production timer factory with 10,000 canceled
+one-year timers, completion/cancellation of active watchdogs, and rejection of
+watchdog rearming after completion. Run just these checks with `--case retention`.
+The timer queue must be empty while its worker is held behind a latch, so the
+check cannot pass by waiting for deadlines. The service checks use the existing
+deterministic executor and actual production completion/binding paths.
+
+The host runner also supports Windows with `--cc <llvm-mingw C compiler>` and a
+Windows JDK. Its JNI fixture explicitly rejects unrelated notification descriptor
+reads with ENOSYS on Windows; these reads are not part of the sync checks. This
+remains a host JVM test, not Windows ART or cross-process Binder validation.
+
 `tools/test_sync_manager.py` normally compiles the current production SyncManager
 and runs the shared service-registry fixture over the declared host JNI boundaries.
 `--source-ref` selects a separate baseline control. The default CI command is unchanged.

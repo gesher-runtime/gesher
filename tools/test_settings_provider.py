@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
     parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
-    parser.add_argument('--case', choices=('all', 'query', 'crud', 'call', 'persistence', 'limits', 'observers'), default='all')
+    parser.add_argument('--case', choices=('all', 'query', 'crud', 'call', 'persistence', 'transient', 'limits', 'observers'), default='all')
     args = parser.parse_args()
     cc = shutil.which('cc')
     if not cc:
@@ -53,6 +53,8 @@ def main() -> None:
         sources.append(str(ROOT / 'app/java/android/app/GesherSettingsContext.java'))
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/SettingsProviderContractTest.java',
+            'tests/dex-services/gesher/services/SettingsWriteAccessTest.java',
+            'tests/dex-services/gesher/services/ClipboardFixture.java',
             'tests/settings/SettingsProviderHost.java'))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), *sources], check=True)

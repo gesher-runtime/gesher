@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 from pathlib import Path
+import subprocess
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +29,19 @@ def rejected(label, replacement, repin=False, target=source_path, pin_name='SYST
             try:
                 policy.check()
             except AssertionError as error:
-                assert str(error) == target.relative_to(ROOT).as_posix(), error
+                # The exact OFD transition also checks whole protected function
+                # bodies; its assertion identifies both the path and marker.
+                detail = error.args[0] if error.args else None
+                path = detail[0] if isinstance(detail, tuple) else detail
+                assert path == target.relative_to(ROOT).as_posix(), error
+                print_result = label
+            except subprocess.CalledProcessError as error:
+                # A mutation inside the pinned transition may be rejected by
+                # reverse application before the baseline hash comparison. This
+                # counts only when that exact check rejects the mutated path.
+                assert error.cmd == ['git', 'apply', '--reverse', '--unidiff-zero', '--check', '-'], error
+                assert error.returncode == 1, error
+                assert target.relative_to(ROOT).as_posix().encode() in error.stderr, error.stderr
                 print_result = label
             else:
                 raise RuntimeError('source policy accepted ' + label)
@@ -94,6 +107,28 @@ for label, replacement in fd_controls:
              target=fd_path, pin_name='FD_SHA256')
 print('stream-device source policy: positive source and seven negative controls passed')
 
+winsock_path = ROOT / 'compat/posix/src/winsock.cc'
+winsock_source = winsock_path.read_bytes()
+priority_wake = policy.TCP_PRIORITY_WAKE_AFTER
+priority_controls = (
+    ('waited TCP priority wake confirmation removed',
+     winsock_source.replace(priority_wake, policy.TCP_PRIORITY_WAKE_BEFORE, 1)),
+    ('TCP priority confirmation introduces another blocking wait',
+     winsock_source.replace(priority_wake,
+                            priority_wake.replace(b'sample_wait = 0;', b'sample_wait = 10;', 1), 1)),
+    ('TCP priority confirmation bypassed with stale readiness',
+     winsock_source.replace(priority_wake,
+                            priority_wake.replace(b'sample_wait = 0; continue;', b'break;', 1), 1)),
+    ('TCP priority confirmation duplicates its reviewed boundary',
+     winsock_source + priority_wake),
+    ('unrelated Winsock transport bytes',
+     winsock_source.replace(b'ptrdiff_t SendOwnedRaw(',
+                            b'// unrelated transport change\nptrdiff_t SendOwnedRaw(', 1)),
+)
+for label, replacement in priority_controls:
+    rejected(label, replacement, target=winsock_path)
+print('TCP priority wake source policy: positive source and five negative controls passed')
+
 fixture_path = ROOT / 'tests/net-tcp-priority/contract.cc'
 fixture = fixture_path.read_bytes()
 rejected('unrelated TCP fixture bytes',
@@ -116,21 +151,39 @@ for before, after in policy.TCP_DIAGNOSTIC_REPLACEMENTS:
 rejected('TCP fixture missing required diagnostics', without_diagnostics, target=fixture_path)
 print('TCP diagnostic source policy: six negative controls passed')
 
-rejected('thread census equality relaxation',
-         fixture.replace(b'actual.threads == baseline.threads',
-                         b'actual.threads >= baseline.threads', 1), target=fixture_path)
+rejected('exact non-pool thread census result ignored',
+         fixture.replace(b'actual.handles == baseline.handles && owners_match',
+                         b'actual.handles == baseline.handles && true', 1), target=fixture_path)
+rejected('process handle census allows leaked handles',
+         fixture.replace(b'actual.handles == baseline.handles && owners_match',
+                         b'actual.handles >= baseline.handles && owners_match', 1), target=fixture_path)
 rejected('thread census observer forced on successful modes',
-         fixture.replace(b'ObserveOwnerThreads(mode, actual.handles != baseline.handles || actual.threads != baseline.threads)',
+         fixture.replace(b'ObserveOwnerThreads(mode, actual.handles != baseline.handles || !owners_match)',
                          b'ObserveOwnerThreads(mode, true)', 1), target=fixture_path)
+rejected('thread census calibration bypassed',
+         fixture.replace(b'require(gesher::test::CalibrateOwnerThreads(),',
+                         b'require(true,', 1), target=fixture_path)
+rejected('owned connect operation retirement unchecked',
+         fixture.replace(b'retired_operation.expired() && retired_description.expired()',
+                         b'true && retired_description.expired()', 1), target=fixture_path)
+rejected('owned socket description retirement unchecked',
+         fixture.replace(b'retired_operation.expired() && retired_description.expired()',
+                         b'retired_operation.expired() && true', 1), target=fixture_path)
 thread_diagnostic = ROOT / policy.OWNER_THREAD_DIAGNOSTIC_PATH
 thread_source = thread_diagnostic.read_bytes()
+rejected('ordinary thread classified as a system pool worker',
+         thread_source.replace(b'if (start == pool_start) {', b'if (start != nullptr) {', 1),
+         target=thread_diagnostic)
+rejected('exact non-pool thread identities replaced with count equality',
+         thread_source.replace(b'current.product == baseline.product',
+                               b'current.count == baseline.count', 1), target=thread_diagnostic)
 rejected('thread observer querying a reused foreign-process TID',
          thread_source.replace(b'if (owner == GetCurrentProcessId()) {', b'if (true) {', 1),
          target=thread_diagnostic)
 rejected('thread observer leaking its diagnostic handles',
          thread_source.replace(b'if (CloseHandle(thread)) ++closed;', b'if (true) ++closed;', 1),
          target=thread_diagnostic)
-print('thread diagnostic source policy: four negative controls passed')
+print('thread diagnostic source policy: ten negative controls passed')
 
 receipt_path = ROOT / 'tools/ci/receipt-diagnostics.ps1'
 receipt = receipt_path.read_bytes()

@@ -47,6 +47,106 @@ app). `GESHER_BINDER_TRACE=1` makes binderd trace every transaction on stderr;
 device starts stream an ART method trace to `<dir>/<package>-<pid>.trace`,
 which survives an abort (it found the HealthConnectManager placeholder's need).
 
+## Storage Access Framework documents
+
+`DocumentsStorageProvider` publishes `com.gesher.documents` through the platform's
+`DocumentsProvider` and `ContentProvider.Transport`. Its registered metadata is
+available before persisted URI grants load; clients receive the transport only
+after `attachInfo` initializes its context, authority and URI matcher. The
+provider requires `MANAGE_DOCUMENTS`, while per-document read/write grants and
+AOSP tree containment authorize normal app operations. The boot framework's
+complete `DocumentsContract` remains the client API.
+
+`DocumentPicker` translates implicit open, create, tree and get-content requests
+into Windows filesystem dialogs. MIME filters, supported multiple selection,
+suggested save names and local initial-URI hints reach the native dialog.
+`ACTION_CREATE_DOCUMENT` uses `IFileSaveDialog`; the selected location is created
+atomically with Android's unique-name rules, preserving existing contents.
+`ACTION_GET_CONTENT` offers temporary read access. SAF results offer persistable
+read/write access; trees also carry a prefix grant. Persisting and releasing each
+mode uses the shared durable URI-grant store.
+
+`MediaStore.ACTION_PICK_IMAGES` uses the same Windows open dialog with the
+[photo picker](https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/tags/android-16.0.0_r4/photopicker/)
+request contract. Its manifest filters accept only `image/*`, `video/*` or no data,
+so an explicit non-media type is not resolved. The wildcard type, alone or in
+`EXTRA_MIME_TYPES`, means `image/*` and `video/*`. Only `EXTRA_PICK_IMAGES_MAX`
+enables multiple selection; `EXTRA_ALLOW_MULTIPLE` does not apply. A limit outside
+`1..getPickImagesMaxLimit()`, or non-media `EXTRA_MIME_TYPES`, starts and then
+returns `RESULT_CANCELED` without UI, as the photo picker does. The dialog title
+states the limit, and a larger selection is cancelled rather than truncated. Results
+carry read and persistable grants. Unlike Android, the returned URIs are
+`content://com.gesher.documents` SAF document URIs, not `content://media/picker`
+URIs; both support streams, `OpenableColumns` queries and persisted grants.
+
+An `ACTION_CHOOSER` around a document request lists the system picker as one of
+its choices, as DocumentsUI appears in Android's chooser; see
+[intent-chooser.md](intent-chooser.md).
+
+Android's MIME map (`DefaultMimeMapFactory`, from the framework jar's
+`mime.types` resources) replaces libcore's minimal default in every Gesher process
+during `Main.bootstrap`, as `RuntimeInit.commonInit` installs it. A failure to load
+it is logged and leaves libcore's map in effect.
+
+Multiple selection and `EXTRA_MIME_TYPES` retain all valid entries; there is no
+256-document or 64-filter policy. Native results are checked against the actual
+JNI array and C++ container representation limits before conversion, following
+Android 16's [selection predicate](https://android.googlesource.com/platform/packages/apps/DocumentsUI/+/android-16.0.0_r4/src/com/android/documentsui/dirlist/DocsSelectionPredicate.java),
+[picked-document delivery](https://android.googlesource.com/platform/packages/apps/DocumentsUI/+/android-16.0.0_r4/src/com/android/documentsui/picker/PickActivity.java)
+and [MIME state](https://android.googlesource.com/platform/packages/apps/DocumentsUI/+/android-16.0.0_r4/src/com/android/documentsui/base/State.java).
+
+`EXTRA_LOCAL_ONLY` is preserved through the Java/JNI/native request. Windows opens
+the existing target for attributes without recall, follows reparse points, and
+queries its [resolved volume GUID](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew)
+and actual drive type. Network, offline and unverifiable targets are rejected,
+including remote mapped drives and local paths that resolve onto a remote share.
+The dialog's [OnFileOk validation](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifiledialogevents-onfileok)
+keeps an invalid selection open with an explanation. A local-only save dialog
+does not create test files; its existing parent is checked again before atomic
+creation, and the selected target is checked before grants or success. The
+aggregate `/` root includes network mounts and does not advertise `FLAG_LOCAL_ONLY`.
+
+Each request belongs to its authenticated activity/process and current package
+installation. The actual covered activity pauses while the native UI runs; a
+paused result recipient retains its pending result until normal resume.
+Cancellation, owner retirement, native errors, unavailable selections and failed
+creation/grant publication produce no successful URI result. Native STA timers
+close retired dialogs, and every request retires its COM objects and window.
+The outstanding picker session keeps the device busy through native cleanup,
+including requests from a process without an activity. Concurrent native document
+and intent dialogs retain their own busy and pause coverage; the covered activity
+resumes after the last dialog closes and any outstanding pause is acknowledged.
+Capabilities reflect existing backing files and writable operations. Android
+shared-storage private subtrees are hidden, and restricted tree roots carry the
+framework blocking flag.
+Recursive deletion retires each successfully deleted child's document and tree
+grants immediately through the framework helper. If a later deletion fails,
+already deleted children remain retired while surviving documents keep their
+permissions; the existing durable grant writer batches the resulting updates.
+
+The behavior follows Android 16 r4
+[DocumentsProvider](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/provider/DocumentsProvider.java),
+[ContentProvider](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/content/ContentProvider.java),
+[DocumentsContract](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/provider/DocumentsContract.java),
+[ExternalStorageProvider](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/packages/ExternalStorageProvider/src/com/android/externalstorage/ExternalStorageProvider.java),
+and the [Android documents guide](https://developer.android.com/training/data-storage/shared/documents-files).
+
+Validation: `tools/test_saf_documents.py` runs the production Java provider
+transport, activity-manager lifecycle and real filesystem/grant store, including
+recursive deletion and partial-failure grant retirement, headless idle ownership,
+overlapping native dialogs, delayed pause acknowledgment,
+257-document/65-filter requests, locality rejection before creation, and exact
+AppTask retirement across native UI. Three separate JVMs cover retained-mode
+reload and release. It declares its host Binder/native initialization, user-input
+and locality-query boundaries. Windows track 94 runs the same service
+fixture through actual provider Binder parcels and file descriptors, then
+`DocumentPickerTest` checks real local and absent targets and opens and cancels
+real local-only open/save/tree dialogs repeatedly. Optional Windows path arguments
+to that test must be caller-owned nonlocal fixtures, such as a mapped share or a
+local reparse point to that share; the actual Windows query must reject each one.
+Unavailable native dialogs fail that check. Neither suite substitutes document
+operations or reports a selected path when an operation fails.
+
 ## Device services (devsvc track)
 
 Design: [0038](decisions/0038-devsvc-windows-backed-services.md). Tests:
@@ -330,6 +430,67 @@ intents nothing resolves (`SettingsIntents`):
 the shared view's media on the host files. Component enabled states, memory info, the SIM
 state and provider intent queries answer as Android (ADR 0087). Tests:
 tests/dex-services `SettingsIntentsTest` (tests/windows/tracks/95-browser.ps1).
+
+## Activity usage history
+
+The managed system server records confirmed activity resume, pause and stop transitions.
+Teardown closes any still-open activity interval. A covered launch can enter PAUSED
+without first resuming: that counts as visible time and never as foreground time.
+Package aggregates count overlapping activities only once per package. Filtered event
+queries use an inclusive start and an exclusive end.
+
+Daily, weekly, monthly and yearly intervals use Android's fixed 24-hour, 7-day,
+30-day and 365-day lengths, with their actual service-load/rollover origins. They
+are not aligned to Unix-epoch multiples or civil-calendar months. Queries return
+whole overlapping intervals. `INTERVAL_BEST` uses the nearest available saved
+origin at or before the query beginning, with the Android daily fallback when no
+stored interval exists.
+
+Public events remain capped at 30 days and 12,000 recent transitions. Separate
+interval totals and live instance state prevent event eviction from erasing usage.
+The interval stores use Android's 10-day, 4-week, 6-month and 2-year pruning windows
+and maximum record counts of 100, 50, 12 and 10, respectively. Completed intervals
+retain cumulative totals, not live activity maps. Public queries copy only the
+selected interval data or event suffix.
+An ordinary query returns recorded values; it does not accrue usage or roll the
+timeline. Lifecycle events and actual periodic flushes advance accounting.
+
+A background writer atomically checkpoints updates at 30-second intervals, and
+shutdown flushes pending work. Recovery ends the previous broker lifetime at the
+last saved accounting point; broker downtime adds no usage. Wall-clock corrections
+greater than two seconds rebase timestamps and interval origins together while
+preserving already recorded usage. A public query reconciles an observed clock
+correction through Android's persist/reload boundary, which drops live activity
+maps without inventing a resumed continuation. Actual rollover processing
+publishes origins before a later BEST query selects from the saved index.
+Uninstall synchronously purges the affected package's events and interval totals
+before its name can be installed again. Checkpoint decoding is transactional, and
+a 64 MiB read/write budget fails an oversized save without replacing the previous
+valid checkpoint.
+Version 3 migrates the published contributor version-2 origins, package totals,
+events and instance-ID counter directly. It stores each package's end at the
+containing interval bound so subsequent activity after an offline backward clock
+change cannot make the next checkpoint unreadable.
+
+Version 1 checkpoints can recover their surviving event suffix, but cannot recover
+already-evicted events or the real interval origins that the old format never
+stored. Migration preserves their known legacy origins and starts subsequent
+intervals at actual load times. A wall correction occurring while the broker is
+down has no trustworthy elapsed anchor: recovery does not invent a shift or
+attribute the intervening downtime to an activity.
+
+The single-process launcher provides empty usage history and never reads the
+managed device's usage file. Source contracts, format boundaries and validation
+limits are recorded in [the usage-history contract notes](research/activity-usage-contracts.md).
+
+An authenticated app can query its own events. Global queries honor the actual
+package/UID `OP_GET_USAGE_STATS` mode: allowed grants access, default falls back to
+the authenticated `PACKAGE_USAGE_STATS` permission, ignored denies access, and
+errored raises Android's `SecurityException`. Trusted control-plane callers retain
+their exemption. Gesher has no Usage Access
+permission UI yet. The activity history does not add Android Doze, app standby,
+usage-limit observers, foreground-service usage, or configuration and screen-state
+telemetry.
 
 ## Status and next steps
 
@@ -697,3 +858,21 @@ tests/dex-services `SettingsIntentsTest` (tests/windows/tracks/95-browser.ps1).
   drive, ADR 0010) are the graphics track's.
 - Local builds: WinLibs g++ warns (`-Warray-bounds` false positives in
   vector inserts) where clang does not; CI uses llvm-mingw.
+
+### Detached native document and chooser overlap
+
+A detached no-result document picker or intent chooser captures the focused task
+even if another native request already covers that task. Focus discovery and
+eligibility to resume are separate: each admitted window owns coverage until its
+real worker completes. The final covering completion alone can resume the source.
+The original caller/process still owns document and intent chooser cancellation;
+retirement does not release a busy reservation before the native call returns.
+
+`DetachedNativeUiContractTest` exercises both document-first and chooser-first
+admission. An attached first request overlaps a detached `NEW_TASK` request;
+closing the first must leave the source paused and the second busy, then the
+last completion resumes once and delivers only the attached result. The same
+new probe fails both orders on published `b03805d8ea701061e73836d45f26549201c0178a`.
+The host runner and Windows track 94 register this regression alongside the
+existing SAF, durable-grant and restart contracts. Host user-input/process
+fixtures do not establish Windows UI, ART or remote Binder behavior.

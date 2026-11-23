@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<spell-checker xmlns:android="http://schemas.android.com/apk/res/android"
+    android:label="@string/app_name">
+    <subtype android:subtypeLocale="en_US" android:subtypeId="1001" />
+    <subtype android:subtypeLocale="fr_FR" android:subtypeId="1002" />
+</spell-checker>

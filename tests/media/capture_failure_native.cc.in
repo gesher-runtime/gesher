@@ -1,0 +1,305 @@
+// Complete production capture worker/stream; WASAPI and thread priority alone
+// are declared test boundaries. Native Windows clocks and synchronization run.
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <optional>
+#include <thread>
+#include <functional>
+#include <string>
+#include <vector>
+// Visibility alone permits deterministic inspection of the lifecycle barrier;
+// every worker and stream implementation below is compiled unchanged.
+#define private public
+#include "@ROOT@/compat/media/audio/capture.h"
+#undef private
+namespace fixture {
+std::atomic<bool> available{true}, start_ok{true}, pull_ok{true}, block_start{false}, start_entered{false};
+std::atomic<int> pulls{0};
+std::atomic<bool> block_pull{false}, pull_entered{false};
+std::mutex mutex;
+std::condition_variable changed;
+// A blocked backend call checks its gate under `mutex` and then sleeps on
+// `changed`. Opening the gate under the same mutex keeps that check and the
+// sleep atomic with respect to the notification: a store and notify made
+// without it can land between them, and the backend then sleeps forever.
+void OpenGate(std::atomic<bool>& gate) {
+  { std::lock_guard<std::mutex> lock(mutex); gate = false; }
+  changed.notify_all();
+}
+}
+namespace gesher::media {
+class ControlledSource : public CaptureSource {
+ public:
+  uint32_t rate() const override { return 48000; }
+  uint32_t channels() const override { return 1; }
+  std::string Describe() const override { return "test WASAPI boundary"; }
+  std::string DeviceName() const override { return "test input"; }
+  bool Start() override {
+    fixture::start_entered = true;
+    fixture::changed.notify_all();
+    std::unique_lock<std::mutex> lock(fixture::mutex);
+    fixture::changed.wait(lock, [] { return !fixture::block_start.load(); });
+    return fixture::start_ok;
+  }
+  void Stop() override {}
+  bool Pull(std::vector<float>* out) override {
+    fixture::pull_entered = true;
+    {
+      std::unique_lock<std::mutex> lock(fixture::mutex);
+      fixture::changed.wait(lock, [] { return !fixture::block_pull.load(); });
+    }
+    ++fixture::pulls;
+    if (!fixture::pull_ok) return false;
+    out->assign(8, .25f); return true;
+  }
+};
+std::unique_ptr<CaptureSource> OpenWasapiCapture(bool, std::string* error) {
+  if (!fixture::available) { *error = "test endpoint unavailable"; return nullptr; }
+  return std::make_unique<ControlledSource>();
+}
+bool HasWasapiCaptureEndpoint(std::string* name) {
+  if (fixture::available && name) *name = "test input";
+  return fixture::available;
+}
+void CaptureComInit() {}
+void RaiseAudioThreadPriority(bool) {}
+size_t BytesPerSample(PcmFormat format) {
+  switch (format) {
+    case PcmFormat::kU8: return 1;
+    case PcmFormat::kS16: return 2;
+    case PcmFormat::kS24Packed: return 3;
+    case PcmFormat::kS32: case PcmFormat::kFloat: return 4;
+  }
+  std::abort();
+}
+}
+#include "@ROOT@/compat/media/audio/capture.cc"
+@ADAPTER_IMPLEMENTATIONS@
+namespace {
+using namespace gesher::media;
+int checks = 0;
+void Check(bool ok, const char* message) {
+  ++checks;
+  if (!ok) { std::fprintf(stderr, "FAIL capture failures: %s\n", message); std::exit(1); }
+}
+// A wall-clock bound: a 1 ms sleep lasts a whole timer tick (15.6 ms by
+// default on Windows), so a count of sleeps is no bound on the wait.
+template<class Predicate> bool Await(Predicate test) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  for (;;) {
+    if (test()) return true;
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+std::shared_ptr<CaptureStream> Open() {
+  CaptureParams params; params.format = PcmFormat::kFloat; params.capacity_frames = 64;
+  std::string error;
+  auto stream = OpenCapture(params, &error);
+  Check(stream != nullptr, "prepare actual worker source"); return stream;
+}
+void Disconnect() {
+  auto stream = Open();
+  Check(stream->Start() == kOk, "start acknowledged after actual backend start");
+  Check(Await([&] { return stream->Available() >= 8; }), "real sample publication");
+  fixture::pull_ok = false;
+  Check(Await([&] { return stream->error() == kCaptureDeadObject; }), "source loss becomes terminal stream state");
+  float data[128]{};
+  auto count = stream->Read(data, sizeof(data), true);
+  Check(count > 0 && count < static_cast<ssize_t>(sizeof(data)), "already captured partial data returned first");
+  for (size_t i = 0; i < static_cast<size_t>(count) / sizeof(float); ++i) Check(data[i] == .25f, "real bytes survive terminal error");
+  Check(stream->Read(data, sizeof(data), false) == kCaptureDeadObject, "next nonblocking read reports DEAD_OBJECT");
+  Check(stream->Read(data, sizeof(data), true) == kCaptureDeadObject, "terminal blocking read returns without waiting");
+  Check(stream->Read(data, 0, true) == 0 && stream->Read(data, 1, true) == 0, "empty or subframe reads remain zero after failure");
+  Check(!stream->WaitForData(1, 10000), "terminal wait returns without sleeping or fake data");
+  Check(stream->Start() == kCaptureDeadObject, "disconnected recorder must be recreated");
+  const int pulls = fixture::pulls;
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  Check(fixture::pulls == pulls && !stream->started(), "failed source is not polled in a busy loop");
+  stream->Release();
+}
+void StartRace(bool release) {
+  auto stream = Open(); fixture::block_start = true;
+  int result = kOk;
+  std::thread starter([&] { result = stream->Start(); });
+  Check(Await([] { return fixture::start_entered.load(); }), "backend start barrier entered");
+  std::thread retirement([&] { if (release) stream->Release(); else stream->Stop(); });
+  Check(Await([&] {
+    std::lock_guard<std::mutex> lock(stream->mu_);
+    return stream->generation_ > 1;
+  }), "retirement advances stream generation before backend admission");
+  fixture::OpenGate(fixture::block_start);
+  starter.join(); retirement.join();
+  Check(result == kInvalidOperation && !stream->started(), "retired start cannot resurrect stream");
+  if (release) Check(stream->Start() == kInvalidOperation, "release remains terminal");
+}
+}
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  const char* test = argv[1];
+  if (!std::strcmp(test, "last-owner")) {
+    fixture::block_pull = true;
+    auto stream = Open();
+    Check(stream->Start() == kOk && Await([] { return fixture::pull_entered.load(); }), "backend pull barrier admitted");
+    auto* raw = stream.get();
+    std::weak_ptr<CaptureStream> weak = stream;
+    std::unique_lock<std::mutex> stream_lock(raw->mu_);
+    fixture::pull_ok = false; fixture::OpenGate(fixture::block_pull);
+    Check(Await([&] { return stream.use_count() > 1; }), "worker weak-lock snapshot owns stream while waiting on stream mutex");
+    stream.reset(); stream_lock.unlock();
+    std::atomic<bool> progressed{false};
+    std::thread next([&] { std::string error; auto fresh = OpenCapture(CaptureParams{}, &error); if (fresh) fresh->Release(); progressed = true; });
+    Check(Await([&] { return progressed.load(); }), "last owner destruction cannot deadlock engine retirement");
+    next.join();
+    Check(weak.expired(), "retired worker snapshot releases last stream ownership");
+  } else if (!std::strcmp(test, "stale-peer")) {
+    auto first = Open(), second = Open();
+    Check(first->Start() == kOk && second->Start() == kOk, "two targets start before source publication");
+    fixture::block_pull = true; fixture::pull_entered = false;
+    Check(Await([] { return fixture::pull_entered.load(); }), "source publication barrier entered after both starts");
+    std::atomic<bool> restarted{false}, delivered{false};
+    std::atomic<int64_t> restart_epoch{0};
+    first->SetEvents({{}, {}, [&] {
+      if (!restarted.exchange(true)) {
+        restart_epoch = MonotonicNs();
+        second->Stop();
+        Check(second->Start() == kOk, "first target callback restarts its already-snapshotted peer");
+      }
+    }});
+    second->SetEvents({{}, {}, [&] {
+      Check(second->stats().timestamp_ns >= restart_epoch.load(), "restarted peer cannot receive a pre-restart capture batch");
+      delivered = true;
+    }});
+    fixture::OpenGate(fixture::block_pull);
+    Check(Await([&] { return delivered.load(); }), "restarted peer receives a fresh later source batch");
+    first->Stop(); second->Stop();
+  } else if (!std::strcmp(test, "missing")) {
+    fixture::available = false;
+    CaptureParams params; std::string error;
+    Check(OpenCapture(params, &error) == nullptr && !error.empty(), "missing input refuses initialization");
+    Check(!GetInputInfo().device, "missing input is not advertised");
+  } else if (!std::strcmp(test, "start-fails")) {
+    auto stream = Open(); fixture::start_ok = false;
+    Check(stream->Start() == kCaptureUnavailable && !stream->started(), "failed backend start is acknowledged as failure");
+    float sample;
+    Check(stream->Read(&sample, sizeof(sample), false) == 0 && fixture::pulls == 0, "failed start emits no samples");
+  } else if (!std::strcmp(test, "disconnect")) Disconnect();
+  else if (!std::strcmp(test, "stop-race")) StartRace(false);
+  else if (!std::strcmp(test, "release-race")) StartRace(true);
+  else if (!std::strcmp(test, "reentrant")) {
+    auto first = Open(), second = Open(); std::atomic<int> admitted{0};
+    first->SetEvents({{}, {}, [&] { if (++admitted == 1) Check(second->Start() == kOk, "capture callback starts peer without self-deadlock"); }});
+    Check(first->Start() == kOk && Await([&] { return second->started(); }), "reentrant peer activation");
+    first->Stop(); second->Stop();
+  } else if (!std::strcmp(test, "fixture-env")) {
+    _putenv_s("GESHER_AUDIO_SOURCE", "null");
+    CaptureParams params; std::string error; auto stream = OpenCapture(params, &error);
+#ifdef GESHER_CAPTURE_TEST_SOURCES
+    Check(stream != nullptr && stream->Start() == kOk, "isolated fixture permits explicit null input");
+#else
+    Check(stream == nullptr && error.find("isolated capture-test build") != std::string::npos, "production refuses synthetic input override");
+#endif
+  } else if (!std::strcmp(test, "fixture-bad-file")) {
+    _putenv_s("GESHER_AUDIO_SOURCE", "__gesher_missing_capture_fixture.wav");
+    CaptureParams params; std::string error;
+    Check(OpenCapture(params, &error) == nullptr && !error.empty(), "invalid fixture source fails without silent fallback");
+  } else if (!std::strcmp(test, "opensl-missing")) {
+    fixture::available = false;
+    auto* object = opensl_fixture::Create();
+    Check(object != nullptr && !object->capture, "OpenSL creation does not initialize recording device");
+    Check(opensl_fixture::ObjRealize(&object->object_itf, 0) == 9 && object->state == 1 && !object->feeder.joinable(),
+          "OpenSL missing device fails at realization and leaves object unrealized");
+    Check(opensl_fixture::ObjRealize(&object->object_itf, 0) == 9, "repeat failed realization remains failure");
+    opensl_fixture::Destroy(object);
+  } else if (!std::strcmp(test, "opensl-permission")) {
+    auto* object = opensl_fixture::Create();
+    opensl_fixture::permission = false;
+    Check(opensl_fixture::ObjRealize(&object->object_itf, 0) == 9 && object->capture == nullptr &&
+          object->state == 1 && !object->feeder.joinable(), "revoked permission prevents deferred native recorder initialization");
+    opensl_fixture::Destroy(object);
+  } else if (!std::strcmp(test, "opensl-descriptors")) {
+    using namespace opensl_fixture;
+    struct Io { uint32_t type, device_type, device_id; void* device; } source{3, 1, UINT32_MAX, nullptr};
+    DataLocatorQueue queue{kLocatorAndroidSimpleBufferQueue, 1};
+    DataFormatPcm pcm{kFormatPcm, 1, 48000000, 16, 16, 1, 2};
+    SLDataSource src{&source, nullptr}; SLDataSink sink{&queue, &pcm};
+    auto bad = [&](uint32_t expected) {
+      Itf result = reinterpret_cast<Itf>(uintptr_t{1});
+      Check(EngCreateAudioRecorder(nullptr, &result, &src, &sink, 0, nullptr, nullptr) == expected && result == nullptr,
+            "OpenSL malformed descriptor fails at Create before hardware realization");
+    };
+    pcm.num_channels = 0; bad(2); pcm.num_channels = 9; bad(9); pcm.num_channels = 1;
+    pcm.samples_per_sec = 0; bad(2); pcm.samples_per_sec = 4000000; bad(9); pcm.samples_per_sec = 48000000;
+    pcm.container_size = 0; bad(2); pcm.container_size = 32; bad(9); pcm.container_size = 16;
+    pcm.bits_per_sample = 0; bad(2); pcm.bits_per_sample = 32; bad(2); pcm.bits_per_sample = 16;
+    pcm.endianness = 0; bad(2); pcm.endianness = 1; bad(9); pcm.endianness = 2;
+    pcm.channel_mask = 3; bad(2); pcm.channel_mask = 0x40000000; bad(2);
+    pcm.channel_mask = 0x80000100; bad(2); pcm.channel_mask = 1;
+    source.device_id = 0; bad(2); source.device_id = UINT32_MAX;
+    queue.num_buffers = 0; bad(2); queue.num_buffers = 256; bad(2); queue.num_buffers = 1;
+    queue.type = kLocatorBufferQueue; bad(2);
+  } else if (!std::strcmp(test, "opensl-start")) {
+    auto* object = opensl_fixture::Create();
+    Check(opensl_fixture::ObjRealize(&object->object_itf, 0) == 0, "OpenSL recorder realizes before start failure");
+    fixture::start_ok = false;
+    Check(opensl_fixture::RecSetState(&object->object_itf, 3) == 0 && object->record_state == 3,
+          "OpenSL preserves Android requested-state acknowledgment");
+    Check(!object->record_ready && !object->capture->started(), "failed recording start cannot admit queue filling");
+    opensl_fixture::Destroy(object);
+  } else if (!std::strcmp(test, "opensl-disconnect")) {
+    auto* object = opensl_fixture::Create();
+    Check(opensl_fixture::ObjRealize(&object->object_itf, 0) == 0, "OpenSL recorder realizes");
+    fixture::pull_ok = false;
+    Check(opensl_fixture::RecSetState(&object->object_itf, 3) == 0, "OpenSL recording request");
+    uint8_t data[128]{};
+    { std::lock_guard<std::mutex> lock(object->mu); object->queue.push_back({data, sizeof(data), 0}); }
+    object->cv.notify_all();
+    std::atomic<bool> returned{false};
+    std::thread joiner([&] { object->feeder.join(); returned = true; });
+    Check(Await([&] { return returned.load(); }), "OpenSL negative capture read terminates filler without spinning");
+    joiner.join();
+    Check(object->queue_index == 0 && object->capture->error() == kCaptureDeadObject,
+          "disconnected input never fabricates a completed OpenSL buffer");
+    opensl_fixture::Destroy(object);
+  } else if (!std::strcmp(test, "recorder-start")) {
+    recorder_fixture::Recorder recorder; recorder.capture_ = Open();
+    fixture::start_ok = false; std::string error; bool invalid_state = true;
+    Check(!recorder.Start(&error, &invalid_state) && !invalid_state && !recorder.started_, "recorder reports backend start failure");
+    Check(recorder_fixture::muxer_starts == 0 && !recorder.audio_thread_.joinable() && !recorder.capture_,
+          "failed capture start admits no muxer or recorder thread and releases the stream");
+    Check(!recorder.Start(&error, &invalid_state) && invalid_state, "recorder preserves invalid-state distinction");
+    fixture::start_ok = true;
+    recorder_fixture::Recorder next; next.capture_ = Open();
+    auto capture = next.capture_; next.muxer_->success = false;
+    Check(!next.Start(&error) && !capture->started() && !next.capture_, "muxer failure rolls back admitted capture");
+  } else if (!std::strcmp(test, "recorder-disconnect")) {
+    recorder_fixture::Recorder recorder; recorder.capture_ = Open();
+    std::string error; fixture::pull_ok = false;
+    Check(recorder.Start(&error), "recorder starts before source loss");
+    Check(Await([&] { return recorder.finished_.load(); }), "recorder reaches shared completion after capture loss");
+    recorder.audio_thread_.join();
+    Check(recorder.stop_reason_ == recorder_fixture::Recorder::StopReason::kError && !recorder.running_,
+          "capture loss forwards ERROR and retires recorder feeding");
+    Check(recorder.error_requests_ == 1 && recorder.completion_requests_ == 1,
+          "recorder forwards one failure/completion request without busy-looping");
+  } else if (!std::strcmp(test, "jni-read")) {
+    auto stream = Open(); audio_record_fixture::stream = stream;
+    Check(stream->Start() == 0, "AudioRecord boundary starts real capture stream");
+    Check(Await([&] { return stream->Available() > 0; }), "AudioRecord boundary captures actual test backend bytes");
+    fixture::pull_ok = false;
+    Check(Await([&] { return stream->error() != 0; }), "AudioRecord source becomes terminal");
+    float data[128]{};
+    Check(audio_record_fixture::ReadInto(nullptr, nullptr, data, sizeof(data), true) > 0, "JNI returns already transferred partial bytes");
+    Check(audio_record_fixture::ReadInto(nullptr, nullptr, data, sizeof(data), true) == -6, "JNI translates native DEAD_OBJECT to Java -6");
+    Check(audio_record_fixture::ReadInto(nullptr, nullptr, data, 0, true) == 0, "JNI empty reads remain zero");
+    audio_record_fixture::stream.reset();
+  } else return 2;
+  std::printf("capture failure %s: %d checks PASS\n", test, checks);
+  return 0;
+}

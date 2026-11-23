@@ -48,8 +48,17 @@ updates or update individual DLLs independently.
 The updater reads the public
 [`releases/latest` endpoint](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)
 for **`gesher-runtime/gesher`**. It accepts only stable, non-draft releases and
-compares three numeric version components. A tag may be `v0.2.0` or `0.2.0`;
-the matching asset must be exactly `gesher-setup-0.2.0.exe`.
+compares numeric versions. A release tag may be `v0.2.0` or `0.2.0` (exactly
+three components); the matching asset must be exactly `gesher-setup-0.2.0.exe`.
+
+An installed Gesher has either a release version (`0.2.0`) or a CI build version
+(`0.2.0.526`, with the highest usable published stable version followed by the
+CI run number). A CI build is
+ordered above the release it follows and below the next one, so a CI build of
+0.2.0 is offered 0.2.1 but never 0.2.0. Before the first usable published
+release, CI builds are `0.0.0.<run number>`. A bare Git tag, draft,
+prerelease, or release missing the updater's required installer metadata does
+not establish a new baseline.
 
 The asset must have GitHub's
 [`digest` metadata](https://docs.github.com/en/rest/releases/assets), formatted as
@@ -69,24 +78,54 @@ There is currently one Windows package: x64, matching the installer's
 `x64compatible` requirement. The bundled Android ARM64 translator is part of
 that package; it is not a separate Windows ARM64 installer.
 
-### Preparing a release asset
+### Publishing a release
 
-1. Run the **ci** workflow on the intended commit with the optional
-   `release_version` input, for example `0.2.0`. The input is validated as three
-   numeric components in the Windows version range. Ordinary CI builds retain
-   the existing `0.1.<run_number>` numbering.
-2. Wait for the full run, including Windows, framework, package and E2E checks,
-   to succeed. Download that run's `gesher-setup` artifact; it contains the
-   installer and `SHA256SUMS.txt`.
-3. Publish a stable GitHub Release for that exact commit with the matching
-   `v0.2.0` tag and upload the tested `gesher-setup-0.2.0.exe` unchanged. GitHub
-   calculates its asset digest. Include the checksum file and release notes.
-4. Confirm that the published asset's filename, product version and API digest
-   agree. The release must be selected as GitHub's latest stable release to be
-   offered by the updater.
+Push a version tag to the official repository to start a release. Choose a
+version newer than any published release with a stable version number, and tag
+the protected `main` commit. The first release must be at least `v0.2.0`
+because older CI builds installed as `0.1.<run number>` must be able to
+upgrade.
 
-Adding this feature does not create a tag or publish a release. Until a suitable
-release exists, a successful check reports that no release is available.
+```sh
+git fetch origin main
+git tag -a v0.2.1 -m "Gesher 0.2.1" origin/main   # or a specific commit on main
+git push origin v0.2.1
+```
+
+The tag starts a read-only **ci** run in a separate concurrency group from
+branch, pull request, and manual runs. It validates the pushed tag, builds the
+installer as exactly `0.2.1`, and runs the full package, upgrade, E2E, and
+aggregate checks. Branch and pull request runs, manual runs on any ref, and
+standalone fork runs produce CI-versioned installers and cannot publish.
+
+After successful tag CI, **Publish Gesher release** runs from its protected
+default-branch workflow revision. It verifies the official repository, CI
+definition, exact run and attempt, tag-push validation step, current tag,
+`main` ancestry, successful `ci-required` gate, and package artifact receipt.
+It checks the artifact's archive SHA-256 and then the one installer and checksum
+inside it. The publisher handles those files as data.
+
+The publisher serializes its work across tags. It creates a draft with generated
+notes, verifies the GitHub asset digests for both files, and reads the release
+catalog and exact Git tag immediately before making the draft public. GitHub
+does not offer an atomic update conditioned on the observed Git ref or release
+catalog. Keep the tag and release unchanged throughout publication, and wait
+for the publisher before starting a manual release.
+
+If publication is interrupted, rerun the publisher for the same successful CI
+attempt after inspecting its result. It can resume a draft when the prior
+protected publisher's job log authenticates its release ID and provenance,
+and every existing asset matches the tested bytes. It uploads only missing
+assets. It leaves manual, unknown, unprovable, and mismatched drafts untouched.
+If the publish request's response was lost, the publisher reconciles against
+the exact release and asset identities. Inspect that release if GitHub is
+temporarily unable to confirm the outcome.
+
+When the protected CI definition changes before the publisher starts, the
+mismatched run is refused. Use a separate version tag on a commit with the
+current protected CI definition, and preserve any existing draft for inspection.
+Until a suitable release exists, a successful updater check reports that no
+release is available.
 
 ## Failure handling and resource use
 
@@ -131,8 +170,8 @@ Any HTTP response proves negotiation, so the check does not require a published
 release and tolerates API rate-limit responses. Certificate validation remains
 enabled for this real request.
 
-The early `update-contracts` CI matrix runs Windows PowerShell 5.1 on Windows
-2022 and 2025. The existing package checks also verify that the installed updater
+The early `windows-host-contracts` CI matrix runs these checks in Windows
+PowerShell 5.1 on Windows 2022 and 2025. The existing package checks also verify that the installed updater
 and version metadata are present. The real installer upgrade test preserves app
 data and update settings while an unrelated process holds the old Explorer shell
 extension open. Existing full Windows/framework/E2E and source/artifact identity

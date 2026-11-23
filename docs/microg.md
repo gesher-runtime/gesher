@@ -61,7 +61,17 @@ The helper verifies the expected manifest package, signed APK contents and
 official signer offline before replacing any supplied slot. It stages files as
 `system/priv-app/<package>/base.apk` under the selected profile and writes
 `microg.enabled`. Startup verifies the fixed slots again before parsing/loading
-their application code; an unexpected or modified APK stops startup.
+their application code; an unexpected or modified APK stops startup. As the
+package manager does for a system package, startup then keeps each addon's native
+libraries for its best ABI in `system/priv-app/<package>/lib/<isa>` (its
+`nativeLibraryDir`, with `primaryCpuAbi`), so other processes that load its code,
+such as Dynamite modules (`cronet_dynamite`), find them on disk. Libraries already
+identical to the verified APK's are not rewritten, changed ones are restored and
+any other file or link there is removed. If that directory cannot be prepared (for
+example, it is a link, or a stale entry cannot be removed), startup logs it and
+does not use that directory: the addon then runs without its native libraries
+(Dynamite modules fail to load) until a later startup prepares them. `-Remove`
+deletes these extracted libraries too.
 
 The normal launcher uses `%LOCALAPPDATA%/Gesher` and enables
 `GESHER_MICROG_SPOOF=1` when that profile's marker exists. An explicit environment
@@ -70,7 +80,8 @@ value, including `0`, takes precedence. The helper's `-ProfileRoot` and
 profile. They do not change the normal launcher's profile selection.
 
 Open microG Settings to configure Google device registration, Cloud Messaging
-and accounts. Staging the APKs does not enable those settings. On device startup,
+and accounts. Staging the APKs does not enable those settings, and the helper
+does not write microG's preferences. On device startup,
 Gesher sends verified Services `BOOT_COMPLETED` so microG can restore services
 enabled in its own settings. Gesher must be running to receive push.
 
@@ -121,6 +132,30 @@ rechecks copied code, and enforces verified signing continuity on updates.
 Unsigned developer fixtures remain supported; replacing their code invalidates
 old code-bound capabilities. Loaded APK files must remain unchanged. The
 installer prevents installing an application as the reserved `android` owner.
+
+Later certificate-compatibility policy checks reuse the full verification owned
+by that exact `ApkPackage` generation. They still require the official current
+signer and the allowed signing scheme; v1 additionally requires the complete GSF
+artifact hash above. A replacement object verifies its own contents, even at the
+same path, size and modification time. Addon admission and override selection
+still independently verify the current file's actual manifest name and complete
+signed contents: cached object identity cannot replace that boundary. The
+standalone packaging verifier and the bundled addon's explicit check before
+`PackageParser2` also remain. No result is transferred from a path-based
+preflight into a later parsed object.
+
+This removes a conditional duplicate present since the November 5 microG
+integration: the first certificate-compatibility check used to reopen an APK
+whose parsed object had already fully verified it. It is separate from the
+November 19 addition of full verification to ordinary UID boot admission, which
+remains mandatory. `tools/test_microg_identity.py` exercises actual official
+Companion and exact-pinned GSF APKs, tampered contents, a new generation at the
+same path and a valid v1 signature with a changed ZIP comment that must fail the
+whole-file pin. It also counts digest input through production verification:
+after Companion's full verification, the additional policy check hashes its
+753-byte certificate instead of reopening the 4,210,169-byte APK. The test uses
+constructed Android manifest objects on the host; `MicrogTest` retains ART
+parser coverage. These are operation counts, not Windows startup timings.
 
 ## Permissions and application identity
 
@@ -181,6 +216,21 @@ Accounts belong to the installed authenticator's package and code identity.
 Only that owner or the trusted host can read passwords/user data or mutate
 protected account secrets. Enumeration respects per-client visibility;
 visibility alone does not grant a normal authentication token.
+
+Visibility resolves as Android's `resolveAccountVisibility`: the authenticator
+always sees its accounts, and a value stored for a client's package and code
+identity wins. A client with no stored value gets the authenticator's
+`PACKAGE_NAME_KEY_LEGACY_VISIBLE` value (default `USER_MANAGED_VISIBLE`) when
+it shares the authenticator's signing certificate, holds
+`GET_ACCOUNTS_PRIVILEGED`, targets below API 26 with `GET_ACCOUNTS`, or holds
+`READ_CONTACTS` for a type whose authenticator holds `WRITE_CONTACTS`.
+Otherwise it gets the `PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE` value (default
+`USER_MANAGED_NOT_VISIBLE`), so an unset client sees nothing in ordinary
+enumeration unless the authenticator changed that default. As on Android,
+`getAccountsByTypeForPackage` called by the type's authenticator also returns
+accounts that are `USER_MANAGED_NOT_VISIBLE` to the client, but never explicit
+denials. microG's account provider (`com.google.android.gms.auth.accounts`)
+uses this call to list the accounts it may offer a calling app.
 
 Token requests bind the real declared authenticator service and retain the
 authenticated requesting application's identity. Normal token access requires
@@ -396,8 +446,8 @@ Gesher supplies a fresh default-No host confirmation for each request. This is a
 user-mediated runtime extension: it does not grant Android's `DELETE_PACKAGES`
 permission or give a store silent removal authority. The original caller process,
 caller code, target code and requested version are checked again after approval.
-System addons and authenticators that still own accounts are rejected. Remove
-those accounts through their normal account workflow first.
+System addons are rejected. A committed authenticator uninstall retires its owned
+accounts and their sync work; other providers' accounts remain intact.
 
 Removal retires the original installed generation before stopping its processes.
 It revokes client grants and pending work, quarantines code and app-specific data,

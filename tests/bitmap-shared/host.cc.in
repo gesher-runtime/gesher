@@ -1,0 +1,287 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Complete production Parcel/helper units plus exact pinned hwui storage
+// methods. Real POSIX descriptors, mappings and seals; declared Skia and Java
+// Parcel/SharedMemory transport boundaries. No Windows/ART claim.
+#include <jni.h>
+#include <cassert>
+#include <cerrno>
+#include <climits>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <limits>
+#include <mutex>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include "hwui/Bitmap.h"
+
+enum Failure { NONE, CREATE, TRUNCATE, MAP, SEAL, DUP, STAT };
+static std::atomic<int> failure{NONE};
+static std::atomic<long long> maps_live{}, heap_calls{}, heap_bytes{}, copies{}, copied_bytes{},
+    regions{}, region_bytes{}, map_calls{}, dup_calls{};
+static bool Inject(Failure point) {
+  int wanted = failure.load();
+  if ((wanted & 255) != point) return false;
+  if (wanted >= 256) { failure = wanted - 256; return false; }
+  if (!failure.compare_exchange_strong(wanted, NONE)) return false;
+  errno = ENOMEM; return true;
+}
+static int HostMemfd(const char* name, unsigned flags) {
+  if (Inject(CREATE)) return -1;
+  int fd = ::memfd_create(name, flags);
+  if (fd >= 0) ++regions;
+  return fd;
+}
+static int HostTruncate(int fd, off_t size) {
+  if (Inject(TRUNCATE)) return -1;
+  int result = ::ftruncate(fd, size);
+  if (result == 0) region_bytes += size;
+  return result;
+}
+static void* HostMap(void* address, size_t size, int prot, int flags, int fd, off_t offset) {
+  if (Inject(MAP)) return MAP_FAILED;
+  void* result = ::mmap(address, size, prot, flags, fd, offset);
+  if (result != MAP_FAILED) { ++maps_live; ++map_calls; }
+  return result;
+}
+static int HostUnmap(void* address, size_t size) {
+  int result = ::munmap(address, size);
+  if (result == 0) --maps_live;
+  return result;
+}
+static int HostFcntl(int fd, int operation, int argument = 0) {
+  if ((operation == F_ADD_SEALS && Inject(SEAL)) ||
+      (operation == F_DUPFD_CLOEXEC && Inject(DUP))) return -1;
+  int result = ::fcntl(fd, operation, argument);
+  if (result >= 0 && operation == F_DUPFD_CLOEXEC) ++dup_calls;
+  return result;
+}
+static int HostStat(int fd, struct stat* result) {
+  if (Inject(STAT)) return -1;
+  return ::fstat(fd, result);
+}
+static void* HostCalloc(size_t count, size_t size) {
+  void* result = std::calloc(count, size);
+  if (result) { ++heap_calls; heap_bytes += count * size; }
+  return result;
+}
+static void* HostCopy(void* to, const void* from, size_t size) {
+  ++copies; copied_bytes += size;
+  return std::memcpy(to, from, size);
+}
+static int FdCount() {
+  DIR* dir = opendir("/proc/self/fd"); assert(dir);
+  int count = 0;
+  while (auto entry = readdir(dir)) if (entry->d_name[0] != '.') ++count;
+  closedir(dir); return count;
+}
+static void ResetWork() {
+  heap_calls = heap_bytes = copies = copied_bytes = regions = region_bytes = map_calls = dup_calls = 0;
+}
+
+#define LOG_ALWAYS_FATAL(...) std::abort()
+#define LOG_ALWAYS_FATAL_IF(value, ...) do { if (value) std::abort(); } while (0)
+#define ATRACE_ENABLED() false
+#define ATRACE_INT64(...) ((void)0)
+#define calloc HostCalloc
+#define memcpy HostCopy
+#define mmap HostMap
+#define munmap HostUnmap
+#define memfd_create HostMemfd
+#define ftruncate HostTruncate
+#define gesher_ftruncate HostTruncate
+#define fcntl HostFcntl
+#define fstat HostStat
+static int ashmem_get_size_region(int fd) { struct stat s{}; return HostStat(fd, &s) == 0 ? int(s.st_size) : -1; }
+@AOSP_BITMAP_METHODS@
+#include "bitmap_parcel.cc"
+#if !BITMAP_BASELINE
+#include "shared_bitmap.cc"
+#endif
+#undef calloc
+#undef memcpy
+#undef mmap
+#undef munmap
+#undef memfd_create
+#undef ftruncate
+#undef gesher_ftruncate
+#undef fcntl
+#undef fstat
+
+static jclass fd_class, bitmap_class;
+static jmethodID fd_constructor, bitmap_constructor;
+static jfieldID fd_field, bitmap_field;
+int jniThrowException(JNIEnv* env, const char* name, const char* text) {
+  if (env->ExceptionCheck()) return -1;
+  jclass cls = env->FindClass(name);
+  if (!cls) return -1;
+  int result = env->ThrowNew(cls, text); env->DeleteLocalRef(cls); return result;
+}
+int jniThrowRuntimeException(JNIEnv* env, const char* text) { return jniThrowException(env, "java/lang/RuntimeException", text); }
+int jniThrowNullPointerException(JNIEnv* env, const char* text) { return jniThrowException(env, "java/lang/NullPointerException", text); }
+int jniRegisterNativeMethods(JNIEnv* env, const char* name, const JNINativeMethod* methods, int count) {
+  jclass cls = env->FindClass(name); if (!cls) return JNI_ERR;
+  int result = env->RegisterNatives(cls, methods, count); env->DeleteLocalRef(cls); return result;
+}
+jobject jniCreateFileDescriptor(JNIEnv* env, int fd) {
+  jobject result = env->NewObject(fd_class, fd_constructor);
+  if (result) env->SetIntField(result, fd_field, fd);
+  return result;
+}
+int jniGetFDFromFileDescriptor(JNIEnv* env, jobject fd) {
+  if (!fd) { jniThrowNullPointerException(env, "null fd"); return -1; }
+  return env->GetIntField(fd, fd_field);
+}
+namespace android::bitmap {
+Bitmap& toBitmap(jlong handle) { assert(handle); return *reinterpret_cast<Bitmap*>(handle); }
+jobject createBitmap(JNIEnv* env, Bitmap* bitmap, int flags, jbyteArray, jobject, int density) {
+  // Declared Java-wrapper boundary: take the supplied reference exactly once.
+  if ((flags & kBitmapCreateFlag_Mutable) == 0) bitmap->setImmutable();
+  jobject result = env->NewObject(bitmap_class, bitmap_constructor,
+      reinterpret_cast<jlong>(bitmap), bitmap->width(), bitmap->height(), density);
+  if (!result) bitmap->unref();
+  return result;
+}
+}
+
+static jobject JNICALL Make(JNIEnv* env, jclass, jint width, jint height, jint padding, jboolean immutable, jboolean color) {
+  auto info = SkImageInfo::Make(width, height, kN32_SkColorType, kPremul_SkAlphaType,
+      color ? sk_sp<SkColorSpace>(new SkColorSpace) : nullptr);
+  const size_t row = info.minRowBytes() + padding;
+  size_t size = 0;
+  if (!android::Bitmap::computeAllocationSize(row, height, &size)) return nullptr;
+  auto native = android::Bitmap::allocateHeapBitmap(size, info, row);
+  if (!native) return nullptr;
+  for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x)
+    reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(native->pixels()) + y * row)[x] =
+        0xff000000u | ((x * 17u + y * 29u) & 0xffffffu);
+  return android::bitmap::createBitmap(env, native.release(), immutable ? 1 : 3, nullptr, nullptr, 320);
+}
+static jobject JNICALL Shared(JNIEnv* env, jclass, jlong handle) {
+  auto& source = android::bitmap::toBitmap(handle);
+  SkBitmap bitmap;
+  source.getSkBitmap(&bitmap);
+  SkBitmap destination; destination.setInfo(bitmap.info(), bitmap.rowBytes());
+  auto native = android::Bitmap::allocateAshmemBitmap(&destination);
+  if (!native) { jniThrowRuntimeException(env, "shared allocation failed"); return nullptr; }
+  // Explicit Skia-copy boundary; native storage allocation/adoption is real.
+  HostCopy(native->pixels(), bitmap.getPixels(), bitmap.computeByteSize());
+  return android::bitmap::createBitmap(env, native.release(), 1, nullptr, nullptr, 320);
+}
+static jboolean JNICALL IsShared(JNIEnv*, jclass, jlong handle) {
+  return handle && android::bitmap::toBitmap(handle).pixelStorageType() == android::PixelStorageType::Ashmem;
+}
+static jboolean JNICALL IsImmutable(JNIEnv*, jclass, jlong handle) {
+  return handle && android::bitmap::toBitmap(handle).isImmutable();
+}
+static void JNICALL Recycle(JNIEnv*, jclass, jlong handle) {
+  if (handle) android::bitmap::toBitmap(handle).unref();
+}
+static jlong JNICALL Checksum(JNIEnv*, jclass, jlong handle) {
+  auto& source = android::bitmap::toBitmap(handle);
+  uint64_t sum = 1469598103934665603ULL;
+  for (int y = 0; y < source.height(); ++y) {
+    auto* row = static_cast<uint8_t*>(source.pixels()) + y * source.rowBytes();
+    for (size_t x = 0; x < source.info().minRowBytes(); ++x) sum = (sum ^ row[x]) * 1099511628211ULL;
+  }
+  return static_cast<jlong>(sum);
+}
+static void JNICALL Change(JNIEnv* env, jclass, jlong handle, jint value) {
+  auto& source = android::bitmap::toBitmap(handle);
+  if (source.isImmutable()) { jniThrowException(env, "java/lang/IllegalStateException", "immutable"); return; }
+  *static_cast<uint32_t*>(source.pixels()) = static_cast<uint32_t>(value);
+}
+static jint JNICALL AshmemFd(JNIEnv*, jclass, jlong handle) { return android::bitmap::toBitmap(handle).getAshmemFd(); }
+static jlong JNICALL SourceId(JNIEnv*, jclass, jlong handle) { return android::bitmap::toBitmap(handle).getSourceId(); }
+static jlong JNICALL BitmapId(JNIEnv*, jclass, jlong handle) { return android::bitmap::toBitmap(handle).getId(); }
+static jint JNICALL RowBytes(JNIEnv*, jclass, jlong handle) { return android::bitmap::toBitmap(handle).rowBytes(); }
+static jboolean JNICALL HasColor(JNIEnv*, jclass, jlong handle) { return android::bitmap::toBitmap(handle).info().colorSpace() != nullptr; }
+
+static jobject JNICALL CreateFd(JNIEnv* env, jclass, jint size) {
+  int fd = HostMemfd("bitmap-host", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+  if (fd >= 0 && HostTruncate(fd, size) != 0) { close(fd); fd = -1; }
+  if (fd < 0) { jniThrowRuntimeException(env, "create fd failed"); return nullptr; }
+  jobject result = jniCreateFileDescriptor(env, fd);
+  if (!result) close(fd);
+  return result;
+}
+static jobject JNICALL DupFd(JNIEnv* env, jclass, jobject descriptor) {
+  int fd = HostFcntl(jniGetFDFromFileDescriptor(env, descriptor), F_DUPFD_CLOEXEC, 0);
+  if (fd < 0) { jniThrowRuntimeException(env, "dup fd failed"); return nullptr; }
+  jobject result = jniCreateFileDescriptor(env, fd); if (!result) close(fd); return result;
+}
+static void JNICALL CloseFd(JNIEnv* env, jclass, jobject descriptor) {
+  int fd = jniGetFDFromFileDescriptor(env, descriptor);
+  env->SetIntField(descriptor, fd_field, -1);
+  if (fd >= 0) close(fd);
+}
+static jobject JNICALL MapFd(JNIEnv* env, jclass, jobject descriptor, jboolean writable) {
+  int fd = jniGetFDFromFileDescriptor(env, descriptor);
+  struct stat s{};
+  if (HostStat(fd, &s) != 0 || s.st_size <= 0) { jniThrowRuntimeException(env, "stat failed"); return nullptr; }
+  void* address = HostMap(nullptr, s.st_size, PROT_READ | (writable ? PROT_WRITE : 0), MAP_SHARED, fd, 0);
+  if (address == MAP_FAILED) { jniThrowRuntimeException(env, "map failed"); return nullptr; }
+  jobject result = env->NewDirectByteBuffer(address, s.st_size);
+  if (!result) HostUnmap(address, s.st_size);
+  return result;
+}
+static void JNICALL Unmap(JNIEnv* env, jclass, jobject buffer) {
+  void* address = env->GetDirectBufferAddress(buffer);
+  jlong size = env->GetDirectBufferCapacity(buffer);
+  assert(address && size > 0); assert(HostUnmap(address, size) == 0);
+}
+static jlongArray JNICALL Stats(JNIEnv* env, jclass) {
+  const jlong values[] = {FdCount(), maps_live, heap_calls, heap_bytes, copies, copied_bytes,
+                          regions, region_bytes, map_calls, dup_calls};
+  jlongArray result = env->NewLongArray(10); if (result) env->SetLongArrayRegion(result, 0, 10, values); return result;
+}
+static void JNICALL Fail(JNIEnv*, jclass, jint point) { failure = point; }
+static void JNICALL Reset(JNIEnv*, jclass) { ResetWork(); }
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+  JNIEnv* env = nullptr; if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
+  jclass fd_local = env->FindClass("java/io/FileDescriptor");
+  if (!fd_local) return JNI_ERR;
+  fd_class = static_cast<jclass>(env->NewGlobalRef(fd_local)); env->DeleteLocalRef(fd_local);
+  fd_constructor = env->GetMethodID(fd_class, "<init>", "()V");
+  fd_field = env->GetFieldID(fd_class, "fd", "I");
+  jclass bitmap_local = env->FindClass("android/graphics/Bitmap");
+  if (!bitmap_local) return JNI_ERR;
+  bitmap_class = static_cast<jclass>(env->NewGlobalRef(bitmap_local)); env->DeleteLocalRef(bitmap_local);
+  bitmap_constructor = env->GetMethodID(bitmap_class, "<init>", "(JIII)V");
+  bitmap_field = env->GetFieldID(bitmap_class, "mNativePtr", "J");
+  if (env->ExceptionCheck()) return JNI_ERR;
+  const JNINativeMethod methods[] = {
+    {"make", "(IIIZZ)Landroid/graphics/Bitmap;", reinterpret_cast<void*>(Make)},
+    {"shared", "(J)Landroid/graphics/Bitmap;", reinterpret_cast<void*>(Shared)},
+    {"isShared", "(J)Z", reinterpret_cast<void*>(IsShared)},
+    {"immutable", "(J)Z", reinterpret_cast<void*>(IsImmutable)},
+    {"recycle", "(J)V", reinterpret_cast<void*>(Recycle)},
+    {"checksum", "(J)J", reinterpret_cast<void*>(Checksum)},
+    {"change", "(JI)V", reinterpret_cast<void*>(Change)},
+    {"ashmemFd", "(J)I", reinterpret_cast<void*>(AshmemFd)},
+    {"sourceId", "(J)J", reinterpret_cast<void*>(SourceId)},
+    {"bitmapId", "(J)J", reinterpret_cast<void*>(BitmapId)},
+    {"rowBytes", "(J)I", reinterpret_cast<void*>(RowBytes)},
+    {"hasColor", "(J)Z", reinterpret_cast<void*>(HasColor)},
+    {"createFd", "(I)Ljava/io/FileDescriptor;", reinterpret_cast<void*>(CreateFd)},
+    {"dupFd", "(Ljava/io/FileDescriptor;)Ljava/io/FileDescriptor;", reinterpret_cast<void*>(DupFd)},
+    {"closeFd", "(Ljava/io/FileDescriptor;)V", reinterpret_cast<void*>(CloseFd)},
+    {"mapFd", "(Ljava/io/FileDescriptor;Z)Ljava/nio/ByteBuffer;", reinterpret_cast<void*>(MapFd)},
+    {"unmap", "(Ljava/nio/ByteBuffer;)V", reinterpret_cast<void*>(Unmap)},
+    {"stats", "()[J", reinterpret_cast<void*>(Stats)},
+    {"fail", "(I)V", reinterpret_cast<void*>(Fail)},
+    {"reset", "()V", reinterpret_cast<void*>(Reset)},
+  };
+  if (jniRegisterNativeMethods(env, "bitmaphost/Host", methods, sizeof(methods)/sizeof(methods[0])) != JNI_OK ||
+      register_gesher_bitmap_parcel(env) != JNI_OK) return JNI_ERR;
+  return JNI_VERSION_1_6;
+}
+
+@STORAGE_MAIN@

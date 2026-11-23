@@ -331,8 +331,10 @@ EGLBoolean EGLAPIENTRY eglSurfaceAttrib(EGLDisplay dpy, EGLSurface surface, EGLi
   return ANGLE(eglSurfaceAttrib)(dpy, surface, attribute, value);
 }
 
+// A window surface on a SurfaceView's or SurfaceTexture's surface (a child
+// surface, egl_child_surface.cc) keeps interval 0 for its hidden swap chain.
 EGLBoolean EGLAPIENTRY eglSwapInterval(EGLDisplay dpy, EGLint interval) {
-  return ANGLE(eglSwapInterval)(dpy, interval);
+  return gesher_egl_swap_interval(dpy, interval);
 }
 
 EGLBoolean EGLAPIENTRY eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects,
@@ -349,7 +351,9 @@ EGLBoolean EGLAPIENTRY eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface su
   }
   static const bool has_damage = AngleExtension(dpy, "EGL_KHR_swap_buffers_with_damage");
   gesher_hwui_gl_before_swap(dpy, surface);
-  gesher_egl_before_swap(dpy, surface);  // a child surface (a Java app's EGL14 on a SurfaceView)
+  // A child surface (a Java app's EGL14 on a SurfaceView) posts its frame; its
+  // hidden swap chain is presented only to resize it.
+  if (!gesher_egl_before_swap(dpy, surface)) return EGL_TRUE;
   if (has_damage) return ANGLE(eglSwapBuffersWithDamageKHR)(dpy, surface, rects, n_rects);
   return ANGLE(eglSwapBuffers)(dpy, surface);
 }

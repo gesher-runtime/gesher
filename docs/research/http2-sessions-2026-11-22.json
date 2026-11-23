@@ -1,0 +1,309 @@
+{
+  "baseline": "20252fde18db387b4d99d99f7050d6336f58bf6e",
+  "candidate_code": "9b2b7f08821a74346e6dce2da90babdfe2b1a35e",
+  "candidate_code_tree": "49d56985f1e0a7d906d94779b0d55a15e3efb6a5",
+  "provider_commit": "e3d37d381375156dfad90887870775137e0481bf",
+  "provider_compiled_sha256": "8184665f76910273531de3fe3427018f5954ec603ba968283368cf5917aa8174",
+  "order": [
+    "a1",
+    "b1",
+    "b2",
+    "a2"
+  ],
+  "sessions": {
+    "a1": {
+      "HTTP2_SESSIONS": {
+        "requests": 64,
+        "connections": 64,
+        "bodies": 261952,
+        "elapsed_ns": 758674600
+      },
+      "HTTP2_TLS_SESSIONS": {
+        "requests": 32,
+        "connections": 32,
+        "handshakes": 32,
+        "bodies": 130976,
+        "elapsed_ns": 1205866997
+      }
+    },
+    "b1": {
+      "HTTP2_SESSIONS": {
+        "requests": 64,
+        "connections": 1,
+        "bodies": 261952,
+        "elapsed_ns": 186862097
+      },
+      "HTTP2_TLS_SESSIONS": {
+        "requests": 32,
+        "connections": 1,
+        "handshakes": 1,
+        "bodies": 130976,
+        "elapsed_ns": 256981299
+      }
+    },
+    "b2": {
+      "HTTP2_SESSIONS": {
+        "requests": 64,
+        "connections": 1,
+        "bodies": 261952,
+        "elapsed_ns": 199726644
+      },
+      "HTTP2_TLS_SESSIONS": {
+        "requests": 32,
+        "connections": 1,
+        "handshakes": 1,
+        "bodies": 130976,
+        "elapsed_ns": 282371942
+      }
+    },
+    "a2": {
+      "HTTP2_SESSIONS": {
+        "requests": 64,
+        "connections": 64,
+        "bodies": 261952,
+        "elapsed_ns": 584171396
+      },
+      "HTTP2_TLS_SESSIONS": {
+        "requests": 32,
+        "connections": 32,
+        "handshakes": 32,
+        "bodies": 130976,
+        "elapsed_ns": 1143992918
+      }
+    }
+  },
+  "production_sha256": {
+    "app/java/android/net/http/Http2SessionPool.java": "b70c42fdb129e7298d7ab553f403f745ed46b99fcb29baaf6933ba3c2f65c2aa",
+    "app/java/android/net/http/Http2Transport.java": "05a43392d1699f3dc32f6d1f853a61b35de3cd0ae35eb63637ea8fef38464433",
+    "app/java/android/net/http/JavaBidirectionalStream.java": "a6e4891e3731f830acfa8c757caeac8c85ae276682fce8a8e4afa6c151c9b031",
+    "app/java/android/net/http/JavaHttpEngine.java": "505962480a0626c1a5c099a3397340af35bb4a28f515f31a46d93de296954151"
+  },
+  "limits": [
+    "Host loopback wire/TLS measurements, not Android runtime or whole-app speed.",
+    "Context, Network routing, Android policy annotations/logger are declared host boundaries.",
+    "TLS factory/certificate, loopback sockets, framing, payload bytes, workers and shutdown are actual.",
+    "Fresh process per sample; shared executor load and JIT affect elapsed/CPU observations.",
+    "Transfer control measures only the calling production adapter thread, not total application allocation."
+  ],
+  "historical_pre_credit_repair": {
+    "candidate_code": "95cdf78f9c166a2f2706121bd923f230851f57c0",
+    "candidate_code_tree": "1870d14c5db4fa1fea1563885bf77bc92a80a64b",
+    "provider_compiled_sha256": "40f70f9682883648792803e0bb969e26c1ec4687fcad095286ea3ee67e598391",
+    "sessions": {
+      "a1": {
+        "HTTP2_SESSIONS": {
+          "requests": 64,
+          "connections": 64,
+          "bodies": 261952,
+          "elapsed_ns": 760002439
+        },
+        "HTTP2_TLS_SESSIONS": {
+          "requests": 32,
+          "connections": 32,
+          "handshakes": 32,
+          "bodies": 130976,
+          "elapsed_ns": 1570549786
+        }
+      },
+      "b1": {
+        "HTTP2_SESSIONS": {
+          "requests": 64,
+          "connections": 1,
+          "bodies": 261952,
+          "elapsed_ns": 420781402
+        },
+        "HTTP2_TLS_SESSIONS": {
+          "requests": 32,
+          "connections": 1,
+          "handshakes": 1,
+          "bodies": 130976,
+          "elapsed_ns": 250699279
+        }
+      },
+      "b2": {
+        "HTTP2_SESSIONS": {
+          "requests": 64,
+          "connections": 1,
+          "bodies": 261952,
+          "elapsed_ns": 186313496
+        },
+        "HTTP2_TLS_SESSIONS": {
+          "requests": 32,
+          "connections": 1,
+          "handshakes": 1,
+          "bodies": 130976,
+          "elapsed_ns": 264381058
+        }
+      },
+      "a2": {
+        "HTTP2_SESSIONS": {
+          "requests": 64,
+          "connections": 64,
+          "bodies": 261952,
+          "elapsed_ns": 718839959
+        },
+        "HTTP2_TLS_SESSIONS": {
+          "requests": 32,
+          "connections": 32,
+          "handshakes": 32,
+          "bodies": 130976,
+          "elapsed_ns": 1347492510
+        }
+      }
+    },
+    "transfer_control": {
+      "a1": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 11882674,
+          "elapsed_ns": 11861084,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 5769677,
+          "elapsed_ns": 5753264,
+          "checksum": 528384
+        }
+      ],
+      "b1": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 8851087,
+          "elapsed_ns": 8841932,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 3428496,
+          "elapsed_ns": 3424674,
+          "checksum": 528384
+        }
+      ],
+      "b2": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 8856967,
+          "elapsed_ns": 8846637,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 3537078,
+          "elapsed_ns": 3619521,
+          "checksum": 528384
+        }
+      ],
+      "a2": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 6502827,
+          "elapsed_ns": 6490727,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 4631615,
+          "elapsed_ns": 4619966,
+          "checksum": 528384
+        }
+      ]
+    },
+    "production_sha256": {
+      "app/java/android/net/http/Http2SessionPool.java": "b70c42fdb129e7298d7ab553f403f745ed46b99fcb29baaf6933ba3c2f65c2aa",
+      "app/java/android/net/http/Http2Transport.java": "67f13a042d74d00c16ac1ea3a4b54270eb20c6a0a6307a30a58ae70cafdb8189",
+      "app/java/android/net/http/JavaBidirectionalStream.java": "a6e4891e3731f830acfa8c757caeac8c85ae276682fce8a8e4afa6c151c9b031",
+      "app/java/android/net/http/JavaHttpEngine.java": "505962480a0626c1a5c099a3397340af35bb4a28f515f31a46d93de296954151"
+    }
+  },
+  "baseline_provider_compiled_sha256": "40f70f9682883648792803e0bb969e26c1ec4687fcad095286ea3ee67e598391",
+  "provider_patch_sha256": "1d9869b0891993e6d2ee91883635d2e6ffb631aadec2a0c94d4192e6d7586bf6",
+  "final_transfer_control": [
+    {
+      "reusable": true,
+      "direction": "read",
+      "bytes": 67108864,
+      "allocated_bytes": 901368,
+      "cpu_ns": 10555331,
+      "elapsed_ns": 10592319,
+      "checksum": 528384
+    },
+    {
+      "reusable": true,
+      "direction": "write",
+      "bytes": 67108864,
+      "allocated_bytes": 294912,
+      "cpu_ns": 4138942,
+      "elapsed_ns": 4132520,
+      "checksum": 528384
+    }
+  ],
+  "credit_component": {
+    "candidate_checks": 51,
+    "candidate_failures": 0,
+    "unchanged_provider_checks": 51,
+    "unchanged_provider_failures": 24,
+    "max_DATA_bytes": 1025,
+    "uses_network": false,
+    "source_ref_control": "95cdf78f9c166a2f2706121bd923f230851f57c0"
+  },
+  "qualification": {
+    "http_requests": 65,
+    "global_factory": true,
+    "transfer_checks": 2415,
+    "original_wire_modes": 9,
+    "session_checks": 124,
+    "tls_route_owner_deadline_checks": 105,
+    "policy_checks": [
+      37,
+      42,
+      42
+    ],
+    "tls_policy_checks": [
+      23,
+      23
+    ],
+    "full_app_java_dex": true,
+    "full_services_java_dex": true,
+    "local_framework_classes": "framework-classes.zip",
+    "local_libcore": "coremod",
+    "compat_changes_sources": 16,
+    "windows_runtime": false,
+    "independent_review": "source only: four pool/transport/engine files and four provider files; no independent runtime claim"
+  },
+  "receipt_log_sha256": {
+    "root-r5-credit-session-a1.log": "457dba0823d81adac553e45266af4b466e29b022f0a5012eeb150639a9d1fc04",
+    "root-r5-credit-session-b1.log": "f8e487129d770a42cbe63853f630524574c03185a94cba43c236412ba045138e",
+    "root-r5-credit-session-b2.log": "36fa828552f079357d5c40eed220342b59cdbf1f21c799be97989aed33e109ab",
+    "root-r5-credit-session-a2.log": "d663af3104c133d629f12c7a1e0551d1a2dcd87ee4d2dc59727051faffc1074a",
+    "root-r5-credit-component.log": "492fd66bb2de997931bca3497c59df0123bcf8c909113c7ff059c0d970deefac",
+    "root-r5-credit-component-negative.log": "48c376b45628b78c9df7fab555254ca20b31951b149d367e895571c100a820b6",
+    "root-r5-credit-full-http.log": "dff7057d345386059e59fa6eaf9b7481ee3cbe743ead2471b964e65255b04e17",
+    "root-r5-credit-app-build.log": "3aacf5f08842545fcd3df02153474cec7fa70eff79b58acb2a0dea557510fea9",
+    "root-r5-credit-services-build.log": "cd89e5e3c408b845c51edbc5e05da2def0e60bbb57fa900b552e77d703841524"
+  }
+}

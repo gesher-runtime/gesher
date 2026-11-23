@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include <windows.h>
 
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -90,7 +91,8 @@ static void DescriptorControls() {
   CHECK(fd >= 0);
   if (fd >= 0) {
     CHECK(fcntl(fd, F_GETFD) == FD_CLOEXEC);
-    CHECK(fcntl(fd, F_GETFL) == O_RDWR);
+    // A 64-bit Android kernel reports O_LARGEFILE for every regular file description.
+    CHECK(fcntl(fd, F_GETFL) == (O_RDWR | O_LARGEFILE));
     CHECK(fcntl(fd, F_GET_SEALS) >= 0);
     CHECK(fcntl(fd, F_SETFD, 0) == 0 && fcntl(fd, F_GETFD) == 0);
     CHECK(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 &&
@@ -671,11 +673,18 @@ struct Event {
 };
 
 // Reads events until `want` is seen (or 3 s pass), appending all to `seen`.
-static bool WaitFor(int in, uint32_t want, const std::string& name, std::vector<Event>* seen) {
+static bool WaitFor(int in, uint32_t want, const std::string& name, std::vector<Event>* seen,
+                    int wd = -1, size_t* cursor = nullptr) {
+  size_t start = cursor != nullptr ? *cursor : 0;
   for (int i = 0; i < 60; ++i) {
-    for (const Event& e : *seen) {
-      if ((e.mask & want) == want && e.name == name) return true;
+    for (size_t j = start; j < seen->size(); ++j) {
+      const Event& e = (*seen)[j];
+      if ((wd == -1 || e.wd == wd) && (e.mask & want) == want && e.name == name) {
+        if (cursor != nullptr) *cursor = j + 1;
+        return true;
+      }
     }
+    start = seen->size();
     pollfd p = {in, POLLIN, 0};
     if (poll(&p, 1, 50) != 1) continue;
     alignas(8) char buf[4096];
@@ -690,6 +699,162 @@ static bool WaitFor(int in, uint32_t want, const std::string& name, std::vector<
   for (const Event& e : *seen) printf(" [%d 0x%x %u '%s']", e.wd, static_cast<unsigned>(e.mask), e.cookie, e.name.c_str());
   printf("\n");
   return false;
+}
+
+struct RenameStep {
+  size_t destination;
+  bool write;
+};
+
+static void InotifyRenameBurst(const std::string& dir, std::initializer_list<RenameStep> steps,
+                               std::initializer_list<uint32_t> expected) {
+  const std::string paths[] = {dir + "/inotify-burst-a", dir + "/inotify-burst-b",
+                               dir + "/inotify-burst-c"};
+  CHECK(PutFile(paths[0], "original"));
+  int fd = open(paths[0].c_str(), O_WRONLY);
+  CHECK(fd >= 0);
+  int in = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+  CHECK(in >= 0);
+  int wd = inotify_add_watch(in, paths[0].c_str(), IN_MOVE_SELF | IN_MODIFY | IN_DELETE_SELF);
+  CHECK(wd > 0);
+  size_t at = 0;
+  for (RenameStep step : steps) {
+    CHECK(rename(paths[at].c_str(), paths[step.destination].c_str()) == 0);
+    at = step.destination;
+    // Keep this originally opened descriptor alive throughout the burst.
+    if (step.write) CHECK(pwrite(fd, "x", 1, 0) == 1);
+  }
+  std::vector<Event> seen;
+  size_t cursor = 0;
+  for (uint32_t mask : expected) CHECK(WaitFor(in, mask, "", &seen, wd, &cursor));
+  size_t i = 0;
+  for (uint32_t mask : expected) {
+    CHECK(i < seen.size() && seen[i].wd == wd && seen[i].mask == mask && seen[i].name.empty());
+    ++i;
+  }
+  CHECK(close(fd) == 0);
+  CHECK(unlink(paths[at].c_str()) == 0);
+  CHECK(WaitFor(in, IN_DELETE_SELF, "", &seen, wd, &cursor));
+  CHECK(WaitFor(in, IN_IGNORED, "", &seen, wd, &cursor));
+  CHECK(inotify_rm_watch(in, wd) == -1 && errno == EINVAL);
+  close(in);
+}
+
+static void InotifyFileRename(const std::string& dir) {
+  InotifyRenameBurst(dir, {{1, true}, {0, true}},
+                    {IN_MOVE_SELF, IN_MODIFY, IN_MOVE_SELF, IN_MODIFY});
+  InotifyRenameBurst(dir, {{1, true}, {2, true}, {1, true}},
+                    {IN_MOVE_SELF, IN_MODIFY, IN_MOVE_SELF, IN_MODIFY, IN_MOVE_SELF, IN_MODIFY});
+  // Two identical unread move notifications coalesce, but both precede the write.
+  InotifyRenameBurst(dir, {{1, false}, {0, true}}, {IN_MOVE_SELF, IN_MODIFY});
+
+  // Run with and without requesting IN_MOVE_SELF. Masking it out must not
+  // stop the watch or keep the old name as its notification source.
+  for (uint32_t move_mask : {0u, static_cast<uint32_t>(IN_MOVE_SELF)}) {
+    int in = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    CHECK(in >= 0);
+    std::string old_path = dir + "/inotify-old.txt";
+    std::string new_path = dir + "/inotify-new.txt";
+    CHECK(PutFile(old_path, "original"));
+    uint32_t mask = IN_MODIFY | IN_DELETE_SELF | move_mask;
+    int wd = inotify_add_watch(in, old_path.c_str(), mask);
+    CHECK(wd > 0);
+    CHECK(rename(old_path.c_str(), new_path.c_str()) == 0);
+
+    std::vector<Event> seen;
+    if (move_mask != 0) CHECK(WaitFor(in, IN_MOVE_SELF, "", &seen, wd));
+
+    CHECK(PutFile(old_path, "replacement"));
+    int replacement_wd = inotify_add_watch(in, old_path.c_str(), IN_MODIFY);
+    CHECK(replacement_wd > 0 && replacement_wd != wd);
+    CHECK(PutFile(old_path, "replacement changed"));
+    CHECK(WaitFor(in, IN_MODIFY, "", &seen, replacement_wd));
+    for (const Event& event : seen) {
+      if (event.wd == wd) CHECK(event.mask == move_mask && event.name.empty());
+    }
+    CHECK(inotify_rm_watch(in, replacement_wd) == 0);
+
+    CHECK(PutFile(new_path, "original changed"));
+    CHECK(WaitFor(in, IN_MODIFY, "", &seen, wd));
+    CHECK(inotify_add_watch(in, new_path.c_str(), mask) == wd);
+    for (const Event& event : seen) {
+      if (event.wd == wd) CHECK((event.mask & (IN_MOVE_SELF | IN_MODIFY)) != 0);
+    }
+    CHECK(unlink(new_path.c_str()) == 0);
+    CHECK(WaitFor(in, IN_DELETE_SELF, "", &seen, wd));
+    CHECK(WaitFor(in, IN_IGNORED, "", &seen, wd));
+    CHECK(unlink(old_path.c_str()) == 0);
+    close(in);
+  }
+
+  // An immediate write to the destination must be visible before closing
+  // the descriptor, even if the directory worker is still processing rename.
+  {
+    int in = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    CHECK(in >= 0);
+    std::string old_path = dir + "/inotify-open-old.txt";
+    std::string new_path = dir + "/inotify-open-new.txt";
+    CHECK(PutFile(old_path, "original"));
+    int wd = inotify_add_watch(in, old_path.c_str(), IN_MOVE_SELF | IN_MODIFY);
+    CHECK(wd > 0);
+    CHECK(rename(old_path.c_str(), new_path.c_str()) == 0);
+    int fd = open(new_path.c_str(), O_WRONLY | O_APPEND);
+    CHECK(fd >= 0 && write(fd, "x", 1) == 1);
+    std::vector<Event> seen;
+    CHECK(WaitFor(in, IN_MODIFY, "", &seen, wd));
+    CHECK(seen.size() >= 2 && seen[0].wd == wd && seen[0].mask == IN_MOVE_SELF);
+    CHECK(close(fd) == 0);
+    CHECK(unlink(new_path.c_str()) == 0);
+    close(in);
+  }
+
+  // Preserve writes at both destinations if the two renames reach the
+  // worker together. A case-only rename still precedes its destination write.
+  {
+    int in = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    CHECK(in >= 0);
+    std::string old_path = dir + "/inotify-chain.txt";
+    std::string middle_path = dir + "/INOTIFY-chain.txt";
+    std::string new_path = dir + "/inotify-chain-new.txt";
+    CHECK(PutFile(old_path, "original"));
+    int wd = inotify_add_watch(in, old_path.c_str(), IN_MOVE_SELF | IN_MODIFY | IN_CLOSE_WRITE);
+    CHECK(wd > 0);
+    CHECK(rename(old_path.c_str(), middle_path.c_str()) == 0);
+    int first = open(middle_path.c_str(), O_WRONLY | O_APPEND);
+    CHECK(first >= 0 && write(first, "x", 1) == 1);
+    CHECK(rename(middle_path.c_str(), new_path.c_str()) == 0);
+    int second = open(new_path.c_str(), O_WRONLY | O_APPEND);
+    CHECK(second >= 0 && write(second, "y", 1) == 1);
+
+    std::vector<Event> seen;
+    size_t cursor = 0;
+    for (int rename_count = 0; rename_count < 2; ++rename_count) {
+      CHECK(WaitFor(in, IN_MOVE_SELF, "", &seen, wd, &cursor));
+      CHECK(WaitFor(in, IN_MODIFY, "", &seen, wd, &cursor));
+    }
+    CHECK(!seen.empty() && seen.front().wd == wd && seen.front().mask == IN_MOVE_SELF);
+    for (const Event& event : seen) CHECK(event.mask != IN_CLOSE_WRITE);
+    CHECK(close(first) == 0);
+    CHECK(close(second) == 0);
+    CHECK(WaitFor(in, IN_CLOSE_WRITE, "", &seen, wd, &cursor));
+    CHECK(unlink(new_path.c_str()) == 0);
+    close(in);
+  }
+
+  int in = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+  CHECK(in >= 0);
+  std::string old_path = dir + "/inotify-oneshot-old.txt";
+  std::string new_path = dir + "/inotify-oneshot-new.txt";
+  CHECK(PutFile(old_path, "original"));
+  int wd = inotify_add_watch(in, old_path.c_str(), IN_MOVE_SELF | IN_ONESHOT);
+  CHECK(wd > 0);
+  CHECK(rename(old_path.c_str(), new_path.c_str()) == 0);
+  std::vector<Event> seen;
+  CHECK(WaitFor(in, IN_MOVE_SELF, "", &seen, wd));
+  CHECK(WaitFor(in, IN_IGNORED, "", &seen, wd));
+  CHECK(inotify_rm_watch(in, wd) == -1 && errno == EINVAL);
+  CHECK(unlink(new_path.c_str()) == 0);
+  close(in);
 }
 
 static void Inotify(const std::string& dir) {
@@ -769,6 +934,7 @@ static void Inotify(const std::string& dir) {
   CHECK(WaitFor(in, IN_IGNORED, "", &seen));
   close(ep);
   close(in);
+  InotifyFileRename(dir);
 
   // A blocking read waits for an event.
   in = inotify_init();

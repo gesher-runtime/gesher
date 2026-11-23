@@ -21,11 +21,14 @@ import android.webkit.WebView;
 import com.gesher.app.window.WindowSession;
 
 import java.lang.reflect.Field;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutorService;
@@ -154,7 +157,120 @@ public final class UiaBridge {
         }
     }
 
-    private static final Map<Long, Root> sRoots = new ConcurrentHashMap<>();
+    // The cache must not own a window's view tree (and its Activity). A query
+    // resolves weak owners into a strong snapshot only for its own lifetime.
+    private static final int CACHE_LIMIT = 256;
+    private static final ReferenceQueue<View> sCollectedViews = new ReferenceQueue<>();
+    private static final class CachedRoot extends WeakReference<View> {
+        final long hwnd, generation, rootNodeId;
+        final int connectionId;
+        final WeakReference<ViewRootImpl> viewRoot;
+        CachedRoot(long hwnd, Root root) {
+            super(root.view, sCollectedViews);
+            this.hwnd = hwnd;
+            generation = root.generation;
+            rootNodeId = root.rootNodeId;
+            connectionId = root.connectionId;
+            viewRoot = new WeakReference<>(root.viewRoot);
+        }
+        Root resolve() {
+            View view = get();
+            ViewRootImpl root = viewRoot.get();
+            return view == null || root == null ? null
+                    : new Root(root, view, connectionId, rootNodeId, generation);
+        }
+    }
+    // Every access is guarded by this map, including reference-queue cleanup.
+    private static final Map<Long, CachedRoot> sRoots = new LinkedHashMap<>(16, .75f, true);
+
+    // Event IDs must survive payload-cache eviction. A window's IWindow token
+    // identifies its ViewRootImpl, independently of a recycled HWND. Keep only
+    // scalar identity while that token is owned elsewhere; neither keys nor
+    // values here keep the token, View, ViewRootImpl or Activity alive.
+    private static final ReferenceQueue<IBinder> sCollectedTokens = new ReferenceQueue<>();
+    private static final class WindowKey extends WeakReference<IBinder> {
+        final int hash;
+        WindowKey(IBinder token) {
+            super(token, sCollectedTokens);
+            hash = System.identityHashCode(token);
+        }
+        @Override public int hashCode() { return hash; }
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            IBinder token = get();
+            return token != null && other instanceof WindowKey
+                    && token == ((WindowKey) other).get();
+        }
+    }
+    private static final class RootIdentity {
+        final long hwnd, generation, nodeId;
+        RootIdentity(long hwnd, long generation, long nodeId) {
+            this.hwnd = hwnd; this.generation = generation; this.nodeId = nodeId;
+        }
+    }
+    private static final Map<WindowKey, RootIdentity> sRootIdentities = new HashMap<>();
+
+    private static void pruneIdentities() {
+        WindowKey collected;
+        while ((collected = (WindowKey) sCollectedTokens.poll()) != null) {
+            sRootIdentities.remove(collected);
+        }
+    }
+
+    private static void rememberIdentity(IBinder token, long hwnd, Root root) {
+        if (token == null) return;
+        synchronized (sRootIdentities) {
+            pruneIdentities();
+            WindowKey key = new WindowKey(token);
+            RootIdentity previous = sRootIdentities.get(key);
+            if (previous != null && previous.generation > root.generation) return;
+            sRootIdentities.put(key, new RootIdentity(hwnd, root.generation, root.rootNodeId));
+        }
+    }
+
+    private static long eventId(IBinder token, long hwnd, long id) {
+        synchronized (sRootIdentities) {
+            pruneIdentities();
+            RootIdentity identity = sRootIdentities.get(new WindowKey(token));
+            return identity != null && identity.hwnd == hwnd && identity.nodeId == id ? ROOT : id;
+        }
+    }
+
+    private static void pruneRoots() {
+        CachedRoot collected;
+        while ((collected = (CachedRoot) sCollectedViews.poll()) != null) {
+            sRoots.remove(collected.hwnd, collected);
+        }
+    }
+
+    private static Root cachedRoot(long hwnd) {
+        synchronized (sRoots) {
+            pruneRoots();
+            CachedRoot cached = sRoots.get(hwnd);
+            Root root = cached == null ? null : cached.resolve();
+            if (cached != null && root == null) sRoots.remove(hwnd, cached);
+            return root;
+        }
+    }
+
+    private static void cacheRoot(long hwnd, Root root) {
+        synchronized (sRoots) {
+            pruneRoots();
+            CachedRoot previous = sRoots.get(hwnd);
+            // Native window generations increase even when Windows reuses HWNDs.
+            if (previous != null && previous.generation > root.generation) return;
+            sRoots.put(hwnd, new CachedRoot(hwnd, root));
+            while (sRoots.size() > CACHE_LIMIT) sRoots.remove(sRoots.keySet().iterator().next());
+        }
+    }
+
+    private static void forgetRoot(long hwnd, Root root) {
+        synchronized (sRoots) {
+            CachedRoot cached = sRoots.get(hwnd);
+            if (cached != null && cached.generation == root.generation
+                    && cached.get() == root.view) sRoots.remove(hwnd, cached);
+        }
+    }
 
     @SuppressWarnings("unchecked")
     private static List<ViewRootImpl> viewRoots() {
@@ -231,10 +347,10 @@ public final class UiaBridge {
     private static Root root(long hwnd) {
         Request q = sRequest.get();
         if (q == null || !q.active()) return null;
-        Root r = sRoots.get(hwnd);
+        Root r = cachedRoot(hwnd);
         if (r != null && r.generation == q.generation && r.view.isAttachedToWindow()
                 && hwndOf(r.view.getWindowToken()) == hwnd && q.active()) return r;
-        if (r != null) sRoots.remove(hwnd, r);
+        if (r != null) forgetRoot(hwnd, r);
         for (ViewRootImpl vr : viewRoots()) {
             if (!q.active()) return null;
             View v = vr.getView();
@@ -248,8 +364,14 @@ public final class UiaBridge {
                             true, 0, null));
             if (info == null || !q.active()) return null;
             r = new Root(vr, v, id, info.getSourceNodeId(), q.generation);
-            sRoots.put(hwnd, r);
-            if (!q.active()) { sRoots.remove(hwnd, r); return null; }
+            cacheRoot(hwnd, r);
+            if (!q.active()) { forgetRoot(hwnd, r); return null; }
+            // Resolve the token outside either cache monitor. WindowSession
+            // validates its currently registered native window before admission.
+            IBinder token = v.getWindowToken();
+            if (token != null && hwndOf(token) == hwnd && q.active()) {
+                rememberIdentity(token, hwnd, r);
+            }
             return r;
         }
         return null;
@@ -468,16 +590,31 @@ public final class UiaBridge {
 
     // ---- Events ----
 
-    private static final Map<Long, Long> sLastStructure = new ConcurrentHashMap<>();
+    private static final Map<Long, Long> sLastStructure = new LinkedHashMap<>(16, .75f, true);
+
+    private static boolean structureDue(long hwnd, long now) {
+        synchronized (sLastStructure) {
+            Long last = sLastStructure.get(hwnd);
+            if (last != null && now - last < 250) return false;
+            sLastStructure.put(hwnd, now);
+            while (sLastStructure.size() > CACHE_LIMIT) {
+                sLastStructure.remove(sLastStructure.keySet().iterator().next());
+            }
+            return true;
+        }
+    }
 
     /** An AccessibilityEvent of a registered window, as a UIA event. */
     static void onEvent(AccessibilityEvent e, IBinder windowToken) {
         if (sLoaded == null || !sLoaded) return;
         long hwnd = hwndOf(windowToken);
         if (hwnd == 0) return;
-        Root r = sRoots.get(hwnd);
+        Root r = cachedRoot(hwnd);
         long id = e.getSourceNodeId();
-        if (r != null) id = publicId(r, id);
+        if (r != null && r.view.getWindowToken() == windowToken) {
+            rememberIdentity(windowToken, hwnd, r);
+        }
+        id = eventId(windowToken, hwnd, id);
         StringBuilder text = new StringBuilder();
         for (CharSequence t : e.getText()) {
             if (text.length() > 0) text.append(' ');
@@ -501,9 +638,7 @@ public final class UiaBridge {
             case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED:
             case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED: {
                 long now = android.os.SystemClock.uptimeMillis();
-                Long last = sLastStructure.get(hwnd);
-                if (last != null && now - last < 250) break;
-                sLastStructure.put(hwnd, now);
+                if (!structureDue(hwnd, now)) break;
                 raise(hwnd, 0, 2, null);
                 break;
             }

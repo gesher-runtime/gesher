@@ -24,15 +24,25 @@ and [0030](decisions/0030-angle-hwui-skiagl.md).
   `build/toolchain/win/rc/win/rc.exe.sha1` and checked). The runner's Visual
   Studio 2022 and Windows SDK are used (`DEPOT_TOOLS_WIN_TOOLCHAIN=0`).
   `gn gen` with `compat/angle/args.gn` (release, x64, Direct3D 11 only, no
-  Vulkan/GL/D3D9/WebGPU/null backends, no tests), then
-  `ninja libEGL libGLESv2`.
+  Vulkan/GL/D3D9/WebGPU/null backends, no tests;
+  `angle_force_context_check_every_call`: GL calls take the global EGL mutex
+  and a context switch between calls resyncs the calling context's state, so
+  contexts current on different threads keep their own state, ADR 0089
+  section 6), then `ninja libEGL libGLESv2`.
+- **Host synchronization bridge** (`compat/angle/gesher_d3d11_context.cpp`):
+  the build adds two private DLL exports for Gesher's EGL fence adapter.
+  Synchronization submission executes under ANGLE's global GL mutex, with no
+  render-state changes or GPU completion waits inside the callback. A second
+  export reports exact EGL errors in ANGLE's thread-local state. These exports
+  are not APK-visible EGL extensions. Local fences record DXGI completion;
+  native fd export waits outside the mutex (ADR 0089 section 3).
 - **Output** (artifact `angle-sdk`): `bin/libEGL.dll`, `bin/libGLESv2.dll`,
   `lib/libEGL.dll.lib`, `lib/libGLESv2.dll.lib` (import libraries),
   `include/{EGL,GLES,GLES2,GLES3,KHR}`, `NOTICES.txt` and `ANGLE_COMMIT.txt`.
   The DLLs link the CRT and Chromium's libc++ statically and need only
   Windows' `d3d11.dll`, `dxgi.dll` and `d3dcompiler_47.dll`.
 - **Cache**: `angle.yml` caches `angle-sdk` under
-  `angle-sdk-<commit>-<hash of args.gn and build-angle.ps1>`; a hit skips the
+  `angle-sdk-<commit>-<hash of compat/angle build inputs>`; a hit skips the
   checkout and build entirely (the cache entry is a few MB).
 - **Probe** (`probes/angle/angle_probe.c`): built on Linux with Gesher's
   llvm-mingw (`-Wall -Wextra -Werror`), linked against the import libraries.
@@ -54,6 +64,14 @@ and [0030](decisions/0030-angle-hwui-skiagl.md).
 - **Installer**: `tools/package/gesher.iss` installs `libEGL.dll` and
   `libGLESv2.dll` next to `dalvikvm.exe` and `ANGLE-NOTICES.txt` into
   `licenses\`; the package job checks the three files are installed.
+- **What the per-call context check costs** (measured 2026-11-20 on an Intel
+  UHD Graphics 770 with a native program over the DLLs, against the build
+  before it): `glUniform1f` 11.6 to 21 ns a call with it, 11.5 to 12.4 ns
+  without; a frame of 500 draws (a uniform, a texture bind and a draw each)
+  0.48 to 0.69 ms either way; two threads drawing with contexts of their own
+  at the same time 21 to 23 ns a call and 0.8 to 1.0 ms a frame, where the
+  build without it crashed. Not a bottleneck for Firefox's compositor (a
+  frame's read-back alone takes 3 to 9 ms).
 
 ## hwui's SkiaGL pipeline on ANGLE
 
@@ -241,10 +259,13 @@ notice requirements. All of these are compatible with Gesher's Apache 2.0.
 - Java apps' GL (above): a frame drawn into a SurfaceView's or a
   SurfaceTexture's surface is read back with glReadPixels at each swap and
   copied (the surfaces track's child surfaces), not shared with the window's
-  swap chain; `SurfaceTexture.updateTexImage` gives no GL texture
-  (`GL_TEXTURE_EXTERNAL_OES` consumers see nothing new); Android-only EGL
-  extensions (`eglPresentationTimeANDROID`, native fences) reach ANGLE's
-  exports, which fail on the Direct3D 11 backend.
+  swap chain; `SurfaceTexture.updateTexImage` latches the newest frame into
+  the app's `GL_TEXTURE_EXTERNAL_OES` texture through an EGLImage of a
+  Direct3D 11 texture holding its pixels (docs/graphics.md, "SurfaceTexture in
+  OpenGL ES"), one upload per latched frame. Native fences are implemented by
+  Gesher's EGL adapter (ADR 0089); other Android-only EGL extensions such as
+  `eglPresentationTimeANDROID` still reach ANGLE's exports and may fail on the
+  Direct3D 11 backend.
 - The runners report OpenGL ES 3.0 on both devices; ES 3.1 and hwui on a
   real GPU through this build are unverified.
 - `gclient sync` still fetches `buildtools/reclient` (~470 MB, a CIPD

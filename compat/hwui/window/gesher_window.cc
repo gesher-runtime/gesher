@@ -519,6 +519,16 @@ void Window::Show() {
   SetForegroundWindow(hwnd);
 }
 
+void Window::Restore() {
+  offscreen_ = false;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  // A user restore can overtake the Java visibility notification. SW_RESTORE on
+  // an already maximized window would unmaximize it, so only restore an icon.
+  if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+  SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  SetForegroundWindow(hwnd);
+}
+
 void Window::Hide() {
   ShowWindowAsync(static_cast<HWND>(hwnd_), SW_HIDE);
 }
@@ -570,6 +580,44 @@ void Window::SetTitle(const std::string& title_utf8) {
   // SetWindowTextW from another thread sends WM_SETTEXT to the window's
   // thread and waits; the title is copied there.
   SetWindowTextW(static_cast<HWND>(hwnd_), Widen(title_utf8).c_str());
+}
+
+void Window::SetTaskMenu(const std::vector<std::string>& labels_utf8, int checked) {
+  {
+    std::lock_guard<std::mutex> lock(task_menu_mutex_);
+    task_menu_.clear();
+    for (const std::string& label : labels_utf8) {
+      if (static_cast<int>(task_menu_.size()) == kTaskMenuMax) break;
+      task_menu_.push_back(Widen(label));
+    }
+    task_menu_checked_ = checked;
+  }
+  if (hwnd_ != nullptr) PostMessageW(static_cast<HWND>(hwnd_), kMsgTaskMenu, 0, 0);
+}
+
+void Window::ApplyTaskMenu() {
+  HMENU menu = GetSystemMenu(static_cast<HWND>(hwnd_), FALSE);
+  if (menu == nullptr) return;
+  for (int i = 0; i < task_menu_shown_; i++) {
+    DeleteMenu(menu, kTaskMenuFirst + 16 * i, MF_BYCOMMAND);
+  }
+  if (task_menu_shown_ > 0) DeleteMenu(menu, kTaskMenuSeparator, MF_BYCOMMAND);
+  task_menu_shown_ = 0;
+  std::vector<std::wstring> labels;
+  int checked;
+  {
+    std::lock_guard<std::mutex> lock(task_menu_mutex_);
+    labels = task_menu_;
+    checked = task_menu_checked_;
+  }
+  if (labels.empty()) return;
+  int n = static_cast<int>(labels.size());
+  for (int i = 0; i < n; i++) {
+    UINT flags = MF_BYPOSITION | MF_STRING | (i == checked ? MF_CHECKED : MF_UNCHECKED);
+    InsertMenuW(menu, i, flags, kTaskMenuFirst + 16 * i, labels[i].c_str());
+  }
+  InsertMenuW(menu, n, MF_BYPOSITION | MF_SEPARATOR, kTaskMenuSeparator, nullptr);
+  task_menu_shown_ = n;
 }
 
 void Window::ResizeBuffer(int width, int height) {
@@ -818,6 +866,21 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       e.type = WindowEvent::kClose;
       Queue(e);
       return 0;  // the app decides
+    case kMsgTaskMenu:
+      if (!popup_) ApplyTaskMenu();
+      return 0;
+    case WM_SYSCOMMAND: {
+      // A task of the window menu's list (ADR 0088): the app brings it forward.
+      const unsigned command = static_cast<unsigned>(wparam) & 0xFFF0;
+      if (popup_ || command < kTaskMenuFirst
+          || command >= kTaskMenuFirst + 16 * kTaskMenuMax) {
+        return -1;
+      }
+      e.type = WindowEvent::kTaskMenu;
+      e.button = static_cast<int32_t>((command - kTaskMenuFirst) / 16);
+      QueueOwn(e);
+      return 0;
+    }
     case WM_ERASEBKGND:
       return 1;
     case WM_PAINT: {
