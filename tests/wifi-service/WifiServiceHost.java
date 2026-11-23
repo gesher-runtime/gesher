@@ -40,12 +40,13 @@ public final class WifiServiceHost {
     private static final String FINE = "android.permission.ACCESS_FINE_LOCATION";
     private static final String COARSE = "android.permission.ACCESS_COARSE_LOCATION";
     private static final String BACKGROUND = "android.permission.ACCESS_BACKGROUND_LOCATION";
+    private static final String NEARBY = "android.permission.NEARBY_WIFI_DEVICES";
     private static final String[] EXEMPTIONS = {
         "android.permission.NETWORK_SETTINGS", "android.permission.NETWORK_SETUP_WIZARD",
         "android.permission.NETWORK_MANAGED_PROVISIONING", "android.permission.NETWORK_STACK",
         "android.permission.MAINLINE_NETWORK_STACK", "android.permission.RADIO_SCAN_WITHOUT_LOCATION"
     };
-    private static final List<String> ORDINARY = List.of(ACCESS, CHANGE, NETWORK, FINE, COARSE, BACKGROUND);
+    private static final List<String> ORDINARY = List.of(ACCESS, CHANGE, NETWORK, FINE, COARSE, BACKGROUND, NEARBY);
     private static final Unsafe UNSAFE;
     private static int checks, nextUid = 14100;
     private static native void setOwnUid(int uid);
@@ -136,7 +137,7 @@ public final class WifiServiceHost {
             ap.capabilities = "[ESS]"; ap.frequency = 5180; ap.level = -49; ap.timestamp = 123456;
         }
         private void read() { reads++; if (duringRead != null) duringRead.run(); }
-        @Override public int wifiState() { read(); return WifiManager.WIFI_STATE_ENABLED; }
+        @Override public int wifiState() { read(); return state; }
         @Override public WifiInfo connectionInfo() { read(); return info; }
         @Override public WifiInfo connectionInfo(int index) {
             read(); requestedIndex = index;
@@ -150,6 +151,16 @@ public final class WifiServiceHost {
         @Override public boolean startScan(BooleanSupplier eligible, Consumer<Boolean> completed) {
             starts++; guard = eligible; completion = completed; return accepted;
         }
+        // Synthetic adapter census and observed bands; production policy maps them.
+        com.gesher.net.WindowsWifi.Hardware hardware = new com.gesher.net.WindowsWifi.Hardware(0, 0, 0, 0);
+        int observedLow = -1, observedHigh = -1;
+        com.gesher.net.WindowsWifi.Events events;
+        int state = WifiManager.WIFI_STATE_ENABLED;
+        @Override public com.gesher.net.WindowsWifi.Hardware hardware() { return hardware; }
+        @Override public boolean bandObserved(int low, int high) {
+            return observedLow >= 0 && observedLow <= high && observedHigh >= low;
+        }
+        @Override public void listen(com.gesher.net.WindowsWifi.Events listener) { events = listener; }
         boolean begin() {
             boolean eligible = guard.getAsBoolean(); if (eligible) physicalScans++; return eligible;
         }
@@ -197,6 +208,9 @@ public final class WifiServiceHost {
                 definitions.put(name, permission);
             }
             ((Set<String>)get(catalog, "mProtectedBroadcasts")).add(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION);
+            ((Set<String>)get(catalog, "mProtectedBroadcasts")).add(WifiManager.WIFI_STATE_CHANGED_ACTION);
+            PermissionInfo nearby = new PermissionInfo(); nearby.name = NEARBY; nearby.packageName = "android";
+            nearby.protectionLevel = PermissionInfo.PROTECTION_DANGEROUS; definitions.put(NEARBY, nearby);
             set(catalog, "mLoaded", true); set(catalog, "mFrameworkRead", true);
             pm.permissions().initializePackages();
             for (App app : List.of(owner, peer, noAccess, noChange)) {
@@ -230,12 +244,13 @@ public final class WifiServiceHost {
                         ? AppOpsManager.MODE_IGNORED : AppOpsManager.MODE_ALLOWED);
             }
         }
-        void listen(App app) throws Exception {
+        void listen(App app) throws Exception { listen(app, WifiManager.SCAN_RESULTS_AVAILABLE_ACTION); }
+        void listen(App app, String action) throws Exception {
             IIntentReceiver receiver = new IIntentReceiver.Default() {
                 final Binder token = new Binder(); @Override public IBinder asBinder() { return token; }
             };
             app.call(() -> am.registerReceiverWithFeature(app.thread, app.name(), null, null, receiver,
-                    new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION), null, 0, 0));
+                    new IntentFilter(action), null, 0, 0));
         }
         @SuppressWarnings("unchecked") void replace(ApkPackage old, ApkPackage replacement) throws Exception {
             Map<String, ApkPackage> packages = new LinkedHashMap<>((Map<String, ApkPackage>)get(pm, "mPackages"));
@@ -507,12 +522,112 @@ public final class WifiServiceHost {
                     "Reinstalled package cannot inherit old network disclosure authority"));
         }
     }
+    /** Client end recording service events (delivered through the local-Binder path). */
+    private static final class Events extends com.gesher.net.IWindowsWifi.Callback {
+        final List<Integer> values = new ArrayList<>();
+        @Override protected void onEvent(int kind, int value, Bundle extras) { values.add(kind * 100 + value); }
+    }
+    private static void capabilitiesAndEvents() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            int erp = 1 << 6, ofdm = 1 << 4, ht = 1 << 7, vht = 1 << 8, he = 1 << 10;
+            h.owner.call(() -> check(h.wifi.getCapabilities(h.owner.name(), 0) == 0
+                    && h.wifi.getCapabilities(h.owner.name(), 1) == 0, "No adapter: no feature, band or standard"));
+            h.radio.hardware = new com.gesher.net.WindowsWifi.Hardware(1, erp | ofdm | ht | vht | he,
+                    (1 << 7) | (1 << 9) | (1 << 10), (1 << 4) | (1 << 31));
+            h.owner.call(() -> {
+                long features = h.wifi.getCapabilities(h.owner.name(), com.gesher.net.IWindowsWifi.CAPABILITIES_FEATURES);
+                check(features == (com.gesher.net.IWindowsWifi.FEATURE_WPA3_SAE | com.gesher.net.IWindowsWifi.FEATURE_OWE
+                        | com.gesher.net.IWindowsWifi.FEATURE_WPA_PERSONAL | com.gesher.net.IWindowsWifi.FEATURE_WEP),
+                        "Auth/cipher pairs map to SAE, OWE, WPA personal and WEP only");
+                long bands = h.wifi.getCapabilities(h.owner.name(), com.gesher.net.IWindowsWifi.CAPABILITIES_BANDS);
+                int shift = com.gesher.net.IWindowsWifi.STANDARD_SHIFT;
+                check((bands & 0xff) == (com.gesher.net.IWindowsWifi.BAND_24_GHZ | com.gesher.net.IWindowsWifi.BAND_5_GHZ),
+                        "ERP and OFDM/VHT establish 2.4 and 5 GHz; no 6 GHz without evidence");
+                check(bands >>> shift == ((1L << ScanResult.WIFI_STANDARD_LEGACY) | (1L << ScanResult.WIFI_STANDARD_11N)
+                        | (1L << ScanResult.WIFI_STANDARD_11AC) | (1L << ScanResult.WIFI_STANDARD_11AX)),
+                        "PHY types map to exactly the supported standards");
+            });
+            h.radio.observedLow = 5955; h.radio.observedHigh = 5955;
+            h.owner.call(() -> check((h.wifi.getCapabilities(h.owner.name(), 1) & com.gesher.net.IWindowsWifi.BAND_6_GHZ) != 0,
+                    "An observed 6 GHz BSS establishes 6 GHz support"));
+            h.noAccess.call(() -> {
+                rejects(() -> h.wifi.getCapabilities(h.noAccess.name(), 0), "Feature group requires ACCESS_WIFI_STATE");
+                check(h.wifi.getCapabilities(h.noAccess.name(), 1) != 0, "Band group carries no permission");
+                rejects(() -> h.wifi.getChannelData(h.noAccess.name(), null), "Channel data requires NEARBY_WIFI_DEVICES");
+            });
+            h.grant(h.owner, NEARBY);
+            h.owner.call(() -> {
+                List<Bundle> channels = h.wifi.getChannelData(h.owner.name(), "wifi");
+                check(channels.size() == 1 && channels.get(0).getInt(WifiManager.CHANNEL_DATA_KEY_FREQUENCY_MHZ) == 5180
+                        && channels.get(0).getInt(WifiManager.CHANNEL_DATA_KEY_NUM_AP) == 1, "Channel data counts real cached APs");
+            });
+            h.radio.ap.level = -85;
+            h.owner.call(() -> check(h.wifi.getChannelData(h.owner.name(), "wifi").isEmpty(),
+                    "APs weaker than -80 dBm are not counted"));
+
+            Events ownerScan = new Events(), ownerState = new Events(), peerScan = new Events();
+            h.owner.call(() -> {
+                h.wifi.registerCallback(h.owner.name(), "wifi", com.gesher.net.IWindowsWifi.CALLBACK_SCAN_RESULTS, ownerScan);
+                h.wifi.registerCallback(h.owner.name(), "wifi", com.gesher.net.IWindowsWifi.CALLBACK_WIFI_STATE, ownerState);
+                try { h.wifi.registerCallback(h.owner.name(), null, 42, new Events()); throw new AssertionError("Unknown callback kind"); }
+                catch (IllegalArgumentException expected) { checks++; }
+            });
+            check(ownerState.values.equals(List.of(200 + WifiManager.WIFI_STATE_ENABLED)),
+                    "State listener reports the current state once on registration");
+            check(ownerScan.values.isEmpty(), "Scan callback is not invoked on registration");
+            h.peer.call(() -> h.wifi.registerCallback(h.peer.name(), null, com.gesher.net.IWindowsWifi.CALLBACK_SCAN_RESULTS, peerScan));
+            h.noAccess.call(() -> rejects(() -> h.wifi.registerCallback(h.noAccess.name(), null,
+                    com.gesher.net.IWindowsWifi.CALLBACK_SCAN_RESULTS, new Events()), "Callbacks require ACCESS_WIFI_STATE"));
+            h.listen(h.peer);
+            h.listen(h.peer, WifiManager.WIFI_STATE_CHANGED_ACTION);
+            // A Windows-initiated scan completion: global broadcast and every callback.
+            h.radio.events.onScanResultsAvailable();
+            check(ownerScan.values.size() == 1 && peerScan.values.size() == 1, "External scan reaches each scan callback");
+            check(h.peer.thread.broadcasts == 1 && h.peer.thread.latest.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
+                    && h.peer.thread.senderUid == Process.SYSTEM_UID, "External scan is a system-origin updated result");
+            // A requested scan's completion also notifies callbacks once.
+            h.owner.call(() -> check(h.wifi.startScan(h.owner.name(), "wifi"), "Requested scan admitted"));
+            check(h.radio.begin(), "Requested scan begins"); h.radio.finish(true);
+            check(ownerScan.values.size() == 2 && peerScan.values.size() == 2, "Requested scan completion reaches callbacks");
+            h.radio.finish(false);
+            check(ownerScan.values.size() == 2, "A failed scan is not results-available");
+            h.peer.process.exiting = true;
+            h.radio.events.onScanResultsAvailable();
+            check(peerScan.values.size() == 2 && ownerScan.values.size() == 3, "An exiting app's callback is not delivered");
+            h.peer.process.exiting = false;
+            h.radio.events.onScanResultsAvailable();
+            check(peerScan.values.size() == 2 && ownerScan.values.size() == 4, "A dropped registration does not return");
+            h.owner.call(() -> h.wifi.unregisterCallback(h.owner.name(), com.gesher.net.IWindowsWifi.CALLBACK_SCAN_RESULTS, ownerScan));
+            h.radio.events.onScanResultsAvailable();
+            check(ownerScan.values.size() == 4, "Unregistered callback receives nothing");
+            int before = h.peer.thread.broadcasts;
+            h.radio.events.onWifiStateChanged(WifiManager.WIFI_STATE_ENABLED, WifiManager.WIFI_STATE_DISABLED);
+            check(ownerState.values.get(ownerState.values.size() - 1) == 200 + WifiManager.WIFI_STATE_DISABLED,
+                    "State listener follows the real radio change");
+            check(h.peer.thread.broadcasts == before + 1
+                    && WifiManager.WIFI_STATE_CHANGED_ACTION.equals(h.peer.thread.latest.getAction())
+                    && h.peer.thread.latest.getIntExtra(WifiManager.EXTRA_WIFI_STATE, -1) == WifiManager.WIFI_STATE_DISABLED
+                    && h.peer.thread.latest.getIntExtra(WifiManager.EXTRA_PREVIOUS_WIFI_STATE, -1) == WifiManager.WIFI_STATE_ENABLED,
+                    "WIFI_STATE_CHANGED carries the new and previous states");
+            Intent sticky = StickyBroadcasts.match(new IntentFilter(WifiManager.WIFI_STATE_CHANGED_ACTION));
+            check(sticky != null && sticky.getIntExtra(WifiManager.EXTRA_WIFI_STATE, -1) == WifiManager.WIFI_STATE_DISABLED,
+                    "WIFI_STATE_CHANGED is sticky");
+            int states = ownerState.values.size();
+            h.radio.events.onWifiStateChanged(WifiManager.WIFI_STATE_DISABLED, WifiManager.WIFI_STATE_UNKNOWN);
+            check(h.peer.thread.broadcasts == before + 1 && ownerState.values.size() == states + 1,
+                    "UNKNOWN is reported to listeners but never broadcast");
+            h.owner.process.dead = true;
+            h.radio.events.onWifiStateChanged(WifiManager.WIFI_STATE_UNKNOWN, WifiManager.WIFI_STATE_ENABLED);
+            check(ownerState.values.size() == states + 1, "A retired process's registrations are dropped");
+        }
+    }
     public static void main(String[] args) throws Exception {
         System.load(args[0]); setOwnUid(Process.SYSTEM_UID);
         android.app.PropertyInvalidatedCache.setTestMode(true);
         android.app.PropertyInvalidatedCache.disableForTestMode();
         field(Class.forName("com.gesher.app.locale.SystemLocale"), "sIs24Hour").set(null, Boolean.TRUE);
         identityAndData(); scanPolicy(); queuedAuthority(); rejectedAdmission(); standalone(); privilegedPolicies(); networkObservations();
+        capabilitiesAndEvents();
         System.out.println("WifiServiceHost passed: " + checks + " checks; real permission/AppOps/broadcast Java, radio=fixture");
     }
 }

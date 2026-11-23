@@ -10,11 +10,17 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Binder;
+import android.os.Bundle;
+import android.os.IBinder;
 import android.os.Process;
+import android.os.RemoteException;
 import com.gesher.net.IWindowsWifi;
 import com.gesher.net.WindowsWifi;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -36,6 +42,9 @@ public final class WifiService extends IWindowsWifi.Stub {
         DhcpInfo dhcpInfo();
         List<ScanResult> scanResults();
         boolean startScan(BooleanSupplier eligible, Consumer<Boolean> completion);
+        WindowsWifi.Hardware hardware();
+        boolean bandObserved(int lowMhz, int highMhz);
+        void listen(WindowsWifi.Events events);
     }
 
     private static final Backend WINDOWS = new Backend() {
@@ -47,6 +56,9 @@ public final class WifiService extends IWindowsWifi.Stub {
         @Override public boolean startScan(BooleanSupplier eligible, Consumer<Boolean> completion) {
             return WindowsWifi.startScan(eligible, completion);
         }
+        @Override public WindowsWifi.Hardware hardware() { return WindowsWifi.hardware(); }
+        @Override public boolean bandObserved(int low, int high) { return WindowsWifi.bandObserved(low, high); }
+        @Override public void listen(WindowsWifi.Events events) { WindowsWifi.addListener(events); }
     };
 
     private final ActivityManagerService mAm;
@@ -67,6 +79,17 @@ public final class WifiService extends IWindowsWifi.Stub {
         mAm = Objects.requireNonNull(am); mAtm = Objects.requireNonNull(atm);
         mPm = Objects.requireNonNull(pm); mLocationEnabled = Objects.requireNonNull(locationEnabled);
         mBackend = Objects.requireNonNull(backend);
+        mBackend.listen(new WindowsWifi.Events() {
+            @Override public void onWifiStateChanged(int previous, int current) {
+                wifiStateChanged(previous, current);
+            }
+            @Override public void onScanResultsAvailable() {
+                // Windows' own (background or other-client) scan completed: Android
+                // publishes every completed device scan, whoever started it.
+                mAm.sendBroadcastFor("android", resultIntent(true), null);
+                dispatch(IWindowsWifi.CALLBACK_SCAN_RESULTS, 0, null);
+            }
+        });
     }
 
     private record Owner(ApkPackage code, ActivityTaskManagerService.ProcessRecord process,
@@ -264,6 +287,7 @@ public final class WifiService extends IWindowsWifi.Stub {
             // This contains only status; each subsequent data read rechecks its own
             // caller. Retirement of an initiator cannot suppress other apps' result.
             mAm.sendBroadcastFor("android", resultIntent(updated), null);
+            if (updated) dispatch(IWindowsWifi.CALLBACK_SCAN_RESULTS, 0, null);
         }
 
         void rejected() {
@@ -306,5 +330,200 @@ public final class WifiService extends IWindowsWifi.Stub {
         }
         if (!accepted) scan.rejected();
         return accepted;
+    }
+
+    // ---- Capabilities ------------------------------------------------------------
+
+    @Override public long getCapabilities(String name, int group) {
+        Owner owner = caller(name, null);
+        if (group == IWindowsWifi.CAPABILITIES_FEATURES) {
+            // WifiServiceImpl.isFeatureSupported enforces ACCESS_WIFI_STATE.
+            enforce(owner, ACCESS);
+            return features(mBackend.hardware());
+        }
+        if (group != IWindowsWifi.CAPABILITIES_BANDS) throw new IllegalArgumentException("Unknown capability group");
+        // Band and standard queries carry no permission on Android.
+        return bands(mBackend.hardware());
+    }
+
+    /** Security support from the adapters' infrastructure auth/cipher pairs (DOT11_*). */
+    static long features(WindowsWifi.Hardware hardware) {
+        long bits = 0;
+        if (!hardware.present()) return 0;
+        if (hardware.auth(9)) bits |= IWindowsWifi.FEATURE_WPA3_SAE;          // WPA3_SAE
+        if (hardware.auth(8)) bits |= IWindowsWifi.FEATURE_WPA3_SUITE_B;      // WPA3_ENT_192
+        if (hardware.auth(10)) bits |= IWindowsWifi.FEATURE_OWE;              // OWE
+        if (hardware.auth(4) || hardware.auth(7)) bits |= IWindowsWifi.FEATURE_WPA_PERSONAL;
+        if (hardware.cipher(1) || hardware.cipher(5) || hardware.cipher(31)) bits |= IWindowsWifi.FEATURE_WEP;
+        return bits;
+    }
+
+    /**
+     * Bands from PHY types that only exist in that band (DSSS/HR-DSSS/ERP: 2.4 GHz;
+     * OFDM 802.11a/VHT: 5 GHz; DMG: 60 GHz) or from an actually observed BSS or link.
+     * Windows reports no 6 GHz capability: only an observed 6 GHz BSS establishes it.
+     */
+    long bands(WindowsWifi.Hardware hardware) {
+        if (!hardware.present()) return 0;
+        long bits = 0;
+        if (hardware.phy(2) || hardware.phy(5) || hardware.phy(6) || mBackend.bandObserved(2400, 2500)) {
+            bits |= IWindowsWifi.BAND_24_GHZ;
+        }
+        if (hardware.phy(4) || hardware.phy(8) || mBackend.bandObserved(4900, 5900)) bits |= IWindowsWifi.BAND_5_GHZ;
+        if (mBackend.bandObserved(5925, 7125)) bits |= IWindowsWifi.BAND_6_GHZ;
+        if (hardware.phy(9)) bits |= IWindowsWifi.BAND_60_GHZ;
+        if (hardware.phy(1) || hardware.phy(2) || hardware.phy(4) || hardware.phy(5) || hardware.phy(6)) {
+            bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_LEGACY);
+        }
+        if (hardware.phy(7)) bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_11N);
+        if (hardware.phy(8)) bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_11AC);
+        if (hardware.phy(9)) bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_11AD);
+        if (hardware.phy(10)) bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_11AX);
+        if (hardware.phy(11)) bits |= 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_11BE);
+        return bits;
+    }
+
+    // ---- Channel data ------------------------------------------------------------
+
+    private static final String NEARBY = "android.permission.NEARBY_WIFI_DEVICES";
+
+    @Override public List<Bundle> getChannelData(String name, String tag) {
+        Owner owner = caller(name, tag);
+        // WifiPermissionsUtil.enforceNearbyDevicesPermission(checkForLocation=false).
+        if (!privilegedScan(owner) && !granted(owner, NEARBY)) {
+            throw new SecurityException("package=" + owner.name() + " UID=" + owner.uid()
+                    + " does not have nearby devices permission.");
+        }
+        Map<Integer, Integer> counts = new TreeMap<>();
+        for (ScanResult scan : mBackend.scanResults()) {
+            // ScanRequestProxy counts APs no weaker than CHANNEL_USAGE_WEAK_SCAN_RSSI_DBM.
+            if (scan.level >= -80) counts.merge(scan.frequency, 1, Integer::sum);
+        }
+        if (!privilegedScan(owner) && !granted(owner, NEARBY)) {
+            throw new SecurityException("Nearby devices permission revoked");
+        }
+        List<Bundle> result = new ArrayList<>(counts.size());
+        for (Map.Entry<Integer, Integer> entry : counts.entrySet()) {
+            Bundle channel = new Bundle();
+            channel.putInt(WifiManager.CHANNEL_DATA_KEY_FREQUENCY_MHZ, entry.getKey());
+            channel.putInt(WifiManager.CHANNEL_DATA_KEY_NUM_AP, entry.getValue());
+            result.add(channel);
+        }
+        return result;
+    }
+
+    // ---- Callbacks and state broadcasts -------------------------------------------
+
+    private static final int MAX_CALLBACKS_PER_UID = 64;
+    private final Map<IBinder, Registration> mCallbacks = new HashMap<>(); // guarded by itself
+
+    private final class Registration implements IBinder.DeathRecipient {
+        final Owner owner;
+        final int kind;
+        final IBinder binder;
+        Registration(Owner owner, int kind, IBinder binder) {
+            this.owner = owner; this.kind = kind; this.binder = binder;
+        }
+        @Override public void binderDied() { drop(this); }
+    }
+
+    private void drop(Registration registration) {
+        synchronized (mCallbacks) {
+            if (mCallbacks.get(registration.binder) == registration) mCallbacks.remove(registration.binder);
+        }
+        try { registration.binder.unlinkToDeath(registration, 0); }
+        catch (RuntimeException ignored) { }
+    }
+
+    @Override public void registerCallback(String name, String tag, int kind, IBinder binder) {
+        Owner owner = caller(name, tag);
+        if (binder == null) throw new IllegalArgumentException("callback cannot be null");
+        switch (kind) {
+            case IWindowsWifi.CALLBACK_SCAN_RESULTS:
+            case IWindowsWifi.CALLBACK_WIFI_STATE:
+            case IWindowsWifi.CALLBACK_SUGGESTION_APPROVAL:
+            case IWindowsWifi.CALLBACK_SUGGESTION_CONNECTION:
+            case IWindowsWifi.CALLBACK_LOCAL_ONLY_FAILURE:
+                enforce(owner, ACCESS);
+                break;
+            default:
+                throw new IllegalArgumentException("Unknown Wi-Fi callback kind " + kind);
+        }
+        Registration registration = new Registration(owner, kind, binder);
+        synchronized (mCallbacks) {
+            Registration existing = mCallbacks.get(binder);
+            if (existing != null) {
+                if (existing.owner.uid() != owner.uid() || existing.kind != kind) {
+                    throw new IllegalArgumentException("Callback already registered");
+                }
+                return;
+            }
+            int count = 0;
+            for (Registration other : mCallbacks.values()) if (other.owner.uid() == owner.uid()) count++;
+            if (count >= MAX_CALLBACKS_PER_UID) throw new IllegalStateException("Too many Wi-Fi callbacks");
+            mCallbacks.put(binder, registration);
+        }
+        try {
+            binder.linkToDeath(registration, 0);
+        } catch (RemoteException dead) {
+            drop(registration);
+            return;
+        }
+        if (kind == IWindowsWifi.CALLBACK_WIFI_STATE) {
+            // ActiveModeWarden.addWifiStateChangedListener reports once on registration.
+            IWindowsWifi.Callback.send(binder, kind, mBackend.wifiState(), null);
+        } else if (kind == IWindowsWifi.CALLBACK_SUGGESTION_APPROVAL) {
+            IWindowsWifi.Callback.send(binder, kind, suggestionApproval(owner), null);
+        }
+    }
+
+    @Override public void unregisterCallback(String name, int kind, IBinder binder) {
+        Owner owner = caller(name, null);
+        enforce(owner, ACCESS);
+        Registration registration;
+        synchronized (mCallbacks) {
+            registration = mCallbacks.get(binder);
+            if (registration == null || registration.owner.uid() != owner.uid() || registration.kind != kind) return;
+        }
+        drop(registration);
+    }
+
+    /** Sends one event to every live, still-permitted registration of {@code kind}. */
+    void dispatch(int kind, int value, Bundle extras) {
+        dispatch(kind, value, extras, owner -> true);
+    }
+
+    void dispatch(int kind, int value, Bundle extras, java.util.function.Predicate<Owner> eligible) {
+        List<Registration> targets = new ArrayList<>();
+        synchronized (mCallbacks) {
+            for (Registration registration : mCallbacks.values()) {
+                if (registration.kind == kind) targets.add(registration);
+            }
+        }
+        for (Registration registration : targets) {
+            if (!current(registration.owner)) { drop(registration); continue; }
+            boolean allowed;
+            try { allowed = granted(registration.owner, ACCESS) && eligible.test(registration.owner); }
+            catch (RuntimeException denied) { allowed = false; }
+            if (allowed && !IWindowsWifi.Callback.send(registration.binder, kind, value, extras)) drop(registration);
+        }
+    }
+
+    /** Without suggestions the per-app status is unknown (WifiNetworkSuggestionsManager). */
+    int suggestionApproval(Owner owner) { return WifiManager.STATUS_SUGGESTION_APPROVAL_UNKNOWN; }
+
+    private void wifiStateChanged(int previous, int current) {
+        // ConcreteClientModeManager: sticky, registered-only-before-boot, new and previous
+        // states; Android does not broadcast WIFI_STATE_UNKNOWN.
+        if (current != WifiManager.WIFI_STATE_UNKNOWN) {
+            Intent intent = new Intent(WifiManager.WIFI_STATE_CHANGED_ACTION)
+                    .addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT)
+                    .putExtra(WifiManager.EXTRA_WIFI_STATE, current)
+                    .putExtra(WifiManager.EXTRA_PREVIOUS_WIFI_STATE, previous);
+            StickyBroadcasts.put(intent);
+            try { mAm.sendBroadcastFor("android", intent, null); }
+            catch (RuntimeException e) { SystemServer.log("Wi-Fi state broadcast not sent: " + e); }
+        }
+        dispatch(IWindowsWifi.CALLBACK_WIFI_STATE, current, null);
     }
 }

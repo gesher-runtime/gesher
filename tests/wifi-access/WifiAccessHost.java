@@ -162,7 +162,18 @@ public final class WifiAccessHost {
         rejects(SecurityException.class, denied::reconnect, "reconnect requires CHANGE_WIFI_STATE");
         rejects(SecurityException.class, () -> denied.addNetwork(new WifiConfiguration()), "add network requires CHANGE_WIFI_STATE");
         rejects(SecurityException.class, () -> denied.removeNetwork(7), "remove network requires CHANGE_WIFI_STATE");
-        rejects(SecurityException.class, denied::saveConfiguration, "save requires CHANGE_WIFI_STATE");
+        check(!denied.saveConfiguration(), "deprecated save answers false without a permission or service call");
+        rejects(SecurityException.class, denied::isWpa3SaeSupported, "feature query requires ACCESS_WIFI_STATE");
+        rejects(SecurityException.class, denied::isTdlsSupported, "unsupported feature still requires ACCESS_WIFI_STATE");
+        rejects(SecurityException.class, denied::isScanAlwaysAvailable, "scan-always query requires ACCESS_WIFI_STATE");
+        rejects(SecurityException.class, denied::reassociate, "reassociate requires CHANGE_WIFI_STATE");
+        rejects(SecurityException.class, () -> denied.registerScanResultsCallback(Runnable::run,
+                new WifiManager.ScanResultsCallback() { @Override public void onScanResultsAvailable() { } }),
+                "scan callback requires ACCESS_WIFI_STATE");
+        rejects(SecurityException.class, () -> denied.addNetworkSuggestions(List.of()), "suggestions require CHANGE_WIFI_STATE");
+        rejects(SecurityException.class, () -> denied.createWifiLock("t").acquire(), "Wi-Fi lock requires WAKE_LOCK");
+        rejects(SecurityException.class, () -> denied.createMulticastLock("t").acquire(),
+                "multicast lock requires CHANGE_WIFI_MULTICAST_STATE");
     }
 
     private static void wifiQueries() throws Exception {
@@ -292,6 +303,168 @@ public final class WifiAccessHost {
         }
         @Override public boolean startScan(String name, String tag) throws RemoteException {
             record(name, tag); starts++; return accept;
+        }
+        long features, bands;
+        final Map<IBinder, Integer> callbacks = new LinkedHashMap<>();
+        @Override public long getCapabilities(String name, int group) throws RemoteException {
+            record(name, null); return group == IWindowsWifi.CAPABILITIES_FEATURES ? features : bands;
+        }
+        @Override public void registerCallback(String name, String tag, int kind, IBinder callback) throws RemoteException {
+            record(name, tag); callbacks.put(callback, kind);
+            // The host has no Parcel natives; the ART transport test covers send().
+            if (kind == IWindowsWifi.CALLBACK_WIFI_STATE) ((IWindowsWifi.Callback) callback).onEvent(kind, 3, null);
+            if (kind == IWindowsWifi.CALLBACK_SUGGESTION_APPROVAL) ((IWindowsWifi.Callback) callback).onEvent(kind, 0, null);
+        }
+        @Override public void unregisterCallback(String name, int kind, IBinder callback) throws RemoteException {
+            record(name, null); callbacks.remove(callback);
+        }
+        @Override public List<android.os.Bundle> getChannelData(String name, String tag) throws RemoteException {
+            record(name, tag); return List.of();
+        }
+        void fire(int kind) {
+            for (Map.Entry<IBinder, Integer> entry : new ArrayList<>(callbacks.entrySet())) {
+                if (entry.getValue() == kind) ((IWindowsWifi.Callback) entry.getKey()).onEvent(kind, 0, null);
+            }
+        }
+    }
+
+    /** Public SDK members beyond the original subset, through the same local Binder boundary. */
+    private static void wifiApi() throws Exception {
+        Caller caller = allowed();
+        WifiManager manager = wifi(caller);
+        WifiServiceBoundary service = new WifiServiceBoundary();
+        Map<String, IBinder> cache = serviceCache();
+        IBinder previousWifi = cache.put(IWindowsWifi.NAME, service);
+        try {
+            service.features = IWindowsWifi.FEATURE_WPA3_SAE | IWindowsWifi.FEATURE_WPA_PERSONAL;
+            service.bands = IWindowsWifi.BAND_24_GHZ | IWindowsWifi.BAND_5_GHZ
+                    | 1L << (IWindowsWifi.STANDARD_SHIFT + ScanResult.WIFI_STANDARD_11AX);
+            check(manager.isWpa3SaeSupported() && manager.isWpaPersonalSupported()
+                    && !manager.isEnhancedOpenSupported() && !manager.isWpa3SuiteBSupported() && !manager.isWepSupported(),
+                    "security support follows the service's adapter census bits only");
+            check(manager.is24GHzBandSupported() && manager.is5GHzBandSupported() && !manager.is6GHzBandSupported()
+                    && !manager.is60GHzBandSupported(), "band support follows the census bits only");
+            check(manager.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11AX)
+                    && !manager.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11BE)
+                    && !manager.isWifiStandardSupported(-1) && !manager.isWifiStandardSupported(9999),
+                    "standards follow PHY bits; out-of-range standards are unsupported");
+            caller.permissions.remove(ACCESS);
+            check(manager.is5GHzBandSupported(), "band queries carry no permission on Android");
+            rejects(SecurityException.class, manager::isWpa3SaeSupported, "feature queries need ACCESS_WIFI_STATE");
+            caller.permissions.add(ACCESS);
+            check(!manager.isWpa3SaeH2eSupported() && !manager.isWpa3SaePublicKeySupported() && !manager.isTdlsSupported()
+                    && !manager.isStaApConcurrencySupported() && !manager.isEasyConnectSupported()
+                    && !manager.isP2pSupported() && !manager.isScanAlwaysAvailable() && !manager.isWifiPasspointEnabled(),
+                    "capabilities Windows does not report are not claimed");
+            check(manager.calculateSignalLevel(-89) == 0 && manager.calculateSignalLevel(-88) == 1
+                    && manager.calculateSignalLevel(-66) == 3 && manager.calculateSignalLevel(-55) == 4
+                    && manager.getMaxSignalLevel() == 4 && WifiManager.compareSignalLevel(-50, -60) == 10,
+                    "RSSI levels use Android's default thresholds");
+            check(manager.getMaxNumberOfChannelsPerNetworkSpecifierRequest() == 5
+                    && manager.getMaxNumberOfNetworkSuggestionsPerApp() == 1024, "Android limits");
+
+            List<Runnable> queued = new ArrayList<>();
+            java.util.concurrent.Executor executor = queued::add;
+            int[] scans = {0}, states = {0}, approvals = {-1};
+            WifiManager.ScanResultsCallback scan = new WifiManager.ScanResultsCallback() {
+                @Override public void onScanResultsAvailable() { scans[0]++; }
+            };
+            rejects(IllegalArgumentException.class, () -> manager.registerScanResultsCallback(null, scan), "null executor");
+            rejects(IllegalArgumentException.class, () -> manager.registerScanResultsCallback(executor, null), "null callback");
+            manager.registerScanResultsCallback(executor, scan);
+            manager.registerScanResultsCallback(executor, scan);
+            check(service.callbacks.size() == 1 && "wifi-host".equals(service.tag),
+                    "one registration per callback, with attribution");
+            check(queued.isEmpty(), "scan callback is not invoked on registration");
+            service.fire(IWindowsWifi.CALLBACK_SCAN_RESULTS);
+            check(scans[0] == 0 && queued.size() == 1, "service event is delivered through the app executor");
+            queued.remove(0).run();
+            check(scans[0] == 1, "scan completion reaches the callback");
+            manager.unregisterScanResultsCallback(scan);
+            service.fire(IWindowsWifi.CALLBACK_SCAN_RESULTS);
+            check(service.callbacks.isEmpty() && queued.isEmpty(), "unregistered callback receives nothing");
+
+            WifiManager.WifiStateChangedListener state = () -> states[0]++;
+            rejects(NullPointerException.class, () -> manager.addWifiStateChangedListener(null, state), "null executor NPE");
+            manager.addWifiStateChangedListener(executor, state);
+            queued.remove(0).run();
+            check(states[0] == 1, "state listener reports once on registration");
+            manager.removeWifiStateChangedListener(state);
+
+            WifiManager.SuggestionUserApprovalStatusListener approval = status -> approvals[0] = status;
+            rejects(NullPointerException.class, () -> manager.addSuggestionUserApprovalStatusListener(executor, null),
+                    "approval listener null is NPE as on Android");
+            manager.addSuggestionUserApprovalStatusListener(executor, approval);
+            queued.remove(0).run();
+            check(approvals[0] == WifiManager.STATUS_SUGGESTION_APPROVAL_UNKNOWN, "current approval status reported");
+            manager.removeSuggestionUserApprovalStatusListener(approval);
+            rejects(IllegalArgumentException.class, () -> manager.addLocalOnlyConnectionFailureListener(executor, null),
+                    "failure listener null is IAE");
+
+            int[] wps = {-1};
+            WifiManager.WpsCallback wpsCallback = new WifiManager.WpsCallback() {
+                @Override public void onStarted(String pin) { }
+                @Override public void onSucceeded() { wps[0] = 99; }
+                @Override public void onFailed(int reason) { wps[0] = reason; }
+            };
+            manager.startWps(null, wpsCallback);
+            check(wps[0] == 0, "WPS fails synchronously with FAILURE_INTERNAL_ERROR");
+            Object[] tdls = new Object[3];
+            manager.isTdlsOperationCurrentlyAvailable(Runnable::run, value -> tdls[0] = value);
+            manager.getMaxSupportedConcurrentTdlsSessions(Runnable::run, value -> tdls[1] = value);
+            manager.getNumberOfEnabledTdlsSessions(Runnable::run, value -> tdls[2] = value);
+            check(Boolean.FALSE.equals(tdls[0]) && Integer.valueOf(-1).equals(tdls[1]) && Integer.valueOf(0).equals(tdls[2]),
+                    "TDLS results are Android's unsupported values");
+            rejects(IllegalArgumentException.class, () -> manager.setTdlsEnabledWithMacAddress(null, true), "null MAC");
+            int[] hotspot = {-1};
+            WifiManager.LocalOnlyHotspotCallback hotspotCallback = new WifiManager.LocalOnlyHotspotCallback() {
+                @Override public void onFailed(int reason) { hotspot[0] = reason; }
+                @Override public void onStarted(WifiManager.LocalOnlyHotspotReservation reservation) { hotspot[0] = 99; }
+            };
+            android.net.wifi.SoftApConfiguration softAp = new android.net.wifi.SoftApConfiguration.Builder().build();
+            rejects(SecurityException.class, () -> manager.startLocalOnlyHotspotWithConfiguration(softAp, Runnable::run,
+                    hotspotCallback), "API 33+ hotspot requires NEARBY_WIFI_DEVICES");
+            caller.permissions.add("android.permission.NEARBY_WIFI_DEVICES");
+            manager.startLocalOnlyHotspotWithConfiguration(softAp, Runnable::run, hotspotCallback);
+            check(hotspot[0] == WifiManager.LocalOnlyHotspotCallback.ERROR_GENERIC, "no SoftAP: generic failure, never started");
+            check(!manager.validateSoftApConfiguration(softAp), "no SoftAP configuration is valid");
+            rejects(IllegalArgumentException.class, () -> manager.addOrUpdatePasspointConfiguration(null),
+                    "Passpoint refusal is IllegalArgumentException");
+            check(manager.getPasspointConfigurations().isEmpty(), "no Passpoint providers");
+            rejects(SecurityException.class, manager::getCallerConfiguredNetworks, "caller networks are DO/PO-only");
+            rejects(SecurityException.class, manager::removeNonCallerConfiguredNetworks, "DO/PO-only removal");
+            rejects(SecurityException.class, () -> manager.allowAutojoinGlobal(true), "autojoin needs privilege");
+            rejects(SecurityException.class, () -> manager.reportCreateInterfaceImpact(0, true, Runnable::run,
+                    (ok, set) -> { }), "interface impact needs MANAGE_WIFI_INTERFACES");
+            rejects(IllegalArgumentException.class, () -> manager.reportCreateInterfaceImpact(9, true, Runnable::run,
+                    (ok, set) -> { }), "invalid interface type");
+            rejects(IllegalArgumentException.class, () -> manager.setPerSsidRoamingMode(null, 5), "roaming mode range first");
+            rejects(NullPointerException.class, () -> manager.setPerSsidRoamingMode(null, 1), "roaming SSID null");
+            rejects(UnsupportedOperationException.class, () -> manager.setPerSsidRoamingMode(
+                    WifiSsid.fromUtf8Text("x"), WifiManager.ROAMING_MODE_AGGRESSIVE), "aggressive roaming unsupported");
+            rejects(IllegalArgumentException.class, () -> manager.setSendDhcpHostnameRestriction(4), "unknown DHCP flags");
+            rejects(SecurityException.class, () -> manager.setSendDhcpHostnameRestriction(1), "DHCP policy is privileged");
+            rejects(SecurityException.class, () -> manager.getUsableChannels(1, 1),
+                    "NEARBY without neverForLocation still needs enabled location");
+            caller.info.targetSdkVersion = 33;
+            rejects(SecurityException.class, () -> manager.getAllowedChannels(1, 1),
+                    "before API 34 the channel query needs LOCATION_HARDWARE");
+            caller.info.targetSdkVersion = 36;
+            check(manager.addNetworkSuggestions(List.of()) == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL
+                    && manager.removeNetworkSuggestions(List.of(), 7) == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID
+                    && manager.getNetworkSuggestions().isEmpty(), "no suggestion store reports no success");
+            check(new WifiManager.InterfaceCreationImpact(1, Set.of("a")).equals(new WifiManager.InterfaceCreationImpact(1, Set.of("a")))
+                    && !new WifiManager.InterfaceCreationImpact(1, Set.of("a")).equals(new WifiManager.InterfaceCreationImpact(2, Set.of("a"))),
+                    "InterfaceCreationImpact value equality");
+            caller.permissions.add("android.permission.WAKE_LOCK");
+            WifiManager.WifiLock lock = manager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "t");
+            lock.acquire();
+            check(lock.isHeld() && lock.toString().contains("held; refcounted: refcount = 1"), "held lock description");
+            lock.release();
+            rejects(RuntimeException.class, lock::release, "under-locked release");
+            rejects(IllegalArgumentException.class, () -> manager.createWifiLock(0, "t").acquire(), "invalid lock mode at acquire");
+        } finally {
+            if (previousWifi == null) cache.remove(IWindowsWifi.NAME); else cache.put(IWindowsWifi.NAME, previousWifi);
         }
     }
 
@@ -474,6 +647,7 @@ public final class WifiAccessHost {
         if (selected.equals("all") || selected.equals("wifi")) wifiQueries();
         if (selected.equals("wifi-no-access")) wifiNoAccess();
         if (selected.equals("all") || selected.equals("connectivity")) connectivity();
+        if (selected.equals("all") || selected.equals("api")) wifiApi();
         System.out.println("WifiAccessHost passed: case=" + selected + " checks=" + checks
                 + "; production caller permissions/facade/callbacks; controlled Context, local Binder replies and Handler boundaries");
     }

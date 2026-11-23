@@ -84,6 +84,28 @@ public final class WindowsWifiTransportTest {
             return result;
         }
         @Override public boolean startScan(String name, String tag) { record(name, tag); return scanAccepted; }
+        int group, kind;
+        IBinder callback;
+        boolean unregistered;
+        @Override public long getCapabilities(String name, int group) {
+            record(name, null); this.group = group; return 0x7_0000_0000L | group;
+        }
+        @Override public void registerCallback(String name, String tag, int kind, IBinder callback) {
+            record(name, tag); this.kind = kind; this.callback = callback;
+            // Force the parcelled one-way path a cross-process client receives.
+            android.os.Bundle extras = new android.os.Bundle(); extras.putString("ssid", "Fixture AP");
+            IWindowsWifi.Callback.send(remote(callback), kind, 3, extras);
+        }
+        @Override public void unregisterCallback(String name, int kind, IBinder callback) {
+            record(name, null); unregistered = this.callback == callback && this.kind == kind;
+        }
+        @Override public List<android.os.Bundle> getChannelData(String name, String tag) {
+            record(name, tag);
+            android.os.Bundle channel = new android.os.Bundle();
+            channel.putInt(WifiManager.CHANNEL_DATA_KEY_FREQUENCY_MHZ, 5180);
+            channel.putInt(WifiManager.CHANNEL_DATA_KEY_NUM_AP, 2);
+            List<android.os.Bundle> result = new ArrayList<>(); result.add(channel); return result;
+        }
     }
     private static IBinder remote(IBinder target) {
         return new Binder() {
@@ -153,6 +175,23 @@ public final class WindowsWifiTransportTest {
         check("request".equals(endpoint.tag), "Scan request attribution tag");
         endpoint.scanAccepted = false;
         check(!wifi.startScan("fixture.app", null), "Rejected boolean scan result");
+        check(wifi.getCapabilities("fixture.app", IWindowsWifi.CAPABILITIES_BANDS) == 0x7_0000_0001L
+                && endpoint.group == IWindowsWifi.CAPABILITIES_BANDS, "64-bit capability group round trip");
+        java.util.concurrent.atomic.AtomicInteger delivered = new java.util.concurrent.atomic.AtomicInteger(-1);
+        IWindowsWifi.Callback callback = new IWindowsWifi.Callback() {
+            @Override protected void onEvent(int kind, int value, android.os.Bundle extras) {
+                if (extras != null && "Fixture AP".equals(extras.getString("ssid"))) delivered.set(kind * 100 + value);
+            }
+        };
+        wifi.registerCallback("fixture.app", "listen", IWindowsWifi.CALLBACK_WIFI_STATE, callback);
+        check(endpoint.callback == callback && endpoint.kind == IWindowsWifi.CALLBACK_WIFI_STATE
+                && "listen".equals(endpoint.tag), "Callback binder, kind and attribution cross the transport");
+        check(delivered.get() == IWindowsWifi.CALLBACK_WIFI_STATE * 100 + 3, "One-way event reaches the client callback");
+        wifi.unregisterCallback("fixture.app", IWindowsWifi.CALLBACK_WIFI_STATE, callback);
+        check(endpoint.unregistered, "Unregistration names the same binder");
+        List<android.os.Bundle> channels = wifi.getChannelData("fixture.app", "channels");
+        check(channels.size() == 1 && channels.get(0).getInt(WifiManager.CHANNEL_DATA_KEY_FREQUENCY_MHZ) == 5180
+                && channels.get(0).getInt(WifiManager.CHANNEL_DATA_KEY_NUM_AP) == 2, "Channel bundles round trip");
         endpoint.empty = true;
         check(wifi.getConnectionInfo("fixture.app", null) == null && wifi.getDhcpInfo("fixture.app") == null,
                 "Null typed objects");

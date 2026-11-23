@@ -1,9 +1,61 @@
-# Windows Wi-Fi observations and scans
+# Windows Wi-Fi
 
 Gesher exposes real Windows WLAN observations through Android's `WifiManager`
-and the Wi-Fi transport information in `ConnectivityManager`. This is a read
-and scan integration. It does not create Android saved network configurations,
-join an access point, change radio power, or implement `WifiNetworkSpecifier`.
+and the Wi-Fi transport information in `ConnectivityManager`. Every public SDK 36
+`WifiManager` member and nested type exists (`tools/check_wifi_manager_api.py`
+compares the built classes with the platform `android.jar`). It does not create
+Android saved network configurations or change radio power.
+
+## System feature and capabilities
+
+`PackageManager.FEATURE_WIFI` is declared when a synchronous `WlanEnumInterfaces`
+census, taken when the package manager starts, finds at least one WLAN interface.
+A missing `wlanapi.dll`, a stopped WLAN AutoConfig service (`WlanOpenHandle`
+failure) or zero interfaces leave it out. Wi-Fi Direct, Aware, RTT and Passpoint
+features are never declared.
+
+Capability answers come from the same census, refreshed on WLAN interface
+arrival/removal:
+
+| API | Source |
+| --- | --- |
+| `isWpa3SaeSupported`, `isWpa3SuiteBSupported`, `isEnhancedOpenSupported`, `isWpaPersonalSupported`, `isWepSupported` | Adapters' supported infrastructure auth/cipher pairs (`DOT11_AUTH_ALGO_WPA3_SAE`, `WPA3_ENT_192`, `OWE`, `WPA_PSK`/`RSNA_PSK`, WEP ciphers) |
+| `isWifiStandardSupported` | `WlanGetInterfaceCapability` PHY types (DSSS/HR-DSSS/OFDM/ERP: legacy; HT: 11n; VHT: 11ac; HE: 11ax; DMG: 11ad; EHT: 11be) |
+| `is24GHzBandSupported`, `is5GHzBandSupported`, `is60GHzBandSupported` | Band-specific PHY types (DSSS/HR-DSSS/ERP; OFDM/VHT; DMG) or an actually observed BSS/link in the band |
+| `is6GHzBandSupported` | Only an observed 6 GHz BSS or link: Windows reports no 6 GHz capability, so an idle 6E adapter answers false until it sees one |
+
+Feature queries require `ACCESS_WIFI_STATE`, as `WifiServiceImpl.isFeatureSupported`
+does; band and standard queries have no permission, as on Android. Facilities that
+Windows does not expose to Gesher answer with Android's unsupported results:
+H2E/public-key SAE, WAPI, DPP, TDLS (callbacks receive `false`, `-1` or `0`),
+STA/AP concurrency, Passpoint (`addOrUpdatePasspointConfiguration` and
+`removePasspointConfiguration` throw `IllegalArgumentException`), local-only
+hotspot (`onFailed(ERROR_GENERIC)` after Android's permission checks), WPS
+(`onFailed(0)`, synchronously), usable/allowed channels (permission and band
+checks, then `UnsupportedOperationException`), and policy APIs reserved for
+privileged callers (`SecurityException`; `UnsupportedOperationException` if a
+caller holds the privilege). `getChannelData` counts the cached real scan's APs
+per frequency (at least -80 dBm) for `NEARBY_WIFI_DEVICES` holders.
+
+## Events
+
+`WindowsWifi` keeps one daemon thread registered for WLAN ACM and MSM
+notifications. Windows' callback threads only record event classes; the Java
+thread drains them, re-reads WLAN state and publishes:
+
+- `WIFI_STATE_CHANGED_ACTION` (sticky, system origin, `EXTRA_WIFI_STATE` and
+  `EXTRA_PREVIOUS_WIFI_STATE`) and `WifiStateChangedListener` callbacks when a
+  successful read shows a known radio state different from the last one. A failed
+  read is not a transition, and `WIFI_STATE_UNKNOWN` is never broadcast.
+  Listeners are also called once on registration, as on Android.
+- `SCAN_RESULTS_AVAILABLE_ACTION` (`EXTRA_RESULTS_UPDATED=true`) and
+  `ScanResultsCallback` for scans Windows completes on its own (background scans
+  or other clients), as Android publishes every completed device scan. The
+  completion of a scan Gesher requested is published once by its requester path.
+
+Callback registrations are Binder objects held by the service, checked against the
+caller's live admission and `ACCESS_WIFI_STATE` at each delivery, dropped when the
+process retires or the binder dies, and bounded per UID.
 
 ## Data and execution
 
@@ -65,9 +117,13 @@ A shared sticky connectivity broadcast contains no SSID. Wi-Fi details
 for a specific `Network` are looked up by that network's interface index; another
 adapter's SSID is never substituted.
 
-Radio mutation methods continue to return unsupported results. Wi-Fi locks are
-compatibility tokens, and a `WifiScanner` hardware service is not supplied.
-This subset does not add `FEATURE_WIFI` to the advertised system features.
+Radio power and the legacy saved-network API (`addNetwork`, `enableNetwork`,
+`disconnect`, `setWifiEnabled` and the rest) keep Android's failure results after
+the `CHANGE_WIFI_STATE` check: no Android-owned profile exists to act on. Wi-Fi and
+multicast locks enforce `WAKE_LOCK`/`CHANGE_WIFI_MULTICAST_STATE`, the lock mode,
+reference counting and Android's 50-lock limit; Windows keeps an associated adapter
+up and does not filter multicast, so the lock has no further effect. A
+`WifiScanner` hardware service is not supplied.
 
 `WindowsWifi` is a runtime-internal backend, not an Android application API.
 These service checks preserve the Android API boundary; they do not add a

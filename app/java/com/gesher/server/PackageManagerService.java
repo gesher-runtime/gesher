@@ -1158,7 +1158,8 @@ public final class PackageManagerService extends IPackageManager.Default {
      * (touchscreen and faketouch, matching {@link com.gesher.app.DeviceProfile#configuration()},
      * both orientations) whose launcher could host app widgets (apps reach
      * AppWidgetManager only on devices with app_widgets, and phone apps assume it).
-     * Telephony, Wi-Fi, sensors and the rest are absent. Bluetooth
+     * FEATURE_WIFI follows the real WLAN adapters (docs/wifi.md); no Wi-Fi Direct, Aware,
+     * RTT or Passpoint feature is claimed. Telephony, sensors and the rest are absent. Bluetooth
      * (docs/bluetooth.md) is there when the host has a radio: FEATURE_BLUETOOTH with an
      * adapter, FEATURE_BLUETOOTH_LE when Windows reports LE support (apps such as
      * companion apps check it before anything else). Cameras follow the real devices
@@ -1198,6 +1199,15 @@ public final class PackageManagerService extends IPackageManager.Default {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
         addLocationFeatures(FEATURES);
+        // Synchronous WLAN census: no wlanapi, a stopped WLAN service or no adapter
+        // leaves FEATURE_WIFI out (docs/wifi.md).
+        addWifiFeature(FEATURES, com.gesher.net.WindowsWifi.hardware());
+    }
+
+    /** FEATURE_WIFI when Windows enumerates at least one real WLAN interface. */
+    static void addWifiFeature(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            com.gesher.net.WindowsWifi.Hardware hardware) {
+        if (hardware != null && hardware.present()) addFeature(features, PackageManager.FEATURE_WIFI);
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */

@@ -7,6 +7,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Parcel;
@@ -19,6 +20,23 @@ public interface IWindowsWifi extends IInterface {
     String NAME = "gesher.wifi";
     String DESCRIPTOR = "com.gesher.net.IWindowsWifi";
 
+    /** {@link #getCapabilities} groups: feature queries need ACCESS_WIFI_STATE, bands do not. */
+    int CAPABILITIES_FEATURES = 0;
+    int CAPABILITIES_BANDS = 1;
+    /** Feature bits, from the adapters' supported infrastructure auth/cipher pairs. */
+    long FEATURE_WPA3_SAE = 1, FEATURE_WPA3_SUITE_B = 1 << 1, FEATURE_OWE = 1 << 2,
+            FEATURE_WPA_PERSONAL = 1 << 3, FEATURE_WEP = 1 << 4;
+    /** Band bits (from PHY types or observed BSSs) and Wi-Fi standard bits (PHY types). */
+    long BAND_24_GHZ = 1, BAND_5_GHZ = 1 << 1, BAND_6_GHZ = 1 << 2, BAND_60_GHZ = 1 << 3;
+    int STANDARD_SHIFT = 16; // bit STANDARD_SHIFT + ScanResult.WIFI_STANDARD_*
+
+    /** {@link #registerCallback} kinds. */
+    int CALLBACK_SCAN_RESULTS = 1;
+    int CALLBACK_WIFI_STATE = 2;
+    int CALLBACK_SUGGESTION_APPROVAL = 3;
+    int CALLBACK_SUGGESTION_CONNECTION = 4;
+    int CALLBACK_LOCAL_ONLY_FAILURE = 5;
+
     int getWifiState(String packageName) throws RemoteException;
     WifiInfo getConnectionInfo(String packageName, String attributionTag) throws RemoteException;
     WifiInfo getConnectionInfoForNetwork(String packageName, String attributionTag,
@@ -28,6 +46,56 @@ public interface IWindowsWifi extends IInterface {
             throws RemoteException;
     List<ScanResult> getScanResults(String packageName, String attributionTag) throws RemoteException;
     boolean startScan(String packageName, String attributionTag) throws RemoteException;
+    /** Feature or band/standard bits of the present adapters (see the constants above). */
+    long getCapabilities(String packageName, int group) throws RemoteException;
+    /** Registers a {@link Callback} binder for one {@code CALLBACK_*} kind. */
+    void registerCallback(String packageName, String attributionTag, int kind, IBinder callback)
+            throws RemoteException;
+    void unregisterCallback(String packageName, int kind, IBinder callback) throws RemoteException;
+    /** Per-frequency AP counts of the cached scan, as WifiManager.getChannelData. */
+    List<Bundle> getChannelData(String packageName, String attributionTag) throws RemoteException;
+
+    /** Client end of service events; the service only sends one-way transactions to it. */
+    abstract class Callback extends Binder {
+        static final String DESCRIPTOR = "com.gesher.net.IWindowsWifi.Callback";
+        static final int EVENT = IBinder.FIRST_CALL_TRANSACTION;
+
+        protected Callback() { attachInterface(null, DESCRIPTOR); }
+
+        /** Called on a Binder thread; implementations hand off to the app's executor. */
+        protected abstract void onEvent(int kind, int value, Bundle extras);
+
+        @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+                throws RemoteException {
+            if (code != EVENT) return super.onTransact(code, data, reply, flags);
+            data.enforceInterface(DESCRIPTOR);
+            int kind = data.readInt(), value = data.readInt();
+            Bundle extras = data.readTypedObject(Bundle.CREATOR);
+            onEvent(kind, value, extras);
+            return true;
+        }
+
+        /** Service side: deliver without waiting for the client (FLAG_ONEWAY). */
+        public static boolean send(IBinder callback, int kind, int value, Bundle extras) {
+            if (callback instanceof Callback local) {
+                // Same-process client (a standalone app in the system process): a local
+                // Binder call is synchronous anyway; onEvent only hands off to an executor.
+                try { local.onEvent(kind, value, extras); return true; }
+                catch (RuntimeException failed) { return false; }
+            }
+            Parcel data = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeInt(kind); data.writeInt(value);
+                data.writeTypedObject(extras, 0);
+                return callback.transact(EVENT, data, null, IBinder.FLAG_ONEWAY);
+            } catch (RemoteException | RuntimeException gone) {
+                return false;
+            } finally {
+                data.recycle();
+            }
+        }
+    }
 
     abstract class Stub extends Binder implements IWindowsWifi {
         private static final int STATE = IBinder.FIRST_CALL_TRANSACTION;
@@ -37,6 +105,10 @@ public interface IWindowsWifi extends IInterface {
         private static final int RESULTS = STATE + 4;
         private static final int SCAN = STATE + 5;
         private static final int NETWORK = STATE + 6;
+        private static final int CAPABILITIES = STATE + 7;
+        private static final int REGISTER = STATE + 8;
+        private static final int UNREGISTER = STATE + 9;
+        private static final int CHANNELS = STATE + 10;
 
         protected Stub() { attachInterface(this, DESCRIPTOR); }
 
@@ -50,12 +122,14 @@ public interface IWindowsWifi extends IInterface {
 
         @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
                 throws RemoteException {
-            if (code < STATE || code > NETWORK) return super.onTransact(code, data, reply, flags);
+            if (code < STATE || code > CHANNELS) return super.onTransact(code, data, reply, flags);
             data.enforceInterface(DESCRIPTOR);
             String packageName = data.readString();
             String attributionTag = data.readString();
             int interfaceIndex = code == NETWORK ? data.readInt() : 0;
             boolean includeLocation = code == NETWORK && data.readBoolean();
+            int argument = code == CAPABILITIES || code == REGISTER || code == UNREGISTER ? data.readInt() : 0;
+            IBinder callback = code == REGISTER || code == UNREGISTER ? data.readStrongBinder() : null;
             data.enforceNoDataAvail();
             switch (code) {
                 case STATE: {
@@ -90,6 +164,24 @@ public interface IWindowsWifi extends IInterface {
                     boolean result = startScan(packageName, attributionTag);
                     reply.writeNoException(); reply.writeBoolean(result); break;
                 }
+                case CAPABILITIES: {
+                    long result = getCapabilities(packageName, argument);
+                    reply.writeNoException(); reply.writeLong(result); break;
+                }
+                case REGISTER: {
+                    if (callback == null) throw new IllegalArgumentException("callback cannot be null");
+                    registerCallback(packageName, attributionTag, argument, callback);
+                    reply.writeNoException(); break;
+                }
+                case UNREGISTER: {
+                    if (callback == null) throw new IllegalArgumentException("callback cannot be null");
+                    unregisterCallback(packageName, argument, callback);
+                    reply.writeNoException(); break;
+                }
+                case CHANNELS: {
+                    List<Bundle> result = getChannelData(packageName, attributionTag);
+                    reply.writeNoException(); writeList(reply, result); break;
+                }
                 default: throw new AssertionError(code);
             }
             return true;
@@ -108,17 +200,18 @@ public interface IWindowsWifi extends IInterface {
             @Override public IBinder asBinder() { return mRemote; }
 
             private interface Read<T> { T read(Parcel reply); }
+            private interface Write { void write(Parcel data); }
             private <T> T call(int code, String name, String tag, Read<T> read)
                     throws RemoteException {
-                return call(code, name, tag, 0, false, read);
+                return call(code, name, tag, null, read);
             }
-            private <T> T call(int code, String name, String tag, int index, boolean includeLocation,
-                    Read<T> read) throws RemoteException {
+            private <T> T call(int code, String name, String tag, Write extra, Read<T> read)
+                    throws RemoteException {
                 Parcel data = Parcel.obtain(), reply = Parcel.obtain();
                 try {
                     data.writeInterfaceToken(DESCRIPTOR);
                     data.writeString(name); data.writeString(tag);
-                    if (code == NETWORK) { data.writeInt(index); data.writeBoolean(includeLocation); }
+                    if (extra != null) extra.write(data);
                     if (!mRemote.transact(code, data, reply, 0)) {
                         throw new RemoteException("Wi-Fi service does not implement transaction " + code);
                     }
@@ -136,7 +229,7 @@ public interface IWindowsWifi extends IInterface {
             }
             @Override public WifiInfo getConnectionInfoForNetwork(String name, String tag,
                     int index, boolean includeLocation) throws RemoteException {
-                return call(NETWORK, name, tag, index, includeLocation,
+                return call(NETWORK, name, tag, data -> { data.writeInt(index); data.writeBoolean(includeLocation); },
                         reply -> reply.readTypedObject(WifiInfo.CREATOR));
             }
             @Override public DhcpInfo getDhcpInfo(String name) throws RemoteException {
@@ -151,6 +244,22 @@ public interface IWindowsWifi extends IInterface {
             }
             @Override public boolean startScan(String name, String tag) throws RemoteException {
                 return call(SCAN, name, tag, Parcel::readBoolean);
+            }
+            @Override public long getCapabilities(String name, int group) throws RemoteException {
+                return call(CAPABILITIES, name, null, data -> data.writeInt(group), Parcel::readLong);
+            }
+            @Override public void registerCallback(String name, String tag, int kind, IBinder callback)
+                    throws RemoteException {
+                call(REGISTER, name, tag, data -> { data.writeInt(kind); data.writeStrongBinder(callback); },
+                        reply -> null);
+            }
+            @Override public void unregisterCallback(String name, int kind, IBinder callback)
+                    throws RemoteException {
+                call(UNREGISTER, name, null, data -> { data.writeInt(kind); data.writeStrongBinder(callback); },
+                        reply -> null);
+            }
+            @Override public List<Bundle> getChannelData(String name, String tag) throws RemoteException {
+                return call(CHANNELS, name, tag, Proxy::readList);
             }
             @SuppressWarnings("unchecked") private static <T extends Parcelable> List<T> readList(Parcel reply) {
                 ParceledListSlice<T> result = reply.readTypedObject(ParceledListSlice.CREATOR);
