@@ -300,6 +300,9 @@ public final class ExactAlarmContractTest {
             set(am, "mPm", pm);
             set(am, "mAtm", atm);
             set(am, "mCallers", callers);
+            // Unsafe skips the ordinary defaults used during real process retirement.
+            set(am, "mShortcutEvaluation", make(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+            set(am, "mShortcutAwake", (java.util.function.BooleanSupplier) () -> false);
 
             // Result/task retirement uses the actual URI ownership service too.
             Object providers = make(type("ContentProviders"), new Class<?>[]{pmType, atmType}, pm, atm);
@@ -407,6 +410,7 @@ public final class ExactAlarmContractTest {
                 appOps.resetAllModes(0, null);
                 // Reset publishes asynchronously. Retire this fixture's real write
                 // before another fixture reads the file or main removes its directory.
+                // Unlike reloadNonHistoricalState(), keep a failed flush visible.
                 Object store = get(invoke(pm, "appOps", new Class<?>[0]), "mStore");
                 if (!(Boolean) invoke(store, "flush", new Class<?>[0])) {
                     throw new AssertionError("Exact-alarm fixture could not persist its final AppOps state");

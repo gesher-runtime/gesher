@@ -55,8 +55,10 @@ ShowLanguageDialog=no
 UsePreviousLanguage=no
 
 [Languages]
-Name: "en"; MessagesFile: "compiler:Default.isl"
-Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"
+; InfoBeforeFile: the security notice (docs/sandbox.md), shown before installing:
+; Android apps run with the user's Windows permissions, not in a sandbox.
+Name: "en"; MessagesFile: "compiler:Default.isl"; InfoBeforeFile: "security-notice.txt"
+Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"; InfoBeforeFile: "security-notice.he.txt"
 
 #include "ui-messages.iss"
 
@@ -438,7 +440,7 @@ begin
     if WizardIsTaskSelected('aurora') then
     begin
       Failed := False;
-      DownloadOptional('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk',
+      DownloadOptional('https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk',
         'AuroraStore.apk', Cancelled, Failed, Error);
       if Failed then
       begin

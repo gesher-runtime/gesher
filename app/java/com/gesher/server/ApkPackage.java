@@ -726,11 +726,10 @@ public final class ApkPackage {
 
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
-        return packageInfo(flags, false, null, false);
+        return packageInfo(flags, false, null);
     }
 
-    private PackageInfo packageInfo(long flags, boolean providerQuery, String authority,
-            boolean forBinding) {
+    private PackageInfo packageInfo(long flags, boolean providerQuery, String authority) {
         if ((flags & DIRECT_BOOT) == 0) {
             flags |= DIRECT_BOOT;
         }
@@ -750,10 +749,10 @@ public final class ApkPackage {
                     (generated | DIRECT_BOOT) & ~(PackageManager.GET_ACTIVITIES | PackageManager.GET_RECEIVERS
                             | PackageManager.GET_SERVICES | PackageManager.GET_PERMISSIONS
                             | PackageManager.GET_CONFIGURATIONS), 0 /* userId */).providers;
-            registerAuthorities(allProviders, authority, forBinding);
+            registerAuthorities(allProviders, authority);
             pi.providers = filterProviderBootState(allProviders, generated);
         } else {
-            registerAuthorities(pi.providers, authority, forBinding);
+            registerAuthorities(pi.providers, authority);
         }
         if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
@@ -984,23 +983,18 @@ public final class ApkPackage {
      * common to bind, publication and PackageManager's authority/component queries.
      */
     public List<ProviderInfo> providers(long flags) {
-        return providerList(flags, null, false);
-    }
-
-    List<ProviderInfo> providersForBinding(long flags) {
-        return providerList(flags, null, true);
+        return providerList(flags, null);
     }
 
     ProviderInfo providerForAuthority(String authority, long flags) {
-        for (ProviderInfo info : providerList(flags, authority, false)) {
+        for (ProviderInfo info : providerList(flags, authority)) {
             if (ContentProviders.hasAuthority(info, authority)) return info;
         }
         return null;
     }
 
-    private List<ProviderInfo> providerList(long flags, String authority, boolean forBinding) {
-        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true,
-                authority, forBinding);
+    private List<ProviderInfo> providerList(long flags, String authority) {
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true, authority);
         List<ProviderInfo> result = new ArrayList<>();
         if (pi.providers != null) Collections.addAll(result, pi.providers);
         return result;
@@ -1016,13 +1010,12 @@ public final class ApkPackage {
      * rejects that ambiguity instead of picking an owner by install order. Use the
      * same first-declaration-per-class rule as the provider queries and index.
      *
-     * <p>For a syncable provider Android stores the first authority on the class record
-     * and the remaining authorities on a separate, non-syncable record. Authority
-     * queries select the corresponding view. The process bind and publication path
-     * uses the complete set of authorities owned by the same provider instance.
+     * <p>For a syncable provider Android maps the first authority to the class record
+     * and maps the aliases to a non-syncable copy that retains the first authority
+     * if registered. Binding uses the class view; authority lookups select
+     * the record registered under the requested authority.
      */
-    private static void registerAuthorities(ProviderInfo[] providers, String authority,
-            boolean forBinding) {
+    private static void registerAuthorities(ProviderInfo[] providers, String authority) {
         if (providers == null) return;
         Set<String> registered = new HashSet<>();
         Set<String> components = new HashSet<>();
@@ -1045,14 +1038,14 @@ public final class ApkPackage {
                     else others.append(';').append(name);
                 }
             }
-            if (info.isSyncable && !forBinding) {
+            String registeredAuthorities = others == null ? first
+                    : first == null ? others.toString() : first + ";" + others;
+            if (info.isSyncable) {
                 boolean classRecord = authority == null || authority.equals(first);
-                info.authority = classRecord ? first : others == null ? null : others.toString();
+                info.authority = classRecord ? first : registeredAuthorities;
                 info.isSyncable = classRecord;
             } else if (skipped) {
-                info.authority = others == null ? first
-                        : first == null ? others.toString() : first + ";" + others;
-                if (first == null && info.authority != null) info.isSyncable = false;
+                info.authority = registeredAuthorities;
             }
         }
     }

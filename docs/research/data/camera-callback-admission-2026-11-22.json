@@ -1,0 +1,36 @@
+{
+  "baseline_commit": "8b316aebf09ab46d5407e955bf86ed748a1e739f",
+  "environment": "Linux host JDK21; complete production Java owners; native capture and metadata allocation are explicit adapters",
+  "workload": "One repeating request with the first callback blocked; stop at 10000 observed reads or producer parked; release callback and verify every admitted frame terminates",
+  "limits": "Counts establish bounded producer/callback accumulation, not physical camera FPS, end-to-end latency, CPU or whole-process RAM gains",
+  "runs": {
+    "baseline": {
+      "stdout": "CameraCallbacks production SHA256 eadf5472d205c7a20f04751dbfa95a56c037bb3e5d2b18ecd3f08163470f383b\nCameraDeviceUser production SHA256 91318dce243837bb9b6e830e7e3aa62620fdc9887371e89a1c74c7fb30982850\n{\"blocked_callback\":true,\"native_reads_while_blocked\":10005,\"capture_thread_stopped\":true,\"observation_limit\":10000}\n{\"terminal_callbacks_after_unblock\":10005}\n",
+      "metrics": [
+        {
+          "blocked_callback": true,
+          "native_reads_while_blocked": 10005,
+          "capture_thread_stopped": true,
+          "observation_limit": 10000
+        },
+        {
+          "terminal_callbacks_after_unblock": 10005
+        }
+      ]
+    },
+    "candidate": {
+      "stdout": "CameraCallbacks production SHA256 1d2dc7dc7d78ef753a90fc60f6a44deba14c84a8da6c05980f5c0bff9e869b09\nCameraDeviceUser production SHA256 4483a77995313abbd3fea8e19c4dc8a4573023a1ea8277bd87d5e9c707d5d49f\n{\"blocked_callback\":true,\"native_reads_while_blocked\":64,\"capture_thread_stopped\":true,\"observation_limit\":10000}\n{\"terminal_callbacks_after_unblock\":64}\n",
+      "metrics": [
+        {
+          "blocked_callback": true,
+          "native_reads_while_blocked": 64,
+          "capture_thread_stopped": true,
+          "observation_limit": 10000
+        },
+        {
+          "terminal_callbacks_after_unblock": 64
+        }
+      ]
+    }
+  }
+}

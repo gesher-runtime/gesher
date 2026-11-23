@@ -272,10 +272,11 @@ public final class ProviderAuthorityIndexTest {
         conflict(pm, "z");
         require(declared(pm, "x").packageName.equals(multi.packageName), "Unrelated authority became ambiguous");
 
-        ApkPackage otherDisabledOwner = apk("fixture.authority.otherdisabled", "x", 12357, false);
+        ApkPackage enabledOwner = apk("fixture.authority.enabledowner", "x", 12357, false);
         invoke(componentState, multi, multi.packageName + ".First", PackageManager.COMPONENT_ENABLED_STATE_DISABLED);
-        publish(pm, map(multi, otherDisabledOwner));
-        conflict(pm, "x");
+        publish(pm, map(multi, enabledOwner));
+        require(declared(pm, "x").packageName.equals(enabledOwner.packageName),
+                "Disabled declaration in another package blocked the enabled owner");
 
         // Registration happens over both boot states, whatever boot state a query asks for.
         PackageImpl boot = manifest("fixture.authority.boot");
@@ -328,14 +329,14 @@ public final class ProviderAuthorityIndexTest {
                 "Free authority of a syncable provider with a skipped first authority");
         ProviderInfo own = declared(pm, "own");
         require(own != null && own.name.equals(syncablePkg.packageName + ".Third")
-                        && "own;more;extra".equals(own.authority) && own.isSyncable,
+                        && "own".equals(own.authority) && own.isSyncable,
                 "Syncable provider that registered its first authority changed");
         ProviderInfo firstRecord = pm.resolveContentProvider("own", 0, 0);
         require(firstRecord != null && "own".equals(firstRecord.authority) && firstRecord.isSyncable,
                 "Authority lookup did not retain the syncable class record");
         ProviderInfo aliasRecord = pm.resolveContentProvider("more", 0, 0);
-        require(aliasRecord != null && "more;extra".equals(aliasRecord.authority) && !aliasRecord.isSyncable,
-                "Secondary authority lookup exposed the syncable class record");
+        require(aliasRecord != null && "own;more;extra".equals(aliasRecord.authority) && !aliasRecord.isSyncable,
+                "Secondary authority lookup lost the first authority from the non-syncable copy");
         ProviderInfo skippedClass = component(pm, syncablePkg, "Second", 0);
         require(skippedClass != null && skippedClass.authority == null && skippedClass.isSyncable,
                 "Class lookup exposed the non-syncable copy of a skipped first authority");
