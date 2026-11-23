@@ -10,8 +10,8 @@
 // out as I420 (COLOR_FormatYUV420Planar, also as an Image), or, with an
 // output Surface, is drawn into it (RGBA through ANativeWindow_lock) when
 // the app releases the buffer with render = true; an ImageReader's Surface
-// gets the frame as an Image (media3, ADR 0059: through the camera's frame
-// path, com.gesher.server.CameraFrames).
+// gets the frame as an Image directly through the native reader queue
+// (media3, ADR 0059), without a Java byte-array round trip.
 //
 // Encoders (media3, ADR 0059) are compat/media/encode's behind the same slots:
 // raw input (I420 or NV12 video, 16-bit or float PCM) in ByteBuffers or Images,
@@ -38,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <string>
 #include <thread>
@@ -49,6 +50,7 @@
 #include "../encode/encoder.h"
 #include "../video/input_surface.h"
 #include "../video/video_decoder.h"
+#include "../../devices/camera_frames.h"
 #include "jni_util.h"
 #include "media_jni.h"
 
@@ -336,7 +338,7 @@ Format FormatFromJava(JNIEnv* env, jobjectArray keys, jobjectArray values) {
 // --- ImageReader surfaces ------------------------------------------------------------------
 
 // com.gesher.server.CameraFrames (gesher-app.jar, the boot class path): an ImageReader's
-// Surface is Gesher's in-process queue (compat/devices/camera_frames.cc), fed NV12 frames.
+// Surface is Gesher's in-process queue (compat/devices/camera_frames.cc).
 jclass CameraFramesClass(JNIEnv* env) {
   static jclass cls = [env] {
     jclass local = env->FindClass("com/gesher/server/CameraFrames");
@@ -364,49 +366,12 @@ bool IsReaderSurface(JNIEnv* env, jobject surface) {
   return r == JNI_TRUE;
 }
 
-// A decoded frame into an ImageReader (YUV_420_888 / PRIVATE readers take NV12).
+// A decoded frame into an ImageReader, directly from native I420 storage.
 int DeliverToReader(jobject surface, const VideoFrame& f, int64_t timestamp_ns) {
   JNIEnv* env = AttachedEnv("gesher-codec");
   if (env == nullptr) return android::UNKNOWN_ERROR;
-  jclass cls = CameraFramesClass(env);
-  if (cls == nullptr) return android::UNKNOWN_ERROR;
-  jmethodID m = env->GetStaticMethodID(cls, "deliver", "(Landroid/view/Surface;[BIIJ[B)I");
-  if (m == nullptr) {
-    env->ExceptionClear();
-    return android::UNKNOWN_ERROR;
-  }
-  const int w = f.visible_width() & ~1, h = f.visible_height() & ~1;
-  if (w <= 0 || h <= 0) return android::BAD_VALUE;
-  std::vector<uint8_t> nv12(static_cast<size_t>(w) * h * 3 / 2);
-  for (int y = 0; y < h; y++) {
-    memcpy(nv12.data() + static_cast<size_t>(y) * w,
-           f.y() + static_cast<size_t>(f.crop_top + y) * f.stride_y + f.crop_left, static_cast<size_t>(w));
-  }
-  uint8_t* uv = nv12.data() + static_cast<size_t>(w) * h;
-  for (int y = 0; y < h / 2; y++) {
-    const size_t row = static_cast<size_t>(f.crop_top / 2 + y) * f.stride_uv + f.crop_left / 2;
-    for (int x = 0; x < w / 2; x++) {
-      uv[static_cast<size_t>(y) * w + 2 * x] = f.u()[row + x];
-      uv[static_cast<size_t>(y) * w + 2 * x + 1] = f.v()[row + x];
-    }
-  }
-  if (env->PushLocalFrame(8) < 0) {
-    CheckException(env, "CameraFrames local frame");
-    return android::NO_MEMORY;
-  }
-  jbyteArray a = env->NewByteArray(static_cast<jsize>(nv12.size()));
-  jint result = android::NO_MEMORY;
-  if (a != nullptr) {
-    env->SetByteArrayRegion(a, 0, static_cast<jsize>(nv12.size()),
-                            reinterpret_cast<const jbyte*>(nv12.data()));
-    if (!env->ExceptionCheck()) {
-      result = env->CallStaticIntMethod(cls, m, surface, a, w, h,
-                                        static_cast<jlong>(timestamp_ns), nullptr);
-    }
-  }
-  const bool threw = CheckException(env, "CameraFrames.deliver");
-  env->PopLocalFrame(nullptr);
-  if (threw && result != android::NO_MEMORY) return android::UNKNOWN_ERROR;
+  const int result = android::QueueImageReaderVideoFrame(env, surface, f, timestamp_ns);
+  if (CheckException(env, "ImageReader native delivery")) return android::UNKNOWN_ERROR;
   // CameraFrames distinguishes an unsupported format (1) from a closed or
   // missing consumer (NO_INIT); only the latter invalidates MediaCodec output.
   return result == 1 ? android::BAD_VALUE : result;
@@ -422,7 +387,56 @@ struct Slot {
   int64_t time_us = 0;
   int flags = 0;
   std::shared_ptr<VideoFrame> frame;  // video outputs
+  std::unique_ptr<uint8_t[]> deferred_mem;  // CPU access after removing a Surface
 };
+
+// CPU output exposes the visible part as tightly packed I420. Surface output
+// keeps the decoded frame instead: neither getOutputBuffer nor getOutputImage
+// exposes its bytes, and releaseOutputBuffer renders the owned frame directly.
+void CopyOutputFramePixels(const VideoFrame& f, uint8_t* d) {
+  const int w = f.visible_width(), h = f.visible_height();
+  const int cw = (w + 1) / 2, ch = (h + 1) / 2;
+  for (int y = 0; y < h; y++) {
+    memcpy(d + static_cast<size_t>(y) * w,
+           f.y() + static_cast<size_t>(f.crop_top + y) * f.stride_y + f.crop_left, static_cast<size_t>(w));
+  }
+  uint8_t* du = d + static_cast<size_t>(w) * h;
+  uint8_t* dv = du + static_cast<size_t>(cw) * ch;
+  for (int y = 0; y < ch; y++) {
+    const size_t row = static_cast<size_t>(f.crop_top / 2 + y) * f.stride_uv + f.crop_left / 2;
+    memcpy(du + static_cast<size_t>(y) * cw, f.u() + row, static_cast<size_t>(cw));
+    memcpy(dv + static_cast<size_t>(y) * cw, f.v() + row, static_cast<size_t>(cw));
+  }
+}
+
+size_t OutputFrameBytes(const VideoFrame& f) {
+  const int w = f.visible_width(), h = f.visible_height();
+  return static_cast<size_t>(w) * h
+      + 2 * static_cast<size_t>((w + 1) / 2) * ((h + 1) / 2);
+}
+
+void CopyOutputFrameToBuffer(Slot& slot) {
+  const VideoFrame& f = *slot.frame;
+  const size_t size = OutputFrameBytes(f);
+  if (slot.mem.size() < size) slot.mem.assign(size, 0);
+  CopyOutputFramePixels(f, slot.mem.data());
+}
+
+uint8_t* CpuOutputBytes(JNIEnv* env, Slot& slot) {
+  if (!slot.mem.empty()) return slot.mem.data();
+  if (slot.frame == nullptr) return nullptr;
+  if (slot.deferred_mem == nullptr) {
+    // This JNI target is built without C++ exceptions. Unlike the worker's
+    // existing vector allocation, a lazy accessor must report Java OOM.
+    slot.deferred_mem.reset(new (std::nothrow) uint8_t[OutputFrameBytes(*slot.frame)]);
+    if (slot.deferred_mem == nullptr) {
+      jniThrow(env, "java/lang/OutOfMemoryError", "MediaCodec output frame");
+      return nullptr;
+    }
+    CopyOutputFramePixels(*slot.frame, slot.deferred_mem.get());
+  }
+  return slot.deferred_mem.get();
+}
 
 class Codec {
  public:
@@ -474,6 +488,7 @@ class Codec {
     if (mime.empty()) AMediaFormat_setString(format.get(), "mime", entry_.mime.c_str());
     if (entry_.encoder && !ConfigureEncoder(format, error)) return false;
     input_format_ = std::move(format);
+    video_scaling_mode_ = 1;
     if (entry_.encoder) {
       BeginMetricsLocked();
       configured_ = true;
@@ -568,6 +583,15 @@ class Codec {
     return true;
   }
 
+  bool SetVideoScalingMode(int mode) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (released_) return false;
+    // As on Android, a valid call before an output Surface exists has no effect.
+    // Capture the setting with each released frame, not in shared pixel storage.
+    if (has_surface()) video_scaling_mode_ = mode;
+    return true;
+  }
+
   jobject GetMetrics(JNIEnv* env) {
     std::optional<CodecMetrics> metrics;
     bool released;
@@ -641,6 +665,7 @@ class Codec {
     std::lock_guard<std::mutex> lock(mu_);
     input_surface_.reset();
     configured_ = false;
+    video_scaling_mode_ = 1;
     video_enc_.reset();
     audio_enc_.reset();
     surface_frames_.clear();
@@ -806,6 +831,7 @@ class Codec {
     std::unique_ptr<ANativeWindow, decltype(&ANativeWindow_release)> window(
         nullptr, ANativeWindow_release);
     int64_t time_us = 0;
+    int video_scaling_mode = 1;
     uint64_t execution_generation = 0;
     std::shared_ptr<GlobalRef> reader;
     {
@@ -829,6 +855,7 @@ class Codec {
       s.client = false;
       frame = std::move(s.frame);
       time_us = s.time_us;
+      video_scaling_mode = video_scaling_mode_;
       execution_generation = execution_generation_;
       if (render && window_ != nullptr) {
         // SetSurface can release the codec's reference once mu_ is unlocked.
@@ -847,7 +874,7 @@ class Codec {
     static gesher::perf::Site render_site("MediaCodec: render a frame into its Surface");
     const int64_t render_start = gesher::perf::Now();
     const int delivery_status = window != nullptr
-        ? RenderFrame(window.get(), *frame, timestamp_ns)
+        ? RenderFrame(window.get(), *frame, timestamp_ns, video_scaling_mode)
         : DeliverToReader(reader->get(), *frame, timestamp_ns);
     if (window != nullptr) render_site.Add(gesher::perf::Now() - render_start);
     if (delivery_status == android::NO_INIT) {
@@ -924,8 +951,12 @@ class Codec {
     if (!CheckInitializedLocked(env)) return nullptr;
     if (index < 0 || index >= kSlots || has_surface()) return nullptr;
     Slot& s = outputs_[index];
-    if (s.mem.empty()) return nullptr;
-    jobject b = NewByteBuffer(env, s.mem.data(), s.mem.size(), true);
+    // A Surface can be removed while an output is held. Materialize that
+    // frame only if a CPU accessor subsequently needs it.
+    uint8_t* data = CpuOutputBytes(env, s);
+    if (data == nullptr) return nullptr;
+    const size_t capacity = s.mem.empty() ? OutputFrameBytes(*s.frame) : s.mem.size();
+    jobject b = NewByteBuffer(env, data, capacity, true);
     if (b != nullptr) SetRange(env, b, 0, s.size);
     return b;
   }
@@ -967,11 +998,13 @@ class Codec {
       } else {
         if (has_surface() || entry_.encoder) return nullptr;
         Slot& s = outputs_[index];
-        if (s.mem.empty() || s.size == 0) return nullptr;
+        if (s.size == 0) return nullptr;
+        uint8_t* data = CpuOutputBytes(env, s);
+        if (data == nullptr) return nullptr;
         w = out_width_;
         h = out_height_;
         t = s.time_us;
-        buffer = NewByteBuffer(env, s.mem.data(), static_cast<size_t>(s.size), true);
+        buffer = NewByteBuffer(env, data, static_cast<size_t>(s.size), true);
       }
     }
     if (buffer == nullptr) return nullptr;
@@ -1329,25 +1362,19 @@ class Codec {
     Slot& s = outputs_[i];
     const int cw = (w + 1) / 2, ch = (h + 1) / 2;
     const size_t size = static_cast<size_t>(w) * h + 2 * static_cast<size_t>(cw) * ch;
-    if (s.mem.size() < size) s.mem.assign(size, 0);
-    // The visible part, tightly packed I420.
-    uint8_t* d = s.mem.data();
-    for (int y = 0; y < h; y++) {
-      memcpy(d + static_cast<size_t>(y) * w,
-             f->y() + static_cast<size_t>(f->crop_top + y) * f->stride_y + f->crop_left, static_cast<size_t>(w));
-    }
-    uint8_t* du = d + static_cast<size_t>(w) * h;
-    uint8_t* dv = du + static_cast<size_t>(cw) * ch;
-    for (int y = 0; y < ch; y++) {
-      size_t row = static_cast<size_t>(f->crop_top / 2 + y) * f->stride_uv + f->crop_left / 2;
-      memcpy(du + static_cast<size_t>(y) * cw, f->u() + row, static_cast<size_t>(cw));
-      memcpy(dv + static_cast<size_t>(y) * cw, f->v() + row, static_cast<size_t>(cw));
-    }
     s.size = static_cast<int>(size);
     s.offset = 0;
     s.time_us = f->time_us;
     s.flags = 0;
     s.frame = std::move(f);
+    s.deferred_mem.reset();
+    if (has_surface()) {
+      // A reused slot may still own CPU storage from an earlier output mode.
+      // Only free slots reach here, so no valid client buffer is invalidated.
+      std::vector<uint8_t>().swap(s.mem);
+    } else {
+      CopyOutputFrameToBuffer(s);
+    }
     Publish(i);
     return true;
   }
@@ -1403,6 +1430,7 @@ class Codec {
     s.time_us = time_us;
     s.flags = kFlagEndOfStream;
     s.frame.reset();
+    s.deferred_mem.reset();
     Publish(i);
   }
 
@@ -1725,6 +1753,7 @@ class Codec {
   std::atomic<bool> frame_rendered_{false};
   Format input_format_;
   ANativeWindow* window_ = nullptr;
+  int video_scaling_mode_ = 1;
   Slot inputs_[kSlots];
   Slot outputs_[kSlots];
   std::deque<int> work_;   // queued inputs, in order
@@ -2013,7 +2042,16 @@ void JNICALL MC_setParameters(JNIEnv* env, jobject thiz, jobjectArray keys, jobj
     jniThrow(env, "java/lang/IllegalStateException", "setParameters() after release()");
   }
 }
-void JNICALL MC_setVideoScalingMode(JNIEnv*, jobject, jint) {}
+void JNICALL MC_setVideoScalingMode(JNIEnv* env, jobject thiz, jint mode) {
+  auto c = GetCodec(env, thiz);
+  if (c == nullptr) return;
+  if (mode != 1 && mode != 2) {
+    jniThrow(env, "java/lang/IllegalArgumentException", "unrecognized video scaling mode");
+    return;
+  }
+  if (!c->SetVideoScalingMode(mode))
+    jniThrow(env, "java/lang/IllegalStateException", "setVideoScalingMode() after release()");
+}
 
 void JNICALL MC_enableOnFrameRenderedListener(JNIEnv* env, jobject thiz, jboolean enable) {
   if (auto c = GetCodec(env, thiz)) c->EnableFrameRendered(enable);

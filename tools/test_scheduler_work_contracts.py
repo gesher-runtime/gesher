@@ -25,7 +25,9 @@ def main() -> None:
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
     parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
-    parser.add_argument('--case', choices=('all', 'drain', 'stopping', 'race', 'alarms', 'delivery', 'constraints'), default='all')
+    parser.add_argument('--case', choices=('all', 'drain', 'stopping', 'race', 'alarms', 'delivery', 'constraints',
+                                         'content', 'content-work'), default='all')
+    parser.add_argument('--expected-uris', type=int, default=50, help='Expected retained records for the actual content-trigger workload')
     args = parser.parse_args()
     cc = shutil.which('cc')
     if not cc:
@@ -54,6 +56,7 @@ def main() -> None:
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/SchedulerWorkContractTest.java',
             'tests/dex-services/gesher/services/JobSchedulerConstraintContractTest.java',
+            'tests/dex-services/gesher/services/JobSchedulerContentTriggerTest.java',
             'tests/scheduler/SchedulerWorkHost.java'))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), *sources], check=True)
@@ -69,7 +72,7 @@ def main() -> None:
                         '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
                         '--patch-module', 'jdk.unsupported=' + str(work / 'cleaner'),
                         '-cp', str(classes) + os.pathsep + classpath,
-                        'SchedulerWorkHost', str(library), args.case],
+                        'SchedulerWorkHost', str(library), args.case, str(args.expected_uris)],
                        env=environment, check=True, timeout=90)
 
 if __name__ == '__main__':
