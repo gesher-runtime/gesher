@@ -463,7 +463,12 @@ descriptors still store independent `O_NONBLOCK` metadata rather than sharing
 an open-file description. `recvmsg` drops ancillary data and output flags;
 `sendmsg` has no ancillary transport. `SCM_RIGHTS`, `IP_PKTINFO`, full datagram
 length reporting with `MSG_TRUNC`, and urgent-data readiness (`POLLPRI`) remain
-unsupported. `AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
+unsupported. (Since then, `IP_PKTINFO` works on IPv4 UDP sockets: the option is
+stored and reported, and `recvmsg` delivers each datagram's `in_pktinfo` with
+`ipi_ifindex`, `ipi_addr` and `ipi_spec_dst`, or `MSG_CTRUNC` if it does not
+fit; `tests/native/udp_pktinfo_test.cc`. `IPV6_RECVPKTINFO` and sending
+with an `in_pktinfo` control message remain unsupported.)
+`AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
 Legacy host/service/protocol resolver functions have no Gesher implementation
 (the separate thread-local `h_errno` does exist). The existing bionic exports
 forward directly to the Windows imports. A small probe using Gesher headers

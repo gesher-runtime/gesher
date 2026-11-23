@@ -83,6 +83,15 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   If that frequency exceeds CNTFRQ_EL0's 32 bits, both use a 1 GHz scale;
   conversion uses a 128-bit intermediate so long-running hosts do not overflow.
 
+- **Instruction cache**: a guest's `IC IVAU` (a line of 64 bytes, CTR_EL0's
+  IminLine) and `IC IALLU` are recorded as invalidations, as is an `mprotect`
+  that makes a range executable (the Linux kernel syncs the instruction cache
+  of such a page, so an inline hook written RWX and then mapped R-X runs
+  without an IC instruction). The Jit that ran the IC drops its translations
+  at the end of the block; every other Jit drops the recorded ranges before
+  its next dispatch, or its whole cache if it missed records that were
+  discarded (1024 are kept). `arm64_abi_test`'s `test_rewritten_code`.
+
 - **Thread reuse**: the Env of an exited guest thread (its Jits with their
   translated code, guest stack and TLS block) is pooled, at most 8
   (`GESHER_ARM64_ENV_POOL=<n>`, 0 disables), and taken by the next new guest

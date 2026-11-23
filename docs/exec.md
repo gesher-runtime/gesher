@@ -99,7 +99,10 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   protocol. Closed standard descriptors are not replaced with NUL for it.
 - **`exec*()` outside a fork** spawns the program with this process's fds,
   environment and working directory, waits and exits with its status (the pid
-  changes).
+  changes). The list forms `execl`, `execlp` and `execle` take their argv (and
+  `execle` its envp after the null) as bionic's `execl.cpp` does, from x86-64
+  code and from translated arm64 code alike; a null `execle` envp is an empty
+  environment.
 - **`waitpid`/`wait`/`wait4`** return Linux's status word
   (`WIFEXITED`/`WIFSIGNALED`); a child's exit raises `SIGCHLD`.
 - **`kill(pid, sig)` to another process** (any Gesher process, children

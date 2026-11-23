@@ -53,9 +53,10 @@ TEB. This brings the three faster execution modes to Windows. The design is
   they became a view (`an executable view of ...`) or a copy.
 - `GESHER_TRACE_DL=1` — log every `dlopen` an app's native library makes and
   its outcome, and every `dlsym` that finds nothing (`gesher dl: ...`).
-- `GESHER_ART_SHIM=0` — no stand-in `libart.so` for an app whose packer hooks
-  ART by symbol (ADR 0086; `gesher art: ...` in the app's log says when one
-  is loaded).
+- `GESHER_ART_SHIM=0` — no stand-in `libart.so` (or, for an arm64 shell,
+  `libart.so` and `libdexfile.so`) for an app whose packer hooks ART by
+  symbol (ADR 0086; `gesher art: ...` in the app's log says when one is
+  loaded).
 - `GESHER_MMAP_NO_PLACEHOLDERS=1` — plain allocations and views, oat code
   copied, no dual-mapped JIT cache (the configuration before ADR 0036).
 - `GESHER_LOG_EXECUTION=1` also logs, for an app, the oat file its dex file

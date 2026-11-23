@@ -96,7 +96,13 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   the method bodies it left out of the dex file back in. When an app loads such
   a shell (`libexec*.so`), `compat/bionic/art_shim.cc` writes and loads a small
   ELF `libart.so` exporting that symbol, and ART's `LoadClass`
-  (`patches/art/0800`) calls it first. `GESHER_ART_SHIM=0` turns it off.
+  (`patches/art/0800`) calls it first. For NetEase Yidun's arm64 shell
+  (`libnesec.so`) it writes two arm64 stand-ins instead: `libart.so`
+  (`LoadClass`, `Runtime::DisableVerifier`, `IsVerificationEnabled`,
+  `IsVerificationSoftFail`, `OatHeader::kOatVersion`, `Runtime::instance_`)
+  and `libdexfile.so` (`DexFileLoader::OpenCommon`, which ART calls through
+  the stand-in, `patches/art/0802` and `0803`). `GESHER_ART_SHIM=0` turns it
+  off.
 
 - **The bionic shim** (`compat/bionic/`, CMake target `gesher_bionic`,
   `gesher/bionic_shim.h`): the libc/libm/libdl/liblog/pthread symbols an app
