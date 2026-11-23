@@ -196,6 +196,9 @@ public final class ProviderAuthorityIndexTest {
         provider(parsed, "Aware", "aware", true, true);
         provider(parsed, "One", "same", true, false);
         provider(parsed, "Two", "same", true, false);
+        provider(parsed, "Three", "same;three", true, false);
+        provider(parsed, "Four", "taken", false, false);
+        provider(parsed, "Five", "taken", true, false);
         ApkPackage duplicates = apk(parsed, 12350);
         publish(pm, map(duplicates));
         require(declared(pm, "canonical") == null && declared(pm, "ignored") == null,
@@ -207,7 +210,22 @@ public final class ProviderAuthorityIndexTest {
         require(pm.resolveContentProvider("aware", PackageManager.MATCH_DIRECT_BOOT_UNAWARE, 0) == null
                 && pm.resolveContentProvider("aware", PackageManager.MATCH_DIRECT_BOOT_AWARE, 0) != null,
                 "Direct-boot flags were cached");
-        conflict(pm, "same");
+        // One package declaring an authority twice: its first provider owns it and a
+        // later one keeps only its free authorities (ComponentResolver.addProvidersLocked).
+        require(declared(pm, "same").name.equals(parsed.getPackageName() + ".One"),
+                "First declaration of a package's authority lost it");
+        ProviderInfo three = declared(pm, "three");
+        require(three != null && three.name.equals(parsed.getPackageName() + ".Three")
+                        && "three".equals(three.authority), "Later provider kept a claimed authority");
+        boolean twoRegistered = false;
+        for (ProviderInfo info : duplicates.providers(PackageManager.MATCH_DISABLED_COMPONENTS)) {
+            if (info.name.equals(parsed.getPackageName() + ".Two")) twoRegistered = true;
+        }
+        require(!twoRegistered, "Provider left without an authority was registered");
+        require(declared(pm, "taken") == null
+                        && pm.resolveContentProvider("taken", PackageManager.MATCH_DISABLED_COMPONENTS, 0)
+                                .name.equals(parsed.getPackageName() + ".Four"),
+                "Enabled later declaration took a disabled first provider's authority");
 
         // Thousands of distinct misses must not grow a result/negative-result cache.
         Object index = field(PackageManagerService.class, "mProviderAuthorityIndex").get(pm);

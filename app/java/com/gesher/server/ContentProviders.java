@@ -214,7 +214,11 @@ final class ContentProviders {
         return false;
     }
 
-    /** Ambiguous declarations never select an attacker simply because it installed first. */
+    /**
+     * Ambiguous declarations never select an attacker simply because it installed first.
+     * Within one package there is no ambiguity: ApkPackage.providers gives an authority
+     * only to the package's first provider declaring it, as ComponentResolver does.
+     */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
         synchronized (pm) {
             ProviderInfo found = null;

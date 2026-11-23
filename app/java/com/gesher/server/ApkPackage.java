@@ -744,7 +744,7 @@ public final class ApkPackage {
         pi.activities = installedComponents(pi.activities, pi.applicationInfo, flags, state);
         pi.receivers = installedComponents(pi.receivers, pi.applicationInfo, flags, state);
         pi.services = installedComponents(pi.services, pi.applicationInfo, flags, state);
-        if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
+        if (providerQuery) pi.providers = registeredProviders(packageName, pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
         pi.firstInstallTime = mInstallTime;
         pi.lastUpdateTime = mUpdateTime;
@@ -979,12 +979,37 @@ public final class ApkPackage {
         return result;
     }
 
-    private static ProviderInfo[] registeredProviders(ProviderInfo[] providers, long flags) {
+    private static ProviderInfo[] registeredProviders(String packageName, ProviderInfo[] providers,
+            long flags) {
         if (providers == null) return null;
         Set<String> components = new HashSet<>();
+        Map<String, String> claimed = new java.util.HashMap<>();
         int count = 0;
         for (ProviderInfo info : providers) {
             if (!components.add(info.name)) continue;
+            // An authority belongs to the first provider of the package that declares
+            // it; a later one keeps only the authorities still free and, left with
+            // none, is not registered (ComponentResolver.addProvidersLocked: "Skipping
+            // provider name ... name already used by ..."). Claimed before boot-state
+            // and enabled-state filtering, as registration is.
+            if (info.authority != null) {
+                StringBuilder kept = new StringBuilder();
+                for (String authority : info.authority.split(";")) {
+                    String owner = claimed.putIfAbsent(authority, info.name);
+                    if (owner == null) {
+                        if (kept.length() > 0) kept.append(';');
+                        kept.append(authority);
+                    } else if (!owner.equals(info.name)) {
+                        android.util.Log.w("PackageManager", "Skipping provider name " + authority + " (in package "
+                                + packageName + "): name already used by " + owner);
+                    }
+                }
+                if (kept.length() == 0) continue;
+                if (!kept.toString().equals(info.authority)) {
+                    info = new ProviderInfo(info);
+                    info.authority = kept.toString();
+                }
+            }
             long bootState = info.directBootAware ? PackageManager.MATCH_DIRECT_BOOT_AWARE
                     : PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
             if ((flags & bootState) != 0) providers[count++] = info;
