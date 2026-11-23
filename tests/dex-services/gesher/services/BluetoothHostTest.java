@@ -363,6 +363,13 @@ public final class BluetoothHostTest {
         denied(() -> scanner.stopScan(intent), "stopScan(PendingIntent)");
         denied(adapter::cancelDiscovery, "cancelDiscovery with the radio on");
         denied(adapter::isDiscovering, "isDiscovering with the radio on");
+        denied(adapter::startDiscovery, "startDiscovery with the radio on");
+        denied(adapter::getScanMode, "getScanMode with the radio on");
+        // API 30 without BLUETOOTH_ADMIN (the legacy scan permission): the same lookup.
+        BluetoothAdapter legacy = new BluetoothManager(new App(30, "android.permission.BLUETOOTH")).getAdapter();
+        legacy.getBluetoothLeScanner().stopScan(new ScanCallback() {});
+        legacy.stopLeScan((device, rssi, record) -> { });
+        checks += 2;
 
         // An active scan whose permission was revoked: the stop reaches the service and fails;
         // the callback is already forgotten, so stopping again is silent and it can start again.
@@ -383,6 +390,17 @@ public final class BluetoothHostTest {
         check(failures.poll(300, TimeUnit.MILLISECONDS) == null,
                 "the failed stop forgot the scan: the callback starts again (no ALREADY_STARTED)");
         active.stopScan(running);
+        // The legacy LE scan stops through the same scanner path.
+        BluetoothAdapter revokedAdapter = new BluetoothManager(revoked).getAdapter();
+        BluetoothAdapter.LeScanCallback legacyScan = (device, rssi, record) -> { };
+        check(revokedAdapter.startLeScan(legacyScan), "legacy startLeScan with BLUETOOTH_SCAN");
+        revoked.revoke("android.permission.BLUETOOTH_SCAN");
+        denied(() -> revokedAdapter.stopLeScan(legacyScan), "stopLeScan of an active scan");
+        revokedAdapter.stopLeScan(legacyScan);
+        checks++;
+        revoked.grant("android.permission.BLUETOOTH_SCAN");
+        check(revokedAdapter.startLeScan(legacyScan), "the failed stopLeScan forgot the legacy scan");
+        revokedAdapter.stopLeScan(legacyScan);
         step("stop without scan permission: a scan never started stops silently; an active one, PendingIntent stops and discovery need BLUETOOTH_SCAN");
     }
 
@@ -786,6 +804,15 @@ public final class BluetoothHostTest {
                 "android.permission.BLUETOOTH_ADMIN")).getAdapter();
         BluetoothAdapter unpermitted = new BluetoothManager(new App(34)).getAdapter();
         BluetoothLeScanner unpermittedScanner = unpermitted.getBluetoothLeScanner();
+        // A scan still active when the radio goes off, its permission since revoked.
+        App lingering = new App(34, "android.permission.BLUETOOTH_SCAN", "android.permission.ACCESS_FINE_LOCATION");
+        BluetoothLeScanner lingeringScanner = new BluetoothManager(lingering).getAdapter().getBluetoothLeScanner();
+        LinkedBlockingQueue<Integer> lingeringFailures = new LinkedBlockingQueue<>();
+        ScanCallback lingeringScan = new ScanCallback() {
+            @Override public void onScanFailed(int error) { lingeringFailures.add(error); }
+        };
+        lingeringScanner.startScan(lingeringScan);
+        lingering.revoke("android.permission.BLUETOOTH_SCAN");
         check(!adapter.disable(), "API 34 apps cannot turn the radio off");
         check(legacy.disable(), "API 30 app turns the radio off");
         List<String> off = actions(broadcasts, 6);
@@ -812,6 +839,8 @@ public final class BluetoothHostTest {
         check(!unpermitted.cancelDiscovery() && !unpermitted.isDiscovering() && !unpermitted.startDiscovery()
                 && unpermitted.getScanMode() == BluetoothAdapter.SCAN_MODE_NONE,
                 "off: discovery calls and scan mode answer without BLUETOOTH_SCAN");
+        lingeringScanner.stopScan(lingeringScan);
+        checks++;  // off: an active scan stops without BLUETOOTH_SCAN
         check(legacy.enable(), "and on again");
         List<String> on = actions(broadcasts, 6);
         step("on: " + on);
@@ -819,6 +848,14 @@ public final class BluetoothHostTest {
                 && on.contains(BluetoothAdapter.ACTION_STATE_CHANGED + " " + BluetoothAdapter.STATE_ON)
                 && on.contains(BluetoothDevice.ACTION_ACL_CONNECTED)
                 && !on.contains(BluetoothDevice.ACTION_BOND_STATE_CHANGED), "TURNING_ON, ON, ACL_CONNECTED; the bond is kept");
+        lingering.grant("android.permission.BLUETOOTH_SCAN");
+        lingeringScanner.startScan(lingeringScan);
+        Integer lingeringError;
+        while ((lingeringError = lingeringFailures.poll(300, TimeUnit.MILLISECONDS)) != null) {
+            check(lingeringError != ScanCallback.SCAN_FAILED_ALREADY_STARTED,
+                    "the scan stopped while off was forgotten: it starts again after the radio is on");
+        }
+        lingeringScanner.stopScan(lingeringScan);
         broadcasts.clear();
         check(adapter.startDiscovery(), "startDiscovery");
         List<String> discovery = actions(broadcasts, 4);

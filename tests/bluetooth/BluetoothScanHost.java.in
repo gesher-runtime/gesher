@@ -124,6 +124,57 @@ public final class BluetoothScanHost {
                 "duplicate callback fails before new settings and scan permission checks");
         reset();
     }
+    private static boolean deniedBy(Runnable call) {
+        try {
+            call.run();
+            return false;
+        } catch (SecurityException denied) {
+            return true;
+        }
+    }
+    /** Android 16: a stop or flush reaches the permission-enforcing service only for an active scan. */
+    private static void stopWithoutPermission() throws Exception {
+        BluetoothHost.scanAllowed = false;
+        Callback never = new Callback();
+        int before = BluetoothHost.permissionChecks;
+        check(!deniedBy(() -> scanner.stopScan(never)) && !deniedBy(() -> scanner.flushPendingScanResults(never))
+                && BluetoothHost.permissionChecks == before,
+                "stopping or flushing a callback that never scanned is silent without scan permission");
+        PendingIntent idle = new PendingIntent();
+        check(deniedBy(() -> scanner.stopScan(idle)),
+                "PendingIntent stop with BLE on always reaches scan permission enforcement");
+
+        BluetoothHost.scanAllowed = true;
+        Callback active = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        PendingIntent activeIntent = new PendingIntent();
+        scanner.startScan(null, null, activeIntent);
+        BluetoothHost.scanAllowed = false;
+        check(deniedBy(() -> scanner.flushPendingScanResults(active)) && client(active) != null,
+                "flushing an active scan without permission throws and keeps the scan");
+        check(deniedBy(() -> scanner.stopScan(active)) && client(active) == null,
+                "stopping an active scan without permission throws after forgetting it, as the module does");
+        check(!deniedBy(() -> scanner.stopScan(active)), "stopping it again is silent");
+        check(deniedBy(() -> scanner.stopScan(activeIntent)) && client(activeIntent) != null,
+                "an active PendingIntent scan is not stopped without permission");
+
+        // BLE off: nothing is enforced and the scans are dropped, as on service shutdown.
+        BluetoothHost.scanAllowed = true;
+        Callback offActive = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        BluetoothHost.scanAllowed = false;
+        BluetoothHost.radioOn = false;
+        before = BluetoothHost.permissionChecks;
+        check(!deniedBy(() -> scanner.stopScan(offActive)) && client(offActive) == null,
+                "BLE off: stopping an active callback scan forgets it without a permission check");
+        check(!deniedBy(() -> scanner.stopScan(activeIntent)) && client(activeIntent) == null,
+                "BLE off: stopping an active PendingIntent scan forgets it without a permission check");
+        check(!deniedBy(() -> scanner.flushPendingScanResults(null)) && BluetoothHost.permissionChecks == before,
+                "BLE off: flush returns before null and permission checks");
+        deliver("after-off-stop");
+        Handler.drain();
+        check(offActive.reports == 0 && offActive.errors == 0 && activeIntent.sends == 0,
+                "a scan stopped while BLE is off gets no later reports or failures");
+        reset();
+    }
     private static void unsupported(ScanSettings settings, String name) throws Exception {
         Callback callback = new Callback();
         scanner.startScan(List.of(new ScanFilter()), settings, callback);
@@ -164,6 +215,7 @@ public final class BluetoothScanHost {
         // replaces only the native watcher thread; no host radio is fabricated.
         field(BluetoothLeScanner.class, "sThread").set(null, Thread.currentThread());
         permissionPrecedence();
+        stopWithoutPermission();
         Callback all = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
         for (int i = 0; i < 4096; i++) deliver("device-" + i);
         Handler.drain();
@@ -301,6 +353,7 @@ class SystemClock {
     static long elapsedRealtimeNanos() { return now * 1_000_000L; }
 }
 class Log {
+    static void d(String tag, String text) {}
     static void i(String tag, String text) {}
     static void w(String tag, String text) {}
 }

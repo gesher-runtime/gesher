@@ -430,10 +430,15 @@ public final class BluetoothLeScanner {
      * (the module looks the callback up locally and never reaches the service). Stopping an
      * active scan reaches the service, which enforces BLUETOOTH_SCAN; the callback is
      * forgotten before that check, as the module removes its wrapper first.
+     *
+     * <p>With BLE off the scan is forgotten without a check: Android's module drops every
+     * scan client when the Bluetooth service goes down, and Windows may report the end of
+     * its watcher only after the app saw STATE_OFF.
      */
     public void stopScan(ScanCallback callback) {
         if (!BluetoothHost.on()) {
             Log.w(TAG, "BLE is not available");
+            forget(callback);
             return;
         }
         synchronized (sLock) {
@@ -447,11 +452,13 @@ public final class BluetoothLeScanner {
 
     /**
      * As Android 16: with BLE off nothing happens; otherwise the request goes to the service,
-     * which enforces BLUETOOTH_SCAN whether or not the PendingIntent has a scan.
+     * which enforces BLUETOOTH_SCAN whether or not the PendingIntent has a scan. With BLE
+     * off its scan is forgotten without a check, as for a callback.
      */
     public void stopScan(PendingIntent callbackIntent) {
         if (!BluetoothHost.on()) {
             Log.w(TAG, "BLE is not available");
+            forget(callbackIntent);
             return;
         }
         BluetoothHost.enforceScan(mContext);
@@ -487,6 +494,14 @@ public final class BluetoothLeScanner {
         if (client != null && results != null) {
             final List<ScanResult> flushed = results;
             handler().post(() -> batch(client, flushed));
+        }
+    }
+
+    /** Drops a scan of a radio that is off (no service left to enforce anything). */
+    private static void forget(Object key) {
+        if (key == null) return;
+        synchronized (sLock) {
+            sClients.remove(key);
         }
     }
 
