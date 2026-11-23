@@ -135,6 +135,10 @@ int Start(const Shell& sh, const std::vector<std::string>& args, const Io& io,
   }
   fds.insert(fds.end(), extra.begin(), extra.end());
   std::wstring environment = EnvironmentBlock(ChildEnv(sh));
+  if (environment.empty()) {
+    ShErr(sh, io, args[0] + ": " + ErrorText(EILSEQ));
+    return 126;
+  }
   DWORD failed = SpawnWithFds(launch, environment.c_str(), WindowsPath(sh.cwd),
                               fds, process);
   if (failed != 0) {
@@ -200,8 +204,8 @@ HandleP Temporary(const std::string& text) {
     return nullptr;
   }
   auto owned = std::make_shared<OwnedHandle>(handle);
-  if (!WriteAll(handle, text)) return nullptr;
-  SetFilePointer(handle, 0, nullptr, FILE_BEGIN);
+  if (!WriteAll(owned->h, text)) return nullptr;
+  if (::lseek(owned->descriptor, 0, SEEK_SET) != 0) return nullptr;
   return owned;
 }
 
@@ -241,35 +245,37 @@ bool Redirect(Shell* sh, const std::vector<Redir>& redirs, Io* io) {
         return false;
       continue;
     }
-    bool input = r.op == "<" || r.op == "<>";
-    DWORD access = input ? GENERIC_READ : GENERIC_WRITE;
-    if (r.op == "<>") access |= GENERIC_WRITE;
-    if (r.op == ">>") access = FILE_APPEND_DATA;
-    DWORD disposition = r.op == "<"                    ? OPEN_EXISTING
-                        : r.op == ">>" || r.op == "<>" ? OPEN_ALWAYS
-                                                       : CREATE_ALWAYS;
-    std::wstring path =
-        target == "/dev/null" ? L"NUL" : WindowsPath(target, sh->cwd);
-    HANDLE file =
-        CreateFileW(path.c_str(), access,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    nullptr, disposition, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
+    int flags = r.op == "<" ? O_RDONLY : r.op == "<>" ? O_RDWR : O_WRONLY;
+    if (r.op != "<") flags |= O_CREAT;
+    if (r.op == ">>") flags |= O_APPEND;
+    else if (r.op != "<" && r.op != "<>") flags |= O_TRUNC;
+    std::string path = target;
+    if (!path.empty() && path[0] != '/' && path[0] != '\\' &&
+        !gesher::reserved_names::DriveRoot(path.c_str())) path = sh->cwd + "/" + path;
+    int descriptor = ::open(path.c_str(), flags | O_CLOEXEC, 0666);
+    if (descriptor < 0) {
       ShErr(*sh, *io,
-            target + ": " + ErrorText(ErrnoFromWin32(GetLastError())));
+            target + ": " + ErrorText(errno));
       return false;
     }
-    io->set(r.fd, file, std::make_shared<OwnedHandle>(file));
+    HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(descriptor));
+    io->set(r.fd, file, std::make_shared<OwnedHandle>(file, descriptor));
   }
   return true;
 }
 
-std::string ReadAll(HANDLE input) {
+std::string ReadAll(HANDLE input, bool* complete) {
   std::string text;
+  *complete = false;
+  auto description = gesher::CaptureFileHandle(input);
+  if (!description) return text;
   char buffer[8192];
-  DWORD count = 0;
-  while (ReadFile(input, buffer, sizeof(buffer), &count, nullptr) && count)
-    text.append(buffer, count);
+  for (;;) {
+    int count = gesher::ReadFileDescription(description, buffer, sizeof(buffer));
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) { *complete = count == 0; break; }
+    text.append(buffer, static_cast<unsigned>(count));
+  }
   return text;
 }
 
@@ -671,8 +677,12 @@ int ExecNode(Shell* sh, const NodeP& node, Io io) {
               status = 1;
               break;
             }
-            reader = std::make_shared<OwnedHandle>(read_end);
-            writer = std::make_shared<OwnedHandle>(write_end);
+            reader = std::make_shared<OwnedHandle>(read_end, -1, O_RDONLY);
+            writer = std::make_shared<OwnedHandle>(write_end, -1, O_WRONLY);
+            if (reader->h == INVALID_HANDLE_VALUE || writer->h == INVALID_HANDLE_VALUE) {
+              status = 1;
+              break;
+            }
             stage.set(1, writer->h, writer);
           }
           PROCESS_INFORMATION child = {};
@@ -749,23 +759,31 @@ int RunPendingSignals(Shell* sh, Io io) {
   return caught;
 }
 
-// ProcessBuilder and shell pipeline input are synchronous Win32 pipes. Do not
-// block in ReadFile with no data: mailbox traps must run on the shell thread.
-// Return one byte, EOF, or minus the caught signal for an interruptible read.
+// Pipe reads keep their real native wait policy. The mailbox event interrupts
+// a pending operation so traps still run on the shell thread. Return one byte,
+// EOF, or minus the caught signal for an interruptible read.
 int ReadByte(Shell* sh, Io io, HANDLE input, char* value, bool interruptible) {
+  auto description = gesher::CaptureFileHandle(input);
+  if (!description) return -256;  // An I/O error, distinct from a caught signal.
+  int flags = gesher::FileDescriptionIoFlags(description);
+  if (flags < 0) return -256;
+  if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) { errno = EBADF; return -256; }
+  const bool pipe = GetFileType(description->handle) == FILE_TYPE_PIPE;
+  HANDLE interrupted = pipe ? PipeSignalEvent() : nullptr;
+  if (pipe && !interrupted) { errno = ErrnoFromWin32(GetLastError()); return -256; }
   for (;;) {
+    // Reset before draining the mailbox. A signal arriving after the drain
+    // sets the event and cancels a pending native read, including its entry race.
+    if (interrupted && !ResetEvent(interrupted)) {
+      errno = ErrnoFromWin32(GetLastError());
+      return -256;
+    }
     int caught = RunPendingSignals(sh, io);
     if (sh->exiting) return 0;
     if (caught && interruptible) return -caught;
-    if (GetFileType(input) == FILE_TYPE_PIPE) {
-      DWORD available = 0;
-      if (!PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr)) return 0;
-      if (!available) {
-        Sleep(10);
-        continue;
-      }
-    }
-    DWORD count = 0;
-    return ReadFile(input, value, 1, &count, nullptr) && count ? 1 : 0;
+    int count = pipe ? gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)
+                     : gesher::ReadFileDescription(description, value, 1);
+    if (count < 0 && errno == EINTR) continue;
+    return count < 0 ? -256 : count;
   }
 }

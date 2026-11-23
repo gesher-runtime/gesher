@@ -22,6 +22,10 @@ class Worker:
         self.process = subprocess.Popen([str(executable), role, str(path), str(command), mode],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         text=True, bufsize=1)
+        # This protocol is parsed by the same POSIX byte-stream worker on both
+        # hosts. Python's Windows default would send CRLF, which raw stdio must
+        # preserve, and "observe\r\n" is not the worker's "observe\n" command.
+        self.process.stdin.reconfigure(newline='\n')
         self.lines = queue.Queue()
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()

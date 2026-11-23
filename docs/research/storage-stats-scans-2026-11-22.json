@@ -1,0 +1,45 @@
+{
+  "baseline": "8b316aebf09ab46d5407e955bf86ed748a1e739f",
+  "scope": "real host filesystem; production service/coordinator; Android Binder and package metadata stubs",
+  "environment": {
+    "os": "Linux",
+    "machine": "x86_64",
+    "java": "OpenJDK 21.0.13"
+  },
+  "source_sha256": {
+    "app/java/com/gesher/server/StorageStatsService.java": "8e2b303eb26e62c6c3953cb23a6abe18b9d30e67cd49f236c60f7d34afb9a880",
+    "app/java/com/gesher/server/StorageStatsScans.java": "456a87aaf59c759559310e8011bf7e5a5b5d0e3e546cbcbca532e989d0aa46e2"
+  },
+  "workloads": [
+    {
+      "files": 1,
+      "concurrent_callers": 32,
+      "baseline_walks": 32,
+      "candidate_walks": 1,
+      "baseline_visits": 64,
+      "candidate_visits": 2,
+      "expected_image_bytes": 3
+    },
+    {
+      "files": 100,
+      "concurrent_callers": 32,
+      "baseline_walks": 32,
+      "candidate_walks": 1,
+      "baseline_visits": 3232,
+      "candidate_visits": 101,
+      "expected_image_bytes": 300
+    },
+    {
+      "files": 10000,
+      "concurrent_callers": 32,
+      "baseline_walks": 32,
+      "candidate_walks": 1,
+      "baseline_visits": 320032,
+      "candidate_visits": 10001,
+      "expected_image_bytes": 30000
+    }
+  ],
+  "timing_claim": null,
+  "host_contract_checks": 181,
+  "negative_control": "baseline fails coalescing assertion on first workload"
+}

@@ -6,13 +6,22 @@ inputs:
     description: Name of the ccache cache (one per job)
     required: true
   pthread-supplier:
-    description: Explicit first-caller proposal; publisher default is unchanged
+    description: Publisher reference, production publisher-cancel overlay, or selected-minimum experiment
     default: publisher
   pthread-caller:
     description: Explicit reviewed caller for selected mode; empty for publisher
     default: ''
 
 outputs:
+  production_compiler_root:
+    description: Separate verified publisher-cancel compiler root
+    value: ${{ steps.pthread_cancel.outputs.compiler_root }}
+  production_receipt:
+    description: Original-publisher cancellation repair receipt
+    value: ${{ steps.pthread_cancel.outputs.receipt }}
+  production_receipt_sha256:
+    description: Whole production cancellation receipt hash
+    value: ${{ steps.pthread_cancel.outputs.receipt_sha256 }}
   selected_compiler_root:
     description: Explicit selected root only; empty for the unchanged publisher default
     value: ${{ steps.host_pthread.outputs.compiler_root }}
@@ -31,13 +40,14 @@ runs:
   steps:
     - name: Cache toolchain
       id: toolchain
+      if: inputs.pthread-supplier != 'publisher-cancel'
       uses: actions/cache@v4
       with:
         path: ~/toolchain
         key: ${{ env.LLVM_MINGW_NAME }}
 
     - name: Fetch llvm-mingw
-      if: steps.toolchain.outputs.cache-hit != 'true'
+      if: inputs.pthread-supplier != 'publisher-cancel' && steps.toolchain.outputs.cache-hit != 'true'
       shell: bash
       run: |
         mkdir -p ~/toolchain
@@ -102,6 +112,12 @@ runs:
         GESHER_HOST_PTHREAD_CALLER: ${{ inputs.pthread-caller }}
       run: python3 tools/toolchain/prepare_host_pthread.py --selection selected-minimum
 
+    - name: Build the pinned original-publisher self-cancellation repair
+      if: inputs.pthread-supplier == 'publisher-cancel'
+      id: pthread_cancel
+      shell: bash
+      run: python3 tools/toolchain/prepare_pthread_cancel.py build
+
     - name: Configure
       shell: bash
       env:
@@ -110,6 +126,9 @@ runs:
         GESHER_SELECTED_PTHREAD_LLVM: ${{ steps.host_pthread.outputs.compiler_root }}
         GESHER_SELECTED_PTHREAD_RECEIPT: ${{ steps.host_pthread.outputs.receipt }}
         GESHER_SELECTED_PTHREAD_RECEIPT_SHA256: ${{ steps.host_pthread.outputs.receipt_sha256 }}
+        GESHER_PTHREAD_CANCEL_LLVM: ${{ steps.pthread_cancel.outputs.compiler_root }}
+        GESHER_PTHREAD_CANCEL_RECEIPT: ${{ steps.pthread_cancel.outputs.receipt }}
+        GESHER_PTHREAD_CANCEL_RECEIPT_SHA256: ${{ steps.pthread_cancel.outputs.receipt_sha256 }}
       run: |
         ccache --set-config=max_size=2G
         if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum ]]; then
@@ -122,6 +141,17 @@ runs:
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
             -DLLVM_MINGW="$llvm" \
             -DCMAKE_PROJECT_INCLUDE="$GITHUB_WORKSPACE/tools/toolchain/selected_link.cmake" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
+          llvm="$GESHER_PTHREAD_CANCEL_LLVM"
+          receipt="$GESHER_PTHREAD_CANCEL_RECEIPT"
+          test -n "$llvm" && test -n "$receipt"
+          printf '%s  %s\n' "$GESHER_PTHREAD_CANCEL_RECEIPT_SHA256" "$receipt" | sha256sum --check --strict
+          python3 tools/toolchain/prepare_pthread_cancel.py verify "$receipt"
+          cmake --fresh -S . -B out -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DLLVM_MINGW="$llvm" \
+            -DCMAKE_PROJECT_INCLUDE="$GITHUB_WORKSPACE/tools/toolchain/pthread_cancel_link.cmake" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         else
           test "$GESHER_HOST_PTHREAD_SELECTION" = publisher
