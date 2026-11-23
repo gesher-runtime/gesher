@@ -4,4 +4,8 @@
     <style name="WinTheme" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@android:color/white</item>
     </style>
+    <!-- A whole-screen application style may still declare windowIsFloating. -->
+    <style name="FloatingRootTheme" parent="WinTheme">
+        <item name="android:windowIsFloating">true</item>
+    </style>
 </resources>

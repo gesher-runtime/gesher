@@ -10,6 +10,17 @@ $bcpBt = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | 
 $dvmBt = @("-Xbootclasspath:$bcpBt", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
   '-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.BluetoothHostTest')
 
+# Server-local fixture injection keeps request policy deterministic, including on
+# machines with a real adapter. This never opens consent UI or changes its radio.
+$requestOut = RunTimed "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcpBt",
+  "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
+  '-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.BluetoothRequestIntentTest') 120
+$requestCode = $LASTEXITCODE
+Check 'bluetooth: request intents preserve consent, permissions, observed state and bounded asynchronous completion' {
+  $global:LASTEXITCODE = $requestCode
+  $requestOut
+} @('BluetoothRequestIntentTest all passed:')
+
 $hadTest = Test-Path Env:GESHER_BLUETOOTH_TEST
 $savedTest = $env:GESHER_BLUETOOTH_TEST
 try {

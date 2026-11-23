@@ -161,6 +161,7 @@ public final class WindowMode {
             public void onTaskVisibility(android.os.IBinder token, int taskId, boolean visible) {
                 if (token != activityToken) return;
                 if (visible) {
+                    android.app.GesherAppDriver.prepareActivityForResume();
                     GesherActivityWindow.restart(current.get());
                     log(name + " restarted, resumed (its window was restored)");
                 } else {

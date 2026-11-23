@@ -1,0 +1,45 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Production registry adapter, with an explicit Win32 observation boundary only.
+#include <cstdint>
+#include <cstring>
+#include <cwchar>
+#include <stdexcept>
+#include <iostream>
+using DWORD = uint32_t;
+using LSTATUS = int32_t;
+constexpr int HKEY_CURRENT_USER = 7;
+constexpr DWORD RRF_RT_REG_DWORD = 0x10;
+constexpr LSTATUS ERROR_SUCCESS = 0;
+static DWORD observed = 0, returned_size = 4;
+static LSTATUS status = 0;
+static int reads = 0;
+static void require(bool result) { if (!result) throw std::runtime_error("native theme contract"); }
+static LSTATUS RegGetValueW(int root, const wchar_t* key, const wchar_t* name, DWORD flags,
+                           DWORD* type, void* value, DWORD* size) {
+  require(root == HKEY_CURRENT_USER && flags == RRF_RT_REG_DWORD && type == nullptr);
+  require(std::wcscmp(key, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize") == 0);
+  require(std::wcscmp(name, L"AppsUseLightTheme") == 0 && *size == sizeof(DWORD));
+  ++reads;
+  std::memcpy(value, &observed, sizeof(observed));
+  *size = returned_size;
+  return status;
+}
+@PRODUCTION_FUNCTION@
+int main() {
+  int checks = 0;
+  for (DWORD value : {0u, 1u, 2u, UINT32_MAX}) {
+    observed = value;
+    require(AppsUseLightTheme() == (value <= 1 ? static_cast<int>(value) : -1)); ++checks;
+  }
+  observed = 0;
+  for (LSTATUS failure : {2, 5, 234, 1630}) {
+    status = failure; require(AppsUseLightTheme() == -1); ++checks;
+  }
+  status = ERROR_SUCCESS;
+  for (DWORD size : {0u, 2u, 8u}) {
+    returned_size = size; require(AppsUseLightTheme() == -1); ++checks;
+  }
+  require(reads == checks);
+  std::cout << "Native theme adapter all passed: " << checks
+            << " checks; explicit Win32 registry boundary, no actual Windows execution\n";
+}

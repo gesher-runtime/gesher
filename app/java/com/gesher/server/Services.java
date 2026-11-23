@@ -67,12 +67,17 @@ public final class Services {
         final PackageManagerService pm;
         final ActivityTaskManagerService atm;
         final ActivityManagerService am;
+        final ClipboardService clipboard;
+        final Map<String, IBinder> services;
 
         Created(PackageManagerService pm, ActivityTaskManagerService atm,
-                ActivityManagerService am) {
+                ActivityManagerService am, ClipboardService clipboard,
+                Map<String, IBinder> services) {
             this.pm = pm;
             this.atm = atm;
             this.am = am;
+            this.clipboard = clipboard;
+            this.services = services;
         }
     }
 
@@ -88,13 +93,25 @@ public final class Services {
         return create(packages, false);
     }
 
+    /** Trusted standalone startup: admit the actual APK before selecting the VM identity. */
+    public static InProcessApplication createInProcess(ApkPackage pkg) {
+        return new InProcessApplication(pkg,
+                new PackageManagerService(java.util.List.of(pkg), false));
+    }
+
     private static Map<String, IBinder> create(Collection<ApkPackage> packages, boolean persistentAccounts) {
+        return create(new PackageManagerService(packages, persistentAccounts), persistentAccounts).services;
+    }
+
+    static Created create(PackageManagerService pm, boolean persistentAccounts) {
         Map<String, IBinder> services = new LinkedHashMap<>();
-        PackageManagerService pm = new PackageManagerService(packages, persistentAccounts);
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        pm.attachInstallSourceCallers(atm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
-        sLast = new Created(pm, atm, am);
+        ClipboardService clipboard = new ClipboardService(atm, pm);
+        Created created = new Created(pm, atm, am, clipboard, services);
+        sLast = created;
         // In the isolated device this owner lives in SystemServer and can finish
         // value-only goodbyes after an application dies. The collapsed profile
         // shares the application's process and cannot promise that lifetime.
@@ -107,8 +124,9 @@ public final class Services {
                 StandIn.of(IActivityManager.class, am).asBinder());
         services.put(Context.ACTIVITY_TASK_SERVICE,
                 StandIn.of(IActivityTaskManager.class, atm).asBinder());
+        WindowManagerService wm = new WindowManagerService();
         services.put(Context.WINDOW_SERVICE,
-                StandIn.of(IWindowManager.class, new WindowManagerService()).asBinder());
+                StandIn.of(IWindowManager.class, wm).asBinder());
         services.put(Context.DISPLAY_SERVICE,
                 StandIn.of(IDisplayManager.class, new DisplayManager()).asBinder());
         services.put(Context.USER_SERVICE,
@@ -116,9 +134,11 @@ public final class Services {
         services.put(Context.RESTRICTIONS_SERVICE,
                 StandIn.of(android.content.IRestrictionsManager.class,
                         new ApplicationRestrictionsService()).asBinder());
+        java.io.File sharedBlobs = persistentAccounts
+                ? new java.io.File(android.os.Environment.getDataDirectory(), "system/gesher-blobs")
+                : null;
         services.put(Context.BLOB_STORE_SERVICE,
-                StandIn.of(android.app.blob.IBlobStoreManager.class,
-                        new BlobStoreService()).asBinder());
+                new BlobStoreService(pm, am.callers(), sharedBlobs).asBinder());
         services.put(Context.ROLLBACK_SERVICE,
                 StandIn.of(android.content.rollback.IRollbackManager.class,
                         new RollbackManagerService(pm, atm)).asBinder());
@@ -146,11 +166,12 @@ public final class Services {
                 new InputMethodManagerService()).asBinder());
         services.put(Context.TEXT_SERVICES_MANAGER_SERVICE, StandIn.of(
                 com.android.internal.textservice.ITextServicesManager.class,
-                new TextServicesManagerService()).asBinder());
+                new TextServicesManagerService(am, pm)).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
+        UiModeManagerService uiMode = new UiModeManagerService(pm, atm, persistentAccounts);
         services.put(Context.UI_MODE_SERVICE,
-                StandIn.of(IUiModeManager.class, new UiModeService()).asBinder());
+                StandIn.of(IUiModeManager.class, uiMode).asBinder());
         // mount: the private data volume and its emulated shared view at
         // $ANDROID_DATA/media/0. Both describe the same host filesystem.
         services.put("mount", StandIn.of(IStorageManager.class, new StorageService()).asBinder());
@@ -168,14 +189,21 @@ public final class Services {
                 new AlarmManagerService(am, pm)).asBinder());
         services.put(Context.APP_OPS_SERVICE, StandIn.of(
                 com.android.internal.app.IAppOpsService.class,
-                new DeviceServices.AppOpsService()).asBinder());
+                pm.appOps()).asBinder());
+        services.put("permission_checker", StandIn.of(android.permission.IPermissionChecker.class,
+                new AppOpsPermissionChecker(pm)).asBinder());
+        // StatusBarManager (TileService.requestListeningState, requestAddTileService).
+        services.put(Context.STATUS_BAR_SERVICE, StandIn.of(
+                com.android.internal.statusbar.IStatusBarService.class,
+                new StatusBarService(pm, atm)).asBinder());
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
-                new DeviceServices.SearchService()).asBinder());
+                new SearchManagerService(pm, am.callers())).asBinder());
+        services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
-                new ClipboardService()).asBinder());
+                clipboard).asBinder());
         // Construct the network provider before jobs subscribe to its changes.
         ConnectivityService connectivity = new ConnectivityService(pm, atm);
         services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
@@ -192,8 +220,11 @@ public final class Services {
         services.put(Context.VIBRATOR_MANAGER_SERVICE, StandIn.of(
                 android.os.IVibratorManagerService.class, new VibratorManagerService()).asBinder());
         // Devices (docs/devices.md): location over Windows' location service.
+        LocationManagerService location = new LocationManagerService(pm, am);
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
-                new LocationManagerService(pm, am)).asBinder());
+                location).asBinder());
+        services.put(com.gesher.net.IWindowsWifi.NAME,
+                new WifiService(am, atm, pm, () -> location.isLocationEnabledForUser(0)));
         // Bluetooth (docs/bluetooth.md): Windows' radio, its broadcasts and discovery. The
         // android.bluetooth classes run scans, GATT and sockets in the app's process.
         services.put(BluetoothManagerService.NAME, new BluetoothManagerService(am, pm));
@@ -235,6 +266,7 @@ public final class Services {
         // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
         // their authenticators.
         AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
+        accounts.setSyncRetirement(sync::accountsRemoved);
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
                 accounts).asBinder());
         sync.start(accounts::syncableAccounts, accounts::canAccessAccount);
@@ -242,9 +274,13 @@ public final class Services {
         services.put(Context.DROPBOX_SERVICE, StandIn.of(
                 com.android.internal.os.IDropBoxManagerService.class,
                 new DeviceServices.DropBoxManagerService()).asBinder());
+        DesktopUsageStatsService usageStats = new DesktopUsageStatsService(pm, am.callers(),
+                persistentAccounts
+                        ? java.nio.file.Path.of(Device.dataDir(), "system", "activity-usage.bin")
+                        : null);
+        if (persistentAccounts) atm.setUsageStats(usageStats);
         services.put(Context.USAGE_STATS_SERVICE, StandIn.of(
-                android.app.usage.IUsageStatsManager.class,
-                new DeviceServices.UsageStatsService(pm)).asBinder());
+                android.app.usage.IUsageStatsManager.class, usageStats).asBinder());
         // StorageStatsManager: app and volume sizes for file managers and cleaners.
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,
@@ -289,7 +325,7 @@ public final class Services {
                 pm.permissions()).asBinder());
         services.put(Context.CROSS_PROFILE_APPS_SERVICE, StandIn.of(
                 android.content.pm.ICrossProfileApps.class, new CrossProfileApps()).asBinder());
-        return services;
+        return created;
     }
 
     /**
@@ -662,6 +698,10 @@ public final class Services {
             java.io.File path = allocationPath(volumeUuid);
             // No Android cache-reclamation/quota backend is present. Only actually
             // usable host space is offered, retaining Android's low-storage reserve.
+            return allocatableBytes(path, flags);
+        }
+
+        static long allocatableBytes(java.io.File path, int flags) {
             if ((flags & StorageManager.FLAG_ALLOCATE_CACHE_ONLY) != 0) return 0;
             return Math.max(0, path.getUsableSpace() - reservedBytes(path, flags));
         }
@@ -697,65 +737,6 @@ public final class Services {
         @Override
         public void mkdirs(String callingPkg, String path) {
             new java.io.File(path).mkdirs();
-        }
-    }
-
-    /**
-     * uimode: UiModeManagerService, a normal (not car, desk or TV) device in day mode,
-     * standard contrast, no forced dark. ViewRootImpl's UiModeManager reads it.
-     */
-    public static final class UiModeService extends IUiModeManager.Default {
-        @Override
-        public void addCallback(IUiModeManagerCallback callback, int userId) {
-            // Nothing ever changes.
-        }
-
-        @Override
-        public void removeCallback(IUiModeManagerCallback callback, int userId) {
-        }
-
-        @Override
-        public int getCurrentModeType(int displayId) {
-            return Configuration.UI_MODE_TYPE_NORMAL;
-        }
-
-        @Override
-        public int getNightMode(int displayId) {
-            return UiModeManager.MODE_NIGHT_NO;
-        }
-
-        @Override
-        public float getContrast(int userId) {
-            return 0f;
-        }
-
-        @Override
-        public int getForceInvertState(int userId) {
-            return UiModeManager.FORCE_INVERT_TYPE_OFF;
-        }
-    }
-
-    /** Permission checks follow the same package policy as PackageManager and AM. */
-    public static final class PermissionChecker extends android.permission.IPermissionChecker.Default {
-        private PermissionPolicy policy() {
-            Created created = sLast;
-            return created == null ? null : created.pm.permissions();
-        }
-        @Override public int checkPermission(String permission,
-                android.content.AttributionSourceState source, String message,
-                boolean forDataDelivery, boolean startDataDelivery, boolean fromDatasource,
-                int attributedOp) {
-            PermissionPolicy policy = policy();
-            return policy == null ? android.content.PermissionChecker.PERMISSION_HARD_DENIED
-                    : policy.checkAttribution(permission, source, fromDatasource);
-        }
-        @Override public void finishDataDelivery(int op,
-                android.content.AttributionSourceState source, boolean fromDatasource) { }
-        @Override public int checkOp(int op, android.content.AttributionSourceState source,
-                String message, boolean forDataDelivery, boolean startDataDelivery) {
-            PermissionPolicy policy = policy();
-            return policy == null ? android.content.PermissionChecker.PERMISSION_HARD_DENIED
-                    : policy.checkAttribution(android.app.AppOpsManager.opToPermission(op), source, false);
         }
     }
 

@@ -195,20 +195,22 @@ class FileSource : public PacedSource {
 };
 
 // The source this machine has (capture.h's order).
-std::unique_ptr<CaptureSource> OpenSource() {
+std::unique_ptr<CaptureSource> OpenSource(std::string* error) {
   const char* env = getenv("GESHER_AUDIO_SOURCE");
-  std::string error;
-  if (env != nullptr && *env != '\0' && strcmp(env, "loopback") != 0 && strcmp(env, "null") != 0) {
-    auto f = std::make_unique<FileSource>();
-    if (f->Load(env, &error)) return f;
-    MEDIA_LOGE("capture: GESHER_AUDIO_SOURCE: %s", error.c_str());
-    return std::make_unique<SilentSource>(error);
+  if (env != nullptr && *env != '\0') {
+#ifdef GESHER_CAPTURE_TEST_SOURCES
+    MEDIA_LOGI("Gesher isolated capture fixture sources enabled");
+    if (strcmp(env, "null") == 0) return std::make_unique<SilentSource>("explicit test source");
+    if (strcmp(env, "loopback") == 0) return OpenWasapiCapture(true, error);
+    auto file = std::make_unique<FileSource>();
+    if (file->Load(env, error)) return file;
+    return nullptr;
+#else
+    *error = "GESHER_AUDIO_SOURCE requires the isolated capture-test build";
+    return nullptr;
+#endif
   }
-  if (env != nullptr && strcmp(env, "null") == 0) return std::make_unique<SilentSource>("GESHER_AUDIO_SOURCE=null");
-  const bool loopback = env != nullptr && strcmp(env, "loopback") == 0;
-  auto w = OpenWasapiCapture(loopback, &error);
-  if (w != nullptr) return w;
-  return std::make_unique<SilentSource>(error);
+  return OpenWasapiCapture(false, error);
 }
 
 }  // namespace
@@ -227,50 +229,50 @@ class CaptureEngine {
     streams_.push_back(s);
   }
 
-  // A stream started or stopped: the source runs while any stream is started.
+  // A stream stopped or was released. No stream lock is held by callers.
   void Wake() {
-    std::lock_guard<std::mutex> lock(mu_);
-    // Remember the idle transition even if the next stream starts before
-    // Run wakes. File sources restart at that boundary, just as after a wait.
-    if (!Started()) restart_ = true;
-    if (!thread_.joinable()) thread_ = std::thread([this] { Run(); });
+    // Destruction of the final weak-lock snapshot can occur while mu_ is held.
+    // Never reacquire that mutex here; the worker owns the idle decision.
+    restart_.store(true);
     cv_.notify_all();
   }
 
+  int Prepare(std::string* error) { return Submit(nullptr, 0, error); }
+  int StartStream(CaptureStream* stream, uint64_t generation) {
+    return Submit(stream, generation, nullptr);
+  }
+
   InputInfo Info() {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (!info_known_) {
-      // Described without capturing (the capture thread opens the source).
-      const char* env = getenv("GESHER_AUDIO_SOURCE");
-      std::string name;
-      if (env != nullptr && *env != '\0' && strcmp(env, "loopback") != 0 && strcmp(env, "null") != 0) {
-        FileSource f;
-        std::string error;
-        if (f.Load(env, &error)) {
-          Describe(f);
-        } else {
-          Describe(SilentSource(error));
-        }
-      } else if (env != nullptr && strcmp(env, "null") == 0) {
-        Describe(SilentSource("GESHER_AUDIO_SOURCE=null"));
-      } else if (env != nullptr && strcmp(env, "loopback") == 0) {
-        info_.description = "WASAPI loopback of the default output";
-        info_.device_name = "Gesher audio loopback";
-        info_.device = true;
-        info_.sample_rate = 48000;
-        info_.channels = 2;
-        info_.device_type = 0x80000000 | 0x100000;  // AUDIO_DEVICE_IN_REMOTE_SUBMIX-like
-        info_known_ = true;
-      } else if (HasWasapiCaptureEndpoint(&name)) {
-        info_.description = "WASAPI shared mode capture on " + name;
-        info_.device_name = name;
-        info_.device = true;
-        info_known_ = true;
-      } else {
-        Describe(SilentSource("no audio capture endpoint"));
-      }
+#ifdef GESHER_CAPTURE_TEST_SOURCES
+    const char* fixture = getenv("GESHER_AUDIO_SOURCE");
+    if (fixture != nullptr && *fixture != '\0') {
+      std::string error;
+      Prepare(&error); // Validate the explicit fixture before advertising it.
     }
-    return info_;
+#endif
+    // This query describes availability without manufacturing a capture source.
+    std::lock_guard<std::mutex> lock(mu_);
+    if (source_ != nullptr) return info_;
+    InputInfo result;
+    result.device = false;
+    const char* env = getenv("GESHER_AUDIO_SOURCE");
+    if (env != nullptr && *env != '\0') {
+#ifdef GESHER_CAPTURE_TEST_SOURCES
+      result.description = "explicit capture test source (not opened)";
+#else
+      result.description = "test capture source unavailable in production";
+#endif
+      return result;
+    }
+    std::string name;
+    if (HasWasapiCaptureEndpoint(&name)) {
+      result.device = true;
+      result.device_name = name;
+      result.description = "WASAPI shared mode capture on " + name;
+    } else {
+      result.description = "no audio capture endpoint";
+    }
+    return result;
   }
 
  private:
@@ -281,7 +283,6 @@ class CaptureEngine {
     info_.description = s.Describe();
     info_.device_name = s.DeviceName();
     info_.device = !info_.device_name.empty();
-    info_known_ = true;
   }
 
   // With mu_ held: prune dead streams and optionally collect the started ones.
@@ -303,35 +304,89 @@ class CaptureEngine {
     return any;
   }
 
+  struct Command {
+    CaptureStream* stream;
+    uint64_t generation;
+    bool done = false;
+    int status = kCaptureUnavailable;
+    std::string error;
+  };
+
+  void ResetIdle() {
+    while (restart_.exchange(false)) {
+      if (!Started()) {
+        if (running_ && source_ != nullptr) source_->Stop();
+        running_ = false;
+      }
+      // Dropping a weak-lock snapshot in Started may itself retire the last
+      // owner. Its nonlocking Wake requests another check before activation.
+    }
+  }
+
+  // On the COM-owning worker, with mu_ held. Activation acquires the stream
+  // mutex in the same engine->stream order as Started(). No callbacks run here.
+  void Process(Command& command) {
+    ResetIdle();
+    if (source_ == nullptr) {
+      source_ = OpenSource(&command.error);
+      if (source_ != nullptr) {
+        Describe(*source_);
+        MEDIA_LOGI("capture: %s", source_->Describe().c_str());
+      }
+    }
+    command.status = source_ != nullptr ? kOk : kCaptureUnavailable;
+    if (command.status == kOk && command.stream != nullptr) {
+      if (!running_) {
+        if (source_->Start()) running_ = true;
+        else {
+          command.error = source_->Describe() + " did not start";
+          source_.reset();
+          info_ = InputInfo{};
+          command.status = kCaptureUnavailable;
+        }
+      }
+      if (command.status == kOk) command.status = command.stream->Activate(command.generation);
+    }
+    if (command.status != kOk && !command.error.empty()) MEDIA_LOGE("capture: %s", command.error.c_str());
+    command.done = true;
+    cv_.notify_all();
+  }
+
+  int Submit(CaptureStream* stream, uint64_t generation, std::string* error) {
+    Command command{stream, generation, false, kCaptureUnavailable, {}};
+    std::unique_lock<std::mutex> lock(mu_);
+    if (!thread_.joinable()) thread_ = std::thread([this] { Run(); });
+    if (thread_.get_id() == std::this_thread::get_id()) {
+      // A capture callback may synchronously start another recorder. Push
+      // invokes callbacks only after releasing both engine and stream locks.
+      Process(command);
+    } else {
+      commands_.push_back(&command);
+      cv_.notify_all();
+      cv_.wait(lock, [&] { return command.done; });
+    }
+    if (error != nullptr) *error = command.error;
+    return command.status;
+  }
+
   void Run() {
-    // The source's COM objects live on this thread.
     CoInitializeMta();
     RaiseAudioThreadPriority(true);
     std::vector<float> buf;
+    std::vector<uint64_t> generations;
     std::unique_lock<std::mutex> lock(mu_);
-    bool running = false;
     for (;;) {
-      if (restart_) {
-        if (running && source_ != nullptr) source_->Stop();
-        running = false;
-        restart_ = false;
+      ResetIdle();
+      while (!commands_.empty()) {
+        Command* command = commands_.front();
+        commands_.erase(commands_.begin());
+        Process(*command);
       }
       if (!Started()) {
-        if (running && source_ != nullptr) source_->Stop();
-        running = false;
-        cv_.wait(lock, [this] { return Started(); });
-      }
-      if (!running) {
-        if (source_ == nullptr) {
-          source_ = OpenSource();
-          MEDIA_LOGI("capture: %s", source_->Describe().c_str());
-        }
-        if (!source_->Start()) {
-          MEDIA_LOGE("capture: %s did not start; silence", source_->Describe().c_str());
-          source_ = std::make_unique<SilentSource>(source_->Describe() + " did not start");
-          source_->Start();
-        }
-        running = true;
+        if (running_ && source_ != nullptr) source_->Stop();
+        running_ = false;
+        cv_.wait(lock, [this] { return !commands_.empty() || Started() || restart_; });
+        continue;
       }
       lock.unlock();
       std::this_thread::sleep_for(std::chrono::milliseconds(kPeriodMs));
@@ -339,22 +394,34 @@ class CaptureEngine {
       const bool ok = source_->Pull(&buf);
       const int64_t now = MonotonicNs();
       lock.lock();
-      // Stop/start may have happened during Pull. Do not give a new stream
-      // samples left over from the recording that just stopped.
-      if (restart_) continue;
+      if (restart_) {
+        ResetIdle();
+        if (!running_) continue;
+      }
+      std::vector<std::shared_ptr<CaptureStream>> targets;
+      Started(&targets);
       if (!ok) {
-        MEDIA_LOGW("capture: %s is gone; silence", source_->Describe().c_str());
-        source_ = std::make_unique<SilentSource>("the input was removed");
-        source_->Start();
+        MEDIA_LOGE("capture: %s was disconnected", source_->Describe().c_str());
+        source_->Stop();
+        source_.reset();
+        running_ = false;
+        info_ = InputInfo{};
+        // Terminal errors are state, not synthetic audio. Fail wakes readers;
+        // API-specific notification runs on the API's own callback thread.
+        for (auto& stream : targets) stream->Fail(kCaptureDeadObject);
         continue;
       }
       const uint32_t ch = source_->channels(), rate = source_->rate();
       if (ch == 0 || buf.empty()) continue;
-      std::vector<std::shared_ptr<CaptureStream>> targets;
-      Started(&targets);
-      // Pushed without the engine's lock: a stream's events may start or stop streams.
+      generations.resize(targets.size());
+      for (size_t i = 0; i < targets.size(); ++i) {
+        std::lock_guard<std::mutex> stream_lock(targets[i]->mu_);
+        generations[i] = targets[i]->generation_;
+      }
       lock.unlock();
-      for (auto& s : targets) s->Push(buf.data(), buf.size() / ch, rate, ch, now);
+      for (size_t i = 0; i < targets.size(); ++i) {
+        targets[i]->Push(buf.data(), buf.size() / ch, rate, ch, now, generations[i]);
+      }
       targets.clear();
       lock.lock();
     }
@@ -368,8 +435,9 @@ class CaptureEngine {
   std::vector<std::weak_ptr<CaptureStream>> streams_;
   std::unique_ptr<CaptureSource> source_;
   InputInfo info_;
-  bool info_known_ = false;
-  bool restart_ = false;
+  std::atomic<bool> restart_{false};
+  bool running_ = false;
+  std::vector<Command*> commands_;
 };
 
 void CaptureEngine::CoInitializeMta() { CaptureComInit(); }
@@ -392,27 +460,67 @@ void CaptureStream::SetEvents(CaptureEvents events) {
 }
 
 int CaptureStream::Start() {
+  uint64_t generation;
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (released_) return kInvalidOperation;
+    if (error_ != kOk) return error_;
     if (started_) return kOk;
-    started_ = true;
-    // A recording starts from now: what an earlier one left is dropped.
-    read_ = written_;
-    primed_ = false;
-    phase_ = 0;
-    was_overrun_ = false;
+    generation = ++generation_;
   }
-  engine_->Wake();
+  return engine_->StartStream(this, generation);
+}
+
+int CaptureStream::Activate(uint64_t generation) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (released_ || generation_ != generation) return kInvalidOperation;
+  if (error_ != kOk) return error_;
+  started_ = true;
+  read_ = written_;
+  primed_ = false;
+  phase_ = 0;
+  was_overrun_ = false;
   return kOk;
+}
+
+void CaptureStream::Fail(int error) {
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (released_ || error_ != kOk) return;
+    error_ = error;
+    started_ = false;
+    ++generation_;
+  }
+  cv_.notify_all();
+  NotifyStateWake();
+}
+
+int CaptureStream::error() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return error_;
+}
+
+uint64_t CaptureStream::StateWakeSequence() const {
+  return state_wake_sequence_.load(std::memory_order_acquire);
+}
+
+void CaptureStream::WaitForStateWake(uint64_t observed) const {
+  state_wake_sequence_.wait(observed, std::memory_order_acquire);
+}
+
+void CaptureStream::NotifyStateWake() {
+  state_wake_sequence_.fetch_add(1, std::memory_order_release);
+  state_wake_sequence_.notify_all();
 }
 
 void CaptureStream::Stop() {
   {
     std::lock_guard<std::mutex> lock(mu_);
     started_ = false;
+    ++generation_;
   }
   cv_.notify_all();
+  NotifyStateWake();
   engine_->Wake();
 }
 
@@ -422,12 +530,12 @@ bool CaptureStream::started() const {
 }
 
 void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uint32_t src_channels,
-                         int64_t now_ns) {
+                         int64_t now_ns, std::optional<uint64_t> generation) {
   if (frames == 0 || src_channels == 0) return;
   std::vector<std::function<void()>> calls;
   {
     std::lock_guard<std::mutex> lock(mu_);
-    if (!started_ || released_) return;
+    if (!started_ || released_ || (generation && *generation != generation_)) return;
     const uint32_t ch = params_.channels;
     // Linear interpolation from src_rate to the stream's rate; channels: mono
     // sources are copied to every channel, otherwise channel c takes c (or the
@@ -445,15 +553,20 @@ void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uin
         }
       }
     };
-    std::vector<float> out;
-    out.reserve(static_cast<size_t>(frames / step + 2) * ch);
+    const size_t cap = params_.capacity_frames;
+    const size_t room = cap - static_cast<size_t>(written_ - read_);
+    auto& out = converted_;
+    out.clear();
+    out.reserve(std::min(static_cast<size_t>(frames / step + 2), room) * ch);
     if (!primed_ && frames > 0) {
       source_frame(0, last_.data());
       primed_ = true;
     }
     // phase_: the position of the next output frame, in source frames, relative
     // to the frame before src[0] (last_).
-    std::vector<float> cur(ch), prev(ch);
+    auto& cur = current_frame_;
+    auto& prev = previous_frame_;
+    size_t n = 0;
     while (true) {
       const double pos = phase_;
       const size_t i = static_cast<size_t>(pos);  // between frame i-1 (last_ when 0) and i
@@ -461,18 +574,20 @@ void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uin
       const float t = static_cast<float>(pos - static_cast<double>(i));
       source_frame(i, cur.data());
       if (i == 0) {
-        prev = last_;
+        std::copy(last_.begin(), last_.end(), prev.begin());
       } else {
         source_frame(i - 1, prev.data());
       }
-      for (uint32_t c = 0; c < ch; c++) out.push_back(prev[c] + (cur[c] - prev[c]) * t);
+      // Advance through discarded frames too: phase/history and lost-frame
+      // accounting must not depend on how much room the consumer left.
+      if (n < room) {
+        for (uint32_t c = 0; c < ch; c++) out.push_back(prev[c] + (cur[c] - prev[c]) * t);
+      }
+      ++n;
       phase_ += step;
     }
     phase_ -= static_cast<double>(frames);
     source_frame(frames - 1, last_.data());
-    const size_t n = out.size() / ch;
-    const size_t cap = params_.capacity_frames;
-    size_t room = cap - static_cast<size_t>(written_ - read_);
     size_t take = std::min(n, room);
     if (take < n) {
       overruns_ += static_cast<uint32_t>(n - take);
@@ -515,6 +630,7 @@ void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uin
 
 ssize_t CaptureStream::Read(void* dst, size_t bytes, bool blocking) {
   const size_t want = bytes / frame_size_;
+  if (want == 0) return 0;
   uint8_t* d = static_cast<uint8_t*>(dst);
   size_t done = 0;
   std::unique_lock<std::mutex> lock(mu_);
@@ -522,7 +638,7 @@ ssize_t CaptureStream::Read(void* dst, size_t bytes, bool blocking) {
     if (released_) break;
     size_t avail = static_cast<size_t>(written_ - read_);
     if (avail == 0) {
-      if (!blocking || !started_) break;
+      if (error_ != kOk || !blocking || !started_) break;
       cv_.wait_for(lock, std::chrono::milliseconds(100));
       continue;
     }
@@ -546,7 +662,7 @@ ssize_t CaptureStream::Read(void* dst, size_t bytes, bool blocking) {
     read_ += n;
     done += n;
   }
-  return static_cast<ssize_t>(done * frame_size_);
+  return done > 0 || error_ == kOk ? static_cast<ssize_t>(done * frame_size_) : error_;
 }
 
 size_t CaptureStream::Available() const {
@@ -557,7 +673,7 @@ size_t CaptureStream::Available() const {
 bool CaptureStream::WaitForData(size_t frames, int timeout_ms) {
   std::unique_lock<std::mutex> lock(mu_);
   return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] {
-    return released_ || !started_ || static_cast<size_t>(written_ - read_) >= frames;
+    return released_ || error_ != kOk || !started_ || static_cast<size_t>(written_ - read_) >= frames;
   }) && static_cast<size_t>(written_ - read_) >= frames;
 }
 
@@ -573,7 +689,7 @@ uint64_t CaptureStream::frames_captured() const {
 
 bool CaptureStream::Timestamp(int64_t* frames, int64_t* time_ns) const {
   std::lock_guard<std::mutex> lock(mu_);
-  if (last_ns_ == 0) return false;
+  if (last_ns_ == 0 || error_ != kOk) return false;
   *frames = static_cast<int64_t>(written_);
   *time_ns = last_ns_;
   return true;
@@ -624,8 +740,11 @@ void CaptureStream::Release() {
     if (released_) return;
     released_ = true;
     started_ = false;
+    std::vector<float>().swap(converted_);
+    ++generation_;
   }
   cv_.notify_all();
+  NotifyStateWake();
   engine_->Wake();
 }
 
@@ -637,6 +756,7 @@ std::shared_ptr<CaptureStream> OpenCapture(const CaptureParams& params, std::str
     return nullptr;
   }
   CaptureEngine& engine = CaptureEngine::Get();
+  if (engine.Prepare(error) != kOk) return nullptr;
   std::shared_ptr<CaptureStream> s(new CaptureStream(&engine, params));
   engine.Add(s);
   return s;

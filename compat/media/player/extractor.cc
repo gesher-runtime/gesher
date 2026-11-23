@@ -48,6 +48,10 @@ bool Format::GetInt32(const char* key, int32_t* out) const {
 bool Format::GetInt64(const char* key, int64_t* out) const {
   return f_ != nullptr && AMediaFormat_getInt64(f_, key, out);
 }
+bool Format::GetRect(const char* key, int32_t* left, int32_t* top, int32_t* right,
+                     int32_t* bottom) const {
+  return f_ != nullptr && AMediaFormat_getRect(f_, key, left, top, right, bottom);
+}
 bool Format::GetFloat(const char* key, float* out) const {
   return f_ != nullptr && AMediaFormat_getFloat(f_, key, out);
 }
@@ -124,22 +128,27 @@ struct SourceAdapter {
 class AospTrackReader : public TrackReader {
  public:
   AospTrackReader(CMediaTrack* track) : track_(track) {
-    started_ = track_->start(track_->data, group_.wrap()) == AMEDIA_OK;
+    start_status_ = track_->start(track_->data, group_.wrap());
   }
   ~AospTrackReader() override {
-    if (started_) track_->stop(track_->data);
+    if (start_status_ == AMEDIA_OK) track_->stop(track_->data);
     track_->free(track_->data);
     free(track_);  // malloc'd by the plugin helper's wrap()
   }
 
-  int Read(Sample* out, int64_t seek_us, SeekMode mode) override {
-    if (!started_) return -1;
+  int StartStatus() const override { return start_status_; }
+
+  int Read(Sample* out, int64_t position, SeekMode mode) override {
+    static_assert(static_cast<uint32_t>(SeekMode::kFrameIndex) ==
+                  android::CMediaTrackReadOptions::SEEK_FRAME_INDEX);
+    if (start_status_ != AMEDIA_OK) return start_status_;
     uint32_t opts = 0;
-    if (seek_us >= 0) opts = android::CMediaTrackReadOptions::SEEK | static_cast<uint32_t>(mode);
+    if (position >= 0) opts = android::CMediaTrackReadOptions::SEEK | static_cast<uint32_t>(mode);
     CMediaBuffer* buf = nullptr;
-    media_status_t err = track_->read(track_->data, &buf, opts, seek_us >= 0 ? seek_us : 0);
+    media_status_t err = track_->read(track_->data, &buf, opts, position >= 0 ? position : 0);
     if (err == AMEDIA_ERROR_END_OF_STREAM) return 1;
-    if (err != AMEDIA_OK || buf == nullptr) return err == AMEDIA_OK ? 1 : -1;
+    if (err != AMEDIA_OK) return err;
+    if (buf == nullptr) return 1;
     const uint8_t* data = static_cast<const uint8_t*>(buf->data(buf->handle));
     size_t off = buf->range_offset(buf->handle), len = buf->range_length(buf->handle);
     out->data.assign(data + off, data + off + len);
@@ -152,14 +161,24 @@ class AospTrackReader : public TrackReader {
     out->sync = meta != nullptr && AMediaFormat_getInt32(meta, "is-sync-frame", &v) && v != 0;
     out->valid_samples =
         meta != nullptr && AMediaFormat_getInt32(meta, "valid-samples", &v) ? v : -1;
+    if (sample_metadata_.get() != nullptr) {
+      AMediaFormat_clear(sample_metadata_.get());
+      if (meta != nullptr) AMediaFormat_copy(sample_metadata_.get(), meta);
+    }
     buf->release(buf->handle);
     return 0;
   }
 
  private:
+  void EnableSampleMetadata() override { sample_metadata_ = Format(); }
+  const Format* SampleMetadata() const override {
+    return sample_metadata_.get() != nullptr ? &sample_metadata_ : nullptr;
+  }
+
   CMediaTrack* track_;
   android::MediaBufferGroup group_;
-  bool started_ = false;
+  Format sample_metadata_{nullptr};
+  media_status_t start_status_ = AMEDIA_ERROR_UNKNOWN;
 };
 
 class AospExtractor : public Extractor {

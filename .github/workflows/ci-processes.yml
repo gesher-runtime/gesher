@@ -4,6 +4,7 @@ on:
     branches: [wip/ci-processes, wip/ci-gtest-processes, wip/ci-reader-helpers]
     paths:
       - .github/workflows/ci-processes.yml
+      - tests/windows/run-tests.ps1
       - tests/windows/tracks/50-services.ps1
       - tests/windows/tracks/49-locale.ps1
       - tests/windows/tracks/44-native2.ps1
@@ -12,11 +13,14 @@ on:
       - tests/windows/tracks/84-ci-processes.ps1
       - tests/windows/fixtures/Process84.cs
       - tests/windows/fixtures/Gtest84.cs
+      - tests/windows/fixtures/Graphics84.cs
+      - tests/windows/fixtures/ProcessReaderCloseObserver.cs
       - tests/windows/helpers/GtestProcess.ps1
       - tests/windows/helpers/ProcessReaderHandles.ps1
       - tests/windows/helpers/CloseProcessReaders.ps1
       - tests/windows/tracks/20-libs.ps1
       - tests/windows/tracks/21-posix.ps1
+      - tests/windows/tracks/30-graphics.ps1
   workflow_dispatch:
 permissions:
   contents: read
@@ -44,7 +48,8 @@ jobs:
           $errors = $null
           . "$pwd/tests/windows/helpers/GtestProcess.ps1"
           . "$pwd/tests/windows/helpers/CloseProcessReaders.ps1"
-          foreach ($helper in @(@('20-libs.ps1', 'Invoke-CoreLibsTest'),
+          foreach ($helper in @(@('../run-tests.ps1', 'NoDrive'),
+                                @('20-libs.ps1', 'Invoke-CoreLibsTest'),
                                 @('21-posix.ps1', 'Invoke-ArtGtest'),
                                 @('50-services.ps1', 'RunTimed'),
                                 @('44-native2.ps1', 'N2Run'),

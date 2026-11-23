@@ -8,6 +8,7 @@
     }
   },
   "messages": {
+    "intent_chooser_title": {"en": "Gesher — choose an app", "he": "גשר — בחירת יישום"},
     "chooser_title": {"en": "Gesher accounts", "he": "גשר — בחירת חשבון"},
     "chooser_prompt": {"en": "Choose an account for this application:", "he": "בחר חשבון עבור יישום זה:"},
     "chooser_select": {"en": "Select", "he": "בחירה"},
@@ -118,6 +119,10 @@
       "en": "failed: {0}",
       "he": "הפעולה נכשלה: {0}"
     },
+    "app_crash_generic": {"en": "The application ⁨{0}⁩ closed because of an error.\n\nDetails are in the log:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה עקב שגיאה.\n\nפרטים מופיעים בלוג:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
+    "app_crash_bluetooth": {"en": "The application ⁨{0}⁩ closed after trying to use a missing Bluetooth adapter. Windows currently reports no Bluetooth adapter.\n\nConnect or enable a Bluetooth adapter in Windows, then try again.\n\nDetails are in the log:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שניסתה להשתמש במתאם Bluetooth שאינו זמין. Windows מדווח כרגע שאין מתאם Bluetooth.\n\nחבר או הפעל מתאם Bluetooth ב־Windows ונסה שוב.\n\nפרטים מופיעים בלוג:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
+    "app_crash_security": {"en": "The application ⁨{0}⁩ closed after a security or permission check rejected an operation.\n\nCheck the application permissions in the Gesher control center. The log may explain other security restrictions:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שבדיקת אבטחה או הרשאות דחתה פעולה.\n\nבדוק את הרשאות האפליקציה בלוח הבקרה של גשר. הלוג עשוי להסביר מגבלות אבטחה אחרות:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
+    "app_crash_compatibility": {"en": "The application ⁨{0}⁩ closed after a class, method or native library could not be linked.\n\nThis may require a compatibility fix. Include the log when reporting the problem:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שלא ניתן היה לקשר מחלקה, מתודה או ספרייה מקומית.\n\nייתכן שנדרש תיקון תאימות. צרף את הלוג לדיווח על התקלה:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
     "launch_failed": {
       "en": "The Android application could not be opened.\n\n{0}",
       "he": "לא ניתן לפתוח את יישום ה־Android.\n\n{0}"
@@ -310,6 +315,10 @@
       "en": "Install Google Play services support (microG)",
       "he": "התקנת תמיכה בשירותי Google Play (microG)"
     },
+    "setup_microg_update": {
+      "en": "Update Google Play services support (microG) to version 0.3.17",
+      "he": "עדכון התמיכה בשירותי Google Play (microG) לגרסה 0.3.17"
+    },
     "setup_aurora": {
       "en": "Install App Store (Aurora Store)",
       "he": "התקנת חנות אפליקציות (Aurora Store)"
@@ -325,6 +334,10 @@
     "setup_configuring_microg": {
       "en": "Setting up Google Play services and applications...",
       "he": "מגדיר שירותי Google Play ויישומים..."
+    },
+    "setup_download_skipped": {
+      "en": "Setup could not download these components and will continue without them:\n\n%1\nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).",
+      "he": "לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:\n\n%1\nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר)."
     },
     "cp_title": {
       "en": "Gesher Control Center",
@@ -425,6 +438,26 @@
     "cp_btn_launch": {
       "en": "Launch",
       "he": "הפעל"
+    },
+    "cp_separate_windows": {
+      "en": "Separate windows",
+      "he": "חלונות נפרדים"
+    },
+    "cp_separate_windows_tip": {
+      "en": "Each task of the app opens in a window of its own, instead of one window for the app. Applies from the app's next start.",
+      "he": "כל משימה של האפליקציה נפתחת בחלון משלה, במקום חלון אחד לאפליקציה. חל מההפעלה הבאה של האפליקציה."
+    },
+    "windows_separate_saved": {
+      "en": "{0}: each task in a window of its own, from the app's next start",
+      "he": "{0}: כל משימה בחלון משלה, מההפעלה הבאה של האפליקציה"
+    },
+    "windows_shared_saved": {
+      "en": "{0}: one window for the app, from its next start",
+      "he": "{0}: חלון אחד לאפליקציה, מההפעלה הבאה שלה"
+    },
+    "window_close_task": {
+      "en": "Close this task",
+      "he": "סגירת המשימה הזו"
     },
     "cp_btn_uninstall": {
       "en": "Uninstall",

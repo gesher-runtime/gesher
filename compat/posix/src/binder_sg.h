@@ -55,17 +55,22 @@ struct Layout {
 // Validate the ordered UAPI object table before touching a pointed-to byte.
 // Parent fixups may move only forwards in the previous pointer's ancestry,
 // following binder_validate_fixup's ordering contract at the pinned source.
+// The caller owns both byte ranges for the duration of validation. Wire offsets
+// need not be uint64_t-aligned: the preceding transaction data can have any size.
 inline bool Describe(const uint8_t* data, size_t data_size,
-                     const std::vector<uint64_t>& offsets, size_t extra_size,
+                     const void* offset_bytes, size_t offsets_size, size_t extra_size,
                      Layout* layout) {
-  if (!Dimensions(data_size, offsets.size() * sizeof(uint64_t), extra_size)) return false;
+  if (!Dimensions(data_size, offsets_size, extra_size)) return false;
+  const auto* offsets = static_cast<const uint8_t*>(offset_bytes);
+  const size_t count = offsets_size / sizeof(uint64_t);
   layout->pointers.clear();
-  std::vector<size_t> pointer_by_object(offsets.size(), kNoParent);
+  std::vector<size_t> pointer_by_object(count, kNoParent);
   uint64_t previous_end = 0;
   uint64_t next_extra = 0;
   size_t last_pointer = kNoParent;
-  for (size_t index = 0; index < offsets.size(); ++index) {
-    const uint64_t offset = offsets[index];
+  for (size_t index = 0; index < count; ++index) {
+    uint64_t offset;
+    memcpy(&offset, offsets + index * sizeof(offset), sizeof(offset));
     if (offset % 4 != 0 || offset < previous_end ||
         !Range(offset, sizeof(binder_object_header), data_size)) return false;
     uint32_t type;
@@ -108,14 +113,28 @@ inline bool Describe(const uint8_t* data, size_t data_size,
   return true;
 }
 
-inline bool WireLayout(const std::vector<uint8_t>& data,
-                       const std::vector<uint64_t>& offsets,
+inline bool Describe(const uint8_t* data, size_t data_size,
+                     const std::vector<uint64_t>& offsets, size_t extra_size,
+                     Layout* layout) {
+  return Describe(data, data_size, offsets.data(), offsets.size() * sizeof(uint64_t),
+                  extra_size, layout);
+}
+
+inline bool WireLayout(const uint8_t* data, size_t data_size,
+                       const void* offsets, size_t offsets_size,
                        size_t extra_size, Layout* layout) {
-  if (!Describe(data.data(), data.size(), offsets, extra_size, layout)) return false;
+  if (!Describe(data, data_size, offsets, offsets_size, extra_size, layout)) return false;
   for (const auto& pointer : layout->pointers) {
     if (pointer.object.buffer != pointer.extra_offset) return false;
   }
   return true;
+}
+
+inline bool WireLayout(const std::vector<uint8_t>& data,
+                       const std::vector<uint64_t>& offsets,
+                       size_t extra_size, Layout* layout) {
+  return WireLayout(data.data(), data.size(), offsets.data(), offsets.size() * sizeof(uint64_t),
+                    extra_size, layout);
 }
 
 // The original sender pointers are read once through the supplied safe user

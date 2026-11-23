@@ -25,7 +25,11 @@ def main() -> None:
     parser.add_argument('--app-classes', type=Path, required=True)
     parser.add_argument('--apksig-jar', type=Path, required=True)
     parser.add_argument('--source-ref', help='Compile older production classes as a negative control')
-    parser.add_argument('--case', choices=('all', 'drain', 'stopping', 'race', 'alarms', 'delivery', 'constraints'), default='all')
+    parser.add_argument('--case', choices=('all', 'drain', 'stopping', 'race', 'alarms', 'delivery', 'constraints',
+                                         'admission', 'admission-work', 'content', 'content-work'), default='all')
+    parser.add_argument('--expected-jobs', type=int, default=151,
+                        help='Expected retained jobs for the admission-work measurement (10000 on the baseline)')
+    parser.add_argument('--expected-uris', type=int, default=50, help='Expected retained records for the actual content-trigger workload')
     args = parser.parse_args()
     cc = shutil.which('cc')
     if not cc:
@@ -41,7 +45,8 @@ def main() -> None:
                         '-I' + str(args.java_home / 'include'), '-I' + str(args.java_home / 'include/linux'),
                         str(ROOT / 'tests/scheduler/framework_host.c'), '-o', str(library)], check=True)
         sources = []
-        for name in ('JobSchedulerService', 'AlarmManagerService', 'BroadcastController', 'DeviceWork'):
+        for name in ('JobSchedulerService', 'ActivityTaskManagerService', 'AlarmManagerService',
+                     'BroadcastController', 'DeviceWork'):
             relative = 'app/java/com/gesher/server/' + name + '.java'
             source = ROOT / relative
             if args.source_ref:
@@ -53,6 +58,8 @@ def main() -> None:
         sources.extend(str(ROOT / p) for p in (
             'tests/dex-services/gesher/services/SchedulerWorkContractTest.java',
             'tests/dex-services/gesher/services/JobSchedulerConstraintContractTest.java',
+            'tests/dex-services/gesher/services/JobSchedulerAdmissionTest.java',
+            'tests/dex-services/gesher/services/JobSchedulerContentTriggerTest.java',
             'tests/scheduler/SchedulerWorkHost.java'))
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), *sources], check=True)
@@ -68,7 +75,8 @@ def main() -> None:
                         '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
                         '--patch-module', 'jdk.unsupported=' + str(work / 'cleaner'),
                         '-cp', str(classes) + os.pathsep + classpath,
-                        'SchedulerWorkHost', str(library), args.case],
+                        'SchedulerWorkHost', str(library), args.case,
+                        str(args.expected_jobs if args.case == 'admission-work' else args.expected_uris)],
                        env=environment, check=True, timeout=90)
 
 if __name__ == '__main__':

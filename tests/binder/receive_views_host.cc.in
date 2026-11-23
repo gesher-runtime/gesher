@@ -1,0 +1,958 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Production Binder receive path. Only pipe transport, Win32 address/handle
+// operations, file-description ownership and thread-connection selection are
+// fixture adapters. Native OFD implementation has its own Windows gates.
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+#include <linux/android/binder.h>
+
+namespace accounting {
+struct Entry { void* pointer = nullptr; size_t size = 0; };
+inline thread_local std::array<Entry, 4096> entries{};
+inline thread_local bool enabled = false;
+inline thread_local size_t allocations = 0, bytes = 0, live = 0, peak = 0, copied = 0;
+void Begin() {
+  for (const auto& entry : entries) if (entry.pointer) std::abort();
+  allocations = bytes = live = peak = copied = 0;
+  enabled = true;
+}
+}
+__attribute__((noinline)) void* operator new(size_t size) {
+  void* pointer = std::malloc(size ? size : 1);
+  if (!pointer) std::abort();
+  if (accounting::enabled) {
+    bool found = false;
+    for (auto& entry : accounting::entries) if (!entry.pointer) {
+      entry = {pointer, size}; found = true; break;
+    }
+    if (!found) std::abort();
+    ++accounting::allocations;
+    accounting::bytes += size;
+    accounting::live += size;
+    accounting::peak = std::max(accounting::peak, accounting::live);
+  }
+  return pointer;
+}
+__attribute__((noinline)) void operator delete(void* pointer) noexcept {
+  if (!pointer) return;
+  for (auto& entry : accounting::entries) if (entry.pointer == pointer) {
+    accounting::live -= entry.size; entry = {}; break;
+  }
+  std::free(pointer);
+}
+void operator delete(void* pointer, size_t) noexcept { ::operator delete(pointer); }
+void* operator new[](size_t size) { return ::operator new(size); }
+void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
+void operator delete[](void* pointer, size_t) noexcept { ::operator delete(pointer); }
+void* CountedCopy(void* destination, const void* source, size_t size) {
+  if (accounting::enabled) accounting::copied += size;
+  return std::memcpy(destination, source, size);
+}
+
+using HANDLE = void*;
+using DWORD = uint32_t;
+using BOOL = int;
+using SIZE_T = size_t;
+const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(~uintptr_t{0});
+constexpr BOOL FALSE = 0;
+constexpr DWORD DUPLICATE_SAME_ACCESS = 2;
+constexpr int _O_RDWR = 2, _O_BINARY = 0x8000;
+constexpr DWORD MEM_COMMIT = 0x1000, PAGE_GUARD = 0x100, PAGE_READWRITE = 4,
+                PAGE_WRITECOPY = 8, PAGE_EXECUTE_READWRITE = 0x40,
+                PAGE_EXECUTE_WRITECOPY = 0x80;
+struct MEMORY_BASIC_INFORMATION {
+  void* BaseAddress;
+  size_t RegionSize;
+  DWORD State;
+  DWORD Protect;
+};
+
+#include "binder_wire.h"
+#define FIXTURE_SHARED_DESCRIPTIONS @SHARED_DESCRIPTIONS@
+#define FIXTURE_SOCKET_DESCRIPTIONS @SOCKET_DESCRIPTIONS@
+#define FIXTURE_NATIVE_FENCES @NATIVE_FENCES@
+#if FIXTURE_SHARED_DESCRIPTIONS
+#include "binder_file_descriptions.h"
+#endif
+namespace fixture {
+std::atomic<unsigned> checks{0}, failed{0};
+void Check(bool ok, const char* why) {
+  ++checks;
+  if (!ok) { ++failed; std::fprintf(stderr, "FAIL Binder receive: %s\n", why); }
+}
+struct Event { uint32_t operation; uint64_t id; bool accepted; };
+struct Adopted { HANDLE handle = nullptr; HANDLE staging = nullptr; int fd = -1; bool open = false; };
+struct Peer {
+  std::vector<uint8_t> response;
+  std::array<uint8_t, 8192> request{};
+  size_t request_at = 0, read_at = 0, chunk = SIZE_MAX;
+  const uint8_t* reading = nullptr;
+  uint32_t reading_size = 0;
+  int32_t ack = 0, claim_status = 0, finish_status = 0;
+  uint32_t fail_read_operation = 0, fail_write_operation = 0, operation = 0;
+  std::array<Event, 64> events{};
+  size_t event_count = 0;
+  unsigned pipe_closes = 0, publishes = 0, fail_publish = 0;
+  bool deny_thread = false, output_readonly = false;
+  const void* bad_input = nullptr;
+  void* output = nullptr;
+  size_t output_size = 0;
+  std::array<Adopted, 32> adopted{};
+  unsigned duplicates = 0, opens = 0, closes = 0, closed_fds = 0, fail_duplicate = 0, fail_open = 0;
+  std::array<uint32_t, 32> adopted_kinds{};
+  void (*on_claim)() = nullptr;
+  // A sender fd that production identifies as a completed native fence.
+  int sending_fence_fd = -1;
+  uintptr_t sending_fence_event = 0;
+};
+thread_local Peer* peer = nullptr;
+struct SelectPeer {
+  Peer* saved;
+  explicit SelectPeer(Peer& selected) : saved(peer) { peer = &selected; }
+  ~SelectPeer() { peer = saved; }
+};
+template<class T> T Load(const uint8_t* p) { T value; std::memcpy(&value, p, sizeof(value)); return value; }
+template<class T> void Append(std::vector<uint8_t>* out, const T& value) {
+  const auto* p = reinterpret_cast<const uint8_t*>(&value);
+  out->insert(out->end(), p, p + sizeof(value));
+}
+void AppendBytes(std::vector<uint8_t>* out, const void* data, size_t size) {
+  if (size) {
+    const auto* first = static_cast<const uint8_t*>(data);
+    out->insert(out->end(), first, first + size);
+  }
+}
+void BeginReply(Peer& p, int32_t status = 0, uint32_t consumed = 0) {
+  p.response.clear(); Append(&p.response, status); Append(&p.response, consumed);
+}
+}
+
+BOOL WriteFile(HANDLE, const void* data, DWORD wanted, DWORD* written, void*) {
+  using namespace fixture;
+  Peer& p = *peer;
+  const size_t count = std::min<size_t>(wanted, p.chunk);
+  if (p.request_at + count > p.request.size()) std::abort();
+  std::memcpy(p.request.data() + p.request_at, data, count);
+  p.request_at += count;
+  *written = static_cast<DWORD>(count);
+  if (p.request_at < 4 || p.request_at < 4 + Load<uint32_t>(p.request.data())) return 1;
+  p.operation = Load<uint32_t>(p.request.data() + 4);
+  p.request_at = p.read_at = 0;
+  if (p.operation == p.fail_write_operation) return 0;
+  if (p.operation == gesher::binder_wire::kWriteRead) {
+    p.reading = p.response.data(); p.reading_size = static_cast<uint32_t>(p.response.size());
+  } else {
+    if (p.event_count == p.events.size()) std::abort();
+    p.events[p.event_count++] = {p.operation, Load<uint64_t>(p.request.data() + 8),
+        p.operation == gesher::binder_wire::kFinishBuffer && Load<uint32_t>(p.request.data() + 16) != 0};
+    p.ack = p.operation == gesher::binder_wire::kClaimBuffer ? p.claim_status : p.finish_status;
+    p.reading = reinterpret_cast<const uint8_t*>(&p.ack); p.reading_size = sizeof(p.ack);
+    if (p.operation == gesher::binder_wire::kClaimBuffer && p.on_claim) p.on_claim();
+  }
+  return 1;
+}
+BOOL ReadFile(HANDLE, void* data, DWORD wanted, DWORD* read, void*) {
+  auto& p = *fixture::peer;
+  if (p.operation == p.fail_read_operation) { *read = 0; return 0; }
+  size_t count = std::min<size_t>(wanted, p.chunk);
+  if (p.read_at < 4) {
+    count = std::min(count, 4 - p.read_at);
+    std::memcpy(data, reinterpret_cast<const uint8_t*>(&p.reading_size) + p.read_at, count);
+  } else {
+    count = std::min(count, p.reading_size - (p.read_at - 4));
+    if (count) std::memcpy(data, p.reading + p.read_at - 4, count);
+  }
+  p.read_at += count; *read = static_cast<DWORD>(count); return 1;
+}
+HANDLE GetCurrentProcess() { return reinterpret_cast<HANDLE>(42); }
+BOOL ReadProcessMemory(HANDLE, const void* source, void* destination, size_t size, SIZE_T* read) {
+  if (!source || source == fixture::peer->bad_input) return 0;
+  std::memcpy(destination, source, size); *read = size; return 1;
+}
+size_t VirtualQuery(const void* address, MEMORY_BASIC_INFORMATION* region, size_t) {
+  auto& p = *fixture::peer;
+  const uintptr_t first = reinterpret_cast<uintptr_t>(p.output);
+  const uintptr_t at = reinterpret_cast<uintptr_t>(address);
+  if (at < first || at >= first + p.output_size) return 0;
+  *region = {p.output, p.output_size, MEM_COMMIT, p.output_readonly ? DWORD{2} : PAGE_READWRITE};
+  return sizeof(*region);
+}
+BOOL WriteProcessMemory(HANDLE, void* destination, const void* source, size_t size, SIZE_T* written) {
+  auto& p = *fixture::peer;
+  if (++p.publishes == p.fail_publish) return 0;
+  std::memcpy(destination, source, size); *written = size; return 1;
+}
+intptr_t _get_osfhandle(int fd) { return fd < 0 ? -1 : 0x100 + fd; }
+BOOL DuplicateHandle(HANDLE, HANDLE staging, HANDLE, HANDLE* owned, DWORD, BOOL, DWORD) {
+  auto& p = *fixture::peer;
+  ++p.duplicates;
+  if (!staging || p.duplicates == p.fail_duplicate) return 0;
+  if (p.duplicates > p.adopted.size()) std::abort();
+  *owned = reinterpret_cast<HANDLE>(0x1000 + p.duplicates);
+  p.adopted[p.duplicates - 1] = {*owned, staging, -1, true};
+  return 1;
+}
+int _open_osfhandle(intptr_t handle, int) {
+  auto& p = *fixture::peer;
+  if (++p.opens == p.fail_open) return -1;
+  for (auto& a : p.adopted) if (a.handle == reinterpret_cast<HANDLE>(handle)) {
+    a.fd = 100 + static_cast<int>(p.opens); return a.fd;
+  }
+  std::abort();
+}
+BOOL CloseHandle(HANDLE handle) {
+  auto& p = *fixture::peer;
+  for (auto& a : p.adopted) if (a.handle == handle) {
+    fixture::Check(a.open, "owned handle closed once"); a.open = false; ++p.closes; return 1;
+  }
+  std::abort();
+}
+int FixtureClose(int fd) {
+  auto& p = *fixture::peer;
+  unsigned handles = 0;
+  for (auto& a : p.adopted) if (a.fd == fd) {
+    fixture::Check(a.open, "adopted fd handles closed once"); a.open = false; ++p.closes; ++handles;
+  }
+  if (!handles) std::abort();
+  // Sockets (4) and completed native fences (5) own one typed handle, no OFD.
+  fixture::Check(handles == (FIXTURE_SHARED_DESCRIPTIONS && p.adopted_kinds[fd - 101] != 4 &&
+                             p.adopted_kinds[fd - 101] != 5 ? 2 : 1),
+                 "fd owns all transported handles");
+  ++p.closed_fds;
+  return 0;
+}
+
+#if FIXTURE_SHARED_DESCRIPTIONS
+namespace gesher {
+// These adapters implement only the documented ownership boundary: adoption
+// consumes both handles on every outcome and returns one close-on-exec fd.
+enum class DescriptorKind : uint32_t { kFile = 0, kZero = 1, kRandom = 2, kUnshareable = 3 };
+struct DescriptorSnapshot { HANDLE handle = nullptr; DescriptorKind kind = DescriptorKind::kFile; };
+using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
+DescriptorSnapshotPtr CaptureDescriptor(int fd) {
+  if (fd < 0) return {};
+  auto snapshot = std::make_shared<DescriptorSnapshot>();
+  snapshot->handle = reinterpret_cast<HANDLE>(0x100 + fd);
+  return snapshot;
+}
+HANDLE ShareFileDescription(const DescriptorSnapshotPtr& snapshot) {
+  return reinterpret_cast<HANDLE>(reinterpret_cast<uintptr_t>(snapshot->handle) + 0x10000);
+}
+int AdoptFileDescription(HANDLE file, HANDLE shared, DescriptorKind kind, bool close_on_exec) {
+  auto& p = *fixture::peer;
+  fixture::Check(close_on_exec, "received descriptor is close-on-exec");
+  fixture::Check(kind <= DescriptorKind::kRandom, "adoption receives a validated descriptor kind");
+  if (++p.opens == p.fail_open) {
+    CloseHandle(file); CloseHandle(shared); return -1;
+  }
+  if (p.opens > p.adopted_kinds.size()) std::abort();
+  p.adopted_kinds[p.opens - 1] = static_cast<uint32_t>(kind);
+  const int fd = 100 + static_cast<int>(p.opens);
+  unsigned handles = 0;
+  for (auto& a : p.adopted) if (a.handle == file || a.handle == shared) {
+    fixture::Check(a.open && a.fd == -1, "adoption consumes two unowned duplicates");
+    a.fd = fd; ++handles;
+  }
+  fixture::Check(handles == 2 && file != shared, "adoption pairs file and exact shared description");
+  return fd;
+}
+}
+#endif
+
+// Instrument only actual production copies. Fixture transport/oracle copies
+// stay outside the accounting boundary.
+#define memcpy CountedCopy
+#define close FixtureClose
+#include "binder_sg.h"
+namespace gesher {
+namespace record_locks { struct DescriptorGuard { ~DescriptorGuard() {} }; }
+// Sender fixtures use plain handles. Received socket fixtures model the
+// separate socket owner, which consumes one native handle, not an OFD section.
+bool TransferSocket(int, uintptr_t*, uint64_t*) { return false; }
+int AdoptSocket(uintptr_t owned, uint64_t metadata) {
+  fixture::Check((metadata & 1) != 0, "socket adoption retains socket metadata");
+  const int fd = _open_osfhandle(static_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
+  if (fd < 0) CloseHandle(reinterpret_cast<HANDLE>(owned));
+  else fixture::peer->adopted_kinds[fd - 101] = 4;
+  return fd;
+}
+#if FIXTURE_NATIVE_FENCES
+// Declared native-fence owner boundary (native_fence.cc). The sender exposes
+// only a completed event handle; the receiver consumes one handle per fd.
+class NativeFence;
+bool TransferNativeFence(int fd, uintptr_t* handle, uint64_t* metadata,
+                         std::shared_ptr<NativeFence>* = nullptr) {
+  auto& p = *fixture::peer;
+  if (fd != p.sending_fence_fd) return false;
+  *handle = p.sending_fence_event;
+  *metadata = binder_wire::kCompletedNativeFenceMetadata;
+  return true;
+}
+int AdoptNativeFence(HANDLE owned, uint64_t metadata) {
+  fixture::Check(metadata == binder_wire::kCompletedNativeFenceMetadata,
+                 "native fence adoption receives its exact completed type");
+  const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
+  if (fd < 0) CloseHandle(owned);
+  else fixture::peer->adopted_kinds[fd - 101] = 5;
+  return fd;
+}
+#endif
+int AdoptTransferred(HANDLE owned, uint64_t) {
+  const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
+  if (fd < 0) CloseHandle(owned);  // as production: a failed adoption closes the handle
+  return fd;
+}
+namespace {
+namespace wire = binder_wire;
+@PIPE@
+@ALLOCATION@
+HANDLE ThreadPipe(const std::shared_ptr<BinderFile>&) {
+  if (fixture::peer->deny_thread) { errno = EBADF; return INVALID_HANDLE_VALUE; }
+  return reinterpret_cast<HANDLE>(1);
+}
+void CloseThreadPipe(BinderFile*) { ++fixture::peer->pipe_closes; }
+@FD@
+@DELIVERY@
+}
+}
+#undef close
+#undef memcpy
+
+namespace fixture {
+using gesher::BinderFile;
+struct Mapping {
+  std::vector<uint8_t> storage;
+  std::shared_ptr<BinderFile> file = std::make_shared<BinderFile>();
+  explicit Mapping(size_t size = 65536) : storage(size, 0xa5) {
+    file->map = storage.data(); file->map_size = size; file->free_blocks[0] = size;
+  }
+};
+struct Output {
+  std::array<uint8_t, 8192> bytes;
+  binder_write_read request{};
+  Output() {
+    bytes.fill(0xcc);
+    request.read_buffer = reinterpret_cast<binder_uintptr_t>(bytes.data());
+    request.read_size = bytes.size();
+  }
+  int Run(Mapping& mapping, Peer& p) {
+    SelectPeer selected(p); p.output = bytes.data(); p.output_size = bytes.size();
+    return gesher::WriteRead(mapping.file, &request);
+  }
+  binder_transaction_data Transaction(size_t at = 0) const {
+    return Load<binder_transaction_data>(bytes.data() + at + 4);
+  }
+};
+struct Payload {
+  std::vector<uint8_t> data;
+  std::vector<uint64_t> offsets;
+  std::vector<uint8_t> extra;
+#if FIXTURE_SHARED_DESCRIPTIONS
+  std::vector<gesher::binder_wire::FileDescription> descriptions;
+#endif
+  explicit Payload(size_t size = 0) : data(size) {
+    for (size_t i = 0; i < size; ++i) data[i] = static_cast<uint8_t>(17 * i + 3);
+  }
+  void Fd(size_t at, uintptr_t staging) {
+    binder_fd_object object{}; object.hdr.type = BINDER_TYPE_FD; object.pad_binder = staging;
+    std::memcpy(data.data() + at, &object, sizeof(object)); offsets.push_back(at);
+#if FIXTURE_SHARED_DESCRIPTIONS
+    descriptions.push_back({at, staging + 0x10000, 0, 0});
+#endif
+  }
+  void Pointer(size_t at, size_t length, uint64_t parent = UINT64_MAX, uint64_t parent_at = 0) {
+    binder_buffer_object object{};
+    object.hdr.type = BINDER_TYPE_PTR; object.buffer = extra.size(); object.length = length;
+    if (parent != UINT64_MAX) {
+      object.flags = BINDER_BUFFER_FLAG_HAS_PARENT; object.parent = parent; object.parent_offset = parent_at;
+    }
+    std::memcpy(data.data() + at, &object, sizeof(object)); offsets.push_back(at);
+    const size_t before = extra.size(); extra.resize(before + ((length + 7) & ~size_t{7}));
+    for (size_t i = before; i < extra.size(); ++i) extra[i] = static_cast<uint8_t>(7 * i + 11);
+  }
+  void AppendTo(Peer& p, uint64_t id = 123, uint32_t command = BR_TRANSACTION) const {
+    binder_transaction_data tr{};
+    tr.target.ptr = 0x1400; tr.cookie = 0x1500; tr.code = 0x80; tr.flags = TF_ACCEPT_FDS;
+    tr.sender_pid = 345; tr.sender_euid = 10000;
+    tr.data_size = data.size(); tr.offsets_size = offsets.size() * sizeof(uint64_t);
+    Append(&p.response, command); Append(&p.response, tr); Append(&p.response, id);
+    Append<uint64_t>(&p.response, extra.size());
+#if FIXTURE_SHARED_DESCRIPTIONS
+    Append<uint32_t>(&p.response, static_cast<uint32_t>(descriptions.size()));
+#endif
+    AppendBytes(&p.response, data.data(), data.size());
+    AppendBytes(&p.response, offsets.data(), offsets.size() * sizeof(uint64_t));
+    AppendBytes(&p.response, extra.data(), extra.size());
+#if FIXTURE_SHARED_DESCRIPTIONS
+    AppendBytes(&p.response, descriptions.data(), descriptions.size() * sizeof(descriptions[0]));
+#endif
+  }
+};
+bool EmptyMapping(const Mapping& map) {
+  return map.file->allocations.empty() && map.file->free_blocks.size() == 1 &&
+      map.file->free_blocks.begin()->first == 0 && map.file->free_blocks.begin()->second == map.storage.size();
+}
+void CheckAccepted(const Peer& p, uint64_t id = 123) {
+  Check(p.event_count == 2, "one claim and one finish");
+  if (p.event_count >= 2) {
+    Check(p.events[0].operation == gesher::binder_wire::kClaimBuffer && p.events[0].id == id,
+          "claim precedes publication");
+    Check(p.events[1].operation == gesher::binder_wire::kFinishBuffer && p.events[1].accepted &&
+          p.events[1].id == id, "accepted finish retains buffer id");
+  }
+}
+void CheckPayload(const Payload& expected, const binder_transaction_data& tr) {
+  Check(tr.target.ptr == 0x1400 && tr.cookie == 0x1500 && tr.code == 0x80 &&
+        tr.flags == TF_ACCEPT_FDS && tr.sender_pid == 345 && tr.sender_euid == 10000,
+        "transaction identity and application fields preserved");
+  Check(tr.data_size == expected.data.size() && tr.offsets_size == expected.offsets.size() * 8,
+        "payload lengths preserved");
+  const auto* block = reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer);
+  const size_t aligned = (expected.data.size() + 7) & ~size_t{7};
+  const size_t extra_at = aligned + expected.offsets.size() * 8;
+  Check(tr.data.ptr.offsets == tr.data.ptr.buffer + aligned, "offsets use aligned receiver address");
+  std::vector<uint8_t> data = expected.data, extra = expected.extra;
+  for (size_t i = 0; i < expected.offsets.size(); ++i) {
+    const size_t at = expected.offsets[i];
+    const uint32_t type = Load<uint32_t>(data.data() + at);
+    if (type == BINDER_TYPE_PTR) {
+      auto object = Load<binder_buffer_object>(data.data() + at);
+      const uint64_t wire_at = object.buffer;
+      object.buffer = reinterpret_cast<uintptr_t>(block + extra_at + wire_at);
+      if (object.flags & BINDER_BUFFER_FLAG_HAS_PARENT) {
+        auto parent = Load<binder_buffer_object>(expected.data.data() + expected.offsets[object.parent]);
+        std::memcpy(extra.data() + parent.buffer + object.parent_offset, &object.buffer, sizeof(object.buffer));
+      }
+      std::memcpy(data.data() + at, &object, sizeof(object));
+    } else if (type == BINDER_TYPE_FD) {
+      const auto received = Load<binder_fd_object>(block + at);
+      Check(received.fd >= 100 && received.fd < 132, "FD object contains adopted local descriptor");
+      std::memcpy(data.data() + at, &received, sizeof(received));
+    }
+  }
+  Check(data.empty() || std::memcmp(block, data.data(), data.size()) == 0, "exact payload bytes and rebased objects");
+  Check(expected.offsets.empty() || std::memcmp(block + aligned, expected.offsets.data(), expected.offsets.size() * 8) == 0,
+        "exact offset table");
+  Check(extra.empty() || std::memcmp(block + extra_at, extra.data(), extra.size()) == 0,
+        "exact SG bytes and parent fixups");
+}
+
+void ValidDeliveries() {
+  for (size_t size : {size_t{0}, size_t{1}, size_t{7}, size_t{8}, size_t{17}, size_t{4097}}) {
+    for (uint32_t command : {uint32_t{BR_TRANSACTION}, uint32_t{BR_REPLY}}) {
+      Mapping mapping; Peer p; BeginReply(p); Payload payload(size); payload.AppendTo(p, 123, command);
+      p.chunk = 7; Output output;
+      Check(output.Run(mapping, p) == 0, "plain transaction through partial pipe reads/writes");
+      Check(output.request.read_consumed == 4 + sizeof(binder_transaction_data), "published command size");
+      Check(Load<uint32_t>(output.bytes.data()) == command, "transaction/reply command preserved");
+      CheckPayload(payload, output.Transaction()); CheckAccepted(p);
+      Check(mapping.file->Free(output.Transaction().data.ptr.buffer) == 123, "caller frees broker id");
+      Check(EmptyMapping(mapping), "mapping coalesces after caller free");
+    }
+  }
+  // Every possible byte alignment of an offsets table in the owned reply.
+  for (size_t tail = 0; tail != 8; ++tail) {
+    Mapping mapping; Peer p; BeginReply(p); Payload payload(128 + tail);
+    payload.Pointer(4, 24); payload.Pointer(44, 9, 0, 8); payload.Pointer(84, 8, 0, 16);
+    payload.AppendTo(p); const auto wire = p.response; Output output;
+    Check(output.Run(mapping, p) == 0, "unaligned wire offsets with valid nested SG");
+    CheckPayload(payload, output.Transaction());
+    Check(p.response == wire, "validation and rebase leave immutable wire unchanged");
+    CheckAccepted(p); mapping.file->Free(output.Transaction().data.ptr.buffer);
+  }
+  Mapping mapping; Peer first; BeginReply(first); Payload one(4097); one.AppendTo(first, 501);
+  Output a; Check(a.Run(mapping, first) == 0, "first outstanding allocation published");
+  const auto retained = a.Transaction();
+  first.response.assign(first.response.size(), 0xee);
+  Peer second; BeginReply(second); Payload two(4001); two.AppendTo(second, 502, BR_REPLY);
+  Output b; Check(b.Run(mapping, second) == 0, "second outstanding allocation published");
+  Check(retained.data.ptr.buffer != b.Transaction().data.ptr.buffer, "outstanding mapping allocations are distinct");
+  CheckPayload(one, retained); CheckPayload(two, b.Transaction());
+  Check(mapping.file->Free(b.Transaction().data.ptr.buffer) == 502, "free second outstanding id");
+  CheckPayload(one, retained);
+  Check(mapping.file->Free(retained.data.ptr.buffer) == 501, "free retained first id");
+  Check(EmptyMapping(mapping), "all published blocks reclaim mapping");
+}
+
+void Reject(Peer& p, int error, bool should_abandon = true, size_t mapping_size = 65536) {
+  Mapping mapping(mapping_size); Output output; const auto before = output.bytes;
+  errno = 0;
+  Check(output.Run(mapping, p) == -1 && errno == error, "invalid delivery rejects with original errno");
+  Check(output.bytes == before, "rejected delivery never publishes bytes");
+  Check(output.request.read_consumed == 0, "rejected transaction leaves consumed prefix unchanged");
+  Check(EmptyMapping(mapping), "rejected delivery owns no mapped block");
+  Check(std::all_of(mapping.storage.begin(), mapping.storage.end(), [](uint8_t byte) { return byte == 0xa5; }),
+        "invalid metadata never copies payload into the mapping");
+  Check(p.duplicates == 0, "reject before claim adopts no FD");
+  if (should_abandon) {
+    Check(p.event_count == 1 && p.events[0].operation == gesher::binder_wire::kFinishBuffer &&
+          !p.events[0].accepted, "rejected shape abandons without claim");
+  } else {
+    Check(p.event_count == 0 && p.pipe_closes != 0, "malformed command closes connection before buffer id");
+  }
+}
+void InvalidDeliveries() {
+  Payload valid(129); valid.Pointer(4, 24); valid.Pointer(44, 16, 0, 8); valid.Pointer(84, 8, 1, 0);
+  for (unsigned kind = 0; kind < 15; ++kind) {
+    Payload bad = valid;
+    auto ptr = Load<binder_buffer_object>(bad.data.data() + 44);
+    switch (kind) {
+      case 0: bad.offsets[0] = 3; break;
+      case 1: bad.offsets[1] = 4; break;
+      case 2: bad.offsets[2] = 124; break;
+      case 3: bad.offsets[0] = UINT64_MAX; break;
+      case 4: ptr.hdr.type = 0x123; break;
+      case 5: ptr.buffer = 25; break;
+      case 6: ptr.length = 1024; break;
+      case 7: ptr.parent = 1; break;
+      case 8: ptr.parent = UINT64_MAX; break;
+      case 9: ptr.parent_offset = 20; break;
+      case 10: ptr.parent_offset = UINT64_MAX; break;
+      case 11: bad.extra.resize(8); break;
+      case 12: bad.offsets[0] = 0; std::memmove(bad.data.data(), bad.data.data() + 4, 40); break;
+      case 13: ptr.flags = 0; ptr.length = UINT64_MAX; break;
+      case 14: ptr.hdr.type = BINDER_TYPE_FDA; break;
+    }
+    if (kind != 12) std::memcpy(bad.data.data() + 44, &ptr, sizeof(ptr));
+    Peer p; BeginReply(p); bad.AppendTo(p); Reject(p, EBADF);
+  }
+  // Truncate every boundary, including inside a table value and extra storage.
+  Peer complete; BeginReply(complete); valid.AppendTo(complete);
+  const size_t header = 8 + 4 + sizeof(binder_transaction_data) + sizeof(uint64_t);
+  for (size_t length = 8; length < complete.response.size(); ++length) {
+    Peer p; p.response.assign(complete.response.begin(), complete.response.begin() + length);
+    if (length == 8) {
+      Mapping mapping; Output output;
+      Check(output.Run(mapping, p) == 0 && output.request.read_consumed == 0, "empty broker command stream");
+    } else {
+      Reject(p, EBADF, length >= header);
+    }
+  }
+  for (unsigned kind = 0; kind != 4; ++kind) {
+    Peer p; BeginReply(p); valid.AppendTo(p);
+    auto tr = Load<binder_transaction_data>(p.response.data() + 12);
+    if (kind == 0) tr.data_size = gesher::binder_sg::kMaxBytes + 1;
+    if (kind == 1) tr.offsets_size = 7;
+    if (kind == 2) tr.offsets_size = gesher::binder_sg::kMaxBytes;
+    if (kind == 3) {
+      uint64_t extra = 7; std::memcpy(p.response.data() + header, &extra, sizeof(extra));
+    }
+    std::memcpy(p.response.data() + 12, &tr, sizeof(tr)); Reject(p, EBADF);
+  }
+  Peer no_room; BeginReply(no_room); valid.AppendTo(no_room); Reject(no_room, ENOMEM, true, 64);
+}
+
+#if FIXTURE_SHARED_DESCRIPTIONS
+void FileDescriptionMetadata() {
+  using gesher::binder_wire::FileDescription;
+  // FD metadata follows the unpadded payload, offsets and extra bytes. Exercise
+  // every alignment together with non-FD objects and all supported kinds.
+  for (size_t tail = 0; tail != 8; ++tail) {
+    for (uint32_t kind = 0; kind != 3; ++kind) {
+      Mapping mapping; Peer p; BeginReply(p); Payload payload(147 + tail);
+      payload.Pointer(4, 24); payload.Fd(44, 0x301);
+      payload.Pointer(76, 16, 0, 8); payload.Fd(116, 0x302);
+      payload.descriptions[0].kind = kind;
+      payload.descriptions[1].kind = (kind + 1) % 3;
+      payload.AppendTo(p, 123, tail % 2 ? BR_REPLY : BR_TRANSACTION);
+      const auto wire = p.response; Output output;
+      Check(output.Run(mapping, p) == 0, "unaligned descriptor metadata with interleaved SG objects");
+      CheckPayload(payload, output.Transaction()); CheckAccepted(p);
+      Check(p.response == wire, "descriptor adoption leaves immutable reply bytes unchanged");
+      Check(p.duplicates == 4 && p.opens == 2 && p.closes == 0,
+            "each delivered FD duplicates both file and shared description");
+      for (size_t i = 0; i != payload.descriptions.size(); ++i) {
+        const auto& description = payload.descriptions[i];
+        const auto fd = Load<binder_fd_object>(payload.data.data() + description.object_offset);
+        Check(reinterpret_cast<uintptr_t>(p.adopted[2 * i].staging) == fd.pad_binder &&
+              reinterpret_cast<uintptr_t>(p.adopted[2 * i + 1].staging) == description.shared_handle,
+              "delivered FD retains its exact matching shared description");
+        Check(p.adopted_kinds[i] == description.kind, "file/device kind reaches descriptor adoption unchanged");
+      }
+      SelectPeer selected(p); const auto tr = output.Transaction();
+      gesher::CloseReceivedFds(reinterpret_cast<uint8_t*>(tr.data.ptr.buffer), tr.data_size,
+                              reinterpret_cast<const void*>(tr.data.ptr.offsets), tr.offsets_size);
+      Check(mapping.file->Free(tr.data.ptr.buffer) == 123, "FD/SG caller frees correct buffer id");
+      Check(p.closed_fds == 2 && p.closes == 4 && EmptyMapping(mapping),
+            "FD/SG caller releases both paired capabilities and mapped storage");
+    }
+  }
+  Payload valid(147); valid.Pointer(4, 24); valid.Fd(44, 0x301);
+  valid.Pointer(76, 16, 0, 8); valid.Fd(116, 0x302);
+  for (unsigned kind = 0; kind != 12; ++kind) {
+    Payload bad = valid;
+    switch (kind) {
+      case 0: bad.descriptions.clear(); break;
+      case 1: bad.descriptions[0].object_offset = 4; break;
+      case 2: std::swap(bad.descriptions[0], bad.descriptions[1]); break;
+      case 3: bad.descriptions[1] = bad.descriptions[0]; break;
+      case 4: bad.descriptions[0].shared_handle = 0; break;
+      case 5: bad.descriptions[0].kind = 3; break;
+      case 6: bad.descriptions[1].kind = UINT32_MAX; break;
+      case 7: bad.descriptions[1].reserved = 1; break;
+      case 8: bad.descriptions.push_back({140, 0x20000, 0, 0}); break;
+      case 9: bad.descriptions.pop_back(); break;
+      case 10: {
+        const uint32_t type = BINDER_TYPE_BINDER;
+        std::memcpy(bad.data.data() + 44, &type, sizeof(type)); break;
+      }
+      case 11: bad.descriptions[0].object_offset = UINT64_MAX; break;
+    }
+    Peer p; BeginReply(p); bad.AppendTo(p); Reject(p, EBADF);
+  }
+  constexpr size_t count_at = 8 + 4 + sizeof(binder_transaction_data) + 8 + 8;
+  for (uint32_t count : {uint32_t{5}, gesher::binder_wire::kMaxFileDescriptions + 1, UINT32_MAX}) {
+    Peer p; BeginReply(p); valid.AppendTo(p);
+    std::memcpy(p.response.data() + count_at, &count, sizeof(count)); Reject(p, EBADF);
+  }
+  Peer complete; BeginReply(complete); valid.AppendTo(complete);
+  const size_t table_at = complete.response.size() - valid.descriptions.size() * sizeof(FileDescription);
+  for (size_t length = table_at; length < complete.response.size(); ++length) {
+    Peer p; p.response.assign(complete.response.begin(), complete.response.begin() + length);
+    Reject(p, EBADF);
+  }
+}
+#if FIXTURE_SOCKET_DESCRIPTIONS
+void SocketDescriptionMetadata() {
+  Payload valid(64); valid.Fd(0, 0x301); valid.Fd(32, 0x302);
+  auto socket = Load<binder_fd_object>(valid.data.data());
+  socket.pad_flags = 1;
+  socket.cookie = 0x123400000055ull;
+  std::memcpy(valid.data.data(), &socket, sizeof(socket));
+  valid.descriptions[0].kind = gesher::binder_wire::kSocketFileDescription;
+  valid.descriptions[0].shared_handle = 0;
+  for (unsigned failure = 0; failure != 5; ++failure) {
+    Mapping mapping; Peer p; BeginReply(p); valid.AppendTo(p, 321); Output output;
+    if (failure == 1) p.fail_duplicate = 2;
+    if (failure == 2) p.fail_open = 1;
+    if (failure == 3) p.fail_open = 2;
+    if (failure == 4) p.fail_publish = 1;
+    const int result = output.Run(mapping, p);
+    if (failure == 0) {
+      Check(result == 0 && p.duplicates == 3 && p.opens == 2,
+            "mixed socket and file adopt their distinct ownership representations");
+      const auto tr = output.Transaction();
+      const auto delivered = Load<binder_fd_object>(reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer));
+      Check(delivered.cookie == 0x55 && delivered.pad_flags == 0,
+            "socket wire metadata is consumed without leaking into Android's FD object");
+      Check(p.adopted_kinds[0] == 4 && p.adopted_kinds[1] == 0,
+            "socket transport does not turn the following file into a socket");
+      SelectPeer selected(p);
+      gesher::CloseReceivedFds(reinterpret_cast<uint8_t*>(tr.data.ptr.buffer), tr.data_size,
+                              reinterpret_cast<const void*>(tr.data.ptr.offsets), tr.offsets_size);
+      Check(mapping.file->Free(tr.data.ptr.buffer) == 321, "mixed caller frees exact buffer");
+    } else {
+      Check(result == -1, "mixed descriptor failure is never published as success");
+    }
+    Check(EmptyMapping(mapping) && std::none_of(p.adopted.begin(), p.adopted.end(),
+          [](const auto& handle) { return handle.open; }), "mixed failure or close releases every capability");
+  }
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Payload invalid = valid;
+    if (failure == 0) invalid.descriptions[0].shared_handle = 0x10000;
+    if (failure == 1) invalid.descriptions[0].kind = 0;
+    if (failure == 2) {
+      socket.pad_flags = 0;
+      std::memcpy(invalid.data.data(), &socket, sizeof(socket));
+    }
+    Peer p; BeginReply(p); invalid.AppendTo(p); Reject(p, EBADF);
+  }
+}
+#endif
+#endif
+
+#if FIXTURE_NATIVE_FENCES
+// Receive: a completed native fence is one typed handle without a shared OFD,
+// and malformed type/handle combinations never reach adoption.
+void NativeFenceDescriptionMetadata() {
+  Payload valid(64); valid.Fd(0, 0x301); valid.Fd(32, 0x302);
+  auto fence = Load<binder_fd_object>(valid.data.data());
+  fence.pad_flags = gesher::binder_wire::kCompletedNativeFenceMetadata;
+  fence.cookie = 0x55;
+  std::memcpy(valid.data.data(), &fence, sizeof(fence));
+  valid.descriptions[0].kind = gesher::binder_wire::kNativeFenceFileDescription;
+  valid.descriptions[0].shared_handle = 0;
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Mapping mapping; Peer p; BeginReply(p); valid.AppendTo(p, 321); Output output;
+    if (failure == 1) p.fail_duplicate = 1;
+    if (failure == 2) p.fail_open = 2;
+    const int result = output.Run(mapping, p);
+    if (failure == 0) {
+      Check(result == 0 && p.duplicates == 3 && p.opens == 2,
+            "mixed native fence and file adopt their distinct ownership representations");
+      const auto tr = output.Transaction();
+      const auto delivered = Load<binder_fd_object>(reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer));
+      Check(delivered.cookie == 0x55 && delivered.pad_flags == 0,
+            "native fence type is consumed without leaking into Android's FD object");
+      Check(p.adopted_kinds[0] == 5 && p.adopted_kinds[1] == 0,
+            "native fence transport does not turn the following file into a fence");
+      SelectPeer selected(p);
+      gesher::CloseReceivedFds(reinterpret_cast<uint8_t*>(tr.data.ptr.buffer), tr.data_size,
+                              reinterpret_cast<const void*>(tr.data.ptr.offsets), tr.offsets_size);
+      Check(mapping.file->Free(tr.data.ptr.buffer) == 321, "native fence caller frees exact buffer");
+    } else {
+      Check(result == -1, "native fence descriptor failure is never published as success");
+    }
+    Check(EmptyMapping(mapping) && std::none_of(p.adopted.begin(), p.adopted.end(),
+          [](const auto& handle) { return handle.open; }), "native fence failure or close releases every capability");
+  }
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Payload invalid = valid;
+    auto object = fence;
+    if (failure == 0) invalid.descriptions[0].shared_handle = 0x10000;
+    if (failure == 1) object.pad_flags = 1;
+    if (failure == 2) object.pad_flags = 0;
+    std::memcpy(invalid.data.data(), &object, sizeof(object));
+    Peer p; BeginReply(p); invalid.AppendTo(p); Reject(p, EBADF);
+  }
+}
+
+// Send: the fence travels as a pinned duplicate of its completion event with
+// its exact type, while Android's ownership cookie and the caller's object stay.
+void SenderNativeFence() {
+  for (unsigned failure = 0; failure != 3; ++failure) {
+    Mapping mapping; Peer p; BeginReply(p, 0, 1); Output output;
+    p.sending_fence_fd = 71;
+    p.sending_fence_event = 0x123400;
+    if (failure == 1) p.fail_duplicate = 1;
+    if (failure == 2) p.fail_write_operation = gesher::binder_wire::kWriteRead;
+    binder_fd_object object{};
+    object.hdr.type = BINDER_TYPE_FD;
+    object.fd = 71;
+    object.cookie = 0xaabbccdd00000001ULL;
+    const std::array<uint64_t, 1> offsets{0};
+    binder_transaction_data transaction{};
+    transaction.data_size = sizeof(object);
+    transaction.offsets_size = sizeof(offsets);
+    transaction.data.ptr.buffer = reinterpret_cast<uintptr_t>(&object);
+    transaction.data.ptr.offsets = reinterpret_cast<uintptr_t>(offsets.data());
+    std::vector<uint8_t> command;
+    Append<uint32_t>(&command, BC_TRANSACTION); Append(&command, transaction);
+    output.request.write_buffer = reinterpret_cast<uintptr_t>(command.data());
+    output.request.write_size = command.size();
+    errno = 0;
+    const int result = output.Run(mapping, p);
+    Check(object.fd == 71 && object.cookie == 0xaabbccdd00000001ULL,
+          "native fence sender object remains unchanged");
+    Check(p.adopted[0].staging == reinterpret_cast<HANDLE>(0x123400) || failure == 1,
+          "native fence pins a duplicate of its actual completion event");
+    if (failure == 2) { Check(result == -1, "native fence transport failure is reported"); continue; }
+    Check(result == 0 && output.request.write_consumed == command.size(),
+          "native fence transaction remains a broker transaction result");
+    constexpr size_t copy_error_at = 4 + 4 + 8 + 4 + 4 + 4 + sizeof(binder_transaction_data);
+    const int32_t copy_error = Load<int32_t>(p.request.data() + copy_error_at);
+    if (failure == 1) { Check(copy_error == EBADF, "failed native fence pin fails only this transaction"); continue; }
+    Check(copy_error == 0, "native fence transaction is serialized");
+    constexpr size_t data_at = copy_error_at + 4 + 4;
+    const auto sent = Load<binder_fd_object>(p.request.data() + data_at);
+    Check(sent.pad_binder == reinterpret_cast<uintptr_t>(p.adopted[0].handle) &&
+          sent.pad_flags == gesher::binder_wire::kCompletedNativeFenceMetadata &&
+          sent.cookie == 0xaabbccdd00000001ULL,
+          "native fence transports its pinned event and exact type, preserving the cookie");
+    const auto table = Load<gesher::binder_wire::FileDescription>(
+        p.request.data() + data_at + sizeof(object) + sizeof(offsets));
+    Check(table.object_offset == 0 && table.shared_handle == 0 &&
+          table.kind == gesher::binder_wire::kNativeFenceFileDescription && table.reserved == 0,
+          "native fence side-table entry carries no shared description");
+  }
+}
+#endif
+
+void FdAndOwnershipFailures() {
+  for (unsigned mode = 0; mode != (FIXTURE_SHARED_DESCRIPTIONS ? 13 : 9); ++mode) {
+    Mapping mapping; Peer p; BeginReply(p); Payload payload(83);
+    payload.Fd(4, 0x301); payload.Fd(36, 0x302); payload.AppendTo(p);
+    if (mode == 1) p.fail_duplicate = 2;
+    if (mode == 2) p.fail_open = 2;
+    if (mode == 3) p.fail_publish = 1;
+    if (mode == 4) p.output_readonly = true;
+    if (mode == 5) p.claim_status = -EBADF;
+    if (mode == 6) p.finish_status = -EBADF;
+    if (mode == 7) p.fail_read_operation = gesher::binder_wire::kClaimBuffer;
+    if (mode == 8) p.fail_read_operation = gesher::binder_wire::kFinishBuffer;
+    if (mode == 9) p.fail_duplicate = 1;
+    if (mode == 10) p.fail_duplicate = 3;
+    if (mode == 11) p.fail_duplicate = 4;
+    if (mode == 12) p.fail_open = 1;
+    Output output; const auto before = output.bytes; errno = 0;
+    const int result = output.Run(mapping, p); const int error = errno;
+    const bool published = mode == 0 || mode == 6 || mode == 8;
+    if (published) {
+      Check(result == (mode == 0 ? 0 : -1), "post-publication transport status");
+      if (mode) Check(error == EBADF && p.pipe_closes == 1, "failed finish closes pipe but retains published output");
+      CheckPayload(payload, output.Transaction());
+      Check(output.request.read_consumed == 4 + sizeof(binder_transaction_data), "published output remains consumed");
+      Check(p.closes == 0 && mapping.file->allocations.size() == 1, "published FDs and allocation remain caller-owned");
+      SelectPeer selected(p);
+      auto tr = output.Transaction();
+      gesher::CloseReceivedFds(reinterpret_cast<uint8_t*>(tr.data.ptr.buffer), tr.data_size,
+                             reinterpret_cast<const void*>(tr.data.ptr.offsets), tr.offsets_size);
+      mapping.file->Free(tr.data.ptr.buffer);
+      Check(p.closed_fds == 2, "caller closes each received fd");
+      Check(p.closes == (FIXTURE_SHARED_DESCRIPTIONS ? 4 : 2), "caller releases all descriptor handles");
+    } else {
+      const int expected = mode == 1 || mode == 2 || mode >= 9 ? EMFILE : mode == 3 || mode == 4 ? EFAULT : EBADF;
+      Check(result == -1 && error == expected, "adoption/publication/claim failure errno");
+      Check(output.bytes == before && output.request.read_consumed == 0, "failed delivery did not publish");
+      Check(EmptyMapping(mapping), "failed post-validation delivery reclaims mapping");
+      Check(p.events[p.event_count - 1].operation == gesher::binder_wire::kFinishBuffer &&
+            !p.events[p.event_count - 1].accepted, "failed delivery sends rejected finish");
+      for (const auto& adopted : p.adopted) Check(!adopted.open, "every locally duplicated handle reclaimed");
+      if (mode == 5 || mode == 7) Check(p.duplicates == 0, "failed claim cannot acquire FD ownership");
+    }
+    Check(EmptyMapping(mapping), "FD case finished with empty mapping");
+  }
+}
+
+void MixedCommands() {
+  Mapping mapping; Peer p; BeginReply(p); Append<uint32_t>(&p.response, BR_NOOP);
+  Payload one(73); one.AppendTo(p, 701); Append<uint32_t>(&p.response, BR_TRANSACTION_COMPLETE);
+  Payload two(129); two.Pointer(4, 8); two.AppendTo(p, 702, BR_REPLY);
+  Output output; output.request.read_consumed = 3;
+  Check(output.Run(mapping, p) == 0, "multiple mixed commands with preexisting consumed prefix");
+  Check(output.bytes[0] == 0xcc && output.bytes[2] == 0xcc, "preexisting read prefix untouched");
+  const size_t first = 7, second = first + 4 + sizeof(binder_transaction_data) + 4;
+  CheckPayload(one, output.Transaction(first)); CheckPayload(two, output.Transaction(second));
+  Check(output.request.read_consumed == second + 4 + sizeof(binder_transaction_data), "mixed read cursor exact");
+  mapping.file->Free(output.Transaction(first).data.ptr.buffer);
+  mapping.file->Free(output.Transaction(second).data.ptr.buffer);
+  for (unsigned failed_publish = 1; failed_publish <= 2; ++failed_publish) {
+    Mapping m; Peer q; BeginReply(q); Append<uint32_t>(&q.response, BR_NOOP); one.AppendTo(q);
+    q.fail_publish = failed_publish; Output out; errno = 0;
+    Check(out.Run(m, q) == -1 && errno == EFAULT, "mixed publication failure");
+    Check(EmptyMapping(m), "mixed publication failure retires allocation");
+    Check(out.request.read_consumed == (failed_publish == 1 ? 0 : 4), "only successful prefix remains consumed");
+    Check(failed_publish == 1 ? q.pipe_closes == 1 && q.event_count == 0 : q.event_count == 2 && !q.events[1].accepted,
+          "prefix fault aborts connection; transaction fault abandons claimed delivery");
+  }
+  Peer limited; BeginReply(limited); one.AppendTo(limited); Output short_output;
+  short_output.request.read_size = sizeof(binder_transaction_data);
+  Check(short_output.Run(mapping, limited) == -1 && errno == EFAULT && limited.pipe_closes == 1,
+        "insufficient command output closes pipe before buffer installation");
+}
+
+void SenderSnapshots() {
+  Mapping mapping; Peer p; BeginReply(p, 0, 1); Output output;
+  std::array<uint8_t, 128> data{}; std::array<uint8_t, 16> extra{};
+  for (size_t i = 0; i < extra.size(); ++i) extra[i] = static_cast<uint8_t>(i + 6);
+  binder_buffer_object object{}; object.hdr.type = BINDER_TYPE_PTR;
+  object.buffer = reinterpret_cast<uintptr_t>(extra.data()); object.length = extra.size();
+  std::memcpy(data.data() + 4, &object, sizeof(object));
+  const std::array<uint64_t, 1> offsets{4};
+  binder_transaction_data_sg sg{}; sg.transaction_data.data_size = data.size();
+  sg.transaction_data.offsets_size = sizeof(offsets); sg.buffers_size = extra.size();
+  sg.transaction_data.data.ptr.buffer = reinterpret_cast<uintptr_t>(data.data());
+  sg.transaction_data.data.ptr.offsets = reinterpret_cast<uintptr_t>(offsets.data());
+  std::vector<uint8_t> command; Append<uint32_t>(&command, BC_TRANSACTION_SG); Append(&command, sg);
+  output.request.write_buffer = reinterpret_cast<uintptr_t>(command.data()); output.request.write_size = command.size();
+  Check(output.Run(mapping, p) == 0 && output.request.write_consumed == command.size(), "sender command snapshot remains supported");
+  constexpr size_t copy_error_at = 4 + 4 + 8 + 4 + 4 + 4 + sizeof(binder_transaction_data_sg);
+  constexpr size_t data_at = copy_error_at + 4 + (FIXTURE_SHARED_DESCRIPTIONS ? 4 : 0);
+  const auto copied = Load<binder_buffer_object>(p.request.data() + data_at + 4);
+  Check(copied.buffer == 0 && copied.length == extra.size(), "outbound SG owns relative wire pointer");
+  Check(std::memcmp(p.request.data() + data_at + data.size() + sizeof(offsets), extra.data(), extra.size()) == 0,
+        "outbound pointed-to bytes captured");
+  Check(Load<binder_buffer_object>(data.data() + 4).buffer == object.buffer,
+        "sender object and pointer remain unchanged");
+  Peer bad; BeginReply(bad, 0, 1); bad.bad_input = extra.data();
+  output.request.write_consumed = 0;
+  Check(output.Run(mapping, bad) == 0, "sender copy failure remains a broker transaction result");
+  Check(Load<int32_t>(bad.request.data() + copy_error_at) == EFAULT, "sender guarded copy error preserved");
+}
+
+thread_local Mapping* reentrant_mapping = nullptr;
+void NestedDelivery() {
+  Peer nested; BeginReply(nested); Payload payload(321); payload.AppendTo(nested, 902);
+  Output output;
+  Check(output.Run(*reentrant_mapping, nested) == 0, "reentrant distinct reply completes");
+  CheckPayload(payload, output.Transaction());
+  Check(reentrant_mapping->file->Free(output.Transaction().data.ptr.buffer) == 902, "reentrant allocation releases its own id");
+}
+void ReentryAndConcurrency() {
+  Mapping mapping; Peer p; BeginReply(p); Payload payload(4000); payload.AppendTo(p, 901);
+  reentrant_mapping = &mapping; p.on_claim = NestedDelivery; Output output;
+  Check(output.Run(mapping, p) == 0, "outer delivery survives claim-time reentry");
+  CheckPayload(payload, output.Transaction()); mapping.file->Free(output.Transaction().data.ptr.buffer);
+  Check(EmptyMapping(mapping), "nested allocation ownership restored");
+  std::array<std::thread, 4> threads;
+  for (size_t thread = 0; thread < threads.size(); ++thread) threads[thread] = std::thread([&, thread] {
+    for (size_t call = 0; call != 100; ++call) {
+      Peer q; BeginReply(q); Payload bytes(129 + thread); bytes.Pointer(4, 16); bytes.AppendTo(q, 1000 + thread);
+      Output out; Check(out.Run(mapping, q) == 0, "concurrent delivery shares mapped allocator safely");
+      CheckPayload(bytes, out.Transaction());
+      Check(mapping.file->Free(out.Transaction().data.ptr.buffer) == 1000 + thread, "concurrent free returns correct id");
+    }
+  });
+  for (auto& thread : threads) thread.join();
+  Check(EmptyMapping(mapping), "concurrent deliveries release all mapped blocks");
+}
+
+void Measure(bool gate) {
+  constexpr size_t payload_bytes = 4u << 20;
+  for (bool sg : {false, true}) {
+    Mapping mapping(payload_bytes + 65536); Peer p; BeginReply(p);
+    Payload payload(sg ? 129 : payload_bytes);
+    if (sg) { payload.Pointer(4, payload_bytes); payload.Pointer(44, 16, 0, 8); }
+    payload.AppendTo(p); Output output;
+    accounting::Begin();
+    const int result = output.Run(mapping, p);
+    const size_t allocations = accounting::allocations, bytes = accounting::bytes;
+    const size_t peak = accounting::peak, copied = accounting::copied;
+    mapping.file->Free(output.Transaction().data.ptr.buffer);
+    accounting::enabled = false;
+    Check(result == 0, "measurement production transaction succeeds");
+    // Allocator bookkeeping can survive until BinderFile is destroyed. Retire
+    // that owner before the next epoch; mapping storage was preallocated.
+    mapping.file.reset();
+    Check(accounting::live == 0, "delivery temporary storage fully retired");
+    std::printf("MEASURE %s payload=%zu allocations=%zu bytes=%zu peak=%zu copies=%zu\n",
+                sg ? "sg" : "plain", payload.data.size() + payload.offsets.size() * 8 + payload.extra.size(),
+                allocations, bytes, peak, copied);
+    if (gate) {
+      // The wire reply remains owned, but no second payload-sized snapshot may
+      // overlap it. Small metadata, validation and protocol allocations remain.
+      Check(bytes < payload_bytes + 8192, "one payload-sized temporary allocation budget");
+      Check(peak < payload_bytes + 8192, "one payload-sized live temporary budget");
+      Check(copied < payload_bytes + 8192, "one payload copy into receiver allocation budget");
+    }
+  }
+}
+}
+
+int main(int argc, char** argv) {
+  const bool gate = !(argc > 1 && std::strcmp(argv[1], "measure") == 0);
+  fixture::ValidDeliveries();
+  fixture::InvalidDeliveries();
+#if FIXTURE_SHARED_DESCRIPTIONS
+  fixture::FileDescriptionMetadata();
+#if FIXTURE_SOCKET_DESCRIPTIONS
+  fixture::SocketDescriptionMetadata();
+#endif
+#endif
+#if FIXTURE_NATIVE_FENCES
+  fixture::NativeFenceDescriptionMetadata();
+  fixture::SenderNativeFence();
+#endif
+  fixture::FdAndOwnershipFailures();
+  fixture::MixedCommands();
+  fixture::SenderSnapshots();
+  fixture::ReentryAndConcurrency();
+  fixture::Measure(gate);
+  std::printf("Binder receive views: %u checks, %u failures\n", fixture::checks.load(), fixture::failed.load());
+  return fixture::failed ? 1 : 0;
+}

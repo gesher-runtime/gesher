@@ -26,6 +26,19 @@ target_compile_options(gesher_libandroid PRIVATE -Wall -Wextra -Werror -Wno-unus
   -Wno-deprecated-anon-enum-enum-conversion -Wno-deprecated-copy)
 target_link_libraries(dalvikvm PRIVATE gesher_libandroid)
 
+# libandroid.so's AInputTransferToken and AInputReceiver (API 35) over the
+# framework's InputTransferToken natives (input_jni, cmake/aosp/input.cmake);
+# ADR 0089. gui/InputTransferToken.h is libgui's only header in aosp.lock.
+add_library(gesher_input_receiver OBJECT ${CMAKE_CURRENT_LIST_DIR}/input_receiver.cc)
+target_include_directories(gesher_input_receiver PRIVATE ${CMAKE_CURRENT_LIST_DIR}
+  ${AOSP_DIR}/frameworks/base/core/jni/include ${AOSP_DIR}/frameworks/native/libs/gui/include)
+target_link_libraries(gesher_input_receiver PRIVATE gesher_bionic gesher_elf binder utils log base
+  nativehelper)
+# AOSP's InputTransferToken.h marks one override only.
+target_compile_options(gesher_input_receiver PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
+  -Wno-inconsistent-missing-override)
+target_link_libraries(dalvikvm PRIVATE gesher_input_receiver)
+
 # Bitmap's NDK entry points over hwui's ABitmap storage, with the loaded
 # library's System V ABI and JNI proxy translated at the boundary.
 add_library(gesher_libjnigraphics OBJECT ${CMAKE_CURRENT_LIST_DIR}/libjnigraphics.cc)

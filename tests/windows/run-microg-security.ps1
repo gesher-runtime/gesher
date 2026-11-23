@@ -530,7 +530,15 @@ try {
     $permissionPid = $Matches[1]
     $null = Tool 'grant-notifications' @('pm', 'grant', $probe, 'android.permission.POST_NOTIFICATIONS')
     $null = WaitLog 'permission-cache-grant-observed' $permissionLog $offset @("GRANT_OBSERVED pid=$permissionPid") '' 30
-    $null = Tool 'revoke-notifications' @('pm', 'revoke', $probe, 'android.permission.POST_NOTIFICATIONS')
+    # An ordinary runtime revoke kills the UID (Android killUid). Observing the denial
+    # in the same live process uses Android's test-only revoke that skips that kill.
+    $env:GESHER_UID = '2000'
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'revoke-notifications-without-kill' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.IdentitySecurityTest', 'revoke-post-without-kill', $probe)
+    RequireOutput 'test-only POST revoke without kill' $text @('IdentitySecurityTest all passed')
+    $env:GESHER_UID = $null
+    $env:GESHER_BINDER_UID = $null
     $null = WaitLog 'permission-cache-revoke-same-process' $permissionLog $offset @(
         "PASS deny-grant-deny in same process pid=$permissionPid"
     ) '' 30
@@ -586,6 +594,33 @@ try {
     $null = Activity 'dpapi-roundtrip-after-server-restart' $owner '.AccountActivity' @('--ez', 'verify-retained-account', 'true') @(
         'account: protected storage survived restart true', 'account: retained account removed true'
     ) 'account: retained account removed'
+    # Actual Installer and protected storage: leave a live account, uninstall its
+    # authenticator, then prove that an identical APK cannot reacquire the account.
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'prepare-authenticator-owner-removal' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'owner-prepare')
+    RequireOutput 'real authenticator owns a live account' $text @('AccountClientRemovalProbe PASS_owner-prepare')
+    $env:GESHER_BINDER_UID = $null
+    $null = Launcher 'uninstall-active-authenticator' @('uninstall', $owner)
+    UseDevice
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'check-committed-authenticator-removal' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'owner-after')
+    RequireOutput 'uninstall purges provider accounts and client access' $text @('AccountClientRemovalProbe PASS_owner-after')
+    $env:GESHER_BINDER_UID = $null
+    $null = RememberDevice
+    $null = Launcher 'shutdown-after-authenticator-removal' @('shutdown')
+    $script:deviceLogs = Join-Path $run 'device-third-boot'
+    SetProfile $script:deviceRoot $script:deviceLogs
+    $null = Launcher 'restart-after-authenticator-removal' @('start')
+    $null = RememberDevice
+    $null = Launcher 'reinstall-identical-authenticator' @('install', (AndroidPath $DevsvcApk))
+    UseDevice
+    $env:GESHER_BINDER_UID = '2000'
+    $text = InvokeVm 'check-reinstalled-authenticator-retirement' @('-cp', (AndroidPath $ServicesDex),
+        'gesher.services.AccountClientRemovalProbe', 'owner-reinstall')
+    RequireOutput 'same-signer reinstall after restart leaves accounts retired' $text @('AccountClientRemovalProbe PASS_owner-reinstall')
+    $env:GESHER_BINDER_UID = $null
     Passed 'offline microG security integration complete'
 } catch {
     $script:failed = $true

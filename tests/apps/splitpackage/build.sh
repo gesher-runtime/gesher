@@ -84,20 +84,34 @@ sed 's/android:versionCode="1"/android:versionCode="1" android:versionCodeMajor=
 "$aapt2" link -o "$(native "$work/fixtures/foreign.apk")" -I "$(native "$framework_res")" \
   --manifest "$(native "$here/core/AndroidManifest.xml")" --rename-manifest-package com.gesher.foreignsplit \
   --package-id 128 "$(native "$work/core/res.zip")"
+# A deliberately unsupported ABI directory is enough to exercise ABI selection;
+# the candidate must be rejected before any attempt to load native code.
+mkdir -p "$work/foreign-abi/lib/x86"
+printf 'unsupported ABI fixture\n' > "$work/foreign-abi/lib/x86/libsplitprobe.so"
+cp "$work/fixtures/core.apk" "$work/fixtures/core-foreign-abi.apk"
+(cd "$work/foreign-abi" && jar -u -M -f "$(native "$work/fixtures/core-foreign-abi.apk")" lib)
 # jar -u may move a stored resources.arsc off its required four-byte boundary.
 # Keep every fixture valid for the same resource-table checks as installed APKs.
 for apk in "$work/fixtures/"*.apk; do
   "$zipalign" -f -p 4 "$(native "$apk")" "$(native "$work/aligned.apk")"
   mv "$work/aligned.apk" "$apk"
 done
-# The real PackageInstaller session path requires a verified signer. A separate
-# signed incomplete base reaches required-split validation and its status callback.
+# The PackageInstaller session tests exercise a verified complete cluster and
+# verified inherited additions, replacements, and rejection cases.
 keytool -genkeypair -keystore "$(native "$work/key.p12")" -storetype PKCS12 \
   -storepass fixture-only -alias fixture -keyalg RSA -keysize 2048 -validity 36500 \
   -dname 'CN=Gesher split package fixture' > /dev/null 2>&1
-java -jar "$(native "$BUILD_TOOLS_DIR/lib/apksigner.jar")" sign \
-  --ks "$(native "$work/key.p12")" --ks-pass pass:fixture-only \
-  --out "$(native "$work/fixtures/base-required-signed.apk")" \
-  "$(native "$work/fixtures/base-required.apk")"
+keytool -genkeypair -keystore "$(native "$work/other.p12")" -storetype PKCS12 \
+  -storepass fixture-only -alias fixture -keyalg RSA -keysize 2048 -validity 36500 \
+  -dname 'CN=Gesher foreign split fixture' > /dev/null 2>&1
+sign() {
+  java -jar "$(native "$BUILD_TOOLS_DIR/lib/apksigner.jar")" sign \
+    --ks "$(native "$work/$1.p12")" --ks-pass pass:fixture-only --v4-signing-enabled false \
+    --out "$(native "$work/fixtures/$3.apk")" "$(native "$work/fixtures/$2.apk")"
+}
+for apk in base base-required core core-typed entry entry-revised core-major core-foreign-abi foreign; do
+  sign key "$apk" "$apk-signed"
+done
+sign other core core-foreign-signer-signed
 (cd "$work/fixtures" && jar -c -M -f "$(native "$out/split-package-fixtures.zip")" .)
 echo "split-package-fixtures.zip written to $out"

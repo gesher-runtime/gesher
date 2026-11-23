@@ -1,6 +1,5 @@
 // gesher-base: Linux interfaces with little or no Windows equivalent —
-// termios on the console, prctl, capabilities, extended attributes, the
-// mount table, sendfile and syslog.
+// termios on the console, prctl, capabilities, mount table, sendfile and syslog.
 #include <errno.h>
 #include <mntent.h>
 #include <pthread.h>
@@ -11,10 +10,10 @@
 #include <sys/capability.h>
 #include <sys/prctl.h>
 #include <sys/sendfile.h>
-#include <sys/xattr.h>
 #include <syslog.h>
 #include <termios.h>
 #include <unistd.h>
+#include <gesher/stdio.h>
 
 #include <limits>
 
@@ -201,21 +200,6 @@ int capset(cap_user_header_t header, const cap_user_data_t data) {
   return 0;
 }
 
-// --- extended attributes ------------------------------------------------------------
-
-ssize_t getxattr(const char*, const char*, void*, size_t) { return errno = ENOTSUP, -1; }
-ssize_t lgetxattr(const char*, const char*, void*, size_t) { return errno = ENOTSUP, -1; }
-ssize_t fgetxattr(int, const char*, void*, size_t) { return errno = ENOTSUP, -1; }
-int setxattr(const char*, const char*, const void*, size_t, int) { return errno = ENOTSUP, -1; }
-int lsetxattr(const char*, const char*, const void*, size_t, int) { return errno = ENOTSUP, -1; }
-int fsetxattr(int, const char*, const void*, size_t, int) { return errno = ENOTSUP, -1; }
-ssize_t listxattr(const char*, char*, size_t) { return errno = ENOTSUP, -1; }
-ssize_t llistxattr(const char*, char*, size_t) { return errno = ENOTSUP, -1; }
-ssize_t flistxattr(int, char*, size_t) { return errno = ENOTSUP, -1; }
-int removexattr(const char*, const char*) { return errno = ENOTSUP, -1; }
-int lremovexattr(const char*, const char*) { return errno = ENOTSUP, -1; }
-int fremovexattr(int, const char*) { return errno = ENOTSUP, -1; }
-
 // --- mount table --------------------------------------------------------------------
 //
 // There is no mount table: setmntent opens an empty stream.
@@ -250,19 +234,26 @@ char* hasmntopt(const struct mntent* mnt, const char* opt) {
 // Reads up to and including `delim` into *lineptr, growing it with realloc.
 ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
   if (lineptr == nullptr || n == nullptr || stream == nullptr) return errno = EINVAL, -1;
+  gesher::stdio::StreamGuard lock(stream);
+  if (!lock) return -1;
   if (*lineptr == nullptr || *n == 0) {
+    char* initial = static_cast<char*>(realloc(*lineptr, 128));
+    if (initial == nullptr) { gesher::stdio::SetError(stream, ENOMEM); return -1; }
+    *lineptr = initial;
     *n = 128;
-    *lineptr = static_cast<char*>(realloc(*lineptr, *n));
-    if (*lineptr == nullptr) return errno = ENOMEM, -1;
   }
   size_t length = 0;
   for (;;) {
-    int c = getc(stream);
+    int c = gesher::stdio::Get(stream, true);
     if (c == EOF) break;
     if (length + 2 > *n) {  // room for c and the terminator
+      if (*n > static_cast<size_t>(std::numeric_limits<ssize_t>::max()) / 2) {
+        gesher::stdio::SetError(stream, EOVERFLOW);
+        return -1;
+      }
       size_t bigger = *n * 2;
       char* grown = static_cast<char*>(realloc(*lineptr, bigger));
-      if (grown == nullptr) return errno = ENOMEM, -1;
+      if (grown == nullptr) { gesher::stdio::SetError(stream, ENOMEM); return -1; }
       *lineptr = grown;
       *n = bigger;
     }
@@ -290,11 +281,8 @@ ssize_t sendfile(int out_fd, int in_fd, off_t* offset, size_t count) {
   }
   if (count == 0) return 0;
   auto seek_input = [in_fd](off_t position, int whence) {
-    off_t result = lseek(in_fd, position, whence);
-    // lseek is the CRT's 64-bit entry under _FILE_OFFSET_BITS=64. Do not
-    // narrow its result through the int-sized CrtResult helper.
-    if (result < 0) errno = gesher_errno_from_crt(errno);
-    return result;
+    // The descriptor adapter returns Linux errno and a full-width offset.
+    return lseek(in_fd, position, whence);
   };
   off_t position = offset != nullptr ? *offset : seek_input(0, SEEK_CUR);
   if (position < 0) {

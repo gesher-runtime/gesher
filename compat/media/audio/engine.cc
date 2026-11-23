@@ -844,7 +844,36 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
   const float dl = (gl - al) / static_cast<float>(std::max<size_t>(frames, 1));
   const float dr = (gr - ar) / static_cast<float>(std::max<size_t>(frames, 1));
 
-  for (; out_done < frames; out_done++) {
+  auto mix_frame = [&](const float* samples) {
+    al += dl;
+    ar += dr;
+    float* o = mix + out_done * out_channels;
+    float l, r;
+    if (ch == 1) {
+      l = r = samples[0];
+    } else if (ch == 2) {
+      l = samples[0];
+      r = samples[1];
+    } else {
+      // FL FR FC LFE BL BR SL SR ...: the center and the surrounds at -3 dB.
+      constexpr float k = 0.7071f;
+      l = samples[0];
+      r = samples[1];
+      if (ch > 2) { l += k * samples[2]; r += k * samples[2]; }
+      for (size_t c = 4; c + 1 < ch && c < 8; c += 2) { l += k * samples[c]; r += k * samples[c + 1]; }
+    }
+    l *= al;
+    r *= ar;
+    if (out_channels == 1) {
+      o[0] += 0.5f * (l + r);
+    } else {
+      o[0] += l;
+      o[1] += r;
+    }
+    ++out_done;
+  };
+
+  while (out_done < frames) {
     int64_t center = static_cast<int64_t>(std::floor(rs.t));
     size_t need = static_cast<size_t>(center + static_cast<int64_t>(width) + 1);
     while (rs.frames() < need) {
@@ -872,9 +901,26 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
       ended = true;
       break;
     }
-    // One output frame.
     if (passthrough) {
-      for (size_t c = 0; c < ch; c++) frame[c] = rs.hist[static_cast<size_t>(center) * ch + c];
+      // Unity-rate output already has contiguous source frames. Keep the
+      // existing read-ahead and history, but check availability once per span
+      // instead of once per output frame. A fractional phase left by a rate
+      // change keeps the single-frame path: rounding when adding 1 near an
+      // integer boundary can otherwise skip a source frame. The bounded
+      // integral span advances exactly, including in floating-point arithmetic.
+      size_t count = 1;
+      if (rs.t == static_cast<double>(center) && rs.t < 0x1p52) {
+        count = std::min({frames - out_done, rs.frames() - static_cast<size_t>(center), size_t{256}});
+      }
+      if (rs.real_end >= 0) {
+        count = std::min(count, static_cast<size_t>(rs.real_end - rs.start_index - center));
+      }
+      const float* samples = rs.hist.data() + static_cast<size_t>(center) * ch;
+      for (size_t i = 0; i < count; ++i) {
+        mix_frame(samples);
+        samples += ch;
+        rs.t += 1.0;
+      }
     } else {
       std::fill(frame.begin(), frame.end(), 0.0f);
       for (int64_t k = center - static_cast<int64_t>(width) + 1;
@@ -884,33 +930,9 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
         const float* s = &rs.hist[static_cast<size_t>(k) * ch];
         for (size_t c = 0; c < ch; c++) frame[c] += s[c] * w;
       }
+      mix_frame(frame.data());
+      rs.t += step;
     }
-    al += dl;
-    ar += dr;
-    float* o = mix + out_done * out_channels;
-    float l, r;
-    if (ch == 1) {
-      l = r = frame[0];
-    } else if (ch == 2) {
-      l = frame[0];
-      r = frame[1];
-    } else {
-      // FL FR FC LFE BL BR SL SR ...: the center and the surrounds at -3 dB.
-      constexpr float k = 0.7071f;
-      l = frame[0];
-      r = frame[1];
-      if (ch > 2) { l += k * frame[2]; r += k * frame[2]; }
-      for (size_t c = 4; c + 1 < ch && c < 8; c += 2) { l += k * frame[c]; r += k * frame[c + 1]; }
-    }
-    l *= al;
-    r *= ar;
-    if (out_channels == 1) {
-      o[0] += 0.5f * (l + r);
-    } else {
-      o[0] += l;
-      o[1] += r;
-    }
-    rs.t += passthrough ? 1.0 : step;
   }
   applied_left_ = gl;
   applied_right_ = gr;

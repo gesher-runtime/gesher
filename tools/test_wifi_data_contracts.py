@@ -97,6 +97,9 @@ def main() -> None:
         for name in ('wifi/WifiInfo', 'wifi/WifiSsid', 'wifi/SupplicantState',
                      'wifi/util/HexEncoding', 'wifi/ScanResult', 'wifi/MloLink',
                      'wifi/AnqpInformationElement', 'wifi/ScanResultSecurity',
+                     'wifi/WifiConfiguration', 'wifi/WifiEnterpriseConfig',
+                     'wifi/SecurityParams', 'wifi/ParcelUtil', 'wifi/OuiKeyedData',
+                     'wifi/util/PersistableBundleUtils',
                      'NetworkInfo', 'TransportInfo', 'MacAddress'):
             relative = 'app/java/android/net/' + name + '.java'
             source = ROOT / relative

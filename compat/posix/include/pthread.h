@@ -54,8 +54,15 @@ int gesher_pthread_getname_np(pthread_t thread, char* name, size_t len);
 #define pthread_setname_np gesher_pthread_setname_np
 #define pthread_getname_np gesher_pthread_getname_np
 
-// A signal sent to a thread is pending for the process, where sigwait takes
-// it (see signal.cc); winpthreads' pthread_kill only checks the thread.
+// Publish the inherited POSIX signal mask and private pending queue before
+// the new thread can run user code or accept a directed signal.
+int gesher_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
+                         void* (*start)(void*), void* argument);
+#undef pthread_create
+#define pthread_create gesher_pthread_create
+
+// Signal zero checks the actual target. Supported directed signals enter
+// that thread's queue, including when it has not entered its wait yet.
 int gesher_pthread_kill(pthread_t thread, int sig);
 #undef pthread_kill
 #define pthread_kill gesher_pthread_kill

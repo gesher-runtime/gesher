@@ -17,6 +17,10 @@ long gesher_toast_show(const wchar_t* app_id, const wchar_t* tag, const wchar_t*
                        const wchar_t* xml, int suppress_popup, int high);
 /* Removes one toast from the screen and the notification center. */
 long gesher_toast_remove(const wchar_t* app_id, const wchar_t* tag, const wchar_t* group);
+/* Remove a legacy identity only if its actual XML launch value matches.
+ * S_FALSE means another owner; API errors preserve the toast. */
+long gesher_toast_remove_if_launch(const wchar_t* app_id, const wchar_t* tag,
+                                  const wchar_t* group, const wchar_t* launch);
 /* Removes every toast of `app_id`. */
 long gesher_toast_clear(const wchar_t* app_id);
 

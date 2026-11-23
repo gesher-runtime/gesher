@@ -2,9 +2,12 @@
 public final class SettingsProviderHost {
     public static void main(String[] args) throws Exception {
         System.load(args[0]);
-        android.os.Binder.restoreCallingIdentity(((long)10042 << 32) | 834121);
-        gesher.services.SettingsProviderContractTest.contracts(args[1]);
-        if (android.os.Binder.getCallingUid() != 10042) throw new AssertionError("Caller identity was not restored");
+        // These direct calls cover storage/CRUD as the owning server. Ordinary remote
+        // reads and denied writes are covered by the separate Binder transport fixture.
+        long identity = android.os.Binder.clearCallingIdentity();
+        try { gesher.services.SettingsProviderContractTest.contracts(args[1]); }
+        finally { android.os.Binder.restoreCallingIdentity(identity); }
         System.out.println("Settings provider host passed: " + gesher.services.SettingsProviderContractTest.checks + " checks");
+        System.out.println("Settings write access host passed: " + gesher.services.SettingsWriteAccessTest.run(false) + " checks");
     }
 }

@@ -39,6 +39,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -81,16 +84,24 @@ public final class ApkPackage {
     private final List<String> mLauncherActivities = new ArrayList<>();
     private long mInstallTime = System.currentTimeMillis();
     private long mUpdateTime = mInstallTime;
+    private volatile PackageInstallSource mInstallSource = PackageInstallSource.UNKNOWN;
     private String mDataDir;
     private AppDataStorage mDataStorage;
     private String mNativeLibraryDir;  // null: <data dir>/lib
     private String mPrimaryCpuAbi;     // null: no native code (NativeLibs.abiFor)
     private final boolean mHasCode;
     private Boolean mVerifiedMicrogSigner;
-    private final int mUid;
+    private int mUid;
+    // Parsing an archive is not package admission. Only the server's identity
+    // transaction may attach a stable UID after validating the complete candidate.
+    private boolean mUidPending;
     private boolean mSystemAddon;
     private boolean mSigningIdentityChecked;
     private Signature[] mVerifiedSignatures;
+    // A parsed APK's verified signing identity is immutable. A replacement APK gets
+    // another ApkPackage; permission migration must not hash this certificate on
+    // each lookup after full admission verification has already succeeded.
+    private String mVerifiedSignerSha256;
     private int mVerifiedSignatureSchemeVersion;
     private com.android.apksig.SigningCertificateLineage mVerifiedLineage;
     // A parsed record can be used before a package service owns it (standalone tools).
@@ -191,7 +202,9 @@ public final class ApkPackage {
         if ("android".equals(packageName)) {
             throw new SecurityException("The platform package name is reserved");
         }
-        mUid = PackageUids.uidFor(packageName);
+        mUid = -1;
+        mUidPending = true;
+        parsed.setUid(-1);
         // Resolve the newly parsed APK, including before an install replaces the old one.
         sharedLibraries = SharedLibraryRegistry.resolve(parsed);
         mHasCode = parsed.isDeclaredHavingCode() && hasDex(apkPath);
@@ -447,6 +460,15 @@ public final class ApkPackage {
         mUpdateTime = lastUpdateTime;
     }
 
+    void setInstallSource(PackageInstallSource source) {
+        mInstallSource = source;
+    }
+
+    PackageInstallSource installSource() {
+        PackageInstallSource source = mInstallSource;
+        return source != null ? source : PackageInstallSource.UNKNOWN;
+    }
+
     public long firstInstallTime() {
         return mInstallTime;
     }
@@ -456,6 +478,13 @@ public final class ApkPackage {
     }
 
     public int uid() { return mUid; }
+    public String sharedUserId() { return parsed != null ? parsed.getSharedUserId() : null; }
+    boolean uidPending() { return mUidPending; }
+    void assignUid(int uid) {
+        mUid = uid;
+        mUidPending = uid < 0;
+        parsed.setUid(uid);
+    }
     void setSystemAddon(boolean enabled) {
         if (enabled) {
             Signature[] verified = verifiedSignatures();
@@ -488,6 +517,36 @@ public final class ApkPackage {
             }
         }
         return mVerifiedSignatures == null ? null : mVerifiedSignatures.clone();
+    }
+
+    /** Matches a SHA-256 certificate digest against the verified APK identity. */
+    synchronized boolean hasVerifiedSigningCertificate(byte[] certificate) {
+        Signature[] current = verifiedSignatures();
+        if (current == null) return false;
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
+        for (Signature signature : current) {
+            if (MessageDigest.isEqual(certificate, digest.digest(signature.toByteArray()))) return true;
+        }
+        // Like Android, only a lone current signer can have signing history.
+        if (current.length != 1 || mVerifiedLineage == null) return false;
+        try {
+            List<X509Certificate> history = mVerifiedLineage.getCertificatesInLineage();
+            if (history.isEmpty() || !current[0].equals(new Signature(
+                    history.get(history.size() - 1).getEncoded()))) return false;
+            for (int i = 0; i < history.size() - 1; i++) {
+                if (MessageDigest.isEqual(certificate, digest.digest(history.get(i).getEncoded()))) {
+                    return true;
+                }
+            }
+        } catch (CertificateEncodingException invalid) {
+            return false;
+        }
+        return false;
     }
 
     public static Signature[] verifySignatures(String path) {
@@ -534,10 +593,42 @@ public final class ApkPackage {
 
     public boolean hasVerifiedSigningIdentity() { return verifiedSignatures() != null; }
 
-    public String verifiedSignerSha256() {
+    /** Signing lineage derived solely from a successful full APK verifier. */
+    synchronized SigningDetails verifiedSigningDetails() {
+        Signature[] current = verifiedSignatures();
+        if (current == null) return SigningDetails.UNKNOWN;
+        try {
+            Signature[] past = null;
+            if (mVerifiedLineage != null) {
+                List<X509Certificate> certificates = mVerifiedLineage.getCertificatesInLineage();
+                if (!certificates.isEmpty() && current.length == 1
+                        && current[0].equals(new Signature(certificates.get(certificates.size() - 1).getEncoded()))) {
+                    past = new Signature[certificates.size()];
+                    for (int i = 0; i < past.length; i++) {
+                        X509Certificate certificate = certificates.get(i);
+                        past[i] = new Signature(certificate.getEncoded());
+                        var capabilities = mVerifiedLineage.getSignerCapabilities(certificate);
+                        int flags = 0;
+                        if (capabilities.hasInstalledData()) flags |= SigningDetails.CertCapabilities.INSTALLED_DATA;
+                        if (capabilities.hasSharedUid()) flags |= SigningDetails.CertCapabilities.SHARED_USER_ID;
+                        if (capabilities.hasPermission()) flags |= SigningDetails.CertCapabilities.PERMISSION;
+                        if (capabilities.hasRollback()) flags |= SigningDetails.CertCapabilities.ROLLBACK;
+                        if (capabilities.hasAuth()) flags |= SigningDetails.CertCapabilities.AUTH;
+                        past[i].setFlags(flags);
+                    }
+                }
+            }
+            return new SigningDetails(current, mVerifiedSignatureSchemeVersion, past);
+        } catch (Exception invalid) {
+            throw new SecurityException("Invalid verified signing lineage", invalid);
+        }
+    }
+
+    public synchronized String verifiedSignerSha256() {
+        if (mVerifiedSignerSha256 != null) return mVerifiedSignerSha256;
         Signature[] signatures = verifiedSignatures();
         if (signatures == null || signatures.length != 1) return null;
-        return certificateSha256(signatures[0].toByteArray());
+        return mVerifiedSignerSha256 = certificateSha256(signatures[0].toByteArray());
     }
 
     private static String certificateSha256(byte[] certificate) {
@@ -617,27 +708,43 @@ public final class ApkPackage {
         return certificateSha256(current[0].toByteArray());
     }
 
-    /** Full APK integrity verification, separate from our compatibility cert collection. */
+    /** Official-addon policy over this generation's fully verified, unspoofed identity. */
     synchronized boolean hasVerifiedMicrogSigner() {
         if (mVerifiedMicrogSigner == null) {
-            mVerifiedMicrogSigner = GmsSignatureSpoofing.verifyOfficialApk(apkPath);
+            // verifiedSignerSha256() first performs full content verification, then
+            // caches only on this ApkPackage. Do not derive a second, independent
+            // signer result or share trust with another APK generation. Only the
+            // v1 legacy GSF branch reads the file again, for its exact whole-file pin.
+            mVerifiedMicrogSigner = GmsSignatureSpoofing.MICROG_CERT_SHA256.equals(verifiedSignerSha256())
+                    && (mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V2
+                        || mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3
+                        || mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.JAR
+                            && GmsSignatureSpoofing.isPinnedLegacyGsf(apkPath));
         }
         return mVerifiedMicrogSigner;
     }
 
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
+        return packageInfo(flags, false);
+    }
+
+    private PackageInfo packageInfo(long flags, boolean providerQuery) {
         if ((flags & DIRECT_BOOT) == 0) {
             flags |= DIRECT_BOOT;
         }
         PackageEnabledStore.State state = enabledState();
         // Include manifest-disabled declarations before applying installed overrides.
+        // A provider query also needs both boot states: choose its registered first
+        // component before either boot-state or enabled-state filtering.
         PackageInfo pi = PackageInfoCommonUtils.generate(parsed,
-                flags | PackageManager.MATCH_DISABLED_COMPONENTS, 0 /* userId */);
+                flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0),
+                0 /* userId */);
         installed(pi.applicationInfo, state, flags);
         pi.activities = installedComponents(pi.activities, pi.applicationInfo, flags, state);
         pi.receivers = installedComponents(pi.receivers, pi.applicationInfo, flags, state);
         pi.services = installedComponents(pi.services, pi.applicationInfo, flags, state);
+        if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
         pi.firstInstallTime = mInstallTime;
         pi.lastUpdateTime = mUpdateTime;
@@ -860,12 +967,29 @@ public final class ApkPackage {
         return result;
     }
 
-    /** The content providers the manifest declares. */
+    /**
+     * The registered providers, with the first declaration of each component owning
+     * its process, authorities and metadata (ComponentResolver.addProvider). Keep this
+     * common to bind, publication and PackageManager's authority/component queries.
+     */
     public List<ProviderInfo> providers(long flags) {
-        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS);
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true);
         List<ProviderInfo> result = new ArrayList<>();
         if (pi.providers != null) Collections.addAll(result, pi.providers);
         return result;
+    }
+
+    private static ProviderInfo[] registeredProviders(ProviderInfo[] providers, long flags) {
+        if (providers == null) return null;
+        Set<String> components = new HashSet<>();
+        int count = 0;
+        for (ProviderInfo info : providers) {
+            if (!components.add(info.name)) continue;
+            long bootState = info.directBootAware ? PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    : PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+            if ((flags & bootState) != 0) providers[count++] = info;
+        }
+        return count == providers.length ? providers : Arrays.copyOf(providers, count);
     }
 
     /** A component whose intent filter matched, and how. */

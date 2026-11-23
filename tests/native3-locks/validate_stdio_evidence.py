@@ -66,8 +66,10 @@ def main():
         assert stack['captured'] == stack['closed'] == '1' and stack['error'] == '0'
         assert stack['suspend-before'] == '0' and stack['resume-before'] == '1' and int(stack['birth']) > 0
         call = exactly(group, 'ACTUAL_CLOSER_FILE_CALL index=')
-        assert hexvalue(call['unwound-rsi']) == hexvalue(call['FILE']) == hexvalue(held['FILE']) == hexvalue(stack['FILE'])
-        assert call['exact-mov-rsi-rcx-and-lock-file-iat'] == 'true'
+        argument_register = call['argument-register']
+        assert argument_register in {'rsi', 'rdi'}, 'Unknown FILE argument instruction chain'
+        assert hexvalue(call['unwound-' + argument_register]) == hexvalue(call['FILE']) == hexvalue(held['FILE']) == hexvalue(stack['FILE'])
+        assert call['exact-file-argument-and-lock-file-iat'] == 'true'
         enter = exactly(group, 'ACTUAL_CLOSER_ENTER_FRAME ')
         begin, end = hexvalue(enter['unwind-begin']), hexvalue(enter['unwind-end'])
         assert begin <= hexvalue(enter['pc']) < end and begin <= hexvalue(enter['named-entry']) < end

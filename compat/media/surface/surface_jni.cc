@@ -4,7 +4,10 @@
 //
 //  - android.graphics.SurfaceTexture: a QueueSurface (queue_surface.h) for its
 //    producer; each frame calls SurfaceTexture.postEventFromNative, so the
-//    TextureView updates its layer and invalidates.
+//    TextureView updates its layer and invalidates. Its GL side
+//    (updateTexImage into the app's GL_TEXTURE_EXTERNAL_OES texture,
+//    attach/detach, releaseTexImage, the transform and time stamp of the
+//    latched frame) is surface_texture_gl.h's.
 //  - TextureView's layer: HardwareRenderer.nCreateTextureLayer makes a
 //    Gesher TextureLayer (not hwui's DeferredLayerUpdater, which needs the
 //    device's ASurfaceTexture), TextureLayer's natives configure it, and
@@ -18,6 +21,8 @@
 //  - android.view.Surface's nativeCreateFromSurfaceTexture and
 //    nativeGetFromBlastBufferQueue, which the host's android_view_Surface.cpp
 //    leaves out.
+//  - The surfaces' side of android.view.Surface in Parcels
+//    (compat/framework/surface_parcel.cc, surface_parcel_bridge.h).
 //
 // Registered from register_gesher_media (after hwui's and the device
 // stand-ins' tables, which these replace in part). Compiled into hwui.
@@ -53,8 +58,13 @@
 #include <memory>
 #include <mutex>
 
+#include <gesher/perf_trace.h>
+
 #include "frame_invalidation.h"
 #include "queue_surface.h"
+#include "surface_parcel_bridge.h"
+#include "surface_texture_gl.h"
+#include "video_scaling.h"
 
 #if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
@@ -132,7 +142,8 @@ class FrameImages {
 struct SurfaceTextureState {
   android::sp<QueueSurface> surface;
   jobject weak_self = nullptr;  // global ref to the WeakReference
-  int64_t timestamp_ns = 0;
+  // The GL side: the external texture updateTexImage latches frames into.
+  std::unique_ptr<gesher::media::GlTextureConsumer> consumer;
   bool released = false;
 };
 
@@ -147,9 +158,13 @@ SurfaceTextureState* StateOf(JNIEnv* env, jobject thiz) {
   return reinterpret_cast<SurfaceTextureState*>(env->GetLongField(thiz, gST.surface_texture));
 }
 
-void JNICALL ST_init(JNIEnv* env, jobject thiz, jboolean, jint, jboolean, jobject weak_self) {
+// SurfaceTexture.nativeInit(isDetached, texName, singleBufferMode, weakSelf).
+void JNICALL ST_init(JNIEnv* env, jobject thiz, jboolean detached, jint tex_name, jboolean,
+                     jobject weak_self) {
   auto* s = new SurfaceTextureState();
   s->surface = android::sp<QueueSurface>::make(1, 1);
+  s->consumer = std::make_unique<gesher::media::GlTextureConsumer>(
+      detached != JNI_FALSE, static_cast<uint32_t>(tex_name));
   s->weak_self = env->NewGlobalRef(weak_self);
   jobject weak = s->weak_self;
   s->surface->SetListener([weak] {
@@ -165,6 +180,7 @@ void ReleaseState(JNIEnv* env, SurfaceTextureState* s) {
   if (s == nullptr || s->released) return;
   s->released = true;
   s->surface->Abandon();
+  s->consumer->Abandon();
 }
 
 void JNICALL ST_release(JNIEnv* env, jobject thiz) { ReleaseState(env, StateOf(env, thiz)); }
@@ -187,32 +203,59 @@ void JNICALL ST_setDefaultBufferSize(JNIEnv* env, jobject thiz, jint w, jint h) 
   if (SurfaceTextureState* s = StateOf(env, thiz)) s->surface->SetDefaultSize(w, h);
 }
 
-// No GL texture behind it: latching a frame only takes its time stamp (apps that
-// sample the external texture themselves get nothing new).
+// updateTexImage and releaseTexImage throw as android_graphics_SurfaceTexture.cpp
+// does: INVALID_OPERATION (no or another EGL context current) is an
+// IllegalStateException, other errors (abandoned: NO_INIT) a RuntimeException.
+void ThrowForStatus(JNIEnv* env, int err, const char* invalid_operation) {
+  if (err == gesher::media::GlTextureConsumer::kInvalidOperation) {
+    jniThrowException(env, "java/lang/IllegalStateException", invalid_operation);
+  } else if (err < 0) {
+    jniThrowException(env, "java/lang/RuntimeException",
+                      "Error during updateTexImage (see logcat for details)");
+  }
+}
+
+// The newest frame into the external texture (surface_texture_gl.h).
 void JNICALL ST_updateTexImage(JNIEnv* env, jobject thiz) {
   SurfaceTextureState* s = StateOf(env, thiz);
   if (s == nullptr) return;
-  auto f = s->surface->Latest();
-  if (f != nullptr) s->timestamp_ns = f->timestamp_ns;
+  ThrowForStatus(env, s->consumer->UpdateTexImage(s->surface->Latest()),
+                 "Unable to update texture contents (see logcat for details)");
 }
 
-void JNICALL ST_releaseTexImage(JNIEnv*, jobject) {}
+void JNICALL ST_releaseTexImage(JNIEnv* env, jobject thiz) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  if (s == nullptr) return;
+  ThrowForStatus(env, s->consumer->ReleaseTexImage(),
+                 "Unable to release texture contents (see logcat for details)");
+}
 
 jlong JNICALL ST_getTimestamp(JNIEnv* env, jobject thiz) {
   SurfaceTextureState* s = StateOf(env, thiz);
-  return s != nullptr ? s->timestamp_ns : 0;
+  return s != nullptr ? s->consumer->Timestamp() : 0;
 }
 
 jint JNICALL ST_getDataSpace(JNIEnv*, jobject) { return 0; }
 
-// The usual transform of a buffer for GL's bottom-up texture coordinates.
-void JNICALL ST_getTransformMatrix(JNIEnv* env, jobject, jfloatArray mtx) {
-  const jfloat m[16] = {1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1};
+// The latched frame's transform: the identity before one is latched, then the
+// vertical flip of a buffer without crop or transform.
+void JNICALL ST_getTransformMatrix(JNIEnv* env, jobject thiz, jfloatArray mtx) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  if (s != nullptr) s->consumer->TransformMatrix(m);
   if (mtx != nullptr && env->GetArrayLength(mtx) >= 16) env->SetFloatArrayRegion(mtx, 0, 16, m);
 }
 
-jint JNICALL ST_detachFromGLContext(JNIEnv*, jobject) { return 0; }
-jint JNICALL ST_attachToGLContext(JNIEnv*, jobject, jint) { return 0; }
+// The Java side throws RuntimeException for a non-zero status.
+jint JNICALL ST_detachFromGLContext(JNIEnv* env, jobject thiz) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  return s != nullptr ? s->consumer->DetachFromContext() : 0;
+}
+
+jint JNICALL ST_attachToGLContext(JNIEnv* env, jobject thiz, jint tex_name) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  return s != nullptr ? s->consumer->AttachToContext(static_cast<uint32_t>(tex_name)) : 0;
+}
 
 // Surface.nativeCreateFromSurfaceTexture(SurfaceTexture): its producer side.
 jlong JNICALL Surface_createFromSurfaceTexture(JNIEnv* env, jclass, jobject surface_texture) {
@@ -304,6 +347,12 @@ void JNICALL TV_unlockCanvasAndPost(JNIEnv* env, jclass, jlong native_window, jo
 
 // --- TextureView's layer --------------------------------------------------------------------
 
+SkRect VideoSourceRect(const SurfaceFrame& frame, int width, int height) {
+  const auto crop = gesher::media::VideoDisplayCrop(
+      frame.width, frame.height, width, height, frame.video_scaling_mode);
+  return SkRect::MakeLTRB(crop.left, crop.top, crop.right, crop.bottom);
+}
+
 class TextureLayer : public android::VirtualLightRefBase {
  public:
   std::mutex mu;
@@ -316,11 +365,13 @@ class TextureLayer : public android::VirtualLightRefBase {
   sk_sp<SkColorFilter> filter;
   FrameImages images;
 
-  sk_sp<SkImage> Image() {
+  sk_sp<SkImage> Image(std::shared_ptr<const SurfaceFrame>* frame_out = nullptr) {
     // Serialize cache publication with attachment/detachment. Otherwise an
     // older in-flight read could repopulate the cache after detach cleared it.
     std::lock_guard<std::mutex> lock(mu);
-    return images.Get(surface != nullptr ? surface->Latest() : nullptr);
+    auto frame = surface != nullptr ? surface->Latest() : nullptr;
+    if (frame_out != nullptr) *frame_out = frame;
+    return images.Get(frame);
   }
 };
 
@@ -335,7 +386,8 @@ class TextureLayerDrawable : public SkDrawable {
   }
 
   void onDraw(SkCanvas* canvas) override {
-    sk_sp<SkImage> image = layer_->Image();
+    std::shared_ptr<const SurfaceFrame> frame;
+    sk_sp<SkImage> image = layer_->Image(&frame);
     if (image == nullptr) return;
     SkPaint paint;
     SkMatrix m;
@@ -351,9 +403,10 @@ class TextureLayerDrawable : public SkDrawable {
     }
     canvas->save();
     canvas->concat(m);
-    canvas->drawImageRect(image.get(), SkRect::MakeIWH(image->width(), image->height()),
+    canvas->drawImageRect(image.get(), VideoSourceRect(*frame, w, h),
                           SkRect::MakeIWH(w, h), SkSamplingOptions(SkFilterMode::kLinear), &paint,
-                          SkCanvas::kFast_SrcRectConstraint);
+                          frame->video_scaling_mode == 2 ? SkCanvas::kStrict_SrcRectConstraint
+                                                         : SkCanvas::kFast_SrcRectConstraint);
     canvas->restore();
   }
 
@@ -384,13 +437,22 @@ jlong JNICALL HR_createTextureLayer(JNIEnv*, jclass, jlong) {
 // A TextureView's frame copied into a Bitmap (TextureView.getBitmap).
 jboolean JNICALL HR_copyLayerInto(JNIEnv*, jclass, jlong, jlong layer_ptr, jlong bitmap_ptr) {
   TextureLayer* layer = LayerOf(layer_ptr);
-  sk_sp<SkImage> image = layer != nullptr ? layer->Image() : nullptr;
+  std::shared_ptr<const SurfaceFrame> frame;
+  sk_sp<SkImage> image = layer != nullptr ? layer->Image(&frame) : nullptr;
   if (image == nullptr) return JNI_FALSE;
+  int width, height;
+  {
+    std::lock_guard<std::mutex> lock(layer->mu);
+    width = layer->width;
+    height = layer->height;
+  }
   SkBitmap bitmap;
   android::bitmap::toBitmap(bitmap_ptr).getSkBitmap(&bitmap);
   SkCanvas canvas(bitmap);
-  canvas.drawImageRect(image.get(), SkRect::MakeIWH(bitmap.width(), bitmap.height()),
-                       SkSamplingOptions(SkFilterMode::kLinear));
+  canvas.drawImageRect(image.get(), VideoSourceRect(*frame, width, height),
+                       SkRect::MakeIWH(bitmap.width(), bitmap.height()),
+                       SkSamplingOptions(SkFilterMode::kLinear), nullptr,
+                       SkCanvas::kStrict_SrcRectConstraint);
   bitmap.notifyPixelsChanged();
   return JNI_TRUE;
 }
@@ -477,6 +539,7 @@ struct ViewSurface {
   std::atomic<unsigned> requests{0}, failures{0}, draws{0}, consumes{0};
   std::atomic<bool> traced_nonblack{false};
   std::atomic<bool> pending_frame{false};
+  std::atomic<uint64_t> traced_frame{0};  // GESHER_PERF_TRACE: the last frame drawn
 };
 
 bool TraceInvalidation() {
@@ -575,8 +638,19 @@ class ViewSurfaceDrawable : public SkDrawable {
   SkRect onGetBounds() override { return SkRect::MakeIWH(w_, h_); }
 
   void onDraw(SkCanvas* canvas) override {
+    // Each frame of the SurfaceView drawn into its window; the count is the
+    // frames its producer queued since the last one drawn that were never shown.
+    static gesher::perf::Site draw_site("SurfaceView: draw its frame into the window (count: frames not shown)");
+    const int64_t draw_start = gesher::perf::Now();
     const auto frame = vs_->surface->Latest();
     sk_sp<SkImage> image = vs_->images.Get(frame);
+    if (gesher::perf::Enabled() && frame != nullptr) {
+      const uint64_t last = vs_->traced_frame.exchange(frame->number, std::memory_order_relaxed);
+      if (last != frame->number) {
+        draw_site.Add(gesher::perf::Now() - draw_start,
+                      last != 0 && frame->number > last + 1 ? static_cast<int64_t>(frame->number - last - 1) : 0);
+      }
+    }
     if (TraceInvalidation()) {
       const unsigned consume = vs_->consumes.fetch_add(1, std::memory_order_relaxed) + 1;
       if (consume <= 16) {
@@ -594,9 +668,10 @@ class ViewSurfaceDrawable : public SkDrawable {
       canvas->clipRRect(SkRRect::MakeRectXY(SkRect::MakeIWH(w_, h_), radius_, radius_), true);
     }
     // The buffer scaled to the view, as SurfaceFlinger scales a SurfaceView's layer.
-    canvas->drawImageRect(image.get(), SkRect::MakeIWH(image->width(), image->height()),
+    canvas->drawImageRect(image.get(), VideoSourceRect(*frame, w_, h_),
                           SkRect::MakeIWH(w_, h_), SkSamplingOptions(SkFilterMode::kLinear), &paint,
-                          SkCanvas::kFast_SrcRectConstraint);
+                          frame->video_scaling_mode == 2 ? SkCanvas::kStrict_SrcRectConstraint
+                                                         : SkCanvas::kFast_SrcRectConstraint);
     canvas->restore();
   }
 
@@ -823,4 +898,70 @@ int register_gesher_media_surfaces(JNIEnv* env) {
   REG("android/view/TextureView", kTextureView);
 #undef REG
   return 0;
+}
+
+// --- Surfaces in Parcels (compat/framework/surface_parcel.cc) -------------------------
+//
+// android.view.Surface crosses processes as a producer endpoint (Chromium's GPU
+// process draws into the browser's SurfaceView). surface_parcel.cc, which has
+// libbinder, does the Binder side through these (surface_parcel_bridge.h).
+
+namespace {
+
+QueueSurface* QueueOf(jlong native_object) {
+  auto* surface = reinterpret_cast<android::Surface*>(native_object);
+  return surface != nullptr ? QueueSurface::From(surface) : nullptr;
+}
+
+}  // namespace
+
+extern "C" bool gesher_surface_queue_size(jlong native_object, int* width, int* height) {
+  QueueSurface* queue = QueueOf(native_object);
+  if (queue == nullptr) return false;
+  // The consumer's size (BufferQueue's default size), not a producer's user
+  // dimensions: NATIVE_WINDOW_WIDTH, as libgui's Surface asks its BufferQueue.
+  queue->query(NATIVE_WINDOW_WIDTH, width);
+  queue->query(NATIVE_WINDOW_HEIGHT, height);
+  return true;
+}
+
+extern "C" bool gesher_surface_post(jlong native_object, int width, int height, int stride,
+                                    int64_t timestamp_ns, const uint32_t* pixels,
+                                    int video_scaling_mode) {
+  QueueSurface* queue = QueueOf(native_object);
+  return queue != nullptr && queue->PostFrame(width, height, stride, pixels, timestamp_ns,
+                                              video_scaling_mode);
+}
+
+extern "C" jlong gesher_surface_create_forwarding(int width, int height,
+                                                  GesherSurfaceFrameFn on_frame,
+                                                  GesherSurfaceReleaseFn release, void* context) {
+  android::sp<QueueSurface> surface = android::sp<QueueSurface>::make(width, height);
+  QueueSurface* raw = surface.get();
+  const jlong self = reinterpret_cast<jlong>(static_cast<android::Surface*>(raw));
+  // The listener owns the context: Publish calls a copy of it, so the context
+  // stays while a frame is being handed over, and goes with the last copy once
+  // the surface is destroyed or abandoned (which drops its listener).
+  std::shared_ptr<void> owner(context, release);
+  surface->SetListener([raw, self, on_frame, owner] {
+    std::shared_ptr<const SurfaceFrame> frame = raw->Latest();
+    if (frame != nullptr) {
+      on_frame(owner.get(), self, frame->width, frame->height, frame->timestamp_ns,
+               frame->pixels.data(), frame->video_scaling_mode);
+    }
+  });
+  raw->incStrong(reinterpret_cast<void*>(&gesher_surface_create_forwarding));
+  return self;
+}
+
+extern "C" void gesher_surface_set_default_size(jlong native_object, int width, int height) {
+  if (QueueSurface* queue = QueueOf(native_object)) queue->SetDefaultSize(width, height);
+}
+
+extern "C" void gesher_surface_abandon(jlong native_object) {
+  if (QueueSurface* queue = QueueOf(native_object)) queue->Abandon();
+}
+
+extern "C" android::RefBase* gesher_surface_refbase(jlong native_object) {
+  return static_cast<android::RefBase*>(reinterpret_cast<android::Surface*>(native_object));
 }

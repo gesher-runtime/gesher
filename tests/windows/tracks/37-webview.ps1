@@ -116,6 +116,22 @@ public static class GesherWebViewWin32 {
 
 $webviewFailedBefore = $failed
 
+# Real COM marshal/unmarshal and retained-body lifetime, without a browser.
+if (Test-Path "$Dir/webview_owned_stream_test.exe") {
+  $streamProbe = Start-Process "$Dir/webview_owned_stream_test.exe" -NoNewWindow -PassThru
+  if (-not $streamProbe.WaitForExit(60000)) {
+    $streamProbe.Kill($true); $streamProbe.WaitForExit()
+    Write-Host 'FAIL  webview owned stream COM gate timed out'
+    $script:failed++
+  } elseif ($streamProbe.ExitCode -ne 0) {
+    Write-Host "FAIL  webview owned stream COM gate exit $($streamProbe.ExitCode)"
+    $script:failed++
+  }
+} else {
+  Write-Host 'FAIL  webview_owned_stream_test.exe is missing'
+  $script:failed++
+}
+
 # --- 1. The probe -------------------------------------------------------------
 if (-not $WebView2Version) {
   Write-Host 'FAIL  webview2: no WebView2 Runtime on this machine'
@@ -209,21 +225,32 @@ function WebAppCheck([string] $Name, [string[]] $Arguments, [string[]] $Expect, 
         $problems += "phase 3: windows '$($windows -join '; ')', asset view $asset"
       }
       $am = [regex]::Match($asset, '^(\d+),(\d+) (\d+)x(\d+)$')
-      $px = [GesherWebViewWin32]::CaptureFull($hwnd)
-      if ($null -eq $px -or -not $am.Success) {
-        $problems += 'PrintWindow failed'
-      } else {
-        $top = [int]$am.Groups[2].Value; $height = [int]$am.Groups[4].Value
-        $red = [GesherWebViewWin32]::Count($px, 0, $top, 0xff0000)
-        $green = [GesherWebViewWin32]::Count($px, $top + 2, $top + $height - 2, 0x00ff00)
-        $greenAbove = [GesherWebViewWin32]::Count($px, 0, $top, 0x00ff00)
-        # The blue 40x40 view over the asset WebView (rows 220-260 at the right edge).
-        $blue = [GesherWebViewWin32]::Count($px, 224, 256, 0x0000ff)
-        Write-Host "INFO  webapp.apk read back ($($px[0])x$($px[1]), PW_RENDERFULLCONTENT): header red $($red[0]) of $($red[1]), asset WebView green $($green[0]) of $($green[1]), green above it $($greenAbove[0]), blue view over it $($blue[0]) pixels"
-        if ($red[0] -lt 0.95 * $red[1]) { $problems += 'the header is not red' }
-        if ($green[0] -lt 0.9 * $green[1]) { $problems += 'the asset WebView is not green in the window' }
-        if ($greenAbove[0] -gt 0) { $problems += 'green above the asset WebView' }
-        if ($blue[0] -lt 0.9 * 40 * 32) { $problems += "the view over the asset WebView does not show ($($blue[0]) blue pixels)" }
+      # The independent full-window capture and the shared client capture used by
+      # real-app e2e must both see the actual composed child and its overlay. A
+      # CPU-only shared capture can retain the pixels underneath the WebView.
+      # Each result is required; one capture cannot substitute for the other.
+      $captures = @(
+        @{ Name = 'full-window reference'; Pixels = [GesherWebViewWin32]::CaptureFull($hwnd) },
+        @{ Name = 'shared client capture'; Pixels = [GesherWin32]::Capture($hwnd) }
+      )
+      foreach ($capture in $captures) {
+        $px = $capture.Pixels
+        $captureName = $capture.Name
+        if ($null -eq $px -or -not $am.Success) {
+          $problems += "$captureName`: PrintWindow failed"
+        } else {
+          $top = [int]$am.Groups[2].Value; $height = [int]$am.Groups[4].Value
+          $red = [GesherWebViewWin32]::Count($px, 0, $top, 0xff0000)
+          $green = [GesherWebViewWin32]::Count($px, $top + 2, $top + $height - 2, 0x00ff00)
+          $greenAbove = [GesherWebViewWin32]::Count($px, 0, $top, 0x00ff00)
+          # The blue 40x40 view over the asset WebView (rows 220-260 at the right edge).
+          $blue = [GesherWebViewWin32]::Count($px, 224, 256, 0x0000ff)
+          Write-Host "INFO  webapp.apk $captureName read back ($($px[0])x$($px[1]), PW_RENDERFULLCONTENT): header red $($red[0]) of $($red[1]), asset WebView green $($green[0]) of $($green[1]), green above it $($greenAbove[0]), blue view over it $($blue[0]) pixels"
+          if ($red[0] -lt 0.95 * $red[1]) { $problems += "$captureName`: the header is not red" }
+          if ($green[0] -lt 0.9 * $green[1]) { $problems += "$captureName`: the asset WebView is not green in the window" }
+          if ($greenAbove[0] -gt 0) { $problems += "$captureName`: green above the asset WebView" }
+          if ($blue[0] -lt 0.9 * 40 * 32) { $problems += "$captureName`: the view over the asset WebView does not show ($($blue[0]) blue pixels)" }
+        }
       }
     }
     if ($Extra) { $problems += & $Extra $hwnd (& $read) }
