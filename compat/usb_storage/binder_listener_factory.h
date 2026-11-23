@@ -1,0 +1,59 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#include <windows.h>
+
+#include <memory>
+#include <mutex>
+#include <span>
+#include <string>
+
+namespace gesher::usb_storage {
+
+class AuthorityLaunch;
+
+// One protected data endpoint owned by the USB authority for one binderd
+// process. Only the authority can create additional named-pipe instances.
+class BinderListenerFactory final {
+ public:
+  static DWORD Create(const AuthorityLaunch& broker, std::span<PSID const> app_containers,
+                      std::unique_ptr<BinderListenerFactory>* result);
+  ~BinderListenerFactory();
+  BinderListenerFactory(const BinderListenerFactory&) = delete;
+  BinderListenerFactory& operator=(const BinderListenerFactory&) = delete;
+
+  const std::wstring& name() const { return name_; }
+
+  // Returns a noninheritable value in the exact broker process's handle table.
+  // The authority publishes it only over its authenticated private control
+  // connection. If publication is ambiguous, revoke the session and do not
+  // try to close this value remotely: the broker might already have reused it.
+  DWORD Take(HANDLE* broker_listener);
+
+  // Stop vending listeners, and stop the exact process to retire all listeners
+  // already offered. This is the lifetime of Binder, independent of a USB grant.
+  DWORD Revoke();
+
+#ifdef GESHER_BINDER_LISTENER_FACTORY_FIXTURE
+  // Separately linked native fixture. The production library has no alternate
+  // owner, process source or SCM identity.
+  static DWORD CreateForFixture(HANDLE broker, PSID owner, std::span<PSID const> app_containers,
+                                std::unique_ptr<BinderListenerFactory>* result);
+#endif
+
+ private:
+  BinderListenerFactory() = default;
+  static DWORD CreateOwned(HANDLE broker, PSID owner, std::span<PSID const> app_containers,
+                           std::unique_ptr<BinderListenerFactory>* result);
+
+  std::wstring name_;
+  HANDLE broker_ = nullptr;
+  HANDLE guard_ = INVALID_HANDLE_VALUE;
+  HANDLE guard_client_ = INVALID_HANDLE_VALUE;
+  std::mutex mutex_;
+  bool published_ = false;
+  bool revoked_ = false;
+};
+
+}  // namespace gesher::usb_storage
