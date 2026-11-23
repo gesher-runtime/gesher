@@ -38,6 +38,9 @@ if(GESHER_STRIP)
   add_link_options(-s)
 endif()
 
+# Machine-installed optional USB authority has only Win32 dependencies.
+add_subdirectory(compat/usb_storage)
+
 # gesher-base: POSIX/Linux interfaces implemented on Win32.
 include(compat/posix/posix.cmake)
 
