@@ -27,6 +27,8 @@ foreach ($fixture in @(
      Label = 'file status flags, OFD sharing across dup, and independent FD_CLOEXEC' },
   @{ Exe = 'stdio_ofd_test.exe'; Markers = @('stdio OFD contracts:', ' checks, 0 failures');
      Label = 'shared stdio buffers, append flags, descriptor ownership and concurrent close' },
+  @{ Exe = 'udp_pktinfo_test.exe'; Markers = @('udp pktinfo contracts:', ' checks, 0 failures');
+     Label = 'IP_PKTINFO option and in_pktinfo control messages on IPv4 UDP' },
   @{ Exe = 'pipe_kernel_test.exe'; Markers = @('pipe kernel contracts:', ' checks, 0 failures');
      Label = 'kernel pipe admission, cancellation, aliases and truthful unsupported operations' },
   @{ Exe = 'pipe_native_process_test.exe'; Markers = @('pipe native process contracts:', ' checks, 0 failures');

@@ -465,7 +465,7 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
 ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockaddr* addr,
                     socklen_t* addrlen, int* result_flags = nullptr,
                     ws::UnixCredentials* credentials = nullptr, bool* pass_credentials = nullptr,
-                    std::vector<int>* rights = nullptr) {
+                    std::vector<int>* rights = nullptr, ws::PacketInfo* packet_info = nullptr) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   // There is no error queue: Linux reports EAGAIN when it is empty.
@@ -479,10 +479,15 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   ws::RightsToken token;
   // SCM_RIGHTS (ADR 0088): a stream pair's groups come with the read that
   // returns their first byte (RecvOwned), a datagram's with its token.
+  // IP_PKTINFO: the receive reports the datagram's packet information.
+  const bool want_packet_info = packet_info != nullptr && state.description->recv_pktinfo.load();
+  if (packet_info != nullptr) *packet_info = {};
+  if (want_packet_info) ws::SetReceivePacketInfo(packet_info);
   ssize_t n = ws::RecvOwned(state.socket, buffers, count, ToMsgFlags(flags),
                        addr != nullptr ? &from : nullptr, state.description,
                             (flags & MSG_DONTWAIT) != 0, result_flags, credentials,
                             rights != nullptr ? &token : nullptr, rights);
+  if (want_packet_info) ws::SetReceivePacketInfo(nullptr);
   if (n >= 0 && rights != nullptr && token.count != 0)
     gesher::ClaimRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0);
   if (n >= 0 && addr != nullptr) {
@@ -642,6 +647,10 @@ ssize_t recvfrom(int fd, void* buf, size_t len, int flags, struct sockaddr* addr
   return RecvBuffers(fd, &buffer, 1, flags, addr, addrlen);
 }
 
+namespace {
+void LocalAddressOf(uint32_t index, in_addr* address);
+}  // namespace
+
 ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   msghdr local;
   if (!ws::CopyFromUser(&local, msg, sizeof(local))) return errno = EFAULT, -1;
@@ -655,23 +664,24 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   // Linux (also with no control buffer at all).
   const size_t capacity = local.msg_control != nullptr ? local.msg_controllen : 0;
   std::vector<int> rights;
+  ws::PacketInfo packet_info;
   ssize_t n;
   pthread_cleanup_push(ReleaseCanceledBuffers, &buffers);
   n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
                  static_cast<sockaddr*>(local.msg_name),
                  local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags,
-                 &credentials, &pass_credentials, &rights);
+                 &credentials, &pass_credentials, &rights, &packet_info);
   pthread_cleanup_pop(0);
   if (n >= 0) {
     local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
     std::vector<unsigned char> control;
     // Appends one control message, as much of it as fits (Linux's put_cmsg).
-    auto append = [&](int type, const void* data, size_t size) -> bool {
+    auto append = [&](int type, const void* data, size_t size, int level = SOL_SOCKET) -> bool {
       const size_t at = control.size();
       if (capacity - at < CMSG_LEN(size)) return false;
       cmsghdr header = {};
       header.cmsg_len = CMSG_LEN(size);
-      header.cmsg_level = SOL_SOCKET;
+      header.cmsg_level = level;
       header.cmsg_type = type;
       const size_t space = CMSG_SPACE(size) < capacity - at ? CMSG_SPACE(size) : capacity - at;
       control.resize(at + space, 0);
@@ -679,6 +689,21 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
       memcpy(control.data() + at + CMSG_LEN(0), data, size);
       return true;
     };
+    if (packet_info.valid) {
+      // IP_PKTINFO: the interface and the datagram's destination; ipi_spec_dst
+      // is the local address it was received at (Linux's rt_spec_dst): the
+      // destination itself unless that is a broadcast or multicast address,
+      // then the interface's own IPv4 address.
+      in_pktinfo value = {};
+      value.ipi_ifindex = static_cast<int>(packet_info.ifindex);
+      memcpy(&value.ipi_addr, packet_info.address, sizeof(value.ipi_addr));
+      value.ipi_spec_dst = value.ipi_addr;
+      const uint8_t first = packet_info.address[0];
+      const bool group = first >= 224 && first <= 239;
+      const bool broadcast = value.ipi_addr.s_addr == 0xffffffffu;
+      if (group || broadcast) LocalAddressOf(packet_info.ifindex, &value.ipi_spec_dst);
+      if (!append(IP_PKTINFO, &value, sizeof(value), IPPROTO_IP)) local.msg_flags |= MSG_CTRUNC;
+    }
     if (pass_credentials) {
       // SO_PASSCRED (ADR 0088): the sender's credentials, from the datagram's
       // header. A control buffer too small for them is MSG_CTRUNC, as on Linux.
@@ -810,6 +835,23 @@ bool WriteInt(int v, void* value, socklen_t* len) {
   return errno = EINVAL, false;
 }
 
+// The first IPv4 address of the interface with this index (unchanged if none).
+void LocalAddressOf(uint32_t index, in_addr* address) {
+  std::vector<ws::Interface> interfaces;
+  if (!ws::ListInterfaces(&interfaces)) return;
+  for (const ws::Interface& iface : interfaces) {
+    if (iface.index != index) continue;
+    for (const ws::InterfaceAddress& a : iface.addresses) {
+      sockaddr_in sin = {};
+      size_t tail = sizeof(sin) - sizeof(sa_family_t);
+      if (a.address.family != ws::Family::kInet || a.address.data_len < tail) continue;
+      memcpy(reinterpret_cast<char*>(&sin) + sizeof(sa_family_t), a.address.data, tail);
+      *address = sin.sin_addr;
+      return;
+    }
+  }
+}
+
 // The index of the interface with this IPv4 address; 0 for INADDR_ANY.
 bool IndexForAddress(in_addr address, uint32_t* index) {
   *index = 0;
@@ -934,6 +976,15 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     state.description->reuse_addr.store(v != 0);
     return 0;
   }
+  if (level == IPPROTO_IP && name == IP_PKTINFO) {
+    // recvmsg then delivers each IPv4 datagram's in_pktinfo. Windows reports
+    // it once asked (SetPacketInfo); a stream socket accepts the option as on
+    // Linux, which has nothing to deliver there.
+    if (!ReadInt(value, len, &v)) return -1;
+    if (ws::SetPacketInfo(state.socket, v != 0) < 0 && errno != ENOPROTOOPT && errno != EINVAL) return -1;
+    state.description->recv_pktinfo.store(v != 0);
+    return 0;
+  }
   if (level == SOL_SOCKET && name == SO_PASSCRED) {
     // ADR 0088: an AF_UNIX datagram pair carries its senders' credentials and
     // delivers them as SCM_CREDENTIALS. Other sockets cannot carry them yet,
@@ -1017,6 +1068,9 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
   }
   if (level == SOL_SOCKET && name == SO_REUSEADDR) {
     return WriteInt(state.description->reuse_addr.load() ? 1 : 0, value, len) ? 0 : -1;
+  }
+  if (level == IPPROTO_IP && name == IP_PKTINFO) {
+    return WriteInt(state.description->recv_pktinfo.load() ? 1 : 0, value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_PASSCRED && state.description->unix_datagram_pair.load()) {
     return WriteInt(state.description->pass_credentials.load() ? 1 : 0, value, len) ? 0 : -1;

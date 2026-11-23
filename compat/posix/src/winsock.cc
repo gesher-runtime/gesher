@@ -926,6 +926,35 @@ ptrdiff_t Send(Socket s, const Buffer* buffers, size_t count, int flags, const A
   return static_cast<ptrdiff_t>(sent);
 }
 
+namespace {
+thread_local PacketInfo* t_packet_info = nullptr;
+
+LPFN_WSARECVMSG RecvMsgFunction(SOCKET s) {
+  static std::atomic<LPFN_WSARECVMSG> function{nullptr};
+  LPFN_WSARECVMSG f = function.load(std::memory_order_acquire);
+  if (f != nullptr) return f;
+  GUID id = WSAID_WSARECVMSG;
+  DWORD bytes = 0;
+  if (WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, &id, sizeof(id), &f, sizeof(f), &bytes,
+               nullptr, nullptr) != 0) {
+    return nullptr;
+  }
+  function.store(f, std::memory_order_release);
+  return f;
+}
+}  // namespace
+
+void SetReceivePacketInfo(PacketInfo* info) { t_packet_info = info; }
+
+int SetPacketInfo(Socket s, bool on) {
+  DWORD value = on ? 1 : 0;
+  if (Api().setsockopt(static_cast<SOCKET>(s), IPPROTO_IP, IP_PKTINFO,
+                       reinterpret_cast<const char*>(&value), sizeof(value)) != 0) {
+    return FailIo();
+  }
+  return 0;
+}
+
 ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from,
                int* result_flags) {
   int type = 0;
@@ -957,9 +986,37 @@ ptrdiff_t Recv(Socket s, Buffer* buffers, size_t count, int flags, Address* from
     DWORD received = 0;
     // Actual Linux UDP receives ignore OOB and WAITALL; Winsock may reject them.
     DWORD win_flags = ToWinMsgFlags(flags & ~(kMsgWaitAll | kMsgOob));
-    if (WSARecvFrom(static_cast<SOCKET>(s), &whole, 1, &received, &win_flags,
-                    from != nullptr ? reinterpret_cast<sockaddr*>(&peer) : nullptr,
-                    from != nullptr ? &peer_len : nullptr, nullptr, nullptr) != 0) return FailIo();
+    PacketInfo* packet_info = t_packet_info;
+    if (packet_info != nullptr) *packet_info = {};
+    if (packet_info != nullptr && protocol.iAddressFamily == AF_INET) {
+      // IP_PKTINFO: WSARecvMsg returns the datagram's IN_PKTINFO (enabled on
+      // the socket by SetPacketInfo) with it, in the same single operation.
+      LPFN_WSARECVMSG recv_msg = RecvMsgFunction(static_cast<SOCKET>(s));
+      if (recv_msg == nullptr) return FailIo();
+      alignas(WSACMSGHDR) char control[WSA_CMSG_SPACE(sizeof(IN_PKTINFO)) * 2] = {};
+      WSAMSG message = {};
+      message.name = from != nullptr ? reinterpret_cast<sockaddr*>(&peer) : nullptr;
+      message.namelen = from != nullptr ? peer_len : 0;
+      message.lpBuffers = &whole;
+      message.dwBufferCount = 1;
+      message.Control.buf = control;
+      message.Control.len = sizeof(control);
+      message.dwFlags = win_flags;
+      if (recv_msg(static_cast<SOCKET>(s), &message, &received, nullptr, nullptr) != 0) return FailIo();
+      peer_len = message.namelen;
+      for (WSACMSGHDR* c = WSA_CMSG_FIRSTHDR(&message); c != nullptr; c = WSA_CMSG_NXTHDR(&message, c)) {
+        if (c->cmsg_level != IPPROTO_IP || c->cmsg_type != IP_PKTINFO) continue;
+        IN_PKTINFO info;
+        std::memcpy(&info, WSA_CMSG_DATA(c), sizeof(info));
+        packet_info->valid = true;
+        packet_info->ifindex = info.ipi_ifindex;
+        std::memcpy(packet_info->address, &info.ipi_addr, sizeof(packet_info->address));
+      }
+    } else if (WSARecvFrom(static_cast<SOCKET>(s), &whole, 1, &received, &win_flags,
+                           from != nullptr ? reinterpret_cast<sockaddr*>(&peer) : nullptr,
+                           from != nullptr ? &peer_len : nullptr, nullptr, nullptr) != 0) {
+      return FailIo();
+    }
     size_t copied = 0;
     for (size_t i = 0; i < count; ++i) {
       size_t n = buffers[i].len < received - copied ? buffers[i].len : received - copied;

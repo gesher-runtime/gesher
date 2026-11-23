@@ -169,6 +169,10 @@ add_executable(stdio_ofd_test tests/native/stdio_ofd_test.cc)
 target_compile_options(stdio_ofd_test PRIVATE -Wall -Wextra -Werror -fno-builtin)
 target_link_libraries(stdio_ofd_test PRIVATE gesher_posix)
 
+add_executable(udp_pktinfo_test tests/native/udp_pktinfo_test.cc)
+target_compile_options(udp_pktinfo_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(udp_pktinfo_test PRIVATE gesher_posix)
+
 add_executable(pipe_kernel_test tests/native/pipe_kernel_test.cc)
 target_compile_options(pipe_kernel_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pipe_kernel_test PRIVATE gesher_posix)
