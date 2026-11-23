@@ -20,6 +20,18 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def method(source: str, signature: str) -> str:
+    if source.count(signature) != 1:
+        raise ValueError("Task-manager lifecycle method boundary changed: " + signature)
+    start = source.index(signature)
+    end = source.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start:end]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--java-home", type=Path, default=Path(os.environ["JAVA_HOME"]) if "JAVA_HOME" in os.environ else None)
@@ -68,18 +80,14 @@ def main() -> None:
         for name in ("UsageLimitObserversTest", "UsageObserverServiceTest"):
             sources.append(str(fixture / (name + ".java")))
         manager = source("ActivityTaskManagerService")
-        signature = "private void recordUsage(ActivityRecord record, ActivityUsageHistory.State state)"
-        if manager.count(signature) != 1:
-            raise ValueError("Task-manager usage hook boundary changed")
-        start = manager.index(signature)
-        end = manager.index("{", start) + 1
-        depth = 1
-        while depth:
-            depth += (manager[end] == "{") - (manager[end] == "}")
-            end += 1
         hook = work / "TaskRootUsageHookHost.java"
         template = (fixture / "TaskRootUsageHookHost.java.in").read_text()
-        hook.write_text(template.replace("@PRODUCTION_RECORD_USAGE@", manager[start:end]))
+        for marker, signature in {
+            "@PRODUCTION_RECORD_USAGE@": "private void recordUsage(ActivityRecord record, ActivityUsageHistory.State state)",
+            "@PRODUCTION_ACTIVITY_CODE_CURRENT@": "private boolean activityCodeCurrent(ActivityRecord r)",
+        }.items():
+            template = template.replace(marker, method(manager, signature))
+        hook.write_text(template)
         sources.append(str(hook))
         classes = work / "classes"
         subprocess.run([javac, "-encoding", "UTF-8", "-d", str(classes), *sources], check=True, timeout=60)

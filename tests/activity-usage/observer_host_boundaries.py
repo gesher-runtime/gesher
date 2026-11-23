@@ -1,6 +1,8 @@
 """Minimal Android I/O and identity boundaries, never replacement observer behavior."""
 
 SOURCES = {
+    "android/app/ActivityManager.java": '''package android.app;
+        public final class ActivityManager { public static final int PROCESS_STATE_TOP=2; }''',
     "android/Manifest.java": '''package android; public final class Manifest {
         public static final class permission {
             public static final String PACKAGE_USAGE_STATS = "android.permission.PACKAGE_USAGE_STATS";

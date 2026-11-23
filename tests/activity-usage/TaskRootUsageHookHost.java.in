@@ -4,10 +4,28 @@
  */
 package com.gesher.server;
 
+import android.app.ActivityManager;
+import java.util.ArrayList;
+import java.util.List;
+
 /** Exact production task-manager call site with recording lifecycle value boundaries. */
 public final class TaskRootUsageHookHost {
     private record Info(String packageName, String name) { }
-    private record ActivityRecord(Object token, Info info, int taskId) { }
+    private static final class ActivityRecord {
+        final Object token;
+        final Info info;
+        final int taskId;
+        ProcessRecord app;
+        ApkPackage targetCode;
+        ActivityRecord(Object token, Info info, int taskId) {
+            this.token=token;this.info=info;this.taskId=taskId;
+        }
+    }
+    private static final class ProcessRecord {
+        boolean ready, dead, exiting, pidSuperseded, shortcutHasShownUi;
+        int uid;
+        final List<ActivityRecord> activities = new ArrayList<>();
+    }
     private static final class Sink {
         Object token;
         String pkg, cls, source;
@@ -17,10 +35,77 @@ public final class TaskRootUsageHookHost {
         }
     }
     private Sink mUsageStats;
+    private final PackageManagerService mPm = new PackageManagerService();
+    private final List<ProcessRecord> mProcesses = new ArrayList<>();
+    private final List<ActivityRecord> mActivities = new ArrayList<>();
+    private int shortcutNotifications;
+    private ProcessRecord shortcutProcess;
+    private int shortcutState;
     private ActivityRecord root;
     private ActivityRecord rootOf(int taskId) { return root != null && root.taskId == taskId ? root : null; }
 
+    // Shortcut quota policy has its own production suite. Record its incoming
+    // lifecycle notification here; the actual eligibility predicate stays intact.
+    private void noteShortcutForeground(ProcessRecord app, int state) {
+        shortcutNotifications++;shortcutProcess=app;shortcutState=state;
+    }
+
+    @PRODUCTION_ACTIVITY_CODE_CURRENT@
+
     @PRODUCTION_RECORD_USAGE@
+
+    private static void check(boolean condition, String description) {
+        if (!condition) throw new AssertionError(description);
+    }
+
+    private static void resumedAccounting() {
+        TaskRootUsageHookHost host = new TaskRootUsageHookHost();
+        ActivityRecord activity = new ActivityRecord(new Object(), new Info("child", "ChildActivity"), 12);
+        ProcessRecord process = new ProcessRecord();
+        process.ready=true;process.uid=10042;
+        activity.app=process;activity.targetCode=new ApkPackage("child", process.uid);
+        process.activities.add(activity);
+        host.mProcesses.add(process);host.mActivities.add(activity);
+        host.mPm.installed.put("child", activity.targetCode);
+        // New main's shortcut accounting is independent of usage-service setup.
+        host.recordUsage(activity, ActivityUsageHistory.State.RESUMED);
+        check(process.shortcutHasShownUi && host.shortcutNotifications == 1
+                        && host.shortcutProcess == process && host.shortcutState == ActivityManager.PROCESS_STATE_TOP,
+                "Live resumed activity must still notify shortcut accounting without a usage service");
+        host.mUsageStats = new Sink();
+        host.root = new ActivityRecord(new Object(), new Info("root", "RootActivity"), 12);
+        for (int retired = 0; retired < 5; retired++) {
+            process.shortcutHasShownUi=false;
+            switch (retired) {
+                case 0 -> process.dead=true;
+                case 1 -> host.mProcesses.remove(process);
+                case 2 -> host.mPm.installed.put("child", new ApkPackage("child", process.uid));
+                case 3 -> host.mPm.pending.add("child");
+                case 4 -> process.uid++;
+            }
+            host.mUsageStats = new Sink();
+            host.recordUsage(activity, ActivityUsageHistory.State.RESUMED);
+            check(!process.shortcutHasShownUi && host.shortcutNotifications == 1,
+                    "Retired or mismatched lifecycle state must not grant shortcut foreground: " + retired);
+            check(host.mUsageStats.token == activity.token && host.mUsageStats.pkg.equals("child")
+                            && host.mUsageStats.cls.equals("ChildActivity") && host.mUsageStats.source.equals("root")
+                            && host.mUsageStats.state == ActivityUsageHistory.State.RESUMED,
+                    "Shortcut accounting guard must not suppress or rewrite the usage transition: " + retired);
+            switch (retired) {
+                case 0 -> process.dead=false;
+                case 1 -> host.mProcesses.add(process);
+                case 2 -> host.mPm.installed.put("child", activity.targetCode);
+                case 3 -> host.mPm.pending.remove("child");
+                case 4 -> process.uid--;
+            }
+        }
+        host.recordUsage(activity, ActivityUsageHistory.State.RESUMED);
+        check(process.shortcutHasShownUi && host.shortcutNotifications == 2,
+                "Restored current activity must notify shortcut accounting again");
+        host.recordUsage(activity, ActivityUsageHistory.State.PAUSED);
+        check(host.shortcutNotifications == 2 && host.mUsageStats.state == ActivityUsageHistory.State.PAUSED,
+                "Pause stays a usage event without becoming shortcut foreground");
+    }
 
     public static void main(String[] args) {
         TaskRootUsageHookHost host = new TaskRootUsageHookHost();
@@ -39,6 +124,7 @@ public final class TaskRootUsageHookHost {
         if (!sink.source.equals("child") || sink.state != ActivityUsageHistory.State.TERMINATED) {
             throw new AssertionError("Missing root lost the terminal lifecycle event");
         }
-        System.out.println("TaskRootUsageHookHost passed: exact production lifecycle call site");
+        resumedAccounting();
+        System.out.println("TaskRootUsageHookHost passed: exact production lifecycle call site and current-process accounting");
     }
 }
