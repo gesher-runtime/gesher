@@ -185,9 +185,15 @@ Check 'native libs: memfd final-page bytes survive remapping without extending t
 # ADR 0086: a packer's shell (Ijiami) finds libart.so in /proc/self/maps and
 # hooks ClassLinker::LoadClass by its symbol. art_hook_test.so does what the
 # shell does to Gesher's stand-in libart.so, then ART's call reaches the hook.
+# The arm64 stand-ins for NetEase Yidun (libart.so, libdexfile.so) are checked
+# as images first: exports, sonames and GOT relocations.
 Check 'native libs: a stand-in libart.so a packer finds in /proc/self/maps and hooks by symbol' {
   & "$Dir/art_shim_test.exe" (NoDrive "$Dir/art_hook_test.so") (NoDrive (Join-Path ([IO.Path]::GetTempPath()) 'gesher-art-shim-test'))
-} @('PASS  /proc/self/maps names the stand-in at its base',
+} @('PASS  arm64 libart.so: ELF64 LSB AArch64 ET_DYN', 'PASS  arm64 libdexfile.so: DT_SONAME',
+    'PASS  arm64 libart.so: each Runtime function tail-calls through its own import''s GOT slot',
+    'PASS  arm64 libdexfile.so: one R_AARCH64_GLOB_DAT GOT slot, for ART''s OpenCommon',
+    'PASS  arm64 libdexfile.so: none of libart.so''s symbols',
+    'PASS  /proc/self/maps names the stand-in at its base',
     'PASS  LoadClass through DT_GNU_HASH', 'PASS  LoadClass through the file''s .symtab',
     'PASS  the hook reads ClassDef::class_data_off_ at 0x18', 'art_shim_test all passed')
 
