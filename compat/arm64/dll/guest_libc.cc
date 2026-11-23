@@ -496,6 +496,29 @@ int GESHER_SYSV GuestMunmap(void* addr, size_t len) {
   return r;
 }
 
+// mremap gives both ranges new contents (a move copies the source, which is
+// unmapped or, with MREMAP_DONTUNMAP, reads back as zeros): a translation of
+// either is stale, and neither keeps the guest's last protection record. A
+// guest may move a buffer of new code over pages that ran older code and then
+// make it R-X. Shrinking in place unmaps the tail.
+constexpr int kMremapFixed = 2;
+void* g_mremap = nullptr;
+
+void* GESHER_SYSV GuestMremap(void* addr, size_t old_size, size_t new_size, int flags,
+                              void* target) {
+  void* p = reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, size_t, int, void*)>(g_mremap)(
+      addr, old_size, new_size, flags, (flags & kMremapFixed) != 0 ? target : nullptr);
+  if (p == reinterpret_cast<void*>(-1)) return p;
+  if (p == addr) {
+    if (new_size < old_size) {
+      ForgetGuestProtection(static_cast<uint8_t*>(addr) + new_size, old_size - new_size);
+    }
+    return p;
+  }
+  GuestMappingMoved(addr, old_size, p, new_size);
+  return p;
+}
+
 // libc-style result: -1 with errno set on failure.
 int64_t DoSyscall(uint64_t nr, const int64_t a[6]) {
   switch (nr) {
@@ -531,6 +554,13 @@ int64_t DoSyscall(uint64_t nr, const int64_t a[6]) {
     case 215:  // munmap
       if (g_munmap == nullptr) break;
       return GuestMunmap(reinterpret_cast<void*>(a[0]), static_cast<size_t>(a[1]));
+    case 216:  // mremap
+      if (g_mremap == nullptr) break;
+      return reinterpret_cast<int64_t>(GuestMremap(reinterpret_cast<void*>(a[0]),
+                                                   static_cast<size_t>(a[1]),
+                                                   static_cast<size_t>(a[2]),
+                                                   static_cast<int>(a[3]),
+                                                   reinterpret_cast<void*>(a[4])));
     case 222:  // mmap
       if (g_mmap == nullptr) break;
       return reinterpret_cast<int64_t>(GuestMmap(reinterpret_cast<void*>(a[0]),
@@ -839,6 +869,8 @@ bool InitGuestLibc() {
   g_munmap = Host("munmap");
   if (g_mprotect) Override("mprotect", reinterpret_cast<void*>(&GuestMprotect));
   if (g_munmap) Override("munmap", reinterpret_cast<void*>(&GuestMunmap));
+  g_mremap = Host("mremap");
+  if (g_mremap) Override("mremap", reinterpret_cast<void*>(&GuestMremap));
   if (g_mmap) {
     Override("mmap", reinterpret_cast<void*>(&GuestMmap));
     Override("mmap64", reinterpret_cast<void*>(&GuestMmap));

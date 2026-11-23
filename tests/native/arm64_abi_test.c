@@ -15,6 +15,7 @@
 //  - a host function pointer from dlsym called directly by guest code;
 //  - code the guest writes and makes PROT_EXEC itself, in an anonymous mapping
 //    and over a libc string (Facebook's force_dlopen);
+//  - code moved over code that already ran (mremap, MREMAP_FIXED);
 //  - code rewritten after it ran (an in-place hook, IC IVAU), also while
 //    another thread spins in it; IC IALLU is SIGILL (GESHER_ARM64_ABI_CRASH).
 
@@ -361,6 +362,48 @@ static void test_rewritten_code(void) {
   munmap(code, page);
 }
 
+// Code moved by mremap: a buffer of new code moved (MREMAP_FIXED) over pages
+// whose older code already ran, then made R-X, runs the new code; the libc
+// function and the raw syscall alike. Code moved from R-X pages runs at its
+// new address.
+static uint32_t* rw_code(long page, uint32_t mov) {
+  uint32_t* p = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (p == MAP_FAILED) return NULL;
+  p[0] = mov;
+  p[1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)p, (char*)(p + 2));
+  return p;
+}
+
+static void test_moved_code(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  uint32_t* code = rw_code(page, 0x52800020);  // mov w0, #1
+  int ok = code != NULL && mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("moved code: the first version runs", ok && call_code(code) == 1 && call_code(code) == 1);
+  if (!ok) return;
+  uint32_t* buf = rw_code(page, 0x528000C0);  // mov w0, #6
+  ok = buf != NULL &&
+       mremap(buf, page, page, MREMAP_MAYMOVE | MREMAP_FIXED, code) == (void*)code &&
+       mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("moved code: mremap(MREMAP_FIXED) over run code, R-X", ok && call_code(code) == 6);
+  buf = rw_code(page, 0x528000E0);  // mov w0, #7
+  ok = ok && buf != NULL &&
+       syscall(SYS_mremap, buf, page, page, MREMAP_MAYMOVE | MREMAP_FIXED, code) == (long)code &&
+       mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("moved code: syscall(SYS_mremap) over run code, R-X", ok && call_code(code) == 7);
+  // MREMAP_FIXED, as MREMAP_MAYMOVE alone may leave it in place.
+  uint32_t* spare = mmap(NULL, page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  uint32_t* moved = ok && spare != MAP_FAILED
+                        ? mremap(code, page, page, MREMAP_MAYMOVE | MREMAP_FIXED, spare)
+                        : MAP_FAILED;
+  check("moved code: R-X code runs after a move", moved == spare && call_code(moved) == 7);
+  // A failed mremap keeps its errno: the source is no longer mapped.
+  errno = 0;
+  check("mremap of an unmapped range fails with EFAULT",
+        moved == spare && syscall(SYS_mremap, code, page, page, 0) == -1 && errno == EFAULT);
+  munmap(moved == spare ? moved : code, page);
+}
+
 // Another thread rewrites code this one is running in a loop that never
 // leaves guest code: IC IVAU is broadcast, and the spinning thread's next ISB
 // runs the new instructions (it must not keep the old ones and spin forever).
@@ -482,6 +525,7 @@ int gesher_selftest(const char* dir) {
   test_host_pointer();
   test_written_code();
   test_rewritten_code();
+  test_moved_code();
   test_rewritten_code_other_thread();
   failures += Arm64FpcrContracts();
   failures += Arm64FpsrContracts();

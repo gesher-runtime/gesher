@@ -2264,6 +2264,35 @@ void ForgetGuestProtection(const void* start, size_t size) {
   EraseCleanExec(first, end);
 }
 
+void GuestMappingMoved(const void* from, size_t from_size, const void* to, size_t to_size) {
+  uintptr_t from_first, from_end, to_first, to_end;
+  const bool has_from = PageRange(from, from_size, &from_first, &from_end);
+  if (!PageRange(to, to_size, &to_first, &to_end)) return;
+  bool clean_source = false;
+  {
+    std::lock_guard<std::mutex> lock(g_clean_exec_mutex);
+    clean_source = has_from && UncleanParts(from_first, from_end).empty();
+    if (has_from) EraseCleanExec(from_first, from_end);
+    if (clean_source) InsertCleanExec(to_first, to_end);
+    else EraseCleanExec(to_first, to_end);
+  }
+  std::vector<CodeRegion> stale;
+  if (has_from) stale.push_back({from_first, from_end});
+  stale.push_back({to_first, to_end});
+  {
+    std::shared_lock<std::shared_mutex> lock(g_regions_mutex);
+    std::erase_if(stale, [](const CodeRegion& part) {
+      for (const CodeRegion& r : g_regions) {
+        if (r.start < part.end && part.start < r.end) return false;
+      }
+      return true;
+    });
+  }
+  for (const CodeRegion& r : stale) InvalidateEveryJit(r.start, r.end);
+  // Code moved from R-X pages stays guest code at its new address.
+  if (clean_source) AddGuestCode(to, to_size);
+}
+
 void AddGuestCode(const void* start, size_t size) {
   if (size == 0) return;
   uintptr_t first = reinterpret_cast<uintptr_t>(start) & ~uintptr_t{0xFFF};
