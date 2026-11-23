@@ -8239,5 +8239,96 @@
     "reconstructed_sha256": "c51acf8abf21cad00eaad8149aec34c91e49fc95063b5f953bbb7b9043efed36",
     "members": 925,
     "unchanged_scope": "Every prior JSON value, all original archive bytes/members, all twelve measured inputs and all fifteen incoming main paths remain exact. Only archive loading and transport documentation change."
+  },
+  "ci_main525_integration": {
+    "published_parent": "1c11b4b86ae28f9de956dcb812fd4763e4df08ba",
+    "incoming_main": "52513f0fc3f5fc657138cf01429cf969b2f21649",
+    "ordered_parents": [
+      "1c11b4b86ae28f9de956dcb812fd4763e4df08ba",
+      "52513f0fc3f5fc657138cf01429cf969b2f21649"
+    ],
+    "canonical_source_tree": "6e96144439ef0df6b59950ab1c376aaf1628b252",
+    "manual_resolutions": [],
+    "incoming_main_paths": [
+      ".github/workflows/arm64-windows-self-hosted.yml",
+      ".github/workflows/ci.yml",
+      ".github/workflows/native3-locks-blocking.yml",
+      ".github/workflows/publish-release.yml",
+      ".github/workflows/tsf-format-component.yml",
+      "tools/ci/artifact_receipt.py",
+      "tools/ci/github_read.py",
+      "tools/ci/publish_release.py",
+      "tools/ci/test_artifact_batch.py",
+      "tools/ci/test_github_rate_limits.py",
+      "tools/ci/test_supplier_bundle.py",
+      "tools/net-tcp-priority/run-component.ps1",
+      "tools/net-tcp-priority/test-helper-metadata.ps1",
+      "tools/surface/download-verified-artifact.py"
+    ],
+    "unchanged_feature_paths": [
+      "cmake/aosp/media.cmake",
+      "compat/media/encode/codec_config.cc",
+      "docs/research/annexb-mp4-2026-11-23.json",
+      "docs/research/annexb-mp4-2026-11-23.md",
+      "docs/research/data/annexb-mp4-2026-11-23.tar.xz.part1",
+      "docs/research/data/annexb-mp4-2026-11-23.tar.xz.part2",
+      "tests/media/annexb_mux_work.cc",
+      "tests/media/annexb_split_contracts.cc",
+      "tests/windows/tracks/79-media4-muxer.ps1",
+      "tools/measure_annexb_mux.py",
+      "tools/test_annexb_report.py",
+      "tools/test_annexb_scan.py"
+    ],
+    "unchanged_measured_input_hashes": {
+      "compat/media/encode/codec_config.cc": "d9c4c5d1d35bb554e6590965a8e1c5dbb7cff86908a0bb5682bc7323962ccf5b",
+      "compat/media/encode/codec_config.h": "7ac81eca32f001c61758e118f9f7ba7d38789345abf98393f1ff658248b55965",
+      "tests/media/annexb_split_contracts.cc": "7dfe7900a042c77d261318130d6563e243636ae921c1208060f618adbbbe94fb",
+      "tests/media/annexb_mux_work.cc": "4a750d123532e4189fa8237de6ee2c18b33fb1e2aae3b4ff68e82a9e9e801eb6",
+      "compat/media/mux/mp4_muxer.cc": "3b2b11badec4363208048f84d02035e79580ac564c3a8697281517a919691330",
+      "compat/media/mux/ogg_muxer.cc": "2e7079b9275c76bb1911fe54f70d1c5f0418b7d9dfd1db9ce7d52bd837c609ca",
+      "compat/media/mux/muxer.h": "197a167604f44af6dc0c0ad66e44c1c99c92482b37f1d732ebcbbeea796e9feb",
+      "compat/media/player/extractor.h": "9e7aed13df31142af066ae64040282afdc08c905b2b2124abb30dcc1c1d3561d",
+      "compat/media/player/data_source.h": "59748aabd2c49e16effbfc530628adda45d252d330bc5444907f185985e6daa9",
+      "compat/media/audio/log.h": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7",
+      "tests/media/recorder-host/include/media/NdkMediaFormat.h": "f4a7db9e290678f44c40ad8bc2ab8d708b9f5e4bea73ae70df23986a83474123",
+      "tools/test_annexb_scan.py": "5317a17cb178ba82c4c202500ba92e0cae5e77555217194fc7678debf165188b"
+    },
+    "workflow_exactly_incoming_plus_unchanged_two_leaf_gates": true,
+    "unchanged_archive_parts": [
+      {
+        "file": "data/annexb-mp4-2026-11-23.tar.xz.part1",
+        "bytes": 7091874,
+        "sha256": "0559a0a340d9f07ea471e7f465e83e9877d2a1f3a9ea7c99e4b28d8dda1f5ef4"
+      },
+      {
+        "file": "data/annexb-mp4-2026-11-23.tar.xz.part2",
+        "bytes": 7091874,
+        "sha256": "889d4ec49a457679920c7b61f164aa5e328c1a634318a000eb9e71f12c144b0a"
+      }
+    ],
+    "unchanged_archive_sha256": "c51acf8abf21cad00eaad8149aec34c91e49fc95063b5f953bbb7b9043efed36",
+    "qualification": {
+      "bundle": {
+        "path": "annexb-main525-bundle.log",
+        "sha256": "528072dff621e483c82c62ec14f093f7b03536ea53f051895059bb2760870c70",
+        "output": "................\n----------------------------------------------------------------------\nRan 16 tests in 0.643s\n\nOK\n"
+      },
+      "batch": {
+        "path": "annexb-main525-batch.log",
+        "sha256": "48bf660543e9d8dfe631ea7ece151aa4f429cca9d0c77e11fbc64469f75bc727",
+        "output": "..................................\n----------------------------------------------------------------------\nRan 34 tests in 0.681s\n\nOK\n"
+      },
+      "github": {
+        "path": "annexb-main525-github.log",
+        "sha256": "00c89186562dfc174d1d6967c682459a812c0539fa7e25b538ddd27dc033070d",
+        "output": ".....................................................................\n----------------------------------------------------------------------\nRan 69 tests in 0.354s\n\nOK\n"
+      },
+      "report": {
+        "path": "annexb-main525-report.log",
+        "sha256": "c3ce01ff05b3c2c402452e3c0b0d4b735aaf60b2a3a2389e5ccbb4728960b31a",
+        "output": "{\"checks\": 14622, \"members\": 925, \"final_processes\": 288, \"final_observations\": 1152, \"pilot_processes\": 48, \"pilot_observations\": 192, \"scope\": \"Historical full MP4 component; no Windows/runtime or release-budget acceptance.\"}\n"
+      }
+    },
+    "scope": "Maintainer #409 CI-only integration; original main910 workflow identity is historical. No runtime/fixture/timing/source changes or remeasurement."
   }
 }

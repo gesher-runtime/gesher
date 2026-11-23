@@ -260,8 +260,8 @@ def download_artifact(artifact_id, digest, destination):
     try:
         subprocess.run([sys.executable, str(verifier), '--id', str(artifact_id), '--digest', digest,
                         '--destination', str(destination)], check=True,
-                       # Download time plus the downloader's 15-minute quota wait budget.
-                       timeout=360 + 15 * 60)
+                       # Download time plus the downloader's 61-minute quota wait budget.
+                       timeout=360 + 61 * 60)
     except (OSError, subprocess.SubprocessError):
         raise ReleaseError('Could not download and verify the exact installer archive') from None
 
