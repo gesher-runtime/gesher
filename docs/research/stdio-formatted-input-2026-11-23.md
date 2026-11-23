@@ -195,10 +195,52 @@ Supplier metadata qualification still passes 36 semantic mutations and the
 separate authority-hash negative. This source qualification supplies no actual
 Windows/runtime approval.
 
-The current main framework reference `fe42fc3d4854141df94cd1e05cfbd10c4a686315`
-is retained. Its public framework workflow blob matches the new main recipe,
-`6dc4cca565aaf15fdf518eee825b0e44765b275f`. The only workflow edit adds the parser
-test to the existing stdio host step.
+The original branch inherited the detached `fe42fc3d` reusable-workflow
+reference. Actions rejected that reference despite its public source blob;
+the published branch subsequently selected reachable main `5aa6b390`. The
+current-main composition below retains main's published `92c87bef` reference.
+All three source recipes have the same exact framework blob
+`6dc4cca565aaf15fdf518eee825b0e44765b275f`; source visibility alone was not an
+Actions-resolution guarantee. The parser invocation remains unconditional.
+
+## Composition with current main and shared stdio ownership
+
+The current branch composes published `d38246cb` with main
+`8f53b6045e26f0bb4a482c69099d084db3e94963`, including PR73's shared Bionic
+metadata and PR371's canonical diagnostic baseline. PR371 changes only a test;
+`fdf4861b` remains the exact production reference for the new transition.
+The original timing records above are preserved, and no newly integrated
+performance or Windows execution result is claimed.
+
+The sole production conflict retains main's zero-size read return before the
+scanner callback fast path. Every complete scanner scope, callback identity
+check and narrow/wide conversion body remains the reviewed feature's code;
+all main owner metadata and cleanup changes remain. Zero-length reads now
+intentionally avoid owner lookup, so the cancellation fixture uses rejected
+`ungetc(EOF)` through the same actual callback/owner boundary. It consumes no
+input and changes no pushback buffer, while retaining the original thread
+isolation, blocking, restoration and post-cancellation recovery assertions.
+The previous fixture failed those ownership assertions on the composed no-op
+behavior; none of its assertions or timeouts was relaxed.
+
+The complete pinned MinGW parser replay again passes 107,015 production checks,
+95 actual Linux reference checks and all six assertion-specific compiled
+mutants, including thread isolation and stale-scope restoration. The ordinary
+integrated stdio corpus passes 269 core, 177 adapter and 71 Linux checks plus
+exit ordering and the mandatory exact socket-retirement negative. Full actual
+`stdio_output.cc` and the public native fixture compile with strict warnings
+for Windows x64 and ARM64; actual Windows/ART/ELF execution remains full CI's
+responsibility.
+
+The original scanner, PR73 and OFD manifests and patches remain byte-identical.
+A new exact single-file transition first restores `fdf4861b`; the unchanged
+four-file PR73 proof then restores original OFD bytes. The original scanner
+receipt is also replayed against the immutable published first-parent source,
+and both normalization routes must agree. Policy checks pass 33 transition
+controls, four repinned-property, five original repinned-scanner, five new
+repinned-current-stdio and 23 shared-stdio controls. Supplier metadata retains
+all 36 semantic mutants and its authority-hash negative. No receipt gains
+runtime approval and no gate, limit or existing workload is removed.
 
 ## Reproduction
 
@@ -213,9 +255,12 @@ python3 tools/net-tcp-priority/test-selected-policy.py --selftest
 python3 tools/net-tcp-priority/test-selected-supplier.py
 ```
 
-For the same unmodified baseline and timing builds:
+For the original unmodified baseline and timing builds, use the matching
+historical helper/fixture from before PR73 changed the owner boundary:
 
 ```sh
+git worktree add /tmp/stdio-scan-measured d38246cb583b669167909902529cb00f4f63e5eb
+cd /tmp/stdio-scan-measured
 python3 tools/test_stdio_scanning.py --source-ref d38b5549dc3963f8d491e9205f9b2743bb6d3745 --sanitize --measure-only --output-dir /tmp/scan-baseline-contract
 python3 tools/test_stdio_scanning.py --source-ref d38b5549dc3963f8d491e9205f9b2743bb6d3745 --measure --compile-only --output-dir /tmp/scan-before
 python3 tools/test_stdio_scanning.py --measure --compile-only --output-dir /tmp/scan-after

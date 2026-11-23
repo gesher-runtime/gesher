@@ -27,7 +27,13 @@ def section(source: str, first: str, after: str) -> str:
 def adapter_source(read_source) -> str:
     adapter = read_source("compat/posix/src/stdio_output.cc").decode()
     fsops = read_source("compat/posix/src/fsops.cc").decode()
+    sockets = read_source("compat/posix/src/fd.cc").decode()
+    guest = read_source("compat/bionic/stdio_bionic.cc").decode()
     adapter = adapter[adapter.index('extern "C" int __mingw_pformat'):]
+    writer = 'return ::write(fd, bytes, count);'
+    if adapter.count(writer) != 1:
+        raise ValueError("production descriptor writer boundary changed")
+    adapter = adapter.replace(writer, 'return HostDescriptorWrite(fd, bytes, count);')
     # These are symbol-name changes for the host envelope, not altered bodies.
     for name in ("fseeko64", "ftello64"):
         marker = '__asm__("' + name + '")'
@@ -53,6 +59,12 @@ def adapter_source(read_source) -> str:
         "@OPEN_CLOSE@": section(fsops, "FILE* fopen(", "// The stream is reopened"),
         "@STDIO_INTERNAL_HEADER@": str(ROOT / "compat/posix/src/stdio_internal.h"),
         "@STREAM_BUFFER_HEADER@": str(ROOT / "compat/posix/src/stdio_stream_buffer.h"),
+        "@SOCKET_REGISTRY@": section(sockets, "struct SocketRegistry {", "// Takes the socket out"),
+        "@SOCKET_INSERT@": section(sockets, "void Insert(", "// Publish a successful CRT replacement"),
+        "@SOCKET_LOOKUP@": section(sockets, "bool LookupSocket(", "void RegisterDevice("),
+        "@BIONIC_ORIENT@": section(guest, "int Orient(FILE* stream,", "using StreamLock"),
+        "@BIONIC_READ_STREAM@": section(guest, "size_t ReadStream(", "// fopen through"),
+        "@BIONIC_UNLOCKED@": section(guest, "size_t BIONIC_SYSV FreadUnlocked(", "int BIONIC_SYSV FputsUnlocked("),
     }
     template = (ROOT / "tests/native/stdio_adapter_host.cc.in").read_text()
     for marker, source in sections.items():
@@ -70,11 +82,14 @@ def main() -> int:
     parser.add_argument("--cc", default=os.environ.get("CC", "gcc"))
     parser.add_argument("--sanitize", action="store_true")
     parser.add_argument("--source-ref", help="Run the unchanged current fixture against exact historical adapter/fsops/header sources")
+    parser.add_argument("--adapter-case", choices=["bionic-unlocked"],
+                        help="Run the bounded guest-unlocked regression against the selected production sources")
     args = parser.parse_args()
     def read_source(path: str) -> bytes:
         if args.source_ref:
             return subprocess.check_output(["git", "show", args.source_ref + ":" + path], cwd=ROOT)
         return (ROOT / path).read_bytes()
+    sockets = read_source("compat/posix/src/fd.cc").decode()
     template = adapter_source(read_source)
     with tempfile.TemporaryDirectory(prefix="gesher-stdio-") as temporary:
         folder = Path(temporary)
@@ -92,15 +107,59 @@ def main() -> int:
             ("adapter", generated, ["-I", str(folder / "include"), "-I", str(ROOT / "tests/native")]),
         ]
         for name, source, extra in cases:
+            if args.adapter_case and name != "adapter":
+                continue
             executable = folder / name
             subprocess.run(cxx + extra + [str(source), "-o", str(executable)], check=True, timeout=120)
-            subprocess.run([str(executable)], cwd=folder, check=True, timeout=45)
+            subprocess.run([str(executable)] + (["--" + args.adapter_case] if args.adapter_case else []),
+                           cwd=folder, check=True, timeout=45)
+            if args.adapter_case:
+                return 0
             if name == "adapter":
                 destination = folder / "exit-output.txt"
                 subprocess.run([str(executable), "--exit-output", str(destination)], cwd=folder, check=True, timeout=45)
                 if destination.read_bytes() != b"earlylate":
                     raise AssertionError("stdio output after an older atexit callback was lost")
                 print("stdio exit-handler ordering: passed", flush=True)
+                socket_destination = folder / "exit-socket.txt"
+                completed = subprocess.run([str(executable), "--exit-socket", str(socket_destination)],
+                                           cwd=folder, capture_output=True, text=True, timeout=45)
+                if completed.returncode or socket_destination.read_bytes() != b"earlylate" or \
+                        "SOCKET_EXIT_RETAINED after_ordinary_destructors=1" not in completed.stderr:
+                    raise AssertionError("late stdio lost the live socket registry: " + completed.stderr)
+                # Keep stderr occupied by a real read-only descriptor so socket
+                # creation cannot reuse it. A failed diagnostic write must fail
+                # the probe instead of silently claiming success.
+                with open(os.devnull, "rb") as readonly_stderr:
+                    unreported = subprocess.run(
+                        [str(executable), "--exit-socket", str(folder / "unreported-socket.txt")],
+                        cwd=folder, stdout=subprocess.PIPE, stderr=readonly_stderr,
+                        text=True, timeout=45)
+                if unreported.returncode != 89:
+                    raise AssertionError(
+                        "socket shutdown diagnostic I/O failure was not rejected: exit " +
+                        str(unreported.returncode))
+                print("stdio shutdown diagnostic I/O failure: rejected", flush=True)
+                # Only the registry's lifetime changes in this negative. The
+                # actual late stdio flush, map insertion/lookup and real files
+                # remain identical; diagnose retirement before undefined access.
+                if "SocketRegistry& Sockets() {" in sockets:
+                    lifetime = section(sockets, "SocketRegistry& Sockets() {", "// Lets the common case")
+                    negative = "SocketRegistry& Sockets() {\n  static SocketRegistry registry;\n  return registry;\n}\n"
+                else:
+                    lifetime = section(sockets, "alignas(SocketRegistry) unsigned char", "std::mutex& table_mutex")
+                    negative = "SocketRegistry socket_registry;\n"
+                if template.count(lifetime) != 1:
+                    raise ValueError("socket registry lifetime control boundary changed")
+                negative_source = folder / "retired-socket.cc"
+                negative_source.write_text(template.replace(lifetime, negative))
+                negative_executable = folder / "retired-socket"
+                subprocess.run(cxx + extra + [str(negative_source), "-o", str(negative_executable)], check=True, timeout=120)
+                rejected = subprocess.run([str(negative_executable), "--exit-socket", str(folder / "negative-socket.txt")],
+                                          cwd=folder, capture_output=True, text=True, timeout=45)
+                if rejected.returncode != 87 or "SOCKET_EXIT_RETIRED before_final_stdio_write=1" not in rejected.stderr:
+                    raise AssertionError("destructible socket-registry negative was not diagnosed: " + rejected.stderr)
+                print("late stdio socket registry: live map PASS, actual shutdown-retirement negative rejected", flush=True)
         reference = folder / "reference.c"
         reference.write_text('''
 #include <stdio.h>

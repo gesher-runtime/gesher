@@ -177,12 +177,13 @@ static void ScanReadingHook(FILE*, bool, void* raw) {
 static void ScanAfterCancellation(void* raw) {
   auto& call = *static_cast<CanceledScan*>(raw);
   // This runs in the canceled thread after the complete scanner/owner cleanup.
-  // A zero-length public read cannot block. It must acquire its owner normally,
-  // proving that no stale thread-local callback context survived unwinding.
+  // PR73 makes zero-length reads return before owner lookup. A rejected EOF
+  // pushback still passes through the actual scanner callback/owner path,
+  // without consuming input or changing the pushback buffer. It therefore
+  // proves that no stale callback context survived the complete unwinding.
   const auto visits = scan_registry_visits;
-  char byte;
-  const bool empty = adapter_fread(&byte, 1, 0, call.stream) == 0;
-  call.restored = empty && (GESHER_SCAN_MEASURE || scan_registry_visits - visits == 1);
+  const bool rejected = adapter_ungetc(EOF, call.stream) == EOF;
+  call.restored = rejected && (GESHER_SCAN_MEASURE || scan_registry_visits - visits == 1);
   call.cleanup = true;
 }
 static void* CanceledScanCall(void* raw) {
@@ -216,8 +217,7 @@ static void TestCanceledScans() {
       std::atomic<bool> entered{false}, finished{false};
       std::thread contender([&] {
         entered = true;
-        char byte;
-        adapter_fread(&byte, 1, 0, stream);
+        adapter_ungetc(EOF, stream);
         finished = true;
       });
       while (!entered.load()) std::this_thread::yield();
