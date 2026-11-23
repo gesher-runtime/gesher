@@ -1,6 +1,9 @@
 // Native test for Track N Item N32 (Issue #56):
 // File Status Flags & Open File Description Semantics in POSIX Layer.
 
+#include <windows.h>
+#include <sddl.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -495,6 +498,123 @@ static void TestFsyncReadOnlyFile() {
   unlink(empty);
 }
 
+// The size NTFS keeps in the file's directory entry (what FindFirstFile
+// reports). NTFS updates it lazily from the open file, and FlushFileBuffers
+// commits it; writing the cached data back through a read-only mapping does
+// not. -1 if the file cannot be found.
+static long long DirectoryEntrySize(const char* path) {
+  WIN32_FIND_DATAA data;
+  HANDLE find = FindFirstFileA(path, &data);
+  if (find == INVALID_HANDLE_VALUE) return -1;
+  FindClose(find);
+  return (static_cast<long long>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+}
+
+static bool SetDacl(const char* path, const char* sddl) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorA(sddl, SDDL_REVISION_1, &descriptor, nullptr))
+    return false;
+  const BOOL set = SetFileSecurityA(path, DACL_SECURITY_INFORMATION, descriptor);
+  LocalFree(descriptor);
+  return set != FALSE;
+}
+
+// fsync through a descriptor that Windows will not give write access (the
+// file made read-only, or an ACL that denies writing) while another
+// descriptor of this process is open for writing: the file is flushed through
+// that descriptor (FlushFileBuffers), which also commits its metadata. The
+// directory entry's size is the observable part of that commit; the
+// read-only fallback (FlushViewOfFile) leaves it stale.
+static void FsyncFlushesThroughWritableAlias(const char* label, bool through_acl) {
+  char path[] = "fsync_alias_XXXXXX";
+  int writer = mkstemp(path);
+  CHECK(writer >= 0);
+  if (writer < 0) return;
+  static char block[8192] = {1};
+  CHECK_EQ(write(writer, block, 10), 10);
+  if (through_acl) {
+    // Everyone may do anything but write the data; the deny comes first.
+    CHECK(SetDacl(path, "D:P(D;;0x6;;;WD)(A;;FA;;;WD)"));
+  } else {
+    CHECK_EQ(chmod(path, 0444), 0);
+  }
+  int reader = open(path, O_RDONLY);
+  CHECK(reader >= 0);
+  // The reader alone cannot get a writable handle.
+  HANDLE probe = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             nullptr, OPEN_EXISTING, 0, nullptr);
+  CHECK(probe == INVALID_HANDLE_VALUE);
+  if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
+  for (int round = 1; round <= 2; ++round) {
+    CHECK_EQ(write(writer, block, sizeof(block)), static_cast<ssize_t>(sizeof(block)));
+    const long long expected = 10 + round * static_cast<long long>(sizeof(block));
+    if (DirectoryEntrySize(path) == expected) {
+      std::printf("  note (%s): NTFS updated the directory entry before fsync; round %d does not "
+                  "tell the flush paths apart\n", label, round);
+    }
+    CHECK_EQ(round == 1 ? fsync(reader) : fdatasync(reader), 0);
+    const long long committed = DirectoryEntrySize(path);
+    CHECK_EQ(committed, expected);
+    if (committed != expected) std::printf("  contract (%s): fsync flushed through the writable descriptor\n", label);
+  }
+  close(writer);
+  close(reader);
+  if (through_acl) CHECK(SetDacl(path, "D:P(A;;FA;;;WD)"));
+  else CHECK_EQ(chmod(path, 0644), 0);
+  CHECK_EQ(unlink(path), 0);
+}
+
+static void TestFsyncWritableAlias() {
+  FsyncFlushesThroughWritableAlias("mode 0444", false);
+  FsyncFlushesThroughWritableAlias("ACL denies writing", true);
+}
+
+// No writable descriptor and no writable handle to be had: Linux fsync still
+// succeeds, and the cached data is written back through a read-only mapping.
+// An ACL that denies writing, and another open that does not share writing.
+static void TestFsyncWithoutWriteAccess() {
+  char path[] = "fsync_aclro_XXXXXX";
+  int writer = mkstemp(path);
+  CHECK(writer >= 0);
+  if (writer < 0) return;
+  CHECK_EQ(write(writer, "data", 4), 4);
+  close(writer);
+  CHECK(SetDacl(path, "D:P(D;;0x6;;;WD)(A;;FA;;;WD)"));
+  int reader = open(path, O_RDONLY);
+  CHECK(reader >= 0);
+  CHECK_EQ(open(path, O_WRONLY), -1);
+  CHECK_EQ(errno, EACCES);
+  errno = 0;
+  CHECK_EQ(fsync(reader), 0);
+  CHECK_EQ(fdatasync(reader), 0);
+  CHECK_EQ(write(reader, "x", 1), -1);
+  CHECK_EQ(errno, EBADF);
+  close(reader);
+  CHECK(SetDacl(path, "D:P(A;;FA;;;WD)"));
+  CHECK_EQ(unlink(path), 0);
+
+  char shared[] = "fsync_noshare_XXXXXX";
+  writer = mkstemp(shared);
+  CHECK(writer >= 0);
+  if (writer < 0) return;
+  CHECK_EQ(write(writer, "data", 4), 4);
+  close(writer);
+  reader = open(shared, O_RDONLY);
+  CHECK(reader >= 0);
+  // Another open of the file that shares reading only.
+  HANDLE exclusive = CreateFileA(shared, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+  CHECK(exclusive != INVALID_HANDLE_VALUE);
+  errno = 0;
+  CHECK_EQ(fsync(reader), 0);
+  CHECK_EQ(fdatasync(reader), 0);
+  char buffer[4] = {};
+  CHECK_EQ(pread(reader, buffer, 4, 0), 4);
+  CHECK(std::memcmp(buffer, "data", 4) == 0);
+  if (exclusive != INVALID_HANDLE_VALUE) CloseHandle(exclusive);
+  close(reader);
+  CHECK_EQ(unlink(shared), 0);
+}
+
 // An O_PATH descriptor is not open for I/O: fsync fails with EBADF, as read
 // and write do (Linux fdget), for a file and a directory alike.
 static void TestFsyncPathDescriptor() {
@@ -526,6 +646,8 @@ int main() {
   std::printf("Running Track N Item N32 File Status Flags & OFD Semantics test...\n");
   TestFsyncReadOnlyDescriptor();
   TestFsyncReadOnlyFile();
+  TestFsyncWritableAlias();
+  TestFsyncWithoutWriteAccess();
   TestFsyncPathDescriptor();
   TestDupSharesFlags();
   TestFdCloexecNotSharedAcrossDup();
