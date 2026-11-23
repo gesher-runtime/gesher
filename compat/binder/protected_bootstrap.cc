@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "protected_bootstrap.h"
 
-#include "protected_bootstrap_wire.h"
+#include "protected_data_pipe.h"
 
 #include <aclapi.h>
 #include <knownfolders.h>
 #include <shlobj.h>
+#include <winternl.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <limits>
 #include <map>
@@ -206,8 +208,8 @@ bool ValidRegistration(const wire::Request& request) {
     return request.uid == 0 && request.process_handle == 0;
   }
   return request.operation == wire::Operation::kRegister &&
-         request.uid <= std::numeric_limits<int32_t>::max() &&
-         request.process_handle != 0 && request.process_handle <= INTPTR_MAX;
+         request.uid <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) &&
+         request.process_handle != 0 && request.process_handle <= static_cast<uint64_t>(INTPTR_MAX);
 }
 
 struct Registrations {
@@ -241,14 +243,36 @@ struct Registrations {
 }  // namespace
 
 ProtectedBootstrap::~ProtectedBootstrap() {
-  if (pipe_ != INVALID_HANDLE_VALUE) CloseHandle(pipe_);
+  ClosePipe();
   if (service_) CloseServiceHandle(service_);
 }
 
+void ProtectedBootstrap::ClosePipe() {
+  if (pipe_ == INVALID_HANDLE_VALUE) return;
+  CloseHandle(pipe_);
+  pipe_ = INVALID_HANDLE_VALUE;
+}
+
 DWORD ProtectedBootstrap::Connect(std::wstring_view locator,
-                                  std::unique_ptr<ProtectedBootstrap>* result) try {
+                                  std::unique_ptr<ProtectedBootstrap>* result) {
+  return ConnectRole(locator, wire::Role::kRegistration, {}, result);
+}
+
+DWORD ProtectedBootstrap::ConnectListeners(std::wstring_view locator, std::wstring_view data_locator,
+                                           std::unique_ptr<ProtectedBootstrap>* result) {
+  return ConnectRole(locator, wire::Role::kListeners, data_locator, result);
+}
+
+DWORD ProtectedBootstrap::ConnectRole(std::wstring_view locator, wire::Role role,
+                                      std::wstring_view data_locator,
+                                      std::unique_ptr<ProtectedBootstrap>* result) try {
   if (!result || *result || !ValidLocator(locator)) return ERROR_INVALID_PARAMETER;
+  if (role == wire::Role::kListeners && !data_pipe::ValidLocator(data_locator)) {
+    return ERROR_INVALID_PARAMETER;
+  }
   std::unique_ptr<ProtectedBootstrap> session(new ProtectedBootstrap);
+  session->role_ = role;
+  session->data_locator_ = data_locator;
   session->pipe_ = CreateFileW(std::wstring(locator).c_str(), wire::kPipeClientAccess,
       0, nullptr, OPEN_EXISTING,
       FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
@@ -286,7 +310,8 @@ DWORD ProtectedBootstrap::CheckLiveAuthority() const {
                            reinterpret_cast<BYTE*>(&report), sizeof(report), &bytes)) {
     return GetLastError();
   }
-  return session == 0 && pid != 0 && pid == server_pid_ && pid == report.dwProcessId &&
+  return session == server_session_ && pid != 0 && pid == server_pid_ &&
+      pid == report.dwProcessId &&
       report.dwCurrentState == SERVICE_RUNNING &&
       (report.dwServiceType & ~SERVICE_INTERACTIVE_PROCESS) == SERVICE_WIN32_OWN_PROCESS
       ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
@@ -295,7 +320,7 @@ DWORD ProtectedBootstrap::CheckLiveAuthority() const {
 DWORD ProtectedBootstrap::Handshake() {
   DWORD status = CheckLiveAuthority();
   if (status != ERROR_SUCCESS) return status;
-  wire::Hello hello{wire::kMagic, wire::kVersion, wire::Operation::kHello, 0};
+  wire::Hello hello{wire::kMagic, wire::kVersion, wire::Operation::kHello, role_};
   status = Transfer(&hello, sizeof(hello), true, kHandshakeTimeout);
   if (status != ERROR_SUCCESS) return status;
   wire::Request ready{};
@@ -310,6 +335,7 @@ DWORD ProtectedBootstrap::Handshake() {
 }
 
 DWORD ProtectedBootstrap::Serve(ProtectedPeers& peers) {
+  if (role_ != wire::Role::kRegistration) return ERROR_INVALID_PARAMETER;
   if (pipe_ == INVALID_HANDLE_VALUE) return ERROR_INVALID_HANDLE;
   DWORD result = ERROR_SUCCESS;
   try {
@@ -332,25 +358,120 @@ DWORD ProtectedBootstrap::Serve(ProtectedPeers& peers) {
   } catch (const std::bad_alloc&) {
     result = ERROR_NOT_ENOUGH_MEMORY;
   }
-  CloseHandle(pipe_);
-  pipe_ = INVALID_HANDLE_VALUE;
+  ClosePipe();
   return result;
+}
+
+DWORD ProtectedBootstrap::CheckListener(HANDLE listener) const {
+  DWORD pipe_flags = 0, pipe_state = 0;
+  ULONG pid = 0, session = 0;
+  if (!GetNamedPipeInfo(listener, &pipe_flags, nullptr, nullptr, nullptr) ||
+      !GetNamedPipeHandleStateW(listener, &pipe_state, nullptr, nullptr, nullptr, nullptr, 0) ||
+      !GetNamedPipeServerProcessId(listener, &pid) ||
+      !GetNamedPipeServerSessionId(listener, &session)) return GetLastError();
+  if (!(pipe_flags & PIPE_SERVER_END) ||
+      (pipe_flags & PIPE_TYPE_MESSAGE) || (pipe_state & (PIPE_READMODE_MESSAGE | PIPE_NOWAIT)) ||
+      pid != server_pid_ || session != server_session_) return ERROR_INVALID_DATA;
+
+  // The user-mode SDK omits these native file information classes.
+  enum class FileInfo : ULONG { kAccess = 8, kName = 9, kMode = 16 };
+  using QueryFile = NTSTATUS(NTAPI*)(HANDLE, PIO_STATUS_BLOCK, void*, ULONG, FileInfo);
+  const auto query = reinterpret_cast<QueryFile>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationFile")));
+  if (!query) return ERROR_NOT_SUPPORTED;
+  IO_STATUS_BLOCK io{};
+  ULONG mode = 0, access = 0;
+  constexpr ULONG listener_access =
+      FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE;
+  if (query(listener, &io, &mode, sizeof(mode), FileInfo::kMode) != 0 ||
+      !(mode & FILE_SYNCHRONOUS_IO_NONALERT) ||
+      query(listener, &io, &access, sizeof(access), FileInfo::kAccess) != 0 ||
+      access != listener_access) return ERROR_INVALID_DATA;
+
+  alignas(FILE_NAME_INFO) std::array<std::byte, 512> bytes{};
+  if (query(listener, &io, bytes.data(), static_cast<ULONG>(bytes.size()), FileInfo::kName) != 0) {
+    return ERROR_INVALID_DATA;
+  }
+  constexpr std::wstring_view device_prefix = LR"(\\.\pipe)";
+  const std::wstring_view expected = std::wstring_view(data_locator_).substr(device_prefix.size());
+  const auto* name = reinterpret_cast<const FILE_NAME_INFO*>(bytes.data());
+  return io.Information >= offsetof(FILE_NAME_INFO, FileName) + expected.size() * sizeof(wchar_t) &&
+      name->FileNameLength == expected.size() * sizeof(wchar_t) &&
+      std::wstring_view(name->FileName, expected.size()) == expected
+      ? ERROR_SUCCESS : ERROR_INVALID_DATA;
+}
+
+DWORD ProtectedBootstrap::RequestListener(HANDLE* listener) {
+  DWORD status = CheckLiveAuthority();
+  if (status != ERROR_SUCCESS) return status;
+  wire::ListenerRequest request{wire::kMagic, wire::kVersion, wire::Operation::kTakeListener, 0};
+  status = Transfer(&request, sizeof(request), true, kReplyTimeout);
+  if (status != ERROR_SUCCESS) return status;
+  wire::ListenerReply reply{};
+  status = Transfer(&reply, sizeof(reply), false, kReplyTimeout);
+  if (status != ERROR_SUCCESS) return status;
+  if (reply.listener_handle > static_cast<uint64_t>(INTPTR_MAX)) return ERROR_INVALID_DATA;
+  const HANDLE raw = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(reply.listener_handle));
+  if (raw == pipe_) return ERROR_INVALID_DATA;
+  DWORD handle_flags = 0;
+  if (raw && !GetHandleInformation(raw, &handle_flags)) return GetLastError();
+  Handle transferred(raw);
+  status = CheckLiveAuthority();
+  if (status != ERROR_SUCCESS) return status;
+  if (reply.magic != wire::kMagic || reply.version != wire::kVersion ||
+      reply.reserved != 0 || handle_flags != 0 ||
+      ((raw != nullptr) != (reply.status == ERROR_SUCCESS))) {
+    return ERROR_INVALID_DATA;
+  }
+  if (reply.status != ERROR_SUCCESS) return reply.status;
+  status = CheckListener(transferred.get());
+  if (status != ERROR_SUCCESS) return status;
+  *listener = transferred.release();
+  return ERROR_SUCCESS;
+}
+
+DWORD ProtectedBootstrap::TakeListener(HANDLE* listener) {
+  if (role_ != wire::Role::kListeners || !listener || *listener) return ERROR_INVALID_PARAMETER;
+  if (pipe_ == INVALID_HANDLE_VALUE) return ERROR_INVALID_HANDLE;
+  const DWORD status = RequestListener(listener);
+  if (status != ERROR_SUCCESS) ClosePipe();
+  return status;
 }
 
 #ifdef GESHER_BINDER_BOOTSTRAP_FIXTURE
 DWORD ProtectedBootstrap::AdoptFixturePipe(HANDLE connected_pipe,
                                            std::unique_ptr<ProtectedBootstrap>* result) {
+  return AdoptFixtureRole(connected_pipe, wire::Role::kRegistration, {}, result);
+}
+
+DWORD ProtectedBootstrap::AdoptFixtureListenerPipe(HANDLE connected_pipe,
+                                                     std::wstring_view data_locator,
+                                                     std::unique_ptr<ProtectedBootstrap>* result) {
+  return AdoptFixtureRole(connected_pipe, wire::Role::kListeners, data_locator, result);
+}
+
+DWORD ProtectedBootstrap::AdoptFixtureRole(HANDLE connected_pipe, wire::Role role,
+                                           std::wstring_view data_locator,
+                                           std::unique_ptr<ProtectedBootstrap>* result) try {
   if (connected_pipe == INVALID_HANDLE_VALUE || !connected_pipe || !result || *result) {
     return ERROR_INVALID_PARAMETER;
   }
   const Handle supplied(connected_pipe);
-  std::unique_ptr<ProtectedBootstrap> session(new (std::nothrow) ProtectedBootstrap);
-  if (!session) return ERROR_NOT_ENOUGH_MEMORY;
+  if (role == wire::Role::kListeners && !data_pipe::ValidLocator(data_locator)) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  std::unique_ptr<ProtectedBootstrap> session(new ProtectedBootstrap);
+  session->role_ = role;
+  session->data_locator_ = data_locator;
   if (!DuplicateHandle(GetCurrentProcess(), supplied.get(), GetCurrentProcess(), &session->pipe_,
                        0, FALSE, DUPLICATE_SAME_ACCESS)) return GetLastError();
+  if (!GetNamedPipeServerProcessId(session->pipe_, &session->server_pid_) ||
+      !GetNamedPipeServerSessionId(session->pipe_, &session->server_session_)) return GetLastError();
   const DWORD status = session->Handshake();
   if (status == ERROR_SUCCESS) *result = std::move(session);
   return status;
+} catch (const std::bad_alloc&) {
+  return ERROR_NOT_ENOUGH_MEMORY;
 }
 #endif
 

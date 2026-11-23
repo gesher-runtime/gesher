@@ -24,6 +24,7 @@ class BinderListenerFactory final {
   BinderListenerFactory& operator=(const BinderListenerFactory&) = delete;
 
   const std::wstring& name() const { return name_; }
+  DWORD broker_pid() const { return GetProcessId(broker_); }
 
   // Returns a noninheritable value in the exact broker process's handle table.
   // The authority publishes it only over its authenticated private control

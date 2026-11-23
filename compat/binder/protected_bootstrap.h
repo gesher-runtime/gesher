@@ -3,8 +3,10 @@
 #pragma once
 
 #include "protected_peers.h"
+#include "protected_bootstrap_wire.h"
 
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace gesher::binder {
@@ -23,6 +25,15 @@ class ProtectedBootstrap final {
   static DWORD Connect(std::wstring_view locator,
                        std::unique_ptr<ProtectedBootstrap>* result);
 
+  // Use a separate bootstrap connection and a fixed private data-pipe name.
+  static DWORD ConnectListeners(std::wstring_view locator, std::wstring_view data_locator,
+                                std::unique_ptr<ProtectedBootstrap>* result);
+
+  // Call serially with an empty output. Success gives the caller one owning
+  // listener handle. A transport, authority, or validation error permanently
+  // closes this connection. The protected broker must exit on such an error.
+  DWORD TakeListener(HANDLE* listener);
+
   // Consume registration frames on the same connection, once. On any fatal
   // error or EOF, revoke every registration made over this connection before
   // returning. The protected broker must exit and must never fall back to
@@ -34,11 +45,24 @@ class ProtectedBootstrap final {
   // available in a production consumer.
   static DWORD AdoptFixturePipe(HANDLE connected_pipe,
                                 std::unique_ptr<ProtectedBootstrap>* result);
+  static DWORD AdoptFixtureListenerPipe(HANDLE connected_pipe, std::wstring_view data_locator,
+                                        std::unique_ptr<ProtectedBootstrap>* result);
 #endif
 
  private:
   ProtectedBootstrap() = default;
+  static DWORD ConnectRole(std::wstring_view locator, bootstrap_wire::Role role,
+                           std::wstring_view data_locator,
+                           std::unique_ptr<ProtectedBootstrap>* result);
+#ifdef GESHER_BINDER_BOOTSTRAP_FIXTURE
+  static DWORD AdoptFixtureRole(HANDLE connected_pipe, bootstrap_wire::Role role,
+                                std::wstring_view data_locator,
+                                std::unique_ptr<ProtectedBootstrap>* result);
+#endif
   DWORD CheckLiveAuthority() const;
+  DWORD CheckListener(HANDLE listener) const;
+  DWORD RequestListener(HANDLE* listener);
+  void ClosePipe();
   DWORD Handshake();
   DWORD Transfer(void* data, DWORD size, bool sending, DWORD timeout);
   DWORD Reply(uint64_t registration_id, DWORD status);
@@ -46,6 +70,9 @@ class ProtectedBootstrap final {
   HANDLE pipe_ = INVALID_HANDLE_VALUE;
   SC_HANDLE service_ = nullptr;
   DWORD server_pid_ = 0;
+  DWORD server_session_ = 0;
+  bootstrap_wire::Role role_ = bootstrap_wire::Role::kRegistration;
+  std::wstring data_locator_;
 };
 
 }  // namespace gesher::binder

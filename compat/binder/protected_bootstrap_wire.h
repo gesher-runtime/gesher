@@ -19,6 +19,12 @@ enum class Operation : uint32_t {
   kReady = 2,
   kRegister = 3,
   kRevoke = 4,
+  kTakeListener = 5,
+};
+
+enum class Role : uint32_t {
+  kRegistration = 0,
+  kListeners = 1,
 };
 
 // All frames are fixed-size, little-endian. Read and write complete frames.
@@ -27,7 +33,7 @@ struct Hello {
   uint32_t magic;
   uint32_t version;
   Operation operation;
-  uint32_t reserved;
+  Role role;
 };
 static_assert(sizeof(Hello) == 16);
 
@@ -57,5 +63,27 @@ struct Reply {
   uint64_t registration_id;
 };
 static_assert(sizeof(Reply) == 24);
+
+// After the Ready acknowledgement on a listener connection, binderd sends
+// one Take request and reads one reply at a time.
+struct ListenerRequest {
+  uint32_t magic;
+  uint32_t version;
+  Operation operation;
+  uint32_t reserved;
+};
+static_assert(sizeof(ListenerRequest) == 16);
+
+// Success transfers one disconnected synchronous server pipe handle already
+// duplicated into binderd. An error reply has a zero listener_handle. The
+// same transfer ownership rule as Register applies once the reply is sent.
+struct ListenerReply {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t status;
+  uint32_t reserved;
+  uint64_t listener_handle;
+};
+static_assert(sizeof(ListenerReply) == 24);
 
 }  // namespace gesher::binder::bootstrap_wire

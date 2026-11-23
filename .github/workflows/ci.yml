@@ -162,6 +162,16 @@ jobs:
           cl /nologo /std:c++20 /EHsc /D_WIN32_WINNT=0x0A00 /DNOMINMAX /Icompat\usb_storage tests\native\usb_block_channel_test.cc compat\usb_storage\block_channel.cc compat\usb_storage\block_broker_client.cc /Fe:usb_block_channel_test.exe bcrypt.lib advapi32.lib
           if errorlevel 1 exit /b 1
           usb_block_channel_test.exe
+      - name: Protected Binder bootstrap and data-pipe identity
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cmake -S probes/binder-protected -B out/binder-protected-ci -G Ninja -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build out/binder-protected-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir out/binder-protected-ci --output-on-failure
+          exit $LASTEXITCODE
       - name: Build native clipboard foreground actor before timed startup
         if: ${{ !cancelled() }}
         shell: cmd

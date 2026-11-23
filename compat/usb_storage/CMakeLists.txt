@@ -12,6 +12,7 @@ add_executable(usb_authority_launch_test EXCLUDE_FROM_ALL
   ${CMAKE_CURRENT_LIST_DIR}/../framework/app_container.cc
   authority_launch.cc
   authority_peer.cc
+  binder_listener_factory.cc
   binder_authority_control.cc)
 target_compile_options(usb_authority_launch_test PRIVATE -Wall -Wextra -Werror -fexceptions)
 target_link_options(usb_authority_launch_test PRIVATE -municode)
