@@ -130,6 +130,30 @@ public final class ManagerConstructionBatchTest {
         require(telephony != null && "".equals(telephony.getNetworkCountryIso())
                         && "".equals(telephony.getSimCountryIso()),
                 "no-SIM TelephonyManager returned null or unexpected country ISO");
+        // The real Mobile Broadband probe on a runner without a cellular modem: no phone,
+        // no telephony features, and AOSP's no-phone answers (docs/telephony.md).
+        require(Class.forName("com.gesher.server.TelephonyService").getMethod("bootSnapshot")
+                        .invoke(null) == null,
+                "the runner unexpectedly reported a cellular modem; these checks assume none");
+        for (Object item : IPackageManager.Stub.asInterface(created.get("package"))
+                .getSystemAvailableFeatures().getList()) {
+            android.content.pm.FeatureInfo feature = (android.content.pm.FeatureInfo) item;
+            require(feature.name == null || !feature.name.startsWith("android.hardware.telephony"),
+                    "telephony feature without a modem: " + feature.name);
+        }
+        require(telephony.getSimState() == TelephonyManager.SIM_STATE_ABSENT,
+                "no-modem SIM state was not ABSENT");
+        require(telephony.getDataState() == TelephonyManager.DATA_DISCONNECTED,
+                "no-modem data state was not DISCONNECTED");
+        require(telephony.getSignalStrength() == null, "no-modem signal strength reported");
+        require(telephony.getServiceState() == null, "no-modem service state reported");
+        require(telephony.getImei(0) == null && telephony.getTypeAllocationCode(0) == null,
+                "no-modem device identifier reported");
+        require(telephony.getSimCarrierId() == TelephonyManager.UNKNOWN_CARRIER_ID,
+                "no-modem carrier ID was not UNKNOWN_CARRIER_ID");
+        require("".equals(telephony.getNetworkOperatorName()) && "".equals(telephony.getSimOperator())
+                        && !telephony.isNetworkRoaming(),
+                "no-modem operator properties were published");
         for (int slot = 0; slot < TelephonyManager.getDefault().getActiveModemCount(); slot++) {
             require(SubscriptionManager.getSubscriptionId(slot) == SubscriptionManager.INVALID_SUBSCRIPTION_ID
                             && subscriptions.getEnabledSubscriptionId(slot)
