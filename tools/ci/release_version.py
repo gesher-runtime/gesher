@@ -1,9 +1,7 @@
 """Compute installer versions from canonical push tags or published releases."""
 from datetime import datetime
-import json
 import os
 import re
-import urllib.request
 
 from github_read import get_json
 
@@ -104,17 +102,12 @@ def build_version(environ, read):
 
 
 def read_public(endpoint):
-    # A token in a standalone fork belongs to that fork. Its public baseline
-    # is still the upstream release feed used by installed Gesher clients.
-    request = urllib.request.Request(f'https://api.github.com/{endpoint}', headers={
-        'Accept': 'application/vnd.github+json',
-        'User-Agent': 'Gesher-CI',
-        'X-GitHub-Api-Version': '2022-11-28',
-    })
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+    # Forks use the same public upstream catalog as installed clients. Reuse
+    # the job's existing authenticated, bounded GET transport; no repository
+    # permission or version acceptance rule changes. The absolute API origin
+    # prevents CLI host configuration from redirecting this canonical read.
+    return get_json(f'https://api.github.com/{endpoint}')
 
 
 if __name__ == '__main__':
-    read = get_json if os.environ.get('GITHUB_REPOSITORY') == REPOSITORY else read_public
-    print(build_version(os.environ, read))
+    print(build_version(os.environ, read_public))
