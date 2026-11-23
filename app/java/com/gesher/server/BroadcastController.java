@@ -253,6 +253,7 @@ final class BroadcastController {
         Intent snapshot = new Intent(intent);
         validateBroadcastSender(origin, snapshot);
         boundedIntent(snapshot);
+        deliverToSystemReceivers(snapshot);
         String[] required = copy(requiredPermissions), excluded = copy(excludePermissions),
                 excludedPackages = copy(excludePackages);
         Bundle extras = resultExtras(resultExtras);
@@ -654,6 +655,30 @@ final class BroadcastController {
         if (app != null && mAtm.callerProcess(app.pid) == app) mAtm.maybeExit(app);
     }
 
+    /** System-server receivers of implicit broadcasts, by action (MediaProvider's MediaReceiver). */
+    private final Map<String, List<java.util.function.Consumer<Intent>>> mSystemReceivers =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    void addSystemReceiver(String action, java.util.function.Consumer<Intent> receiver) {
+        mSystemReceivers.computeIfAbsent(java.util.Objects.requireNonNull(action),
+                ignored -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                .add(java.util.Objects.requireNonNull(receiver));
+    }
+
+    /** Hands an implicit, package-less broadcast to the system receivers of its action. */
+    private void deliverToSystemReceivers(Intent intent) {
+        if (intent.getComponent() != null || intent.getPackage() != null) return;
+        List<java.util.function.Consumer<Intent>> receivers = mSystemReceivers.get(intent.getAction());
+        if (receivers == null) return;
+        for (java.util.function.Consumer<Intent> receiver : receivers) {
+            try {
+                receiver.accept(new Intent(intent));
+            } catch (RuntimeException e) {
+                SystemServer.log("system receiver for " + intent.getAction() + " failed: " + e);
+            }
+        }
+    }
+
     BroadcastController(ActivityTaskManagerService atm, PackageManagerService pm) {
         this(atm, pm, RECEIVER_TIMEOUT_MS);
     }
@@ -812,6 +837,7 @@ final class BroadcastController {
         if (intent == null) throw new IllegalArgumentException("Missing broadcast intent");
         intent = new Intent(intent);
         validateBroadcastSender(sender, intent);
+        deliverToSystemReceivers(intent);
         String callingPackage = sender.packageName;
         // Registered receivers: implicit broadcasts only.
         List<ReceiverList> registered = new ArrayList<>();

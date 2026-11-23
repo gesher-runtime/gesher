@@ -198,6 +198,15 @@ public final class Services {
         services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 clipboard).asBinder());
+        // content://media: MediaStore over the shared volume (docs/media-provider.md).
+        try {
+            MediaStoreProvider.create(am, pm, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/media")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to index.
+            SystemServer.log("media: provider unavailable: " + e);
+        }
         // Construct the network provider before jobs subscribe to its changes.
         ConnectivityService connectivity = new ConnectivityService(pm, atm);
         services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
