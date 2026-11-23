@@ -412,19 +412,16 @@ public final class Launcher {
             if (state != null) {
                 String name = state.getProperty(Device.STATE_DEVICE);
                 if (Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
-                    if (start && protectedRequested() && !protectedDevice(state)) {
-                        stopLegacyDeviceForProtectedLaunch(state);
-                    } else {
-                        use(state);
-                        log(text("connected", name, Device.pid(state, Device.SYSTEM_SERVER)));
-                        return state;
-                    }
-                } else {
-                    log(text("cleaning", name));
-                    Device.killLeftovers(state);
-                    Device.stateFile().delete();
-                    Device.readyFile().delete();
+                    if (start && protectedRequested()) requireProtectedDevice(state);
+                    use(state);
+                    log(text("connected", name, Device.pid(state, Device.SYSTEM_SERVER)));
+                    return state;
                 }
+                // Crashed or killed, or never got ready: what is left of it goes.
+                log(text("cleaning", name));
+                Device.killLeftovers(state);
+                Device.stateFile().delete();
+                Device.readyFile().delete();
             }
             if (!start) return null;
             state = readyCohostOwner();
@@ -464,45 +461,21 @@ public final class Launcher {
         try {
             Properties state = Device.read(Device.stateFile());
             if (state != null && Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
-                if (protectedDevice(state)) {
-                    use(state);
-                    return state;
+                requireProtectedDevice(state);
+            } else {
+                if (state != null) {
+                    Device.killLeftovers(state);
+                    Device.stateFile().delete();
+                    Device.readyFile().delete();
                 }
-                stopLegacyDeviceForProtectedLaunch(state);
-            } else if (state != null) {
-                Device.killLeftovers(state);
-                Device.stateFile().delete();
-                Device.readyFile().delete();
+                state = readyCohostOwner();
+                if (state == null) state = startDevice(true);
             }
-            state = readyCohostOwner();
-            if (state == null) state = startDevice(true);
             use(state);
             return state;
         } finally {
             Zygote.unlock(lock);
         }
-    }
-
-    /** Runs under the device lock and waits for the recorded server generation to exit. */
-    private static void stopLegacyDeviceForProtectedLaunch(Properties state) throws IOException {
-        String name = state.getProperty(Device.STATE_DEVICE);
-        if (Device.alive(state, Device.SYSTEM_SERVER)) {
-            if (!Zygote.signalEvent(state.getProperty(Device.STATE_SHUTDOWN_EVENT,
-                    Device.shutdownEventName())) && Device.alive(state, Device.SYSTEM_SERVER)) {
-                throw new IllegalStateException("Could not request shutdown of the existing Gesher device");
-            }
-            long deadline = SystemClock.uptimeMillis() + 30_000;
-            while (Device.alive(state, Device.SYSTEM_SERVER)) {
-                if (SystemClock.uptimeMillis() >= deadline) {
-                    throw new IllegalStateException("The existing Gesher device is still shutting down");
-                }
-                SystemClock.sleep(200);
-            }
-        }
-        Device.killLeftovers(state);
-        Files.deleteIfExists(Device.stateFile().toPath());
-        Files.deleteIfExists(Device.readyFile().toPath());
-        log(text("device_stopped", name));
     }
 
     /** Waits until the system server of {@code state} has registered its services. */
@@ -539,6 +512,15 @@ public final class Launcher {
 
     private static boolean protectedDevice(Properties state) {
         return "true".equals(state.getProperty(Device.STATE_PROTECTED));
+    }
+
+    private static void requireProtectedDevice(Properties state) {
+        if (!protectedDevice(state)) {
+            // Older servers have no atomic idle-only retirement request. Their
+            // shutdown event can terminate apps, so leave the live device alone.
+            throw new IllegalStateException("A legacy Gesher device is still running. Finish its apps"
+                    + " and let it stop, or run gesher-app shutdown before trying again.");
+        }
     }
 
     private static Properties startDevice(boolean cohostOwner) throws Exception {
