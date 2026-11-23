@@ -339,6 +339,12 @@ public final class ExactAlarmContractTest {
                     new Class<?>[]{pmType, amType, java.util.function.ToIntBiFunction.class}, pm, am, toast);
             set(am, "mServices", make(type("ActiveServices"),
                     new Class<?>[]{atmType, pmType, notificationType}, atm, pm, notifications));
+            // Mirror AMS ownership before attaching it to ATM: exact-alarm
+            // revocation retires processes through the real sensor policy too.
+            Class<?> sensorType = type("SensorAccessService");
+            Object sensors = make(sensorType, new Class<?>[]{pmType, atmType}, pm, atm);
+            set(am, "mSensorAccess", sensors);
+            invoke(get(am, "mServices"), "setSensorAccess", new Class<?>[]{sensorType}, sensors);
             broadcasts = make(type("BroadcastController"), new Class<?>[]{atmType, pmType}, atm, pm);
             set(am, "mBroadcasts", broadcasts);
             set(am, "mPendingIntents", make(type("PendingIntents"), new Class<?>[]{amType, pmType}, am, pm));
@@ -413,6 +419,8 @@ public final class ExactAlarmContractTest {
                     field(locales, "sIs24Hour").set(null, previousHour);
                     field(locales, "sLocales").set(null, previousLocales);
                 }
+                ((java.util.concurrent.ExecutorService) get(get(am, "mSensorAccess"), "notifications"))
+                        .shutdownNow();
             } catch (Exception failure) { throw new AssertionError(failure); }
         }
     }
