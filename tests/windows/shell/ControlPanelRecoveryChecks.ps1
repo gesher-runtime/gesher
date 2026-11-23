@@ -10,7 +10,8 @@ $ast = [Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath
 if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($name in 'Get-SeparateWindowApps','Get-InstalledApps','Get-FileStamp','Get-StateStamp','Get-AppFilesStamp',
         'Update-AppsView','Test-PanelMetadataVisible','Request-PanelMetadataRefresh','Update-PanelMetadataWatch',
-        'Refresh-Dashboard','Invoke-LiveRefreshTick') {
+        'Refresh-Dashboard','Invoke-LiveRefreshTick',
+        'ConvertTo-ProxyValue','Read-ProxyProperties','ConvertFrom-PropertiesEscapes','Get-ProxySettings','Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $false))
@@ -53,6 +54,7 @@ $conventional = Join-Path $root 'data/data/fixture.app/gesher-shell/icon.ico'
 $external = Join-Path $fixture 'external/late.ico'
 $custom = Join-Path $root 'custom/late.ico'
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
+$script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 $icoFile = Join-Path $fixture 'panel-default.ico'
 $appsList = [pscustomobject]@{ ItemsSource = @() }
 $window = @{ IsVisible = $true; WindowState = 'Normal' }
@@ -65,7 +67,7 @@ try {
     # Each explicitly watched state input must also change the fallback stamp.
     foreach ($path in @((Join-Path $root 'data/system/gesher-device.ready'), $packages,
             (Join-Path $root 'microg.enabled'), (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk'),
-            $script:AppWindowsFile)) {
+            $script:AppWindowsFile, $script:ProxyFile)) {
         $before = Get-StateStamp
         Write-Metadata $path 'metadata fixture'
         Assert-Recovery ($before -ne (Get-StateStamp)) "Creation is absent from recovery stamp: $path"
