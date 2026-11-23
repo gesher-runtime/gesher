@@ -66,11 +66,21 @@ if ($Windows) {
   # replacement. Entry is acknowledged only after OpenClipboard succeeds.
   Add-Type -TypeDefinition @'
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Threading;
 public sealed class ClipboardSetupReader : IDisposable {
   [DllImport("user32.dll", SetLastError = true)] static extern bool OpenClipboard(IntPtr window);
   [DllImport("user32.dll", SetLastError = true)] static extern bool CloseClipboard();
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern IntPtr CreateWindowExW(uint extendedStyle, string name, string title,
+      uint style, int x, int y, int width, int height, IntPtr parent,
+      IntPtr menu, IntPtr instance, IntPtr parameter);
+  [DllImport("user32.dll", SetLastError = true)] static extern bool DestroyWindow(IntPtr window);
+  [DllImport("user32.dll")] static extern IntPtr GetOpenClipboardWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
   [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
   [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr value);
   [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr value);
@@ -79,24 +89,62 @@ public sealed class ClipboardSetupReader : IDisposable {
   readonly Thread thread;
   Thread releaser;
   Exception failure;
+  IntPtr window;
+  uint openThread, closeThread, destroyThread;
+  int closeError, destroyError;
+  bool closed, destroyed;
   public volatile bool Held;
+  public bool OwnsClipboard { get { return Held && window != IntPtr.Zero && GetOpenClipboardWindow() == window; } }
   public ClipboardSetupReader() {
     thread = new Thread(() => {
       try {
+        openThread = GetCurrentThreadId();
+        // PowerShell's real Set/Get use OpenClipboard(NULL). Give the holder
+        // a distinct actual window identity, owned and destroyed on this thread.
+        window = CreateWindowExW(0, "STATIC", "clipboard setup reader", 0,
+            0, 0, 0, 0, new IntPtr(-3) /* HWND_MESSAGE */, IntPtr.Zero,
+            IntPtr.Zero, IntPtr.Zero);
+        if (window == IntPtr.Zero)
+          throw new Win32Exception(Marshal.GetLastWin32Error(), "Native reader window creation failed");
+        uint process;
+        if (GetWindowThreadProcessId(window, out process) != openThread || process != GetCurrentProcessId())
+          throw new InvalidOperationException("Native reader window has a different thread/process owner");
         var timer = System.Diagnostics.Stopwatch.StartNew();
-        while (!OpenClipboard(IntPtr.Zero)) {
-          if (timer.ElapsedMilliseconds >= 2000) throw new InvalidOperationException("Actual native reader could not open clipboard");
+        while (!OpenClipboard(window)) {
+          int error = Marshal.GetLastWin32Error();
+          if (timer.ElapsedMilliseconds >= 2000)
+            throw new Win32Exception(error, "Actual native reader could not open clipboard");
           Thread.Sleep(1);
         }
         Held = true;
         entered.Set();
         try {
           if (!release.Wait(5000)) throw new InvalidOperationException("Native reader release was not requested");
+        } catch (Exception ex) {
+          failure = ex;
         } finally {
+          closeThread = GetCurrentThreadId();
+          closed = CloseClipboard();
+          closeError = closed ? 0 : Marshal.GetLastWin32Error();
           Held = false;
-          if (!CloseClipboard()) throw new InvalidOperationException("Actual native reader failed to close clipboard");
+          if (!closed) throw new Win32Exception(closeError, "Actual native reader failed to close clipboard");
         }
-      } catch (Exception ex) { failure = ex; entered.Set(); }
+      } catch (Exception ex) {
+        failure = failure == null ? ex : new AggregateException(failure, ex);
+        entered.Set();
+      }
+      finally {
+        if (window != IntPtr.Zero) {
+          destroyThread = GetCurrentThreadId();
+          destroyed = DestroyWindow(window);
+          destroyError = destroyed ? 0 : Marshal.GetLastWin32Error();
+          if (destroyed) window = IntPtr.Zero;
+          else {
+            var error = new Win32Exception(destroyError, "Native reader window destruction failed");
+            failure = failure == null ? error : new AggregateException(failure, error);
+          }
+        }
+      }
     });
     thread.IsBackground = true;
     thread.Start();
@@ -134,32 +182,54 @@ public sealed class ClipboardSetupReader : IDisposable {
     if (!thread.Join(3000) || (releaser != null && !releaser.Join(3000)))
       throw new InvalidOperationException("Native reader threads did not retire");
     entered.Dispose(); release.Dispose();
+    Console.WriteLine("CLIPBOARD_SETUP_READER closed={0} destroyed={1} open_thread={2} close_thread={3} destroy_thread={4} close_error={5} destroy_error={6}",
+        closed, destroyed, openThread, closeThread, destroyThread, closeError, destroyError);
     if (failure != null) throw failure;
+    if (!closed || !destroyed || openThread != closeThread || openThread != destroyThread)
+      throw new InvalidOperationException("Native reader did not close and destroy its window on the owning thread");
   }
 }
 '@
+  function Complete-ClipboardSetupReader($Reader, [Exception] $PrimaryFailure) {
+    try { $Reader.Dispose() }
+    catch {
+      if ($PrimaryFailure) {
+        throw [AggregateException]::new('Clipboard assertion and owned reader cleanup both failed',
+            [Exception[]]@($PrimaryFailure, $_.Exception))
+      }
+      throw
+    }
+  }
   $token = 'clipboard-setup-' + [Guid]::NewGuid().ToString('N')
   Set-GesherClipboardText -Text ($token + '-prior')
   $reader = [ClipboardSetupReader]::new()
+  $primaryFailure = $null
   try {
     Assert-ClipboardSetup $reader.Held 'Actual native reader must own clipboard before the negative control'
+    Assert-ClipboardSetup $reader.OwnsClipboard 'Real open clipboard must identify the distinct holder HWND'
     Set-Clipboard -Value $token
     Assert-ClipboardSetup ((Get-Clipboard -Raw) -cne $token) 'Original immediate Set/Get must fail while the real reader holds clipboard'
     Assert-ClipboardSetup $reader.Held 'Failed clipboard commands must not release the other thread reader'
+    Assert-ClipboardSetup $reader.OwnsClipboard 'Denied native commands must preserve the exact open clipboard HWND'
     $reader.ReleaseAfter(150)
     Set-GesherClipboardText -Text $token
     Assert-ClipboardSetup (-not $reader.Held) 'Publication must wait for the actual reader release'
     Assert-ClipboardSetup ([ClipboardSetupReader]::ReadText() -ceq $token) 'Independent native readback must contain the exact challenge after reader release'
-  } finally { $reader.Dispose() }
+  } catch { $primaryFailure = $_.Exception; throw }
+  finally { Complete-ClipboardSetupReader $reader $primaryFailure }
 
   $reader = [ClipboardSetupReader]::new()
+  $primaryFailure = $null
   try {
+    Assert-ClipboardSetup $reader.OwnsClipboard 'Persistent contention starts with the exact real holder HWND'
     $rejected = $false; $timed = [Diagnostics.Stopwatch]::StartNew()
     try { Set-GesherClipboardText -Text ($token + '-denied') }
     catch { $rejected = $_.Exception.Message -match 'exact readback was not established' }
     Assert-ClipboardSetup ($rejected -and $timed.ElapsedMilliseconds -ge 1000 -and $timed.ElapsedMilliseconds -lt 4000) 'Persistent actual native contention must fail within the bounded setup interval'
     Assert-ClipboardSetup $reader.Held 'Timeout must not steal or release the real reader ownership'
-  } finally { $reader.Dispose() }
+    Assert-ClipboardSetup $reader.OwnsClipboard 'Setup timeout must preserve the exact open clipboard HWND'
+  } catch { $primaryFailure = $_.Exception; throw }
+  finally { Complete-ClipboardSetupReader $reader $primaryFailure }
   Assert-ClipboardSetup ([ClipboardSetupReader]::ReadText() -ceq $token) 'Failed publication must leave the previous real clipboard text intact'
 }
 Write-Host "PASS clipboard setup: $checks exact-readback/deadline/error checks; native_windows=$($Windows.IsPresent)"
