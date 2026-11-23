@@ -46,6 +46,7 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -76,6 +77,9 @@ public final class ApkPackage {
     /** Both kinds of components, as PackageManagerService adds when neither is asked for. */
     private static final long DIRECT_BOOT = PackageManager.MATCH_DIRECT_BOOT_AWARE
             | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+
+    // Tiny families cost less to generate directly than to index and copy.
+    private static final int BATCH_METADATA_COMPONENTS = 8;
 
     public final String apkPath;
     public final ParsedPackage parsed;
@@ -726,14 +730,13 @@ public final class ApkPackage {
 
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
-        return packageInfo(flags, false);
+        return packageInfo(flags, false, enabledState());
     }
 
-    private PackageInfo packageInfo(long flags, boolean providerQuery) {
+    private PackageInfo packageInfo(long flags, boolean providerQuery, PackageEnabledStore.State state) {
         if ((flags & DIRECT_BOOT) == 0) {
             flags |= DIRECT_BOOT;
         }
-        PackageEnabledStore.State state = enabledState();
         // Include manifest-disabled declarations before applying installed overrides.
         // A provider query also needs both boot states: choose its registered first
         // component before either boot-state or enabled-state filtering.
@@ -771,10 +774,14 @@ public final class ApkPackage {
     }
 
     public ApplicationInfo applicationInfo(long flags) {
+        return applicationInfo(flags, enabledState());
+    }
+
+    private ApplicationInfo applicationInfo(long flags, PackageEnabledStore.State state) {
         return packageInfo(flags & ~(PackageManager.GET_ACTIVITIES
                 | PackageManager.GET_RECEIVERS | PackageManager.GET_SERVICES
                 | PackageManager.GET_PROVIDERS | PackageManager.GET_PERMISSIONS
-                | PackageManager.GET_CONFIGURATIONS)).applicationInfo;
+                | PackageManager.GET_CONFIGURATIONS), false, state).applicationInfo;
     }
 
     /** The activity named {@code className}, or null. */
@@ -846,9 +853,15 @@ public final class ApkPackage {
             }
             return result;
         }
-        for (Match m : match(parsed.getActivities(), intent, resolvedType, flags)) {
-            ActivityInfo a = activityInfo(m.name, flags);
-            if (a != null) result.add(m.resolveInfo(flags, a, null));
+        List<ParsedActivity> declarations = parsed.getActivities();
+        List<Match> matches = match(declarations, intent, resolvedType, flags);
+        if (matches.size() > 1 && declarations.size() >= BATCH_METADATA_COMPONENTS) {
+            addActivityMatches(result, matches, flags, false);
+        } else {
+            for (Match m : matches) {
+                ActivityInfo a = activityInfo(m.name, flags);
+                if (a != null) result.add(m.resolveInfo(flags, a, null));
+            }
         }
         return result;
     }
@@ -874,9 +887,15 @@ public final class ApkPackage {
             }
             return result;
         }
-        for (Match m : match(parsed.getServices(), intent, resolvedType, flags)) {
-            ServiceInfo s = serviceInfo(m.name, flags);
-            if (s != null) result.add(m.resolveInfo(flags, null, s));
+        var declarations = parsed.getServices();
+        List<Match> matches = match(declarations, intent, resolvedType, flags);
+        if (matches.size() > 1 && declarations.size() >= BATCH_METADATA_COMPONENTS) {
+            addServiceMatches(result, matches, flags);
+        } else {
+            for (Match m : matches) {
+                ServiceInfo s = serviceInfo(m.name, flags);
+                if (s != null) result.add(m.resolveInfo(flags, null, s));
+            }
         }
         return result;
     }
@@ -902,9 +921,57 @@ public final class ApkPackage {
             }
             return result;
         }
-        for (Match m : match(parsed.getReceivers(), intent, resolvedType, flags)) {
-            ActivityInfo a = receiverInfo(m.name, flags);
-            if (a != null) result.add(m.resolveInfo(flags, a, null));
+        List<ParsedActivity> declarations = parsed.getReceivers();
+        List<Match> matches = match(declarations, intent, resolvedType, flags);
+        if (matches.size() > 1 && declarations.size() >= BATCH_METADATA_COMPONENTS) {
+            addActivityMatches(result, matches, flags, true);
+        } else {
+            for (Match m : matches) {
+                ActivityInfo a = receiverInfo(m.name, flags);
+                if (a != null) result.add(m.resolveInfo(flags, a, null));
+            }
+        }
+        return result;
+    }
+
+    /** Generate one family and enabled-state snapshot per batched query, never retain it. */
+    private void addActivityMatches(List<ResolveInfo> result, List<Match> matches,
+            long flags, boolean receivers) {
+        PackageEnabledStore.State state = enabledState();
+        Map<String, ActivityInfo> snapshot = firstComponents(receivers
+                ? packageInfo(flags | PackageManager.GET_RECEIVERS, false, state).receivers
+                : packageInfo(flags | PackageManager.GET_ACTIVITIES, false, state).activities);
+        for (Match m : matches) {
+            ActivityInfo template = snapshot.get(m.name);
+            if (template == null) continue;
+            ActivityInfo a = new ActivityInfo(template);
+            // The framework copy constructor shares this generated mutable set.
+            a.setKnownActivityEmbeddingCerts(template.getKnownActivityEmbeddingCerts());
+            if (!result.isEmpty()) a.applicationInfo = applicationInfo(flags, state);
+            result.add(m.resolveInfo(flags, a, null));
+        }
+    }
+
+    private void addServiceMatches(List<ResolveInfo> result, List<Match> matches, long flags) {
+        PackageEnabledStore.State state = enabledState();
+        Map<String, ServiceInfo> snapshot = firstComponents(
+                packageInfo(flags | PackageManager.GET_SERVICES, false, state).services);
+        for (Match m : matches) {
+            ServiceInfo template = snapshot.get(m.name);
+            if (template == null) continue;
+            ServiceInfo s = new ServiceInfo(template);
+            // Keep independently generated application/library metadata per result.
+            if (!result.isEmpty()) s.applicationInfo = applicationInfo(flags, state);
+            result.add(m.resolveInfo(flags, null, s));
+        }
+    }
+
+    private static <T extends ComponentInfo> Map<String, T> firstComponents(T[] components) {
+        Map<String, T> result = new HashMap<>();
+        if (components != null) {
+            // Match the single-component getters: the first declaration remaining
+            // after boot/enabled filtering wins, including duplicate names.
+            for (T component : components) result.putIfAbsent(component.name, component);
         }
         return result;
     }
@@ -973,7 +1040,7 @@ public final class ApkPackage {
      * common to bind, publication and PackageManager's authority/component queries.
      */
     public List<ProviderInfo> providers(long flags) {
-        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true);
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true, enabledState());
         List<ProviderInfo> result = new ArrayList<>();
         if (pi.providers != null) Collections.addAll(result, pi.providers);
         return result;

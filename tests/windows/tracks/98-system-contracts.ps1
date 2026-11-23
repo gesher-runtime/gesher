@@ -113,7 +113,9 @@ try {
   Check 'services: intent candidates preserve Android matching and package generations' {
     $global:LASTEXITCODE = $intentIndexCode
     $intentIndexOut
-  } @('IntentCandidateIndexTest contracts passed', 'INTENT_WORK packages=1000 kind=PROVIDER queries=32')
+  } @('IntentCandidateIndexTest contracts passed', 'INTENT_WORK packages=1000 kind=PROVIDER queries=32',
+    'Component query metadata contracts passed', 'COMPONENT_METADATA_WORK kind=SERVICE components=64 queries=8',
+    'Component query enabled-snapshot contracts passed')
 
   $microgLibsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'MicrogAddonNativeLibsTest') 90
   $microgLibsCode = $LASTEXITCODE
