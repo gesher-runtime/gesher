@@ -1016,14 +1016,6 @@ void LoadArtShimArm64For(const char* path, const std::string& dir) {
                  path);
     return;
   }
-  gesher::bionic::AddBionicSymbol(gesher::bionic::kArtShimDisableVerifierImport,
-                                  reinterpret_cast<void*>(&RuntimeDisableVerifierSysv));
-  gesher::bionic::AddBionicSymbol(gesher::bionic::kArtShimIsVerificationEnabledImport,
-                                  reinterpret_cast<void*>(&RuntimeIsVerificationEnabledSysv));
-  gesher::bionic::AddBionicSymbol(gesher::bionic::kArtShimIsVerificationSoftFailImport,
-                                  reinterpret_cast<void*>(&RuntimeIsVerificationSoftFailSysv));
-  gesher::bionic::AddBionicSymbol(gesher::bionic::kArtShimOpenCommonImport,
-                                  reinterpret_cast<void*>(&gesher_art_dex_file_loader_open_common));
   const std::string version(reinterpret_cast<const char*>(gesher_art_oat_version()), 4);
   std::string shim, message;
   void* guest_open_common = nullptr;
@@ -1139,6 +1131,22 @@ int ElfClose(void* handle) {
 const gesher_elf_dlopen_ops kElfOps = {&ElfOpen, &ElfSym, &ElfClose};
 
 [[maybe_unused]] const bool g_registered = (gesher_set_elf_dlopen(&kElfOps), true);
+
+// The arm64 stand-in's imports of the host Runtime and OpenCommon functions,
+// registered once at startup: the bionic symbol table is not locked, so it is
+// not written while app threads look symbols up (LoadArtShimArm64For).
+void RegisterArtShimImports() {
+  gesher::bionic::AddBionicSymbol(gesher::bionic::kArtShimDisableVerifierImport,
+                                  reinterpret_cast<void*>(&RuntimeDisableVerifierSysv));
+  gesher::bionic::AddBionicSymbol(gesher::bionic::kArtShimIsVerificationEnabledImport,
+                                  reinterpret_cast<void*>(&RuntimeIsVerificationEnabledSysv));
+  gesher::bionic::AddBionicSymbol(gesher::bionic::kArtShimIsVerificationSoftFailImport,
+                                  reinterpret_cast<void*>(&RuntimeIsVerificationSoftFailSysv));
+  gesher::bionic::AddBionicSymbol(gesher::bionic::kArtShimOpenCommonImport,
+                                  reinterpret_cast<void*>(&gesher_art_dex_file_loader_open_common));
+}
+
+[[maybe_unused]] const bool g_art_shim_imports_registered = (RegisterArtShimImports(), true);
 
 }  // namespace
 
