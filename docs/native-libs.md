@@ -133,6 +133,31 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     again (the freed bytes became the next allocation: `dlopen failed:
     cannot open cko_mozglue_GeckoLoader_loadNSSLibsNative/libxul.so`).
     Setting the value a variable already has changes nothing.
+  - `android_dlopen_ext` (`shim.cc`, `<android/dlext.h>`): `dlopen` with
+    bionic's extended options. As bionic's `do_dlopen`, a flag outside
+    `ANDROID_DLEXT_VALID_FLAG_BITS`, `USE_LIBRARY_FD_OFFSET` without
+    `USE_LIBRARY_FD` and `USE_NAMESPACE` with a null namespace fail with its
+    dlerror texts; a null `extinfo` is `dlopen`; a library already loaded
+    (by soname) is returned where it is. `RESERVED_ADDRESS` loads the
+    library with its first page at `reserved_addr` (load bias
+    `reserved_addr - page_start(min p_vaddr)`), its segments mapped
+    `MAP_FIXED` over the caller's reservation, whose unused pages stay as the
+    caller mapped them; if the load span (`page_end(max p_vaddr + p_memsz) -
+    page_start(min p_vaddr)`) exceeds `reserved_size` the call fails
+    (`reserved address space ... smaller than ... bytes needed for "..."`)
+    without touching the reservation. `RESERVED_ADDRESS_HINT` loads the same
+    way when the span fits, and anywhere when it does not. A load that fails
+    after mapping into the reservation maps those pages back `PROT_NONE`
+    (`LoadOptions::reserved_addr`, `Library::mapped_by_caller`), as
+    bionic's `soinfo_free` does: the reservation stays the caller's. Only
+    the named library goes there; its dependencies load anywhere. The other
+    valid flags are not implemented and fail the call with `android_dlopen_ext:
+    extended flags 0x... are not supported` (before anything is mapped)
+    rather than being ignored: `WRITE_RELRO`, `USE_RELRO`, `USE_LIBRARY_FD`
+    (and `_OFFSET`), `FORCE_LOAD`, `RESERVED_ADDRESS_RECURSIVE` and
+    `USE_NAMESPACE` (no linker namespaces exist here). `GESHER_TRACE_DL`
+    prints the flags, `reserved_addr` and `reserved_size` of each call.
+    Tested from x86-64 and arm64-v8a code by `tests/native/dlext_test.c`.
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
     the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
     `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,

@@ -89,6 +89,15 @@ Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a lat
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_test29.so") (NoDrive "$Dir")
 } @('fs_test: all passed', 'elf_load_test all passed')
 
+# android_dlopen_ext (tests/native/dlext_test.c): extended flags checked as
+# bionic checks them; RESERVED_ADDRESS loads at the start of the caller's
+# reservation or fails without touching it; RESERVED_ADDRESS_HINT falls back
+# to any address; a load failing after mapping leaves the reservation
+# PROT_NONE and the caller's; unimplemented flags fail with dlerror.
+Check 'native libs: android_dlopen_ext reserved address space, hints and flag checks' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/dlext/dlext_test.so") (NoDrive "$Dir/dlext")
+} @('dlext_test: all passed', 'elf_load_test all passed')
+
 Check 'native libs: partial unwind covers hidden code and preserves executable data' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_partial_unwind.so")
 } @('partial_unwind: hidden uncovered function reached by direct call PASS',

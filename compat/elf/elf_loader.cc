@@ -128,6 +128,9 @@ struct Library {
   uint8_t* base = nullptr;   // where the first PT_LOAD landed
   uint8_t* load_bias = nullptr;  // base - first PT_LOAD p_vaddr
   size_t map_size = 0;       // total reserved span
+  // [base, base + map_size) is part of the caller's reservation
+  // (LoadOptions::reserved_addr): given back PROT_NONE, never unmapped.
+  bool mapped_by_caller = false;
   bool is_closed = false;
   bool is_closing = false;  // finalizers claimed, still visible until they finish
   bool is_aarch64 = false;   // EM_AARCH64: translated guest code (ADR 0047)
@@ -664,7 +667,16 @@ bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error);
 // offset and address differ modulo the page size is copied into anonymous
 // pages instead, and so is every segment of an object loaded from memory, or
 // without placeholders, or whose segments share a page.
-bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::string* error) {
+//
+// With options.use_reserved (android_dlopen_ext's RESERVED_ADDRESS/_HINT), the
+// span goes at the start of the caller's reservation when it fits, as bionic's
+// ElfReader::ReserveAddressSpace places it: no reservation of the loader's own,
+// every mapping MAP_FIXED over the caller's pages, which stay the caller's
+// (mapped_by_caller). Pages of the span between segments keep what the caller
+// mapped there (PROT_NONE). A span that does not fit fails the load before
+// anything is mapped, or (hint) is loaded anywhere.
+bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd,
+                 const LoadOptions& options, std::string* error) {
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
   if (ehdr->e_phoff > size || ehdr->e_phnum * sizeof(Elf64_Phdr) > size - ehdr->e_phoff) {
     Fail(error, "program headers outside the file");
@@ -705,15 +717,51 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::st
   max_vaddr = PageUp(max_vaddr);
   lib->map_size = max_vaddr - min_vaddr;
 
+  uint8_t* reserved = nullptr;
+  if (options.use_reserved) {
+    if (lib->map_size > options.reserved_size) {
+      if (!options.reserved_hint) {
+        // bionic's text, including its first number (reserved_size - load_size, negative).
+        char message[256];
+        std::snprintf(message, sizeof(message),
+                      "reserved address space %zd smaller than %zd bytes needed for \"%s\"",
+                      static_cast<ssize_t>(options.reserved_size - lib->map_size),
+                      static_cast<ssize_t>(lib->map_size), lib->name.c_str());
+        Fail(error, message);
+        return false;
+      }
+      // Too small for a hint: anywhere, as without one.
+    } else {
+      const auto at = reinterpret_cast<uintptr_t>(options.reserved_addr);
+      if (at == 0 || at % kPageSize != 0 || options.reserved_size > UINTPTR_MAX - at) {
+        // bionic would mmap MAP_FIXED there and fail; never map elsewhere.
+        char message[160];
+        std::snprintf(message, sizeof(message),
+                      "reserved address %p is not a page-aligned address range for \"%s\"",
+                      options.reserved_addr, lib->name.c_str());
+        Fail(error, message);
+        return false;
+      }
+      reserved = static_cast<uint8_t*>(options.reserved_addr);
+    }
+  }
+
   if (!can_view) {
     // Copy while writable, then give each segment its requested protection,
     // just like file views. IFUNC resolvers can run during relocation, before
     // the final protection pass; leaving copied code RW would make that path
     // non-executable (including every LoadFromMemory request).
-    void* reservation = mmap(nullptr, lib->map_size, PROT_READ | PROT_WRITE,
-                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (reservation == MAP_FAILED) {
-      Fail(error, "mmap reservation failed");
+    if (reserved != nullptr) {
+      // From here on a failure gives the span back PROT_NONE (DiscardLibrary):
+      // a failed MAP_FIXED may already have replaced the caller's pages.
+      lib->base = reserved;
+      lib->mapped_by_caller = true;
+    }
+    void* reservation = mmap(reserved, lib->map_size, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS | (reserved ? MAP_FIXED : 0), -1, 0);
+    if (reservation == MAP_FAILED || (reserved != nullptr && reservation != reserved)) {
+      Fail(error, reserved ? "mapping into the reserved address space failed"
+                           : "mmap reservation failed");
       return false;
     }
     lib->base = static_cast<uint8_t*>(reservation);
@@ -741,13 +789,18 @@ bool MapSegments(Library* lib, const uint8_t* data, size_t size, int fd, std::st
   }
 
   // The reservation: inaccessible and uncommitted; the segments replace parts
-  // of it, and the gaps between them stay so.
-  void* reservation = mmap(nullptr, lib->map_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (reservation == MAP_FAILED) {
-    Fail(error, "mmap reservation failed");
-    return false;
+  // of it, and the gaps between them stay so. The caller's, when it gave one.
+  if (reserved != nullptr) {
+    lib->base = reserved;
+    lib->mapped_by_caller = true;
+  } else {
+    void* reservation = mmap(nullptr, lib->map_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (reservation == MAP_FAILED) {
+      Fail(error, "mmap reservation failed");
+      return false;
+    }
+    lib->base = static_cast<uint8_t*>(reservation);
   }
-  lib->base = static_cast<uint8_t*>(reservation);
   lib->load_bias = lib->base - min_vaddr;
 
   size_t viewed = 0, copied = 0;
@@ -1530,7 +1583,16 @@ void DiscardLibrary(Library* lib) {
     }
     VirtualFree(lib->unresolved_data, 0, MEM_RELEASE);
   }
-  if (lib->base != nullptr) munmap(lib->base, lib->map_size);
+  if (lib->base != nullptr && lib->mapped_by_caller) {
+    // The caller's reservation (android_dlopen_ext): its pages become
+    // PROT_NONE again, as bionic's soinfo_free leaves them, and stay mapped.
+    // gesher-base replaces them under its lock in one step (Punch, then a
+    // PROT_NONE fill of the same placeholder), so no other mapping can take
+    // the range in between.
+    mmap(lib->base, lib->map_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+  } else if (lib->base != nullptr) {
+    munmap(lib->base, lib->map_size);
+  }
   delete lib;
 }
 
@@ -1662,7 +1724,7 @@ class LoadTransaction {
     node->size = size;
     node->options = options;
     node->image = std::move(image);
-    if (!MapSegments(lib, data, size, fd, error)) return nullptr;
+    if (!MapSegments(lib, data, size, fd, options, error)) return nullptr;
     ParseDynamic(lib, data);
     TraceMapping(*lib);
     nodes_.push_back(std::move(node));
@@ -1689,6 +1751,12 @@ class LoadTransaction {
         FileImage* source = child_image.get();
         LoadOptions child_options = options;
         child_options.main_executable = false;
+        // The caller's reservation is the named object's alone
+        // (ANDROID_DLEXT_RESERVED_ADDRESS_RECURSIVE is not supported).
+        child_options.use_reserved = false;
+        child_options.reserved_addr = nullptr;
+        child_options.reserved_size = 0;
+        child_options.reserved_hint = false;
         dep = Stage(soname.c_str(), found.c_str(), source->data, source->size, source->fd,
                     child_options, error, std::move(child_image));
         if (dep == nullptr) return nullptr;

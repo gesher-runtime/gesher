@@ -243,6 +243,15 @@ jobs:
           "$cc" -shared -fPIC -O2 -fstack-protector-strong \
             -Wl,-soname,libjni_test.so \
             -o dist-arm64/jni_test_arm64.so tests/native/arm64_jni_test.c
+          # android_dlopen_ext (tests/native/dlext_test.c) from a guest: the
+          # libraries it loads into reservations, in a directory of their own
+          # (native-libs.yml builds the same names for x86_64).
+          mkdir -p dist-arm64/dlext-arm64
+          "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror             -Wl,-soname,libdlext_test.so -o dist-arm64/dlext-arm64/dlext_test.so tests/native/dlext_test.c -ldl
+          for n in a b c d; do
+            "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror               -Wl,-soname,libdlext_$n.so -o dist-arm64/dlext-arm64/libdlext_$n.so tests/native/dlext_target.c
+          done
+          "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror -DGESHER_DLEXT_TLS_FAIL             -Wl,-soname,libdlext_tlsfail.so -o dist-arm64/dlext-arm64/libdlext_tlsfail.so tests/native/dlext_target.c
           # An arm64-v8a ELF executable (the exec track's test program, ADR 0035)
           # and its DT_NEEDED library, for gesher-exec through the translator:
           # in a directory of their own (the x86_64 ones have the same names).

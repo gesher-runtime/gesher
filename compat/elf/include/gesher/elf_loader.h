@@ -52,6 +52,22 @@ struct LoadOptions {
   // Only the initial dynamic executable, before its dependencies. Enables
   // link-time local-exec TLS offsets when its PT_TLS layout is compatible.
   bool main_executable = false;
+  // Address space the caller reserved for the object (android_dlopen_ext's
+  // ANDROID_DLEXT_RESERVED_ADDRESS / _HINT): with use_reserved, the object's load
+  // span (page_end(max p_vaddr + p_memsz) - page_start(min p_vaddr)) must fit
+  // in [reserved_addr, reserved_addr + reserved_size), and the object is then
+  // loaded with its first page at reserved_addr, its segments mapped
+  // MAP_FIXED over the caller's mapping. The reservation stays the caller's:
+  // what the object does not use is left as it was, and a failed load maps
+  // the pages it used back PROT_NONE instead of unmapping them. An object
+  // that does not fit fails the load (reserved_hint false) without touching
+  // the reservation, or is loaded elsewhere (reserved_hint true). Only the
+  // object named by the load: its dependencies are loaded anywhere.
+  // reserved_addr must be page aligned when the object fits.
+  bool use_reserved = false;
+  void* reserved_addr = nullptr;
+  size_t reserved_size = 0;
+  bool reserved_hint = false;
 };
 
 // Loads the ELF object at `path`. On success returns a handle and runs its

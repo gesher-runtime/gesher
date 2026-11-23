@@ -102,6 +102,15 @@ jobs:
           "$cc" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test26.so -o dist-native/fs_test26.so tests/native/fs_test.c -ldl
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test29.so -o dist-native/fs_test29.so tests/native/fs_test.c -ldl
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_late.so -o dist-native/fs_late.so tests/native/fs_late.c
+          # android_dlopen_ext (tests/native/dlext_test.c): the libraries it
+          # loads into reservations, in a directory of their own (arm64.yml
+          # builds the same names for arm64-v8a).
+          mkdir -p dist-native/dlext
+          "$cc29" -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libdlext_test.so -o dist-native/dlext/dlext_test.so tests/native/dlext_test.c -ldl
+          for n in a b c d; do
+            "$cc29" -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libdlext_$n.so -o dist-native/dlext/libdlext_$n.so tests/native/dlext_target.c
+          done
+          "$cc29" -shared -fPIC -O2 -Wall -Wextra -Werror -DGESHER_DLEXT_TLS_FAIL -Wl,-soname,libdlext_tlsfail.so -o dist-native/dlext/libdlext_tlsfail.so tests/native/dlext_target.c
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong -fasynchronous-unwind-tables -Wall -Wextra -Werror -Wl,-soname,fs_partial_unwind.so -o dist-native/fs_partial_unwind.so tests/native/fs_partial_unwind.c
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-all dist-native/fs_partial_unwind.so
           # Raw Linux system calls (`syscall` instructions) and code written
