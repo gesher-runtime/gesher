@@ -17,6 +17,8 @@ import android.os.ServiceManager;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
+import java.util.Properties;
 
 /** The pm/am tool's Binder client. It never reads an Installer registry directly. */
 public final class RuntimeCommands {
@@ -159,6 +161,17 @@ public final class RuntimeCommands {
             // Binder; app processes have already opened it with their assigned UID.
             android.system.Os.setenv("GESHER_BINDER_UID", "2000", true);
             System.loadLibrary("android_runtime");
+            if (args.length > 0 && args[0].equals("--device-operator")) {
+                Properties state = Device.read(Device.stateFile());
+                if (state == null || !"true".equals(state.getProperty(Device.STATE_PROTECTED))
+                        || !Objects.equals(System.getenv("GESHER_BINDER"),
+                                state.getProperty(Device.STATE_DEVICE))
+                        || !Zygote.nativePrepareProtectedOperator(Device.pid(state, Device.BINDERD),
+                                Device.startTime(state, Device.BINDERD))) {
+                    throw new SecurityException("Could not verify the protected operator device");
+                }
+                args = java.util.Arrays.copyOfRange(args, 1, args.length);
+            }
             if (args.length == 0) throw new IllegalArgumentException("missing tool name");
             if (args[0].equals("pm")) result = pm(args);
             else if (args[0].equals("am")) result = am(args);

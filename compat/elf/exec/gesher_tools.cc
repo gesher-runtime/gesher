@@ -364,7 +364,12 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
     boot_class_path += vm_path(directory + jar);
   }
   std::vector<std::string> command{Narrow(directory + L"dalvikvm.exe"),
-      boot_class_path, "-Ximage:" + vm_path(image), "-Xusejit:false", "com.gesher.server.RuntimeCommands", tool};
+      boot_class_path, "-Ximage:" + vm_path(image), "-Xusejit:false", "com.gesher.server.RuntimeCommands"};
+  if (binder_bootstrap::GuestUid() == 0 &&
+      EnvOr("GESHER_SANDBOX", "") == "appcontainer-trusted") {
+    command.emplace_back("--device-operator");
+  }
+  command.push_back(tool);
   command.insert(command.end(), args.begin(), args.end());
   Launch launch;
   int error = PrepareLaunch(command, Narrow(directory), &launch);
