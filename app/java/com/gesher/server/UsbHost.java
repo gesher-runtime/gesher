@@ -28,8 +28,9 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.IntFunction;
 
-/** Present WinUSB-device inventory and attachment-scoped application permission. */
+/** USB attachment inventory and attachment-scoped WinUSB application permission. */
 final class UsbHost {
     private final CallerIdentity callers;
     private final PackageManagerService packages;
@@ -67,18 +68,26 @@ final class UsbHost {
         worker.scheduleWithFixedDelay(this::monitor, 0, 1, TimeUnit.SECONDS);
     }
 
+    private enum Backend { WINUSB, STORAGE_OBSERVATION }
+
     private static final class Attachment {
         final String path;
         final long version;
         final UsbDevice device;
+        final Backend backend;
         final Set<ApkPackage> grants = new HashSet<>();
         final Map<ApkPackage, ComponentName> launching = new HashMap<>();
         volatile boolean present = true;
 
-        Attachment(String path, long version, UsbDevice device) {
+        Attachment(String path, long version, UsbDevice device, Backend backend) {
             this.path = path;
             this.version = version;
             this.device = device;
+            this.backend = backend;
+        }
+
+        boolean supportsTransfers() {
+            return backend == Backend.WINUSB;
         }
 
         boolean hasGrant(ApkPackage installation) {
@@ -90,11 +99,14 @@ final class UsbHost {
     }
 
     private record PermissionRequest(Attachment attachment, ApkPackage installation) {}
+    private record StorageDescriptors(byte[] raw, String[] strings) {}
     private record Alternate(int id, int setting, int nameIndex, int type, int subtype, int protocol,
             List<UsbEndpoint> endpoints) {}
 
     private static native boolean nativeAvailable();
     private static native String[] nativePaths();
+    private static native String[] nativeStoragePaths();
+    private static native StorageDescriptors nativeInspectStorage(String path);
     private static native long nativeVersion(String path);
     private static native byte[] nativeInspect(String path);
     private static native String nativeString(String path, int index);
@@ -125,17 +137,21 @@ final class UsbHost {
 
     private void refresh() {
         if (!started) return;
-        String[] paths;
         try {
-            paths = nativePaths();
+            refresh(nativePaths(), Backend.WINUSB);
+            refresh(nativeStoragePaths(), Backend.STORAGE_OBSERVATION);
         } catch (LinkageError unavailable) {
-            return;
+            // The no-host service stays available when the native backend is absent.
         }
+    }
+
+    private void refresh(String[] paths, Backend backend) {
         if (paths == null) return;
         Set<String> present = new HashSet<>(List.of(paths));
         var iterator = byPath.entrySet().iterator();
         while (iterator.hasNext()) {
             Attachment device = iterator.next().getValue();
+            if (device.backend != backend) continue;
             if (present.contains(device.path) && nativeVersion(device.path) == device.version) continue;
             device.present = false;
             iterator.remove();
@@ -148,15 +164,22 @@ final class UsbHost {
             if (byPath.containsKey(path) || nextAddress >= 999 * 127) continue;
             long version = nativeVersion(path);
             if (version < 0) continue;
-            byte[] descriptors = nativeInspect(path);
-            if (descriptors == null || nativeVersion(path) != version) continue;
             int address = nextAddress;
             String name = String.format(Locale.ROOT, "/dev/bus/usb/%03d/%03d",
                     address / 127 + 1, address % 127 + 1);
-            UsbDevice device = parse(name, path, descriptors);
+            UsbDevice device;
+            if (backend == Backend.WINUSB) {
+                byte[] descriptors = nativeInspect(path);
+                device = descriptors == null ? null : parse(name, descriptors,
+                        index -> nativeString(path, index));
+            } else {
+                StorageDescriptors descriptors = nativeInspectStorage(path);
+                device = descriptors == null ? null : parse(name, descriptors.raw,
+                        index -> descriptors.strings[index]);
+            }
             if (device == null || nativeVersion(path) != version) continue;
             ++nextAddress;
-            Attachment attachment = new Attachment(path, version, device);
+            Attachment attachment = new Attachment(path, version, device, backend);
             byName.put(name, attachment);
             byPath.put(path, attachment);
             activityManager.sendBroadcastFor("android", new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -172,11 +195,13 @@ final class UsbHost {
         choosingAttachment = true;
         try {
             IntentChooser.Option chosen = attachActivities.choose(attachment.device,
-                    () -> stillAttached(attachment));
+                    () -> stillAttached(attachment), attachment.supportsTransfers());
             if (chosen == null || !chosen.current(packages, null)) return;
             synchronized (this) {
                 if (!launchTargetCurrent(attachment, chosen)) return;
-                attachment.launching.put(chosen.code, chosen.component);
+                if (attachment.supportsTransfers()) {
+                    attachment.launching.put(chosen.code, chosen.component);
+                }
             }
             boolean launched = false;
             try {
@@ -191,7 +216,7 @@ final class UsbHost {
             } finally {
                 synchronized (this) {
                     attachment.launching.remove(chosen.code);
-                    if (launched && launchTargetCurrent(attachment, chosen)) {
+                    if (launched && attachment.supportsTransfers() && launchTargetCurrent(attachment, chosen)) {
                         attachment.grants.add(chosen.code);
                     }
                 }
@@ -221,7 +246,7 @@ final class UsbHost {
         return uint8(data, offset) | (uint8(data, offset + 1) << 8);
     }
 
-    private UsbDevice parse(String name, String path, byte[] raw) {
+    private UsbDevice parse(String name, byte[] raw, IntFunction<String> strings) {
         if (raw.length < 27 || raw[0] != 18 || raw[1] != 1 || raw[17] != 1
                 || raw[18] != 9 || raw[19] != 2 || raw[22] != 1
                 || uint16(raw, 20) != raw.length - 18) return null;
@@ -267,21 +292,21 @@ final class UsbHost {
         UsbInterface[] interfaces = new UsbInterface[alternates.size()];
         for (int i = 0; i < interfaces.length; ++i) {
             Alternate a = alternates.get(i);
-            UsbInterface iface = new UsbInterface(a.id, a.setting, nativeString(path, a.nameIndex),
+            UsbInterface iface = new UsbInterface(a.id, a.setting, strings.apply(a.nameIndex),
                     a.type, a.subtype, a.protocol);
             iface.setEndpoints(a.endpoints.toArray(UsbEndpoint[]::new));
             interfaces[i] = iface;
         }
-        UsbConfiguration config = new UsbConfiguration(uint8(raw, 23), nativeString(path, uint8(raw, 24)),
+        UsbConfiguration config = new UsbConfiguration(uint8(raw, 23), strings.apply(uint8(raw, 24)),
                 uint8(raw, 25), uint8(raw, 26));
         config.setInterfaces(interfaces);
         int version = uint16(raw, 12);
         return new UsbDevice.Builder(name, uint16(raw, 8), uint16(raw, 10), uint8(raw, 4),
-                uint8(raw, 5), uint8(raw, 6), nativeString(path, uint8(raw, 14)),
-                nativeString(path, uint8(raw, 15)),
+                uint8(raw, 5), uint8(raw, 6), strings.apply(uint8(raw, 14)),
+                strings.apply(uint8(raw, 15)),
                 String.format(Locale.ROOT, "%x.%02x", version >>> 8, version & 255),
                 new UsbConfiguration[]{config}, null, false, false, false, false, false)
-                .build(serialReader(name, nativeString(path, uint8(raw, 16))));
+                .build(serialReader(name, strings.apply(uint8(raw, 16))));
     }
 
     private IUsbSerialReader serialReader(String name, String serial) {
@@ -304,8 +329,9 @@ final class UsbHost {
     }
 
     synchronized boolean has(String name, String packageName) {
-        if (callers.isSystem()) return true;
         Attachment device = valid(name);
+        if (device != null && !device.supportsTransfers()) return false;
+        if (callers.isSystem()) return true;
         if (device == null) return false;
         ApkPackage installation = callers.requireCurrentPackage(packageName);
         return installed(installation) && device.hasGrant(installation);
@@ -313,7 +339,7 @@ final class UsbHost {
 
     synchronized ParcelFileDescriptor open(String name, String packageName) {
         Attachment device = valid(name);
-        if (device == null || !has(name, packageName)) return null;
+        if (device == null || !device.supportsTransfers() || !has(name, packageName)) return null;
         int fd = nativeOpen(device.path, device.version);
         if (fd < 0) return null;
         ParcelFileDescriptor handle = ParcelFileDescriptor.adoptFd(fd);
@@ -325,12 +351,16 @@ final class UsbHost {
     }
 
     synchronized void request(UsbDevice requested, String packageName, PendingIntent reply) {
+        Attachment device = valid(requested.getDeviceName());
+        if (device != null && !device.supportsTransfers()) {
+            UsbService.sendDevicePermission(reply, device.device, false);
+            return;
+        }
         if (callers.isSystem()) {
             UsbService.sendDevicePermission(reply, requested, true);
             return;
         }
         ApkPackage installation = callers.requireCurrentPackage(packageName);
-        Attachment device = valid(requested.getDeviceName());
         if (device == null || !installed(installation)
                 || !installation.packageName.equals(reply.getCreatorPackage())) {
             UsbService.sendDevicePermission(reply, requested, false);

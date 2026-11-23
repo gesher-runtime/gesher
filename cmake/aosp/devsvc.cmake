@@ -10,6 +10,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_win32.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_winusb.cc
+  ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_storage_observation.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/clipboard_access.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_toast.c
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_activator.c)
@@ -17,6 +18,7 @@ target_sources(framework_runtime PRIVATE
 set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
                     ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_natives.cc
                     ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_winusb.cc
+                    ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_storage_observation.cc
   APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devsvc)
 target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32 wtsapi32

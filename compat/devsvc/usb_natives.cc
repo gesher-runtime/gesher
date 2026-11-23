@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "core_jni_helpers.h"
+#include "usb_storage_observation.h"
 #include "usb_winusb.h"
 
 namespace android {
@@ -58,21 +59,55 @@ jboolean Available(JNIEnv*, jclass) try {
   return JNI_FALSE;
 }
 
-jobjectArray Paths(JNIEnv* env, jclass) try {
-  auto paths = gesher::usb::InterfacePaths();
-  if (!paths) return nullptr;
+jobjectArray PathArray(JNIEnv* env, const std::vector<std::wstring>& paths) {
   jclass str = env->FindClass("java/lang/String");
   if (!str) return nullptr;
-  jobjectArray out = env->NewObjectArray(paths->size(), str, nullptr);
+  jobjectArray out = env->NewObjectArray(paths.size(), str, nullptr);
   env->DeleteLocalRef(str);
   if (!out) return nullptr;
-  for (size_t i = 0; i < paths->size(); ++i) {
-    jstring path = String(env, (*paths)[i]);
+  for (size_t i = 0; i < paths.size(); ++i) {
+    jstring path = String(env, paths[i]);
     if (!path) return nullptr;
     env->SetObjectArrayElement(out, i, path);
     env->DeleteLocalRef(path);
   }
   return out;
+}
+
+jobjectArray Paths(JNIEnv* env, jclass) try {
+  auto paths = gesher::usb::InterfacePaths();
+  return paths ? PathArray(env, *paths) : nullptr;
+} catch (const std::bad_alloc&) {
+  return nullptr;
+}
+
+jobjectArray StoragePaths(JNIEnv* env, jclass) try {
+  auto paths = gesher::usb::StorageInterfacePaths();
+  return paths ? PathArray(env, *paths) : nullptr;
+} catch (const std::bad_alloc&) {
+  return nullptr;
+}
+
+jobject InspectStorage(JNIEnv* env, jclass, jstring name) try {
+  auto observation = gesher::usb::ObserveStorage(Wide(env, name));
+  if (!observation) return nullptr;
+  jbyteArray raw = Bytes(env, observation->descriptors);
+  if (!raw || env->ExceptionCheck()) return nullptr;
+  jclass str = env->FindClass("java/lang/String");
+  if (!str) return nullptr;
+  jobjectArray strings = env->NewObjectArray(256, str, nullptr);
+  if (!strings) return nullptr;
+  for (const auto& [index, value] : observation->strings) {
+    jstring text = String(env, value);
+    if (!text) return nullptr;
+    env->SetObjectArrayElement(strings, index, text);
+    env->DeleteLocalRef(text);
+    if (env->ExceptionCheck()) return nullptr;
+  }
+  jclass cls = env->FindClass("com/gesher/server/UsbHost$StorageDescriptors");
+  if (!cls) return nullptr;
+  jmethodID constructor = env->GetMethodID(cls, "<init>", "([B[Ljava/lang/String;)V");
+  return constructor ? env->NewObject(cls, constructor, raw, strings) : nullptr;
 } catch (const std::bad_alloc&) {
   return nullptr;
 }
@@ -531,6 +566,9 @@ jstring DeviceName(JNIEnv* env, jclass, jint id) {
 const JNINativeMethod host_methods[] = {
     USB_METHOD("nativeAvailable", "()Z", Available),
     USB_METHOD("nativePaths", "()[Ljava/lang/String;", Paths),
+    USB_METHOD("nativeStoragePaths", "()[Ljava/lang/String;", StoragePaths),
+    USB_METHOD("nativeInspectStorage",
+               "(Ljava/lang/String;)Lcom/gesher/server/UsbHost$StorageDescriptors;", InspectStorage),
     USB_METHOD("nativeVersion", "(Ljava/lang/String;)J", Version),
     USB_METHOD("nativeInspect", "(Ljava/lang/String;)[B", Inspect),
     USB_METHOD("nativeString", "(Ljava/lang/String;I)Ljava/lang/String;", DeviceString),

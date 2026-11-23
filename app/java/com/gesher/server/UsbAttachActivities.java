@@ -38,7 +38,7 @@ final class UsbAttachActivities {
         this.dialog = dialog;
     }
 
-    IntentChooser.Option choose(UsbDevice device, BooleanSupplier attached) {
+    IntentChooser.Option choose(UsbDevice device, BooleanSupplier attached, boolean supportsTransfers) {
         if (!attached.getAsBoolean() || !dialog.available()) return null;
         Intent intent = new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -51,7 +51,9 @@ final class UsbAttachActivities {
             labels[i] = options.get(i).label;
             enabled[i] = true;
         }
-        String title = String.format(Locale.ROOT, "Choose an app to access USB device %04x:%04x",
+        String title = String.format(Locale.ROOT, supportsTransfers
+                        ? "Choose an app to access USB device %04x:%04x"
+                        : "Choose an app for attached USB device %04x:%04x",
                 device.getVendorId(), device.getProductId());
         int index = dialog.choose("Android USB", title, labels, enabled, attached);
         if (index < 0 || index >= options.size() || !attached.getAsBoolean()) return null;
