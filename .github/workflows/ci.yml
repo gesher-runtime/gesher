@@ -962,8 +962,10 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     needs: [source-identity]
-    # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@a31f1cdcc0c515905a4faa9bd3bf51e906e1c80b
+    # A local call runs the framework.yml of the commit under test, so a
+    # framework.yml change takes effect in the same PR. Hosted build runners;
+    # see docs/self-hosted-ci.md before routing it to the restricted group.
+    uses: ./.github/workflows/framework.yml
     with:
       local-runner: false
 
