@@ -4,6 +4,7 @@
 // it does not infer exclusive creation or inheritance from the requested mode.
 #include <cerrno>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -35,6 +36,7 @@ struct StreamLock {
 };
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+#include "uncontained_storage_fixture.h"
 // Device/OFD identity is exercised by test_stream_device_lifetime.py and the complete OFD corpus.
 void ForgetStreamDevice(int, bool) {}
 int HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? fd : INVALID_HANDLE_VALUE; }
