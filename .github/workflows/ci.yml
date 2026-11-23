@@ -118,6 +118,16 @@ jobs:
         run: |
           & .\app-identity-restart.exe
           if ($LASTEXITCODE -ne 0) { throw 'Native application identity restart gate failed' }
+      - name: Build actual dexopt child waiting and resource budgets
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\services_dexopt_watch.cc tests\native\dexopt_child_wait_test.cc /Fe:dexopt-child-wait.exe user32.lib
+      - name: Verify real compiler cancellation, reaping, CPU and memory budgets
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\dexopt-child-wait.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native dexopt child wait/budget gate failed' }
       - name: Build actual private clipboard publication and competing-writer regression
         if: ${{ !cancelled() }}
         shell: cmd
@@ -258,6 +268,9 @@ jobs:
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
           python3 -m unittest discover -s tools/ci -p test_producer_context.py
+          python3 -m unittest discover -s tools/ci -p test_binder_modes.py
+          python3 -m unittest discover -s tools/ci -p test_native2_producer_context.py
+          python3 -m unittest discover -s tools/ci -p test_component_producer.py
           python3 -m unittest discover -s tools/ci -p test_wait_for_job.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
@@ -277,6 +290,9 @@ jobs:
           python3 -m unittest discover -s tools/tests -p test_soong_zip.py
           python3 -m unittest discover -s tools/tests -p test_sdk_resource_attrs_diff.py
           python3 tools/fonts/test-standalone-link.py
+
+      - name: Notification image staging, cache, cancellation and encoder ownership
+        run: python3 tools/test_notification_images.py
 
       - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
         run: |
@@ -517,7 +533,9 @@ jobs:
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
+          python3 tools/test_camera_callback_admission.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
+          python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
 
       - name: Validate user interface translations
         run: |
@@ -935,7 +953,7 @@ jobs:
   framework:
     needs: [source-identity]
     # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@5aa6b39027e9c38de2781ff9cda066418d25b1ba
+    uses: gesher-runtime/gesher/.github/workflows/framework.yml@92c87bef013c0f1a5423b49b68d9b78079a8acd9
     with:
       local-runner: false
 
@@ -2435,7 +2453,7 @@ jobs:
           python3 tools/net-tcp-priority/manifest.py "${args[@]}"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.repository == 'gesher-runtime/gesher' && 'tcp-coherent' || 'tcp-fork-diagnostic' }}-${{ matrix.supplier }}-${{ github.sha }}-a${{ github.run_attempt }}
+          name: ${{ github.repository == 'gesher-runtime/gesher' && 'tcp-coherent-selected-minimum' || format('tcp-fork-diagnostic-{0}-{1}-a{2}', matrix.supplier, github.sha, github.run_attempt) }}
           path: tcp-fixture/
           if-no-files-found: error
           retention-days: 14
@@ -2490,9 +2508,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/ci/artifact_receipt.py --name native3-locks-host --producer build --destination ci-suppliers/native3_host
-          prefix=tcp-coherent
-          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then prefix=tcp-fork-diagnostic; fi
-          python3 tools/ci/artifact_receipt.py --name "$prefix-selected-minimum-${{ github.sha }}-a${{ github.run_attempt }}" --producer "compile-selected-minimum" --destination ci-suppliers/tcp_selected
+          if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then
+            python3 tools/ci/artifact_receipt.py --name "tcp-fork-diagnostic-selected-minimum-$GITHUB_SHA-a$GITHUB_RUN_ATTEMPT" --producer "compile-selected-minimum" --destination ci-suppliers/tcp_selected
+          else
+            python3 tools/ci/component_producer.py stage tcp-selected-correlation
+          fi
       - name: Correlate selected host supplier between full build and TCP component
         run: |
           args=()
