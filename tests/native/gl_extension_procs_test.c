@@ -65,17 +65,24 @@ int gesher_selftest(void) {
   EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
   EGLint major = 0, minor = 0;
   check("eglInitialize", display != EGL_NO_DISPLAY && eglInitialize(display, &major, &minor));
-  static const EGLint kConfig[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
-                                   EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-                                   EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT */, EGL_NONE};
+  // ES 3 where the device has it; ES 2 on a software Direct3D device, which
+  // gives no ES 3 (docs/system-features.md).
+  EGLint es = 3;
+  EGLint config_attribs[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+                             EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+                             EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT */, EGL_NONE};
   EGLConfig config = NULL;
   EGLint count = 0;
-  check("eglChooseConfig (ES 3, pbuffer)",
-        eglChooseConfig(display, kConfig, &config, 1, &count) && count == 1);
+  if (!eglChooseConfig(display, config_attribs, &config, 1, &count) || count != 1) {
+    es = 2;
+    config_attribs[9] = EGL_OPENGL_ES2_BIT;
+  }
+  printf("  an ES %d context\n", es);
+  check("eglChooseConfig (pbuffer)", eglChooseConfig(display, config_attribs, &config, 1, &count) && count == 1);
   static const EGLint kSurface[] = {EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE};
   EGLSurface surface = eglCreatePbufferSurface(display, config, kSurface);
-  static const EGLint kContext[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
-  EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, kContext);
+  const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, es, EGL_NONE};
+  EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attribs);
   check("eglMakeCurrent", surface != EGL_NO_SURFACE && context != EGL_NO_CONTEXT &&
                               eglMakeCurrent(display, surface, surface, context));
   if (failures != 0) return failures;

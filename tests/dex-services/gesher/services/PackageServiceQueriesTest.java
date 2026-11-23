@@ -35,6 +35,49 @@ public final class PackageServiceQueriesTest {
      * the production list matches the probes this process can make, and the helpers claim
      * a feature only for the hardware or runtime that implements it.
      */
+    /**
+     * The system server's OpenGL ES probe is bounded (PackageManagerService.boundedProbe):
+     * an answer passes through, a probe that hangs gives -2 (no version declared) after the
+     * timeout instead of blocking the start, and a LinkageError reaches the caller.
+     */
+    private static void checkBoundedGlesProbe() {
+        try {
+            java.lang.reflect.Method bounded = PackageManagerService.class.getDeclaredMethod(
+                    "boundedProbe", java.util.function.IntSupplier.class, long.class);
+            bounded.setAccessible(true);
+            require((Integer) bounded.invoke(null,
+                            (java.util.function.IntSupplier) () -> 0x20000, 5000L) == 0x20000,
+                    "bounded GLES probe did not pass its answer through");
+            java.util.concurrent.CountDownLatch never = new java.util.concurrent.CountDownLatch(1);
+            long start = System.nanoTime();
+            int hung = (Integer) bounded.invoke(null, (java.util.function.IntSupplier) () -> {
+                try {
+                    never.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return 0x30000;
+            }, 200L);
+            long millis = (System.nanoTime() - start) / 1_000_000;
+            never.countDown();
+            require(hung == -2 && millis >= 150 && millis < 3000,
+                    "hung GLES probe gave " + hung + " after " + millis + " ms");
+            boolean thrown = false;
+            try {
+                bounded.invoke(null, (java.util.function.IntSupplier) () -> {
+                    throw new UnsatisfiedLinkError("no natives");
+                }, 5000L);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                thrown = e.getCause() instanceof UnsatisfiedLinkError;
+            }
+            require(thrown, "bounded GLES probe swallowed a LinkageError");
+            System.out.println("system features: bounded GLES probe: answer, timeout (" + millis
+                    + " ms) and LinkageError");
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("PackageManagerService.boundedProbe: " + e, e);
+        }
+    }
+
     private static void checkSystemFeatures(PackageManagerService service) {
         List<FeatureInfo> list = service.getSystemAvailableFeatures().getList();
         // CI runs this class without libandroid_runtime (no property natives); through
@@ -62,6 +105,7 @@ public final class PackageServiceQueriesTest {
                     "OpenGL ES entry does not carry ro.opengles.version");
         }
         require(unnamed == 1, "Available features need exactly one OpenGL ES entry, got " + unnamed);
+        checkBoundedGlesProbe();
         // The version is the default EGL display's (compat/bionic/egl_gles_version.h): ES 3.0
         // only on a hardware Direct3D 11 device, never on WARP. -1 without the natives.
         int probed;

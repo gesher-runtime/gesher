@@ -278,8 +278,9 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     `EGL_DEFAULT_DISPLAY` is ANGLE's Direct3D 11 display on the hardware
     adapter, else WARP (`GESHER_EGL_DEVICE=warp` forces WARP; the choice is
     printed as `gesher EGL: default display: ...`, with the adapter and the
-    OpenGL ES version the device declares for it: 3.0 only on a GPU,
-    docs/system-features.md). `eglCreateWindowSurface`
+    OpenGL ES version the device declares for it). ES 3.0 only on a GPU:
+    without one, WARP is capped at feature level 10_0, ES 2.0 only (no ES 3
+    config, ES 3 contexts refused with `EGL_BAD_MATCH`; docs/system-features.md). `eglCreateWindowSurface`
     (and the platform forms) takes the `ANativeWindow*` and creates ANGLE's
     window surface on its HWND (`gesher_window_hwnd`), holding a reference
     to the window until `eglDestroySurface`. Android-only config attributes

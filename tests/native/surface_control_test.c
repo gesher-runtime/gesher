@@ -259,18 +259,26 @@ static PFNEGLCLIENTWAITSYNCKHRPROC p_client_wait;
 static PFNEGLGETSYNCATTRIBKHRPROC p_sync_attrib;
 
 static EGLConfig g_config;
+// The ES version of the contexts: 3 where the device has it, 2 on a software
+// Direct3D device, which gives no ES 3 (docs/system-features.md).
+static EGLint g_es = 3;
 
 static int SetUpEgl(void) {
   g_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
   if (g_display == EGL_NO_DISPLAY || !eglInitialize(g_display, NULL, NULL)) return 0;
-  const EGLint config_attribs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-                                   EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
-                                   EGL_NONE};
+  EGLint config_attribs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+                             EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+                             EGL_NONE};
   EGLConfig config;
   EGLint n = 0;
-  if (!eglChooseConfig(g_display, config_attribs, &config, 1, &n) || n < 1) return 0;
+  if (!eglChooseConfig(g_display, config_attribs, &config, 1, &n) || n < 1) {
+    g_es = 2;
+    config_attribs[1] = EGL_OPENGL_ES2_BIT;
+    if (!eglChooseConfig(g_display, config_attribs, &config, 1, &n) || n < 1) return 0;
+  }
+  printf("surface_control_test: EGL with ES %d contexts\n", g_es);
   g_config = config;
-  const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+  const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, g_es, EGL_NONE};
   g_context = eglCreateContext(g_display, config, EGL_NO_CONTEXT, context_attribs);
   const EGLint surface_attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
   g_surface = eglCreatePbufferSurface(g_display, config, surface_attribs);
@@ -536,7 +544,7 @@ static void GiveTurn(int to) {
 static void MakeFramebuffer(GLuint* texture, GLuint* framebuffer) {
   glGenTextures(1, texture);
   glBindTexture(GL_TEXTURE_2D, *texture);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+  glTexImage2D(GL_TEXTURE_2D, 0, g_es >= 3 ? GL_RGBA8 : GL_RGBA, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
   glGenFramebuffers(1, framebuffer);
   glBindFramebuffer(GL_FRAMEBUFFER, *framebuffer);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texture, 0);
@@ -549,20 +557,30 @@ static uint32_t Pixel(void) {
   return px;
 }
 
-// A program filling the viewport with the uniform `color` (a triangle made
-// from gl_VertexID, no buffers); 0 on failure.
+// A program filling the viewport with the uniform `color` (ES 3: a triangle
+// made from gl_VertexID, no buffers; ES 2: the same triangle from a buffer);
+// 0 on failure.
 static GLuint ColorProgram(GLint* color) {
-  static const char* vs =
+  static const char* vs3 =
       "#version 300 es\n"
       "void main() {\n"
       "  gl_Position = vec4(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0, 0.0, 1.0);\n"
       "}\n";
-  static const char* fs =
+  static const char* fs3 =
       "#version 300 es\n"
       "precision mediump float;\n"
       "uniform vec4 color;\n"
       "out vec4 o;\n"
       "void main() { o = color; }\n";
+  static const char* vs2 =
+      "attribute vec2 pos;\n"
+      "void main() { gl_Position = vec4(pos, 0.0, 1.0); }\n";
+  static const char* fs2 =
+      "precision mediump float;\n"
+      "uniform vec4 color;\n"
+      "void main() { gl_FragColor = color; }\n";
+  const char* vs = g_es >= 3 ? vs3 : vs2;
+  const char* fs = g_es >= 3 ? fs3 : fs2;
   GLuint v = glCreateShader(GL_VERTEX_SHADER), f = glCreateShader(GL_FRAGMENT_SHADER);
   glShaderSource(v, 1, &vs, NULL);
   glCompileShader(v);
@@ -571,6 +589,7 @@ static GLuint ColorProgram(GLint* color) {
   GLuint program = glCreateProgram();
   glAttachShader(program, v);
   glAttachShader(program, f);
+  if (g_es < 3) glBindAttribLocation(program, 0, "pos");
   glLinkProgram(program);
   glDeleteShader(v);
   glDeleteShader(f);
@@ -582,6 +601,16 @@ static GLuint ColorProgram(GLint* color) {
   }
   glUseProgram(program);
   *color = glGetUniformLocation(program, "color");
+  if (g_es < 3) {
+    // The ES 3 shader's triangle, from a buffer of this context (left bound).
+    static const GLfloat kTriangle[] = {-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
+    GLuint buffer = 0;
+    glGenBuffers(1, &buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof kTriangle, kTriangle, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    glEnableVertexAttribArray(0);
+  }
   return program;
 }
 
@@ -595,7 +624,7 @@ static int g_other_ready;
 
 static void* OtherContextThread(void* arg) {
   (void)arg;
-  const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+  const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, g_es, EGL_NONE};
   EGLContext context = eglCreateContext(g_display, g_config, EGL_NO_CONTEXT, context_attribs);
   const EGLint surface_attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
   EGLSurface surface = eglCreatePbufferSurface(g_display, g_config, surface_attribs);

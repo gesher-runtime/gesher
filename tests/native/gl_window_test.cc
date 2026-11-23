@@ -326,7 +326,10 @@ int main(int argc, char** argv) {
     gesher_window_show(window);
     rc = gl_draw(window, es, out, sizeof out);
     std::printf("es%d: %s\n", es, out);
-    if (rc != 0) {
+    if (rc == 2 && es == 3) {
+      // No ES 3 on this device (a software Direct3D device): refused as checked.
+      std::printf("es3: unavailable on this device, ES 3 refused as on Android\n");
+    } else if (rc != 0) {
       failures++;
     } else {
       char label[16];

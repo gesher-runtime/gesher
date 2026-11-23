@@ -1301,6 +1301,37 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (summary[2] > 0) addFeature(features, PackageManager.FEATURE_ETHERNET);
     }
 
+    /** How long the system server waits for the OpenGL ES probe at boot (a Direct3D device). */
+    static final long GL_PROBE_TIMEOUT_MS = 5000;
+
+    /**
+     * {@code probe}'s answer, on a thread of its own, or -2 when it has not answered in
+     * {@code timeoutMillis} (a hung display driver must not stop the system server's
+     * start; the thread is left to finish or hang, a daemon). Then no version is declared,
+     * as nothing proved one. A LinkageError from the probe is thrown here.
+     */
+    static int boundedProbe(java.util.function.IntSupplier probe, long timeoutMillis) {
+        java.util.concurrent.FutureTask<Integer> task =
+                new java.util.concurrent.FutureTask<>(probe::getAsInt);
+        Thread thread = new Thread(task, "gesher-gles-probe");
+        thread.setDaemon(true);
+        thread.start();
+        try {
+            return task.get(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            SystemServer.log("OpenGL ES probe: no answer in " + timeoutMillis
+                    + " ms (Direct3D device creation hung); no OpenGL ES version declared");
+            return -2;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return -2;
+        } catch (java.util.concurrent.ExecutionException e) {
+            if (e.getCause() instanceof LinkageError) throw (LinkageError) e.getCause();
+            SystemServer.log("OpenGL ES probe failed: " + e.getCause());
+            return -1;
+        }
+    }
+
     // Guarded by PackageManagerService.class. No initializers: FEATURES' static block,
     // above, calls glEsVersion before this point of the class's initialization.
     private static boolean sGlEsVersionKnown;
@@ -1312,7 +1343,9 @@ public final class PackageManagerService extends IPackageManager.Default {
      * property; here the first call sets it (for every process of this boot) from what
      * Android's default EGL display runs on (WindowsHost.glEsVersion,
      * docs/system-features.md): ES 3.0 only on a hardware Direct3D 11 device that gives it,
-     * ES 2.0 on WARP or a GPU without ES 3.0, nothing without ANGLE or a Direct3D device.
+     * ES 2.0 on WARP (capped there, so EGL gives no more) or a GPU without ES 3.0, nothing
+     * without ANGLE or a Direct3D device, or when the probe does not answer within
+     * GL_PROBE_TIMEOUT_MS.
      */
     public static synchronized int glEsVersion() {
         if (sGlEsVersionKnown) return sGlEsVersion;
@@ -1320,7 +1353,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         try {
             version = android.os.SystemProperties.getInt("ro.opengles.version", version);
             if (version == android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED) {
-                int probed = WindowsHost.glEsVersion();
+                int probed = boundedProbe(WindowsHost::glEsVersion, GL_PROBE_TIMEOUT_MS);
                 if (probed > 0) {
                     version = probed;
                     try {

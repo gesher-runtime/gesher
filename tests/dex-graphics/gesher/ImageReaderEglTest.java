@@ -29,7 +29,6 @@ public final class ImageReaderEglTest {
     private static final int GL_PACK_REVERSE_ROW_ORDER_ANGLE = 0x93A4;
     private static final int GL_PIXEL_PACK_BUFFER = 0x88EB;
     private static final int GL_PIXEL_PACK_BUFFER_BINDING = 0x88ED;
-    private static final int GL_STREAM_READ = 0x88E1;
 
     private static boolean hasExtension(String list, String name) {
         return list != null && (" " + list + " ").contains(" " + name + " ");
@@ -142,7 +141,9 @@ public final class ImageReaderEglTest {
             if (pbo) {
                 GLES20.glGenBuffers(1, packBuffer, 0);
                 GLES20.glBindBuffer(GL_PIXEL_PACK_BUFFER, packBuffer[0]);
-                GLES20.glBufferData(GL_PIXEL_PACK_BUFFER, 16 * 12 * 4, null, GL_STREAM_READ);
+                // GL_STREAM_READ is an ES 3.0 usage; an ES 2 context on a device
+                // without ES 3 (WARP, capped at ES 2.0) accepts only the *_DRAW ones.
+                GLES20.glBufferData(GL_PIXEL_PACK_BUFFER, 16 * 12 * 4, null, GLES20.GL_STREAM_DRAW);
                 check(packBuffer[0] != 0 && GLES20.glGetError() == GLES20.GL_NO_ERROR,
                         "PBO can be bound before child surface swap");
             }

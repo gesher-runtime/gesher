@@ -229,6 +229,41 @@ static int check_buffer_ranges(char* out, size_t n) {
   return 0;
 }
 
+// Without OpenGL ES 3 on the device (no config carries EGL_OPENGL_ES3_BIT_KHR,
+// as on a software Direct3D device; docs/system-features.md), an ES 3 context
+// must be refused with EGL_BAD_MATCH, as on an Android device whose GPU has only
+// ES 2.0. 2 when that holds ("es3 unavailable"), 1 when it does not.
+static int es3_refused(char* out, size_t n) {
+  EGLint count = 0;
+  if (!eglGetConfigs(g_display, NULL, 0, &count) || count <= 0) FAIL("eglGetConfigs 0x%x", eglGetError());
+  EGLConfig* all = malloc(sizeof(EGLConfig) * (size_t)count);
+  eglGetConfigs(g_display, all, count, &count);
+  int es3_bits = 0;
+  for (EGLint i = 0; i < count; i++) {
+    EGLint renderable = 0, conformant = 0;
+    eglGetConfigAttrib(g_display, all[i], EGL_RENDERABLE_TYPE, &renderable);
+    eglGetConfigAttrib(g_display, all[i], EGL_CONFORMANT, &conformant);
+    if ((renderable | conformant) & EGL_OPENGL_ES3_BIT_KHR) es3_bits++;
+  }
+  free(all);
+  if (es3_bits != 0) FAIL("%d of %d configs carry EGL_OPENGL_ES3_BIT_KHR, none chosen", es3_bits, count);
+  const EGLint es2_attribs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE};
+  EGLConfig config;
+  EGLint configs = 0;
+  if (!eglChooseConfig(g_display, es2_attribs, &config, 1, &configs) || configs < 1) FAIL("no ES 2 config");
+  const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+  EGLContext context = eglCreateContext(g_display, config, EGL_NO_CONTEXT, context_attribs);
+  EGLint error = eglGetError();
+  if (context != EGL_NO_CONTEXT) {
+    eglDestroyContext(g_display, context);
+    FAIL("an ES 3 context was created without ES 3 configs");
+  }
+  if (error != EGL_BAD_MATCH) FAIL("ES 3 context refused with 0x%x, not EGL_BAD_MATCH", error);
+  append(out, n, ", es3 unavailable: no EGL_OPENGL_ES3_BIT_KHR config in %d, ES 3 context refused with "
+         "EGL_BAD_MATCH", count);
+  return 2;
+}
+
 EXPORT int glapp_gl_draw(ANativeWindow* window, int es, char* out, size_t n) {
   out[0] = 0;
   g_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -236,6 +271,15 @@ EXPORT int glapp_gl_draw(ANativeWindow* window, int es, char* out, size_t n) {
   EGLint major = 0, minor = 0;
   if (!eglInitialize(g_display, &major, &minor)) FAIL("eglInitialize 0x%x", eglGetError());
   append(out, n, "EGL %d.%d", major, minor);
+  if (es >= 3) {
+    const EGLint es3_attribs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR, EGL_NONE};
+    EGLConfig any;
+    EGLint es3_configs = 0;
+    if (!eglChooseConfig(g_display, es3_attribs, &any, 1, &es3_configs)) {
+      FAIL("eglChooseConfig(ES 3) 0x%x", eglGetError());
+    }
+    if (es3_configs == 0) return es3_refused(out, n);
+  }
 
   const EGLint config_attribs[] = {
       EGL_RENDERABLE_TYPE, es >= 3 ? EGL_OPENGL_ES3_BIT_KHR : EGL_OPENGL_ES2_BIT,
@@ -369,6 +413,7 @@ JNIEXPORT jstring JNICALL Java_com_gesher_glapp_GlActivity_glDraw(JNIEnv* env, j
   glapp_gl_finish();
   ANativeWindow_release(window);
   char result[800];
-  snprintf(result, sizeof result, "%s %s", rc == 0 ? "ok:" : "FAIL:", out);
+  // 2: ES 3 unavailable on this device, and refused as Android refuses it.
+  snprintf(result, sizeof result, "%s %s", rc == 0 ? "ok:" : rc == 2 ? "unavailable:" : "FAIL:", out);
   return (*env)->NewStringUTF(env, result);
 }

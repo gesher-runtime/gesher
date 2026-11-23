@@ -12,9 +12,10 @@
 //  - eglGetDisplay(EGL_DEFAULT_DISPLAY), and eglGetPlatformDisplay(EXT) for
 //    EGL_PLATFORM_ANDROID_KHR: ANGLE's Direct3D 11 display on the hardware
 //    adapter, initialized here to see that it works, else on WARP (the
-//    environment variable GESHER_EGL_DEVICE=warp asks for WARP directly); the
-//    OpenGL ES version the device declares follows that choice
-//    (gesher_egl_gles_version, egl_gles_version.h: ES 3.0 only on a GPU);
+//    environment variable GESHER_EGL_DEVICE=warp asks for WARP directly),
+//    WARP capped at feature level 10_0 (OpenGL ES 2.0 only); the version the
+//    device declares is that display's (gesher_egl_gles_version,
+//    egl_gles_version.h: ES 3.0 only on a GPU);
 //  - eglCreateWindowSurface / eglCreatePlatformWindowSurface(EXT): the
 //    native window is an ANativeWindow*; a Gesher window's (Win32Surface's)
 //    HWND gets the ANGLE window surface. The surface holds a reference to the
@@ -84,6 +85,9 @@
 #define EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE 0x320B
 #endif
 
+// EGL_ANGLE_platform_angle's maximum Direct3D feature level to ask for.
+constexpr EGLint kEglPlatformAngleMaxVersionMajor = 0x3204;
+constexpr EGLint kEglPlatformAngleMaxVersionMinor = 0x3205;
 // EGL_EXT_device_query's EGL_DEVICE_EXT and EGL_ANGLE_device_d3d's device.
 constexpr EGLint kEglDeviceExt = 0x322C;
 constexpr EGLint kEglD3d11DeviceAngle = 0x33A1;
@@ -204,12 +208,26 @@ void Log(const char* text) {
 
 // --- displays ------------------------------------------------------------------------------------
 
-EGLDisplay OpenAngle(EGLint device_type) {
-  const EGLint attribs[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
-                            EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, device_type, EGL_NONE};
+// ANGLE's Direct3D 11 display on `device_type`, initialized. `capped`: at most
+// feature level 10_0, where ANGLE gives OpenGL ES 2.0 only (egl_gles_version.h).
+// `*already_initialized`, if given, says whether someone in this process had
+// initialized that same display before (ANGLE gives one display per attribute
+// list; an app can reach it through eglGetPlatformDisplay's pass-through).
+EGLDisplay OpenAngle(EGLint device_type, bool capped, bool* already_initialized = nullptr) {
+  const EGLint uncapped[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+                             EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, device_type, EGL_NONE};
+  const EGLint limited[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
+                            EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE, device_type,
+                            kEglPlatformAngleMaxVersionMajor, kSoftwareMaxFeatureLevelMajor,
+                            kEglPlatformAngleMaxVersionMinor, kSoftwareMaxFeatureLevelMinor, EGL_NONE};
   EGLDisplay d = MS(eglGetPlatformDisplayEXT)(EGL_PLATFORM_ANGLE_ANGLE,
-                                              reinterpret_cast<void*>(EGL_DEFAULT_DISPLAY), attribs);
+                                              reinterpret_cast<void*>(EGL_DEFAULT_DISPLAY),
+                                              capped ? limited : uncapped);
   if (d == EGL_NO_DISPLAY) return EGL_NO_DISPLAY;
+  if (already_initialized != nullptr) {
+    // eglQueryString fails with EGL_NOT_INITIALIZED on a display not initialized.
+    *already_initialized = MS(eglQueryString)(d, EGL_VERSION) != nullptr;
+  }
   EGLint major = 0, minor = 0;
   if (MS(eglInitialize)(d, &major, &minor) != EGL_TRUE) return EGL_NO_DISPLAY;
   return d;
@@ -275,58 +293,74 @@ DisplayFacts Facts(EGLDisplay d, bool warp) {
   return facts;
 }
 
+// Logs a display's adapter and ES 3 configs; with `version` >= 0, the version
+// declared for it.
 void LogChoice(const char* what, const DisplayFacts& facts, int version) {
-  char text[200];
-  std::snprintf(text, sizeof text,
-                "%s (adapter %04x:%04x%s), declared OpenGL ES %s", what,
+  char text[300];
+  std::snprintf(text, sizeof text, "%s (adapter %04x:%04x%s, ES 3 configs %s)%s%s", what,
                 static_cast<unsigned>(facts.adapter.vendor_id),
                 static_cast<unsigned>(facts.adapter.device_id),
                 !facts.adapter.known ? " unidentified"
                 : HardwareAdapter(facts.adapter) ? ", hardware" : ", software",
-                version == kGlEsVersion30 ? "3.0" : version == kGlEsVersion20 ? "2.0" : "none");
+                facts.es3_config ? "yes" : "no", version < 0 ? "" : ", declared OpenGL ES ",
+                version < 0 ? "" : version == kGlEsVersion30 ? "3.0"
+                                 : version == kGlEsVersion20 ? "2.0" : "none");
   Log(text);
 }
 
 struct DisplayChoice {
   EGLDisplay display = EGL_NO_DISPLAY;
   int gles_version = kGlEsVersionUndefined;
+  bool shared = false;  // the display was initialized in this process before
 };
 
-// Android's default display: ANGLE on Direct3D 11, the hardware device if it is
-// a GPU with any ES config (or a software "hardware" adapter with ES 3.0),
-// else WARP (egl_gles_version.h). The version the device declares follows the
-// choice: ES 3.0 only on a GPU that gives it (ro.opengles.version, set by the
-// system server from gesher_egl_gles_version; docs/system-features.md).
+// Android's default display (egl_gles_version.h): ANGLE's Direct3D 11 hardware
+// device if it is a GPU with any ES config; otherwise WARP capped at feature
+// level 10_0, OpenGL ES 2.0 only. The declared version is that display's
+// (ro.opengles.version, set by the system server from gesher_egl_gles_version;
+// docs/system-features.md); one policy decides both.
 DisplayChoice ChooseDisplay() {
   DisplayChoice choice;
   if (!AngleAvailable()) return choice;
   const char* want = std::getenv("GESHER_EGL_DEVICE");
   bool warp_only = want != nullptr && std::strcmp(want, "warp") == 0;
   if (!warp_only) {
-    EGLDisplay d = OpenAngle(EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE);
+    EGLDisplay d = OpenAngle(EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE, false, &choice.shared);
     DisplayFacts facts = Facts(d, false);
-    if (KeepHardwareDevice(facts)) {
+    if (KeepHardwareDevice(facts) && AcceptDisplay(facts)) {
       choice.display = d;
       choice.gles_version = DeclaredGlEsVersion(facts);
       LogChoice("default display: ANGLE, Direct3D 11 hardware device", facts, choice.gles_version);
       return choice;
     }
     if (d != EGL_NO_DISPLAY) {
-      MS(eglTerminate)(d);
-      Log("Direct3D 11 hardware device is not a GPU with OpenGL ES; trying WARP");
+      if (!choice.shared) MS(eglTerminate)(d);
+      LogChoice("Direct3D 11 hardware device is not a GPU with OpenGL ES; using WARP, ES 2.0 only",
+                facts, -1);
     } else {
-      Log("Direct3D 11 hardware device failed; trying WARP");
+      Log("Direct3D 11 hardware device failed; using WARP, ES 2.0 only");
     }
   }
-  EGLDisplay d = OpenAngle(EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE);
+  choice.shared = false;
+  EGLDisplay d = OpenAngle(EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE, true, &choice.shared);
   DisplayFacts facts = Facts(d, true);
+  if (d == EGL_NO_DISPLAY) {
+    Log("no Direct3D 11 device (hardware or WARP): EGL_NO_DISPLAY");
+    return choice;
+  }
+  if (!AcceptDisplay(facts)) {
+    // The feature level cap was not in effect: WARP would give ES 3.0 while the
+    // device declares less. No default display rather than a disagreement.
+    if (!choice.shared) MS(eglTerminate)(d);
+    LogChoice("WARP device not capped at OpenGL ES 2.0 (or without ES configs): EGL_NO_DISPLAY",
+              facts, -1);
+    choice.shared = false;
+    return choice;
+  }
   choice.display = d;
   choice.gles_version = DeclaredGlEsVersion(facts);
-  if (d != EGL_NO_DISPLAY) {
-    LogChoice("default display: ANGLE, Direct3D 11 WARP device", facts, choice.gles_version);
-  } else {
-    Log("no Direct3D 11 device (hardware or WARP): EGL_NO_DISPLAY");
-  }
+  LogChoice("default display: ANGLE, Direct3D 11 WARP device, feature level 10_0", facts,
+            choice.gles_version);
   return choice;
 }
 
@@ -352,14 +386,20 @@ EGLDisplay DefaultDisplay() { return DefaultChoice().display; }
 // The declared version: the default display's, if this process has one;
 // otherwise the same choice made and its display terminated again, so a
 // process that only asks (the system server, at boot) keeps no Direct3D
-// device. The answer is kept for the process.
+// device. A display that was already initialized in this process (an app's
+// own, through eglGetPlatformDisplay's pass-through with the same attributes)
+// is not terminated. The probe holds g_default_mutex, so the default display
+// is never chosen while it runs. An app that obtained the same display through
+// the pass-through only while the probe ran, and used it after, would find it
+// terminated; the probe runs in the system server, which loads no app code.
+// The answer is kept for the process.
 int GlEsVersion() {
   if (g_default_chosen.load(std::memory_order_acquire)) return g_default.gles_version;
   std::lock_guard<std::mutex> lock(g_default_mutex);
   if (g_default_chosen.load(std::memory_order_relaxed)) return g_default.gles_version;
   if (g_probed_version < 0) {
     DisplayChoice probe = ChooseDisplay();
-    if (probe.display != EGL_NO_DISPLAY) MS(eglTerminate)(probe.display);
+    if (probe.display != EGL_NO_DISPLAY && !probe.shared) MS(eglTerminate)(probe.display);
     g_probed_version = probe.gles_version;
   }
   return g_probed_version;
