@@ -216,8 +216,43 @@ class AvcDecoder : public VideoDecoder {
     const int ys = b.u4_y_strd > 0 ? static_cast<int>(b.u4_y_strd) : stride_;
     const int us = b.u4_u_strd > 0 ? static_cast<int>(b.u4_u_strd) : stride_ / 2;
     const int vs = b.u4_v_strd > 0 ? static_cast<int>(b.u4_v_strd) : stride_ / 2;
+    const int cw = (w + 1) / 2, ch = (h + 1) / 2;
+    const size_t luma = static_cast<size_t>(w) * h;
+    const size_t chroma = static_cast<size_t>(cw) * ch;
     VideoFrame f;
-    f.Allocate(w, h);
+    // Non-shared libavc output belongs to the caller after Call completes.
+    // Adopt only our exact packed I420 allocation; provider-owned, cropped or
+    // padded planes still need the row copy below. swap leaves no storage for
+    // the next decode to overwrite while a consumer retains this frame.
+    if (ys == w && us == cw && vs == cw && buffer_.size() == luma + 2 * chroma &&
+        b.pv_y_buf == buffer_.data() && b.pv_u_buf == buffer_.data() + luma &&
+        b.pv_v_buf == buffer_.data() + luma + chroma) {
+      f.width = w;
+      f.height = h;
+      f.stride_y = w;
+      f.stride_uv = cw;
+      f.crop_right = w - 1;
+      f.crop_bottom = h - 1;
+      f.data.swap(buffer_);
+    } else {
+      f.Allocate(w, h);
+      uint8_t* y = f.data.data();
+      for (int r = 0; r < h; r++) {
+        memcpy(y + static_cast<size_t>(r) * f.stride_y,
+               static_cast<const uint8_t*>(b.pv_y_buf) + static_cast<size_t>(r) * ys,
+               static_cast<size_t>(w));
+      }
+      uint8_t* u = y + static_cast<size_t>(f.stride_y) * f.height;
+      uint8_t* v = u + static_cast<size_t>(f.stride_uv) * ((f.height + 1) / 2);
+      for (int r = 0; r < ch; r++) {
+        memcpy(u + static_cast<size_t>(r) * f.stride_uv,
+               static_cast<const uint8_t*>(b.pv_u_buf) + static_cast<size_t>(r) * us,
+               static_cast<size_t>(cw));
+        memcpy(v + static_cast<size_t>(r) * f.stride_uv,
+               static_cast<const uint8_t*>(b.pv_v_buf) + static_cast<size_t>(r) * vs,
+               static_cast<size_t>(cw));
+      }
+    }
     int64_t t = last_out_us_;
     auto it = times_.find(o.u4_ts);
     if (it != times_.end()) {
@@ -226,23 +261,6 @@ class AvcDecoder : public VideoDecoder {
     }
     last_out_us_ = t;
     f.time_us = t;
-    uint8_t* y = f.data.data();
-    for (int r = 0; r < h; r++) {
-      memcpy(y + static_cast<size_t>(r) * f.stride_y,
-             static_cast<const uint8_t*>(b.pv_y_buf) + static_cast<size_t>(r) * ys,
-             static_cast<size_t>(w));
-    }
-    uint8_t* u = y + static_cast<size_t>(f.stride_y) * f.height;
-    uint8_t* v = u + static_cast<size_t>(f.stride_uv) * ((f.height + 1) / 2);
-    const int cw = (w + 1) / 2, ch = (h + 1) / 2;
-    for (int r = 0; r < ch; r++) {
-      memcpy(u + static_cast<size_t>(r) * f.stride_uv,
-             static_cast<const uint8_t*>(b.pv_u_buf) + static_cast<size_t>(r) * us,
-             static_cast<size_t>(cw));
-      memcpy(v + static_cast<size_t>(r) * f.stride_uv,
-             static_cast<const uint8_t*>(b.pv_v_buf) + static_cast<size_t>(r) * vs,
-             static_cast<size_t>(cw));
-    }
     out->push_back(std::move(f));
   }
 

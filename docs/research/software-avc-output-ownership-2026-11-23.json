@@ -1,0 +1,322 @@
+{
+  "before": {
+    "source_sha256": "c88f8a9ad860bf5b556ee205b1e5c6553031441ad6ad1f9afdc3eab1ebd54c37",
+    "libavc_revision": "d380d04a78c6c08702e36aca86d0fd4baee390f9",
+    "measure_only": true,
+    "metrics": [
+      {
+        "name": "small",
+        "frames": 6,
+        "copied_bytes": 884736,
+        "peak_raw_bytes": 294912,
+        "raw_allocations": 6
+      },
+      {
+        "name": "cropped",
+        "frames": 6,
+        "copied_bytes": 681156,
+        "peak_raw_bytes": 251766,
+        "raw_allocations": 6
+      },
+      {
+        "name": "720p",
+        "frames": 18,
+        "copied_bytes": 24883200,
+        "peak_raw_bytes": 2764800,
+        "raw_allocations": 18
+      },
+      {
+        "name": "1080p",
+        "frames": 6,
+        "copied_bytes": 18662400,
+        "peak_raw_bytes": 6243840,
+        "raw_allocations": 6
+      },
+      {
+        "name": "4k",
+        "frames": 2,
+        "copied_bytes": 24883200,
+        "peak_raw_bytes": 24883200,
+        "raw_allocations": 2
+      }
+    ],
+    "fixtures": {
+      "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+      "clips": {
+        "small": {
+          "width": 384,
+          "height": 256,
+          "frames": 12,
+          "fixture_sha256": "548a705f8144c11e9a89a6f6776d40a6ed6f7019f5669d13517ce8ac3419cdc4",
+          "reference_sha256": "fe7ce85ab00ec5d05fc79ada3a7f23c3fc4e5d66a12f114baaf1e84cba35af4e",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P"
+          ]
+        },
+        "cropped": {
+          "width": 318,
+          "height": 238,
+          "frames": 12,
+          "fixture_sha256": "243c019c3cc9ff3b6ae8dc06dc0b147e0f4f8818deefbdc7f95c310daa6a02ac",
+          "reference_sha256": "61349cedfa0ff2e46ea7b81fc8dd56dbd299e2150fcc5519a6ece4423e3b4763",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P"
+          ]
+        },
+        "720p": {
+          "width": 1280,
+          "height": 720,
+          "frames": 24,
+          "fixture_sha256": "6ca3826b17fb5c8e8da0339517f18556b15544a91462a0fa235340e5f5b7b348",
+          "reference_sha256": "4ca4d081b02c8f85a4a5362754e3a2a832d564e55c4c3d05583675ed55fc9aba",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P"
+          ]
+        },
+        "1080p": {
+          "width": 1920,
+          "height": 1080,
+          "frames": 12,
+          "fixture_sha256": "c0cf25b5d029240e59cd25aaa44c148e011eaa63008292995a9fbff72fe48a54",
+          "reference_sha256": "3de253cddbd85b8e41b0d591e2888969c5d8e46050692c2f1e583260896d77b7",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P"
+          ]
+        },
+        "4k": {
+          "width": 3840,
+          "height": 2160,
+          "frames": 8,
+          "fixture_sha256": "9e993891ac810f07e16bb63cc9acb855c4ec1b3f4abdc04c4c87e43c54c2619e",
+          "reference_sha256": "c743ac490e5bc2f7a8bf80273b6259dc3ffc6cee6f8111d8476fdc91b0bc51e1",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P"
+          ]
+        }
+      }
+    }
+  },
+  "after": {
+    "source_sha256": "cccbf8a2e422fe78ac6e823ff7410cd5c206297c4426432b0c99ca6c65697964",
+    "libavc_revision": "d380d04a78c6c08702e36aca86d0fd4baee390f9",
+    "measure_only": false,
+    "metrics": [
+      {
+        "name": "small",
+        "frames": 6,
+        "copied_bytes": 0,
+        "peak_raw_bytes": 147456,
+        "raw_allocations": 6
+      },
+      {
+        "name": "cropped",
+        "frames": 6,
+        "copied_bytes": 681156,
+        "peak_raw_bytes": 251766,
+        "raw_allocations": 6
+      },
+      {
+        "name": "720p",
+        "frames": 18,
+        "copied_bytes": 0,
+        "peak_raw_bytes": 1382400,
+        "raw_allocations": 18
+      },
+      {
+        "name": "1080p",
+        "frames": 6,
+        "copied_bytes": 18662400,
+        "peak_raw_bytes": 6243840,
+        "raw_allocations": 6
+      },
+      {
+        "name": "4k",
+        "frames": 2,
+        "copied_bytes": 0,
+        "peak_raw_bytes": 12441600,
+        "raw_allocations": 2
+      }
+    ],
+    "fixtures": {
+      "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+      "clips": {
+        "small": {
+          "width": 384,
+          "height": 256,
+          "frames": 12,
+          "fixture_sha256": "548a705f8144c11e9a89a6f6776d40a6ed6f7019f5669d13517ce8ac3419cdc4",
+          "reference_sha256": "fe7ce85ab00ec5d05fc79ada3a7f23c3fc4e5d66a12f114baaf1e84cba35af4e",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P"
+          ]
+        },
+        "cropped": {
+          "width": 318,
+          "height": 238,
+          "frames": 12,
+          "fixture_sha256": "243c019c3cc9ff3b6ae8dc06dc0b147e0f4f8818deefbdc7f95c310daa6a02ac",
+          "reference_sha256": "61349cedfa0ff2e46ea7b81fc8dd56dbd299e2150fcc5519a6ece4423e3b4763",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P"
+          ]
+        },
+        "720p": {
+          "width": 1280,
+          "height": 720,
+          "frames": 24,
+          "fixture_sha256": "6ca3826b17fb5c8e8da0339517f18556b15544a91462a0fa235340e5f5b7b348",
+          "reference_sha256": "4ca4d081b02c8f85a4a5362754e3a2a832d564e55c4c3d05583675ed55fc9aba",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P"
+          ]
+        },
+        "1080p": {
+          "width": 1920,
+          "height": 1080,
+          "frames": 12,
+          "fixture_sha256": "c0cf25b5d029240e59cd25aaa44c148e011eaa63008292995a9fbff72fe48a54",
+          "reference_sha256": "3de253cddbd85b8e41b0d591e2888969c5d8e46050692c2f1e583260896d77b7",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P",
+            "I",
+            "B",
+            "B",
+            "P"
+          ]
+        },
+        "4k": {
+          "width": 3840,
+          "height": 2160,
+          "frames": 8,
+          "fixture_sha256": "9e993891ac810f07e16bb63cc9acb855c4ec1b3f4abdc04c4c87e43c54c2619e",
+          "reference_sha256": "c743ac490e5bc2f7a8bf80273b6259dc3ffc6cee6f8111d8476fdc91b0bc51e1",
+          "display_picture_types": [
+            "I",
+            "B",
+            "B",
+            "P",
+            "B",
+            "B",
+            "P",
+            "P"
+          ]
+        }
+      }
+    }
+  }
+}
