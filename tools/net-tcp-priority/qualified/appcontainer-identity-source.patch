@@ -2502,14 +2502,55 @@ index 30d03bc86..3051bcb4e 100644
 +}
 +static HANDLE OpenNullDevice(DWORD, bool) { std::abort(); }
 diff --git a/tools/test_ofd_transfer_contracts.py b/tools/test_ofd_transfer_contracts.py
-index 17667bdeb..d2b5387b9 100644
+index 17667bdeb..0b1f14efc 100644
 --- a/tools/test_ofd_transfer_contracts.py
 +++ b/tools/test_ofd_transfer_contracts.py
-@@ -38,0 +39,5 @@ def main():
+@@ -26,0 +27,25 @@ def without_includes(source):
++def load_host_template():
 +    bootstrap = (ROOT / "compat/posix/include/gesher/binder_bootstrap.h").read_text()
 +    boundary = "\ninline bool ReadStartup(Endpoint endpoint, Startup* result)"
 +    if bootstrap.count(boundary) != 1:
 +        raise ValueError("Binder startup-record boundary changed")
 +    startup_record = without_includes(bootstrap[:bootstrap.index(boundary)])
-@@ -46,0 +52 @@ def main():
++    template = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
++    headers = {
++        "@PE_EXPORTS_HEADER@": str(ROOT / "compat/elf/exec/pe_exports.h"),
++        "@ENVIRONMENT_ENCODING_HEADER@": str(ROOT / "compat/posix/include/gesher/environment_utf16.h"),
 +        "@BINDER_STARTUP_RECORD@": startup_record + "\n}  // namespace gesher::binder_bootstrap\n",
++    }
++    for token, value in headers.items():
++        if template.count(token) != 1:
++            raise ValueError("OFD host boundary changed: " + token)
++        template = template.replace(token, value)
++    return template
++
++
++def require_rendered_host_source(source):
++    remaining = sorted(set(re.findall(r"@[A-Z][A-Z0-9_]*@", source)))
++    if remaining:
++        raise ValueError("Unresolved OFD host source markers: " + ", ".join(remaining))
++
++
+@@ -43 +68 @@ def main():
+-    template = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
++    template = load_host_template()
+@@ -45,2 +69,0 @@ def main():
+-        "@PE_EXPORTS_HEADER@": str(ROOT / "compat/elf/exec/pe_exports.h"),
+-        "@ENVIRONMENT_ENCODING_HEADER@": str(ROOT / "compat/posix/include/gesher/environment_utf16.h"),
+@@ -55,0 +79 @@ def main():
++    require_rendered_host_source(template)
+diff --git a/tools/test_revocable_file_contracts.py b/tools/test_revocable_file_contracts.py
+index c2fe1eef5..79fc5e7c5 100644
+--- a/tools/test_revocable_file_contracts.py
++++ b/tools/test_revocable_file_contracts.py
+@@ -17,0 +18,2 @@ import tempfile
++from test_ofd_transfer_contracts import load_host_template, require_rendered_host_source
++
+@@ -31 +33 @@ def main():
+-    base = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
++    base = load_host_template()
+@@ -33,2 +34,0 @@ def main():
+-    boundary = boundary.replace("@PE_EXPORTS_HEADER@", str(ROOT / "compat/elf/exec/pe_exports.h"))
+-    boundary = boundary.replace("@ENVIRONMENT_ENCODING_HEADER@", str(ROOT / "compat/posix/include/gesher/environment_utf16.h"))
+@@ -61,0 +62 @@ def main():
++    require_rendered_host_source(template)
