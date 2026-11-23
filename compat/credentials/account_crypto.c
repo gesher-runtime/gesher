@@ -18,6 +18,7 @@
 #include "../locale/ui_locale.h"
 
 static BOOL server_process = FALSE;
+static BOOL standalone_process = FALSE;
 
 static BOOL Equal(const WCHAR* a, const WCHAR* b) {
   while (*a && *a == *b) { ++a; ++b; }
@@ -46,6 +47,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
       if (Equal(args[i], L"-cp") || Equal(args[i], L"-classpath")) { ++i; continue; }
       if (args[i][0] == L'-') continue;
       server_process = Equal(args[i], L"com.gesher.server.SystemServer");
+      standalone_process = Equal(args[i], L"com.gesher.app.Main");
       break;
     }
     LocalFree(args);
@@ -115,7 +117,13 @@ JNIEXPORT jboolean GESHER_NATIVE
 Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,
                                                        jstring label, jstring permissions) {
   (void)cls;
-  if (!RequireServer(env)) return JNI_FALSE;
+  // Both runtime entry points host PermissionRequests, whose Java service
+  // authenticates the requesting APK/activity. Account storage and account
+  // token consent continue to require the separate system-server role.
+  if (!server_process && !standalone_process) {
+    Fail(env, "java/lang/SecurityException", "Permission consent requires an active runtime");
+    return JNI_FALSE;
+  }
   if (label == NULL || permissions == NULL) return JNI_FALSE;
   jsize ln = (*env)->GetStringLength(env, label);
   jsize pn = (*env)->GetStringLength(env, permissions);
