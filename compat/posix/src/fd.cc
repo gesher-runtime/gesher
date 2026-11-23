@@ -30,6 +30,7 @@
 #include "descriptor_resources.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "native_fence_internal.h"
 #include "revocable_internal.h"
 #include "pipe_io.h"
 #include "poll_scratch.h"
@@ -467,6 +468,7 @@ int read(int fd, void* buf, unsigned int count) {
     Device device;
     if (gesher::LookupDevice(fd, &device)) return gesher::ReadDevice(device, buf, count);
     if (gesher::ReadEventObject(fd, buf, count, &result)) return result;
+    if (gesher::LookupNativeFence(fd)) return errno = EINVAL, -1;
     // A close/dup2 between the earlier kind probes may have replaced the fd
     // with a file or pipe. Dispatch the final capture through its own policy;
     // never fall through to a raw CRT operation on an unchecked replacement.
@@ -487,6 +489,7 @@ int write(int fd, const void* buf, unsigned int count) {
     if (flags < 0) return -1;
     if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_RDONLY) return errno = EBADF, -1;
     if (gesher::WriteEventObject(fd, buf, count, &result)) return result;
+    if (gesher::LookupNativeFence(fd)) return errno = EINVAL, -1;
     return NativeDescriptorIo(gesher::CaptureDescriptor(fd), const_cast<void*>(buf), count, true);
   }
   gesher::ws::Buffer buffer = {const_cast<void*>(buf), count};
@@ -503,6 +506,7 @@ int dup(int fd) {
     Device device;
     if (fd2 >= 0 && gesher::LookupDevice(fd, &device)) gesher::RegisterDevice(fd2, device);
     if (fd2 >= 0) gesher::DupEventObject(fd, fd2);
+    if (fd2 >= 0) gesher::DupNativeFence(fd, fd2);
     if (fd2 >= 0) gesher::DupBinder(fd, fd2);
     if (fd2 >= 0) {
       int error = gesher::DupOfd(fd, fd2) < 0 ? errno : 0;
@@ -565,6 +569,7 @@ static int DupTo(int fd, int fd2, bool cloexec) {
       gesher::RegisterDevice(fd2, device);
     } else if (!source_is_socket) {
       gesher::DupEventObject(fd, fd2);
+      gesher::DupNativeFence(fd, fd2);
       gesher::DupBinder(fd, fd2);
     }
     if (gesher::DupOfd(fd, fd2) < 0 && !metadata_error) metadata_error = errno;
@@ -649,10 +654,14 @@ struct FdPollScratch {
   std::vector<nfds_t> socket_index;
   std::vector<std::shared_ptr<gesher::EventFd>> eventfds;
   std::vector<nfds_t> eventfd_index;
+  std::vector<std::shared_ptr<gesher::NativeFence>> fences;
+  std::vector<nfds_t> fence_index;
   std::vector<HANDLE> handles;
 
   void Reset() {
     gesher::ClearPollScratch(handles);
+    gesher::ClearPollScratch(fence_index);
+    gesher::ClearPollScratch(fences);
     gesher::ClearPollScratch(eventfd_index);
     gesher::ClearPollScratch(eventfds);
     gesher::ClearPollScratch(socket_index);
@@ -772,13 +781,19 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
   // Held so that their events stay open while waited on.
   auto& eventfds = scratch.eventfds;
   auto& eventfd_index = scratch.eventfd_index;
+  auto& fences = scratch.fences;
+  auto& fence_index = scratch.fence_index;
   bool waiting_files = false;  // a pipe that may become readable
   for (nfds_t i = 0; i < nfds; ++i) {
     pollfd* p = &fds[i];
     p->revents = 0;
     if (p->fd < 0) continue;  // ignored, as on Linux
     SocketFd state;
-    if (std::shared_ptr<EventFd> e = LookupEventFd(p->fd)) {
+    if (auto fence = LookupNativeFence(p->fd)) {
+      p->revents = PollNativeFence(fence, p->events, nullptr);
+      fences.push_back(std::move(fence));
+      fence_index.push_back(i);
+    } else if (std::shared_ptr<EventFd> e = LookupEventFd(p->fd)) {
       p->revents = PollEventFd(*e, p->events, nullptr);
       eventfds.push_back(std::move(e));
       eventfd_index.push_back(i);
@@ -816,7 +831,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
   // the registration woke nobody, so the first round only looks.
   std::optional<WaiterRegistration> registration;
   if (ready == 0 && timeout != 0 &&
-      (interrupt != nullptr || waiting_files || (!sockets.empty() && !eventfds.empty()))) {
+      (interrupt != nullptr || waiting_files || !fences.empty() || (!sockets.empty() && !eventfds.empty()))) {
     registration.emplace(!sockets.empty());
   }
   PollWaiter* waiter = registration ? registration->get() : nullptr;
@@ -865,12 +880,28 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
       }
     } else if (wait_ms != 0) {
       handles.clear();
+      auto append_handle = [&](HANDLE handle) {
+        // Aliases of one fence/eventfd share an event. Windows forbids the
+        // same HANDLE twice in one WaitForMultipleObjects call, while POSIX
+        // poll must still report readiness for every requested fd slot.
+        // Once overflow is certain, the bounded fallback below needs no more
+        // handles. Keep duplicate scans bounded for very large poll sets.
+        if (handles.size() > MAXIMUM_WAIT_OBJECTS) return;
+        if (handle && std::find(handles.begin(), handles.end(), handle) == handles.end()) handles.push_back(handle);
+      };
+      for (size_t k = 0; k < fences.size(); ++k) {
+        pollfd* p = &fds[fence_index[k]];
+        HANDLE wake = nullptr;
+        p->revents = LookupNativeFence(p->fd) == fences[k] ? PollNativeFence(fences[k], p->events, &wake) : POLLNVAL;
+        if (p->revents != 0) wait_ms = 0;
+        append_handle(wake);
+      }
       for (size_t k = 0; k < eventfds.size(); ++k) {
         pollfd* p = &fds[eventfd_index[k]];
         HANDLE wake = nullptr;
         p->revents = PollEventFd(*eventfds[k], p->events, &wake);
         if (p->revents != 0) wait_ms = 0;  // ready since the last look
-        if (wake != nullptr) handles.push_back(wake);
+        append_handle(wake);
       }
       if (waiter != nullptr) handles.push_back(waiter->event);
       if (interrupt != nullptr) handles.push_back(interrupt);  // last, as below
@@ -893,6 +924,10 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
       }
     }
 
+    for (size_t k = 0; k < fences.size(); ++k) {
+      pollfd* p = &fds[fence_index[k]];
+      p->revents = LookupNativeFence(p->fd) == fences[k] ? PollNativeFence(fences[k], p->events, nullptr) : POLLNVAL;
+    }
     for (size_t k = 0; k < eventfds.size(); ++k) {
       pollfd* p = &fds[eventfd_index[k]];
       p->revents = PollEventFd(*eventfds[k], p->events, nullptr);
@@ -908,7 +943,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
       for (nfds_t i = 0; i < nfds; ++i) {
         pollfd* p = &fds[i];
         SocketFd state;
-        if (p->fd < 0 || p->revents != 0 || LookupSocket(p->fd, &state) || LookupEventFd(p->fd)) {
+        if (p->fd < 0 || p->revents != 0 || LookupSocket(p->fd, &state) || LookupEventFd(p->fd) || LookupNativeFence(p->fd)) {
           continue;
         }
         int result = PollFile(p);

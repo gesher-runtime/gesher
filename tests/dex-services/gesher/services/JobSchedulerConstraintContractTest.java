@@ -1604,6 +1604,7 @@ public final class JobSchedulerConstraintContractTest {
         android.system.Os.setenv("GESHER_MICROG_SPOOF", "1", true);
         contracts();
         JobSchedulerAdmissionTest.contracts(true);
+        JobSchedulerContentTriggerTest.contracts(true);
         System.out.println("JobSchedulerConstraintContractTest all passed: " + checks + " checks");
     }
 }

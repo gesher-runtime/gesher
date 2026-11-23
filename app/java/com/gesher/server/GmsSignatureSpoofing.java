@@ -86,6 +86,12 @@ public final class GmsSignatureSpoofing {
         }
     }
 
+    /** V1 trust remains limited to the exact upstream GSF artifact, even after verification. */
+    static boolean isPinnedLegacyGsf(String path) {
+        try { return LEGACY_GSF_SHA256.equals(sha256(path)); }
+        catch (Exception | LinkageError failure) { return false; }
+    }
+
     public static boolean isOfficialMicrogCertificate(byte[] certificate) {
         if (certificate == null || certificate.length == 0) return false;
         try {

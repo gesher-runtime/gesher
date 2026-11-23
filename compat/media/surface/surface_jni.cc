@@ -64,6 +64,7 @@
 #include "queue_surface.h"
 #include "surface_parcel_bridge.h"
 #include "surface_texture_gl.h"
+#include "video_scaling.h"
 
 #if defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
@@ -346,6 +347,12 @@ void JNICALL TV_unlockCanvasAndPost(JNIEnv* env, jclass, jlong native_window, jo
 
 // --- TextureView's layer --------------------------------------------------------------------
 
+SkRect VideoSourceRect(const SurfaceFrame& frame, int width, int height) {
+  const auto crop = gesher::media::VideoDisplayCrop(
+      frame.width, frame.height, width, height, frame.video_scaling_mode);
+  return SkRect::MakeLTRB(crop.left, crop.top, crop.right, crop.bottom);
+}
+
 class TextureLayer : public android::VirtualLightRefBase {
  public:
   std::mutex mu;
@@ -358,11 +365,13 @@ class TextureLayer : public android::VirtualLightRefBase {
   sk_sp<SkColorFilter> filter;
   FrameImages images;
 
-  sk_sp<SkImage> Image() {
+  sk_sp<SkImage> Image(std::shared_ptr<const SurfaceFrame>* frame_out = nullptr) {
     // Serialize cache publication with attachment/detachment. Otherwise an
     // older in-flight read could repopulate the cache after detach cleared it.
     std::lock_guard<std::mutex> lock(mu);
-    return images.Get(surface != nullptr ? surface->Latest() : nullptr);
+    auto frame = surface != nullptr ? surface->Latest() : nullptr;
+    if (frame_out != nullptr) *frame_out = frame;
+    return images.Get(frame);
   }
 };
 
@@ -377,7 +386,8 @@ class TextureLayerDrawable : public SkDrawable {
   }
 
   void onDraw(SkCanvas* canvas) override {
-    sk_sp<SkImage> image = layer_->Image();
+    std::shared_ptr<const SurfaceFrame> frame;
+    sk_sp<SkImage> image = layer_->Image(&frame);
     if (image == nullptr) return;
     SkPaint paint;
     SkMatrix m;
@@ -393,9 +403,10 @@ class TextureLayerDrawable : public SkDrawable {
     }
     canvas->save();
     canvas->concat(m);
-    canvas->drawImageRect(image.get(), SkRect::MakeIWH(image->width(), image->height()),
+    canvas->drawImageRect(image.get(), VideoSourceRect(*frame, w, h),
                           SkRect::MakeIWH(w, h), SkSamplingOptions(SkFilterMode::kLinear), &paint,
-                          SkCanvas::kFast_SrcRectConstraint);
+                          frame->video_scaling_mode == 2 ? SkCanvas::kStrict_SrcRectConstraint
+                                                         : SkCanvas::kFast_SrcRectConstraint);
     canvas->restore();
   }
 
@@ -426,13 +437,22 @@ jlong JNICALL HR_createTextureLayer(JNIEnv*, jclass, jlong) {
 // A TextureView's frame copied into a Bitmap (TextureView.getBitmap).
 jboolean JNICALL HR_copyLayerInto(JNIEnv*, jclass, jlong, jlong layer_ptr, jlong bitmap_ptr) {
   TextureLayer* layer = LayerOf(layer_ptr);
-  sk_sp<SkImage> image = layer != nullptr ? layer->Image() : nullptr;
+  std::shared_ptr<const SurfaceFrame> frame;
+  sk_sp<SkImage> image = layer != nullptr ? layer->Image(&frame) : nullptr;
   if (image == nullptr) return JNI_FALSE;
+  int width, height;
+  {
+    std::lock_guard<std::mutex> lock(layer->mu);
+    width = layer->width;
+    height = layer->height;
+  }
   SkBitmap bitmap;
   android::bitmap::toBitmap(bitmap_ptr).getSkBitmap(&bitmap);
   SkCanvas canvas(bitmap);
-  canvas.drawImageRect(image.get(), SkRect::MakeIWH(bitmap.width(), bitmap.height()),
-                       SkSamplingOptions(SkFilterMode::kLinear));
+  canvas.drawImageRect(image.get(), VideoSourceRect(*frame, width, height),
+                       SkRect::MakeIWH(bitmap.width(), bitmap.height()),
+                       SkSamplingOptions(SkFilterMode::kLinear), nullptr,
+                       SkCanvas::kStrict_SrcRectConstraint);
   bitmap.notifyPixelsChanged();
   return JNI_TRUE;
 }
@@ -648,9 +668,10 @@ class ViewSurfaceDrawable : public SkDrawable {
       canvas->clipRRect(SkRRect::MakeRectXY(SkRect::MakeIWH(w_, h_), radius_, radius_), true);
     }
     // The buffer scaled to the view, as SurfaceFlinger scales a SurfaceView's layer.
-    canvas->drawImageRect(image.get(), SkRect::MakeIWH(image->width(), image->height()),
+    canvas->drawImageRect(image.get(), VideoSourceRect(*frame, w_, h_),
                           SkRect::MakeIWH(w_, h_), SkSamplingOptions(SkFilterMode::kLinear), &paint,
-                          SkCanvas::kFast_SrcRectConstraint);
+                          frame->video_scaling_mode == 2 ? SkCanvas::kStrict_SrcRectConstraint
+                                                         : SkCanvas::kFast_SrcRectConstraint);
     canvas->restore();
   }
 
@@ -905,9 +926,11 @@ extern "C" bool gesher_surface_queue_size(jlong native_object, int* width, int* 
 }
 
 extern "C" bool gesher_surface_post(jlong native_object, int width, int height, int stride,
-                                    int64_t timestamp_ns, const uint32_t* pixels) {
+                                    int64_t timestamp_ns, const uint32_t* pixels,
+                                    int video_scaling_mode) {
   QueueSurface* queue = QueueOf(native_object);
-  return queue != nullptr && queue->PostFrame(width, height, stride, pixels, timestamp_ns);
+  return queue != nullptr && queue->PostFrame(width, height, stride, pixels, timestamp_ns,
+                                              video_scaling_mode);
 }
 
 extern "C" jlong gesher_surface_create_forwarding(int width, int height,
@@ -924,7 +947,7 @@ extern "C" jlong gesher_surface_create_forwarding(int width, int height,
     std::shared_ptr<const SurfaceFrame> frame = raw->Latest();
     if (frame != nullptr) {
       on_frame(owner.get(), self, frame->width, frame->height, frame->timestamp_ns,
-               frame->pixels.data());
+               frame->pixels.data(), frame->video_scaling_mode);
     }
   });
   raw->incStrong(reinterpret_cast<void*>(&gesher_surface_create_forwarding));

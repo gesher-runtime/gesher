@@ -6,11 +6,17 @@ public final class SchedulerWorkHost {
             gesher.services.JobSchedulerAdmissionTest.measure(Integer.parseInt(args[2]));
             return;
         }
-        if (!args[1].equals("constraints") && !args[1].equals("admission")) {
+        if (!args[1].equals("constraints") && !args[1].equals("admission") && !args[1].startsWith("content")) {
             gesher.services.SchedulerWorkContractTest.contracts(args[1], false);
         }
         if (args[1].equals("all") || args[1].equals("admission")) {
             gesher.services.JobSchedulerAdmissionTest.contracts(false);
+        }
+        if (args[1].equals("all") || args[1].equals("content")) {
+            gesher.services.JobSchedulerContentTriggerTest.contracts(false);
+        }
+        if (args[1].equals("all") || args[1].equals("content-work")) {
+            gesher.services.JobSchedulerContentTriggerTest.workload(args.length > 2 ? Integer.parseInt(args[2]) : 50);
         }
         if (args[1].equals("all") || args[1].equals("constraints")) {
             gesher.services.JobSchedulerConstraintContractTest.contracts();
