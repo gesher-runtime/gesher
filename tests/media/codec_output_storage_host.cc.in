@@ -1,0 +1,472 @@
+// Exact production output methods. JNI, decoder and window calls are explicit
+// test boundaries; the Windows videoapp supplies the real public-API gate.
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <deque>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "compat/media/video/video_decoder.h"
+using gesher::media::VideoFrame;
+
+int checks = 0, failures = 0;
+uint64_t copied_bytes = 0;
+bool baseline = false;
+thread_local bool fail_deferred_allocation = false;
+void* operator new[](size_t size, const std::nothrow_t&) noexcept {
+  if (fail_deferred_allocation) {
+    fail_deferred_allocation = false;
+    return nullptr;
+  }
+  return ::operator new[](size);
+}
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL codec output: %s\n", reason); }
+}
+void* CountedCopy(void* dst, const void* src, size_t size) {
+  copied_bytes += size;
+  return std::memcpy(dst, src, size);
+}
+
+using jint = int32_t;
+using jlong = int64_t;
+using jboolean = uint8_t;
+using jsize = int32_t;
+using jbyte = int8_t;
+using jclass = int;
+using jobject = void*;
+using jobjectArray = std::vector<jobject>*;
+using jbyteArray = std::vector<jbyte>*;
+constexpr jboolean JNI_FALSE = 0, JNI_TRUE = 1;
+struct ByteBuffer {
+  uint8_t* data;
+  size_t capacity;
+  bool read_only;
+  int position = 0, limit = 0;
+};
+struct BufferInfo { int offset = 0, size = 0, flags = 0; int64_t time_us = 0; };
+struct ImageResult { ByteBuffer* buffer = nullptr; int64_t timestamp = 0; };
+struct JNIEnv {
+  bool exception = false;
+  const char* exception_type = nullptr;
+  BufferInfo info;
+  ImageResult image;
+  int rect = 0;
+  std::vector<std::unique_ptr<ByteBuffer>> buffers;
+  std::vector<std::unique_ptr<std::vector<jbyte>>> arrays;
+  std::vector<std::unique_ptr<std::vector<jobject>>> object_arrays;
+  int PushLocalFrame(int) { return 0; }
+  jobject PopLocalFrame(jobject result) { return result; }
+  bool ExceptionCheck() { return exception; }
+  void DeleteLocalRef(jobject) {}
+  jbyteArray NewByteArray(jsize size) {
+    arrays.push_back(std::make_unique<std::vector<jbyte>>(size));
+    return arrays.back().get();
+  }
+  void SetByteArrayRegion(jbyteArray array, jsize start, jsize size, const jbyte* data) {
+    std::copy(data, data + size, array->begin() + start);
+  }
+  jobjectArray NewObjectArray(int count, int, jobject value) {
+    object_arrays.push_back(std::make_unique<std::vector<jobject>>(count, value));
+    return object_arrays.back().get();
+  }
+  void SetObjectArrayElement(jobjectArray a, int index, jobject value) { (*a)[index] = value; }
+  int GetStaticMethodID(int, const char*, const char*) { return 1; }
+  jobject CallStaticObjectMethod(int, int, jbyteArray array) { return array; }
+  jobject CallObjectMethod(jobject value, int, jobject) { return value; }
+  jobject NewObject(int, int) { return &info; }
+  jobject NewObject(int, int, int, int, int, int) { return &rect; }
+  jobject NewObject(int, int, jobject buffer, jobject, jboolean, jlong timestamp,
+                    int, int, jobject) {
+    image = {static_cast<ByteBuffer*>(buffer), timestamp};
+    return &image;
+  }
+  void CallVoidMethod(jobject object, int, int offset, int size, jlong time_us, int flags) {
+    *static_cast<BufferInfo*>(object) = {offset, size, flags, time_us};
+  }
+};
+struct {
+  int byte_buffer = 1, order = 1, rect = 1, rect_ctor = 1;
+  int media_image = 1, media_image_ctor = 1;
+  int buffer_info = 1, buffer_info_ctor = 1, buffer_info_set = 1;
+  jobject native_order = nullptr;
+} gJ;
+JNIEnv* AttachedEnv(const char*) { thread_local JNIEnv env; return &env; }
+void jniThrow(JNIEnv* env, const char* type, const char*) {
+  env->exception = true; env->exception_type = type;
+}
+jobject NewByteBuffer(JNIEnv* env, uint8_t* data, size_t size, bool read_only) {
+  env->buffers.push_back(std::make_unique<ByteBuffer>(ByteBuffer{data, size, read_only}));
+  return env->buffers.back().get();
+}
+void SetRange(JNIEnv*, jobject buffer, int start, int size) {
+  auto* b = static_cast<ByteBuffer*>(buffer);
+  b->position = start; b->limit = start + size;
+}
+struct ANativeWindow { int refs = 0; };
+struct Surface { ANativeWindow* window = nullptr; bool reader = false; };
+void ANativeWindow_release(ANativeWindow* window) { --window->refs; }
+ANativeWindow* ANativeWindow_fromSurface(JNIEnv*, jobject surface) {
+  auto* w = static_cast<Surface*>(surface)->window;
+  if (w) ++w->refs;
+  return w;
+}
+bool IsReaderSurface(JNIEnv*, jobject surface) { return static_cast<Surface*>(surface)->reader; }
+struct GlobalRef { GlobalRef(JNIEnv*, jobject) {} };
+constexpr int kSlots = 8, kCbOutputAvailable = 2, kFlagEndOfStream = 4;
+
+#define memcpy CountedCopy
+@SLOT_AND_COPY@
+class Codec {
+ public:
+  std::mutex mu_;
+  std::condition_variable cv_;
+  Slot outputs_[kSlots], inputs_[kSlots];
+  std::deque<int> ready_;
+  ANativeWindow* window_ = nullptr;
+  std::shared_ptr<GlobalRef> reader_;
+  bool released_ = false, fatal_ = false, quit_ = false, flush_requested_ = false;
+  bool async_ = false, output_known_ = false;
+  struct { bool video = true, encoder = false; } entry_;
+  struct { int width = 0, height = 0; } enc_params_;
+  void* input_surface_ = nullptr;
+  int out_width_ = 0, out_height_ = 0, callbacks = 0, callback_index = -1;
+  BufferInfo callback_info;
+  struct Metrics { int width = 0, height = 0; };
+  std::optional<Metrics> metrics_{Metrics{}};
+  ~Codec() { if (window_) ANativeWindow_release(window_); }
+  void OutputFormatIs(int w, int h) { out_width_ = w; out_height_ = h; output_known_ = true; }
+  void PostLocked(int event, int index, jobject info) {
+    Check(event == kCbOutputAvailable, "production Publish emits output callback");
+    ++callbacks; callback_index = index; callback_info = *static_cast<BufferInfo*>(info);
+  }
+  jobject InputBuffer(JNIEnv*, int) { return nullptr; }
+  @SET_SURFACE@
+  @HAS_SURFACE@
+  @INITIALIZED@
+  @OUTPUT_BUFFER@
+  @OUTPUT_IMAGE@
+  @BUFFERS@
+  @FREE_OUTPUT@
+  @PUBLISH@
+  @EMIT_FRAME@
+  @EMIT_EOS@
+
+  // Controlled consumer boundary. Production release/flush/reset ownership is
+  // separately exercised by test_media_surface_contracts and codec_lifecycle.
+  int Take() {
+    int i = ready_.front(); ready_.pop_front(); outputs_[i].client = true; return i;
+  }
+  void Release(int i) {
+    outputs_[i].client = false; outputs_[i].frame.reset(); cv_.notify_all();
+  }
+  size_t Capacity() const {
+    size_t result = 0;
+    for (const Slot& slot : outputs_) {
+      result += slot.mem.capacity();
+#if HAS_DEFERRED_OUTPUT
+      if (slot.deferred_mem != nullptr) result += static_cast<size_t>(slot.size);
+#endif
+    }
+    return result;
+  }
+};
+#undef memcpy
+
+uint8_t Y(int x, int y, int seed) { return static_cast<uint8_t>((x + 3 * y + seed) % 251); }
+uint8_t U(int x, int y, int seed) { return static_cast<uint8_t>((5 * x + 7 * y + seed + 64) % 253); }
+uint8_t V(int x, int y, int seed) { return static_cast<uint8_t>((11 * x + y + seed + 128) % 255); }
+std::shared_ptr<VideoFrame> Frame(int w, int h, int crop, int seed) {
+  auto f = std::make_shared<VideoFrame>();
+  f->width = w + crop + 3; f->height = h + crop + 3;
+  f->stride_y = f->width + 7; f->stride_uv = (f->width + 1) / 2 + 5;
+  f->crop_left = f->crop_top = crop;
+  f->crop_right = crop + w - 1; f->crop_bottom = crop + h - 1;
+  f->time_us = 1234567 + seed;
+  const size_t y_bytes = static_cast<size_t>(f->stride_y) * f->height;
+  const size_t c_bytes = static_cast<size_t>(f->stride_uv) * ((f->height + 1) / 2);
+  f->data.assign(y_bytes + 2 * c_bytes, 0xee);
+  for (int y = 0; y < f->height; ++y)
+    for (int x = 0; x < f->width; ++x)
+      f->data[static_cast<size_t>(y) * f->stride_y + x] = Y(x, y, seed);
+  for (int y = 0; y < (f->height + 1) / 2; ++y)
+    for (int x = 0; x < (f->width + 1) / 2; ++x) {
+      const size_t n = static_cast<size_t>(y) * f->stride_uv + x;
+      f->data[y_bytes + n] = U(x, y, seed);
+      f->data[y_bytes + c_bytes + n] = V(x, y, seed);
+    }
+  return f;
+}
+std::vector<uint8_t> Expected(int w, int h, int crop, int seed) {
+  std::vector<uint8_t> bytes;
+  for (int y = 0; y < h; ++y)
+    for (int x = 0; x < w; ++x) bytes.push_back(Y(x + crop, y + crop, seed));
+  for (int y = 0; y < (h + 1) / 2; ++y)
+    for (int x = 0; x < (w + 1) / 2; ++x) bytes.push_back(U(x + crop / 2, y + crop / 2, seed));
+  for (int y = 0; y < (h + 1) / 2; ++y)
+    for (int x = 0; x < (w + 1) / 2; ++x) bytes.push_back(V(x + crop / 2, y + crop / 2, seed));
+  return bytes;
+}
+void ConfigureSurface(Codec& codec, JNIEnv& env, Surface* surface) {
+  std::lock_guard lock(codec.mu_);
+  codec.SetSurfaceLocked(&env, surface);
+}
+bool Emit(Codec& codec, std::shared_ptr<VideoFrame> frame) {
+  std::unique_lock lock(codec.mu_);
+  return codec.EmitFrame(lock, std::move(frame));
+}
+void CheckBytes(ByteBuffer* buffer, const std::vector<uint8_t>& expected) {
+  Check(buffer != nullptr, "CPU accessor supplies a buffer");
+  if (!buffer) return;
+  Check(buffer->read_only && buffer->capacity >= expected.size(), "CPU view is read-only and large enough");
+  Check(std::equal(expected.begin(), expected.end(), buffer->data), "all visible I420 pixels match, without padding");
+}
+void PixelsAndModes() {
+  for (int mode = 0; mode < 3; ++mode)
+    for (auto [w, h] : {std::pair{1, 1}, {5, 3}, {6, 4}, {63, 31}, {320, 240}})
+      for (int crop : {0, 1, 2, 3}) {
+        JNIEnv env;
+        ANativeWindow window;
+        Surface native{&window, false}, reader{nullptr, true};
+        Codec codec;
+        ConfigureSurface(codec, env, mode == 1 ? &native : mode == 2 ? &reader : nullptr);
+        const auto expected = Expected(w, h, crop, 19);
+        auto f = Frame(w, h, crop, 19);
+        const auto input = f->data;
+        copied_bytes = 0;
+        Check(Emit(codec, f), "frame admitted");
+        int i = codec.Take();
+        Slot& slot = codec.outputs_[i];
+        Check(slot.frame == f && f->data == input, "the exact unmodified decoded frame remains owned");
+        Check(slot.offset == 0 && slot.size == static_cast<int>(expected.size())
+              && slot.time_us == f->time_us && slot.flags == 0, "BufferInfo metadata is preserved");
+        Check(codec.metrics_->width == w && codec.metrics_->height == h,
+              "metrics retain visible dimensions");
+        if (mode != 0) {
+          Check(codec.OutputBuffer(&env, i) == nullptr && codec.OutputImage(&env, i) == nullptr,
+                "Surface output has no CPU buffer or Image");
+          auto buffers = codec.Buffers(&env, false);
+          Check(std::all_of(buffers->begin(), buffers->end(), [](jobject p) { return p == nullptr; }),
+                "legacy Surface output buffer array contains only nulls");
+          Check(copied_bytes == (baseline ? expected.size() : 0), "Surface frame has no duplicate I420 copies");
+          Check(baseline || codec.Capacity() == 0, "Surface frame has no duplicate output-slot capacity");
+        } else {
+          auto* buffer = static_cast<ByteBuffer*>(codec.OutputBuffer(&env, i));
+          CheckBytes(buffer, expected);
+          Check(buffer->position == 0 && buffer->limit == slot.size, "ByteBuffer valid range preserved");
+          Check(codec.OutputImage(&env, i) != nullptr, "CPU output produces an Image");
+          CheckBytes(env.image.buffer, expected);
+          Check(env.image.timestamp == f->time_us * 1000, "Image timestamp unchanged");
+          int32_t info[26];
+          std::memcpy(info, env.arrays.back()->data(), sizeof(info));
+          const int cw = (w + 1) / 2, ch = (h + 1) / 2;
+          Check(info[2] == w && info[3] == h && info[6] == 0 && info[8] == w
+                && info[11] == w * h && info[13] == cw
+                && info[16] == w * h + cw * ch && info[18] == cw,
+                "Image plane geometry preserves odd sizes and tight strides");
+          Check(copied_bytes == expected.size(), "repeated CPU getters do not copy the frame again");
+        }
+        Check(codec.OutputBuffer(&env, -1) == nullptr && codec.OutputImage(&env, kSlots) == nullptr,
+              "invalid output indexes remain inaccessible");
+        std::weak_ptr<VideoFrame> weak = f;
+        f.reset();
+        Check(!weak.expired(), "client-held output keeps its frame alive");
+        codec.Release(i);
+        Check(weak.expired(), "consumer release can retire the frame");
+      }
+}
+void Transitions() {
+  JNIEnv env;
+  ANativeWindow one, two;
+  Surface native{&one, false}, replacement{&two, false}, reader{nullptr, true};
+  Codec codec;
+  Check(Emit(codec, Frame(9, 7, 2, 11)), "initial CPU frame admitted");
+  int i = codec.Take();
+  CheckBytes(static_cast<ByteBuffer*>(codec.OutputBuffer(&env, i)), Expected(9, 7, 2, 11));
+  codec.Release(i);
+  ConfigureSurface(codec, env, &native);
+  copied_bytes = 0;
+  auto f = Frame(5, 3, 1, 42);
+  Check(Emit(codec, f), "Surface frame reuses previous CPU slot");
+  i = codec.Take();
+  Check(baseline || codec.outputs_[i].mem.capacity() == 0, "Surface reuse retires earlier CPU storage");
+  ConfigureSurface(codec, env, &replacement);
+  Check(one.refs == 0 && two.refs == 1 && codec.outputs_[i].frame == f,
+        "surface replacement preserves held output and window references");
+  ConfigureSurface(codec, env, &reader);
+  Check(two.refs == 0 && codec.OutputBuffer(&env, i) == nullptr, "reader switch remains Surface output");
+  ConfigureSurface(codec, env, nullptr);
+  CheckBytes(static_cast<ByteBuffer*>(codec.OutputBuffer(&env, i)), Expected(5, 3, 1, 42));
+  Check(codec.OutputImage(&env, i) != nullptr, "detached output has its retained frame Image");
+  CheckBytes(env.image.buffer, Expected(5, 3, 1, 42));
+  Check(copied_bytes == Expected(5, 3, 1, 42).size(), "detached output materializes exactly once, without stale CPU pixels");
+  codec.Release(i);
+  ConfigureSurface(codec, env, &native);
+  Check(Emit(codec, Frame(17, 11, 3, 77)), "larger Surface frame after CPU transition");
+  i = codec.Take();
+  ConfigureSurface(codec, env, nullptr);
+  Check(codec.OutputImage(&env, i) != nullptr, "Image can be first accessor after detach");
+  CheckBytes(env.image.buffer, Expected(17, 11, 3, 77));
+  codec.Release(i);
+  for (bool async : {false, true}) {
+    codec.async_ = async;
+    ConfigureSurface(codec, env, &native);
+    Check(Emit(codec, Frame(4, 2, 0, 23)), "frame before EOS admitted");
+    i = async ? codec.callback_index : codec.Take();
+    Check(!async || (codec.callback_info.size == 12 && codec.callback_info.time_us == 1234590),
+          "asynchronous callback metadata unchanged");
+    codec.Release(i);
+    {
+      std::unique_lock lock(codec.mu_);
+      codec.EmitEos(lock, 7654321);
+    }
+    i = async ? codec.callback_index : codec.Take();
+    const Slot& eos = codec.outputs_[i];
+    Check(eos.frame == nullptr && eos.size == 0 && eos.flags == kFlagEndOfStream
+          && eos.time_us == 7654321, "EOS does not retain a stale decoded frame");
+    codec.Release(i);
+  }
+  codec.released_ = true;
+  Check(codec.OutputBuffer(&env, 0) == nullptr && env.exception, "released codec access still throws");
+}
+void Backpressure() {
+  JNIEnv env;
+  ANativeWindow window;
+  Surface surface{&window, false};
+  Codec codec;
+  ConfigureSurface(codec, env, &surface);
+  std::vector<std::weak_ptr<VideoFrame>> held;
+  for (int n = 0; n < kSlots; ++n) {
+    auto f = Frame(7, 5, 1, n);
+    held.push_back(f);
+    Check(Emit(codec, std::move(f)), "bounded output slot admitted");
+    Check(codec.Take() == n, "client-held outputs are not reused");
+  }
+  std::promise<void> entering;
+  auto entered = entering.get_future();
+  bool admitted = true;
+  auto ninth = Frame(7, 5, 1, 100);
+  std::weak_ptr<VideoFrame> pending = ninth;
+  std::thread producer([&codec, &entering, &admitted, f = std::move(ninth)]() mutable {
+    std::unique_lock lock(codec.mu_);
+    entering.set_value();
+    admitted = codec.EmitFrame(lock, std::move(f));
+  });
+  entered.get();
+  {
+    // Acquiring mu_ means FreeOutput has released it while waiting: no sleep
+    // or timing guess is used to assert the eight-slot admission boundary.
+    std::lock_guard lock(codec.mu_);
+    for (const auto& f : held) Check(!f.expired(), "blocked producer preserves every held frame");
+    Check(!pending.expired(), "blocked producer owns its pending frame");
+    codec.flush_requested_ = true;
+    codec.cv_.notify_all();
+  }
+  producer.join();
+  Check(!admitted && pending.expired(), "flush cancels blocked admission and releases pending frame");
+  for (int n = 0; n < kSlots; ++n) codec.Release(n);
+  for (const auto& f : held) Check(f.expired(), "held frame retires after its consumer releases");
+}
+void AllocationFailures() {
+#if HAS_DEFERRED_OUTPUT
+  // Fail only the production lazy allocation. The fake JNI boundary and all
+  // fixture setup still allocate normally, so this cannot mistake a setup
+  // failure for a correctly translated Java error.
+  for (int accessor : {0, 1, 2}) {
+    JNIEnv env;
+    ANativeWindow window;
+    Surface native{&window, false};
+    Codec codec;
+    ConfigureSurface(codec, env, &native);
+    auto frame = Frame(17, 11, 3, 99);
+    const auto expected = Expected(17, 11, 3, 99);
+    Check(Emit(codec, frame), "OOM fixture frame admitted");
+    int i = codec.Take();
+    ConfigureSurface(codec, env, nullptr);
+    copied_bytes = 0;
+    fail_deferred_allocation = true;
+    jobject result = accessor == 0 ? codec.OutputBuffer(&env, i)
+        : accessor == 1 ? codec.OutputImage(&env, i) : codec.Buffers(&env, false);
+    Check(!fail_deferred_allocation, "lazy allocation fault reached production");
+    Check(result == nullptr && env.exception && env.exception_type != nullptr
+          && std::string(env.exception_type) == "java/lang/OutOfMemoryError",
+          "native lazy allocation failure becomes Java OutOfMemoryError");
+    const Slot& slot = codec.outputs_[i];
+    Check(slot.mem.empty() && slot.deferred_mem == nullptr && copied_bytes == 0,
+          "failed allocation exposes no partial or stale CPU storage");
+    Check(slot.frame == frame && slot.client && slot.time_us == frame->time_us
+          && slot.size == static_cast<int>(expected.size()),
+          "allocation failure preserves owned frame and output metadata");
+    env.exception = false;
+    env.exception_type = nullptr;
+    CheckBytes(static_cast<ByteBuffer*>(codec.OutputBuffer(&env, i)), expected);
+    Check(codec.OutputImage(&env, i) != nullptr, "image accessor succeeds after memory recovers");
+    CheckBytes(env.image.buffer, expected);
+    Check(copied_bytes == expected.size(), "recovery materializes once");
+    codec.Release(i);
+    ConfigureSurface(codec, env, &native);
+    Check(Emit(codec, Frame(5, 3, 1, 2)), "slot reused after recovered allocation");
+    i = codec.Take();
+    Check(codec.Capacity() == 0, "Surface reuse releases recovered CPU allocation");
+    codec.Release(i);
+  }
+#endif
+}
+void Measure(int mode, int w, int h) {
+  JNIEnv env;
+  ANativeWindow window;
+  Surface native{&window, false}, reader{nullptr, true};
+  Codec codec;
+  ConfigureSurface(codec, env, mode == 1 ? &native : mode == 2 ? &reader : nullptr);
+  std::vector<std::shared_ptr<VideoFrame>> frames;
+  for (int n = 0; n < kSlots; ++n) frames.push_back(Frame(w, h, 0, n));
+  const size_t frame_bytes = static_cast<size_t>(w) * h
+      + 2 * static_cast<size_t>((w + 1) / 2) * ((h + 1) / 2);
+  // Warm all eight slots to separate the steady-state copy cost from growth.
+  for (const auto& f : frames) Check(Emit(codec, f), "benchmark warmup admitted");
+  for (int n = 0; n < kSlots; ++n) codec.Release(codec.Take());
+  copied_bytes = 0;
+  const auto start = std::chrono::steady_clock::now();
+  constexpr int count = 120;
+  for (int batch = 0; batch < count / kSlots; ++batch) {
+    for (const auto& f : frames) {
+      if (!Emit(codec, f)) std::abort();
+    }
+    for (int n = 0; n < kSlots; ++n) codec.Release(codec.Take());
+  }
+  const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - start).count();
+  const uint64_t expected = mode == 0 || baseline ? count * frame_bytes : 0;
+  Check(copied_bytes == expected, "measured frame-copy payload matches mode");
+  Check(mode == 0 || baseline || codec.Capacity() == 0, "measured Surface slots retain no duplicate capacity");
+  std::printf("MEASURE {\"mode\":\"%s\",\"width\":%d,\"height\":%d,\"frames\":%d,"
+              "\"frame_bytes\":%zu,\"copied_bytes\":%llu,\"slot_capacity_bytes\":%zu,"
+              "\"elapsed_us\":%lld}\n",
+              mode == 0 ? "cpu" : mode == 1 ? "window" : "reader", w, h, count, frame_bytes,
+              static_cast<unsigned long long>(copied_bytes), codec.Capacity(),
+              static_cast<long long>(elapsed));
+}
+int main(int argc, char** argv) {
+  baseline = argc > 1 && std::string(argv[1]) == "--baseline";
+  PixelsAndModes();
+  Transitions();
+  Backpressure();
+  AllocationFailures();
+  for (auto [w, h] : {std::pair{1280, 720}, {1920, 1080}, {3840, 2160}})
+    for (int mode = 0; mode < 3; ++mode) Measure(mode, w, h);
+  std::printf("codec output storage: %d checks, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

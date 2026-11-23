@@ -262,6 +262,32 @@ public final class RuntimePermissionStateTest {
         check(h.flags(AUDIO) == (USER_SET | USER_FIXED) && h.flags(CONTACTS) == USER_SET,
                 "microphone retry changed an unrelated contacts decision");
 
+        // PermissionController keeps a separate denial history for the
+        // foreground and background halves of a split permission group.
+        final int decisionFlags = USER_SET | USER_FIXED;
+        final int exempt = PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT;
+        h.reset();
+        h.flags(BACKGROUND, exempt);
+        h.request(deny, FINE);
+        h.request(deny, BACKGROUND);
+        check((h.flags(BACKGROUND) & decisionFlags) == USER_SET,
+                "Foreground denial fixed the first background decision");
+        check(h.state(BACKGROUND) == Context.PERMISSION_REQUEST_STATE_REQUESTABLE,
+                "First background denial remained unavailable");
+        h.request(deny, BACKGROUND);
+        check((h.flags(BACKGROUND) & decisionFlags) == decisionFlags,
+                "Repeated background denial failed to retain its own history");
+        h.reset();
+        h.flags(BACKGROUND, exempt);
+        h.request(deny, BACKGROUND);
+        h.request(deny, COARSE);
+        check((h.flags(COARSE) & decisionFlags) == USER_SET,
+                "Background denial fixed the first foreground decision");
+        h.request(deny, FINE);
+        check((h.flags(FINE) & decisionFlags) == decisionFlags,
+                "Fine and coarse lost their shared foreground denial history");
+        h.reset();
+
         // These definitions come through production PermissionCatalog from the
         // fixture's actual ParsedPermission declarations, on both host and ART.
         h.request(deny, CUSTOM_READ);

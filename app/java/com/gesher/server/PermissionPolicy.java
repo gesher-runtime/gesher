@@ -46,6 +46,11 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     // Keep that intermediate view tied to the exact APK generation, without retaining it
     // after removal. A replacement APK must never inherit this retirement marker.
     private final Map<ApkPackage, Boolean> mForgottenPackages = new WeakHashMap<>();
+    // Keyed by PM's immutable published map, never by a name, UID or timestamp.
+    // Retirement remains a separate live filter: an uninstall may be in progress
+    // before the package map is replaced, and a failed removal may restore it.
+    private Map<String, ApkPackage> mIndexedPackages;
+    private Map<Integer, List<ApkPackage>> mUidMembers = Map.of();
     private record AttributionOwner(String name, int uid, ApkPackage code) { }
     private record RegisteredAttribution(AttributionSourceState source, List<AttributionOwner> owners) { }
     private final Map<IBinder, RegisteredAttribution> mAttributions = new WeakHashMap<>();
@@ -140,7 +145,14 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                     && GmsSignatureSpoofing.isTrustedPackage(pkg);
         }
         List<ApkPackage> members = uidMembers(pkg.uid());
-        if (permissionState(pkg.uid(), name, members).granted) return true;
+        PermissionInfo info = mCatalog.get(name);
+        // A normal grant depends on the installed UID's manifest requests, not
+        // runtime decisions or flags. Flag queries still take the full path below.
+        if (info != null && (info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE)
+                == PermissionInfo.PROTECTION_NORMAL) {
+            return requestingTargetSdk(name, members) != Integer.MAX_VALUE;
+        }
+        if (permissionState(pkg.uid(), name, members, info).granted) return true;
         String fuller = fullerPermission(name);
         return fuller != null && permissionState(pkg.uid(), fuller, members).granted;
     }
@@ -153,7 +165,11 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     private synchronized PermissionState permissionState(int uid, String name, List<ApkPackage> members) {
-        PermissionInfo info = mCatalog.get(name);
+        return permissionState(uid, name, members, mCatalog.get(name));
+    }
+
+    private PermissionState permissionState(int uid, String name, List<ApkPackage> members,
+            PermissionInfo info) {
         if (info == null) return new PermissionState(false, 0, false);
         int targetSdk = requestingTargetSdk(name, members);
         if (targetSdk == Integer.MAX_VALUE) return new PermissionState(false, 0, false);
@@ -281,10 +297,28 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         }
     }
 
+    synchronized void invalidatePackageIndex() {
+        mIndexedPackages = null;
+        mUidMembers = Map.of();
+        mCatalog.invalidateDeclarations();
+    }
+
     private synchronized List<ApkPackage> uidMembers(int uid) {
+        Map<String, ApkPackage> packages = mPm.packageSnapshot();
+        if (mIndexedPackages != packages) {
+            Map<Integer, List<ApkPackage>> indexed = new LinkedHashMap<>();
+            for (ApkPackage pkg : packages.values()) {
+                indexed.computeIfAbsent(pkg.uid(), unused -> new ArrayList<>()).add(pkg);
+            }
+            indexed.replaceAll((key, value) -> List.copyOf(value));
+            mUidMembers = indexed;
+            mIndexedPackages = packages;
+        }
+        List<ApkPackage> indexed = mUidMembers.getOrDefault(uid, List.of());
+        if (mForgottenPackages.isEmpty()) return indexed;
         List<ApkPackage> members = new ArrayList<>();
-        for (ApkPackage pkg : mPm.packages()) {
-            if (pkg.uid() == uid && !mForgottenPackages.containsKey(pkg)) members.add(pkg);
+        for (ApkPackage pkg : indexed) {
+            if (!mForgottenPackages.containsKey(pkg)) members.add(pkg);
         }
         return members;
     }
@@ -350,7 +384,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         for (PermissionInfo info : mCatalog.permissions().values()) {
             int target = requestingTargetSdk(info.name, members);
             if (!info.isRuntime() || target == Integer.MAX_VALUE) continue;
-            states.put(info.name, new RuntimeState(permissionState(uid, info.name, members),
+            states.put(info.name, new RuntimeState(permissionState(uid, info.name, members, info),
                     storedLegacyGrant(uid, info.name, info, target),
                     "granted".equals(runtimeDecisionForUid(uid, info.name, members))));
         }
@@ -382,10 +416,11 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     /** Reconcile the runtime grant flags, once, when the requesting APK is published. */
-    private void reconcileRuntimeState(int uid, String permission, RuntimeState old, List<ApkPackage> members) {
-        PermissionInfo info = mCatalog.get(permission);
+    private void reconcileRuntimeState(int uid, PermissionInfo info, RuntimeState old, List<ApkPackage> members) {
+        if (info == null || !info.isRuntime()) return;
+        String permission = info.name;
         int target = requestingTargetSdk(permission, members);
-        if (info == null || !info.isRuntime() || target == Integer.MAX_VALUE) return;
+        if (target == Integer.MAX_VALUE) return;
         if (old == null) old = new RuntimeState(new PermissionState(false, 0, false), false, false);
         int implicit = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED | PackageManager.FLAG_PERMISSION_REVOKE_WHEN_REQUESTED;
         int flags = old.access.flags;
@@ -425,13 +460,20 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     /** Boot admission re-evaluates saved flags against the installed requesting packages. */
     synchronized void initializePackages() {
         Properties saved = new Properties(); saved.putAll(mDecisions);
+        // Definitions do not change while the initial admitted set is reconciled.
+        // Rebuilding the entire catalogue for each UID multiplies package scans.
+        Map<String, PermissionInfo> permissions = mCatalog.permissions();
         java.util.Set<Integer> seen = new java.util.HashSet<>();
         for (ApkPackage pkg : mPm.packages()) {
             if (!seen.add(pkg.uid())) continue;
             List<ApkPackage> members = uidMembers(pkg.uid());
             trimUidState(pkg.uid(), members);
-            for (PermissionInfo info : mCatalog.permissions().values()) {
-                if (!info.isRuntime() || requestingTargetSdk(info.name, members) == Integer.MAX_VALUE) continue;
+            java.util.Set<String> requested = new java.util.LinkedHashSet<>();
+            for (ApkPackage member : members) requested.addAll(member.parsed.getRequestedPermissions());
+            for (String permission : requested) {
+                PermissionInfo info = permissions.get(permission);
+                if (info == null || !info.isRuntime()
+                        || requestingTargetSdk(info.name, members) == Integer.MAX_VALUE) continue;
                 String decision = runtimeDecisionForUid(pkg.uid(), info.name, members);
                 String storedFlags = mDecisions.getProperty(flagsKey(pkg.uid(), info.name));
                 String storedLegacy = mDecisions.getProperty(legacyGrantKey(pkg.uid(), info.name));
@@ -448,7 +490,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                     old = new RuntimeState(new PermissionState(legacy || granted && !(restricted && info.isHardRestricted()),
                             flags, restricted), legacy, granted);
                 }
-                reconcileRuntimeState(pkg.uid(), info.name, old, members);
+                reconcileRuntimeState(pkg.uid(), info, old, members);
             }
         }
         if (!saved.equals(mDecisions)) scheduleWrite();
@@ -473,7 +515,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             List<ApkPackage> members = uidMembers(snapshot.uid);
             trimUidState(snapshot.uid, members);
             if (snapshot.uid == pkg.uid()) for (String permission : pkg.parsed.getRequestedPermissions()) {
-                reconcileRuntimeState(snapshot.uid, permission, snapshot.permissions.get(permission), members);
+                reconcileRuntimeState(snapshot.uid, mCatalog.get(permission), snapshot.permissions.get(permission), members);
             }
             List<String> revoked = new ArrayList<>();
             for (var entry : snapshot.permissions.entrySet()) {
@@ -677,11 +719,14 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             List<ApkPackage> members = uidMembers(expected.uid());
             Map<String, PermissionState> pending = new LinkedHashMap<>();
             Map<String, Boolean> previouslySet = new LinkedHashMap<>();
+            java.util.Set<String> background = allowed ? java.util.Set.of()
+                    : RuntimePermissionGroups.backgroundPermissions(mCatalog.permissions());
             for (String name : permissions) {
                 if (!canRequest(expected.packageName, name) || granted(name, expected.packageName)) continue;
                 PermissionInfo info = mCatalog.get(name);
                 pending.put(name, permissionState(expected.uid(), name, members));
-                // Snapshot the entire group's history before mutating any permission.
+                if (allowed) continue;
+                // Snapshot this foreground/background subgroup's history before mutating it.
                 // Two names in a first request must not count as two user denials.
                 boolean userSet = false;
                 String group = RuntimePermissionGroups.group(info);
@@ -689,7 +734,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                     PermissionInfo other = mCatalog.get(requested);
                     boolean sameGroup = other != null && other.isRuntime() && (name.equals(requested)
                             || group != null && group.equals(RuntimePermissionGroups.group(other))
-                            && java.util.Objects.equals(info.packageName, other.packageName));
+                            && java.util.Objects.equals(info.packageName, other.packageName)
+                            && background.contains(name) == background.contains(requested));
                     if (sameGroup && (permissionState(expected.uid(), requested, members).flags
                             & PackageManager.FLAG_PERMISSION_USER_SET) != 0) userSet = true;
                 }
@@ -879,7 +925,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         synchronized (mPm) { synchronized (this) {
             if (expected != null && (mPm.get(expected.packageName) != expected
                     || mPm.isRemovalPending(expected.packageName))) return false;
-            List<ApkPackage> members = uidMembers(uid);
+            List<ApkPackage> members = new ArrayList<>(uidMembers(uid));
             members.removeIf(member -> mPm.isRemovalPending(member.packageName));
             if (members.isEmpty()) return false;
             Map<Integer, Integer> before = runtimeModes(uid);

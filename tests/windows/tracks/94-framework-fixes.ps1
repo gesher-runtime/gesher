@@ -23,6 +23,15 @@ Check 'network: Android HttpEngine requests over real ART and HTTP sockets' {
   $httpEngineOut
 } @('HttpEngineDeviceSmoke passed:')
 
+foreach ($httpCacheTest in @('HttpEngineCacheTest', 'HttpEngineConnectionLifetimeTest', 'HttpEngineReadBufferTest')) {
+  $httpCacheOut = FixesRun ($dvmFixes + $httpCacheTest) 90
+  $httpCacheCode = $LASTEXITCODE
+  Check "network: $httpCacheTest real-provider contracts on ART" {
+    if ($httpCacheCode -ne 0) { throw "HTTP engine contract failed: $httpCacheOut" }
+    $httpCacheOut
+  } @("${httpCacheTest} passed:")
+}
+
 foreach ($httpPolicyMode in @('ordinary', 'global-enabled', 'global-disabled')) {
   $httpPolicyOut = FixesRun ($dvmFixes + 'HttpEngineProtocolPolicyTest' + $httpPolicyMode) 45
   $httpPolicyCode = $LASTEXITCODE
@@ -39,7 +48,7 @@ Check 'network: HTTP/2 full duplex, direct buffers, flush and gRPC trailers' {
   $http2Out
 } @('Http2DeviceSmoke passed:')
 
-$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'disabled')
+$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'large', 'cancel', 'disabled', 'sessions')
 foreach ($http2ContractMode in $http2ContractModes) {
   $http2ContractOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + $http2ContractMode) 45
   $http2ContractCode = $LASTEXITCODE
@@ -48,6 +57,13 @@ foreach ($http2ContractMode in $http2ContractModes) {
     $http2ContractOut
   } @('Http2DeviceSmoke passed:')
 }
+
+$http2CreditOut = FixesRun ($dvmFixes + 'Http2CreditContracts') 45
+$http2CreditCode = $LASTEXITCODE
+Check 'network: HTTP/2 returns discarded receive credit exactly once' {
+  if ($http2CreditCode -ne 0) { throw "HTTP/2 receive credit failed: $http2CreditOut" }
+  $http2CreditOut
+} @('Http2CreditContracts: 55 checks, 0 failures; in-memory only, max DATA 1025 bytes')
 
 $http2GzipOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + 'gzip') 45
 $http2GzipCode = $LASTEXITCODE
@@ -400,7 +416,7 @@ $appOpsCode = $LASTEXITCODE
 Check 'services: AppOps defaults, authority, attributed delivery, foreground lifecycle and signed persistence' {
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
-} @('AppOpsContractTest all passed: 482 checks; binder=true')
+} @('AppOpsContractTest all passed: 489 checks; binder=true')
 
 $permissionStateOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'RuntimePermissionStateTest') 90

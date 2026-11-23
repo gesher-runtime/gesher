@@ -23,6 +23,7 @@
 #include <math.h>
 #include <mntent.h>
 #include <pthread.h>
+#include <regex.h>
 #include <search.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -60,6 +61,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "epoll_nested_test.inc"
 #include "event_loop_contract_test.inc"
 #include "allocation_test.inc"
+#include "memmem_test.inc"
 #include "system_contract_test.inc"
 #include "socket_control_test.inc"
 #include "socket_timeout_contract_test.inc"
@@ -76,10 +78,13 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "ordinary_os_contract_test.inc"
 #include "sendfile_contract_test.inc"
 #include "freopen_mode_contract_test.inc"
+#include "file_description_contract_test.inc"
+#include "stdio_ofd_contract.inc"
 #include "statvfs_contract_test.inc"
 #include "sleep_contract_test.inc"
 #include "bionic_signal_range_contracts.h"
 #include "stream_device_contract_test.inc"
+#include "regex_scaling_contract.inc"
 
 // --- memory and strings -------------------------------------------------------
 
@@ -946,11 +951,15 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_ordinary_os_contracts();
   test_sendfile_contracts();
   test_freopen_mode_contracts();
+  test_file_description_contracts();
+  test_stdio_ofd_contracts();
   test_statvfs_contracts();
   test_sleep_contracts();
   test_timerfd_syscalls();
   test_strings();
+  test_memmem_contracts();
   test_fnmatch();
+  test_regex_scaling_contracts(regcomp, regexec, regfree);
   test_getrlimit_fault();
   test_ctype_table();
   test_urandom_stdio();

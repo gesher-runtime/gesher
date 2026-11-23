@@ -19,6 +19,10 @@ package com.gesher.server;
 import android.Manifest;
 import android.content.pm.PermissionInfo;
 import android.permission.flags.Flags;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import static android.Manifest.permission.*;
 
 /**
@@ -36,6 +40,20 @@ final class RuntimePermissionGroups {
         // permissions retain their declared group (and their defining owner).
         String declared = permission.group;
         return declared == null || "android.permission-group.UNDEFINED".equals(declared) ? null : declared;
+    }
+
+    /** Android classifies background grants by their foreground permission's definition. */
+    static Set<String> backgroundPermissions(Map<String, PermissionInfo> definitions) {
+        Set<String> background = new HashSet<>();
+        for (PermissionInfo foreground : definitions.values()) {
+            if (!foreground.isRuntime() || foreground.backgroundPermission == null) continue;
+            PermissionInfo other = definitions.get(foreground.backgroundPermission);
+            if (other != null && other.isRuntime()
+                    && Objects.equals(foreground.packageName, other.packageName)) {
+                background.add(other.name);
+            }
+        }
+        return background;
     }
 
     private static String platformGroup(String permission) {

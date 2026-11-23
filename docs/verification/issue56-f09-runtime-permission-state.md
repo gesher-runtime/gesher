@@ -20,7 +20,7 @@ host consent consumers retain their boolean interface and accept only Allow.
 | Current state / choice | Permission result | User-choice flags | Rationale |
 | --- | --- | --- | --- |
 | Untouched / first explicit Deny | Denied | `USER_SET` | True |
-| Previously set permission group / explicit Deny | Denied | `USER_SET`, `USER_FIXED` | False |
+| Previously set foreground or background subgroup / explicit Deny | Denied | `USER_SET`, `USER_FIXED` | False |
 | Requestable / explicit Allow | Granted | `USER_SET` | False |
 | User-, policy-, or system-fixed denial / request | Denied without a prompt | Unchanged | False |
 | Any denied state / dismissal or unavailable UI | Denied | Unchanged | Unchanged |
@@ -35,8 +35,10 @@ Logical platform groups come from Android 16 PermissionController's
 `PermissionMapping`, not `PermissionInfo.group`: the framework manifest exposes
 the same raw `android.permission-group.UNDEFINED` value for camera, contacts,
 microphone, and other unrelated permissions. That placeholder cannot share
-denial history. Valid custom groups retain both their declared name and their
-defining package identity. `RuntimePermissionGroups` adapts AOSP's mapping and
+denial history. Foreground and background decisions use separate histories
+within a logical group. The background subgroup follows the corresponding
+foreground definitions' `backgroundPermission` links. Valid custom groups
+retain both their declared name and their defining package identity. `RuntimePermissionGroups` adapts AOSP's mapping and
 retains its Apache-2.0 notice.
 
 The public request-state query and host-dialog eligibility remain distinct. A
