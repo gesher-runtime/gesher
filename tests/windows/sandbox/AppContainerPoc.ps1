@@ -194,7 +194,8 @@ try {
 Write-Host "== app processes seen"
 foreach ($k in $watch.Keys) { Write-Host "pid $k : $($watch[$k])" }
 Write-Host "== logs ($Root/logs)"
-foreach ($f in Get-ChildItem (Join-Path $Root 'logs') -File -Filter '*.log' -Recurse -ErrorAction SilentlyContinue) {
+foreach ($f in Get-ChildItem (Join-Path $Root 'logs') -File -Recurse -ErrorAction SilentlyContinue |
+    Where-Object Extension -eq '.log') {
   Write-Host "--- $($f.Name)"
   Get-Content $f.FullName -Tail 80 | Write-Host
 }

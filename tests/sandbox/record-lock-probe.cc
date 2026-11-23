@@ -10,8 +10,10 @@
 #include <array>
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include "exec_spawn.h"
 #include "services_zygote.h"
@@ -303,7 +305,16 @@ int ReadPinnedSource(const fs::path& dir) {
   if (first >= 0) close(first);
   if (second >= 0) close(second);
   if (writable >= 0) close(writable);
-  return Check(okay, "enrolled source uses real bytes and independent read-only handles") ? 0 : 1;
+  if (!Check(okay, "enrolled source uses real bytes and independent read-only handles")) return 1;
+  static constexpr char expected[] = "scoped input bytes";
+  std::array<char, sizeof(expected) - 1> input{};
+  if (!Check(read(STDIN_FILENO, input.data(), input.size()) == input.size() &&
+             std::memcmp(input.data(), expected, input.size()) == 0,
+             "scoped app reads the original redirected stdin")) return 1;
+  Mark("scoped guest stdout");
+  std::fputs("scoped guest stderr\n", stderr);
+  std::fflush(stderr);
+  return 0;
 }
 
 int ScopedServer(const fs::path& dir) {
@@ -332,16 +343,30 @@ int ScopedServer(const fs::path& dir) {
 
 int ScopedSupervisor(const fs::path& runtime, const fs::path& dir) {
   const auto device = U16(dir.filename().native()) + u"-scoped";
+  const auto input_path = dir / L"scoped-input";
+  std::ofstream(input_path, std::ios::binary) << "scoped input bytes";
+  HANDLE input = CreateFileW(input_path.c_str(), GENERIC_READ, kSharing, nullptr,
+                             OPEN_EXISTING, 0, nullptr);
+  HANDLE error = CreateFileW((dir / L"scoped-supervisor.err").c_str(), GENERIC_WRITE,
+                             kSharing, nullptr, CREATE_NEW, 0, nullptr);
+  if (input == INVALID_HANDLE_VALUE || error == INVALID_HANDLE_VALUE) return 1;
+  const HANDLE stdin_handle = GetStdHandle(STD_INPUT_HANDLE);
+  const HANDLE stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
+  if (!SetStdHandle(STD_INPUT_HANDLE, input) || !SetStdHandle(STD_ERROR_HANDLE, error)) return 1;
   const auto children = launch::StartProtectedDevice(device,
       {Quote(runtime / L"binderd.exe"), Quote(runtime / L"servicemanager.exe"),
        Quote(fs::path(launch::ExePath())) + u" --scoped-server " + Quote(dir)},
       {U16((dir / L"scoped-binder.log").native()), U16((dir / L"scoped-manager.log").native()),
        U16((dir / L"scoped-server.log").native())},
       {u"GESHER_BINDER=" + device}, true);
+  SetStdHandle(STD_INPUT_HANDLE, stdin_handle);
+  SetStdHandle(STD_ERROR_HANDLE, stderr_handle);
+  CloseHandle(input);
+  CloseHandle(error);
   if (children.size() != 3 || !WaitMarker(children[2], dir / L"scoped-server.log", "scoped server ready")) {
     return 1;
   }
-  std::printf("%d %d %d\n", children[0], children[1], children[2]);
+  std::printf("scoped-actors %d %d %d\n", children[0], children[1], children[2]);
   std::fflush(stdout);
   Sleep(INFINITE);
   return 1;
@@ -356,7 +381,15 @@ bool CheckScopedDevice(const fs::path& runtime, const fs::path& dir, const fs::p
   const auto deadline = GetTickCount64() + 10000;
   do {
     std::ifstream source(scope_log);
-    if (source >> pids[0] >> pids[1] >> pids[2]) break;
+    std::string line;
+    while (std::getline(source, line)) {
+      if (line.starts_with("scoped-actors ")) {
+        std::istringstream roles(line.substr(14));
+        if (roles >> pids[0] >> pids[1] >> pids[2]) break;
+        pids = {};
+      }
+    }
+    if (pids[2] != 0) break;
     pids = {};
     Sleep(20);
   } while (GetTickCount64() < deadline && launch::ExitCode(supervisor) == STILL_ACTIVE);
@@ -372,7 +405,11 @@ bool CheckScopedDevice(const fs::path& runtime, const fs::path& dir, const fs::p
           == WAIT_OBJECT_0;
   for (HANDLE process : processes) if (process != nullptr) CloseHandle(process);
   launch::DeleteAppContainer(Profile(dir, L"pinned"));
-  return Check(stopped, "scoped device job exits after its exact supervisor dies");
+  return Check(stopped, "scoped device job exits after its exact supervisor dies") &&
+      Check(Contains(scope_log, "scoped guest stdout") &&
+            !Contains(scope_log, "scoped guest stderr") &&
+            Contains(dir / L"scoped-supervisor.err", "scoped guest stderr"),
+            "scoped output preserves distinct inherited streams");
 }
 }  // namespace
 

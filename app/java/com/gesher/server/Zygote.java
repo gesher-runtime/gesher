@@ -36,6 +36,7 @@ public final class Zygote {
             String[] capabilities);
     private static native int[] nativeStartProtectedDevice(String device, String[] commands,
             String[] logs, String[] environment, boolean scoped);
+    public static native void finishScopedStandardStreams();
     static native boolean nativeHasProtectedLaunchAuthority(boolean scoped);
     public static native boolean nativePrepareProtectedOperator(int brokerPid, long birth);
     private static native int nativeSpawnProtectedApp(String commandLine, String[] setEnv,

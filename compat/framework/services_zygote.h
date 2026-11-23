@@ -40,9 +40,13 @@ int SpawnInAppContainer(const std::u16string& command_line,
 
 // Start the broker, service manager and server as one device bootstrap.
 // Only the broker and server inherit their respective private control handles.
+// A scoped device retains the actual launcher lifetime and lends its streams
+// once, to the first application started with a pinned source.
 std::vector<int> StartProtectedDevice(const std::u16string& device,
     const std::vector<std::u16string>& commands, const std::vector<std::u16string>& logs,
     const std::vector<std::u16string>& environment, bool scoped = false);
+// After a scoped device ends, drain any launcher-side console byte relays.
+void FinishScopedStandardStreams();
 
 // A protected SystemServer must enroll the actual contained child before it
 // runs. The install UUID and UID come from the server's durable package data.

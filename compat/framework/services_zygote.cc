@@ -50,7 +50,77 @@ struct Enrollment {
 struct DeviceLifetime {
   uint64_t job = 0;
   uint64_t supervisor = 0;
+  std::array<uint64_t, 3> stdio{};
 };
+
+using StandardHandles = std::array<peer::OwnedHandle, 3>;
+
+struct StandardRelay {
+  peer::OwnedHandle input;
+  peer::OwnedHandle output;
+};
+
+DWORD WINAPI RelayStandardStream(void* data) {
+  std::unique_ptr<StandardRelay> relay(static_cast<StandardRelay*>(data));
+  char bytes[4096];
+  DWORD size;
+  while (ReadFile(relay->input.get(), bytes, sizeof(bytes), &size, nullptr) && size != 0) {
+    DWORD offset = 0;
+    while (offset < size) {
+      DWORD written = 0;
+      if (!WriteFile(relay->output.get(), bytes + offset, size - offset, &written, nullptr) ||
+          written == 0) return 0;
+      offset += written;
+    }
+  }
+  return 0;
+}
+
+bool OpenScopedStandardHandles(StandardHandles* destination, StandardHandles* relays) {
+  constexpr DWORD kStreams[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+  for (size_t i = 0; i < destination->size(); ++i) {
+    const HANDLE original = GetStdHandle(kStreams[i]);
+    if (original == nullptr || original == INVALID_HANDLE_VALUE) {
+      auto& result = (*destination)[i];
+      result.reset(CreateFileW(L"NUL", i == 0 ? GENERIC_READ : GENERIC_WRITE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+      if (result.get() == INVALID_HANDLE_VALUE) return false;
+      continue;
+    }
+    DWORD mode;
+    HANDLE standard = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), original, GetCurrentProcess(), &standard,
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) return false;
+    peer::OwnedHandle copy(standard);
+    if (!GetConsoleMode(original, &mode)) {
+      (*destination)[i] = std::move(copy);
+      continue;
+    }
+    // Console handles cannot be used by a detached app. Relay the caller's
+    // bytes within its own console and send only the appropriate pipe endpoint.
+    HANDLE read = nullptr;
+    HANDLE write = nullptr;
+    if (!CreatePipe(&read, &write, nullptr, 0)) return false;
+    peer::OwnedHandle reader(read), writer(write);
+    auto relay = std::make_unique<StandardRelay>();
+    if (i == 0) {
+      relay->input = std::move(copy);
+      relay->output = std::move(writer);
+      (*destination)[i] = std::move(reader);
+    } else {
+      relay->input = std::move(reader);
+      relay->output = std::move(copy);
+      (*destination)[i] = std::move(writer);
+    }
+    auto* context = relay.release();
+    (*relays)[i].reset(CreateThread(nullptr, 0, RelayStandardStream, context, 0, nullptr));
+    if (!(*relays)[i]) {
+      delete context;
+      return false;
+    }
+  }
+  return true;
+}
 
 struct StandaloneInput {
   peer::OwnedHandle file;
@@ -105,6 +175,7 @@ bool EnrollProcess(const Enrollment& enrollment, HANDLE process,
 
 std::mutex g_lock;
 std::mutex g_bootstrap_lock;  // one publisher for the private control stream
+StandardHandles g_scoped_relays;
 std::map<int, HANDLE> g_children;  // processes this one started, for their exit codes
 HANDLE g_job = nullptr;
 
@@ -258,7 +329,8 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
               bool breakaway, const AppContainerSpec* sandbox,
               const BootstrapHandles* bootstrap = nullptr,
               const Enrollment* enrollment = nullptr, HANDLE lifetime_job = nullptr,
-              std::unique_ptr<PinnedChildInput> pinned_input = nullptr) {
+              std::unique_ptr<PinnedChildInput> pinned_input = nullptr,
+              const StandardHandles* stdio = nullptr) {
   Container container;
   if (sandbox != nullptr) {
     DWORD error = PrepareContainer(*sandbox, &container);
@@ -284,10 +356,12 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
     CloseHandle(log);
     return -static_cast<int>(error);
   }
-  std::vector<HANDLE> handles{log, nul};
+  std::vector<HANDLE> handles{nul};
+  if (stdio == nullptr) handles.push_back(log);
   peer::OwnedHandle inherited_channel;
   peer::OwnedHandle inherited_broker;
   peer::OwnedHandle inherited_job_delivery;
+  StandardHandles inherited_stdio;
   launch::Startup record;
   if (bootstrap != nullptr) {
     auto make_inheritable = [](HANDLE source) -> peer::OwnedHandle {
@@ -327,6 +401,17 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
         record.code_name = launch::EncodeHandle(source.name.get());
       }
     }
+    if (stdio != nullptr) {
+      for (size_t i = 0; i < inherited_stdio.size(); ++i) {
+        inherited_stdio[i] = make_inheritable((*stdio)[i].get());
+        if (!inherited_stdio[i]) {
+          CloseHandle(nul);
+          CloseHandle(log);
+          return -ERROR_INVALID_HANDLE;
+        }
+        handles.push_back(inherited_stdio[i].get());
+      }
+    }
   }
   SIZE_T size = 0;
   InitializeProcThreadAttributeList(nullptr, attribute_count, 0, &size);
@@ -351,9 +436,9 @@ int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> se
     STARTUPINFOEXW si = {};
     si.StartupInfo.cb = sizeof(si);
     si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    si.StartupInfo.hStdInput = nul;
-    si.StartupInfo.hStdOutput = log;
-    si.StartupInfo.hStdError = log;
+    si.StartupInfo.hStdInput = stdio != nullptr ? inherited_stdio[0].get() : nul;
+    si.StartupInfo.hStdOutput = stdio != nullptr ? inherited_stdio[1].get() : log;
+    si.StartupInfo.hStdError = stdio != nullptr ? inherited_stdio[2].get() : log;
     if (bootstrap != nullptr) {
       si.StartupInfo.lpReserved2 = reinterpret_cast<BYTE*>(&record);
       si.StartupInfo.cbReserved2 = sizeof(record);
@@ -476,6 +561,8 @@ std::vector<int> StartProtectedDevice(const std::u16string& device,
       self.principal.container.size != 0 || self.principal.integrity < SECURITY_MANDATORY_MEDIUM_RID) {
     return {};
   }
+  StandardHandles stdio;
+  if (scoped && !OpenScopedStandardHandles(&stdio, &g_scoped_relays)) return {};
 
   peer::OwnedHandle lifetime_job(CreateLifetimeJob());
   if (!lifetime_job) return {};
@@ -541,29 +628,50 @@ std::vector<int> StartProtectedDevice(const std::u16string& device,
 
   // The launcher owns the only job handle while the system server is suspended.
   // Deliver a non-inheritable copy to that exact running child, then drop ours.
-  HANDLE remote_job = nullptr;
-  HANDLE remote_supervisor = nullptr;
+  DeviceLifetime delivered;
+  bool copied = false;
   {
     std::lock_guard<std::mutex> lock(g_lock);
     auto child = g_children.find(system);
     if (child != g_children.end()) {
-      DuplicateHandle(GetCurrentProcess(), lifetime_job.get(), child->second, &remote_job,
-                      0, FALSE, DUPLICATE_SAME_ACCESS);
+      auto to_child = [&](HANDLE local, DWORD rights, DWORD flags, uint64_t* remote) {
+        HANDLE copy = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), local, child->second, &copy, rights, FALSE,
+                             flags)) return false;
+        *remote = launch::EncodeHandle(copy);
+        return true;
+      };
+      copied = to_child(lifetime_job.get(), 0, DUPLICATE_SAME_ACCESS, &delivered.job);
       if (scoped) {
-        DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), child->second,
-                        &remote_supervisor, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
-                        FALSE, 0);
+        copied = copied && to_child(GetCurrentProcess(),
+            SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, &delivered.supervisor);
+        for (size_t i = 0; copied && i < stdio.size(); ++i) {
+          copied = to_child(stdio[i].get(), 0, DUPLICATE_SAME_ACCESS, &delivered.stdio[i]);
+        }
       }
     }
   }
-  DeviceLifetime delivered{launch::EncodeHandle(remote_job),
-                           launch::EncodeHandle(remote_supervisor)};
-  if (remote_job == nullptr || (scoped && remote_supervisor == nullptr) ||
-      !launch::Transfer(job_writer.get(), &delivered, sizeof(delivered), true)) {
+  if (!copied || !launch::Transfer(job_writer.get(), &delivered, sizeof(delivered), true)) {
     TerminateJobObject(lifetime_job.get(), ERROR_ACCESS_DENIED);
     return {};
   }
   return {broker, manager, system};
+}
+
+void FinishScopedStandardStreams() {
+  StandardHandles relays;
+  {
+    std::lock_guard<std::mutex> lock(g_bootstrap_lock);
+    relays = std::move(g_scoped_relays);
+  }
+  if (relays[0]) CancelSynchronousIo(relays[0].get());
+  // The supervisor still owns its end of the real console. Drain both
+  // output pipes once the temporary job's inherited writers have closed.
+  for (size_t i = 1; i < relays.size(); ++i) {
+    if (relays[i] && WaitForSingleObject(relays[i].get(), 5000) == WAIT_TIMEOUT) {
+      CancelSynchronousIo(relays[i].get());
+    }
+  }
 }
 
 namespace {
@@ -572,6 +680,7 @@ struct Writer {
   peer::OwnedHandle channel;
   peer::OwnedHandle broker;
   bool scoped = false;
+  StandardHandles stdio;
   std::map<std::array<uint8_t, 16>, peer::OwnedHandle> installations;
   std::map<std::array<uint8_t, 16>, uint64_t> stopped_through;
 };
@@ -600,6 +709,11 @@ Writer ReadWriter() {
   peer::OwnedHandle job(launch::DecodeHandle(delivered.job));
   peer::OwnedHandle supervisor(launch::DecodeHandle(delivered.supervisor));
   writer.scoped = delivered.supervisor != 0;
+  for (size_t i = 0; i < writer.stdio.size(); ++i) {
+    const bool has_streams = delivered.stdio[0] != 0;
+    if ((delivered.stdio[i] != 0) != has_streams || (has_streams && !writer.scoped)) return {};
+    writer.stdio[i].reset(launch::DecodeHandle(delivered.stdio[i]));
+  }
   BOOL in_job = FALSE;
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
   if (!job || !IsProcessInJob(GetCurrentProcess(), job.get(), &in_job) || !in_job ||
@@ -704,8 +818,10 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
     const DWORD error = PreparePinnedSource(code_pin, &input->source);
     if (error != ERROR_SUCCESS) return -static_cast<int>(error);
   }
+  const auto* stdio = input && authority.stdio[0] ? &authority.stdio : nullptr;
   int pid = SpawnImpl(command_line, set, unset, log_path, false, &sandbox, &app_handles,
-                      &enrollment, job->second.get(), std::move(input));
+                      &enrollment, job->second.get(), std::move(input), stdio);
+  if (pid > 0 && stdio != nullptr) authority.stdio = {};
   if (channel_failed) authority = {};
   return pid;
 }

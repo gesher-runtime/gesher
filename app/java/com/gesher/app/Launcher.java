@@ -657,7 +657,7 @@ public final class Launcher {
         return 1;
     }
 
-    private record ScopedDevice(Properties state, File logs) implements AutoCloseable {
+    private record ScopedDevice(Properties state) implements AutoCloseable {
         @Override public void close() {
             try {
                 GesherService.Client client = GesherService.Client.find();
@@ -671,6 +671,7 @@ public final class Launcher {
                 // The native job also ends with the exact launcher.
             } finally {
                 Device.killLeftovers(state);
+                Zygote.finishScopedStandardStreams();
             }
         }
     }
@@ -693,12 +694,18 @@ public final class Launcher {
             env.add("GESHER_APP_STRICT_SERVICES=1");
         }
         String vm = Zygote.vmCommandLine(Launcher.class.getName());
-        int[] children = Zygote.startProtectedDevice(name, List.of(
-                Zygote.quote(dir + "binderd.exe") + " " + name,
-                Zygote.quote(dir + "servicemanager.exe"),
-                Zygote.commandLine(vm, SystemServer.class.getName(), args)),
-                List.of(new File(logs, "binderd.log"), new File(logs, "servicemanager.log"),
-                        new File(logs, "system_server.log")), env, true);
+        int[] children;
+        try {
+            children = Zygote.startProtectedDevice(name, List.of(
+                    Zygote.quote(dir + "binderd.exe") + " " + name,
+                    Zygote.quote(dir + "servicemanager.exe"),
+                    Zygote.commandLine(vm, SystemServer.class.getName(), args)),
+                    List.of(new File(logs, "binderd.log"), new File(logs, "servicemanager.log"),
+                            new File(logs, "system_server.log")), env, true);
+        } catch (Exception failure) {
+            Zygote.finishScopedStandardStreams();
+            throw failure;
+        }
         Properties state = new Properties();
         state.setProperty(Device.STATE_DEVICE, name);
         state.setProperty(Device.STATE_PROTECTED, "true");
@@ -712,9 +719,10 @@ public final class Launcher {
                 throw new IllegalStateException(text("server_not_ready", name, serverLog));
             }
             use(state);
-            return new ScopedDevice(state, logs);
+            return new ScopedDevice(state);
         } catch (Exception failure) {
             Device.killLeftovers(state);
+            Zygote.finishScopedStandardStreams();
             throw failure;
         }
     }
@@ -876,9 +884,8 @@ public final class Launcher {
 
         // The app's output: its process appends to the package's log (not copied when
         // nobody reads it: detached).
-        Tail tail = new Tail(temporary == null ? Device.packageLog(pkg)
-                : new File(temporary.logs(), pkg + ".log"));
-        if (!detach) tail.start();
+        Tail tail = temporary == null && !detach ? new Tail(Device.packageLog(pkg)) : null;
+        if (tail != null) tail.start();
         try {
             if (shortcutId == null) log(text("start_intent", intent.toShortString(false, true, true, false)));
             IActivityTaskManager atm = ActivityTaskManager.getService();
@@ -937,7 +944,7 @@ public final class Launcher {
                 }
                 SystemClock.sleep(300);
             }
-            tail.finish();
+            if (tail != null) tail.finish();
             if (terminal == null) {
                 if (state != null && !Device.alive(state, Device.SYSTEM_SERVER)) {
                     log(text("server_unexpected"));
@@ -955,7 +962,7 @@ public final class Launcher {
             log(text("done"));
             return 0;
         } finally {
-            tail.finish();
+            if (tail != null) tail.finish();
         }
     }
 

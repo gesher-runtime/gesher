@@ -192,6 +192,10 @@ static jintArray Zygote_startProtectedDevice(JNIEnv* env, jclass, jstring device
     return result;
 }
 
+static void Zygote_finishScopedStandardStreams(JNIEnv*, jclass) {
+    gesher::zygote::FinishScopedStandardStreams();
+}
+
 static jboolean Zygote_hasProtectedLaunchAuthority(JNIEnv*, jclass, jboolean scoped) {
     return gesher::zygote::HasProtectedLaunchAuthority(scoped == JNI_TRUE);
 }
@@ -406,6 +410,7 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeStartProtectedDevice",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Z)[I",
      GESHER_JNI(Zygote_startProtectedDevice)},
+    {"finishScopedStandardStreams", "()V", GESHER_JNI(Zygote_finishScopedStandardStreams)},
     {"nativeHasProtectedLaunchAuthority", "(Z)Z", GESHER_JNI(Zygote_hasProtectedLaunchAuthority)},
     {"nativePrepareProtectedOperator", "(IJ)Z", GESHER_JNI(Zygote_prepareProtectedOperator)},
     {"nativeSpawnProtectedApp",
