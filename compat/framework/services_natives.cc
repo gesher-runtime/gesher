@@ -282,6 +282,31 @@ static jint Zygote_deleteAppContainer(JNIEnv* env, jclass, jstring name) {
     return static_cast<jint>(gesher::zygote::DeleteAppContainer(ZygoteString(env, name)));
 }
 
+static jboolean Zygote_attachCapturePermissionPolicy(JNIEnv* env, jclass, jobject predicate) {
+    if (predicate == nullptr) return JNI_FALSE;
+    JavaVM* vm = nullptr;
+    if (env->GetJavaVM(&vm) != JNI_OK) return JNI_FALSE;
+    jclass type = env->GetObjectClass(predicate);
+    if (type == nullptr) return JNI_FALSE;
+    const jmethodID method = env->GetMethodID(type, "test", "(I)Z");
+    env->DeleteLocalRef(type);
+    if (method == nullptr) return JNI_FALSE;
+    const jobject policy = env->NewGlobalRef(predicate);
+    if (policy == nullptr) return JNI_FALSE;
+    const bool started = gesher::zygote::RegisterProtectedCapturePolicy(
+        [vm, policy, method](uint32_t uid) {
+            JNIEnv* thread = nullptr;
+            if (vm->AttachCurrentThread(&thread, nullptr) != JNI_OK) return false;
+            const bool allowed = thread->CallBooleanMethod(policy, method, static_cast<jint>(uid));
+            const bool failed = thread->ExceptionCheck();
+            if (failed) thread->ExceptionClear();
+            vm->DetachCurrentThread();
+            return allowed && !failed;
+        });
+    if (!started) env->DeleteGlobalRef(policy);
+    return started ? JNI_TRUE : JNI_FALSE;
+}
+
 static jint Zygote_spawnCompiler(JNIEnv* env, jclass, jstring commandLine, jobjectArray set,
                                  jobjectArray unset, jstring logPath, jint memory, jint cpu) {
     return gesher::zygote::Spawn(ZygoteString(env, commandLine), ZygoteStrings(env, set),
@@ -695,7 +720,14 @@ static jint Zygote_runPinnedCohost(JNIEnv* env, jclass, jstring command, jstring
                 if (env->ExceptionCheck()) return ERROR_ACCESS_DENIED;
                 return authority.Start(static_cast<HANDLE>(process), static_cast<HANDLE>(job));
             }, std::move(credentialRoot.canonical), std::move(deviceRoot.canonical),
-            std::move(credentialRoot.nt), std::move(deviceRoot.nt), streams, buildPath, frameworkPath};
+            std::move(credentialRoot.nt), std::move(deviceRoot.nt), streams, buildPath, frameworkPath,
+            [vm, host, dispatch, uid](uint32_t source_uid) {
+                if (source_uid != static_cast<uint32_t>(uid)) return false;
+                std::vector<int32_t> values;
+                return DispatchCohostPermission(vm, host, dispatch, cohost::Operation::kCheck,
+                    {u"android.permission.RECORD_AUDIO"}, &values) == ERROR_SUCCESS &&
+                    values.size() == 1 && values[0] == 0; // PackageManager.PERMISSION_GRANTED
+            }};
         gesher::zygote::AppContainerSpec spec{ZygoteString(env, name), ZygoteString(env, display),
                                              ZygoteStrings(env, capabilities)};
         failure = gesher::zygote::RunPinnedCohost(ZygoteString(env, command), spec,
@@ -780,6 +812,8 @@ static const JNINativeMethod gZygoteMethods[] = {
      GESHER_JNI(Zygote_startProtectedDevice)},
     {"finishScopedStandardStreams", "()V", GESHER_JNI(Zygote_finishScopedStandardStreams)},
     {"nativeHasProtectedLaunchAuthority", "(Z)Z", GESHER_JNI(Zygote_hasProtectedLaunchAuthority)},
+    {"nativeAttachCapturePermissionPolicy", "(Ljava/util/function/IntPredicate;)Z",
+     GESHER_JNI(Zygote_attachCapturePermissionPolicy)},
     {"nativePrepareProtectedOperator", "(IJ)Z", GESHER_JNI(Zygote_prepareProtectedOperator)},
     {"nativeSpawnProtectedApp",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;"

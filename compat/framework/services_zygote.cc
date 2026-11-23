@@ -182,6 +182,66 @@ bool EnrollProcess(const Enrollment& enrollment, HANDLE process,
   return SubmitLaunchRequest(enrollment.channel, request, enrollment.channel_failed);
 }
 
+// Windows Binder supplies the exact Android UID. The decision lives in the
+// authenticated host Java permission owner and is never sent by the guest.
+class CapturePolicyServer {
+ public:
+  ~CapturePolicyServer() {
+    if (stop_) SetEvent(stop_.get());
+    if (thread_) WaitForSingleObject(thread_.get(), INFINITE);
+  }
+
+  bool Start(HANDLE authority, HANDLE broker, std::function<bool(uint32_t)> allowed) {
+    peer::OwnedHandle writer;
+    if (!launch::PrivatePipe(&pipe_, &writer, true)) return false;
+    stop_.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    ready_.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!stop_ || !ready_) return false;
+    allowed_ = std::move(allowed);
+    thread_.reset(CreateThread(nullptr, 0, Serve, this, 0, nullptr));
+    if (!thread_) return false;
+    HANDLE remote = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), writer.get(), broker, &remote,
+                         0, FALSE, DUPLICATE_SAME_ACCESS)) return false;
+    launch::Request attach;
+    attach.action = launch::Action::kAttachCapturePolicy;
+    attach.process = launch::EncodeHandle(remote);
+    return SubmitLaunchRequest(authority, attach);
+  }
+
+ private:
+  bool Exchange(void* value, DWORD size, bool write) {
+    ResetEvent(ready_.get());
+    OVERLAPPED io{};
+    io.hEvent = ready_.get();
+    DWORD moved = 0;
+    const BOOL done = write ? WriteFile(pipe_.get(), value, size, &moved, &io)
+                            : ReadFile(pipe_.get(), value, size, &moved, &io);
+    if (done) return moved == size;
+    if (GetLastError() != ERROR_IO_PENDING) return false;
+    HANDLE events[] = {stop_.get(), ready_.get()};
+    if (WaitForMultipleObjects(2, events, FALSE, INFINITE) != WAIT_OBJECT_0 + 1) {
+      CancelIoEx(pipe_.get(), &io);
+      GetOverlappedResult(pipe_.get(), &io, &moved, TRUE);
+      return false;
+    }
+    return GetOverlappedResult(pipe_.get(), &io, &moved, FALSE) && moved == size;
+  }
+
+  static DWORD WINAPI Serve(void* self) {
+    auto& server = *static_cast<CapturePolicyServer*>(self);
+    uint32_t uid = 0;
+    while (server.Exchange(&uid, sizeof(uid), false)) {
+      uint32_t allowed = uid >= 10000 && uid <= 19999 && server.allowed_(uid);
+      if (!server.Exchange(&allowed, sizeof(allowed), true)) break;
+    }
+    return 0;
+  }
+
+  peer::OwnedHandle pipe_, thread_, ready_, stop_;
+  std::function<bool(uint32_t)> allowed_;
+};
+
 std::mutex g_lock;
 std::mutex g_bootstrap_lock;  // one publisher for the private control stream
 StandardHandles g_scoped_relays;
@@ -863,6 +923,17 @@ bool StopInstallation(Writer& authority, const std::array<uint8_t, 16>& installa
 
 }  // namespace
 
+bool RegisterProtectedCapturePolicy(std::function<bool(uint32_t)> allowed) {
+  std::lock_guard<std::mutex> lock(g_bootstrap_lock);
+  auto& owner = Authority();
+  if (!owner.channel || !allowed) return false;
+  auto service = std::make_unique<CapturePolicyServer>();
+  if (!service->Start(owner.channel.get(), owner.broker.get(), std::move(allowed))) return false;
+  // This private policy endpoint lives with the protected SystemServer.
+  (void)service.release();
+  return true;
+}
+
 bool HasProtectedLaunchAuthority(bool scoped) {
   std::lock_guard<std::mutex> lock(g_bootstrap_lock);
   auto& authority = Authority();
@@ -1117,6 +1188,7 @@ uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t*
   std::u16string exe = ExePath();
   if (exe.empty() || command.empty()) return ERROR_INVALID_PARAMETER;
   OwnedHandle input, output, error, device, job, process, thread, broker_pin;
+  CapturePolicyServer capture_policy;
   StandaloneRecordBroker record_broker;
   const DWORD kinds[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
   OwnedHandle* copies[] = {&input, &output, &error};
@@ -1142,6 +1214,9 @@ uint32_t Supervise(std::u16string command, std::u16string environment, uint32_t*
   if (sandbox != nullptr) {
     const DWORD failure = record_broker.Start(exe, job.value, sandbox->sid.value);
     if (failure != ERROR_SUCCESS) return failure;
+    if (cohost && cohost->services->capture_allowed &&
+        !capture_policy.Start(record_broker.authority.get(), record_broker.process.get(),
+                              cohost->services->capture_allowed)) return ERROR_ACCESS_DENIED;
     SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
     device.value = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING, 0, nullptr);
