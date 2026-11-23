@@ -412,19 +412,19 @@ public final class Launcher {
             if (state != null) {
                 String name = state.getProperty(Device.STATE_DEVICE);
                 if (Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
-                    if (protectedRequested() && !protectedDevice(state)) {
-                        throw new IllegalStateException("Shut down the current device before"
-                                + " starting a protected device");
+                    if (start && protectedRequested() && !protectedDevice(state)) {
+                        stopLegacyDeviceForProtectedLaunch(state);
+                    } else {
+                        use(state);
+                        log(text("connected", name, Device.pid(state, Device.SYSTEM_SERVER)));
+                        return state;
                     }
-                    use(state);
-                    log(text("connected", name, Device.pid(state, Device.SYSTEM_SERVER)));
-                    return state;
+                } else {
+                    log(text("cleaning", name));
+                    Device.killLeftovers(state);
+                    Device.stateFile().delete();
+                    Device.readyFile().delete();
                 }
-                // Crashed or killed, or never got ready: what is left of it goes.
-                log(text("cleaning", name));
-                Device.killLeftovers(state);
-                Device.stateFile().delete();
-                Device.readyFile().delete();
             }
             if (!start) return null;
             state = readyCohostOwner();
@@ -464,23 +464,45 @@ public final class Launcher {
         try {
             Properties state = Device.read(Device.stateFile());
             if (state != null && Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
-                if (!protectedDevice(state)) {
-                    throw new IllegalStateException("The running device has no protected policy owner");
+                if (protectedDevice(state)) {
+                    use(state);
+                    return state;
                 }
-            } else {
-                if (state != null) {
-                    Device.killLeftovers(state);
-                    Device.stateFile().delete();
-                    Device.readyFile().delete();
-                }
-                state = readyCohostOwner();
-                if (state == null) state = startDevice(true);
+                stopLegacyDeviceForProtectedLaunch(state);
+            } else if (state != null) {
+                Device.killLeftovers(state);
+                Device.stateFile().delete();
+                Device.readyFile().delete();
             }
+            state = readyCohostOwner();
+            if (state == null) state = startDevice(true);
             use(state);
             return state;
         } finally {
             Zygote.unlock(lock);
         }
+    }
+
+    /** Runs under the device lock and waits for the recorded server generation to exit. */
+    private static void stopLegacyDeviceForProtectedLaunch(Properties state) throws IOException {
+        String name = state.getProperty(Device.STATE_DEVICE);
+        if (Device.alive(state, Device.SYSTEM_SERVER)) {
+            if (!Zygote.signalEvent(state.getProperty(Device.STATE_SHUTDOWN_EVENT,
+                    Device.shutdownEventName())) && Device.alive(state, Device.SYSTEM_SERVER)) {
+                throw new IllegalStateException("Could not request shutdown of the existing Gesher device");
+            }
+            long deadline = SystemClock.uptimeMillis() + 30_000;
+            while (Device.alive(state, Device.SYSTEM_SERVER)) {
+                if (SystemClock.uptimeMillis() >= deadline) {
+                    throw new IllegalStateException("The existing Gesher device is still shutting down");
+                }
+                SystemClock.sleep(200);
+            }
+        }
+        Device.killLeftovers(state);
+        Files.deleteIfExists(Device.stateFile().toPath());
+        Files.deleteIfExists(Device.readyFile().toPath());
+        log(text("device_stopped", name));
     }
 
     /** Waits until the system server of {@code state} has registered its services. */
