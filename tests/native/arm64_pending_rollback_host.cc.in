@@ -1,6 +1,8 @@
 // Production translator methods are inserted verbatim. The Win32/Jit adapter
 // below does not execute guest instructions or generated stubs. Its Jit retains
 // instruction bytes until ClearCache, making missing retirement observable.
+// Targeted guest instruction-cache invalidation is outside this rollback
+// fixture: reaching that Jit boundary fails instead of simulating coherence.
 #include "translator.h"
 #include <sys/mman.h>
 #include <algorithm>
@@ -13,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -81,9 +84,12 @@ size_t AllocationCalls() {
 }
 
 namespace Dynarmic {
-enum class HaltReason : unsigned { UserDefined1 = 1, UserDefined2 = 2 };
+enum class HaltReason : unsigned { UserDefined1 = 1, UserDefined2 = 2, CacheInvalidation = 4 };
 HaltReason operator|(HaltReason a, HaltReason b) {
   return static_cast<HaltReason>(static_cast<unsigned>(a) | static_cast<unsigned>(b));
+}
+bool Has(HaltReason reason, HaltReason flag) {
+  return (static_cast<unsigned>(reason) & static_cast<unsigned>(flag)) != 0;
 }
 namespace A64 {
 class UserCallbacks {
@@ -100,12 +106,14 @@ class Jit {
   std::array<uint64_t, 31> registers{};
   uint64_t pc = 0;
   unsigned halt = 0;
-  void Run() {
+  HaltReason Run() {
     REQUIRE(!running && static_cast<bool>(run));
     running = true;
     run(*this);
     running = false;
+    return static_cast<HaltReason>(halt);
   }
+  void InvalidateCacheRange(uint64_t, uint64_t) { REQUIRE(false); }
   void ClearCache() {
     REQUIRE(!running);
     code.clear();
@@ -140,6 +148,7 @@ extern "C" void gesher_guest_entry_shim() { std::abort(); }
 
 namespace fixture {
 constexpr int kSigSys = 31;
+using gesher_arm64::kSigIll;
 const gesher_arm64_host* g_host = nullptr;
 thread_local int t_guest_running = 0;
 std::shared_mutex g_host_pages_mutex;
@@ -149,6 +158,7 @@ std::unordered_map<uintptr_t, bool> g_host_pages;
 @REGISTRY@
 @TLS@
 @ENTRIES@
+@FORGET_PROTECTION@
 @RETIRE@
 @CLASSIFY@
 @BINDINGS@
@@ -170,6 +180,8 @@ class Env final : public A64::UserCallbacks {
   bool used_before_ = false, event_ = false;
   std::vector<std::unique_ptr<A64::Jit>> jits_;
   std::vector<uint64_t> code_generations_;
+  std::vector<std::unique_ptr<std::atomic<uint32_t>>> posted_;
+  uintptr_t icache_start_ = 0, icache_end_ = 0;
   std::atomic<A64::Jit*> running_jit_{nullptr};
   std::atomic<uint64_t> last_syscall_{0};
   ThreadCounters counters_;
@@ -177,6 +189,7 @@ class Env final : public A64::UserCallbacks {
   Env() { REQUIRE(tls_block_ != nullptr); }
   ~Env() override {
     UnattachForTest();
+    for (const auto& jit : jits_) UnregisterJit(jit.get());
     REQUIRE(VirtualFree(tls_block_, 0, MEM_RELEASE));
   }
   void UnattachForTest() {
@@ -187,6 +200,8 @@ class Env final : public A64::UserCallbacks {
     while (jits_.size() <= depth) {
       jits_.push_back(std::make_unique<A64::Jit>());
       code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
+      posted_.push_back(std::make_unique<std::atomic<uint32_t>>(0));
+      RegisterJit(jits_.back().get(), posted_.back().get());
     }
     return jits_[depth].get();
   }
@@ -204,6 +219,7 @@ class Env final : public A64::UserCallbacks {
     host_call(jit, fn, index, pointer_variadic_fixed);
   }
 @ATTACH@
+@FLUSH_ICACHE@
 @CALLSVC@
 @DISPATCH@
   PendingHostCall pending_call_;
@@ -507,6 +523,7 @@ void TestPreparedAttach() {
 
 void Cleanup() {
   REQUIRE(g_tls_blocks.empty());
+  REQUIRE(g_live_jits.empty());
   g_entries.clear();
   g_free_entries.clear();
   g_regions.clear();

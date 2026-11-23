@@ -2,8 +2,10 @@
 """Run production ARM64 pending-load retirement with explicit host boundaries.
 
 Registry, TLS, host-entry/trampoline recycling, classification, CallSVC,
-RunGuest and Attach methods are inserted verbatim from translator.cc. The
-Win32/Jit adapter retains instruction bytes until production invalidates them.
+RunGuest, Attach, FlushIcache and ForgetGuestProtection methods are inserted
+verbatim from translator.cc. The Win32/Jit adapter retains instruction bytes
+until production invalidates them.
+Targeted Jit cache invalidation remains an unexercised, fail-closed boundary.
 Native AArch64 or Windows execution is not established here.
 """
 from __future__ import annotations
@@ -39,11 +41,13 @@ def main() -> None:
         "@REGISTRY@": section(source, "struct CodeRegion {", "// --- guest TLS"),
         "@TLS@": section(source, "constexpr size_t kTcbSize =", "// --- the exclusive monitor"),
         "@ENTRIES@": section(source, "std::mutex g_entry_mutex;", "// --- acquire loads"),
+        "@FORGET_PROTECTION@": section(source, "void ForgetGuestProtection(", "void GuestMappingMoved("),
         "@RETIRE@": section(source, "void ApiRemoveCode(", "uint64_t ApiCall("),
         "@CLASSIFY@": section(source, "bool InGuestCode(uintptr_t addr) {", "uint32_t GuestFpcr()"),
         "@BINDINGS@": section(source, "void AddVaListFunction(const void* fn, int index) {", "bool InTranslatorCode("),
         "@COUNTERS@": section(source, "struct Counter {", "class Env final"),
         "@ATTACH@": section(source, "  void Attach() {", "  // The thread is exiting."),
+        "@FLUSH_ICACHE@": section(source, "  void FlushIcache() {", "  void CallSVC("),
         "@CALLSVC@": section(source, "  void CallSVC(std::uint32_t swi) override {", "  void ExceptionRaised("),
         "@DISPATCH@": section(source, "  struct PendingHostCall {", "  static constexpr size_t kStackSize ="),
     }
