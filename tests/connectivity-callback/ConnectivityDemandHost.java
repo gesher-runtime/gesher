@@ -423,7 +423,8 @@ public final class ConnectivityDemandHost {
     private static void runningJobSignals() throws Exception {
         current = ONLINE;
         Class<?> harnessType = Class.forName("gesher.services.JobSchedulerConstraintContractTest$Harness");
-        Object harness = make(harnessType, new Class<?>[]{boolean.class, boolean.class}, true, true);
+        Object harness = make(harnessType, new Class<?>[]{boolean.class, boolean.class, boolean.class},
+                true, true, true);
         Object scheduler = get(harness, "scheduler");
         ConnectivityService connectivity = (ConnectivityService)get(harness, "connectivity");
         AtomicInteger starts = new AtomicInteger(), stops = new AtomicInteger(), changes = new AtomicInteger();

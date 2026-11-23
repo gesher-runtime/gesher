@@ -67,6 +67,8 @@ def main() -> None:
                         str(ROOT / "tests/connectivity-callback/ConnectivityServiceSnapshotHost.java"),
                         str(ROOT / "tests/connectivity-callback/ConnectivityDemandHost.java"),
                         str(ROOT / "tests/dex-services/gesher/services/JobSchedulerConstraintContractTest.java"),
+                        str(ROOT / "tests/dex-services/gesher/services/JobSchedulerAdmissionTest.java"),
+                        str(ROOT / "tests/dex-services/gesher/services/JobSchedulerContentTriggerTest.java"),
                         str(ROOT / "tests/dex-services/gesher/services/ConnectivityCallbackContractTest.java")], check=True)
         # Android NativeAllocationRegistry uses its Cleaner in jdk.unsupported.
         cleaner = work / "cleaner" / "sun" / "misc"; cleaner.mkdir(parents=True)
