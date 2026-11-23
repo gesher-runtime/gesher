@@ -1016,8 +1016,9 @@ public final class ApkPackage {
      * ComponentResolver.addProvidersLocked registers a package's providers in manifest
      * order: each authority belongs to the first declaration that names it, a later one
      * keeps only the authorities still free and logs "Skipping provider name ...", and
-     * one left with none stays a registered component with a null authority (its
-     * ParsedProvider's authority is rewritten, so PackageInfo shows the same), so
+     * one left with none stays a registered component with a null authority (the
+     * ParsedProvider keeps its declared authorities; registerAuthorities rewrites the
+     * generated ProviderInfo, so PackageInfo shows the same), so
      * queryContentProviders never binds it. Done on the parsed declarations, before
      * enabled and direct-boot filtering, as registration happens at scan time; computed
      * once, so the warning is logged once per parsed package. Authorities shared with
@@ -1081,7 +1082,6 @@ public final class ApkPackage {
         for (ProviderInfo info : providers) {
             if (!components.add(info.name) || info.authority == null) continue;
             ProviderClaim claim = claims.get(info.name);
-            if (claim == null) continue;  // not generated from these declarations
             String first = claim.first();
             String registeredAuthorities = claim.others() == null ? first
                     : first == null ? claim.others() : first + ";" + claim.others();
