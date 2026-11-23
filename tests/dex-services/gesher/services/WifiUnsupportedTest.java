@@ -95,6 +95,10 @@ public final class WifiUnsupportedTest {
         lock.release(); require(!lock.isHeld(), "Wi-Fi token leaked after final release");
         try { lock.release(); throw new AssertionError("Wi-Fi token underflow accepted"); }
         catch (RuntimeException expected) { checks++; }
+        // As Android: the underflow leaves the count at -1, so the next counted acquire
+        // only returns it to zero and does not hold the lock.
+        lock.acquire();
+        require(!lock.isHeld() && lock.toString().endsWith("refcount = 0 }"), "Underflowed count was reset instead of kept");
         lock.setReferenceCounted(false); lock.acquire(); lock.acquire(); lock.release();
         require(!lock.isHeld(), "Non-reference-counted token retained stale acquisitions");
         // Android only flips the mode: a non-counted acquisition left no count to release.
@@ -102,7 +106,11 @@ public final class WifiUnsupportedTest {
         try { lock.release(); throw new AssertionError("Counted release below zero accepted"); }
         catch (RuntimeException expected) { checks++; }
         require(lock.isHeld(), "Under-locked release dropped the non-counted acquisition");
-        lock.setReferenceCounted(false); lock.release();
+        // The count is now -1: Android's non-counted release drops the lock and still
+        // reports the negative count.
+        lock.setReferenceCounted(false);
+        try { lock.release(); throw new AssertionError("Negative count not reported"); }
+        catch (RuntimeException expected) { checks++; }
         require(!lock.isHeld(), "Non-counted release did not drop the lock");
         try { wifi.createWifiLock(9, "synthetic-test").acquire(); throw new AssertionError("Invalid lock mode accepted"); }
         catch (IllegalArgumentException expected) { checks++; }
