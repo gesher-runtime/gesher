@@ -25,7 +25,7 @@ $trusted = @{
   'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
   'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
   'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
-  'tools/ci/github_read.py'='477d623607b9be564709110c503177321524de4b'
+  'tools/ci/github_read.py'='a0b0496b84194d824f7ff2d91a41a286397f1586'
   'tools/ci/github_jobs.py'='ae6864eaf1f612317c917a10a2f45e5c8b15ac0c'
 }
 foreach ($entry in $trusted.GetEnumerator()) {

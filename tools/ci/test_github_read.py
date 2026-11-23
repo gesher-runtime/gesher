@@ -182,6 +182,36 @@ class GitHubReadTest(unittest.TestCase):
         self.run.assert_called_once()
         self.sleep.assert_not_called()
 
+    def test_terminal_json_eof_reports_status_without_response_body(self):
+        for status in (401, 403, 404, 429, 500, 502, 503, 504):
+            with self.subTest(status=status):
+                self.run.reset_mock()
+                self.sleep.reset_mock()
+                failed = response(code=1, stderr=GH_JSON_EOF)
+                failed.stdout = (f'HTTP/2.0 {status}\r\n\r\n'.encode()
+                                 + b'{"private_response_value":"must-not-be-logged",')
+                self.run.return_value = failed
+                with self.assertRaises(GitHubReadError) as caught:
+                    get_json(ENDPOINT, retry_transient=False)
+                self.assertNotIsInstance(caught.exception, GitHubTransientError)
+                self.assertIn(f'http_status={status}', str(caught.exception))
+                self.assertNotIn('must-not-be-logged', str(caught.exception))
+                self.assertNotIn('must-not-be-logged', self.stderr.getvalue())
+                self.run.assert_called_once_with(COMMAND, capture_output=True, timeout=60)
+                self.sleep.assert_not_called()
+
+    def test_terminal_failure_without_http_framing_reports_status_unavailable(self):
+        failed = response(code=1, stderr='unclassified read failure')
+        failed.stdout = b'private_response_value=must-not-be-logged'
+        self.run.return_value = failed
+        with self.assertRaises(GitHubReadError) as caught:
+            get_json(ENDPOINT)
+        self.assertIn('http_status=unavailable', str(caught.exception))
+        self.assertNotIn('must-not-be-logged', str(caught.exception))
+        self.assertNotIn('must-not-be-logged', self.stderr.getvalue())
+        self.run.assert_called_once_with(COMMAND, capture_output=True, timeout=60)
+        self.sleep.assert_not_called()
+
     def test_a_permanent_error_after_one_transient_stops_immediately(self):
         self.run.side_effect = [response(code=1, stderr='gh: Server Error (HTTP 502)'),
                                 response(code=1, stderr='gh: Forbidden (HTTP 403)')]

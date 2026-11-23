@@ -212,7 +212,8 @@ def get_json(endpoint, *, retry_transient=True):
         if delay is None or time.monotonic() + delay >= deadline:
             raise GitHubReadError(
                 f'GitHub GET failed after {attempt + 1} attempt(s) '
-                f'(gh exit {result.returncode})')
+                f'(gh exit {result.returncode}, '
+                f'http_status={status if status is not None else "unavailable"})')
         print(f'CI_GITHUB_READ_RETRY attempt={attempt + 1}/4 delay={delay}s',
               file=sys.stderr, flush=True)
         _sleep(delay)
